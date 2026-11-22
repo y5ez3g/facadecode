@@ -152,14 +152,31 @@ fn facade_mcp_serves_a_line_with_words_this_build_does_not_know() {
         ("guest", home.command(&test_binaries().mcp)),
     ] {
         let (answers, output) = server_line(command);
-        let tools = answers
+        assert!(output.status.success(), "{kind}: {output:?}");
+        assert_eq!(
+            answers.len(),
+            2,
+            "{kind}: initialized sends no reply: {answers:?}"
+        );
+        let initialized = answers
+            .iter()
+            .find(|answer| answer["id"] == 1)
+            .unwrap_or_else(|| panic!("{kind}: missing initialize reply: {answers:?}"));
+        assert_eq!(initialized["jsonrpc"], "2.0", "{initialized}");
+        assert_eq!(
+            initialized["result"]["protocolVersion"], "2025-06-18",
+            "{initialized}"
+        );
+        let listed = answers
             .iter()
             .find(|answer| answer["id"] == 2)
-            .and_then(|answer| answer["result"]["tools"].as_array().cloned())
-            .unwrap_or_default();
+            .unwrap_or_else(|| panic!("{kind}: missing tools/list reply: {answers:?}"));
+        assert_eq!(listed["jsonrpc"], "2.0", "{listed}");
         assert!(
-            output.status.success() && !tools.is_empty(),
-            "{kind}: {answers:?} {output:?}"
+            listed["result"]["tools"]
+                .as_array()
+                .is_some_and(|tools| !tools.is_empty()),
+            "{kind}: {listed}"
         );
     }
 }

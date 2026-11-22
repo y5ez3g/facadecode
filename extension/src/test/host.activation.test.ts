@@ -7,8 +7,14 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_INSTANCE_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
-import { withModules } from './withModules';
+import { isWindowIdentity, WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_INSTANCE_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
+import { connectWithin } from '../base/connect';
+import { isDirectory, WINDOW_ALLOCATE_COMMAND, WINDOW_DIRECTORY_COMMAND, WINDOW_NETWORK_PROTOCOL, WINDOW_PUBLISH_COMMAND, WORKSPACE_REPUBLISH_COMMAND } from '../base/windowNetwork';
+import type { RunChange } from '../core/ports';
+import { windowAddress, windowSocketPath } from '../host/windowNetwork';
+import { registerWindow, registeredWindow, unregisterWindow } from '../record/windowRegistry';
+import { runFacts } from './contractFakes';
+import { TestEmitter, withModules } from './withModules';
 
 suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-2.4)', () => {
 	let temp: string;
@@ -30,16 +36,19 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 	let configurationChanged: ((event: { affectsConfiguration: (section: string) => boolean }) => void)[];
 	const session = 'session-now';
 	const none = { dispose: () => undefined };
-	const api = () => ({
-		env: { sessionId: session, remoteName, appName: 'Visual Studio Code' },
+	const api = (sessionId = session, handlers = commands) => ({
+		env: { sessionId, remoteName, appName: 'Visual Studio Code' },
 		Uri: { from: (parts: object) => parts },
 		l10n: { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, n) => String(args[Number(n)])) },
 		commands: {
-			registerCommand: (id: string, handler: (...args: unknown[]) => unknown) => { commands.set(id, handler); return none; },
+			registerCommand: (id: string, handler: (...args: unknown[]) => unknown) => {
+				handlers.set(id, handler);
+				return { dispose: () => { if (handlers.get(id) === handler) { handlers.delete(id); } } };
+			},
 			executeCommand: async (id: string, ...args: unknown[]) => {
 				executed.push(id);
 				if (id === 'setContext') { return undefined; }
-				const handler = commands.get(id);
+				const handler = handlers.get(id);
 				if (!handler) {
 					throw new Error(`command '${id}' not found`);
 				}
@@ -133,6 +142,266 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 
 	teardown(() => {
 		fs.rmSync(temp, { recursive: true, force: true });
+	});
+
+	function componentEditor(editorSession = session) {
+		const handlers = new Map<string, (...args: unknown[]) => unknown>();
+		const vscode = api(editorSession, handlers);
+		return {
+			vscode,
+			command: (id: string, ...args: unknown[]) => {
+				assert.ok(handlers.has(id), id + ' is registered');
+				return vscode.commands.executeCommand(id, ...args);
+			}
+		};
+	}
+
+	/** Real component activation and network with the editor command dispatch supplied by the fixture. */
+	function activateWindowComponent(logUri: string, editorSession = session, component = '0.1.6', editor = componentEditor(editorSession)) {
+		const subscriptions: { dispose(): void }[] = [];
+		const { activate } = withModules({ vscode: editor.vscode })<typeof import('../host/window')>(require.resolve('../host/window'));
+		activate({
+			logUri: { fsPath: logUri }, globalStorageUri: { fsPath: path.join(logUri, 'storage') }, subscriptions,
+			extension: { packageJSON: { version: component } }
+		} as never);
+		return { ...editor, dispose: () => subscriptions.splice(0).reverse().forEach(subscription => subscription.dispose()) };
+	}
+
+	test('the identity command answers the current session with the persisted window token and component version, refuses stale sessions and leaves damaged records intact (ARCHITECTURE-2.2)', async () => {
+		const before = process.env.FACADE_HOME;
+		const facadeRoot = path.join(temp, 'home');
+		const privateHome = path.join(facadeRoot, 'extension');
+		home = facadeRoot;
+		const record = path.join(temp, 'handover.json');
+		const initial = activateWindowComponent(temp);
+		const restartedSession = 'session-restarted';
+		const restarted = activateWindowComponent(temp, restartedSession, '0.1.7');
+		const damaged = activateWindowComponent(temp, restartedSession);
+		try {
+			assert.strictEqual(await initial.command(WINDOW_IDENTITY_COMMAND, 'older-session'), undefined);
+			assert.ok(!fs.existsSync(record), 'stale requests do not mint an identity');
+
+			const identity = await initial.command(WINDOW_IDENTITY_COMMAND, session);
+			assert.ok(isWindowIdentity(identity, session));
+			assert.deepStrictEqual(identity, { version: 1, session, token: identity.token, component: '0.1.6' });
+			const serialized = fs.readFileSync(record, 'utf8');
+			assert.deepStrictEqual(JSON.parse(serialized), { version: 1, token: identity.token });
+			await initial.command(WINDOW_DIRECTORY_COMMAND, session);
+			const window = windowAddress(identity.token);
+			const initialEntry = registeredWindow(privateHome, window);
+			assert.ok(initialEntry);
+			initial.dispose();
+			assert.strictEqual(registeredWindow(privateHome, window), undefined);
+			if (process.platform !== 'win32') { assert.ok(!fs.existsSync(initialEntry.socket)); }
+
+			assert.strictEqual(await restarted.command(WINDOW_IDENTITY_COMMAND, session), undefined);
+			assert.deepStrictEqual(await restarted.command(WINDOW_IDENTITY_COMMAND, restartedSession), {
+				version: 1, session: restartedSession, token: identity.token, component: '0.1.7'
+			});
+			assert.strictEqual(fs.readFileSync(record, 'utf8'), serialized);
+			await restarted.command(WINDOW_DIRECTORY_COMMAND, restartedSession);
+			restarted.dispose();
+			assert.strictEqual(registeredWindow(privateHome, window), undefined);
+
+			fs.writeFileSync(record, '{');
+			assert.strictEqual(await damaged.command(WINDOW_IDENTITY_COMMAND, session), undefined);
+			assert.deepStrictEqual(await damaged.command(WINDOW_IDENTITY_COMMAND, restartedSession),
+				{ version: 1, session: restartedSession, damaged: true });
+			assert.strictEqual(fs.readFileSync(record, 'utf8'), '{');
+		} finally {
+			damaged.dispose();
+			restarted.dispose();
+			initial.dispose();
+			if (before === undefined) { delete process.env.FACADE_HOME; } else { process.env.FACADE_HOME = before; }
+		}
+	});
+
+	test('window directory and roster publication require the current session and expose exact public identities while distinguishing an incompatible peer (ARCHITECTURE-2.1)', async () => {
+		const before = process.env.FACADE_HOME;
+		const facadeRoot = path.join(temp, 'home');
+		const privateHome = path.join(facadeRoot, 'extension');
+		home = facadeRoot;
+		const peerSession = 'session-peer';
+		const local = activateWindowComponent(path.join(temp, 'local'));
+		const peer = activateWindowComponent(path.join(temp, 'peer'), peerSession);
+		const incompatible = 'win-1234567890abcdef';
+		try {
+			const localIdentity = await local.command(WINDOW_IDENTITY_COMMAND, session);
+			const peerIdentity = await peer.command(WINDOW_IDENTITY_COMMAND, peerSession);
+			assert.ok(isWindowIdentity(localIdentity, session) && isWindowIdentity(peerIdentity, peerSession));
+			const localWindow = windowAddress(localIdentity.token);
+			const peerWindow = windowAddress(peerIdentity.token);
+			assert.notStrictEqual(localWindow, peerWindow);
+			await local.command(WINDOW_DIRECTORY_COMMAND, session);
+			await peer.command(WINDOW_DIRECTORY_COMMAND, peerSession);
+
+			const localRun = runFacts(1, { name: 'Gauge' });
+			const peerRun = runFacts(2, { name: 'Shaft', activity: 'working', title: 'Private activity' });
+			const localAgent = { run: localRun.id, alias: '#a1', name: 'Gauge', root: localRun.id, yolo: false, cli: 'claude', lifecycle: 'running' };
+			const peerAgent = { run: peerRun.id, alias: '#a2', name: 'Shaft', root: peerRun.id, yolo: false, cli: 'claude', lifecycle: 'running' };
+			assert.deepStrictEqual(await local.command(WINDOW_PUBLISH_COMMAND, session, [localAgent], 'Design'), { listening: true });
+
+			const dispatch = peer.vscode.commands;
+			let published: Promise<unknown> | undefined;
+			const vscode = { ...peer.vscode, commands: { ...dispatch, executeCommand: (id: string, ...args: unknown[]) => {
+				const result = dispatch.executeCommand(id, ...args);
+				if (id === WINDOW_PUBLISH_COMMAND) { published = result; }
+				return result;
+			} } };
+			const client = withModules({ vscode })<typeof import('../host/client')>(require.resolve('../host/client'));
+			const changes = new TestEmitter<RunChange>();
+			const publication = client.publishAgents({ list: () => [peerRun], onDidChange: changes.event }, 'Backend', () => undefined);
+			try {
+				assert.ok(published, 'workspace publication reached the command');
+				assert.deepStrictEqual(await published, { listening: true });
+			} finally {
+				publication.dispose();
+				changes.dispose();
+			}
+
+			registerWindow(privateHome, {
+				protocol: WINDOW_NETWORK_PROTOCOL + 1, window: incompatible, socket: windowSocketPath(privateHome, incompatible),
+				pid: process.pid, label: 'Other version', environment: 'local', agents: [], updatedAt: 1
+			});
+			assert.strictEqual(await local.command(WINDOW_DIRECTORY_COMMAND, peerSession), undefined);
+			assert.strictEqual(await peer.command(WINDOW_PUBLISH_COMMAND, session, [localAgent], 'Intruder'), undefined);
+			assert.strictEqual(await peer.command(WINDOW_PUBLISH_COMMAND, peerSession, [{ ...peerAgent, lifecycle: 'invalid' }], 'Invalid'), undefined);
+			const localEntry = { window: localWindow, label: 'Design', environment: 'local', agents: [localAgent] };
+			const peerEntry = { window: peerWindow, label: 'Backend', environment: 'local', agents: [peerAgent] };
+			const unavailable = [{ window: incompatible, label: 'Other version', reason: 'protocol_incompatible' }];
+			assert.deepStrictEqual(await local.command(WINDOW_DIRECTORY_COMMAND, session),
+				{ self: localWindow, windows: [localEntry, peerEntry], unavailable });
+			assert.deepStrictEqual(await peer.command(WINDOW_DIRECTORY_COMMAND, peerSession),
+				{ self: peerWindow, windows: [peerEntry, localEntry], unavailable });
+
+			const endpoints = [localWindow, peerWindow].map(window => {
+				const entry = registeredWindow(privateHome, window);
+				assert.ok(entry);
+				return entry.socket;
+			});
+			peer.dispose();
+			local.dispose();
+			assert.strictEqual(registeredWindow(privateHome, localWindow), undefined);
+			assert.strictEqual(registeredWindow(privateHome, peerWindow), undefined);
+			if (process.platform !== 'win32') { assert.ok(endpoints.every(socket => !fs.existsSync(socket))); }
+		} finally {
+			peer.dispose();
+			local.dispose();
+			if (registeredWindow(privateHome, incompatible)) { unregisterWindow(privateHome, incompatible); }
+			if (before === undefined) { delete process.env.FACADE_HOME; } else { process.env.FACADE_HOME = before; }
+		}
+	});
+
+	test('agent and message allocations use one counter per kind across listening windows and honor the session and floor (ARCHITECTURE-2.1, RULES-2.2)', async () => {
+		const before = process.env.FACADE_HOME;
+		const root = path.join(temp, 'home');
+		const local = activateWindowComponent(path.join(temp, 'local'));
+		const peerSession = 'session-peer';
+		const peer = activateWindowComponent(path.join(temp, 'peer'), peerSession);
+		home = root;
+		try {
+			assert.ok(isWindowIdentity(await local.command(WINDOW_IDENTITY_COMMAND, session), session));
+			assert.ok(isWindowIdentity(await peer.command(WINDOW_IDENTITY_COMMAND, peerSession), peerSession));
+			await local.command(WINDOW_DIRECTORY_COMMAND, session);
+			await peer.command(WINDOW_DIRECTORY_COMMAND, peerSession);
+
+			for (const [kind, floor] of [['agent', 40], ['message', 90]] as const) {
+				assert.strictEqual(await local.command(WINDOW_ALLOCATE_COMMAND, peerSession, kind, 9, floor + 100), undefined);
+				assert.strictEqual(await peer.command(WINDOW_ALLOCATE_COMMAND, peerSession, kind, '9', floor + 100), undefined);
+				assert.deepStrictEqual(await local.command(WINDOW_ALLOCATE_COMMAND, session, kind, 3, floor), { first: floor + 1, count: 3 });
+				assert.deepStrictEqual(await peer.command(WINDOW_ALLOCATE_COMMAND, peerSession, kind, 2, floor - 1), { first: floor + 4, count: 2 });
+				assert.deepStrictEqual(await local.command(WINDOW_ALLOCATE_COMMAND, session, kind, 1, floor + 20), { first: floor + 21, count: 1 });
+				assert.deepStrictEqual(await peer.command(WINDOW_ALLOCATE_COMMAND, peerSession, kind, 4), { first: floor + 22, count: 4 });
+				const counter = path.join(root, 'extension', `client-${kind}-numbers.json`);
+				assert.deepStrictEqual(JSON.parse(fs.readFileSync(counter, 'utf8')), { last: floor + 25 });
+			}
+		} finally {
+			peer.dispose();
+			local.dispose();
+			if (before === undefined) { delete process.env.FACADE_HOME; } else { process.env.FACADE_HOME = before; }
+		}
+	});
+
+	test('a restarted listening Window Component requests a session-matched republish of the unchanged workspace roster (ARCHITECTURE-2.1)', async () => {
+		const before = process.env.FACADE_HOME;
+		const root = path.join(temp, 'home');
+		const privateHome = path.join(root, 'extension');
+		home = root;
+		const log = path.join(temp, 'workspace');
+		const observerSession = 'session-observer';
+		const observer = activateWindowComponent(path.join(temp, 'observer'), observerSession);
+		const editor = componentEditor();
+		const republish: unknown[][] = [];
+		const publishes: Promise<unknown>[] = [];
+		const dispatch = editor.vscode.commands.executeCommand;
+		editor.vscode.commands.executeCommand = (id: string, ...args: unknown[]) => {
+			if (id === WORKSPACE_REPUBLISH_COMMAND) { republish.push(args); }
+			const result = dispatch(id, ...args);
+			if (id === WINDOW_PUBLISH_COMMAND) { publishes.push(result); }
+			return result;
+		};
+		const initial = activateWindowComponent(log, session, '0.1.6', editor);
+		let successor: ReturnType<typeof activateWindowComponent> | undefined;
+		let publication: { dispose(): void } | undefined;
+		const changes = new TestEmitter<RunChange>();
+		try {
+			assert.ok(isWindowIdentity(await observer.command(WINDOW_IDENTITY_COMMAND, observerSession), observerSession));
+			const identity = await initial.command(WINDOW_IDENTITY_COMMAND, session);
+			assert.ok(isWindowIdentity(identity, session));
+			const address = windowAddress(identity.token);
+			await initial.command(WINDOW_DIRECTORY_COMMAND, session);
+			assert.deepStrictEqual(republish, [[session]], 'the initial component asked its workspace as it began listening');
+			republish.length = 0;
+
+			const client = withModules({ vscode: editor.vscode })<typeof import('../host/client')>(require.resolve('../host/client'));
+			const run = runFacts(7, { name: 'Gauge' });
+			publication = client.publishAgents({ list: () => [run], onDidChange: changes.event }, 'Design', () => undefined);
+			assert.strictEqual(publishes.length, 1);
+			assert.deepStrictEqual(await publishes[0], { listening: true });
+			const roster = { window: address, label: 'Design', environment: 'local',
+				agents: [{ run: run.id, alias: '#a7', name: 'Gauge', root: run.id, yolo: false, cli: 'claude', lifecycle: 'running' }] };
+			const visibleRoster = async () => {
+				const directory = await observer.command(WINDOW_DIRECTORY_COMMAND, observerSession);
+				assert.ok(isDirectory(directory));
+				return directory.windows.find(window => window.window === address);
+			};
+			assert.deepStrictEqual(await visibleRoster(), roster);
+			const previousEntry = registeredWindow(privateHome, address);
+			assert.ok(previousEntry);
+			initial.dispose();
+			assert.strictEqual(await visibleRoster(), undefined, 'the stopped component leaves no public roster behind');
+
+			await editor.command(WORKSPACE_REPUBLISH_COMMAND, 'session-before');
+			assert.strictEqual(publishes.length, 1, 'an old session cannot cause a publication');
+			republish.length = 0;
+
+			successor = activateWindowComponent(log, session, '0.1.6', editor);
+			assert.deepStrictEqual(await successor.command(WINDOW_IDENTITY_COMMAND, session), identity);
+			await successor.command(WINDOW_DIRECTORY_COMMAND, session);
+			assert.deepStrictEqual(republish, [[session]], 'the successor itself requested the workspace roster');
+			assert.strictEqual(publishes.length, 2, 'the request publishes at once without an agent change');
+			assert.deepStrictEqual(await publishes[1], { listening: true });
+			assert.deepStrictEqual(await visibleRoster(), roster);
+
+			const currentEntry = registeredWindow(privateHome, address);
+			assert.ok(currentEntry);
+			assert.notStrictEqual(currentEntry.socket, previousEntry.socket);
+			const connection = await connectWithin(currentEntry.socket, 1_000);
+			assert.ok(connection.socket, 'the successor is reachable on its own listener');
+			connection.socket.destroy();
+			successor.dispose();
+			assert.strictEqual(await visibleRoster(), undefined);
+			if (process.platform !== 'win32') {
+				assert.ok(!fs.existsSync(previousEntry.socket) && !fs.existsSync(currentEntry.socket));
+			}
+		} finally {
+			publication?.dispose();
+			changes.dispose();
+			successor?.dispose();
+			initial.dispose();
+			observer.dispose();
+			if (before === undefined) { delete process.env.FACADE_HOME; } else { process.env.FACADE_HOME = before; }
+		}
 	});
 
 	test('a damaged handover record: the window component invents no identity and answers so, the workspace component says to open the folder again - not to reload, which reads the same record - in its notification and panel', async () => {

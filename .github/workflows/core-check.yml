@@ -6,10 +6,19 @@ on:
       - 'core/**'
       - 'extension/src/base/names.ts'
       - '.github/workflows/core-check.yml'
+      - 'ci/acceptance.py'
+      - 'ci/catalog.py'
+      - 'ci/check_real_ssh_route.py'
+      - 'ci/evidence.py'
+      - 'ci/native_core.py'
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: core-check-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
@@ -77,6 +86,21 @@ jobs:
           ssh-keyscan -t ed25519 localhost >> ~/.ssh/known_hosts
           mkdir -p "$RUNNER_TEMP/facade-tests"
           TMPDIR="$RUNNER_TEMP/facade-tests" scripts/ssh-check.sh
+      - name: Route a Core agent over real SSH
+        if: ${{ !cancelled() && matrix.target == 'linux-x64' }}
+        run: |
+          out="$RUNNER_TEMP/facade-ssh-route"
+          mkdir -p "$out"
+          bin="${FACADE_SSH_CHECK_BIN:-${CARGO_TARGET_DIR:-$PWD/target}/debug}"
+          python3 -B ../ci/check_real_ssh_route.py --bin-dir "$bin" --receipt "$out/receipt.json" 2>&1 | tee "$out/console.log"
+          python3 -B ../ci/acceptance.py verify-native-ssh --bin-dir "$bin" "$out/receipt.json" "$out/console.log"
+      - name: Keep the real SSH route evidence
+        if: ${{ always() && matrix.target == 'linux-x64' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-ssh-route-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/facade-ssh-route/
+          if-no-files-found: ignore
       - name: Collect the failed Windows run
         if: ${{ failure() && runner.os == 'Windows' }}
         shell: powershell

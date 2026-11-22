@@ -48,6 +48,45 @@ fn wait_for_title(term: &TestTerminal, from: usize, title: &str) {
 }
 
 #[test]
+fn foreground_attach_returns_the_selected_process_exit_status() {
+    let home = TestHome::new("attachexit");
+    let other = home.start_fake("other");
+    home.add_custom_cli_with("attach-exit", &test_binaries().fakecli, &["--attach-exit"]);
+    // This scenario checks exit propagation. Keep the same geometry on both sides so
+    // the first Attach does not also resize the managed console while input starts.
+    let (cols, rows) = (100, 30);
+    let started = connect(&home).call_ok(
+        "agent.start",
+        json!({
+            "cli": "attach-exit", "name": "selected", "folder": home.project,
+            "env": { "FACADE_HOME": home.path }, "size": { "cols": cols, "rows": rows },
+        }),
+    );
+    let agent = started["agent"]["reference"]["agent_id"]
+        .as_str()
+        .expect("the selected agent has an ID");
+    let selected = address(&home, agent);
+    let mut terminal = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["attach", &selected]),
+        cols,
+        rows,
+    );
+    assert!(terminal.wait_for_output(LOADED_TIMEOUT, "ATTACH-READY"));
+    terminal.send(b"finish\r");
+    let exit = terminal
+        .wait_exit(LOADED_TIMEOUT)
+        .expect("the foreground Attach exited");
+    assert_eq!(exit.code(), Some(23), "{}", terminal.text_with_scrollback());
+    assert!(terminal.wait_for_output(secs(5), "ATTACH-FINISHED"));
+    assert!(terminal.wait_for_output(
+        secs(5),
+        &format!("selected ({selected}) exited with code 23.")
+    ));
+    assert_eq!(home.agent_record(&other.id).unwrap()["process"], "running");
+}
+
+#[test]
 fn foreground_alternate_first_start_hands_the_same_shell_page_back() {
     let home = TestHome::new("alternate-first");
     let _wire = connect(&home);

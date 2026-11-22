@@ -99,7 +99,7 @@ suite('The agent panel in Chromium', function () {
 		this.timeout(75_000);
 		const root = path.resolve(__dirname, '../../..');
 		const source = fs.readFileSync(path.join(root, 'src/webview/panel.ts'), 'utf8');
-		const hooks = `\n(window as any).panel = { page, render: (next: PanelState) => { state = next; render(); } };`;
+		const hooks = `\n(window as any).panel = { page, revision: () => state.revision, render: (next: PanelState) => { state = next; render(); } };`;
 		const bundle = async (testMode: boolean) => (await build({ stdin: { contents: source + hooks, loader: 'ts', resolveDir: path.join(root, 'src/webview') }, bundle: true, write: false, format: 'iife', minifySyntax: true, define: { FACADE_TEST_MODE: String(testMode) } })).outputFiles[0].text;
 		[shipped, tested] = await Promise.all([bundle(false), bundle(true)]);
 		css = fs.readFileSync(path.join(root, 'media/panel.css'), 'utf8');
@@ -1443,6 +1443,39 @@ suite('The agent panel in Chromium', function () {
 			{ type: 'act', action: `${first.page}-1`, what: 'open', target: 'run-3', page: first.page },
 			{ type: 'act', action: `${first.page}-2`, what: 'open', target: 'run-5', page: first.page }
 		], [0]]);
+	});
+
+	test('the Rust cards, revision and pending open belong to the current page and exact action ID (PANEL-3.1, 3.2)', async () => {
+		const older = await evaluate('panel.page');
+		await load();
+		const current = await evaluate('panel.page');
+		assert.notStrictEqual(current, older);
+		const frame = await evaluate(`stateOf([
+			newCard(1, { runId: 'workstation/a1', name: 'Gauge', alias: 'a1', selected: true, orchestrator: { cli: 'Claude Code', running: true } }),
+			newCard(2, { runId: 'devbox/a1', name: 'Gauge', alias: 'a1', orchestrator: { cli: 'Claude Code', running: true } })
+		], { revision: 42 })`);
+		const rendered = () => evaluate(`[panel.revision(), [...document.querySelectorAll('.agent')].map(card => card.dataset.run),
+			[...document.querySelectorAll('.agent.selected')].map(card => card.dataset.run)]`);
+		const cards = ['workstation/a1', 'devbox/a1'];
+		await deliver({ type: 'state', state: frame });
+		assert.deepStrictEqual(await rendered(), [42, cards, ['workstation/a1']]);
+		await deliver({ type: 'state', page: older, state: { ...frame, revision: 99, cards: [], cardCount: 0 } });
+		assert.deepStrictEqual(await rendered(), [42, cards, ['workstation/a1']]);
+
+		const posted = await evaluate(`(() => {
+			window.posted = [];
+			document.querySelector('[data-run="devbox/a1"]').click();
+			return window.posted;
+		})()`);
+		assert.deepStrictEqual(posted, [{ type: 'act', what: 'open', page: current, action: current + '-1', target: 'devbox/a1' }]);
+		const action = posted[0].action;
+		assert.deepStrictEqual(await rendered(), [42, cards, ['devbox/a1']]);
+		await deliver({ type: 'outcome', page: older, action, ok: false, reason: 'gone' });
+		await deliver({ type: 'outcome', action: current + '-999', ok: false, reason: 'failed' });
+		assert.deepStrictEqual(await rendered(), [42, cards, ['devbox/a1']]);
+		await deliver({ type: 'outcome', action, ok: false, reason: 'failed' });
+		assert.deepStrictEqual(await rendered(), [42, cards, ['workstation/a1']]);
+		assert.deepStrictEqual(await evaluate('window.errors'), []);
 	});
 
 	test('PANEL-3.1: a page made as the view shows again restores the still-valid scroll position and keyboard card from its saved state, without taking focus', async () => {

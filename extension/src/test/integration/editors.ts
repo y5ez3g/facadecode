@@ -19,6 +19,17 @@ export function normalizeDriveLetter(file: string): string {
 	return process.platform === 'win32' ? file.replace(/^[A-Z]:/u, drive => drive.toLowerCase()) : file;
 }
 
+/** Compare an existing folder on this host by its filesystem path, independent of URI or process drive-letter spelling. */
+export function localFolderIdentity(file: unknown): string | undefined {
+	if (typeof file !== 'string' || !path.isAbsolute(file)) { return undefined; }
+	try {
+		const canonical = fs.realpathSync.native(file);
+		return fs.statSync(canonical).isDirectory() ? normalizeDriveLetter(canonical) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /** The official VS Code `VSCODE_EXECUTABLE` names, else macOS's standard installation where there is one. */
 export function officialEditor(): string {
 	const standard = '/Applications/Visual Studio Code.app/Contents/MacOS/Code';
@@ -26,12 +37,12 @@ export function officialEditor(): string {
 	if (!executable || !path.isAbsolute(executable) || !fs.statSync(executable, { throwIfNoEntry: false })?.isFile()) {
 		throw new Error('Set VSCODE_EXECUTABLE to the absolute path of an official VS Code executable, for example "/Applications/Visual Studio Code.app/Contents/MacOS/Code".');
 	}
-	officialVsCode(executable);
+	officialProducts(executable);
 	return executable;
 }
 
 /** The official VS Code only: a derived editor can load its own agent extension and share a data folder with a person's live state. */
-function officialVsCode(executable: string): void {
+export function officialProducts(executable: string) {
 	const dir = path.dirname(executable);
 	const candidates = [
 		path.join(dir, '..', 'Resources', 'app', 'product.json'),
@@ -44,12 +55,28 @@ function officialVsCode(executable: string): void {
 	if (!files.length) {
 		throw new Error(`Cannot find product.json beside ${executable}; refusing to run the suite in an unknown editor.`);
 	}
-	for (const file of files) {
-		const product = JSON.parse(fs.readFileSync(file, 'utf8')) as { nameShort?: string; dataFolderName?: string; applicationName?: string };
+	return files.map(file => {
+		const product = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+			nameShort?: string; dataFolderName?: string; applicationName?: string; commit?: string
+		};
 		if (product.dataFolderName !== '.vscode' || product.applicationName !== 'code') {
 			throw new Error(`${executable} is ${product.nameShort ?? 'not VS Code'} (data folder ${product.dataFolderName}); the suite runs only in official VS Code.`);
 		}
+		return { file, commit: product.commit };
+	});
+}
+
+export function editorBuildCommit(executable: string, expectedVersion: string): string {
+	const commits = new Set<string>();
+	for (const { file, commit } of officialProducts(executable)) {
+		const pkg = JSON.parse(fs.readFileSync(path.join(path.dirname(file), 'package.json'), 'utf8')) as { version?: string };
+		if (pkg.version !== expectedVersion || typeof commit !== 'string' || !/^[a-f0-9]{40}$/u.test(commit)) {
+			throw new Error(`Expected official VS Code ${expectedVersion}, got ${pkg.version} (${commit}).`);
+		}
+		commits.add(commit);
 	}
+	assert.strictEqual(commits.size, 1, `Conflicting VS Code build commits beside ${executable}.`);
+	return [...commits][0];
 }
 
 /**
@@ -316,30 +343,44 @@ export async function until<T>(what: string, probe: () => Promise<T | undefined>
 /**
  * Removes the active managed agents of the run's own Facade home, then waits for its idle daemon to take its socket away.
  * The client only connects to an existing daemon, identifies agents by exact reference, and closes before the idle wait.
+ * The owned-scope runner can retain a strict idle wait for the daemon and Keeper before removing its temporary roots.
  */
-export async function endCore(home: string, ms = 30_000): Promise<void> {
-	if (!coreListens(home)) { return; }
-	try {
-		const hello = await helloInCore(home);
-		if ('error' in hello) { throw new Error(`cleanup hello: ${JSON.stringify(hello.error)}`); }
-		const { machine_id: machine } = hello.result as DaemonHelloResult;
-		const { agents } = await coreCall(home, 'agent.list', { scope: { kind: 'local' } });
-		for (const agent of agents) {
-			if (agent.type === 'managed' && agent.reference.machine_id === machine) {
-				const removed = await coreCall(home, 'agent.remove', { target: agent.reference });
-				assert.deepStrictEqual(removed.reference, agent.reference);
+export async function endCore(home: string, ms = 30_000, deferIdle?: (waiting: Promise<void>) => void): Promise<void> {
+	if (coreListens(home)) {
+		try {
+			const hello = await helloInCore(home);
+			if ('error' in hello) { throw new Error(`cleanup hello: ${JSON.stringify(hello.error)}`); }
+			const { machine_id: machine } = hello.result as DaemonHelloResult;
+			const { agents } = await coreCall(home, 'agent.list', { scope: { kind: 'local' } });
+			for (const agent of agents) {
+				if (agent.type === 'managed' && agent.reference.machine_id === machine) {
+					const removed = await coreCall(home, 'agent.remove', { target: agent.reference });
+					assert.deepStrictEqual(removed.reference, agent.reference);
+				}
 			}
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if ((code !== 'ENOENT' && code !== 'ECONNREFUSED') || coreListens(home)) { throw error; }
 		}
-	} catch (error) {
-		const code = (error as NodeJS.ErrnoException).code;
-		if ((code === 'ENOENT' || code === 'ECONNREFUSED') && !coreListens(home)) { return; }
-		throw error;
 	}
+	if (deferIdle) {
+		deferIdle(waitForCoreIdle(home, ms, true));
+	} else {
+		await waitForCoreIdle(home, ms, false);
+	}
+}
+
+async function waitForCoreIdle(home: string, ms: number, strict: boolean): Promise<void> {
+	const daemon = coreSocket(home);
+	const keeper = path.join(path.dirname(daemon), path.basename(daemon).replace(/^daemon-/u, 'keeper-'));
+	const waiting = () => coreListens(home) || (strict && fs.existsSync(keeper));
 	const end = Date.now() + ms;
-	while (coreListens(home) && Date.now() < end) {
+	while (waiting() && Date.now() < end) {
 		await new Promise(resolve => setTimeout(resolve, 200));
 	}
-	if (coreListens(home)) {
-		console.warn(`Facade core of ${home} still runs after ${ms} ms.`);
+	if (waiting()) {
+		const message = `Facade core of ${home} still runs after ${ms} ms.`;
+		if (strict) { throw new Error(message); }
+		console.warn(message);
 	}
 }

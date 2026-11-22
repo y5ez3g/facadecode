@@ -178,9 +178,9 @@ The normal workspace suite skips these cases.
 
 | Case | Artifact input | Expected result |
 | --- | --- | --- |
-| [`machines` · `cold_cutover_keeps_prerelease_agent_records_and_saved_transport`](../../core/tests/tests/machines.rs#L265) | `FACADE_TEST_API_V1_PRERELEASE` is the accepted pre-v1 `facade[.exe]` with the range-form daemon hello | Keep the machine ID, Agent reference, finished record and saved SSH transport through a cold open. |
+| [`machines` · `cold_cutover_keeps_prerelease_agent_records_and_saved_transport`](../../core/tests/tests/machines.rs#L265) | `FACADE_TEST_API_V1_PRERELEASE` is the accepted pre-v1 `facade[.exe]` with the range-form daemon hello. See the [native runner](../CI.md#native-core-cold-cutover). | Keep the machine IDs, Agent reference, finished record, session, saved SSH transport and delivery receipt through a cold open. Replay the same request without delivering it again. |
 | [`machines` · `a_legacy_workspace_import_recovers_both_machines_before_cold_cutover`](../../core/tests/tests/machines.rs#L2106) | Same prerelease program selecting range protocol 3, plus the [pinned v2 fixture](../../core/tests/src/binaries.rs#L83). Use `FACADE_TEST_V2_BIN` for a prepared directory containing `facade[.exe]` and its matching `.test-build` marker. | Import both members before the switch and retain the expected records afterward. |
-| [`upgrade` · `a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover`](../../core/tests/tests/upgrade.rs#L1826) | `FACADE_TEST_API_V1_NEXT` from a separate compatible build with a higher numeric version | Replace the daemon while the Keeper, CLI, session and one delivery survive. |
+| [`upgrade` · `a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover`](../../core/tests/tests/upgrade.rs#L1924) | `FACADE_TEST_API_V1_NEXT` from a separate compatible build with a higher numeric version. See the [Linux x64 QA replay](../CI.md#native-core-hot-takeover-qa). | Replace the Daemon while the Keeper, CLI, session and existing receipt survive. Deliver one fresh message to the same CLI. |
 
 ### Docs and working files
 

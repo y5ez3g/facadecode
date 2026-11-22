@@ -797,6 +797,104 @@ fn build_doing_as(home: &TestHome, build: &str, role: &str, what: &str) -> PathB
     }
 }
 
+/// A terminal client observes and acknowledges live replacement before reattaching to the same CLI.
+#[test]
+fn closing_notification_names_the_live_replacement_and_acknowledgement_releases_the_stream() {
+    let home = TestHome::new("raw-closing");
+    home.start_facade_with(&[]);
+    let before = home
+        .hello_result()
+        .expect("the launched Daemon answers hello");
+    assert_eq!(before["api_version"], 1);
+    let keeper_before = keeper(&home);
+    let running = home.start_fake("survivor");
+    let reference = home.inspect_agent(&running.address)["agent"]["reference"].clone();
+    let mut prior = ManualReadClient::open(&home);
+    let args = json!({ "topic": "attach", "args": { "target": reference } });
+    prior.send(1, "watch", args.clone());
+    let snapshot = prior
+        .read_frame()
+        .unwrap()
+        .expect("the old Attach snapshot");
+    assert_eq!(snapshot["id"], 1, "{snapshot}");
+    assert_eq!(
+        snapshot["result"]["snapshot"]["reference"], reference,
+        "{snapshot}"
+    );
+
+    let replacement = newer();
+    let program = program_of_build(&home, &replacement);
+    let takeover = home
+        .command(&program)
+        .args(["daemon", "--takeover"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let closing = loop {
+        let frame = prior
+            .read_frame()
+            .unwrap()
+            .expect("closing before the old stream exits");
+        assert!(frame.get("id").is_none(), "{frame}");
+        if frame["method"] == "closing" {
+            break frame;
+        }
+        assert_eq!(frame["method"], "changed", "{frame}");
+    };
+    assert_eq!(closing["jsonrpc"], "2.0", "{closing}");
+    assert_eq!(
+        closing["params"],
+        json!({ "build": replacement }),
+        "{closing}"
+    );
+    let ack = json!({ "jsonrpc": "2.0", "method": "closing", "params": {} });
+    std::io::Write::write_all(&mut prior.writer, format!("{ack}\n").as_bytes()).unwrap();
+    while let Some(frame) = prior
+        .read_frame()
+        .expect("the old connection closes cleanly")
+    {
+        assert!(
+            frame.get("id").is_none() && frame["method"] == "changed",
+            "{frame}"
+        );
+    }
+    let report = takeover.wait_with_output().unwrap();
+    assert!(
+        report.status.success(),
+        "{}\n{}",
+        stdout(&report),
+        stderr(&report)
+    );
+    let after = home.hello_result().expect("the replacement answers hello");
+    assert_eq!(after["api_version"], 1);
+    assert_eq!(after["build"], replacement);
+    assert_eq!(after["machine_id"], before["machine_id"]);
+    assert_ne!(after["pid"], before["pid"]);
+    assert_eq!(keeper(&home), keeper_before);
+    let mut fresh = ManualReadClient::open(&home);
+    fresh.send(2, "watch", args);
+    let snapshot = fresh
+        .read_frame()
+        .unwrap()
+        .expect("the new Attach snapshot");
+    assert_eq!(snapshot["id"], 2, "{snapshot}");
+    assert_eq!(
+        snapshot["result"]["snapshot"]["reference"], reference,
+        "{snapshot}"
+    );
+    assert_eq!(
+        snapshot["result"]["snapshot"]["process"], "running",
+        "{snapshot}"
+    );
+    assert_eq!(
+        home.inspect_agent(&running.address)["agent"]["pid"],
+        running.pid
+    );
+    assert!(alive(&running.process));
+}
+
 /// An IDE reconnects after a v1 takeover and finds its running agent under the same reference.
 #[test]
 fn an_editor_refinds_its_running_agent_after_v1_takeover() {
@@ -1824,6 +1922,47 @@ fn v1_takeover_refuses_disjoint_daemon_and_keeper_sets_before_installing() {
         "refusals preserved daemon {daemon:?}, keeper {keeper:?}, CLI {:?}",
         agent.process
     );
+
+    // Offer the same newer version with both compatible sets through the public operation.
+    let program = program_of_build(&home, &build);
+    let handed = wire.call_ok(
+        "daemon.upgrade",
+        json!({
+            "program": program, "build": build, "daemon_api_versions": [1], "keeper_api_versions": [1],
+        }),
+    );
+    assert_eq!(
+        handed,
+        json!({ "from": CURRENT, "agent_count": 1 }),
+        "{handed}"
+    );
+    drop(wire);
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .hello_result()
+        .is_some_and(|hello| hello["build"] == build)));
+    let replacement = home
+        .lock_record("daemon")
+        .expect("the replacement daemon lock");
+    assert_ne!(replacement.0, daemon.0);
+    assert_ne!(replacement.1, daemon.1);
+    assert_eq!(home.lock_record("keeper"), Some(keeper));
+    assert_eq!(launcher_build(&home.path).as_deref(), Some(build.as_str()));
+    let mut current = connect(&home);
+    let continued = current.call_ok("agent.inspect", json!({ "target": reference }));
+    assert_eq!(continued["agent"]["reference"], reference, "{continued}");
+    assert_eq!(continued["agent"]["pid"], agent.pid, "{continued}");
+    assert_eq!(continued["agent"]["process"], "running", "{continued}");
+    assert_eq!(process_identity(agent.pid), agent.process);
+    type_raw(&mut current, &agent.address, " and typed after takeover");
+    assert!(wait_for_screen_text(
+        &home,
+        &agent.address,
+        "kept after refusal and typed after takeover"
+    ));
+    println!(
+        "compatible offer replaced daemon {daemon:?} with {replacement:?}, kept CLI {:?}",
+        agent.process
+    );
 }
 
 #[test]
@@ -1880,6 +2019,14 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
     let current = home.lock_record("daemon").unwrap();
     assert_ne!(current.0, daemon.0);
     assert_ne!(current.1, daemon.1);
+    let old_daemon = facade_base::process::ProcessIdentity {
+        pid: daemon.0 as u32,
+        birth: daemon.1,
+    };
+    assert!(
+        wait_until(LOADED_TIMEOUT, || !alive(&old_daemon)),
+        "the old Daemon is still live: {old_daemon:?}"
+    );
     assert_eq!(keeper(&home), keeper_before);
     assert_eq!(process_identity(agent.pid), agent.process);
     let inspected = reconnected.call_ok("agent.inspect", json!({ "target": reference }));
@@ -1901,16 +2048,57 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
     let repeated = reconnected.call_ok("agent.send", send);
     assert_eq!(repeated["id"], receipt["id"], "{repeated}");
     assert_eq!(repeated["repeated"], true, "{repeated}");
+    assert_eq!(repeated["message"], receipt["message"], "{repeated}");
+    assert_eq!(receipt["recipient"]["reference"], reference, "{receipt}");
+    for key in ["reference", "address", "name", "cli"] {
+        assert_eq!(
+            repeated["recipient"][key], receipt["recipient"][key],
+            "{repeated}"
+        );
+    }
     let message_id = receipt["message"]["message_id"].as_str().unwrap();
+    let original = format!(
+        "📨 Message from the command line · {message_id}\nreceipt before the live takeover"
+    );
+    assert_eq!(
+        home.submitted_messages().as_slice(),
+        std::slice::from_ref(&original)
+    );
+    let fresh_text = "fresh message after hot takeover";
+    let fresh = reconnected.call_ok(
+        "agent.send",
+        json!({
+            "to": reference, "text": fresh_text, "request_id": "qa-v1-takeover-fresh",
+        }),
+    );
+    let delivery = &fresh["message"]["delivery"];
+    assert_eq!(delivery["status"], "success", "{fresh}");
+    assert_eq!(delivery["text_written"], "full", "{fresh}");
+    assert_eq!(delivery["enter_written"], true, "{fresh}");
+    assert_eq!(fresh["recipient"]["reference"], reference, "{fresh}");
+    assert_eq!(fresh["message"]["text"], fresh_text, "{fresh}");
+    let fresh_id = fresh["message"]["message_id"].as_str().unwrap();
+    assert_ne!(fresh["id"], receipt["id"], "{fresh}");
     assert_eq!(
         home.submitted_messages(),
-        [format!(
-            "📨 Message from the command line · {message_id}\nreceipt before the live takeover"
-        )]
+        [
+            original,
+            format!("📨 Message from the command line · {fresh_id}\n{fresh_text}")
+        ]
     );
+    assert_eq!(process_identity(agent.pid), agent.process);
     println!(
-        "daemon {daemon:?} -> {current:?}, keeper {keeper_before:?}, CLI {:?}, receipt {}",
-        agent.process, receipt["id"]
+        "Facade hot takeover evidence {}",
+        json!({
+            "from_build": CURRENT, "to_build": next_build,
+            "daemon_api_version": DAEMON_API_VERSIONS[0],
+            "daemon_before": old_daemon,
+            "daemon_after": {"pid": current.0, "birth": current.1},
+            "keeper": {"pid": keeper_before.pid, "birth": keeper_before.birth},
+            "cli": {"pid": agent.process.pid, "birth": agent.process.birth},
+            "reference": reference, "session": session,
+            "receipt": receipt["id"], "fresh_receipt": fresh["id"],
+        })
     );
 }
 

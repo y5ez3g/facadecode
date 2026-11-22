@@ -59,6 +59,16 @@ fn log_repeat(message: &Message, request_id: &str) {
     );
 }
 
+fn terminal_send_window(remaining: Duration, wait: wire::SendWait) -> Duration {
+    // Settlement can take two grace periods past delivery. Leave another for the reply to reach
+    // the Shell before its transport deadline. An inbox receipt does not wait for settlement.
+    let periods = match wait {
+        wire::SendWait::Inbox => 1,
+        wire::SendWait::Delivery | wire::SendWait::Result => 3,
+    };
+    remaining.saturating_sub(messages::RESPONSE_GRACE * periods)
+}
+
 /// How input waits where its agent has no room for it now, or a resize waits to take effect.
 pub(crate) enum InputWait {
     /// It does not wait: a call with an ID fails with `capacity_exceeded`.
@@ -320,7 +330,7 @@ impl Daemon {
         };
         let due = match args.wait_for {
             None => Due::within(budget),
-            Some(_) => {
+            Some(wait) => {
                 let terminal = matches!(caller, Caller::Terminal { .. });
                 let cap = if terminal {
                     MAX_TERMINAL_SEND
@@ -332,7 +342,7 @@ impl Daemon {
                     .unwrap_or_else(delivery_limit)
                     .min(cap);
                 let left = if terminal && !forwarded {
-                    left.saturating_sub(messages::RESPONSE_GRACE)
+                    terminal_send_window(left, wait)
                 } else {
                     left
                 };
@@ -1552,7 +1562,23 @@ fn send_before_deadline() -> ErrorBody {
 
 #[cfg(test)]
 mod tests {
+    use super::{Duration, messages::RESPONSE_GRACE, terminal_send_window, wire::SendWait};
     use facade_base::model::message::{MAX_MESSAGE_CHARS, MAX_MESSAGE_LINES};
+
+    #[test]
+    fn a_terminal_delivery_or_reply_wait_keeps_time_to_settle_and_send_its_receipt() {
+        let remaining = Duration::from_secs(1);
+        for wait in [SendWait::Delivery, SendWait::Result] {
+            let window = terminal_send_window(remaining, wait);
+            assert!(window > Duration::ZERO);
+            assert_eq!(window + RESPONSE_GRACE * 3, remaining);
+            assert_eq!(terminal_send_window(RESPONSE_GRACE, wait), Duration::ZERO);
+        }
+        assert_eq!(
+            terminal_send_window(remaining, SendWait::Inbox),
+            remaining - RESPONSE_GRACE
+        );
+    }
 
     #[test]
     fn accepts_a_message_at_both_public_limits() {

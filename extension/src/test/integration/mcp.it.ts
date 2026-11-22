@@ -3,6 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import { execFileSync } from 'child_process';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
@@ -11,10 +13,16 @@ import * as vscode from 'vscode';
 import type { Response, DaemonHelloParams, InspectResult, ScreenText } from '../../base/coreProtocol';
 import { lineReader } from '../../base/lines';
 import { unspun } from '../../base/tabSpinner';
+import { isWindowIdentity, WINDOW_IDENTITY_COMMAND } from '../../base/windowIdentity';
+import { AGENTS_ROUTE_COMMAND, type Directory, type RouteResponse, WINDOW_DIRECTORY_COMMAND, WINDOW_ROUTE_COMMAND } from '../../base/windowNetwork';
+import type { GuestCaller, RoutedCall } from '../../contract/network';
+import { TOOL_PROTOCOL } from '../../schema/protocol';
+import type { Result } from '../../schema/result';
 import { linesOf as cardLines } from '../detailLines';
-import { coreCall, coreSocket, normalizeDriveLetter } from './editors';
+import { coreCall, coreSocket, localFolderIdentity, normalizeDriveLetter } from './editors';
 import { BUILT_IN_ADAPTERS } from '../../clis/catalog';
 import type { Card, PanelState } from '../../webview/protocol';
+import { observeAcceptanceEngine } from './acceptanceEngine';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
 /** Whether the windows run on the Rust engine: Facade's tools are core's, with core's arguments and results. */
@@ -77,6 +85,13 @@ function linesOf(alias: string): Line[] {
 		read(fs.readFileSync(file));
 	}
 	return lines;
+}
+
+/** Raw terminal input recorded by the fake CLI itself. */
+function terminalInputOf(alias: string): string {
+	const file = `${RECORD}.stdin.${alias}`;
+	return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean)
+		.map(line => (JSON.parse(line) as { data: string }).data).join('') : '';
 }
 
 const phases = new Map<string, number>();
@@ -356,6 +371,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		if (!RUST) { this.skip(); }
 		this.timeout(120_000);
 		const { card, alias, address } = await personAgent();
+		observeAcceptanceEngine(this, card);
 		assertTools(alias);
 		const lines = linesOf(alias);
 		const initialize = lines.find(line => line.step === 'initialize')?.answer?.result;
@@ -368,8 +384,10 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			{ name: 'Reviewer', prompt: 'Review the README.', reply: 'I reviewed the README.' },
 			{ name: 'Verifier', prompt: 'Verify the test setup.', reply: 'I verified the test setup.' }
 		];
+		const folder = vscode.workspace.workspaceFolders![0].uri.fsPath;
+		const machine = card.runId.split('/')[0];
 		const started = await script(alias, [
-			...helpers.map(({ name, prompt }) => ({ tool: 'start_agent', arguments: { name, cli: CLI, prompt } })),
+			...helpers.map(({ name, prompt }) => ({ tool: 'start_agent', arguments: { name, cli: CLI, folder, prompt } })),
 			{ tool: 'list_agents', arguments: {} }
 		]);
 		const publicList = started.content('list_agents');
@@ -377,9 +395,16 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const references = helpers.map((helper, index) => {
 			const result = started.content('start_agent', index);
 			assert.strictEqual(result?.status, 'success', JSON.stringify(result));
+			assert.strictEqual(result.data.machine_id, machine);
+			assert.strictEqual(normalizeDriveLetter(result.data.folder), normalizeDriveLetter(folder));
 			const child = result.data.id as string;
 			return { ...helper, address: child, alias: fakeAlias(child) };
 		});
+		assert.strictEqual(new Set(references.map(helper => helper.address)).size, references.length);
+		for (const helper of references) {
+			assert.strictEqual(publicList.data.agents.filter((agent: { name: string; id: string }) =>
+				agent.name === helper.name && agent.id === helper.address).length, 1);
+		}
 		await until('both helper cards', async () => {
 			const cards = (await state()).cards;
 			return references.every(helper => cards.some(each => each.name === helper.name)) || undefined;
@@ -390,6 +415,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		for (const child of references) {
 			const original = await until(`${child.name} to accept its first task`, () =>
 				received(child.alias).find(text => text.endsWith(child.prompt)));
+			assert.strictEqual(normalizeDriveLetter(argsOf(child.alias).cwd), normalizeDriveLetter(folder));
 			const id = / · (m\d+)$/u.exec(original.split('\n')[0])?.[1];
 			assert.ok(id && original.includes(address), original);
 			const sent = await script(child.alias, [{ tool: 'send_message', arguments: { to: address, text: child.reply, reply_to: id } }]);
@@ -404,22 +430,36 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			assert.strictEqual(reply, `📨 Message from ${child.name} (${child.address}) · ${replyId} · Reply to ${id}\n${child.reply}`);
 		}
 		const [reviewer, verifier] = references;
+		const typed = 'typed by its creator 中文 🚀';
 		const ran = await script(alias, [
 			{ tool: 'read_screen', arguments: { agent: reviewer.address }, until: reviewer.prompt },
 			{ tool: 'read_screen', arguments: { agent: verifier.address }, until: verifier.prompt },
-			{ tool: 'type_text', arguments: { agent: reviewer.address, text: 'typed by its creator' } },
-			{ tool: 'read_screen', arguments: { agent: reviewer.address }, until: 'typed by its creator' },
+			{ tool: 'type_text', arguments: { agent: reviewer.address, text: typed, enter: false } },
+			{ tool: 'read_screen', arguments: { agent: reviewer.address }, until: typed },
 			{ tool: 'press_keys', arguments: { agent: reviewer.address, keys: ['Ctrl+U'] } },
 			{ tool: 'read_screen', arguments: { agent: reviewer.address }, until: reviewer.prompt, untilAbsent: 'typed by its creator' }
 		]);
-		assert.ok(JSON.stringify(ran.content('read_screen')).includes(reviewer.prompt), 'the parent reads the first helper\'s screen');
-		assert.ok(JSON.stringify(ran.content('read_screen', 1)).includes(verifier.prompt), 'the parent reads the second helper\'s screen');
+		for (const [index, helper] of references.entries()) {
+			const screen = ran.content('read_screen', index);
+			assert.strictEqual(screen?.status, 'success', JSON.stringify(screen));
+			assert.deepStrictEqual([screen.data.address, screen.data.agent_id], [helper.address, helper.address.split('@')[0]]);
+			assert.ok(screen.data.text.includes(helper.prompt), 'the intended helper\'s prompt is returned inline');
+		}
 		assert.strictEqual(ran.content('type_text')?.status, 'success', JSON.stringify(ran.content('type_text')));
-		assert.ok(JSON.stringify(ran.content('read_screen', 2)).includes('typed by its creator'), 'direct text is a draft in its box');
+		assert.ok(ran.content('read_screen', 2)?.data.text.includes(typed), 'direct text is a draft in its box');
+		assert.strictEqual(terminalInputOf(reviewer.alias).split(typed).length - 1, 1, 'the intended process received the exact Unicode text once');
+		assert.ok(!terminalInputOf(verifier.alias).includes(typed), 'the second helper received none of the typed text');
+		assert.ok(!received(reviewer.alias).some(text => text.includes(typed)), 'the typed text was never submitted');
 		assert.strictEqual(ran.content('press_keys')?.status, 'success', JSON.stringify(ran.content('press_keys')));
 		assert.ok(!JSON.stringify(ran.content('read_screen', 3)).includes('typed by its creator'), 'Ctrl+U cleared it');
 		const stopped = await script(alias, references.map(child => ({ tool: 'stop_agent', arguments: { agent: child.address } })));
 		references.forEach((_, index) => assert.strictEqual(stopped.content('stop_agent', index)?.status, 'success'));
+		const input = terminalInputOf(alias);
+		for (const helper of references) {
+			assert.strictEqual(input.split(helper.reply).length - 1, 1, 'each reply was pasted once at the creator');
+			assert.strictEqual(received(alias).filter(text => text.endsWith(helper.reply)).length, 1,
+				'each matching reply was submitted once to the creator');
+		}
 		assert.ok(card.runId);
 		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId }).then(undefined, () => undefined);
 	});
@@ -428,6 +468,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		this.timeout(120_000);
 		if (RUST) { this.skip(); }
 		const { card, alias } = await personAgent();
+		observeAcceptanceEngine(this, card);
 		assertTools(alias);
 		const lines = linesOf(alias);
 		const initialize = lines.find(line => line.step === 'initialize')?.answer?.result;
@@ -451,7 +492,8 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		]);
 		const options = ran.content('list_agents');
 		assert.strictEqual(options?.status, 'success', JSON.stringify(options));
-		assert.strictEqual(options.data.windows[0].label, window);
+		assert.deepStrictEqual(options.data.windows.map((each: { label: string }) => each.label), [window]);
+		assert.strictEqual(options.data.scope, 'all');
 		const logFile = options.data.windows[0].history_log.path as string;
 		const events = () => fs.readFileSync(logFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
 		for (const event of ['window_attached', 'locations_scanned', 'cli_scan']) { assert.ok(events().some(each => each.event === event), event); }
@@ -490,9 +532,14 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const listed = ran.content('list_agents', 1)?.data.agents as { agent_id: string; creator?: string; root: string }[];
 		assert.deepStrictEqual(listed.filter(each => each.agent_id === child).map(each => [each.creator, each.root]), [[card.runId, card.runId]], 'the child joins its creator\'s tree');
 
-		assert.ok(JSON.stringify(ran.content('read_screen')).includes('Review the README.'), 'its screen is read, its first task on it');
+		const initialScreen = ran.content('read_screen');
+		assert.strictEqual(initialScreen?.status, 'success', JSON.stringify(initialScreen));
+		assert.deepStrictEqual([initialScreen.data.agent_id, initialScreen.data.text_format], [childCard.alias, 'facade-styled']);
+		assert.ok(initialScreen.data.text.includes('Review the README.'), 'its screen is read, its first task on it');
 		assert.deepStrictEqual([ran.content('type_text')?.status, ran.content('type_text')?.effects.text_written, ran.content('type_text')?.effects.enter_written], ['success', 'full', false]);
 		assert.ok(JSON.stringify(ran.content('read_screen', 1)).includes('typed by its creator'), 'direct text is a draft in its box');
+		assert.strictEqual(terminalInputOf(childAlias).split('typed by its creator').length - 1, 1, 'the selected process received the text once');
+		assert.ok(!received(childAlias).some(text => text.includes('typed by its creator')), 'the typed text was never submitted');
 		assert.deepStrictEqual([ran.content('press_keys')?.status, ran.content('press_keys')?.effects.keys_sent], ['success', 1], JSON.stringify(ran.content('press_keys')));
 		assert.strictEqual(ran.content('read_screen', 2)?.status, 'success', JSON.stringify(ran.content('read_screen', 2)));
 		assert.ok(JSON.stringify(ran.content('read_screen', 2)).includes('Review the README.'), 'the completed screen keeps its earlier output');
@@ -526,9 +573,82 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 	});
 
+	test('the old supervisor serves editor terminal input and starts an MCP child in a linked worktree', async function () {
+		if (RUST || CLI !== 'claude') { this.skip(); }
+		this.timeout(90_000);
+		const folder = vscode.workspace.workspaceFolders![0].uri.fsPath;
+		const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 10_000 }).trim();
+		const original = git(folder, 'rev-parse', 'HEAD');
+		const status = git(folder, 'status', '--porcelain');
+		const branch = 'editor-acceptance';
+		const checkout = path.join(`${folder}.worktrees`, branch);
+		git(folder, 'worktree', 'add', '-b', branch, checkout, original);
+		assert.strictEqual(git(checkout, 'rev-parse', 'HEAD'), original);
+		assert.strictEqual(git(checkout, 'branch', '--show-current'), branch);
+		assert.strictEqual(git(folder, 'branch', '--show-current'), 'main');
+		assert.strictEqual(git(folder, 'status', '--porcelain'), status, 'worktree creation leaves the original checkout unchanged');
+		const { card, alias } = await personAgent();
+		let child: string | undefined;
+		try {
+			observeAcceptanceEngine(this, card);
+			assertTools(alias);
+			const component = vscode.extensions.getExtension('facade.facadecode-window');
+			assert.ok(component?.isActive, 'the local Window Component activates in the workspace');
+			const session = vscode.env.sessionId;
+			const identity: unknown = await vscode.commands.executeCommand(WINDOW_IDENTITY_COMMAND, session);
+			assert.ok(isWindowIdentity(identity, session));
+			assert.strictEqual(identity.component, component.packageJSON.version);
+			assert.strictEqual(await vscode.commands.executeCommand(WINDOW_IDENTITY_COMMAND, `${session}-stale`), undefined);
+			const windowId = `win-${createHash('sha256').update(`facade-window:${identity.token}`).digest('hex').slice(0, 16)}`;
+			await until('the local Window Component publishes the creator under this session', async () => {
+				const directory = await vscode.commands.executeCommand<Directory>(WINDOW_DIRECTORY_COMMAND, session);
+				assert.strictEqual(directory.self, windowId);
+				assert.strictEqual(directory.windows[0].window, windowId);
+				return directory.windows[0].agents.some(agent => agent.alias === alias && agent.run === card.runId) || undefined;
+			});
+			const terminal = vscode.window.terminals.find(each => unspun(each.name) === card.name);
+			assert.ok(terminal, 'the creator has its editor terminal');
+			const text = 'worktree fixture input';
+			terminal.sendText(text, false);
+			await until('the old supervisor terminal input at the fake CLI', () => {
+				const bytes = `${RECORD}.bytes.${alias}`;
+				return fs.existsSync(bytes) && fs.readFileSync(bytes).includes(Buffer.from(text)) || undefined;
+			});
+
+			const { window, location } = await until('the linked worktree is available as an MCP location', async () => {
+				const listing = (await script(alias, [{ tool: 'list_agents', arguments: {} }])).content('list_agents');
+				assert.strictEqual(listing?.status, 'success');
+				const window = listing.data.windows[0];
+				const location = (window.locations as { path?: string; location_id: string }[]).find(each =>
+					each.path && normalizeDriveLetter(each.path) === normalizeDriveLetter(checkout));
+				return location ? { window, location } : undefined;
+			}, 15_000);
+			assert.deepStrictEqual(vscode.workspace.workspaceFolders!.map(each => each.uri.fsPath), [folder]);
+
+			const prompt = 'Read this worktree';
+			const ran = await script(alias, [
+				{ tool: 'start_agent', arguments: { name: 'Worktree helper', cli: CLI, window_id: window.window_id, location_id: location.location_id, prompt }, save: { worktreeChild: 'data.agent_id' } },
+				{ tool: 'read_screen', arguments: { agent: '$worktreeChild' }, until: prompt, wait: 30_000 }
+			]);
+			const started = ran.content('start_agent');
+			assert.strictEqual(started?.status, 'success', JSON.stringify(started));
+			child = started.data.agent_id as string;
+			assert.match(child, /^#a\d+$/u);
+			assert.strictEqual(started.data.creator, card.runId);
+			assert.strictEqual(normalizeDriveLetter(fs.realpathSync(argsOf(child).cwd)), normalizeDriveLetter(fs.realpathSync(checkout)));
+			const screen = ran.content('read_screen');
+			assert.strictEqual(screen?.status, 'success', JSON.stringify(screen));
+			assert.ok(JSON.stringify(screen).includes(prompt), 'the selected old supervisor child drew its prompt');
+		} finally {
+			if (child) { await closePublicAgent(child); }
+			await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
+		}
+	});
+
 	test('messages: one paste and Enter into the input box; a draft there is waited for, never typed over, and the send fails within its thirty seconds, nothing coming after; an input it cannot read fails the same; reading delivers it once', async function () {
 		this.timeout(180_000);
 		const { card, alias } = await personAgent();
+		observeAcceptanceEngine(this, card);
 		const window = vscode.workspace.name!;
 		const first = await script(alias, [
 			discover(),
@@ -544,31 +664,69 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		if (!RUST && started.data.prompt?.path === 'post_start') {
 			await script(alias, [{ tool: 'read_messages', arguments: { all: true }, until: 'after startup', wait: 30_000 }]);
 		}
-		const sending = await script(alias, [
-			{ tool: 'send_message', arguments: { to: '$child', text: 'Hello from your creator.\nTwo lines, one message.', ...DELIVERY_WAIT } },
+		const greeting = 'Hello from your creator.\nTwo lines, one message.';
+		const forbidden = 'Second message.';
+		const drafting: Step[] = [
+			{ tool: 'send_message', arguments: { to: '$child', text: greeting, ...DELIVERY_WAIT } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Two lines, one message.' },
 			// A draft left in its box: the next message never goes over it, waiting for it within its thirty seconds (RULES-1.4, 1.5)
 			{ tool: 'type_text', arguments: { agent: '$child', text: 'half-written' } },
-			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'half-written' },
-			{ tool: 'send_message', arguments: { to: '$child', text: 'Second message.', ...DELIVERY_WAIT }, ...RUST ? {} : { save: { second: 'data.message_id' } } },
-			{ tool: 'send_message', arguments: { to: '#human', text: 'Please look at this.' } }
-		]);
+			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'half-written' }
+		];
+		const askHuman: Step = { tool: 'send_message', arguments: { to: '#human', text: 'Please look at this.' } };
 
 		if (RUST) {
-			// Core's results: a send answers how it went in, a refused one why (MCP-1.2, RULES-1.4, 1.5)
-			const [delivered, held, human] = [0, 1, 2].map(nth => sending.content('send_message', nth));
+			const drafted = await script(alias, drafting);
+			const delivered = drafted.content('send_message');
 			await expectSent(delivered, childAlias, started.data.id);
 			assert.strictEqual(delivered.data.delivery, 'typed_into_input', JSON.stringify(delivered));
-			assert.ok(received(childAlias).some(each => each.includes('Hello from your creator.\nTwo lines, one message.')), `its box took the whole message: ${JSON.stringify(received(childAlias))}`);
-			assert.ok(JSON.stringify(sending.content('read_screen')).includes('Two lines, one message.'), 'its screen shows the message');
-			assert.deepStrictEqual([held?.status, held?.reason], ['failure', 'input_draft'], JSON.stringify(held));
+			assert.ok(received(childAlias).some(each => each.includes(greeting)), `its box took the whole message: ${JSON.stringify(received(childAlias))}`);
+			assert.ok(JSON.stringify(drafted.content('read_screen')).includes('Two lines, one message.'), 'its screen shows the message');
+			const inspectInput = async () => (await coreCall(process.env.FACADE_HOME!, 'agent.inspect', { target: started.data.id })).input;
+			const draft = await until('Core to recognize the listener’s draft', async () => {
+				const input = await inspectInput();
+				return input.state === 'draft' ? input : undefined;
+			}, 10_000);
+			const rawBytes = () => fs.readFileSync(`${RECORD}.bytes.${childAlias}`);
+			const before = rawBytes();
+			assert.ok(before.includes('half-written'), 'the listener received the controlled draft');
+			const submitted = received(childAlias);
+			assert.ok(submitted.every(text => !text.includes('half-written')), 'the held draft has never been submitted');
+			const sending = await script(alias, [
+				{ tool: 'send_message', arguments: { to: '$child', text: forbidden, ...DELIVERY_WAIT } },
+				askHuman
+			]);
+			const held = sending.content('send_message');
+			const human = sending.content('send_message', 1);
+			assert.strictEqual(held?.status, 'failure', JSON.stringify(held));
+			if (held.reason === 'timeout') {
+				// The deadline can win before the typist reports the blocking state (RULES-1.5).
+				const recipient = childAlias.slice(1);
+				assert.strictEqual(held.message, `the deadline passed before ${recipient} took the message; nothing was typed; it was withdrawn from ${recipient}'s inbox, so it is safe to send it again later`);
+			} else {
+				assert.strictEqual(held.reason, 'input_draft', JSON.stringify(held));
+			}
 			assert.strictEqual(human?.status, 'failure', JSON.stringify(human));
 			assert.strictEqual(human?.data?.window_delivery, undefined);
-			assert.ok(!received(childAlias).some(each => each.includes('Second message.')), 'nothing went over the draft');
-			await script(alias, [{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } }]);
+			assert.deepStrictEqual(rawBytes(), before, 'no terminal bytes reached the listener during the blocked send');
+			assert.strictEqual((await inspectInput()).state, 'draft', 'Core still sees the original draft');
+			const cleared = await script(alias, [
+				{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } },
+				{ tool: 'read_screen', arguments: { agent: '$child' }, untilAbsent: 'half-written' }
+			]);
+			assert.strictEqual(cleared.content('press_keys')?.status, 'success');
+			const screenAfterClear = cleared.content('read_screen');
+			assert.strictEqual(screenAfterClear?.status, 'success', JSON.stringify(screenAfterClear));
+			assert.ok(!screenAfterClear.data.text.includes('half-written'), 'the draft cleared');
 			await new Promise(resolve => setTimeout(resolve, 8_000));
-			assert.ok(!received(childAlias).some(each => each.includes('Second message.')), 'a failed message is never typed later');
-			assert.ok(received(childAlias).every(each => !each.includes('half-written')), 'the person\'s draft was never submitted');
+			assert.deepStrictEqual(rawBytes(), Buffer.concat([before, Buffer.from([0x15])]), 'only Ctrl+U reached the listener after the failed send');
+			assert.deepStrictEqual(received(childAlias), submitted, 'clearing the draft did not submit any input');
+			const inbox = (await script(childAlias, [{ tool: 'read_messages', arguments: { last: 10 } }])).content('read_messages');
+			assert.strictEqual(inbox?.status, 'success', JSON.stringify(inbox));
+			const texts = (inbox.data.messages as { text: string }[]).map(message => message.text);
+			assert.ok(texts.includes(greeting), 'the listener’s history contains the delivered message');
+			assert.ok(!texts.includes(forbidden), 'the withdrawn message is absent from the listener’s history');
+			console.log(`      Rust ${CLI} draft: ${draft.state}, ${held.reason}, zero bytes while blocked, only Ctrl+U afterward, no submission or inbox entry`);
 			// An input its reader cannot recognize: the send fails within its thirty seconds
 			fs.writeFileSync(`${RECORD}.quirks.${childAlias}`, JSON.stringify({ garble: true }));
 			const third = (await script(alias, [
@@ -582,11 +740,17 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 			return;
 		}
+		const sending = await script(alias, [
+			...drafting,
+			{ tool: 'send_message', arguments: { to: '$child', text: forbidden }, save: { second: 'data.message_id' } },
+			askHuman
+		]);
 		const sent = sending.content('send_message');
 		assert.strictEqual(sent?.status, 'success', JSON.stringify(sent));
 		assert.deepStrictEqual([sent.effects.outcome, sent.effects.text_written, sent.effects.enter_written, sent.data.disposition], ['confirmed', 'full', true, 'submitted_to_cli']);
 		const message = sent.data.message_id as string;
-		assert.ok(received(childAlias).some(each => block(message, alias, window, 'Hello from your creator.\nTwo lines, one message.').test(each)), `its box took the whole message: ${JSON.stringify(received(childAlias))}`);
+		assert.strictEqual(received(childAlias).filter(each => block(message, alias, window, 'Hello from your creator.\nTwo lines, one message.').test(each)).length, 1,
+			`its box took the whole message once: ${JSON.stringify(received(childAlias))}`);
 		assert.ok(JSON.stringify(sending.content('read_screen')).includes(message), 'its screen shows the message block');
 
 		// Held by the draft through its thirty seconds: it fails with nothing typed, its outcome in its answer (RULES-1.2, 1.4, 1.5)
@@ -647,6 +811,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 	test('a slow submission is pasted once and a missed Enter follows the engine\'s delivery rule', async function () {
 		this.timeout(120_000);
 		const { card, alias } = await personAgent();
+		observeAcceptanceEngine(this, card);
 		const first = await script(alias, [
 			discover(),
 			startChild('Slow', 'Wait for my messages.'),
@@ -698,6 +863,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		if (!RUST) { this.skip(); }
 		this.timeout(120_000);
 		const { alias, card } = await personAgent();
+		observeAcceptanceEngine(this, card);
 		const folder = PEER_DIR;
 		assert.ok(folder && normalizeDriveLetter(folder) !== normalizeDriveLetter(vscode.workspace.workspaceFolders![0].uri.fsPath), 'the peer has a distinct folder');
 		const ran = await script(alias, [
@@ -725,10 +891,128 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		await vscode.commands.executeCommand('facade.deleteAgent', { run_id: card.runId });
 	});
 
+	if (!RUST && !PEER_ELSEWHERE) {
+		test('the actual Window Component routes to the exact peer and refuses stale sessions and malformed calls', async function () {
+			this.timeout(90_000);
+			const { card, alias } = await personAgent();
+			observeAcceptanceEngine(this, card);
+			let child: { run: string; pid: number } | undefined;
+			try {
+				const session = vscode.env.sessionId;
+				const directory = await until('this component’s peer and exact local agent', async () => {
+					const now = await vscode.commands.executeCommand<Directory>(WINDOW_DIRECTORY_COMMAND, session);
+					return now?.windows.some(window => window.window === now.self && window.agents.some(agent => agent.run === card.runId)) &&
+						now.windows.some(window => window.label === PEER) ? now : undefined;
+				});
+				const peer = directory.windows.find(window => window.label === PEER)!;
+				const local = directory.windows.find(window => window.window === directory.self)!.agents.find(agent => agent.run === card.runId)!;
+				const caller: GuestCaller = { id: local.run, alias: local.alias, name: local.name, root: local.root, yolo: false, window: directory.self };
+				const response = (tool: string, args: unknown, id: string): RoutedCall =>
+					({ protocol: TOOL_PROTOCOL, tool, arguments: args, caller, callId: id, elapsedMs: 0, inline: true });
+				const route = async (op: string, args: unknown) => {
+					const answer = await vscode.commands.executeCommand<RouteResponse>(WINDOW_ROUTE_COMMAND, session, { to: peer.window, op, args, deadlineMs: 30_000 });
+					assert.ok(answer?.ok, JSON.stringify(answer));
+					return answer.result;
+				};
+				const received = async <T>(tool: string, args: unknown, id: string): Promise<Result<T>> =>
+					(await route('call', response(tool, args, id)) as { result: Result<T> }).result;
+				const snapshot = await route('agents', { caller }) as {
+					window: {
+						window_id: string;
+						folders: { path: string; uri: string }[];
+						locations: { location_id: string; path: string; opened: boolean; folder_uris: string[] }[];
+					};
+				};
+				assert.strictEqual(snapshot.window.window_id, peer.window);
+				const expected = localFolderIdentity(PEER_DIR);
+				assert.ok(expected, `the fixture peer folder exists: ${PEER_DIR}`);
+				const source = vscode.workspace.workspaceFolders![0].uri;
+				const sourceFolder = localFolderIdentity(source.fsPath);
+				assert.ok(sourceFolder, `the fixture source folder exists: ${source.toString()}`);
+				assert.notStrictEqual(sourceFolder, expected, 'the two workspaces have distinct folders');
+
+				const folders = snapshot.window.folders.filter(each => localFolderIdentity(each.path) === expected);
+				assert.strictEqual(folders.length, 1, `the receiving window opened the exact fixture folder: ${JSON.stringify({ expected: PEER_DIR, folders: snapshot.window.folders })}`);
+				const folder = folders[0];
+				const uri = vscode.Uri.parse(folder.uri, true);
+				assert.deepStrictEqual([uri.scheme, uri.authority], [source.scheme, source.authority], 'the receiving workspace URI is on this host');
+				assert.strictEqual(localFolderIdentity(uri.fsPath), expected, `the receiving workspace URI names the fixture folder: ${folder.uri}`);
+				const locations = snapshot.window.locations.filter(each =>
+					each.opened && each.folder_uris.includes(folder.uri) && localFolderIdentity(each.path) === expected);
+				assert.strictEqual(locations.length, 1, `the receiving workspace supplies its own exact launch location: ${JSON.stringify({ folder, locations: snapshot.window.locations })}`);
+				const location = locations[0];
+				const launches = () => fs.readdirSync(path.dirname(RECORD))
+					.filter(file => file.startsWith(path.basename(RECORD) + '.starts.')).sort();
+				const original = new Set(launches());
+				const startArgs = { name: 'Exact window route', cli: 'claude', window_id: peer.window, location_id: location.location_id };
+				const request = { to: peer.window, op: 'call', args: response('start_agent', startArgs, 'stale-fixture-route'), deadlineMs: 30_000 };
+				assert.strictEqual(await vscode.commands.executeCommand(WINDOW_ROUTE_COMMAND, session + '-stale', request), undefined);
+				const { deadlineMs: _, ...malformed } = request;
+				assert.strictEqual(await vscode.commands.executeCommand(WINDOW_ROUTE_COMMAND, session, malformed), undefined);
+				await assert.rejects(Promise.resolve(vscode.commands.executeCommand(AGENTS_ROUTE_COMMAND, {
+					op: 'call', args: response('stop_agent', { agent: local.run }, 'incomplete-fixture-route'), deadlineMs: 30_000
+				})), /The routed request was incomplete/);
+				const sourcePid = Number(fs.readFileSync(RECORD + '.' + alias, 'utf8').trim());
+				assert.ok(alive(sourcePid));
+				assert.deepStrictEqual(launches(), [...original], 'invalid requests start no agent');
+				const started = await received<{ agent_id: string; alias: string; window_id: string; cwd: string; root: string; creator: string }>(
+					'start_agent', startArgs, 'valid-fixture-route');
+				assert.strictEqual(started.status, 'success', JSON.stringify(started));
+				const facts = started.data;
+				assert.match(facts.alias, /^#a\d+$/u);
+				assert.notStrictEqual(facts.alias, alias);
+				const launchLog = RECORD + '.starts.' + facts.alias;
+				const pid = await until('the actual peer CLI to record its start', () => {
+					if (!fs.existsSync(launchLog)) { return undefined; }
+					const text = fs.readFileSync(launchLog, 'utf8').trim();
+					return /^\d+$/u.test(text) ? Number(text) : undefined;
+				});
+				child = { run: facts.agent_id, pid };
+				assert.deepStrictEqual([facts.window_id, facts.root, facts.creator], [peer.window, local.root, local.run]);
+				assert.strictEqual(localFolderIdentity(facts.cwd), expected, `the routed start records the receiving folder: ${facts.cwd}`);
+				const fakeCwd = argsOf(facts.alias).cwd;
+				assert.strictEqual(localFolderIdentity(fakeCwd), expected, `the actual fake process runs in the receiving folder: ${fakeCwd}`);
+				assert.ok(pid > 0 && alive(pid));
+				assert.deepStrictEqual(launches().filter(name => !original.has(name)), [path.basename(RECORD) + '.starts.' + facts.alias]);
+				assert.deepStrictEqual(fs.readFileSync(RECORD + '.starts.' + facts.alias, 'utf8').trim().split(/\r?\n/u).map(Number), [pid]);
+				await until('the screen from the exact peer agent', async () => {
+					const screen = await received<{ text: string; agent_id: string; window_id: string }>('read_screen', { agent: facts.agent_id }, 'read-fixture-route');
+					assert.strictEqual(screen.status, 'success', JSON.stringify(screen));
+					assert.deepStrictEqual([screen.data.agent_id, screen.data.window_id], [facts.agent_id, peer.window]);
+					return screen.data.text.includes('Try a task') || undefined;
+				});
+				const blocked = await route('call', {
+					...response('stop_agent', { agent: facts.agent_id }, 'blocked-fixture-route'), caller: { ...caller, root: 'run-' + '0'.repeat(32) }
+				}) as { result: Result };
+				assert.deepStrictEqual([blocked.result.status, blocked.result.error?.reason, blocked.result.effects.outcome], ['failure', 'out_of_tree', 'none']);
+				assert.ok(alive(pid) && alive(sourcePid), 'an out-of-tree stop leaves both original processes');
+				const stopped = await received('stop_agent', { agent: child.run }, 'stop-fixture-route');
+				assert.strictEqual(stopped.status, 'success', JSON.stringify(stopped));
+				await until('the exact peer process to stop', () => !alive(pid) || undefined);
+				child = undefined;
+				console.log('  Window route observation ' + JSON.stringify({
+					source: { window: directory.self, run: local.run, pid: sourcePid },
+					peer: { window: facts.window_id, run: facts.agent_id, cwd: facts.cwd, pid },
+					folders: { fixture: PEER_DIR, workspace: folder.path, uri: folder.uri, location: location.path, process: fakeCwd },
+					refused: ['stale-session', 'malformed-window-request', 'incomplete-workspace-request', 'out_of_tree']
+				}));
+			} finally {
+				try {
+					if (child && alive(child.pid)) {
+						await script(alias, [{ tool: 'stop_agent', arguments: { agent: child.run } }]);
+					}
+				} finally {
+					await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
+				}
+			}
+		});
+	}
+
 	test('it lists the other window, starts an agent there, messages it, reads its screen and stops it', async function () {
 		this.timeout(120_000);
 		if (RUST) { this.skip(); }
-		const { alias } = await personAgent();
+		const { card, alias } = await personAgent();
+		observeAcceptanceEngine(this, card);
 		const window = vscode.workspace.name!;
 		// Listed and available: a window that is still starting is listed as unavailable
 		const found = await script(alias, [{ tool: 'list_agents', arguments: {}, until: `"label":${JSON.stringify(PEER)},"environment"`, wait: 30_000 }]);
@@ -739,6 +1023,9 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		assert.ok(peer.clis.some(each => each.cli === 'claude' && each.available), 'the destination supplies its own CLI availability');
 		const location = peer.locations.find(each => each.path === PEER_DIR) ?? peer.locations[0];
 		assert.ok(location, JSON.stringify(peer));
+		if (process.env.FACADE_IT_EXPECT_TESTS) {
+			assert.strictEqual(location.path, PEER_DIR, 'the exact local journey selects the advertised peer folder');
+		}
 
 		const ran = await script(alias, [
 			{ tool: 'start_agent', arguments: { name: 'Remote helper', window_id: peer.window_id, location_id: location.location_id, cli: 'claude', prompt: 'Help from afar.' }, save: { child: 'data.agent_id' } },

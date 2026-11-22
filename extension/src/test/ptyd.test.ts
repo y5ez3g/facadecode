@@ -103,8 +103,8 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		await b.request('claim', { owner: 'w2', generation: 1, token: 'other-window' });
 		const key = { environment: 'local', cli: 'claude', sessionId: 'exact-session' };
 		const results = await Promise.allSettled([
-			spawn(a, 'r-a', 'sleep 30', { meta: { ...key, name: 'private-name' } }),
-			spawn(b, 'r-b', 'sleep 30', { owner: 'w2', meta: { ...key, name: 'private-name' } })
+			spawn(a, 'r-a', IDLE, { meta: { ...key, name: 'private-name' } }),
+			spawn(b, 'r-b', IDLE, { owner: 'w2', meta: { ...key, name: 'private-name' } })
 		]);
 		assert.strictEqual(results.filter(result => result.status === 'fulfilled').length, 1);
 		const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
@@ -334,12 +334,15 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 	test('a run started is claimed by its window: its numbered output, what it is typed and its end reach that window', async () => {
 		const client = await connect();
 		const events = eventsOf(client, 'r1');
-		const info = await spawn(client, 'r1', `process.stdout.write('started\\n'); ${eachLine(finish(`'got ' + line + '\\n'`, 3))}`);
+		const info = await spawn(client, 'r1', `process.stdout.write('started ' + process.pid + '\\n'); ${eachLine(finish(`'got ' + line + '\\n'`, 3))}`);
+		assert.deepStrictEqual([info.run, info.owner], ['r1', 'w1']);
 		assert.ok(info.pid > 1);
+		assert.ok(alive(info.pid));
 		assert.strictEqual(info.claimedElsewhere, false);
 		// ConPTY can emit its terminal initialization before the spawn reply. All output still has consecutive sequence numbers.
 		assert.ok(Number.isSafeInteger(info.seq) && info.seq >= 0);
-		await until('its first line', () => outputOf(events).includes('started'));
+		const started = await until('its process to announce its PID', () => /started (\d+)\r?\n/.exec(outputOf(events)) ?? undefined);
+		assert.strictEqual(Number(started[1]), info.pid);
 		await client.request('input', { run: 'r1', data: 'hello\r' });
 		await until('its answer', () => outputOf(events).includes('got hello'));
 		const exit = await until('its end', () => events.find(event => event.event === 'exit'));
@@ -354,6 +357,8 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		await until('its end', async () => (await client.request('list', { owner: 'w1' })).find(run => run.run === 'once')?.exited);
 		await client.request('forget', { run: 'once' });
 		assert.deepStrictEqual(await client.request('list', { owner: 'w1' }), []);
+		assert.deepStrictEqual(await client.request('list', {}), []);
+		await assert.rejects(client.request('attach', { run: 'once' }), /No run once/);
 		await assert.rejects(spawn(client, 'once', 'process.exit(0)'), /was started before: ptyd never starts a run ID twice/);
 		await assert.rejects(client.request('input', { run: 'nope', data: 'x' }), /No run nope/);
 	});
@@ -483,7 +488,14 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		const before = await spawn(first, 'r3', IDLE);
 		const lost: string[] = [];
 		first.onDidLoseOwner(owner => lost.push(owner));
-		const second = await connect();
+		const unrelated = await connect(false);
+		await unrelated.request('claim', { owner: 'w2', generation: 1, token: 'other-window' });
+		const second = await connect(false);
+		const unrelatedLost: string[] = [];
+		const successorLost: string[] = [];
+		unrelated.onDidLoseOwner(owner => unrelatedLost.push(owner));
+		second.onDidLoseOwner(owner => successorLost.push(owner));
+		await second.request('claim', { owner: 'w1', generation: ++generation, token: `activation-${generation}` });
 		await until('the transfer notice', () => lost.length === 1);
 		const attached = await second.request('attach', { run: 'r3' });
 		assert.deepStrictEqual([attached.info.pid, attached.info.startedAt, lost], [before.pid, before.startedAt, ['w1']]);
@@ -500,11 +512,19 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		]) {
 			await assert.rejects(operation(), /ownership was transferred or expired/);
 		}
+		await unrelated.request('list', { owner: 'w2' });
+		await second.request('list', { owner: 'w1' });
+		assert.deepStrictEqual([lost, unrelatedLost, successorLost], [['w1'], [], []], 'only the previous owner is notified');
 		first.dispose();
 		const resumedOld = await connect(false);
 		await assert.rejects(resumedOld.request('claim', { owner: 'w1', generation: 1, token: 'activation-1' }), /ownership was transferred or expired/);
 		const [after] = await second.request('list', { owner: 'w1' });
 		assert.deepStrictEqual([after.pid, after.exited, after.cols, after.rows, after.meta], [before.pid, undefined, 80, 24, { name: 'r3' }]);
+		const meta = { name: 'updated', selected: true };
+		await second.request('setMeta', { run: 'r3', meta });
+		const { info } = await second.request('attach', { run: 'r3' });
+		assert.deepStrictEqual([info.run, info.pid, info.startedAt, info.meta], ['r3', before.pid, before.startedAt, meta]);
+		assert.strictEqual(await second.request('terminate', { run: 'r3', graceMs: 200 }), 'terminated');
 	});
 
 	test('terminate hangs up the process group and answers its actual end; one that ignores the hang-up is killed after the grace, its children with it; an ended or unknown run already exited (LIFECYCLE-4.2)', async () => {
@@ -676,13 +696,17 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 
 	test('endWindow requires current ownership and ends only that workspace', async () => {
 		const mine = await connect();
-		await spawn(mine, 'm1', IDLE);
+		const ends = eventsOf(mine, 'm1');
+		const first = await spawn(mine, 'm1', IDLE);
 		const theirs = await connect(false);
 		await theirs.request('claim', { owner: 'w2', generation: 1, token: 'other-workspace' });
-		await spawn(theirs, 't1', IDLE, { owner: 'w2' });
+		const other = await spawn(theirs, 't1', IDLE, { owner: 'w2' });
 		await assert.rejects(mine.request('endWindow', { owner: 'w2', graceMs: 0 }), /ownership was transferred or expired/);
 		assert.strictEqual(await mine.request('endWindow', { owner: 'w1', graceMs: 1_000 }), 1);
-		assert.deepStrictEqual((await theirs.request('list', { owner: 'w2' })).map(run => run.run), ['t1']);
+		await until('only the selected run to exit', () => (ends.some(event => event.event === 'exit' && event.run === 'm1') && !alive(first.pid)) || undefined);
+		const listed = await theirs.request('list', { owner: 'w2' });
+		assert.deepStrictEqual(listed.map(run => [run.run, run.pid, run.exited]), [['t1', other.pid, undefined]]);
+		assert.ok(alive(other.pid));
 	});
 
 	test('a resize reaches the process', async () => {

@@ -623,6 +623,119 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual([activeGroup().activeTab === (c.terminal.tab as unknown), groupAt(1).activeTab === (a.terminal.tab as unknown), mine.isActive, second.isActive, model!.made], [true, true, false, false, []]);
 	});
 
+	for (const [timing, delay] of [['earlier in the same millisecond', 0], ['215 ms earlier', 215]] as const) {
+		test('a restored tab switch preserves both Pins when the old terminal was observed ' + timing + ' (LIFECYCLE-2.2, 3.5)', async () => {
+			const port = portOf();
+			groupsOf(1);
+			const changes: unknown[] = [];
+			port.onDidPinTab(change => changes.push(change));
+			port.openPair(facts('run-first', { pinned: true }), { reveal: false, hidden: true });
+			port.openPair(facts('run-second', { pinned: true }), { reveal: false, hidden: true });
+
+			const first = port.openPinned('run-first');
+			const firstTerminal = await until('the first restored terminal', () => terminals[0]);
+			open(firstTerminal);
+			const firstTab = opensIn(firstTerminal, 1);
+			activeTerminal = firstTerminal;
+			activeChanged.fire(firstTerminal);
+			await first;
+			assert.strictEqual(firstTab.isPinned, true);
+
+			const next = port.openPinned('run-second');
+			const secondTerminal = await until('the second restored terminal', () => terminals[1]);
+			const group = groupAt(1);
+			const secondTab = Object.assign(secondTerminal.tab, { group, isPreview: false }) as unknown as ModelTab;
+			assert.strictEqual(firstTab.label, secondTab.label, 'labels cannot identify the terminal');
+			const now = Date.now;
+			let observedAt = now();
+			let firstAgain!: ModelTab;
+			let secondAgain!: ModelTab;
+			try {
+				// The new active tab and rebuilt group arrive before the new active terminal.
+				Date.now = () => observedAt;
+				activeChanged.fire(firstTerminal);
+				observedAt += delay;
+				open(secondTerminal);
+				group.tabs.push(secondTab);
+				tabsChanged.fire({ opened: [secondTab], closed: [], changed: [] });
+				toFront(secondTab);
+				if (delay) { observedAt++; }
+				firstAgain = { ...firstTab };
+				secondAgain = { ...secondTab };
+				group.tabs.splice(0, group.tabs.length, firstAgain, secondAgain);
+				group.activeTab = secondAgain;
+				groupsChanged.fire({ opened: [], changed: [group], closed: [] } as never);
+				observedAt += 32;
+				activeTerminal = secondTerminal;
+				activeChanged.fire(secondTerminal);
+			} finally {
+				Date.now = now;
+			}
+			await next;
+			await port.finishRestore();
+
+			assert.deepStrictEqual(changes, [], 'the previous terminal does not inherit the new tab’s unmarked state');
+			assert.deepStrictEqual([firstAgain.isPinned, secondAgain.isPinned], [true, true]);
+			assert.strictEqual(group.activeTab, secondAgain);
+			assert.deepStrictEqual(commands, ['workbench.action.pinEditor', 'workbench.action.pinEditor']);
+
+			// After the real active-terminal event established the correct pair, the person’s Unpin still applies.
+			secondAgain.isPinned = false;
+			tabsChanged.fire({ opened: [], closed: [], changed: [secondAgain] });
+			assert.deepStrictEqual(changes, [{ run: 'run-second', pinned: false }]);
+			secondAgain.isPinned = true;
+			tabsChanged.fire({ opened: [], closed: [], changed: [secondAgain] });
+			assert.deepStrictEqual(changes, [{ run: 'run-second', pinned: false }, { run: 'run-second', pinned: true }]);
+			assert.strictEqual(firstAgain.isPinned, true);
+		});
+	}
+
+	test('the newer terminal event in the same millisecond retains authority through a group rebuild (LIFECYCLE-2.2, 3.4)', async () => {
+		const port = portOf();
+		await port.finishRestore();
+		groupsOf(1);
+		port.openPair(facts('run-first'), { reveal: true });
+		const first = terminals[0];
+		open(first);
+		const firstTab = opensIn(first, 1);
+		port.openPair(facts('run-second'), { reveal: true });
+		const second = terminals[1];
+		open(second);
+		const secondTab = opensIn(second, 1);
+		assert.strictEqual(firstTab.label, secondTab.label, 'labels cannot identify the terminal');
+		modelShow(second, false);
+		port.pinTab('run-second', true);
+		await until('the second original tab pinned', () => secondTab.isPinned);
+		await new Promise(resolve => setTimeout(resolve, 150));
+		modelShow(first, false);
+		const changes: unknown[] = [];
+		port.onDidPinTab(change => changes.push(change));
+		const group = groupAt(1);
+		const now = Date.now;
+		const tick = now();
+		try {
+			Date.now = () => tick;
+			tabsChanged.fire({ opened: [], closed: [], changed: [firstTab] });
+			activeTerminal = second;
+			activeChanged.fire(second);
+			const firstAgain = { ...firstTab, isActive: false };
+			const secondAgain = { ...secondTab, isActive: true };
+			group.tabs.splice(0, group.tabs.length, firstAgain, secondAgain);
+			group.activeTab = secondAgain;
+			groupsChanged.fire({ opened: [], changed: [group], closed: [] } as never);
+			assert.deepStrictEqual(changes, []);
+			secondAgain.isPinned = false;
+			tabsChanged.fire({ opened: [], closed: [], changed: [secondAgain] });
+			assert.deepStrictEqual(changes, [{ run: 'run-second', pinned: false }]);
+			secondAgain.isPinned = true;
+			tabsChanged.fire({ opened: [], closed: [], changed: [secondAgain] });
+			assert.deepStrictEqual(changes, [{ run: 'run-second', pinned: false }, { run: 'run-second', pinned: true }]);
+			assert.strictEqual(firstAgain.isPinned, false);
+		} finally {
+			Date.now = now;
+		}
+	});
+
 	test('an Unpin asked while a restored tab takes its mark reaches that tab after its turn (LIFECYCLE-3.4, 3.5)', async () => {
 		const port = portOf();
 		await port.finishRestore();

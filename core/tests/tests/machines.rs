@@ -5,6 +5,8 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use facade_base::files::real_path;
 use facade_base::ssh::{SshMode, decode_home_hex, machine_ssh_args};
@@ -269,6 +271,21 @@ fn cold_cutover_keeps_prerelease_agent_records_and_saved_transport() {
     assert!(old.is_absolute() && old.is_file(), "{}", old.display());
     let local = TestHome::new("v1-cutover-a");
     let remote = TestHome::new("v1-cutover-b");
+    let session = "86da4482-2bae-4a45-b193-a5664c19826a";
+    let keys = local.folder().join("cli-keys");
+    let transcripts = local.folder().join("transcripts");
+    std::fs::create_dir(&transcripts).unwrap();
+    let transcript = transcripts.join(format!("{session}.jsonl"));
+    std::fs::write(
+        local.path.join("facade.json"),
+        json!({ "clis": { "fake": {
+            "type": "claude", "command": test_binaries().fakecli,
+            "env": { "FAKECLI_LOOK": "claude", "FAKECLI_SESSION": session,
+                "FAKECLI_TRANSCRIPTS": transcripts, "FAKECLI_KEYS": keys }
+        } } })
+        .to_string(),
+    )
+    .unwrap();
     let machines = [("laptop", &local), ("devbox", &remote)];
     install_machine_ssh(&machines, &old);
     let old_call = |home: &TestHome, args: &[&str]| {
@@ -295,10 +312,69 @@ fn cold_cutover_keeps_prerelease_agent_records_and_saved_transport() {
     drop(remote_wire);
     let out = old_call(&local, &["start", "-d", "--name", "kept", "fake"]);
     let address = started_ref(&out);
+    let text = "cold cutover delivery from the old Daemon";
+    let send = json!({
+        "to": address, "text": text, "request_id": "cold-cutover-prior-terminal-send"
+    });
+    let receipt = prior.call_ok("agent.send", send.clone());
+    assert_eq!(receipt["id"], "m1@laptop", "{receipt}");
+    assert!(receipt.get("repeated").is_none(), "{receipt}");
+    assert_eq!(receipt["message"]["from"], "command_line", "{receipt}");
+    assert_eq!(receipt["message"]["text"], text, "{receipt}");
+    assert_eq!(
+        receipt["message"]["delivery"]["status"], "success",
+        "{receipt}"
+    );
+    assert_eq!(
+        receipt["message"]["delivery"]["delivered_via"], "terminal",
+        "{receipt}"
+    );
+    assert_eq!(
+        receipt["message"]["delivery"]["text_written"], "full",
+        "{receipt}"
+    );
+    assert_eq!(
+        receipt["message"]["delivery"]["enter_written"], true,
+        "{receipt}"
+    );
+    let repeat = |wire: &mut DaemonTestClient| {
+        let replay = wire.call_ok("agent.send", send.clone());
+        assert_eq!(replay["repeated"], true, "{replay}");
+        assert_eq!(replay["id"], receipt["id"], "{replay}");
+        assert_eq!(replay["message"], receipt["message"], "{replay}");
+        assert_eq!(
+            replay["recipient"]["reference"], receipt["recipient"]["reference"],
+            "{replay}"
+        );
+        replay
+    };
+    let mut old_reconnect = DaemonTestClient::open(&local);
+    let hello = old_reconnect.hello_prerelease("terminal", [3, 3], json!({}));
+    assert_eq!(hello["result"]["machine_id"], local_id, "{hello}");
+    let prior_replay = repeat(&mut old_reconnect);
+    drop(old_reconnect);
+    assert!(wait_until(LOADED_TIMEOUT, || {
+        transcript.is_file()
+            && prior.call_ok("agent.inspect", json!({ "agent": address }))["agent"]["session"]
+                == session
+    }));
+    let original_keys = std::fs::read(&keys).unwrap();
+    let header = "📨 Message from the command line · m1";
+    assert_eq!(
+        original_keys,
+        format!("📨 Message from \x1b[200~the command line · m1\r{text}\x1b[201~\r").as_bytes()
+    );
+    let original_transcript = std::fs::read(&transcript).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&original_transcript).unwrap(),
+        json!({ "message": format!("{header}\n{text}") })
+    );
     old_call(&local, &["stop", address]);
     let record = prior.call_ok("agent.inspect", json!({ "agent": address }))["agent"].clone();
     assert_eq!(record["process"], "ended", "{record}");
     assert_eq!(record["machine_id"], local_id, "{record}");
+    assert_eq!(record["session"], session, "{record}");
+    assert_eq!(receipt["message"]["to"], record["agent_id"], "{receipt}");
     old_call(
         &local,
         &[
@@ -311,13 +387,11 @@ fn cold_cutover_keeps_prerelease_agent_records_and_saved_transport() {
             "devbox",
         ],
     );
-    let old_row = machine_in(&prior.call_ok("machine.list", json!({})), &remote_id).unwrap();
-    let old_route = old_row["connections"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|link| link["kind"] == "saved" && link["initiator_machine_id"] == local_id)
-        .expect("the prerelease saved SSH link");
+    let old_roster = prior.call_ok("machine.list", json!({}));
+    let old_peer = machine_in(&old_roster, &remote_id).expect("the prerelease peer");
+    // The initiating machine owns the saved transport, including while the peer is online.
+    let old_row = machine_in(&old_roster, &local_id).expect("the prerelease initiator");
+    let old_route = saved_ssh(&old_row, &local_id, &remote_id);
     assert_eq!(old_route["remote_home"], json!(remote.path));
     assert!(!old_route["ssh_args"].as_array().unwrap().is_empty());
     let old_keeper = local.lock_record("keeper").expect("the prerelease keeper");
@@ -337,18 +411,28 @@ fn cold_cutover_keeps_prerelease_agent_records_and_saved_transport() {
     install_machine_ssh(&machines, &test_binaries().facade);
 
     let mut current = connect(&local);
-    assert_eq!(local.hello_result().unwrap()["machine_id"], local_id);
+    let welcome = local.hello_result().unwrap();
+    assert_eq!(welcome["api_version"], 1);
+    assert_eq!(welcome["machine_id"], local_id);
     let reference = json!({ "machine_id": local_id, "agent_id": record["agent_id"] });
+    assert_eq!(receipt["recipient"]["reference"], reference);
     let after = current.call_ok("agent.inspect", json!({ "target": reference }));
     assert_eq!(after["agent"]["reference"], reference);
-    for field in ["address", "name", "cli", "cwd", "process", "exit"] {
+    for field in [
+        "address", "name", "cli", "cwd", "process", "exit", "session",
+    ] {
         assert_eq!(after["agent"][field], record[field], "{field}: {after}");
     }
+    let migrated_replay = repeat(&mut current);
+    let mut fresh = send;
+    fresh["request_id"] = json!("cold-cutover-new-request");
+    let denied = current.call("agent.send", fresh);
+    assert_eq!(error_reason(&denied), "ended", "{denied}");
+    assert_eq!(std::fs::read(&keys).unwrap(), original_keys);
+    assert_eq!(std::fs::read(&transcript).unwrap(), original_transcript);
     let roster = current.call_ok("machine.list", json!({}));
-    assert_eq!(
-        machine_in(&roster, &remote_id).unwrap()["state"],
-        "disconnected"
-    );
+    let cold_peer = machine_in(&roster, &remote_id).unwrap();
+    assert_eq!(cold_peer["state"], "disconnected");
     let row = machine_in(&roster, &local_id).unwrap();
     let route = saved_ssh(&row, &local_id, &remote_id);
     assert_eq!(route["transport"]["kind"], "ssh", "{route}");
@@ -358,13 +442,22 @@ fn cold_cutover_keeps_prerelease_agent_records_and_saved_transport() {
             "{field}: {route}"
         );
     }
-    assert_eq!(
-        ssh_attempts(&remote),
-        previous,
-        "the cold read does not dial"
-    );
+    let attempts = ssh_attempts(&remote);
+    assert_eq!(attempts, previous, "the cold read does not dial");
     drop(connect(&remote));
     assert_eq!(remote.hello_result().unwrap()["machine_id"], remote_id);
+    println!(
+        "Facade cold cutover evidence {}",
+        json!({
+            "prior": { "protocol": 3, "agent": record, "saved": old_route, "peer": old_peer },
+            "candidate": { "api_version": welcome["api_version"], "agent": after["agent"],
+                "saved": route, "peer": cold_peer },
+            "ssh_attempts": { "before": previous, "after": attempts },
+            "receipt": { "original": receipt, "prior_replay": prior_replay, "candidate_replay": migrated_replay },
+            "new_request": denied, "cli_bytes": original_keys,
+            "transcript": String::from_utf8_lossy(&original_transcript)
+        })
+    );
 }
 
 #[test]
@@ -444,6 +537,138 @@ fn a_guarded_removal_matches_the_exact_saved_id_even_when_a_name_matches() {
     );
     assert_eq!(removed["machine_id"], remote_id);
     assert_eq!(ssh_attempts(&remote), attempts);
+}
+
+/// A saved destination must introduce its original machine before it can serve any agent.
+#[test]
+fn a_saved_destination_refuses_a_different_peer_and_keeps_exact_agent_refs() {
+    let local = TestHome::new("wrong-peer-origin");
+    let peer = TestHome::new("wrong-peer-expected");
+    let other = TestHome::new("wrong-peer-unexpected");
+    let facade = &test_binaries().facade;
+    install_machine_ssh(
+        &[("origin", &local), ("devbox", &peer), ("other", &other)],
+        facade,
+    );
+    let local_id = name_machine(&local, "origin");
+    let peer_id = name_machine(&peer, "devbox");
+    let other_id = name_machine(&other, "other");
+    assert_ne!(peer_id, other_id);
+    let local_run = local.start_fake_with("worker", &[("FAKECLI_NAME", "local marker")]);
+    let peer_run = peer.start_fake_with("worker", &[("FAKECLI_NAME", "peer marker")]);
+    assert_eq!(local_run.id, peer_run.id);
+    assert!(add_saved(&local, "devbox", &peer).contains("Saved the connection to devbox."));
+    wait_for_route(&local, &peer_id, &[&peer_id]);
+    let saved = || {
+        saved_ssh(
+            &machine_json(&local, &local_id).unwrap(),
+            &local_id,
+            &peer_id,
+        )
+    };
+    let before = saved();
+    assert_eq!(before["transport"]["ssh_destination"], "devbox");
+    assert_eq!(before["state"], "connected");
+
+    // Relay a new connection for the saved destination to the other real daemon.
+    let other_run = other.start_fake("other worker");
+    let connections_before = machine_json(&local, &local_id).unwrap()["connections"].clone();
+    let mut opening = ManualReadClient::open(&local);
+    opening.send(
+        1,
+        "call",
+        json!({ "op": "machine.connect", "args": { "kind": "saved", "transport": before["transport"] } }),
+    );
+    let authorized = opening
+        .read_message()
+        .expect("machine connection authorization");
+    assert_eq!(authorized["id"], 1, "{authorized}");
+    assert_eq!(
+        authorized["result"]["expected_machine_id"], peer_id,
+        "{authorized}"
+    );
+    let hello = opening
+        .read_message()
+        .expect("the origin daemon's machine hello");
+    assert_eq!(hello["method"], "hello", "{hello}");
+    assert_eq!(
+        hello["params"]["machine"]["machine_id"], local_id,
+        "{hello}"
+    );
+    let mut remote = other
+        .command(facade)
+        .args(["machine", "serve", "--no-start"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(remote.stdin.take().unwrap(), "{hello}").unwrap();
+    let served = remote.wait_with_output().unwrap();
+    let output = stdout(&served);
+    let reply: Value = serde_json::from_str(
+        output
+            .lines()
+            .next()
+            .expect("the other daemon's hello reply"),
+    )
+    .unwrap();
+    assert_eq!(reply["id"], hello["id"], "{reply}");
+    assert_eq!(reply["result"]["api_version"], 1, "{reply}");
+    assert_eq!(reply["result"]["machine_id"], other_id, "{reply}");
+    writeln!(opening.writer, "{reply}").unwrap();
+    let refused = opening.read_message().expect("the mismatch notification");
+    assert_eq!(refused["method"], "connect_failed", "{refused}");
+    assert_eq!(refused["jsonrpc"], "2.0", "{refused}");
+    assert!(refused.get("id").is_none(), "{refused}");
+    let after = opening
+        .read_frame()
+        .expect("the refused handoff ends cleanly");
+    assert!(after.is_none(), "unexpected frame after refusal: {after:?}");
+    let error = &refused["params"]["error"]["data"];
+    assert_eq!(error["reason"], "machine_id_mismatch", "{refused}");
+    assert_eq!(
+        error["details"]["expected_machine_id"], peer_id,
+        "{refused}"
+    );
+    assert_eq!(error["details"]["machine_id"], other_id, "{refused}");
+    assert!(alive(&other_run.process));
+    assert!(machine_json(&local, &other_id).is_none());
+    assert_eq!(
+        machine_json(&local, &local_id).unwrap()["connections"],
+        connections_before,
+        "the failed handoff records no successful connection",
+    );
+    assert_eq!(saved(), before);
+    wait_for_route(&local, &peer_id, &[&peer_id]);
+
+    let mut wire = connect(&local);
+    let ambiguous = wire.call("agent.inspect", json!({ "target": "worker" }));
+    assert_eq!(
+        error_reason(&ambiguous),
+        "ambiguous_reference",
+        "{ambiguous}"
+    );
+    let candidates = ambiguous["error"]["data"]["details"]["candidates"]
+        .as_array()
+        .unwrap();
+    assert_eq!(candidates.len(), 2, "{ambiguous}");
+    for (machine, worker, marker) in [
+        (&local_id, &local_run, "local marker"),
+        (&peer_id, &peer_run, "peer marker"),
+    ] {
+        assert!(candidates.contains(&json!(worker.address)), "{ambiguous}");
+        let reference = json!({ "machine_id": machine, "agent_id": worker.id });
+        let found = wire.call_ok("agent.inspect", json!({ "target": reference }));
+        assert_eq!(found["agent"]["reference"], reference, "{found}");
+        assert_eq!(found["agent"]["pid"], worker.pid, "{found}");
+        assert_eq!(process_identity(worker.pid), worker.process);
+        let screen = wire.call_ok("agent.screen", json!({ "target": reference }));
+        assert!(
+            screen["text"].as_str().unwrap().contains(marker),
+            "{screen}"
+        );
+    }
 }
 
 #[test]
@@ -533,8 +758,8 @@ fn reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones() {
         ],
         &test_binaries().facade,
     );
-    name_machine(&local, "laptop");
-    name_machine(&awake, "devbox");
+    let local_id = name_machine(&local, "laptop");
+    let awake_id = name_machine(&awake, "devbox");
     name_machine(&sleeping, "staging");
     name_machine(&unavailable, "gpu");
     for (destination, peer) in [
@@ -550,11 +775,18 @@ fn reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones() {
     std::fs::write(unavailable.folder().join("ssh-needs-login"), []).unwrap();
     assert!(sleeping.hello_result().is_none() && unavailable.hello_result().is_none());
     let session = "3182c480-42a0-4aa0-b112-58e2c865031c";
-    let worker = awake.start_fake_with("Worker", &[("FAKECLI_SESSION", session)]);
+    let worker = awake.start_fake_with(
+        "Worker",
+        &[("FAKECLI_SESSION", session), ("FAKECLI_STATUS", "1")],
+    );
     assert!(wait_until(LOADED_TIMEOUT, || awake
         .inspect_agent(&worker.address)["agent"]["session"]
         == session));
-    let pixel = local.start_fake("Pixel");
+    let local_session = "77bc3b1c-ba9c-41c3-9043-1a5c63e71b77";
+    let pixel = local.start_fake_with("Pixel", &[("FAKECLI_SESSION", local_session)]);
+    assert!(wait_until(LOADED_TIMEOUT, || local
+        .inspect_agent(&pixel.address)["agent"]["session"]
+        == local_session));
 
     let previous = ssh_serves(&sleeping);
     let named = local.run_facade(&["stop", "--machine", "staging"]);
@@ -584,6 +816,20 @@ fn reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones() {
     );
     assert_eq!(ssh_serves(&sleeping), format!("{previous}no-start\n"));
     assert!(sleeping.hello_result().is_none());
+
+    assert!(wait_until(LOADED_TIMEOUT, || awake
+        .inspect_agent(&worker.address)["agent"]["state"]
+        == "idle"));
+    let remote_only = local.run_facade(&["list", "--machine", "devbox"]);
+    assert_eq!(
+        (remote_only.status.code(), stderr(&remote_only)),
+        (Some(0), String::new())
+    );
+    let remote_only = Table::parse(&stdout(&remote_only));
+    assert_eq!(remote_only.column("REF"), [worker.address.as_str()]);
+    assert_eq!(remote_only.column("NAME"), ["Worker"]);
+    assert_eq!(remote_only.column("STATE"), ["Idle"]);
+    assert!(alive(&worker.process) && alive(&pixel.process));
 
     let previous = ssh_serves(&sleeping);
     let stopped = local.run_facade(&["stop", "--all"]);
@@ -632,6 +878,51 @@ fn reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones() {
     let table = Table::parse(&stdout(&resumable));
     assert_eq!(table.column("TYPE"), ["Managed"]);
     assert_eq!(table.column("REF"), [worker.address.as_str()]);
+    // Query each eligible stopped run from the same caller, changing only the machine.
+    let folder = real_path(&awake.project).unwrap();
+    let mut client = connect(&local);
+    for (selector, holder, machine_id, run, name, session) in [
+        ("laptop", &local, &local_id, &pixel, "Pixel", local_session),
+        ("devbox", &awake, &awake_id, &worker, "Worker", session),
+    ] {
+        let stopped = holder.inspect_agent(&run.address)["agent"].clone();
+        let reference = &stopped["reference"];
+        let expected_folder = real_path(&holder.project).unwrap();
+        assert_eq!(stopped["process"], "ended", "{stopped}");
+        assert_eq!(reference["machine_id"], *machine_id, "{stopped}");
+        assert_eq!(stopped["session"], session, "{stopped}");
+        assert_eq!(stopped["cwd"], json!(expected_folder), "{stopped}");
+        let listed = client.call_ok(
+            "agent.resume_list",
+            json!({
+                "scope": { "kind": "machine", "machine": selector },
+                "folder": folder, "folder_scope": "all",
+            }),
+        );
+        let [machine] = listed["machines"].as_array().unwrap().as_slice() else {
+            panic!("expected only {selector} to answer: {listed}");
+        };
+        assert_eq!(machine["machine_id"], *machine_id, "{listed}");
+        assert_eq!(machine["name"], selector, "{listed}");
+        assert_eq!(machine["status"], "answered", "{listed}");
+        let [item] = listed["items"].as_array().unwrap().as_slice() else {
+            panic!("expected only {name} to be resumable on {selector}: {listed}");
+        };
+        assert_eq!(
+            item["target"],
+            json!({ "kind": "agent", "reference": reference }),
+            "{listed}"
+        );
+        assert_eq!(item["agent"], *reference, "{listed}");
+        assert_eq!(item["machine_id"], *machine_id, "{listed}");
+        assert_eq!(item["cli"], "fake", "{listed}");
+        assert_eq!(item["folder"], json!(expected_folder), "{listed}");
+        assert_eq!(item["session"], session, "{listed}");
+        assert_eq!(item["name"], name, "{listed}");
+        assert_eq!(item["stopped"], true, "{listed}");
+        println!("agent.resume_list selected {selector} {machine_id}: {item}");
+    }
+
     let resumed = local.run_facade(&["resume", "-d", table.column("REF")[0]]);
     assert_eq!(resumed.status.code(), Some(0), "{}", stderr(&resumed));
     assert!(resumed.stderr.is_empty(), "{}", stderr(&resumed));
@@ -778,6 +1069,149 @@ impl Drop for MachineLink {
     }
 }
 
+/// Relays the real handoff between two daemons and records each side of the machine protocol.
+struct ObservedMachineLink {
+    front_socket: facade_base::paths::ClientSocket,
+    peer_socket: facade_base::paths::ClientSocket,
+    pumps: Option<[std::thread::JoinHandle<()>; 2]>,
+    from_front: std::sync::mpsc::Receiver<Value>,
+    from_peer: std::sync::mpsc::Receiver<Value>,
+}
+
+const LIVE_ADVERTISE_PROBE: u64 = 10_000;
+
+struct AdvertiseProbe {
+    allow_live_tables: AtomicBool,
+    destination: String,
+}
+
+fn advertises_route(frame: &Value, destination: &str) -> bool {
+    frame["method"] == "advertise"
+        && frame["params"]["machines"].as_array().is_some_and(|rows| {
+            rows.iter()
+                .any(|row| row["machine_id"] == destination && row["route"] == json!([destination]))
+        })
+}
+
+impl ObservedMachineLink {
+    fn open(front: &TestHome, peer: &TestHome) -> Self {
+        Self::with_advertise_probe(front, peer, None)
+    }
+
+    fn with_advertise_probe(
+        front: &TestHome,
+        peer: &TestHome,
+        probe: Option<Arc<AdvertiseProbe>>,
+    ) -> Self {
+        let mut outgoing = ManualReadClient::open(front);
+        outgoing.send(
+            1,
+            "call",
+            json!({ "op": "machine.connect", "args": {
+            "kind": "temporary", "transport": { "kind": "bridge" }
+        } }),
+        );
+        let authorization = outgoing
+            .read_frame()
+            .unwrap()
+            .expect("authorize the handoff");
+        assert_eq!(authorization["id"], 1, "{authorization}");
+        assert_eq!(
+            authorization["result"]["transport"]["kind"], "bridge",
+            "{authorization}"
+        );
+        let incoming = ManualReadClient::before_hello(peer);
+        let front_socket = outgoing.writer.try_clone().unwrap();
+        let peer_socket = incoming.writer.try_clone().unwrap();
+        let relay = |mut source: ManualReadClient,
+                     mut target: facade_base::paths::ClientSocket,
+                     front: bool| {
+            let (observed, frames) = std::sync::mpsc::channel();
+            let probe = probe.clone();
+            let pump = std::thread::spawn(move || {
+                let mut probed = false;
+                while let Ok(Some(frame)) = source.read_frame() {
+                    // The foreground Shell consumes this local handoff result before forwarding.
+                    let endpoint_notice = front
+                        && matches!(
+                            frame["method"].as_str(),
+                            Some("connected" | "connect_failed")
+                        );
+                    let _ = observed.send(frame.clone());
+                    let live_table = frame["method"] == "advertise" && frame.get("id").is_none();
+                    let control_reply = probe.is_some()
+                        && front
+                        && frame["id"] == LIVE_ADVERTISE_PROBE
+                        && frame.get("method").is_none();
+                    let held_table = !front
+                        && live_table
+                        && probe
+                            .as_ref()
+                            .is_some_and(|probe| !probe.allow_live_tables.load(Ordering::SeqCst));
+                    if endpoint_notice || control_reply || held_table {
+                        continue;
+                    }
+                    if writeln!(target, "{frame}").is_err() {
+                        break;
+                    }
+                    if !front
+                        && live_table
+                        && !probed
+                        && probe
+                            .as_ref()
+                            .is_some_and(|probe| advertises_route(&frame, &probe.destination))
+                    {
+                        // An ID-bearing copy immediately after the live notification is an ordered
+                        // barrier. Its error is observed here and never sent to the other Daemon.
+                        let mut control = frame;
+                        control["id"] = json!(LIVE_ADVERTISE_PROBE);
+                        if writeln!(target, "{control}").is_err() {
+                            break;
+                        }
+                        probed = true;
+                    }
+                }
+            });
+            (pump, frames)
+        };
+        let (forward, from_front) = relay(outgoing, peer_socket.try_clone().unwrap(), true);
+        let (returning, from_peer) = relay(incoming, front_socket.try_clone().unwrap(), false);
+        Self {
+            front_socket,
+            peer_socket,
+            pumps: Some([forward, returning]),
+            from_front,
+            from_peer,
+        }
+    }
+}
+
+impl Drop for ObservedMachineLink {
+    fn drop(&mut self) {
+        let _ = self.front_socket.shutdown(std::net::Shutdown::Both);
+        let _ = self.peer_socket.shutdown(std::net::Shutdown::Both);
+        for pump in self.pumps.take().unwrap() {
+            let _ = pump.join();
+        }
+    }
+}
+
+fn observed_frame(
+    frames: &std::sync::mpsc::Receiver<Value>,
+    expected: &str,
+    mut matches: impl FnMut(&Value) -> bool,
+) -> Value {
+    let deadline = std::time::Instant::now() + LOADED_TIMEOUT;
+    loop {
+        let frame = frames
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap_or_else(|error| panic!("expected {expected}: {error}"));
+        if matches(&frame) {
+            return frame;
+        }
+    }
+}
+
 fn wait_for_route(home: &TestHome, target: &str, hops: &[&str]) {
     assert!(
         wait_until(secs(15), || {
@@ -789,12 +1223,158 @@ fn wait_for_route(home: &TestHome, target: &str, hops: &[&str]) {
     );
 }
 
+/// Initial tables are acknowledged after machine hello. Later announcements are id-less.
+#[test]
+fn initial_and_live_machine_advertisements_route_exact_calls() {
+    let origin = TestHome::new("advertise-origin");
+    let middle = TestHome::new("advertise-middle");
+    let first = TestHome::new("advertise-first");
+    let later = TestHome::new("advertise-later");
+    install_machine_ssh(
+        &[("middle", &middle), ("first", &first), ("later", &later)],
+        &test_binaries().facade,
+    );
+    let origin_id = name_machine(&origin, "origin");
+    let middle_id = name_machine(&middle, "middle");
+    let first_id = name_machine(&first, "first");
+    let later_id = name_machine(&later, "later");
+    let initial_run = first.start_fake("worker");
+    let later_run = later.start_fake("worker");
+    assert_eq!(initial_run.id, later_run.id);
+    let _first_link = MachineLink::open(&middle, "first", &first);
+    wait_for_route(&middle, &first_id, &[&first_id]);
+    assert!(machine_json(&origin, &first_id).is_none());
+    assert!(machine_json(&origin, &later_id).is_none());
+
+    let probe = Arc::new(AdvertiseProbe {
+        allow_live_tables: AtomicBool::new(false),
+        destination: later_id.clone(),
+    });
+    let bridge = ObservedMachineLink::with_advertise_probe(&origin, &middle, Some(probe.clone()));
+    let welcomed = observed_frame(&bridge.from_peer, "authenticated machine hello", |frame| {
+        frame["id"] == 0 && frame["result"]["machine_id"] == middle_id
+    });
+    assert_eq!(welcomed["result"]["api_version"], 1, "{welcomed}");
+    let announced = observed_frame(&bridge.from_peer, "ID-bearing initial table", |frame| {
+        frame["id"].is_u64() && advertises_route(frame, &first_id)
+    });
+    let table_id = announced["id"].as_u64().unwrap();
+    let receipt = observed_frame(
+        &bridge.from_front,
+        "correlated initial table success",
+        |frame| frame["id"] == table_id && frame.get("method").is_none(),
+    );
+    assert_eq!(
+        receipt,
+        json!({"jsonrpc": "2.0", "id": table_id, "result": {}})
+    );
+
+    let mut caller = connect(&origin);
+    let verify_call = |caller: &mut DaemonTestClient, target: &str, worker: &TestAgent| {
+        wait_for_route(&origin, target, &[&middle_id, target]);
+        let reference = json!({ "machine_id": target, "agent_id": worker.id });
+        let id = caller.send(
+            "call",
+            json!({ "op": "agent.inspect", "args": { "target": reference } }),
+        );
+        let forwarded = observed_frame(&bridge.from_front, "the exact routed call", |frame| {
+            frame["method"] == "forward" && frame["params"]["params"]["op"] == "agent.inspect"
+        });
+        assert_eq!(
+            forwarded["params"]["route"],
+            json!([middle_id, target]),
+            "{forwarded}"
+        );
+        assert_eq!(
+            forwarded["params"]["caller"]["machine_id"], origin_id,
+            "{forwarded}"
+        );
+        assert_eq!(
+            forwarded["params"]["params"]["args"]["target"], reference,
+            "{forwarded}"
+        );
+        let peer_id = forwarded["id"]
+            .as_u64()
+            .expect("the forwarded call has an ID");
+        let peer = observed_frame(&bridge.from_peer, "the peer's correlated result", |frame| {
+            frame["id"] == peer_id && frame.get("method").is_none()
+        });
+        let answer = caller
+            .wait_for_response(id, LOADED_TIMEOUT)
+            .expect("the caller receives its answer");
+        assert_eq!(answer["id"], id, "{answer}");
+        assert_eq!(peer["result"]["agent"]["reference"], reference, "{peer}");
+        assert_eq!(
+            answer["result"]["agent"]["reference"], reference,
+            "{answer}"
+        );
+        assert_eq!(answer["result"]["agent"]["pid"], worker.pid, "{answer}");
+        assert_eq!(process_identity(worker.pid), worker.process);
+    };
+    // The bridge discards id-less peer tables here, so the initial table owns this route.
+    verify_call(&mut caller, &first_id, &initial_run);
+    assert!(machine_json(&origin, &later_id).is_none());
+
+    probe.allow_live_tables.store(true, Ordering::SeqCst);
+    let _later_link = MachineLink::open(&middle, "later", &later);
+    let notification = observed_frame(&bridge.from_peer, "id-less route announcement", |frame| {
+        frame.get("id").is_none() && advertises_route(frame, &later_id)
+    });
+    assert_eq!(notification["jsonrpc"], "2.0", "{notification}");
+    wait_for_route(&origin, &later_id, &[&middle_id, &later_id]);
+    let rejected = observed_frame(
+        &bridge.from_front,
+        "the post-announcement barrier",
+        |frame| {
+            if frame["id"] == LIVE_ADVERTISE_PROBE && frame.get("method").is_none() {
+                return true;
+            }
+            assert!(
+                frame.get("result").is_none() && frame.get("error").is_none(),
+                "the id-less table received an unexpected response: {frame}"
+            );
+            false
+        },
+    );
+    assert_eq!(
+        rejected,
+        json!({ "jsonrpc": "2.0", "id": LIVE_ADVERTISE_PROBE,
+                "error": {"code": -32601, "message": "Unexpected machine request.",
+                          "data": {"reason": "invalid_argument"}} }),
+    );
+    verify_call(&mut caller, &later_id, &later_run);
+    println!(
+        "initial table {table_id} routed {first_id}; live notification routed {later_id}; only the barrier got a reply"
+    );
+}
+
 /// Location and CLI queries use the target machine. The remote start creates the worktree from
 /// that repository's current HEAD, and both Attach clients reach the same terminal.
 #[test]
 fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     let local = TestHome::new("worktree-local");
     let remote = TestHome::new("worktree-remote");
+    check_remote_worktree(&local, &remote, &test_binaries().fakecli, |_, _, _| {});
+}
+
+fn worktree_git(home: &TestHome, folder: &Path, args: &[&str]) -> String {
+    let output = home
+        .command("git")
+        .current_dir(folder)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git {args:?}: {}", stderr(&output));
+    stdout(&output).trim_end_matches(['\r', '\n']).to_string()
+}
+
+// Keep the two real Shell Attach views alive for the optional editor observation.
+fn check_remote_worktree(
+    local: &TestHome,
+    remote: &TestHome,
+    worker: &Path,
+    observe: impl FnOnce(&str, &Value, [&TestTerminal; 2]),
+) {
     let programs = test_binaries();
     let settings = |home: &TestHome, clis: Value| {
         std::fs::write(
@@ -804,33 +1384,27 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
         .unwrap();
     };
     settings(
-        &local,
+        local,
         json!({ "laptop-only": { "type": "fake", "command": programs.fakecli } }),
     );
     settings(
-        &remote,
+        remote,
         json!({
-            "devbox-only": { "type": "fake", "command": programs.fakecli },
+            "devbox-only": {
+                "type": "fake", "command": worker,
+                "env": { "FAKECLI_STARTS": remote.folder().join("worker-pids") },
+            },
             "devbox-missing": { "type": "fake", "command": remote.folder().join("missing-cli") },
         }),
     );
     install_machine_ssh(
-        &[("qa-laptop", &local), ("devbox", &remote)],
+        &[("qa-laptop", local), ("devbox", remote)],
         &programs.facade,
     );
-    let local_id = name_machine(&local, "qa-laptop");
-    let remote_id = name_machine(&remote, "devbox");
+    let local_id = name_machine(local, "qa-laptop");
+    let remote_id = name_machine(remote, "devbox");
 
-    let git = |folder: &std::path::Path, args: &[&str]| {
-        let output = remote
-            .command("git")
-            .current_dir(folder)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "git {args:?}: {}", stderr(&output));
-        stdout(&output).trim().to_string()
-    };
+    let git = |folder, args: &[&str]| worktree_git(remote, folder, args);
     let commit = |message: &str| {
         git(
             &remote.project,
@@ -879,7 +1453,7 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     let added = stdout(&output);
     assert!(output.status.success(), "{added}\n{}", stderr(&output));
     assert!(added.contains("Saved the connection to"), "{added}");
-    let attempts = ssh_attempts(&remote);
+    let attempts = ssh_attempts(remote);
     assert!(!attempts.is_empty(), "add did not try SSH");
     assert!(
         attempts
@@ -887,7 +1461,7 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
             .all(|attempt| attempt.starts_with("batch 2222 ")),
         "add should reuse the existing noninteractive login: {attempts}"
     );
-    let status = connect(&local).call_ok(
+    let status = connect(local).call_ok(
         "daemon.status",
         json!({ "scope": { "kind": "machine", "machine": "devbox" } }),
     );
@@ -897,15 +1471,15 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
         "the first call immediately reaches the saved machine"
     );
     assert_eq!(
-        ssh_attempts(&remote),
+        ssh_attempts(remote),
         attempts,
         "the first operation reuses the saved machine session"
     );
-    let machine = machine_json(&local, &remote_id).expect("the saved devbox");
+    let machine = machine_json(local, &remote_id).expect("the saved devbox");
     assert_eq!(machine["state"], "online", "{machine}");
     assert_eq!(machine["route"], json!([remote_id]), "{machine}");
     let connection = saved_ssh(
-        &machine_json(&local, &local_id).unwrap(),
+        &machine_json(local, &local_id).unwrap(),
         &local_id,
         &remote_id,
     );
@@ -920,7 +1494,7 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
         .isolating_env()
         .into_iter()
         .collect::<std::collections::BTreeMap<_, _>>();
-    let mut wire = connect(&local);
+    let mut wire = connect(local);
     let local_clis = wire.call_ok("cli.list", json!({ "folder": local.project, "env": env }));
     assert!(
         local_clis["clis"]
@@ -968,7 +1542,7 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     );
 
     let observer = local.start_named_fake("observer", &[]);
-    let mut relay = McpTestClient::open_configured(&local, &observer.id);
+    let mut relay = McpTestClient::open_configured(local, &observer.id);
     let refused = relay.call(
         "start_agent",
         json!({ "machine": "devbox", "folder": folder, "cli": "laptop-only" }),
@@ -1033,6 +1607,7 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     }
     let marker = "typed through the remote worktree";
     first.send(format!("{marker}\r").as_bytes());
+    observe(&local_id, agent, [&first, &second]);
     for terminal in [&mut first, &mut second] {
         assert!(
             terminal.wait_for(LOADED_TIMEOUT, |screen| screen.contains(marker)),
@@ -1054,7 +1629,7 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     );
     remote.wait_for_idle_exit();
     local.run_facade_ok(&["list"]);
-    let sleeping = wait_for_machine_state(&local, &remote_id, "sleeping");
+    let sleeping = wait_for_machine_state(local, &remote_id, "sleeping");
     assert!(sleeping.get("route").is_none(), "{sleeping}");
     let machine_table = local.run_facade(&["machine", "list"]);
     assert_eq!(
@@ -1084,7 +1659,7 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
         "a bare roster leaves the peer asleep"
     );
 
-    let status = connect(&local).call_ok(
+    let status = connect(local).call_ok(
         "daemon.status",
         json!({ "scope": { "kind": "machine", "machine": "devbox" } }),
     );
@@ -1094,7 +1669,149 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
         "naming the saved machine wakes its daemon"
     );
     assert_eq!(remote.hello_result().unwrap()["machine_id"], remote_id);
-    wait_for_route(&local, &remote_id, &[&remote_id]);
+    wait_for_route(local, &remote_id, &[&remote_id]);
+}
+
+/// The same routed worktree and live worker are visible to Shell and to the actual Extension.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+#[ignore = "requires the isolated VS Code bridge and Xvfb display from the editor test runner"]
+fn a_remote_worktree_is_shared_by_the_shell_and_editor() {
+    let fixture_file = |name: &str| {
+        let path = std::path::PathBuf::from(
+            std::env::var_os(name)
+                .unwrap_or_else(|| panic!("set {name} to the absolute fixture path")),
+        );
+        assert!(
+            path.is_absolute() && path.is_file(),
+            "{name} must name an absolute fixture file: {path:?}"
+        );
+        path
+    };
+    let node = fixture_file("FACADE_TEST_REMOTE_WORKTREE_NODE");
+    let bridge = fixture_file("FACADE_TEST_REMOTE_WORKTREE_BRIDGE");
+    let vscode = fixture_file("VSCODE_EXECUTABLE");
+    let display =
+        std::env::var_os("DISPLAY").expect("run this fixture on the editor runner's Xvfb display");
+    let local = TestHome::new("worktree-local");
+    let remote = TestHome::new("worktree-remote");
+    let git = |args: &[&str]| worktree_git(&local, &local.project, args);
+    let tracked = local.project.join("keep.txt");
+    let untracked = local.project.join("untracked.txt");
+    git(&["init", "-q", "-b", "local-trunk"]);
+    std::fs::write(&tracked, b"committed locally\n").unwrap();
+    git(&["add", "keep.txt"]);
+    git(&[
+        "-c",
+        "user.name=Facade QA",
+        "-c",
+        "user.email=qa@example.invalid",
+        "commit",
+        "-qm",
+        "local HEAD",
+    ]);
+    std::fs::write(&tracked, b"staged local change\n").unwrap();
+    git(&["add", "keep.txt"]);
+    std::fs::write(&tracked, b"unstaged local change\n").unwrap();
+    std::fs::write(&untracked, b"untracked local file\n").unwrap();
+    let git_snapshot = || {
+        let state: [&[&str]; 6] = [
+            &["rev-parse", "HEAD"],
+            &["symbolic-ref", "HEAD"],
+            &["show-ref"],
+            &["status", "--porcelain=v1", "--untracked-files=all"],
+            &["ls-files", "--stage"],
+            &["worktree", "list", "--porcelain"],
+        ];
+        (
+            state.map(|args| (args, git(args))),
+            [&tracked, &untracked].map(|file| std::fs::read(file).unwrap()),
+        )
+    };
+    let local_before = git_snapshot();
+
+    let editor_runtime = local.folder().join("editor-runtime");
+    facade_base::files::create_private_folder_all(&editor_runtime).unwrap();
+    // Keep the running executable's identity stable if Cargo relinks another test's binaries.
+    let worker = remote.folder().join("facade-fakecli");
+    std::fs::copy(&test_binaries().fakecli, &worker).unwrap();
+    check_remote_worktree(&local, &remote, &worker, |origin, agent, shells| {
+        let address = agent["address"].as_str().expect("the remote address");
+        let pid = agent["pid"].as_u64().expect("the remote PID");
+        let cwd = Path::new(agent["cwd"].as_str().expect("the remote cwd"));
+        assert_eq!(agent["process"], "running");
+        let expected = json!({ "reference": agent["reference"], "pid": pid, "cwd": cwd });
+        let proc = Path::new("/proc").join(pid.to_string());
+        let check_process = || {
+            for home in [&local, &remote] {
+                let observed = home.inspect_agent(address);
+                for field in ["reference", "pid", "cwd", "process"] {
+                    assert_eq!(observed["agent"][field], agent[field], "{address}: {field}");
+                }
+            }
+            assert_eq!(std::fs::read_link(proc.join("cwd")).unwrap(), cwd);
+            assert_eq!(
+                std::fs::read_link(proc.join("exe")).unwrap(),
+                real_path(&worker).unwrap(),
+            );
+        };
+        check_process();
+
+        let marker = "Editor typed into the remote worktree";
+        let mut command = local.command(&node);
+        command
+            .env("VSCODE_EXECUTABLE", &vscode)
+            .env("DISPLAY", &display)
+            .env("XDG_RUNTIME_DIR", &editor_runtime)
+            .env("XDG_DATA_HOME", local.folder().join("editor-data"))
+            .env("XDG_CACHE_HOME", local.folder().join("editor-cache"))
+            .env("XDG_STATE_HOME", local.folder().join("editor-state"))
+            .arg(&bridge)
+            .arg(&local.project)
+            .arg(&local.path)
+            .arg(origin)
+            .arg(address)
+            .arg(expected.to_string())
+            .arg(marker)
+            .stdin(Stdio::null());
+        if let Some(authority) = std::env::var_os("XAUTHORITY") {
+            command.env("XAUTHORITY", authority);
+        }
+        let output = command.output().expect("launch the isolated editor bridge");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            stdout(&output),
+            stderr(&output)
+        );
+        println!("remote editor evidence {}", stdout(&output).trim());
+        for shell in shells {
+            assert!(
+                shell.wait_for(LOADED_TIMEOUT, |screen| screen.contains(marker)),
+                "{}",
+                shell.text()
+            );
+        }
+        assert!(remote.screen(address).contains(marker));
+        check_process();
+        assert_eq!(
+            std::fs::read_to_string(remote.folder().join("worker-pids"))
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            [pid.to_string()],
+            "the remote fake CLI launched once at the original PID",
+        );
+    });
+    assert_eq!(
+        git_snapshot(),
+        local_before,
+        "the local Git state and file bytes stayed unchanged"
+    );
+    assert!(!local.project.with_extension("worktrees").exists());
+    println!(
+        "both Shell views read the editor input; one original worker PID; local Git snapshot unchanged"
+    );
 }
 
 fn ssh_attempts(home: &TestHome) -> String {
@@ -2029,16 +2746,828 @@ fn a_cross_machine_send_replays_its_original_settlement_after_reconnect() {
     );
 }
 
+/// Once the peer accepts raw input, a cut link can hide the result while the bytes still arrive.
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the test gate of debug builds")]
+fn raw_input_on_a_cut_peer_link_reports_unknown_and_arrives_once() {
+    let local = TestHome::new("raw-cut-origin");
+    let peer = TestHome::new("raw-cut-peer");
+    install_machine_ssh(
+        &[("origin", &local), ("peer", &peer)],
+        &test_binaries().facade,
+    );
+    let gate = "before-type-input";
+    peer.start_facade_with(&[("FACADE_TEST_GATES", gate)]);
+    name_machine(&local, "origin");
+    let peer_id = name_machine(&peer, "peer");
+    let keys = peer.project.join("raw-keys");
+    let worker = peer.start_fake_with("worker", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
+    let reference = peer.inspect_agent(&worker.address)["agent"]["reference"].clone();
+    assert!(wait_until(LOADED_TIMEOUT, || keys.is_file()));
+    let link = MachineLink::open(&local, "peer", &peer);
+    wait_for_route(&local, &peer_id, &[&peer_id]);
+
+    let text = "raw input 界";
+    let bytes = format!("{text}\r");
+    let mut origin = connect(&local);
+    let input = origin.send(
+        "call",
+        json!({
+            "op": "agent.type",
+            "args": { "target": reference,
+                "input": { "kind": "raw", "raw": facade_base::base64::encode(bytes.as_bytes()) } },
+        }),
+    );
+    peer.wait_for_gate(gate);
+    // The forwarded request is executing on the peer, with no terminal bytes written yet.
+    assert!(std::fs::read(&keys).unwrap().is_empty());
+    drop(link);
+    let lost = origin
+        .wait_for_response(input, LOADED_TIMEOUT)
+        .expect("the origin reports the cut peer link");
+    assert_eq!(lost["id"], input, "{lost}");
+    assert_eq!(error_reason(&lost), "unavailable", "{lost}");
+    let details = &lost["error"]["data"]["details"];
+    assert_eq!(details["execution"], "outcome_unknown", "{lost}");
+    assert_eq!(details["machine"]["machine_id"], peer_id, "{lost}");
+    assert!(std::fs::read(&keys).unwrap().is_empty());
+
+    peer.release_gate(gate);
+    assert!(wait_until(LOADED_TIMEOUT, || peer.submitted_messages() == [text]));
+    assert_eq!(std::fs::read(&keys).unwrap(), bytes.as_bytes());
+    assert_eq!(process_identity(worker.pid), worker.process);
+
+    let _link = MachineLink::open(&local, "peer", &peer);
+    wait_for_route(&local, &peer_id, &[&peer_id]);
+    let screen = origin.call_ok("agent.screen", json!({ "target": reference }));
+    assert!(screen["text"].as_str().unwrap().contains(text), "{screen}");
+    let next = "new input after reconnect";
+    type_raw(&mut origin, &worker.address, &format!("{next}\r"));
+    assert!(wait_until(LOADED_TIMEOUT, || peer.submitted_messages() == [text, next]));
+    assert_eq!(
+        std::fs::read(&keys).unwrap(),
+        format!("{bytes}{next}\r").as_bytes()
+    );
+}
+
+/// Only a forwarded call may read the holder's internal agent records.
+#[test]
+fn authenticated_peer_lists_exact_holder_records_and_local_access_is_refused() {
+    let local = TestHome::new("records-origin");
+    let peer = TestHome::new("records-peer");
+    let local_id = name_machine(&local, "origin");
+    let peer_id = name_machine(&peer, "peer");
+    let local_run = local.start_fake("worker");
+    let peer_run = peer.start_fake("worker");
+    assert_eq!(local_run.id, peer_run.id);
+    assert_ne!(local_run.address, peer_run.address);
+    let expected = json!({ "machine_id": peer_id, "agent_id": peer_run.id });
+    let bridge = ObservedMachineLink::open(&local, &peer);
+    wait_for_route(&local, &peer_id, &[&peer_id]);
+
+    let mut person = connect(&local);
+    let listed = person.call_ok(
+        "agent.list",
+        json!({ "scope": { "kind": "machine", "machine": peer_id } }),
+    );
+    let listed = listed["agents"]
+        .as_array()
+        .expect("the selected peer's roster");
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["reference"], expected);
+    assert_eq!(listed[0]["address"], peer_run.address);
+    let request = observed_frame(&bridge.from_front, "the forwarded record query", |frame| {
+        frame["method"] == "forward" && frame["params"]["params"]["op"] == "internal.agent_records"
+    });
+    assert_eq!(
+        request["params"]["caller"],
+        json!({ "kind": "terminal", "machine_id": local_id }),
+        "{request}"
+    );
+    assert_eq!(request["params"]["route"], json!([peer_id]), "{request}");
+    assert_eq!(
+        request["params"]["params"]["args"],
+        json!({ "active": true }),
+        "{request}"
+    );
+    let response = observed_frame(
+        &bridge.from_peer,
+        "the holder's correlated records",
+        |frame| frame["id"] == request["id"],
+    );
+    let records = response["result"].as_array().expect("the holder's records");
+    assert_eq!(records.len(), 1, "{response}");
+    assert_eq!(records[0]["agent"]["reference"], expected, "{response}");
+    assert_eq!(
+        records[0]["agent"]["address"], peer_run.address,
+        "{response}"
+    );
+    assert_eq!(records[0]["agent"]["pid"], peer_run.pid, "{response}");
+
+    let denied = connect(&peer).call("internal.agent_records", json!({ "active": true }));
+    assert_eq!(error_reason(&denied), "refused", "{denied}");
+    assert!(denied.get("result").is_none(), "{denied}");
+    assert_eq!(
+        denied["error"]["message"],
+        "internal.agent_records is unavailable to this client"
+    );
+    assert!(alive(&peer_run.process) && alive(&local_run.process));
+}
+
+/// The first hop stays authenticated while a live subscription loses and regains its provider.
+#[test]
+fn a_forwarded_attach_maps_live_peer_changes_and_watch_end() {
+    let origin = TestHome::new("watch-front");
+    let middle = TestHome::new("watch-middle");
+    let provider = TestHome::new("watch-provider");
+    install_machine_ssh(
+        &[("middle", &middle), ("provider", &provider)],
+        &test_binaries().facade,
+    );
+    let origin_id = name_machine(&origin, "origin");
+    let middle_id = name_machine(&middle, "middle");
+    let provider_id = name_machine(&provider, "provider");
+    let remote_keys = provider.folder().join("forwarded-keys");
+    let local_keys = origin.folder().join("local-keys");
+    let remote_sizes = provider.folder().join("forwarded-sizes");
+    let local_sizes = origin.folder().join("local-sizes");
+    let worker = provider.start_fake_with(
+        "worker",
+        &[
+            ("FAKECLI_KEYS", remote_keys.to_str().unwrap()),
+            ("FAKECLI_SIZE_LOG", remote_sizes.to_str().unwrap()),
+        ],
+    );
+    let decoy = origin.start_fake_with(
+        "worker",
+        &[
+            ("FAKECLI_KEYS", local_keys.to_str().unwrap()),
+            ("FAKECLI_SIZE_LOG", local_sizes.to_str().unwrap()),
+        ],
+    );
+    assert_eq!(worker.id, decoy.id);
+    assert_ne!(worker.address, decoy.address);
+    let exact = provider.inspect_agent(&worker.address)["agent"]["reference"].clone();
+    assert_eq!(exact["machine_id"], provider_id);
+    assert!(wait_for_screen_text(&provider, &worker.address, "❯"));
+    let downstream = MachineLink::open(&middle, "provider", &provider);
+    wait_for_route(&middle, &provider_id, &[&provider_id]);
+
+    let mut roster = ManualReadClient::open(&origin);
+    roster.send(1, "watch", json!({ "topic": "machines", "args": {} }));
+    let initial = roster.read_frame().unwrap().expect("the machine snapshot");
+    assert_eq!(initial["id"], 1);
+    let roster_watch = initial["result"]["watch"].as_u64().unwrap();
+    let machines = initial["result"]["snapshot"]
+        .as_array()
+        .expect("the machine roster array");
+    assert_eq!(machines.len(), 1, "{initial}");
+    assert_eq!(machines[0]["machine_id"], origin_id, "{initial}");
+    assert_eq!(machines[0]["connections"], json!([]), "{initial}");
+
+    let bridge = ObservedMachineLink::open(&origin, &middle);
+    let hello = observed_frame(
+        &bridge.from_front,
+        "the origin's machine introduction",
+        |frame| frame["method"] == "hello",
+    );
+    assert_eq!(hello["id"], 0, "{hello}");
+    assert_eq!(hello["params"]["kind"], "machine", "{hello}");
+    assert_eq!(hello["params"]["api_versions"], json!([1]), "{hello}");
+    assert_eq!(
+        hello["params"]["machine"]["machine_id"], origin_id,
+        "{hello}"
+    );
+    assert_eq!(hello["params"]["machine"]["name"], "origin", "{hello}");
+    let connected = observed_frame(&bridge.from_front, "the handoff notification", |frame| {
+        frame["method"] == "connected"
+    });
+    assert!(connected.get("id").is_none(), "{connected}");
+    assert_eq!(connected["jsonrpc"], "2.0", "{connected}");
+    assert_eq!(
+        connected["params"]["machine"]["machine_id"], middle_id,
+        "{connected}"
+    );
+    assert_eq!(
+        connected["params"]["machine"]["name"], "middle",
+        "{connected}"
+    );
+    let greeting = observed_frame(&bridge.from_peer, "the peer's machine hello", |frame| {
+        frame["id"] == hello["id"]
+    });
+    assert_eq!(greeting["result"]["api_version"], 1, "{greeting}");
+    assert_eq!(greeting["result"]["machine_id"], middle_id, "{greeting}");
+    assert!(
+        greeting["result"]["machine"]["boot_id"].is_string(),
+        "{greeting}"
+    );
+    assert_eq!(
+        connected["params"]["machine"]["boot_id"], greeting["result"]["machine"]["boot_id"],
+        "{connected}"
+    );
+    let mut peer_update = false;
+    let mut connection_update = false;
+    while !peer_update || !connection_update {
+        let frame = roster
+            .read_frame()
+            .unwrap()
+            .expect("a machine roster update");
+        assert_eq!(frame["method"], "changed", "{frame}");
+        assert_eq!(frame["params"]["watch"], roster_watch, "{frame}");
+        assert!(frame.get("id").is_none(), "{frame}");
+        let change = &frame["params"]["change"];
+        if change["kind"] != "updated" {
+            continue;
+        }
+        let machine = &change["machine"];
+        peer_update |= machine["machine_id"] == middle_id
+            && machine["state"] == "online"
+            && machine["route"] == json!([middle_id]);
+        connection_update |= machine["machine_id"] == origin_id
+            && machine["connections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|connection| {
+                    connection["machine_id"] == middle_id
+                        && connection["initiator_machine_id"] == origin_id
+                        && connection["kind"] == "temporary"
+                        && connection["state"] == "connected"
+                });
+    }
+    drop(roster);
+    wait_for_route(&origin, &provider_id, &[&middle_id, &provider_id]);
+
+    // The same introduction with a disjoint offer cannot enter the machine protocol.
+    let mut invalid = ManualReadClient::before_hello(&middle);
+    let mut params = hello["params"].clone();
+    params["api_versions"] = json!([2]);
+    invalid.send(7, "hello", params);
+    let rejection = invalid
+        .read_message()
+        .expect("the disjoint hello is refused");
+    assert_eq!(rejection["id"], 7, "{rejection}");
+    assert_eq!(rejection["error"]["code"], -32000, "{rejection}");
+    assert_eq!(
+        error_reason(&rejection),
+        "protocol_incompatible",
+        "{rejection}"
+    );
+    assert_eq!(
+        rejection["error"]["data"]["details"]["supported_api_versions"],
+        json!([1]),
+        "{rejection}"
+    );
+    invalid.send(8, "forward", json!({}));
+    let refused = invalid
+        .read_message()
+        .expect("the unadmitted session is refused");
+    assert_eq!(refused["id"], 8, "{refused}");
+    assert_eq!(refused["error"]["message"], "send hello first", "{refused}");
+    drop(invalid);
+    wait_for_route(&middle, &origin_id, &[&origin_id]);
+    println!(
+        "machine hello {origin_id} -> {middle_id} selected v1, disjoint offer stayed unadmitted"
+    );
+
+    let mut user = ManualReadClient::open(&origin);
+    let args = json!({ "topic": "attach", "args": { "target": exact } });
+    user.send(1, "watch", args.clone());
+    let local = user
+        .read_frame()
+        .unwrap()
+        .expect("the local watch snapshot");
+    assert_eq!(local["id"], 1, "{local}");
+    let local_watch = local["result"]["watch"].as_u64().unwrap();
+    assert_eq!(local["result"]["snapshot"]["reference"], exact, "{local}");
+    let forward = observed_frame(&bridge.from_front, "the forwarded watch", |frame| {
+        frame["method"] == "forward"
+            && frame["params"]["method"] == "watch"
+            && frame["params"]["params"]["topic"] == "attach"
+    });
+    assert_eq!(
+        forward["params"]["caller"]["machine_id"], origin_id,
+        "{forward}"
+    );
+    assert_eq!(
+        forward["params"]["params"]["args"]["target"], exact,
+        "{forward}"
+    );
+    let accepted = observed_frame(&bridge.from_peer, "the peer watch snapshot", |frame| {
+        frame["id"] == forward["id"]
+    });
+    let peer_watch = accepted["result"]["watch"]
+        .as_u64()
+        .expect("the peer watch ID");
+    assert_ne!(local_watch, peer_watch);
+    assert_eq!(
+        accepted["result"]["snapshot"]["reference"], exact,
+        "{accepted}"
+    );
+    let initial_size = accepted["result"]["snapshot"]["size"].clone();
+    assert_eq!(local["result"]["snapshot"]["size"], initial_size, "{local}");
+    let binding = accepted["result"]["view"].clone();
+    let holder_boot = machine_json(&middle, &provider_id).unwrap()["boot_id"].clone();
+    assert!(holder_boot.is_string(), "{holder_boot}");
+    assert_eq!(binding["boot_id"], holder_boot, "{accepted}");
+    assert!(binding["viewer"].is_u64(), "{accepted}");
+
+    let marker = "output from the exact remote worker";
+    assert!(wait_until(LOADED_TIMEOUT, || remote_keys.is_file()
+        && local_keys.is_file()));
+    assert_eq!(std::fs::read(&remote_keys).unwrap(), b"");
+    assert_eq!(std::fs::read(&local_keys).unwrap(), b"");
+    let mut terminal = connect(&origin);
+    let input = json!({ "kind": "raw", "raw": facade_base::base64::encode(marker.as_bytes()) });
+    let typed = terminal.send(
+        "call",
+        json!({ "op": "agent.type", "args": { "target": exact, "input": input } }),
+    );
+    let forwarded_input = observed_frame(&bridge.from_front, "the forwarded raw input", |frame| {
+        frame["method"] == "forward" && frame["params"]["params"]["op"] == "agent.type"
+    });
+    let forwarded_id = forwarded_input["id"].as_u64().expect("a peer request ID");
+    assert_eq!(
+        forwarded_input["params"]["caller"],
+        json!({ "kind": "terminal", "machine_id": origin_id }),
+        "{forwarded_input}"
+    );
+    assert_eq!(
+        forwarded_input["params"]["route"],
+        json!([middle_id, provider_id]),
+        "{forwarded_input}"
+    );
+    assert_eq!(
+        forwarded_input["params"]["params"]["args"],
+        json!({ "target": exact, "input": input }),
+        "{forwarded_input}"
+    );
+    let output = |frame: &Value| {
+        frame["params"]["change"]["data"]
+            .as_str()
+            .map(|data| facade_base::base64::decode(data).unwrap())
+    };
+    let mut peer_bytes = Vec::new();
+    let mut peer_receipt = None;
+    let peer_change = observed_frame(
+        &bridge.from_peer,
+        "the remote worker's id-less output",
+        |frame| {
+            if frame["id"] == forwarded_id {
+                peer_receipt = Some(frame.clone());
+                return false;
+            }
+            if frame["method"] != "changed"
+                || frame["params"]["watch"] != peer_watch
+                || frame["params"]["change"]["kind"] != "output"
+            {
+                return false;
+            }
+            assert!(frame.get("id").is_none(), "{frame}");
+            peer_bytes.extend(output(frame).unwrap());
+            peer_bytes
+                .windows(marker.len())
+                .any(|bytes| bytes == marker.as_bytes())
+        },
+    );
+    let peer_receipt = peer_receipt.unwrap_or_else(|| {
+        observed_frame(&bridge.from_peer, "the forwarded input reply", |frame| {
+            frame["id"] == forwarded_id
+        })
+    });
+    let accepted = terminal
+        .wait_for_response(typed, LOADED_TIMEOUT)
+        .expect("the original call answers");
+    assert_eq!(
+        accepted,
+        json!({ "jsonrpc": "2.0", "id": typed, "result": {} }),
+        "{accepted}"
+    );
+    assert_eq!(
+        peer_receipt,
+        json!({ "jsonrpc": "2.0", "id": forwarded_id, "result": {} }),
+        "{peer_receipt}"
+    );
+    assert_eq!(std::fs::read(&remote_keys).unwrap(), marker.as_bytes());
+    assert_eq!(std::fs::read(&local_keys).unwrap(), b"");
+    assert_eq!(process_identity(decoy.pid), decoy.process);
+    println!(
+        "terminal request {typed} used peer request {forwarded_id} for {exact}, local input stayed empty"
+    );
+    let mut local_bytes = Vec::new();
+    loop {
+        let frame = user
+            .read_frame()
+            .unwrap()
+            .expect("the local watch receives the peer output");
+        assert_eq!(frame["method"], "changed", "{frame}");
+        assert!(frame.get("id").is_none(), "{frame}");
+        assert_eq!(frame["params"]["watch"], local_watch, "{frame}");
+        if frame["params"]["change"]["kind"] != "output" {
+            continue;
+        }
+        local_bytes.extend(output(&frame).unwrap());
+        if local_bytes
+            .windows(marker.len())
+            .any(|bytes| bytes == marker.as_bytes())
+        {
+            assert_eq!(frame["params"]["change"], peer_change["params"]["change"]);
+            break;
+        }
+    }
+
+    // Resize the exact watch from its owning socket, then observe the holder's redraw and PTY.
+    let grid_line = |size: &Value| format!("{}x{}", size["cols"], size["rows"]);
+    let measured = |path: &Path| std::fs::read_to_string(path).unwrap_or_default();
+    let initial_grid = grid_line(&initial_size);
+    assert!(
+        measured(&remote_sizes).lines().last() == Some(&initial_grid),
+        "the remote process reported {}, expected {initial_grid}",
+        measured(&remote_sizes)
+    );
+    let decoy_grid = measured(&local_sizes);
+    assert!(!decoy_grid.is_empty());
+    let new_size = json!({ "cols": 103, "rows": 31 });
+    assert_ne!(initial_size, new_size);
+    let resize_id = 9;
+    user.send(
+        resize_id,
+        "call",
+        json!({
+            "op": "attach.resize", "args": { "watch": local_watch, "size": new_size },
+        }),
+    );
+    let resize = observed_frame(&bridge.from_front, "the forwarded Attach resize", |frame| {
+        frame["method"] == "forward" && frame["params"]["params"]["op"] == "internal.attach_resize"
+    });
+    let peer_resize = resize["id"].as_u64().expect("the peer resize request ID");
+    assert_eq!(
+        resize["params"]["route"],
+        json!([middle_id, provider_id]),
+        "{resize}"
+    );
+    assert_eq!(
+        resize["params"]["caller"]["machine_id"], origin_id,
+        "{resize}"
+    );
+    assert_eq!(resize["params"]["method"], "call", "{resize}");
+    assert_eq!(
+        resize["params"]["params"]["args"],
+        json!({ "viewer": binding["viewer"], "boot_id": holder_boot, "size": new_size }),
+        "{resize}"
+    );
+    let redraw = |frame: &Value, watch| {
+        frame["method"] == "changed"
+            && frame["params"]["watch"] == watch
+            && frame["params"]["change"]["kind"] == "redraw"
+            && frame["params"]["change"]["size"] == new_size
+    };
+    let mut peer_ack = false;
+    let mut peer_redraw = None;
+    observed_frame(
+        &bridge.from_peer,
+        "the holder's resize reply and redraw",
+        |frame| {
+            if frame["id"] == peer_resize {
+                assert_eq!(
+                    *frame,
+                    json!({ "jsonrpc": "2.0", "id": peer_resize, "result": {} }),
+                    "{frame}"
+                );
+                peer_ack = true;
+            }
+            if redraw(frame, peer_watch) {
+                assert!(frame.get("id").is_none(), "{frame}");
+                peer_redraw = Some(frame["params"]["change"].clone());
+            }
+            peer_ack && peer_redraw.is_some()
+        },
+    );
+    let mut local_ack = false;
+    let mut local_redraw = false;
+    while !local_ack || !local_redraw {
+        let frame = user
+            .read_frame()
+            .unwrap()
+            .expect("the owning watch stays open");
+        if frame["id"] == resize_id {
+            assert_eq!(
+                frame,
+                json!({ "jsonrpc": "2.0", "id": resize_id, "result": {} }),
+                "{frame}"
+            );
+            local_ack = true;
+        }
+        if redraw(&frame, local_watch) {
+            assert!(frame.get("id").is_none(), "{frame}");
+            assert_eq!(frame["params"]["change"], *peer_redraw.as_ref().unwrap());
+            local_redraw = true;
+        }
+    }
+    let new_grid = grid_line(&new_size);
+    assert!(
+        wait_until(LOADED_TIMEOUT, || measured(&remote_sizes).lines().last()
+            == Some(&new_grid)),
+        "the remote process reported {}, expected {new_grid}",
+        measured(&remote_sizes)
+    );
+    assert_eq!(process_identity(worker.pid), worker.process);
+    assert_eq!(measured(&local_sizes), decoy_grid);
+    println!(
+        "Attach resize {resize_id} forwarded as {peer_resize} to {exact}, watch {peer_watch} redrew as local {local_watch}, PID {} measured {} -> {}",
+        worker.pid, initial_grid, new_grid
+    );
+
+    drop(downstream);
+    let ended = observed_frame(
+        &bridge.from_peer,
+        "the peer ends its forwarded watch",
+        |frame| frame["method"] == "watch_ended" && frame["params"]["watch"] == peer_watch,
+    );
+    assert!(ended.get("id").is_none(), "{ended}");
+    assert_eq!(ended["params"]["watch"], peer_watch, "{ended}");
+    assert_eq!(
+        ended["params"]["error"]["data"]["reason"], "unavailable",
+        "{ended}"
+    );
+    loop {
+        let frame = user
+            .read_frame()
+            .unwrap()
+            .expect("the owning local watch ends");
+        assert!(frame.get("id").is_none(), "{frame}");
+        assert_eq!(frame["params"]["watch"], local_watch, "{frame}");
+        if frame["method"] == "watch_ended" {
+            assert_eq!(
+                frame["params"]["error"]["data"]["reason"],
+                ended["params"]["error"]["data"]["reason"],
+                "{frame}"
+            );
+            break;
+        }
+        assert_eq!(frame["method"], "changed", "{frame}");
+    }
+    wait_for_route(&origin, &middle_id, &[&middle_id]);
+    let _downstream = MachineLink::open(&middle, "provider", &provider);
+    wait_for_route(&origin, &provider_id, &[&middle_id, &provider_id]);
+    user.send(2, "watch", args);
+    let fresh = user
+        .read_frame()
+        .unwrap()
+        .expect("a new watch after the provider returns");
+    assert_eq!(fresh["id"], 2, "{fresh}");
+    let fresh_watch = fresh["result"]["watch"]
+        .as_u64()
+        .expect("the fresh watch ID");
+    assert_ne!(fresh_watch, local_watch);
+    let snapshot = &fresh["result"]["snapshot"];
+    assert_eq!(snapshot["reference"], exact, "{fresh}");
+    let redraw = facade_base::base64::decode(snapshot["redraw"].as_str().unwrap()).unwrap();
+    assert!(
+        redraw
+            .windows(marker.len())
+            .any(|bytes| bytes == marker.as_bytes()),
+        "{fresh}"
+    );
+    assert_eq!(process_identity(worker.pid), worker.process);
+}
+
+/// Losing the link does not replace its remote CLI or retarget calls to a same-named local run.
+#[test]
+fn a_lost_route_recovers_to_the_same_live_remote_terminal() {
+    let local = TestHome::new("route-recover-local");
+    let peer = TestHome::new("route-recover-peer");
+    install_machine_ssh(
+        &[("origin", &local), ("peer", &peer)],
+        &test_binaries().facade,
+    );
+    name_machine(&local, "origin");
+    let peer_id = name_machine(&peer, "peer");
+    let worker = peer.start_fake("worker");
+    let decoy = local.start_fake("worker");
+    assert_eq!(worker.id, decoy.id);
+    assert_ne!(worker.address, decoy.address);
+
+    let original = peer.inspect_agent(&worker.address)["agent"].clone();
+    let reference = &original["reference"];
+    assert_eq!(reference["machine_id"], peer_id);
+    let daemon = peer.lock_record("daemon").unwrap();
+    let keeper = peer.lock_record("keeper").unwrap();
+    let link = MachineLink::open(&local, "peer", &peer);
+    wait_for_route(&local, &peer_id, &[&peer_id]);
+    let mut origin = connect(&local);
+    let inspect = |origin: &mut DaemonTestClient| {
+        origin.call_ok("agent.inspect", json!({ "target": reference }))["agent"].clone()
+    };
+    let reachable = inspect(&mut origin);
+    assert_eq!(reachable["reference"], *reference);
+    assert_eq!(reachable["pid"], worker.pid);
+    local.run_facade_ok(&["type", &worker.address, "from before the cut"]);
+    assert!(wait_for_screen_text(
+        &peer,
+        &worker.address,
+        "❯ from before the cut"
+    ));
+    assert!(peer.submitted_messages().is_empty());
+
+    drop(link);
+    assert!(
+        wait_until(LOADED_TIMEOUT, || machine_json(&local, &peer_id)
+            .is_none_or(|row| row.get("route").is_none())),
+        "the cut peer still has a route: {}",
+        machines_json(&local)
+    );
+    let lost = origin.call("agent.screen", json!({ "target": reference }));
+    assert_eq!(error_reason(&lost), "unavailable", "{lost}");
+    assert!(alive(&worker.process));
+    assert!(wait_for_screen_text(
+        &peer,
+        &worker.address,
+        "❯ from before the cut"
+    ));
+
+    let _replacement_link = MachineLink::open(&local, "peer", &peer);
+    wait_for_route(&local, &peer_id, &[&peer_id]);
+    let recovered = inspect(&mut origin);
+    assert_eq!(recovered["reference"], *reference);
+    assert_eq!(recovered["address"], worker.address);
+    assert_eq!(recovered["pid"], worker.pid);
+    assert_eq!(process_identity(worker.pid), worker.process);
+    assert_eq!(peer.lock_record("daemon"), Some(daemon));
+    assert_eq!(peer.lock_record("keeper"), Some(keeper));
+    assert!(
+        local
+            .run_facade_ok(&["screen", &worker.address])
+            .contains("❯ from before the cut")
+    );
+    local.run_facade_ok(&["type", &worker.address, " and after", "--enter"]);
+    assert!(wait_until(LOADED_TIMEOUT, || {
+        peer.submitted_messages() == ["from before the cut and after"]
+    }));
+    assert!(alive(&decoy.process));
+    assert!(local.submitted_messages().is_empty());
+}
+
+/// The authenticated route request opens the intermediate's saved hop before forwarding the call.
+#[test]
+fn ensure_route_reopens_the_intermediates_saved_hop() {
+    let origin = TestHome::new("ensure-origin");
+    let middle = TestHome::new("ensure-middle");
+    let provider = TestHome::new("ensure-provider");
+    install_machine_ssh(
+        &[("middle", &middle), ("provider", &provider)],
+        &test_binaries().facade,
+    );
+    let origin_id = name_machine(&origin, "origin");
+    let middle_id = name_machine(&middle, "middle");
+    let provider_id = name_machine(&provider, "provider");
+    let worker = provider.start_fake("worker");
+    let reference = json!({ "machine_id": provider_id, "agent_id": worker.id });
+    let marker = "terminal kept behind the saved hop";
+    provider.run_facade_ok(&["type", &worker.address, marker]);
+    assert!(wait_for_screen_text(&provider, &worker.address, marker));
+    add_saved(&middle, "provider", &provider);
+    wait_for_route(&middle, &provider_id, &[&provider_id]);
+    let saved = || {
+        saved_ssh(
+            &machine_json(&middle, &middle_id).unwrap(),
+            &middle_id,
+            &provider_id,
+        )
+    };
+    let transport = saved()["transport"].clone();
+    assert_eq!(transport["ssh_destination"], "provider");
+    assert_eq!(transport["remote_home"], json!(provider.path));
+    let bridge = ObservedMachineLink::open(&origin, &middle);
+    wait_for_route(&origin, &provider_id, &[&middle_id, &provider_id]);
+
+    let old = provider.kill_daemon();
+    provider
+        .wait_for_daemon_after(old, LOADED_TIMEOUT)
+        .expect("the provider recovers its live agent");
+    let no_route = |home: &TestHome| {
+        machine_json(home, &provider_id).is_none_or(|row| row.get("route").is_none())
+    };
+    assert!(wait_until(LOADED_TIMEOUT, || no_route(&middle) && no_route(&origin)));
+    assert_eq!(saved()["state"], "disconnected");
+    assert_eq!(saved()["transport"], transport);
+    assert_eq!(process_identity(worker.pid), worker.process);
+
+    let hold = provider.folder().join("ssh-hold");
+    std::fs::write(&hold, []).unwrap();
+    let attempts = ssh_attempts(&provider);
+    let serves = ssh_serves(&provider);
+    let mut caller = connect(&origin);
+    let denied = caller.call("internal.ensure_route", json!({ "wake": true }));
+    assert_eq!(error_reason(&denied), "refused", "{denied}");
+    assert_eq!(ssh_attempts(&provider), attempts);
+    let screen_call = caller.send(
+        "call",
+        json!({ "op": "agent.screen", "args": { "target": reference } }),
+    );
+    let ensure = observed_frame(
+        &bridge.from_front,
+        "the authenticated route wake",
+        |frame| {
+            frame["method"] == "forward"
+                && frame["params"]["params"]["op"] == "internal.ensure_route"
+        },
+    );
+    let ensure_id = ensure["id"].as_u64().expect("a peer wake request");
+    assert_eq!(
+        ensure["params"]["route"],
+        json!([middle_id, provider_id]),
+        "{ensure}"
+    );
+    assert_eq!(
+        ensure["params"]["caller"],
+        json!({ "kind": "terminal", "machine_id": origin_id }),
+        "{ensure}"
+    );
+    assert_eq!(
+        ensure["params"]["params"]["args"],
+        json!({ "wake": true }),
+        "{ensure}"
+    );
+    assert!(wait_until(LOADED_TIMEOUT, || ssh_attempts(&provider) != attempts));
+    assert_eq!(ssh_serves(&provider), serves);
+    let dialing = wait_for_machine_state(&middle, &provider_id, "connecting");
+    assert!(dialing.get("route").is_none(), "{dialing}");
+    assert_eq!(saved()["state"], "disconnected");
+    assert!(no_route(&middle) && no_route(&origin));
+    assert!(
+        caller
+            .wait_for_response(screen_call, std::time::Duration::ZERO)
+            .is_none(),
+        "the exact call is still blocked by the saved hop"
+    );
+
+    std::fs::remove_file(hold).unwrap();
+    let opened = observed_frame(
+        &bridge.from_peer,
+        "the correlated route-wake receipt",
+        |frame| frame["id"] == ensure_id && frame.get("method").is_none(),
+    );
+    assert_eq!(
+        opened,
+        json!({ "jsonrpc": "2.0", "id": ensure_id, "result": {} })
+    );
+    assert_eq!(ssh_serves(&provider), format!("{serves}wake\n"));
+    wait_for_route(&middle, &provider_id, &[&provider_id]);
+    wait_for_route(&origin, &provider_id, &[&middle_id, &provider_id]);
+    assert_eq!(saved()["transport"], transport);
+    assert_eq!(saved()["state"], "connected");
+
+    let forwarded = observed_frame(
+        &bridge.from_front,
+        "the call on the opened route",
+        |frame| frame["method"] == "forward" && frame["params"]["params"]["op"] == "agent.screen",
+    );
+    assert_eq!(
+        forwarded["params"]["route"],
+        json!([middle_id, provider_id]),
+        "{forwarded}"
+    );
+    assert_eq!(
+        forwarded["params"]["params"]["args"]["target"], reference,
+        "{forwarded}"
+    );
+    let forwarded_id = forwarded["id"].as_u64().expect("a peer call ID");
+    let response = observed_frame(
+        &bridge.from_peer,
+        "the provider's screen response",
+        |frame| frame["id"] == forwarded_id && frame.get("method").is_none(),
+    );
+    assert!(
+        response["result"]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains(marker)),
+        "{response}"
+    );
+    let received = caller
+        .wait_for_response(screen_call, LOADED_TIMEOUT)
+        .expect("the caller's screen result");
+    assert_eq!(received["id"], screen_call, "{received}");
+    assert_eq!(
+        received["result"]["text"], response["result"]["text"],
+        "{received}"
+    );
+    assert_eq!(process_identity(worker.pid), worker.process);
+    println!(
+        "ensure-route {ensure_id} woke {provider_id} through {middle_id}; peer call {forwarded_id} read CLI {}",
+        worker.pid
+    );
+}
+
 #[test]
 fn shell_receives_a_linked_reply_from_a_managed_agent_across_machines() {
     let origin = TestHome::new("shell-send-origin");
     let peer = TestHome::new("shell-send-peer");
     let programs = test_binaries();
-    install_machine_ssh(&[("origin", &origin), ("peer", &peer)], &programs.facade);
     let origin_id = name_machine(&origin, "origin");
     let peer_id = name_machine(&peer, "peer");
     let worker = peer.start_named_fake("worker", &[]);
-    let _link = MachineLink::open(&origin, "peer", &peer);
+    let bridge = ObservedMachineLink::open(&origin, &peer);
     wait_for_route(&origin, &peer_id, &[&peer_id]);
     wait_for_route(&peer, &origin_id, &[&origin_id]);
     let mut receiver = McpTestClient::open_configured(&peer, &worker.id);
@@ -2053,6 +3582,22 @@ fn shell_receives_a_linked_reply_from_a_managed_agent_across_machines() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let forwarded = observed_frame(&bridge.from_front, "the original Shell send", |frame| {
+        frame["method"] == "forward" && frame["params"]["params"]["op"] == "agent.send"
+    });
+    assert_eq!(
+        forwarded["params"]["route"],
+        json!([peer_id]),
+        "{forwarded}"
+    );
+    let args = &forwarded["params"]["params"]["args"];
+    let recipient = json!({ "machine_id": peer_id, "agent_id": worker.id });
+    assert_eq!(args["to"], recipient, "{forwarded}");
+    assert_eq!(args["wait_for"], "result", "{forwarded}");
+    assert_eq!(args["text"], request, "{forwarded}");
+    let request_id = args["request_id"].as_str().expect("the Shell request ID");
+    assert!(!request_id.is_empty());
+
     assert!(
         wait_until(secs(10), || !peer.submitted_messages().is_empty()),
         "{}",
@@ -2080,6 +3625,39 @@ fn shell_receives_a_linked_reply_from_a_managed_agent_across_machines() {
     );
     assert_eq!(sent["status"], "success", "{sent}");
     assert_eq!(sent["data"]["delivery"], "returned_to_request", "{sent}");
+    let (returned_number, _) = sent["data"]["id"]
+        .as_str()
+        .and_then(|id| id.split_once('@'))
+        .expect("a full reply address");
+    assert_ne!(original["id"], returned_number, "{sent}");
+    let forwarded = observed_frame(&bridge.from_peer, "the linked command reply", |frame| {
+        frame["method"] == "forward" && frame["params"]["params"]["op"] == "internal.command_reply"
+    });
+    let params = &forwarded["params"];
+    assert_eq!(params["route"], json!([origin_id]), "{forwarded}");
+    assert_eq!(params["caller"]["kind"], "agent", "{forwarded}");
+    assert_eq!(params["caller"]["agent"], recipient, "{forwarded}");
+    assert_eq!(
+        params["params"]["args"],
+        json!({
+            "request_id": request_id,
+            "original": { "machine_id": peer_id, "message_id": original["id"] },
+            "reply": {
+                "reference": { "machine_id": peer_id, "message_id": returned_number },
+                "text": reply,
+            },
+        }),
+        "{forwarded}"
+    );
+    let reply_id = forwarded["id"].as_u64().expect("the peer call ID");
+    let receipt = observed_frame(&bridge.from_front, "the accepted command reply", |frame| {
+        frame["id"] == reply_id && frame.get("method").is_none()
+    });
+    assert_eq!(
+        receipt,
+        json!({ "jsonrpc": "2.0", "id": reply_id, "result": {} })
+    );
+
     if !wait_until(secs(10), || shell.try_wait().unwrap().is_some()) {
         let _ = shell.kill();
     }

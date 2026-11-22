@@ -161,8 +161,10 @@ export class AgentTerminals implements vscode.Disposable {
 	private strayOpened: { readonly tab: vscode.Tab; readonly at: number }[] = [];
 	/** Terminal tabs Facade cannot tell: the mark each showed last, and when it changed - a person's pin or unpin there (LIFECYCLE-3.4). */
 	private readonly strayMarks = new WeakMap<vscode.Tab, { readonly pinned: boolean; readonly changedAt?: number }>();
-	private terminalActivatedAt = -Infinity;
+	private activationOrder = 0;
+	private terminalActivation?: { readonly at: number; readonly order: number };
 	private tabActivatedAt = -Infinity;
+	private tabActivationOrder = 0;
 	private readonly disposables: vscode.Disposable[] = [];
 	private creation = Promise.resolve();
 	private revealRequested?: { readonly pair: TerminalEntry; readonly preserveFocus: boolean };
@@ -182,7 +184,7 @@ export class AgentTerminals implements vscode.Disposable {
 				if (change.affectsConfiguration('workbench.reduceMotion')) { this.moved(); }
 			}),
 			vscode.window.onDidChangeActiveTerminal(terminal => {
-				this.terminalActivatedAt = Date.now();
+				this.terminalActivation = { at: Date.now(), order: ++this.activationOrder };
 				this.noteFront();
 				this.correlate();
 				const pair = terminal && this.pairOf(terminal);
@@ -1244,6 +1246,7 @@ export class AgentTerminals implements vscode.Disposable {
 		}
 		if (event.changed.some(tab => tab.isActive) || event.opened.some(tab => tab.isActive)) {
 			this.tabActivatedAt = now;
+			this.tabActivationOrder = ++this.activationOrder;
 			this.correlate();
 		}
 		for (const tab of event.changed) {
@@ -1303,13 +1306,22 @@ export class AgentTerminals implements vscode.Disposable {
 		const front = vscode.window.tabGroups.activeTabGroup.activeTab;
 		// That group survived this change and is the active one: a closed group's tabs, joined into another, are not its front there
 		const still = before.column !== undefined && !closed.includes(before.column) && shifted(before.column) === vscode.window.tabGroups.activeTabGroup.viewColumn;
-		if (dropped && still && !dropped.pair.hiding && vscode.window.activeTerminal === dropped.pair.terminal
+		const activeTerminal = vscode.window.activeTerminal;
+		const terminalActivation = this.terminalActivation;
+		if (dropped && still && activeTerminal && activeTerminal !== dropped.pair.terminal
+			&& terminalActivation && terminalActivation.order < this.tabActivationOrder) {
+			// The terminal notification preceded the change to a different known front.
+			// Discard it before correlating the replacement Tab objects.
+			this.terminalActivation = undefined;
+		}
+		if (dropped && still && !dropped.pair.hiding && activeTerminal === dropped.pair.terminal
 			&& front?.input instanceof vscode.TabInputTerminal && !this.pairOfTab(front)) {
 			this.match(dropped.pair, front);
 		}
+		// Rebuilding Tab objects refreshes the correlation window, without a new active-tab notification.
 		this.tabActivatedAt = Date.now();
 		this.correlate();
-		const pair = vscode.window.activeTerminal && this.pairOf(vscode.window.activeTerminal);
+		const pair = activeTerminal && this.pairOf(activeTerminal);
 		if (pair) { this.applyPin(pair); }
 		this.noteFront();
 	}
@@ -1339,7 +1351,7 @@ export class AgentTerminals implements vscode.Disposable {
 	 * is matched otherwise; a conflict is ambiguous, and nothing changes (LIFECYCLE-2.2). Never by a tab's label.
 	 */
 	private correlate(): void {
-		if (Math.abs(this.terminalActivatedAt - this.tabActivatedAt) > TOGETHER_MS) {
+		if (!this.terminalActivation || Math.abs(this.terminalActivation.at - this.tabActivatedAt) > TOGETHER_MS) {
 			return;
 		}
 		const terminal = vscode.window.activeTerminal;

@@ -1,0 +1,90 @@
+name: Core prior-build compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'ci/acceptance.py'
+      - 'ci/check_prior_build.py'
+      - 'ci/catalog.py'
+      - 'ci/evidence.py'
+      - 'ci/native_core.py'
+      - 'ci/test_prior_build.py'
+      - 'core/Cargo.lock'
+      - 'core/Cargo.toml'
+      - 'core/rust-toolchain.toml'
+      - 'core/scripts/leftovers.sh'
+      - 'core/crates/base/src/model/**'
+      - 'core/crates/base/src/paths.rs'
+      - 'core/crates/base/src/protocol/**'
+      - 'core/crates/daemon/src/server/**'
+      - 'core/crates/daemon/src/lifecycle/**'
+      - 'core/crates/daemon/src/machine_service.rs'
+      - 'core/crates/daemon/src/store/**'
+      - 'core/crates/keeper/**'
+      - 'core/tests/tests/machines.rs'
+      - 'core/tests/src/binaries.rs'
+      - 'core/tests/src/home.rs'
+      - 'core/tests/src/bin/facade-fakecli.rs'
+      - '.github/workflows/core-compatibility.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-compatibility-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  cold-cutover:
+    name: Core cold migration (linux-x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CC_x86_64_unknown_linux_musl: musl-gcc
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Fetch the pinned prior source
+        run: |
+          prior=$(PYTHONPATH=ci python3 -B -c 'from check_prior_build import PRIOR_MAIN; print(PRIOR_MAIN)')
+          git fetch --no-tags --depth=1 origin "$prior"
+          test "$(git rev-parse FETCH_HEAD)" = "$prior"
+      - name: Install Linux x64 build inputs
+        working-directory: core
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          rustup toolchain install
+          rustup target add x86_64-unknown-linux-musl
+          # The pinned v3 source has its own toolchain.
+          rustup target add x86_64-unknown-linux-musl --toolchain 1.98.1
+      - name: Build the native Core candidate
+        working-directory: core
+        run: |
+          cargo build --locked --release --target x86_64-unknown-linux-musl \
+            -p facade -p facade-relay --bin facade --bin facade-mcp
+      - name: Reopen the pinned v3 state in the candidate
+        run: |
+          mkdir -p "$RUNNER_TEMP/core-compatibility"
+          python3 -B ci/check_prior_build.py \
+            --candidate-bin core/target/x86_64-unknown-linux-musl/release \
+            --output-dir "$RUNNER_TEMP/core-compatibility/cold-cutover" prior-main \
+            2>&1 | tee "$RUNNER_TEMP/core-compatibility/console.log"
+          python3 -B ci/acceptance.py verify-native-prior \
+            --candidate-bin core/target/x86_64-unknown-linux-musl/release \
+            "$RUNNER_TEMP/core-compatibility/cold-cutover" "$RUNNER_TEMP/core-compatibility/console.log" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Keep the prior and candidate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: core-cold-migration-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/core-compatibility/
+          if-no-files-found: ignore

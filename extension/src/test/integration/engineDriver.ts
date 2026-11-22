@@ -104,9 +104,9 @@ export async function activate(): Promise<void> {
 				].map(value => JSON.stringify(value)).join('\n') + '\n');
 				agents.push({ runId: card.runId, alias, name: card.name, pid, session });
 			}
-			const setting = vscode.workspace.getConfiguration('facade').inspect<string>('rustEngine')?.globalValue;
+			const setting = vscode.workspace.getConfiguration('facade').inspect<string>('rustEngine');
 			await vscode.workspace.getConfiguration('facade').update('rustEngine', 'auto', vscode.ConfigurationTarget.Global);
-			write({ phase: 'two', before: setting, agents, core: coreRuns() });
+			write({ phase: 'two', before: setting?.globalValue, defaultSetting: setting?.defaultValue, agents, core: coreRuns() });
 			void vscode.commands.executeCommand('workbench.action.reloadWindow').then(undefined, () => undefined);
 			return;
 		}

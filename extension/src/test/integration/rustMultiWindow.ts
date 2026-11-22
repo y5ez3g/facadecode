@@ -5,13 +5,20 @@
 import * as assert from 'assert';
 import { execFile, execFileSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
+import * as net from 'net';
+import * as os from 'os';
 import * as path from 'path';
+import { createInterface } from 'readline';
 import { isDeepStrictEqual } from 'util';
-import type { AgentInfo, DaemonHelloResult, InspectResult } from '../../base/coreProtocol';
+import type { AgentInfo, AgentRef, DaemonHelloResult, HelloParams, HelloResult, InspectResult } from '../../base/coreProtocol';
 import { isProcessRunning } from '../../base/system';
-import type { RustPin } from '../../core/ports';
+import type { OwnerClaim } from '../../base/ownership';
+import { ptydRecords, recordedPtyds } from '../../base/ptydRegistry';
+import { PtydClient } from '../../host/execution/ptydClient';
+import { isCurrentOwner, writeAsOwner } from '../../record/ownership';
+import type { Pin, RustPin } from '../../core/ports';
 import { freePort, Workbench } from './cdpInput';
-import { callInCore, coreCall, detachedStartReference, endEditors, helloInCore, normalizeDriveLetter, until } from './editors';
+import { callInCore, coreCall, coreListens, coreSocket, detachedStartReference, endEditors, helloInCore, normalizeDriveLetter, until } from './editors';
 import type { AttachView, SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './rustMultiWindowDriver';
 import type { RunningAgent } from './rustWindowDriver';
 
@@ -40,7 +47,7 @@ interface WindowFiles {
 interface DrivenWindow {
 	readonly ready: WindowReady;
 	act<Result>(action: WindowAction): Promise<Result>;
-	close(): Promise<void>;
+	close(options?: { readonly waitForExit: boolean }): Promise<void>;
 	workbench(): Promise<Workbench>;
 }
 
@@ -94,18 +101,18 @@ export async function withRustWindows(files: WindowFiles, start: StartEditor, jo
 		return {
 			ready, act,
 			workbench: () => Workbench.connect(port, path.basename(folder)),
-			close: async () => {
-				await act<boolean>({ kind: 'close' });
-				if (process.platform !== 'win32') {
+			close: async (options) => {
+				await act<boolean>({ kind: 'close', quit: options?.waitForExit });
+				if (process.platform !== 'win32' && !options?.waitForExit) {
 					await endEditors([editor]);
 					return;
 				}
-				// The driver's reply comes during shutdown. Let VS Code finish saving its editor layout before reopening.
+				// The driver's reply comes during shutdown. Wait for VS Code to flush its profile before reopening.
 				try {
 					await until(`the VS Code process for ${profile} to exit`, () =>
 						editor.exitCode !== null || editor.signalCode !== null || undefined, 20_000);
 				} finally {
-					console.log(`  VS Code ${profile} after Close Window has exit code ${editor.exitCode} and signal ${editor.signalCode ?? 'none'}`);
+					console.log(`  VS Code ${profile} after shutdown has exit code ${editor.exitCode} and signal ${editor.signalCode ?? 'none'}`);
 				}
 				assert.strictEqual(editor.exitCode, 0, `VS Code ${profile} did not exit cleanly`);
 			}
@@ -116,6 +123,80 @@ export async function withRustWindows(files: WindowFiles, start: StartEditor, jo
 	} finally {
 		await endEditors(editors);
 	}
+}
+
+/** Two actual old-engine windows replace the active claim for one workspace and keep both original agents. */
+export async function staleOwner(open: OpenWindow, folder: string, env: NodeJS.ProcessEnv): Promise<void> {
+	const home = path.join(env.FACADE_HOME!, 'extension');
+	const claim = () => {
+		const directory = path.join(home, 'claims');
+		const files = fs.readdirSync(directory).filter(file => file.endsWith('.json'));
+		assert.strictEqual(files.length, 1, 'exactly this fixture workspace has a claim');
+		return JSON.parse(fs.readFileSync(path.join(directory, files[0]), 'utf8')) as OwnerClaim;
+	};
+	const first = await open(folder, 'old');
+	assert.strictEqual(first.ready.machineId, null, 'the old engine owns the agents');
+	const start = () => first.act<{ runId: string; alias: string }>({ kind: 'start-fallback' });
+	const agents = [await start(), await start()] as const;
+	const runs = [agents[0].runId, agents[1].runId] as const;
+	assert.notStrictEqual(runs[0], runs[1]);
+	for (const run of runs) { await first.act({ kind: 'pin-owned', run }); }
+	const oldPage = await first.act<string>({ kind: 'panel-generation' });
+	const previous = claim();
+	const stateFile = path.join(home, 'workspaces', previous.owner, 'workspace-state.json');
+	const savedPins = (): readonly string[] => {
+		const state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as { readonly 'facade.pins'?: readonly Pick<Pin, 'id'>[] };
+		return (state['facade.pins'] ?? []).map(pin => pin.id);
+	};
+	const services = recordedPtyds(ptydRecords(path.join(home, 'ptyd')));
+	assert.strictEqual(services.length, 1, 'the two actual fake CLIs use one old supervisor');
+	const service = services[0];
+	const ptyd = await PtydClient.connect(service.socket, '', path.join(home, 'ptyd', 'unused.log'), { start: false, protocol: service.protocol });
+	const list = () => ptyd.request('list', { owner: previous.owner });
+	const snapshot = async () => (await list()).map(row => ({
+		run: row.run, pid: row.pid, cwd: row.cwd, startedAt: row.startedAt, exited: row.exited, name: row.meta.name
+	})).sort((a, b) => a.run.localeCompare(b.run));
+	try {
+		const original = await snapshot();
+		assert.deepStrictEqual(original.map(row => row.run), [...runs].sort((a, b) => a.localeCompare(b)));
+		for (const agent of agents) {
+			const recorded = Number(fs.readFileSync(`${env.FACADE_IT_RECORD}.${agent.alias}`, 'utf8').trim());
+			assert.ok(recorded > 0 && isProcessRunning(recorded));
+			assert.strictEqual(original.find(row => row.run === agent.runId)?.pid, recorded);
+		}
+		const pins = await until('both runs’ durable Pins', async () => {
+			const saved = savedPins();
+			const live = await list();
+			const linked = runs.map(run => live.find(row => row.run === run)?.meta.pin);
+			return saved.length === runs.length && new Set(linked).size === runs.length
+				&& linked.every(id => typeof id === 'string' && saved.includes(id)) ? saved : undefined;
+		});
+		await first.close({ waitForExit: true });
+		assert.deepStrictEqual(savedPins(), pins, 'the predecessor saved both exact Pins through normal shutdown');
+		console.log(`  ✔ Both original Pins survived the predecessor’s clean exit (${pins.join(', ')})`);
+		const successor = await open(folder, 'new');
+		assert.strictEqual(successor.ready.machineId, null);
+		assert.notStrictEqual(successor.ready.hostPid, first.ready.hostPid);
+		const current = claim();
+		assert.strictEqual(current.owner, previous.owner);
+		assert.strictEqual(current.generation, previous.generation + 1);
+		assert.notStrictEqual(current.token, previous.token);
+		assert.strictEqual(isCurrentOwner(current, home), true);
+		const before = fs.readFileSync(stateFile);
+		assert.strictEqual(writeAsOwner(previous, home, () => assert.fail('a stale writer reached the current workspace record')), false);
+		assert.deepStrictEqual(fs.readFileSync(stateFile), before);
+		await assert.rejects(ptyd.request('claim', previous), /ownership was transferred or expired/i);
+		for (const run of runs) {
+			await assert.rejects(ptyd.request('input', { run, data: 'unexpected stale input' }), /ownership was transferred or expired/i);
+			await assert.rejects(ptyd.request('terminate', { run, graceMs: 0 }), /ownership was transferred or expired/i);
+		}
+		const replay = await successor.act<{ page: string; refusedActions: number }>({ kind: 'stale-owner', previous, current, page: oldPage, runs });
+		assert.deepStrictEqual(await snapshot(), original, 'both exact fake CLI processes survived stale effects');
+		assert.strictEqual(replay.refusedActions, 2);
+		console.log(`  ✔ Stale claim ${previous.generation} lost to ${current.generation}; stale page ${oldPage} changed neither run; current page ${replay.page} unpinned only ${runs[0]}; original fake PIDs ${original.map(row => row.pid).join(', ')}`);
+		for (const runId of runs) { await successor.act({ kind: 'stop-fallback', runId }); }
+		await successor.close();
+	} finally { ptyd.dispose(); }
 }
 
 async function expectAgent(window: DrivenWindow, id: string, pinned: boolean): Promise<void> {
@@ -133,21 +214,246 @@ async function expectAgent(window: DrivenWindow, id: string, pinned: boolean): P
 	}
 }
 
+/** An expired agent with a missing session and a deliberately unpinned agent on the same real reopen. */
+export async function missingSessionUnpin(open: OpenWindow, folder: string, env: NodeJS.ProcessEnv): Promise<void> {
+	const home = env.FACADE_HOME!;
+	const first = await open(folder, 'pins');
+	assert.strictEqual(normalizeDriveLetter(first.ready.home), normalizeDriveLetter(home));
+	assert.ok(first.ready.machineId && first.ready.remote === null, 'the local window observed the real Core machine');
+	const missing = await first.act<RunningAgent>({ kind: 'start' });
+	const unpinned = await first.act<RunningAgent>({ kind: 'start' });
+	assert.notStrictEqual(missing.session, unpinned.session);
+	const transcript = (agent: RunningAgent) =>
+		path.join(env.CLAUDE_CONFIG_DIR!, 'projects', agent.cwd.replace(/[^A-Za-z0-9]/g, '-'), `${agent.session}.jsonl`);
+	const validSession = fs.readFileSync(transcript(unpinned), 'utf8');
+	assert.ok(fs.existsSync(transcript(missing)));
+	await first.act({ kind: 'pin', agent: missing.id });
+	await first.act({ kind: 'pin', agent: unpinned.id });
+	const { file, pin } = await first.act<SavedPin>({ kind: 'saved-pin', agent: missing.id });
+	assert.deepStrictEqual([pin.machine_id, pin.conversation.sessionId], [first.ready.machineId, missing.session]);
+	const pins = () => (JSON.parse(fs.readFileSync(file, 'utf8')) as { pins: RustPin[] }).pins.map(each => each.agent).sort();
+	assert.deepStrictEqual(pins(), [missing.id, unpinned.id].sort());
+	await first.act({ kind: 'stop', agent: missing.id });
+	await first.act({ kind: 'stop', agent: unpinned.id });
+	await first.act({ kind: 'unpin', agent: unpinned.id });
+	assert.deepStrictEqual(pins(), [missing.id], 'only the other Pin remains on disk before reopening');
+	await first.close();
+	await until('the isolated Core daemon to idle out before aging the fixture', () => !coreListens(home) || undefined, 45_000);
+
+	// Change only the stopped fixture's timestamp while its own daemon is down. Core writes the expiry record on startup.
+	const { DatabaseSync } = await import('node:sqlite');
+	const db = new DatabaseSync(path.join(home, 'core', 'facade.db'));
+	try {
+		const aged = db.prepare('UPDATE agents SET exit_at = ? WHERE agent_id = ? AND session = ? AND pid = ? AND exit_at IS NOT NULL')
+			.run(new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString(), missing.id, missing.session, missing.pid);
+		assert.strictEqual(aged.changes, 1);
+	} finally {
+		db.close();
+	}
+	fs.unlinkSync(transcript(missing));
+
+	const recordDir = path.dirname(env.FACADE_IT_RECORD!);
+	const prefix = path.basename(env.FACADE_IT_RECORD!) + '.starts.#';
+	const launches = () => Object.fromEntries(fs.readdirSync(recordDir).filter(name => name.startsWith(prefix)).map(name => {
+		const pidList = fs.readFileSync(path.join(recordDir, name), 'utf8').trim();
+		return [name.slice(prefix.length), pidList.split(/\r?\n/u).map(Number)];
+	}));
+	const original = { [missing.id]: [missing.pid], [unpinned.id]: [unpinned.pid] };
+	assert.deepStrictEqual(launches(), original);
+
+	const reopened = await open(folder, 'pins');
+	assert.strictEqual(reopened.ready.machineId, first.ready.machineId);
+	const removed = await callInCore(home, 'agent.inspect', { target: { machine_id: pin.machine_id, agent_id: missing.id } });
+	assert.ok('error' in removed, JSON.stringify(removed));
+	assert.deepStrictEqual([removed.error.data.reason, removed.error.data.details?.record_removal], ['not_found', 'expired']);
+	const notice = `Removed the Pin for ${pin.name} because its saved session is gone.`;
+	const workbench = await reopened.workbench();
+	try {
+		await reopened.act({ kind: 'show-notifications' });
+		const containsNotice = `Array.from(document.querySelectorAll('.notification-list-item-message'))
+			.some(node => node.textContent?.trim() === ${JSON.stringify(notice)})`;
+		await until('the missing-session notice in the real workbench', async () =>
+			await workbench.cdp.evaluate<boolean>(containsNotice) || undefined);
+	} finally {
+		workbench.cdp.close();
+	}
+	assert.deepStrictEqual(pins(), [], 'the confirmed-missing session clears its Pin');
+	const view = await reopened.act<WindowView>({ kind: 'snapshot' });
+	assert.deepStrictEqual(view.cards.map(card => [card.id, card.running, card.pinned]), [[unpinned.id, false, false]]);
+	assert.strictEqual(view.terminals, 0);
+	const { agent } = await reopened.act<InspectResult>({ kind: 'inspect', agent: unpinned.id });
+	assert.deepStrictEqual([agent.process, agent.session], ['ended', unpinned.session]);
+	assert.strictEqual(fs.readFileSync(transcript(unpinned), 'utf8'), validSession, 'the intentionally unpinned session remains available');
+	assert.deepStrictEqual((await coreCall(home, 'agent.list', {})).agents, []);
+	await reopened.close();
+	assert.deepStrictEqual(launches(), original, 'neither the missing nor the deliberately unpinned session launched');
+	console.log('  ✔ Missing session removed its Pin and showed the workbench notice. Unpin prevented a second launch. ' +
+		JSON.stringify({ home, expired: missing.id, unpinned: unpinned.id, notice, launches: original }));
+}
+
+/** A present but unlaunchable staged Core falls back to one usable old-engine panel. */
+export async function activationFailure(open: OpenWindow, folder: string, env: NodeJS.ProcessEnv, faultProgram: string): Promise<void> {
+	const home = env.FACADE_HOME!;
+	const record = env.FACADE_IT_RECORD!;
+	const launches = () => fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`));
+	const window = await open(folder, 'fault');
+	assert.strictEqual(normalizeDriveLetter(window.ready.home), normalizeDriveLetter(home));
+	assert.deepStrictEqual([window.ready.remote, window.ready.machineId], [null, null]);
+	assert.ok(!coreListens(home), 'there is no Core daemon for this fixture');
+	assert.deepStrictEqual(await window.act<WindowView>({ kind: 'snapshot' }), { cards: [], terminals: 0 });
+	assert.deepStrictEqual(launches(), [], 'activation did not launch an agent');
+	const warningStart = `The old engine is active on ${os.hostname()}. Could not connect to the Orchestrator. Could not run ${faultProgram}: `;
+	const warningEnd = 'Fix the problem, set facade.rustEngine to `auto`, and reload the window to try the Rust engine again.';
+	const workbench = await window.workbench();
+	let warning: string;
+	try {
+		await window.act({ kind: 'show-notifications' });
+		const warningText = `Array.from(document.querySelectorAll('.notification-list-item-message'))
+			.map(node => node.textContent?.trim()).find(text => text?.startsWith(${JSON.stringify(warningStart)})
+				&& text.endsWith(${JSON.stringify(warningEnd)}))`;
+		warning = await until('the startup warning naming the failed Core executable and recovery', async () =>
+			await workbench.cdp.evaluate<string | undefined>(warningText));
+	} finally {
+		workbench.cdp.close();
+	}
+	const agent = await window.act<{ runId: string; alias: string; name: string }>({ kind: 'start-fallback' });
+	const launchFile = `${record}.starts.${agent.alias}`;
+	const pids = () => fs.readFileSync(launchFile, 'utf8').trim().split(/\r?\n/u).map(Number);
+	const pid = await until('the old-engine fake CLI PID', () => fs.existsSync(launchFile) ? pids()[0] || undefined : undefined);
+	assert.ok(isProcessRunning(pid), 'the fake CLI is alive');
+	const view = await window.act<WindowView>({ kind: 'snapshot' });
+	assert.deepStrictEqual(view.cards.map(card => [card.id, card.name]), [[agent.alias, agent.name]]);
+	assert.strictEqual(view.terminals, 1);
+	assert.ok(!coreListens(home));
+	await window.act({ kind: 'stop-fallback', runId: agent.runId });
+	await until('the one old-engine fake CLI to stop', () => !isProcessRunning(pid) || undefined);
+	await window.close();
+	assert.deepStrictEqual(launches(), [path.basename(launchFile)]);
+	assert.deepStrictEqual(pids(), [pid], 'the one requested legacy run launched exactly one process');
+	assert.ok(!coreListens(home));
+	console.log('  ✔ Rust startup failed visibly. The old panel served one requested agent and its process stopped. ' +
+		JSON.stringify({ home, warning, before: 0, after: { alias: agent.alias, pids: pids() }, cliStopped: true }));
+}
+
+/** An incompatible hello refuses activation, including the actual Facade webview and commands. */
+export async function incompatibleActivation(open: OpenWindow, folder: string, env: NodeJS.ProcessEnv): Promise<void> {
+	const home = env.FACADE_HOME!;
+	const endpoint = coreSocket(home);
+	if (process.platform !== 'win32') { fs.mkdirSync(path.dirname(endpoint), { mode: 0o700, recursive: true }); }
+	assert.ok(!coreListens(home), 'the fixture home has no daemon');
+	const incompatible: HelloResult = {
+		api_version: 999, build: 'incompatible-editor-fixture', machine_id: '98367538-470c-4f4e-8503-f2bd9b9339ba',
+		pid: process.pid, agent_count: 0, ops: [], topics: []
+	};
+	const requests: { id: number; method: string; params: HelloParams }[] = [];
+	const connections = new Set<net.Socket>();
+	const failures: Error[] = [];
+	const server = net.createServer(socket => {
+		connections.add(socket);
+		socket.on('close', () => connections.delete(socket));
+		socket.on('error', error => failures.push(error));
+		createInterface({ input: socket }).on('line', line => {
+			try {
+				const request = JSON.parse(line) as (typeof requests)[number];
+				requests.push(request);
+				if (request.method === 'hello') {
+					socket.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: incompatible }) + '\n');
+				}
+			} catch (error) {
+				failures.push(error as Error);
+			}
+		});
+	});
+	const closeServer = () => {
+		for (const connection of connections) { connection.destroy(); }
+		return new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+	};
+	const terminate = () => void closeServer().then(
+		() => process.exit(143),
+		error => { console.error(error); process.exit(1); },
+	);
+	process.once('SIGTERM', terminate);
+	const reason = 'Facade core did not select an offered daemon API version.';
+	try {
+		await new Promise<void>((resolve, reject) => {
+			server.once('error', reject);
+			server.listen(endpoint, resolve);
+		});
+		const window = await open(folder, 'reject');
+		assert.deepStrictEqual([normalizeDriveLetter(window.ready.home), window.ready.remote, window.ready.machineId],
+			[normalizeDriveLetter(home), null, null]);
+		await window.act({ kind: 'show-failure-panel' });
+		const workbench = await window.workbench();
+		try {
+			const facadeFrame = `Array.from(document.querySelectorAll('iframe.webview')).find(frame => frame.getClientRects().length
+				&& getComputedStyle(frame).visibility === 'visible' && new URL(frame.src).searchParams.get('extensionId') === 'facade.facadecode')?.src`;
+			const viewUrl = await until('the visible Facade webview frame', () => workbench.cdp.evaluate<string | undefined>(facadeFrame));
+			const target = await until('the Facade webview target in this isolated workbench', async () => {
+				const listed = await workbench.cdp.send<{ targetInfos: { targetId: string; type: string; url: string }[] }>('Target.getTargets');
+				return listed.targetInfos.find(each => each.type === 'iframe' && each.url === viewUrl);
+			});
+			const { sessionId } = await workbench.cdp.send<{ sessionId: string }>('Target.attachToTarget', { targetId: target.targetId, flatten: true });
+			try {
+				await until('the exact activation error rendered inside the Facade panel', async () => {
+					const body = await workbench.cdp.evaluate<string | undefined>(
+						"document.querySelector('#active-frame')?.contentDocument?.body?.innerText.trim()", sessionId);
+					return body === reason ? body : undefined;
+				});
+			} finally {
+				await workbench.cdp.send('Target.detachFromTarget', { sessionId });
+			}
+			await window.act({ kind: 'request-refused-agent' });
+			await window.act({ kind: 'show-notifications' });
+			await until('the activation error notification after New Agent', async () => {
+				const notices = await workbench.cdp.evaluate<string[]>(
+					"Array.from(document.querySelectorAll('.notification-list-item-message')).map(node => node.textContent?.trim() ?? '')");
+				assert.ok(!notices.some(text => text.startsWith('The old engine is active on ')));
+				return notices.includes(reason) || undefined;
+			});
+		} finally {
+			workbench.cdp.close();
+		}
+		await window.close();
+		assert.deepStrictEqual(failures, []);
+		assert.deepStrictEqual(requests.map(request => request.method), ['hello']);
+		const offered = requests[0].params;
+		assert.deepStrictEqual([offered.kind, offered.api_versions], ['ide', [1]]);
+		assert.ok(!fs.existsSync(path.join(home, 'core')) && !fs.existsSync(path.join(home, 'extension', 'ptyd')));
+		const record = env.FACADE_IT_RECORD!;
+		assert.deepStrictEqual(fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`)), []);
+		console.log('  ✔ The incompatible hello was refused by the real Facade panel and New Agent. ' +
+			JSON.stringify({ home, endpoint, offered: offered.api_versions, selected: incompatible.api_version, panel: reason,
+				newAgent: 'refused', fallback: false, launches: 0 }));
+	} finally {
+		process.removeListener('SIGTERM', terminate);
+		if (server.listening) { await closeServer(); }
+	}
+	assert.ok(!coreListens(home), 'the private endpoint was removed');
+}
+
 /** Go to Agent attaches to a Shell run that survives closing the VS Code window. */
 export async function shellHandoff(open: OpenWindow, folder: string, facade: string, env: NodeJS.ProcessEnv): Promise<void> {
 	const run = (...args: string[]) => execFileSync(facade, args, { cwd: folder, env, encoding: 'utf8', timeout: 20_000 });
 	const home = env.FACADE_HOME!;
 	const name = 'shell-ada';
 	const prompt = 'Review the isolated Shell handoff';
-	const address = detachedStartReference(run('start', '-d', '--name', name, 'codex', '--', prompt), name);
+	const branch = 'shell-handoff-worktree';
+	const worktree = path.join(`${folder}.worktrees`, branch);
+	const [started, location, ...extra] = run('start', '-d', '--name', name, '--worktree', branch, 'codex', '--', prompt).trimEnd().split(/\r?\n/u);
+	const address = detachedStartReference(started, name);
+	assert.ok(location?.startsWith('Worktree: '));
+	assert.deepStrictEqual([normalizeDriveLetter(location.slice('Worktree: '.length)), extra], [normalizeDriveLetter(worktree), []]);
 	const inspect = async () => (await coreCall(home, 'agent.inspect', { target: address })).agent;
 	const before = await inspect();
 	assert.ok(before.pid && before.process === 'running');
 	assert.strictEqual(before.address, address);
+	assert.strictEqual(normalizeDriveLetter(fs.realpathSync(before.cwd)), normalizeDriveLetter(fs.realpathSync(worktree)));
+	assert.strictEqual(execFileSync('git', ['branch', '--show-current'], { cwd: worktree, encoding: 'utf8' }).trim(), branch);
 	const launchFile = `${env.FACADE_IT_RECORD}.args.#${before.reference.agent_id}`;
 	const launch = await until('the Shell start argv at the fake CLI', () => fs.existsSync(launchFile)
-		? JSON.parse(fs.readFileSync(launchFile, 'utf8')) as { readonly args: string[] }
+		? JSON.parse(fs.readFileSync(launchFile, 'utf8')) as { readonly args: string[]; readonly cwd: string }
 		: undefined);
+	assert.strictEqual(normalizeDriveLetter(fs.realpathSync(launch.cwd)), normalizeDriveLetter(fs.realpathSync(worktree)));
 	assert.deepStrictEqual(launch.args.filter(arg => arg === '--' || arg === prompt), ['--', prompt], 'the two Shell arguments each arrive once');
 	assert.deepStrictEqual(launch.args.slice(-2), ['--', prompt], 'the prompt follows its separator at the end of argv');
 	const window = await open(folder, 'sh');
@@ -165,6 +471,7 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	const after = await inspect();
 	assert.strictEqual(after.address, address);
 	assert.strictEqual(after.pid, before.pid);
+	assert.strictEqual(after.cwd, before.cwd);
 	assert.strictEqual(after.process, 'running');
 
 	execFileSync(process.execPath, [path.join(__dirname, 'shellAttachFixture.js'), facade, address, marker], { cwd: folder, env, timeout: 65_000 });
@@ -174,13 +481,17 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	const session = await until('the fake CLI to report its session', async () => (await inspect()).session);
 	const startLog = `${env.FACADE_IT_RECORD}.starts.#${before.reference.agent_id}`;
 	const starts = () => fs.readFileSync(startLog, 'utf8').trim().split(/\r?\n/u).map(Number);
-	const priorStarts = starts().length;
-	const pinWindow = await open(folder, 'sh');
-	const peerWindow = await open(folder, 'sh2');
+	const launchPids = starts();
+	const priorStarts = launchPids.length;
+	// The fresh profile has never had this run's native tab.
+	const pinWindow = await open(folder, 'sh2');
+	const peerWindow = await open(folder, 'sh');
 	const cardIn = async (window: DrivenWindow) =>
 		(await window.act<WindowView>({ kind: 'snapshot' })).cards.find(card => card.name === name);
 	await until('the other window to see the same workspace card', () => cardIn(peerWindow));
-	await pinWindow.act({ kind: 'shell-pin', name, set: true });
+	await pinWindow.act({ kind: 'shell-pin', name, set: true, verifyOpen: address });
+	assert.deepStrictEqual(starts(), launchPids, 'Open Terminal did not launch a second fake CLI');
+	console.log('  ✔ Open Terminal attached the exact Core run with a new native tab and the original PID');
 	await until('Pin to be visible in the other window', async () => (await cardIn(peerWindow))?.pinned || undefined);
 	await Promise.all([pinWindow.close(), peerWindow.close()]);
 	// Pin recovery groups live extension hosts. Let both hosts exit before the next opening.
@@ -224,8 +535,12 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	assert.notStrictEqual(restored.pid, before.pid);
 	assert.deepStrictEqual(starts().slice(priorStarts), [restored.pid], 'reopening started the saved Pin once');
 	await restoredPeer.act({ kind: 'hide-shell-agent', name });
-	await until('the hidden card to leave both windows', async () =>
-		!await cardIn(restoredWindow) && !await cardIn(restoredPeer) || undefined);
+	await until('the hidden card, tab, workspace member and Pin to go', async () => {
+		const views = await Promise.all([restoredWindow, restoredPeer].map(window => window.act<WindowView>({ kind: 'snapshot' })));
+		const saved = roster();
+		return views.every(view => !view.cards.some(card => card.name === name) && view.terminals === 0)
+			&& saved.members.length === 0 && saved.pins.length === 0 || undefined;
+	});
 	assert.strictEqual((await inspect()).pid, restored.pid, 'Hide leaves the resumed agent running');
 	await restoredWindow.act({ kind: 'open-shell-agent', name, address, text: 'reopened before removal' });
 	await restoredWindow.act({ kind: 'shell-pin', name, set: true });
@@ -457,6 +772,9 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 	};
 
 	const first = await start(folder, 'a');
+	if (journey.remote === null) {
+		assert.ok(await first.act<boolean>({ kind: 'terminal-owner' }), 'the local Window Component owns this VS Code session');
+	}
 	const screen = 'Shared agent screen';
 	const before = await first.act<RunningAgent>({ kind: 'start', screen });
 	await expectAgent(first, before.id, false);
@@ -497,10 +815,67 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 	assert.notStrictEqual(left.pid, before.pid, 'the original process ended before the resume');
 	console.log('  ✔ Both Pins restore the same stopped agent with its original session');
 
-	await restored[0].act({ kind: 'remove', agent: before.id });
+	if (remote === null) {
+		await removeAndResume(restored, home, left);
+	} else {
+		await restored[0].act({ kind: 'remove', agent: before.id });
+	}
 	await worktreeLifetime(restored[0], restored[1]);
 	await Promise.all(restored.map(window => window.close()));
 	await sameWorkspace(start, journey);
+}
+
+/** Remove running and stopped workspace members, preserving their native session (RULES-6.2, 6.3). */
+async function removeAndResume(windows: readonly DrivenWindow[], home: string, live: RunningAgent): Promise<void> {
+	const source = windows[0];
+	const machine = source.ready.machineId;
+	assert.ok(machine);
+	const reference = (id: string): AgentRef => ({ machine_id: machine, agent_id: id });
+	const workspaces = path.join(home, 'extension', 'workspaces');
+	const savedPins = (id: string) => fs.readdirSync(workspaces).filter(key => {
+		const file = path.join(workspaces, key, 'orchestrator-workspace.json');
+		if (!fs.existsSync(file)) { return false; }
+		const { pins } = JSON.parse(fs.readFileSync(file, 'utf8')) as { readonly pins: readonly RustPin[] };
+		return pins.some(pin => pin.machine_id === machine && pin.agent === id);
+	});
+	const assertRemoved = async (id: string) => {
+		await until(`${id}'s cards, native tabs and saved Pins to clear`, async () => {
+			const views = await Promise.all(windows.map(window => window.act<WindowView>({ kind: 'snapshot' })));
+			return views.every(view => view.cards.length === 0 && view.terminals === 0) && savedPins(id).length === 0 || undefined;
+		});
+		const reply = await callInCore(home, 'agent.inspect', { target: reference(id) });
+		assert.ok('error' in reply, JSON.stringify(reply));
+		assert.deepStrictEqual([reply.error.data.reason, reply.error.data.details?.record_removal], ['not_found', 'removed']);
+	};
+	const findSaved = () => until('the exact native session to be discoverable in this workspace', async () => {
+		const { items } = await coreCall(home, 'agent.resume_list', {
+			folder: source.ready.folder, scope: { kind: 'local' }, folder_scope: 'cwd'
+		});
+		return items.find(item => item.target.kind === 'session' && item.session === live.session
+			&& item.machine_id === machine && normalizeDriveLetter(item.folder) === normalizeDriveLetter(live.cwd));
+	});
+
+	await until('both running-agent Pins to be saved', () => savedPins(live.id).length === 2 || undefined);
+	await source.act({ kind: 'remove', agent: live.id });
+	await source.act({ kind: 'wait-for-exit', pid: live.pid });
+	await assertRemoved(live.id);
+	const saved = await findSaved();
+	const resumed = await source.act<RunningAgent>({ kind: 'resume-saved', cli: saved.cli, session: saved.session });
+	assert.notStrictEqual(resumed.id, live.id, 'Resume Agent gives the saved session a fresh identity');
+	assert.deepStrictEqual([resumed.session, normalizeDriveLetter(resumed.cwd)], [live.session, normalizeDriveLetter(live.cwd)]);
+	await source.act({ kind: 'pin', agent: resumed.id });
+	await expectAgent(source, resumed.id, true);
+	await until('the resumed agent Pin to be saved', () => savedPins(resumed.id).length === 1 || undefined);
+	await source.act({ kind: 'stop', agent: resumed.id });
+	await source.act({ kind: 'wait-for-exit', pid: resumed.pid });
+	const stopped = await source.act<WindowView>({ kind: 'snapshot' });
+	assert.deepStrictEqual(stopped.cards.map(card => [card.id, card.pinned, card.running]), [[resumed.id, true, false]]);
+	assert.strictEqual(stopped.terminals, 0, 'Stop detached the tab');
+	assert.strictEqual(savedPins(resumed.id).length, 1, 'Stop retained the saved Pin');
+	await source.act({ kind: 'remove', agent: resumed.id });
+	await assertRemoved(resumed.id);
+	await findSaved();
+	console.log('  ✔ Remove cleared running and stopped cards, native tabs and saved Pins, and Resume kept the native session under a new identity');
 }
 
 async function worktreeLifetime(source: DrivenWindow, peer: DrivenWindow): Promise<void> {
@@ -557,7 +932,7 @@ async function sameWorkspace(open: OpenWindow, journey: WindowJourney): Promise<
 	assert.strictEqual(before[1].filter, undefined);
 	assert.deepStrictEqual(before.map(each => each.column), [2, 1]);
 
-	await Promise.all([left.close(), right.close()]);
+	await Promise.all([left.close({ waitForExit: true }), right.close({ waitForExit: true })]);
 	const firstBack = await open(folder, 'c');
 	const secondBack = await open(folder, 'd');
 	for (const window of [firstBack, secondBack]) {

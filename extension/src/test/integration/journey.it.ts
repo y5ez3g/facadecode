@@ -11,8 +11,11 @@ import * as vscode from 'vscode';
 import { piSessionFolderName } from '../../clis/history/pi';
 import { BUILT_IN_NAMES } from '../../base/names';
 import type { PanelState } from '../../webview/protocol';
+import type { Pin } from '../../core/ports';
 import { linesOf } from '../detailLines';
 import { unspun } from '../../base/tabSpinner';
+import { observeAcceptanceEngine } from './acceptanceEngine';
+import { coreSocket } from './editors';
 import { RESUME_PICKER_STATE, type ResumePickerState } from './resumePickerFixture';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
@@ -166,9 +169,10 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		}
 	});
 
-	test('New Agent with the preselected CLI creates the card and terminal at once, and its CLI runs in the folder', async () => {
+	test('New Agent with the preselected CLI creates the card and terminal at once, and its CLI runs in the folder', async function () {
 		const card = await newCard();
 		firstRun = card.runId;
+		observeAcceptanceEngine(this, card);
 		const terminal = vscode.window.terminals.find(each => unspun(each.name) === card.name);
 		assert.ok(terminal, 'its editor terminal shows only the agent name');
 		const alias = fixtureAlias(card);
@@ -271,11 +275,34 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		firstRun = undefined;
 	});
 
+	test('Stop Agent ends the targeted process and leaves a second editor agent running', async function () {
+		const target = await newCard();
+		firstRun = target.runId;
+		observeAcceptanceEngine(this, target);
+		const survivor = await newCard();
+		const pidOf = (card: PanelState['cards'][number]) => {
+			const pidFile = `${RECORD}.${fixtureAlias(card)}`;
+			return until('the fake CLI PID', async () => fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8').trim()) : undefined);
+		};
+		try {
+			const [ended, kept] = await Promise.all([pidOf(target), pidOf(survivor)]);
+			assert.notStrictEqual(ended, kept);
+			assert.ok(alive(ended) && alive(kept), 'both fixture agents were running');
+			await vscode.commands.executeCommand('facade.stopAgent', { run_id: target.runId });
+			await until('the target process to end', async () => alive(ended) ? undefined : true);
+			const cards = (await state()).cards;
+			assert.ok(alive(kept) && cards.some(card => card.runId === survivor.runId));
+		} finally {
+			await stopAndHide(survivor.runId);
+		}
+	});
+
 	test('LIFECYCLE-2.2: a person types English, Chinese and emoji in an agent terminal, unchanged and without submitting', async function () {
 		if (CUSTOM) { this.skip(); }
 		const card = await newCard();
 		let watching: vscode.Disposable | undefined;
 		try {
+			observeAcceptanceEngine(this, card);
 			const alias = fixtureAlias(card);
 			assert.ok(alias);
 			const terminal = vscode.window.terminals.find(each => unspun(each.name) === card.name);
@@ -326,6 +353,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		try {
 			const first = await newCard();
 			cards.push(first.runId);
+			observeAcceptanceEngine(this, first);
 			await until('its tab active', async () => vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof vscode.TabInputTerminal ? true : undefined);
 			const before = seen();
 			// What terminals the editor opens for the split: VS Code 1.105 opens none - its split of a terminal tab is an empty group
@@ -427,6 +455,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			assert.ok(BUILT_IN_NAMES.includes(card.name), `Resume assigns a short name, not the history title: ${card.name}`);
 			const alias = fixtureAlias(card);
 			assert.ok(alias);
+			observeAcceptanceEngine(this, card);
 			const launch = await until('the resumed process', async () => fs.existsSync(`${RECORD}.args.${alias}`) ? JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] } : undefined);
 			assert.ok(sameFolder(launch.cwd, cwd));
 			const resumeAt = launch.args.indexOf(fixture.args[0]);
@@ -489,6 +518,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			this.skip();
 		}
 		const card = await newCard();
+		observeAcceptanceEngine(this, card);
 		// Filter by Working Location..., as the person takes the card's location: in this window of one folder, the item after its
 		// whole folder
 		// The picker lists its locations once the window's locations are read, later in a remote window: a key before that accepts the
@@ -518,6 +548,66 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		]);
 	});
 
+	if (!RUST && CLI === 'claude') {
+		test('PANEL-1.3: the Webview Pin and Unpin buttons persist only the exact card’s native session', async function () {
+			const cards: PanelState['cards'][number][] = [];
+			const home = path.join(process.env.FACADE_HOME!, 'extension');
+			const uri = vscode.workspace.workspaceFolders![0].uri.toString();
+			const ledgerKey = process.platform === 'linux' ? uri : uri.toLowerCase();
+			const readJson = <T>(file: string): T | undefined => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) as T : undefined;
+			const saved = (): readonly Pin[] => {
+				const workspace = readJson<{ bindings: Record<string, string> }>(path.join(home, 'workspace-uris.json'))?.bindings[ledgerKey];
+				if (!workspace) { return []; }
+				const file = path.join(home, 'workspaces', workspace, 'workspace-state.json');
+				return readJson<{ 'facade.pins'?: readonly Pin[] }>(file)?.['facade.pins'] ?? [];
+			};
+			const selector = (run: string, pinned: boolean) =>
+				'.agent[data-run=' + JSON.stringify(run) + '] .pin-button:not([hidden])[data-look="' + (pinned ? 'filled' : 'outline') + '"]';
+			const rendered = async (run: string, pinned: boolean) =>
+				(await vscode.commands.executeCommand<string[]>('facade.probe', { op: 'read', selector: selector(run, pinned) }))?.length === 1;
+			const changePin = async (run: string, wasPinned: boolean, wanted: readonly string[]) => {
+				const before = await state();
+				await until('the exact rendered Pin button', async () => await rendered(run, wasPinned) || undefined);
+				assert.strictEqual(await vscode.commands.executeCommand('facade.probe', { op: 'click', selector: selector(run, wasPinned) }), true);
+				return until('the new Webview state and saved Pins for the expected sessions', async () => {
+					const now = await state();
+					const pins = saved();
+					const card = now.cards.find(each => each.runId === run);
+					if (now.revision > before.revision && card && !!card.pinned !== wasPinned && await rendered(run, !wasPinned) &&
+						pins.length === wanted.length && pins.every((pin, index) => pin.conversation.sessionId === wanted[index])) {
+						return pins;
+					}
+					return undefined;
+				});
+			};
+			try {
+				cards.push(await newCard());
+				cards.push(await newCard());
+				const [first, second] = cards;
+				observeAcceptanceEngine(this, first);
+				const [firstSession, secondSession] = await Promise.all(cards.map(card => until('its exact native conversation can be pinned', async () => {
+					const session = readJson<{ session_id?: string }>(path.join(home, 'runs', card.runId + '.session.json'))?.session_id;
+					return typeof session === 'string' && session && (await state()).cards.some(each => each.runId === card.runId && each.menu.pin)
+						? session : undefined;
+				})));
+				assert.notStrictEqual(firstSession, secondSession);
+				assert.deepStrictEqual(saved(), []);
+				await changePin(first.runId, false, [firstSession]);
+				assert.ok(await rendered(second.runId, false), 'the neighboring card remains unpinned');
+				const both = await changePin(second.runId, false, [firstSession, secondSession]);
+				const remaining = await changePin(first.runId, true, [secondSession]);
+				assert.deepStrictEqual(remaining, [both[1]], 'Unpin preserves the neighboring card’s exact Pin');
+				assert.ok(await rendered(second.runId, true), 'the Webview still renders its neighboring Pin');
+				console.log('  Webview Pin observation ' + JSON.stringify({
+					target: { run: first.runId, session: firstSession, pin: both[0].id },
+					retained: { run: second.runId, session: secondSession, pin: remaining[0].id },
+				}));
+			} finally {
+				await Promise.all(cards.map(card => stopAndHide(card.runId)));
+			}
+		});
+	}
+
 	test('CLIS-4.1, ARCHITECTURE-3.3: Show Agent Command Line shows each CLI as a start in this folder would have it, starting none; Show Agents Log shows the log', async function () {
 		// Once, with the first built-in: the documents are the window's, whatever the CLI
 		if (CLI !== 'claude') {
@@ -525,33 +615,37 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		}
 		const before = (await state()).cardCount;
 		// The Rust engine has no Show Agent Command Line (the specification takes it away); its log is core's own
-		if (RUST) {
+		if (!RUST) {
+			const showing = vscode.commands.executeCommand('facade.showAgentLaunch');
+			const launch = await until('the launch document', async () => {
+				const document = vscode.workspace.textDocuments.find(document => document.uri.scheme === 'facade-launch');
+				if (document) { return document; }
+				await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+				return undefined;
+			});
+			await showing;
+			assert.strictEqual(launch.uri.path, '/Agent Command Line');
+			const text = launch.getText();
+			assert.match(text, /^Agent command line in /);
+			assert.match(text, /^YOLO: on, from yolo in .*facade\.json; applies to newly started agents$/m);
+			for (const name of ['Claude Code (claude, clis.claude)', 'Codex (codex, clis.codex)', 'Pi (pi, clis.pi)']) {
+				assert.ok(text.includes(`\n${name}\n  State: available\n`), `${name} available in:\n${text}`);
+			}
+			assert.ok(text.includes('\n    --dangerously-skip-permissions\n'), text);
+			assert.strictEqual((await state()).cardCount, before, 'showing the launch does not start an agent');
+		}
+		const card = await newCard();
+		firstRun = card.runId;
+		observeAcceptanceEngine(this, card);
+		const pidFile = `${RECORD}.${fixtureAlias(card)}`;
+		const pid = await until('the logged fake CLI', async () => fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8').trim()) : undefined);
+		await until('the log to contain a known event from this Facade root', async () => {
 			await vscode.commands.executeCommand('facade.showAgentsLog');
-			const log = await until('the log document', async () => vscode.workspace.textDocuments.find(document => document.uri.scheme === 'facade-agents-log'));
-			assert.ok(log.getText().trim() && log.getText() !== 'No agent events yet\n', 'core has logged this run');
-			assert.strictEqual((await state()).cardCount, before, 'no agent was started');
-			return;
-		}
-		// As the Command Palette runs it; Resume may have remembered a nested cwd, so accept the location picker if shown.
-		const showing = vscode.commands.executeCommand('facade.showAgentLaunch');
-		const launch = await until('the launch document', async () => {
-			const document = vscode.workspace.textDocuments.find(document => document.uri.scheme === 'facade-launch');
-			if (document) { return document; }
-			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
-			return undefined;
+			const document = vscode.window.activeTextEditor?.document;
+			if (document?.uri.scheme !== 'facade-agents-log') { return undefined; }
+			const logged = document.getText();
+			return (RUST ? logged.includes(`listening on ${coreSocket(process.env.FACADE_HOME!)}`)
+				: logged.includes(`Started ${card.alias} (${CLI}) pid ${pid}`)) || undefined;
 		});
-		await showing;
-		assert.strictEqual(launch.uri.path, '/Agent Command Line');
-		const text = launch.getText();
-		assert.match(text, /^Agent command line in /);
-		assert.match(text, /^YOLO: on, from yolo in .*facade\.json; applies to newly started agents$/m);
-		for (const name of ['Claude Code (claude, clis.claude)', 'Codex (codex, clis.codex)', 'Pi (pi, clis.pi)']) {
-			assert.ok(text.includes(`\n${name}\n  State: available\n`), `${name} available in:\n${text}`);
-		}
-		assert.ok(text.includes('\n    --dangerously-skip-permissions\n'), text);
-		assert.strictEqual((await state()).cardCount, before, 'no agent was started');
-		await vscode.commands.executeCommand('facade.showAgentsLog');
-		const log = await until('the log document', async () => vscode.workspace.textDocuments.find(document => document.uri.scheme === 'facade-agents-log'));
-		assert.ok(log.getText().trim() && log.getText() !== 'No agent events yet\n', 'this run has logged its agents');
 	});
 });

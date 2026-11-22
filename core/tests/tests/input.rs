@@ -360,6 +360,51 @@ fn type_pastes_text_and_presses_keys() {
     assert_eq!(home.submitted_messages().len(), wanted.len());
 }
 
+/// Observe bytes from the public Shell command at the selected process, before and after Enter.
+#[test]
+fn shell_type_writes_exact_paste_and_enter_bytes_to_its_target() {
+    let home = TestHome::new("shell-type-bytes");
+    let keys = home.project.join("worker-input");
+    let other_keys = home.project.join("other-input");
+    let worker = home.start_fake_with("worker", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
+    let other = home.start_fake_with("other", &[("FAKECLI_KEYS", other_keys.to_str().unwrap())]);
+    assert!(wait_for_screen_text(&home, &worker.address, "❯"));
+    assert!(wait_for_screen_text(&home, &other.address, "❯"));
+    let before = std::fs::read(&keys).unwrap();
+    let other_before = std::fs::read(&other_keys).unwrap();
+    let draft = "界🙂 draft";
+    let suffix = " + Enter";
+    let mut expected = before;
+    let expect_bytes = |expected: &[u8]| {
+        assert!(wait_until(LOADED_TIMEOUT, || std::fs::read(&keys)
+            .is_ok_and(|bytes| bytes.len() >= expected.len())));
+        assert_eq!(std::fs::read(&keys).unwrap(), expected);
+    };
+    home.run_facade_ok(&["type", &worker.address, draft]);
+    expected.extend(format!("\x1b[200~{draft}\x1b[201~").bytes());
+    expect_bytes(&expected);
+    assert!(wait_for_screen_text(
+        &home,
+        &worker.address,
+        &format!("❯ {draft}")
+    ));
+    assert!(home.submitted_messages().is_empty());
+    home.run_facade_ok(&["type", &worker.address, suffix, "--enter"]);
+    expected.extend(format!("\x1b[200~{suffix}\x1b[201~\r").bytes());
+    expect_bytes(&expected);
+    let submitted = format!("{draft}{suffix}");
+    assert!(wait_until(LOADED_TIMEOUT, || home.submitted_messages()
+        == [submitted.as_str()]));
+
+    // Explicit keys take the raw path: the Unicode key and Enter have no paste wrapper.
+    home.run_facade_ok(&["type", &worker.address, "--key", "界", "--key", "Enter"]);
+    expected.extend("界\r".bytes());
+    expect_bytes(&expected);
+    assert!(wait_until(LOADED_TIMEOUT, || home.submitted_messages()
+        == [submitted.as_str(), "界"]));
+    assert_eq!(std::fs::read(other_keys).unwrap(), other_before);
+}
+
 /// The CLI validates a whole batch and the v3 endpoint can still type its legacy frames.
 #[test]
 fn public_keys_have_a_limit_and_v3_keeps_its_existing_keys() {

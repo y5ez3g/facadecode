@@ -14,5 +14,41 @@ export async function run(): Promise<void> {
 	for (const file of fs.readdirSync(__dirname).filter(each => each.endsWith('.it.js')).sort()) {
 		mocha.addFile(path.join(__dirname, file));
 	}
-	return new Promise((resolve, reject) => mocha.run(failures => failures ? reject(new Error(`${failures} integration tests failed.`)) : resolve()));
+	const selection = process.env.FACADE_IT_EXPECT_TESTS;
+	const expected: unknown = selection ? JSON.parse(selection) : undefined;
+	if (selection && (!Array.isArray(expected) || expected.length === 0
+		|| !expected.every(name => typeof name === 'string' && name.length > 0)
+		|| new Set(expected).size !== expected.length)) {
+		throw new Error('Expected distinct full acceptance test titles.');
+	}
+	return new Promise((resolve, reject) => {
+		const passed: { name: string; engine: unknown }[] = [];
+		const runner = mocha.run(failures => {
+			if (failures) {
+				reject(new Error(String(failures) + ' integration tests failed.'));
+				return;
+			}
+			if (Array.isArray(expected)) {
+				const observed = passed.map(test => test.name).sort();
+				if (JSON.stringify(observed) !== JSON.stringify([...expected].sort()) || runner.stats?.pending) {
+					reject(new Error('Expected exactly these observed passing tests: ' + selection));
+					return;
+				}
+				if (passed.some(test => !test.engine || test.engine !== process.env.FACADE_IT_ENGINE)) {
+					reject(new Error('An acceptance test did not observe the selected engine.'));
+					return;
+				}
+				for (const test of passed) {
+					console.log('Facade acceptance test ' + JSON.stringify(test));
+				}
+			}
+			resolve();
+		});
+		if (Array.isArray(expected)) {
+			runner.on('test', test => {
+				if (test.ctx) { delete test.ctx.acceptanceEngine; }
+			});
+			runner.on('pass', test => passed.push({ name: test.fullTitle(), engine: test.ctx?.acceptanceEngine }));
+		}
+	});
 }

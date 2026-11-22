@@ -133,10 +133,27 @@ suite('Window terminal registration: actual objects across workspace host genera
 		const ticket = begin('run-a');
 		const noise = create('same'); noise.dispose();
 		const candidate = create('same');
+		assert.strictEqual(finish('run-a', 'stale ticket', owner, candidate), false);
 		assert.strictEqual(finish('run-a', ticket), false);
 		assert.strictEqual(old.disposed, 0); assert.strictEqual(candidate.disposed, 0);
 		bind('run-a', 'different title');
 		assert.strictEqual(old.disposed, 1); assert.strictEqual(candidate.disposed, 0);
+	});
+
+	test('one nonempty capture ticket belongs to its session, owner and run', () => {
+		const old = bind('prior-run', 'Kept open');
+		const ticket = begin('capture-run');
+		assert.ok(ticket);
+		assert.strictEqual(registry.request({ ...owner, kind: 'begin', run: 'other-run' }), false);
+		const captured = create('Captured');
+		assert.strictEqual(finish('prior-run', ticket, owner, captured), false);
+		assert.strictEqual(finish('capture-run', ticket, { ...owner, session: 'another-session' }, captured), false);
+		assert.strictEqual(finish('capture-run', ticket, { ...owner, claim: { ...owner.claim, token: 'another-host' } }, captured), false);
+		assert.strictEqual(finish('capture-run', ticket, owner, captured), true);
+		assert.strictEqual(old.disposed, 0);
+		nextHost();
+		bind('capture-run', 'Replacement');
+		assert.deepStrictEqual([old.disposed, captured.disposed], [0, 1]);
 	});
 
 	test('a pre-existing object closing during capture does not contaminate the new object', () => {
@@ -159,6 +176,9 @@ suite('Window terminal registration: actual objects across workspace host genera
 		const ticket = begin('run-a'); const current = create('current');
 		assert.strictEqual(finish('run-a', oldTicket, previous), false);
 		assert.strictEqual(registry.request({ ...previous, kind: 'activate' }), false);
+		const conflicting = { ...owner, claim: { ...owner.claim, token: 'conflicting-host' } };
+		assert.strictEqual(registry.request({ ...conflicting, kind: 'activate' }), false);
+		assert.strictEqual(finish('run-a', ticket, conflicting, current), false);
 		assert.strictEqual(registry.request({ ...previous, kind: 'cancel', run: 'run-a', ticket: oldTicket }), false);
 		assert.strictEqual(finish('run-a', ticket), true);
 		assert.strictEqual(current.disposed, 0);
@@ -298,20 +318,21 @@ suite('Window terminal registration: actual objects across workspace host genera
 		const legacy = '#a3@id:00000000000040008000000000000003';
 		bind('run-a', 'Old'); bind('run-b', 'Old other');
 		bind(legacy, 'Confirmed old v2 tab'); bind('unknown', 'Unconfirmed old tab');
+		create('Unregistered Shell');
 		const old = restartLocalHost();
 		const runtime = manager(false);
 		const pinned = runtime.create({ run: 'run-a', name: 'Pinned', cli: 'claude' }, false);
 		runtime.create({ run: 'run-b', name: 'Hidden', cli: 'claude' }, false);
 		const kinds = () => commands.map(each => each.kind).filter(kind => kind === 'retire');
 		await runtime.finishRestore();
-		assert.deepStrictEqual([kinds(), old.map(each => each.disposed)], [[], [0, 0, 0, 0]], 'its pinned tab has not opened yet');
+		assert.deepStrictEqual([kinds(), old.map(each => each.disposed)], [[], [0, 0, 0, 0, 0]], 'its pinned tab has not opened yet');
 		pinned.open(false);
 		await clock.tick(0);
 		const current = terminals[terminals.length - 1];
 		await runtime.retirePredecessor(['run-a', 'run-b', legacy, legacy]);
 		const sent = commands.filter(each => each.kind === 'retire') as unknown as { runs: readonly string[]; hidden: readonly string[] }[];
 		assert.deepStrictEqual(sent.map(each => [each.runs, each.hidden]), [[['run-a', 'run-b', legacy], ['run-b', legacy]]]);
-		assert.deepStrictEqual(old.map(each => each.disposed), [1, 1, 1, 0]);
+		assert.deepStrictEqual(old.map(each => each.disposed), [1, 1, 1, 0, 0]);
 		assert.strictEqual(current.disposed, 0, 'the registered current tab stays open');
 	});
 

@@ -218,10 +218,18 @@ fn unread_dedicated_shell_attach_closes_and_allows_natural_idle_exit() {
     let mut editor = DaemonTestClient::open(&home);
     let hello = editor.hello("ide", DAEMON_API_VERSIONS, json!({}));
     assert_eq!(hello["result"]["api_version"], 1, "{hello}");
+    assert!(
+        hello["result"]["topics"]
+            .as_array()
+            .is_some_and(|topics| topics.iter().all(|topic| topic != "attach.shell")),
+        "{hello}"
+    );
 
     let target =
         terminal.call_ok("agent.inspect", json!({ "target": agent }))["agent"]["reference"].clone();
     let dedicated = json!({ "topic": "attach.shell", "args": { "target": target } });
+    let refused = editor.request("watch", dedicated.clone());
+    assert_eq!(error_reason(&refused), "refused", "{refused}");
     let refused = terminal.request("watch", dedicated.clone());
     assert_eq!(error_reason(&refused), "refused", "{refused}");
     assert!(

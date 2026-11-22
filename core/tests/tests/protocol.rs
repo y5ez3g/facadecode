@@ -1,7 +1,7 @@
 //! Daemon protocol handshake, methods, validation, line limits, and bounded response queues.
 
 use facade_base::paths::ClientSocket;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
@@ -228,6 +228,44 @@ fn a_start_with_no_cli_or_no_terminal_size_is_an_invalid_argument() {
     assert_eq!(agents[0]["name"], "w1", "{listed}");
 }
 
+#[test]
+fn calls_return_only_the_correlated_result_or_error() {
+    let home = TestHome::new("callresponses");
+    let agent = home.start_fake("w1");
+    let mut wire = DaemonTestClient::open(&home);
+    let welcome = hello_v1(&mut wire);
+    let target = json!({ "machine_id": welcome["result"]["machine_id"], "agent_id": agent.id });
+    let call = |wire: &mut DaemonTestClient, id, op, args| {
+        wire.write(&json!({
+            "jsonrpc": "2.0", "id": id, "method": "call", "params": { "op": op, "args": args },
+        }));
+        let response = wire
+            .wait_for_response(id, LOADED_TIMEOUT)
+            .expect("the call was answered");
+        assert_eq!(response["jsonrpc"], "2.0", "{response}");
+        assert_eq!(response["id"], id, "{response}");
+        response
+    };
+
+    for (id, op, args) in [
+        (41, "agent.stop", json!({ "selection": [&target] })),
+        (72, "agent.teleport", json!({ "target": target })),
+    ] {
+        let invalid = call(&mut wire, id, op, args);
+        assert_eq!(invalid["error"]["code"], -32602, "{invalid}");
+        assert_eq!(error_reason(&invalid), "invalid_argument", "{invalid}");
+        assert!(invalid.get("result").is_none(), "{invalid}");
+    }
+    let valid = call(&mut wire, 113, "agent.inspect", json!({ "target": target }));
+    assert!(valid.get("error").is_none(), "{valid}");
+    let current = &valid["result"]["agent"];
+    assert_eq!(current["reference"], target, "{valid}");
+    assert_eq!(current["pid"], agent.pid, "{valid}");
+    assert_eq!(current["process"], "running", "{valid}");
+    assert!(alive(&agent.process));
+    assert_eq!(home.agents().len(), 1);
+}
+
 /// Malformed requests receive JSON-RPC errors with null IDs: -32700 for invalid JSON, -32600 for an
 /// invalid request. Reading continues. Oversized lines receive an error and close the connection.
 #[test]
@@ -288,13 +326,13 @@ fn malformed_requests_get_json_rpc_errors_and_oversized_lines_close_connection()
     );
 }
 
-/// Responses must use bounded memory when a client sends calls faster than it reads.
+/// A full response queue must backpressure the unread connection and leave another client usable.
 #[test]
 fn unread_responses_backpressure_the_connection() {
     let home = TestHome::new("outbox");
     home.run_facade_ok(&["daemon", "--detach"]);
     let mut wire = DaemonTestClient::open(&home);
-    let welcome = hello_v1(&mut wire);
+    hello_v1(&mut wire);
     let started = wire.call_ok("agent.start", json!({
         "cli": home.shell_cli(), "name": "scrollback", "folder": home.project,
         "size": { "cols": 80, "rows": 24 },
@@ -304,47 +342,50 @@ fn unread_responses_backpressure_the_connection() {
         .as_str()
         .expect("the Shell agent address");
     assert!(wait_for_screen_text(&home, agent, "DONE"));
-    let daemon = welcome["result"]["pid"].as_i64().unwrap() as i32;
-    let rss = || resident_kib(daemon);
-    let before = rss();
-    let stream = ClientSocket::connect(home.daemon_socket()).unwrap();
-    let mut writer = stream.try_clone().unwrap();
-    writer
-        .write_all(
-            format!(
-                "{}\n",
-                json!({
-                    "jsonrpc": "2.0", "id": 0, "method": "hello",
-                    "params": { "api_versions": [1], "build": "t", "kind": "terminal" },
-                })
-            )
-            .as_bytes(),
-        )
-        .unwrap();
-    std::thread::spawn(move || {
-        for id in 1..=300 {
-            let call = json!({
-                "jsonrpc": "2.0", "id": id, "method": "call",
-                "params": {
-                    "op": "agent.screen", "args": { "target": "scrollback", "lines": 2000 },
-                },
-            });
-            if writer.write_all(format!("{call}\n").as_bytes()).is_err() {
-                return;
+    let args = json!({ "target": agent, "lines": 2000 });
+    let expected = wire.call_ok("agent.screen", args.clone());
+    assert!(
+        expected["text"]
+            .as_str()
+            .is_some_and(|text| text.len() > 50_000),
+        "these responses must collectively exceed the outbox and its in-flight calls"
+    );
+
+    let mut stalled = ManualReadClient::open(&home);
+    stalled.writer.set_write_timeout(Some(secs(5))).unwrap();
+    let mut blocked = None;
+    for id in 1..=300 {
+        let call = json!({
+            "jsonrpc": "2.0", "id": id, "method": "call",
+            "params": { "op": "agent.screen", "args": args },
+        });
+        // Valid JSON padding fills the transport buffer even when the reader is backpressured.
+        let mut line = call.to_string().into_bytes();
+        line.resize(line.len() + 64 * 1024, b' ');
+        line.push(b'\n');
+        match stalled.writer.write_all(&line) {
+            Ok(()) => {}
+            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                blocked = Some(id);
+                break;
             }
+            Err(error) => panic!("call {id} lost the test connection: {error}"),
         }
-    });
-    std::thread::sleep(secs(3));
-    let grown = rss().saturating_sub(before);
-    // Each result is about 170 KB. The limit is 16 call tasks plus the 8 MiB outbox, below the
-    // roughly 50 MB for 300 results.
-    assert!(grown < 40_000, "the daemon grew by {grown} KiB");
-    // Other clients must still receive responses.
+    }
+    let blocked = blocked.expect("an unread client must stop admitting the flood of calls");
     assert!(
         wire.call("agent.screen", json!({ "target": agent, "lines": 1 }))["result"]["text"]
             .is_string()
     );
-    drop(stream);
+    let queued = stalled
+        .read_message()
+        .expect("a queued response is still readable");
+    assert!(
+        queued["id"]
+            .as_u64()
+            .is_some_and(|id| (1..blocked).contains(&id))
+    );
+    assert_eq!(queued["result"]["text"], expected["text"]);
 }
 
 /// The person's client reads the last log lines, oldest first, without message text. A managed

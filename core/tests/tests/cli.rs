@@ -251,7 +251,19 @@ fn detached_start_names_the_running_agent() {
         ("a2", &["--detach"][..]),
     ] {
         let args = [&["start"][..], options, &["fake"]].concat();
-        let started = facade(&home, &args);
+        let launches = home.project.join(format!("launch-{id}"));
+        let launcher = home
+            .command(&test_binaries().facade)
+            .env("PATH", home.path_with_test_programs())
+            .env("FAKECLI_STARTS", &launches)
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let launcher_pid = launcher.id() as i32;
+        let started = launcher.wait_with_output().unwrap();
         assert_eq!(started.status.code(), Some(0), "{}", stderr(&started));
         let record = home.agent_record(id).expect("a started agent");
         let name = record["name"].as_str().expect("the agent's name");
@@ -265,6 +277,26 @@ fn detached_start_names_the_running_agent() {
             )
         );
         assert_eq!(record["process"], "running");
+        let pid = record["pid"].as_i64().expect("the detached CLI PID") as i32;
+        assert_ne!(
+            pid, launcher_pid,
+            "the launcher exited before checking the fake CLI"
+        );
+        let process = process_identity(pid);
+        assert!(wait_until(LOADED_TIMEOUT, || std::fs::read_to_string(
+            &launches
+        )
+        .is_ok_and(|recorded| recorded == format!("{pid}\n"))));
+        let inspected = home.inspect_agent(reference);
+        assert_eq!(
+            inspected["agent"]["reference"], record["reference"],
+            "{inspected}"
+        );
+        assert_eq!(inspected["agent"]["pid"], pid, "{inspected}");
+        assert!(
+            alive(&process),
+            "the exact detached CLI is alive after the launcher exited zero"
+        );
         if id == "a1" {
             assert_eq!(name, "w1");
         }
@@ -275,8 +307,13 @@ fn detached_start_names_the_running_agent() {
 #[test]
 fn agent_list_inspect_and_status_agree_on_the_record() {
     let home = TestHome::new("agentviews");
-    let worker = home.start_fake("worker");
+    assert_status_starts_nothing(&home);
+    let worker = home.start_fake_with("worker", &[("FAKECLI_STATUS", "1")]);
     assert!(wait_for_screen_text(&home, &worker.id, "❯"));
+    assert_status_shows_running(&home);
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .inspect_agent(&worker.address)["agent"]["state"]
+        == "idle"));
     let record = home.agent_record(&worker.id).unwrap();
     let listed = home.agent_list();
     let row = &listed["agents"][0];
@@ -298,11 +335,19 @@ fn agent_list_inspect_and_status_agree_on_the_record() {
     ] {
         assert_eq!(agent[key], record[key], "{inspected}");
     }
+    let selected = home.inspect_agent(&worker.address);
+    let reference = &record["reference"];
+    assert_eq!(selected["agent"]["reference"], *reference, "{selected}");
+    assert_eq!(selected["agent"]["address"], worker.address, "{selected}");
+    assert_eq!(selected["agent"]["state"], "idle", "{selected}");
+    assert_eq!(selected["agent"]["process"], "running", "{selected}");
+    assert_eq!(selected["agent"]["pid"], worker.pid, "{selected}");
+    assert!(selected.get("attachments").is_none(), "{selected}");
     let table = home.list_table();
     let row = table.row("NAME", "worker").expect("the active worker");
     assert_eq!(table.cell(row, "REF"), worker.address);
     assert_eq!(table.cell(row, "WORKING DIRECTORY"), agent["cwd"]);
-    let detail = home.run_facade_ok(&["status", &worker.id]);
+    let detail = home.run_facade_ok(&["status", &worker.address]);
     assert_eq!(
         detail.lines().next().unwrap(),
         format!("worker ({})", worker.address)
@@ -317,6 +362,46 @@ fn agent_list_inspect_and_status_agree_on_the_record() {
         Some(worker.pid.to_string().as_str()),
         "{detail}"
     );
+    assert_eq!(status_field(&detail, "State"), Some("Idle"), "{detail}");
+
+    let mut terminal = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["attach", &worker.address]),
+        100,
+        30,
+    );
+    assert!(
+        terminal.wait_for(LOADED_TIMEOUT, |screen| screen.contains("❯")),
+        "{}",
+        terminal.text()
+    );
+    let expected = json!([{ "kind": "shell", "machine_id": reference["machine_id"] }]);
+    let mut wire = connect(&home);
+    let viewed = wire.call_ok("agent.inspect", json!({ "target": reference }));
+    assert_eq!(viewed["agent"]["reference"], *reference, "{viewed}");
+    assert_eq!(viewed["agent"]["address"], worker.address, "{viewed}");
+    assert_eq!(viewed["agent"]["pid"], worker.pid, "{viewed}");
+    assert_eq!(viewed["agent"]["state"], "idle", "{viewed}");
+    assert_eq!(viewed["attachments"], expected, "{viewed}");
+    let attached = home.run_facade_ok(&["status", &worker.address]);
+    let (_, machine) = worker.address.rsplit_once('@').expect("machine in address");
+    let shown = format!("Shell ({machine})");
+    assert_eq!(
+        status_field(&attached, "Attached in"),
+        Some(shown.as_str()),
+        "{attached}"
+    );
+    terminal.send(b"\x1d");
+    assert!(
+        terminal
+            .wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .inspect_agent(&worker.address)
+        .get("attachments")
+        .is_none()));
+    assert_eq!(process_identity(worker.pid), worker.process);
 }
 
 /// CLI arguments and a name can begin with a dash, even when a word spells an option of Facade.
@@ -451,14 +536,20 @@ fn start_workdir_uses_the_invoking_shell_for_local_paths() {
             &app_folder,
         ),
     ];
-    for (options, folder) in cases {
+    for (index, (options, folder)) in cases.iter().enumerate() {
+        let launch_pid = home.project.join(format!("start-{index}-pid"));
+        let launch_args = home.project.join(format!("start-{index}-args.json"));
+        let cli_args = ["--test-flag", "an argument with spaces"];
         let started = home
             .command(&test_binaries().facade)
             .env("PATH", home.path_with_test_programs())
+            .env("FAKECLI_STARTS", &launch_pid)
+            .env("FAKECLI_ARGS", &launch_args)
             .current_dir(&shell_folder)
             .args(["start", "-d"])
             .args(*options)
             .arg("fake")
+            .args(cli_args)
             .stdin(Stdio::null())
             .output()
             .unwrap();
@@ -467,15 +558,42 @@ fn start_workdir_uses_the_invoking_shell_for_local_paths() {
             "{options:?}: {}",
             stderr(&started)
         );
-        let id = started_id(&stdout(&started));
+        let receipt = stdout(&started);
+        let id = started_id(&receipt);
+        let address = started_ref(&receipt);
         let record = home.agent_record(&id).unwrap();
         assert_eq!(record["reference"]["machine_id"], machine_id, "{record}");
+        let inspected = home.inspect_agent(address);
+        let agent = &inspected["agent"];
+        assert_eq!(agent["reference"], record["reference"], "{inspected}");
+        assert_eq!(agent["address"], address, "{inspected}");
+        assert_eq!(agent["cli"], "fake", "{inspected}");
+        let pid = agent["pid"].as_i64().unwrap() as i32;
+        assert_eq!(record["pid"], pid, "{record}");
         let started_folder = Path::new(record["cwd"].as_str().unwrap());
         assert_eq!(
             real_path(started_folder).unwrap(),
             real_path(folder).unwrap(),
             "{record}"
         );
+        assert!(
+            wait_until(LOADED_TIMEOUT, || std::fs::read_to_string(&launch_pid)
+                .is_ok_and(|pids| pids == format!("{pid}\n"))
+                && launch_args.is_file()),
+            "the fake CLI did not record its launch for {address}"
+        );
+        assert!(alive(&process_identity(pid)), "{address} must be live");
+        let mut argv: Vec<String> =
+            facade_scenarios::serde_json::from_slice(&std::fs::read(&launch_args).unwrap())
+                .unwrap();
+        let mcp = argv.iter().position(|arg| arg == "--mcp-config").unwrap();
+        let run = facade_rules::run_folder(&home.path.join("core/runs"), &id).unwrap();
+        assert_eq!(
+            real_path(Path::new(&argv[mcp + 1])).unwrap(),
+            real_path(&run.join("mcp.json")).unwrap()
+        );
+        argv.drain(mcp..mcp + 2);
+        assert_eq!(argv, cli_args);
     }
 }
 
@@ -548,6 +666,10 @@ fn machine_list_and_remove_on_a_lone_machine() {
 #[test]
 fn status_on_an_empty_home_starts_nothing() {
     let home = TestHome::new("statusempty");
+    assert_status_starts_nothing(&home);
+}
+
+fn assert_status_starts_nothing(home: &TestHome) {
     let version = env!("CARGO_PKG_VERSION");
     let (out, err, code) = said(&home.run_facade(&["status"]));
     assert_eq!((err.as_str(), code), ("", Some(0)));
@@ -584,10 +706,14 @@ fn status_on_an_empty_home_starts_nothing() {
 fn status_shows_a_running_facade() {
     let home = TestHome::new("statusrunning");
     home.start_fake("w1");
+    assert_status_shows_running(&home);
+}
+
+fn assert_status_shows_running(home: &TestHome) {
     let hello = home.hello_result().unwrap();
     let daemon = hello["pid"].as_i64().unwrap();
     let keeper = hello["keeper"]["pid"].as_i64().unwrap();
-    let local = connect(&home).call_ok("machine.list", json!({}))["machines"][0].clone();
+    let local = connect(home).call_ok("machine.list", json!({}))["machines"][0].clone();
     let name = local["name"].as_str().unwrap();
     let version = env!("CARGO_PKG_VERSION");
     let (out, err, code) = said(&home.run_facade(&["status"]));
@@ -624,7 +750,7 @@ fn status_shows_a_running_facade() {
         Some(format!("Add \"{}\" as a stdio server.", launcher.display()).as_str()),
         "{out}"
     );
-    let result = connect(&home).call_ok("daemon.status", json!({}));
+    let result = connect(home).call_ok("daemon.status", json!({}));
     assert_eq!(result["home"], home.path.to_str().unwrap());
     assert_eq!(
         result["settings_file"],

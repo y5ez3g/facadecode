@@ -16,16 +16,24 @@ import type { PanelState } from '../../webview/protocol';
 import { coreCall, helloInCore, normalizeDriveLetter, until } from './editors';
 import { RESUME_PICKER_STATE, type ResumePickerState } from './resumePickerFixture';
 import { agentTab, facade, hasAgentTab, inspect, keepConversation, newCard, pin, resumeCard, running, state, stop } from './rustWindowDriver';
+import type { WindowTerminalIdentity } from '../../base/windowIdentity';
+import type { OwnerClaim } from '../../base/ownership';
 
 type Action =
-	| { readonly kind: 'snapshot' | 'filter' | 'window-component' }
+	| { readonly kind: 'snapshot' | 'filter' | 'window-component' | 'terminal-owner' | 'show-notifications' | 'show-failure-panel' | 'request-refused-agent' }
+	| { readonly kind: 'start-fallback' }
+	| { readonly kind: 'pin-owned'; readonly run: string }
+	| { readonly kind: 'panel-generation' }
+	| { readonly kind: 'stale-owner'; readonly previous: OwnerClaim; readonly current: OwnerClaim; readonly page: string; readonly runs: readonly [string, string] }
+	| { readonly kind: 'stop-fallback'; readonly runId: string }
 	| { readonly kind: 'open-shell-agent'; readonly name: string; readonly address: string; readonly text: string }
 	| { readonly kind: 'shell-attach-view'; readonly grid?: vscode.TerminalDimensions; readonly text?: string; readonly resize?: boolean }
 	| { readonly kind: 'settings-path'; readonly file: string }
-	| { readonly kind: 'shell-pin'; readonly name: string; readonly set?: boolean }
+	| { readonly kind: 'shell-pin'; readonly name: string; readonly set?: boolean; readonly verifyOpen?: string }
 	| { readonly kind: 'hide-shell-agent'; readonly name: string }
 	| { readonly kind: 'start'; readonly screen?: string; readonly secondGroup?: boolean }
-	| { readonly kind: 'adopt' | 'resume' | 'pin' | 'stop' | 'remove' | 'inspect' | 'saved-pin'; readonly agent: string }
+	| { readonly kind: 'adopt' | 'resume' | 'pin' | 'unpin' | 'stop' | 'remove' | 'inspect' | 'saved-pin'; readonly agent: string }
+	| { readonly kind: 'resume-saved'; readonly session: string; readonly cli: string }
 	| { readonly kind: 'remote-card'; readonly agent: string; readonly machine: string }
 	| { readonly kind: 'running'; readonly agent: string; readonly screen?: string }
 	| { readonly kind: 'send'; readonly to: string; readonly text: string }
@@ -33,7 +41,7 @@ type Action =
 	| { readonly kind: 'worktree'; readonly branch: string }
 	| { readonly kind: 'delete-worktree'; readonly folder: string };
 
-export type WindowAction = Action | { readonly kind: 'close' };
+export type WindowAction = Action | { readonly kind: 'close'; readonly quit?: boolean };
 
 export interface WindowReady {
 	readonly folder: string;
@@ -152,12 +160,128 @@ function savedPin(id: string): SavedPin {
 	return found[0];
 }
 
+interface GenerationAction {
+	readonly page: string;
+	readonly action: string;
+	readonly what: 'unpin';
+	readonly target: string;
+}
+
+async function panelGeneration(actions: readonly GenerationAction[] = []): Promise<{ page: string; outcomes: readonly { action: string; page: string; ok: boolean }[] }> {
+	const found = await vscode.commands.executeCommand<{ page: string; outcomes: readonly { action: string; page: string; ok: boolean }[] }>(
+		'facade.probe', { op: 'generation-fixture', selector: JSON.stringify(actions) });
+	assert.match(found.page, /^[0-9a-f]{32}$/u);
+	return found;
+}
+
 async function perform(action: Action): Promise<unknown> {
 	switch (action.kind) {
 		case 'snapshot':
 			return view();
+		case 'show-notifications':
+			await vscode.commands.executeCommand('notifications.showList');
+			return true;
+		case 'show-failure-panel':
+			await vscode.commands.executeCommand('facade.agents.focus');
+			return true;
+		case 'request-refused-agent':
+			await vscode.commands.executeCommand('notifications.clearAll');
+			assert.strictEqual(await vscode.commands.executeCommand('facade.newAgent'), undefined);
+			assert.strictEqual(vscode.window.terminals.length, 0);
+			return true;
+		case 'start-fallback': {
+			const before = new Set((await state()).cards.map(card => card.runId));
+			const picker = vscode.commands.executeCommand('facade.newAgent');
+			void picker.then(undefined, () => undefined);
+			const card = await until('the old-engine card and terminal', async () => {
+				const panel = await state();
+				const first = panel.cards.find(card => !before.has(card.runId));
+				if (first && agentTab(first)) { return first; }
+				await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+				return undefined;
+			});
+			await picker;
+			assert.equal(card.orchestrator, undefined);
+			assert.match(card.alias, /^#a\d+$/u);
+			return { runId: card.runId, alias: card.alias, name: card.name };
+		}
+		case 'pin-owned': {
+			const card = (await state()).cards.find(each => each.runId === action.run);
+			assert.ok(card);
+			await pin(card);
+			return true;
+		}
+		case 'panel-generation':
+			return (await panelGeneration()).page;
+		case 'stale-owner': {
+			const { previous, current, runs } = action;
+			const cards = () => state().then(panel => panel.cards.filter(each => runs.includes(each.runId)));
+			let observedCards: PanelState['cards'] = [];
+			await until('both old-engine Pins and their tabs to return', async () => {
+				const live = await cards();
+				observedCards = live;
+				const tabs = live.map(agentTab);
+				return live.length === 2 && live.every(card => card.pinned && !card.orchestrator)
+					&& tabs.every(tab => tab !== undefined) && new Set(tabs).size === 2
+					&& vscode.window.terminals.length === 2 || undefined;
+			}).catch(error => {
+				const tabs = vscode.window.tabGroups.all.flatMap(group => group.tabs
+					.filter(tab => tab.input instanceof vscode.TabInputTerminal)
+					.map(tab => ({ label: tab.label, pinned: tab.isPinned, column: group.viewColumn })));
+				const terminals = vscode.window.terminals.map(terminal => ({ name: terminal.name, exit: terminal.exitStatus }));
+				const observed = observedCards.map(card => ({
+					run: card.runId, name: card.name, alias: card.alias, pinned: card.pinned === true,
+					engine: card.orchestrator ? 'rust' : 'old', matchedTab: agentTab(card)?.label
+				}));
+				throw new Error(`${(error as Error).message}: ${JSON.stringify({ expected: runs, cards: observed, tabs, terminals })}`);
+			});
+			const { page } = await panelGeneration();
+			assert.notStrictEqual(page, action.page);
+			const terminals = [...vscode.window.terminals];
+			const request = (claim: OwnerClaim, value: object) => vscode.commands.executeCommand(
+				'facade.window.terminals', { session: vscode.env.sessionId, claim, ...value });
+			assert.strictEqual(await request(previous, { kind: 'activate' }), false);
+			assert.strictEqual(await request(previous, { kind: 'retire', runs: [], hidden: [...runs] }), false);
+			for (const run of runs) { assert.strictEqual(await request(previous, { kind: 'begin', run }), false); }
+			assert.strictEqual(await request(current, { kind: 'activate' }), true);
+			assert.ok(terminals.every(terminal => vscode.window.terminals.includes(terminal)));
+
+			const replay = runs.map((target, index) => ({ page: action.page, action: `${action.page}-${index + 1}`, what: 'unpin' as const, target }));
+			await panelGeneration(replay);
+			assert.deepStrictEqual((await cards()).map(card => [card.runId, card.pinned]).sort(), runs.map(run => [run, true]).sort());
+			const fresh = { page, action: `${page}-1`, what: 'unpin' as const, target: runs[0] };
+			await panelGeneration([fresh]);
+			await until('only the current generation’s exact target to unpin', async () => {
+				const now = new Map((await cards()).map(card => [card.runId, card.pinned === true]));
+				return now.get(runs[0]) === false && now.get(runs[1]) === true || undefined;
+			});
+			const observed = await until('the current generation’s action outcome', async () => {
+				const seen = await panelGeneration();
+				return seen.outcomes.some(outcome => outcome.action === fresh.action) ? seen.outcomes : undefined;
+			});
+			assert.deepStrictEqual(observed, [{ type: 'outcome', page, action: fresh.action, ok: true }]);
+			assert.strictEqual(vscode.window.terminals.length, 2);
+			assert.ok(terminals.every(terminal => vscode.window.terminals.includes(terminal)));
+			return { page, refusedActions: replay.length };
+		}
+		case 'stop-fallback':
+			await vscode.commands.executeCommand('facade.stopAgent', { run_id: action.runId });
+			return true;
 		case 'window-component':
 			return vscode.extensions.getExtension('facade.facadecode-window') !== undefined;
+		case 'terminal-owner': {
+			assert.ok(vscode.extensions.getExtension('facade.facadecode-window')?.isActive);
+			const session = vscode.env.sessionId;
+			const command = 'facade.window.terminalOwner';
+			const owner = await vscode.commands.executeCommand<WindowTerminalIdentity>(command, session);
+			assert.strictEqual(owner?.version, 1);
+			assert.strictEqual(owner.session, session);
+			assert.match(owner.token, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+			assert.deepStrictEqual(await vscode.commands.executeCommand(command, session), owner,
+				'the local terminal handover identity is stable');
+			assert.strictEqual(await vscode.commands.executeCommand(command, `${session}-stale`), undefined);
+			return true;
+		}
 		case 'settings-path':
 			for (const command of ['facade.openSettings', 'facade.openSettingsFile']) {
 				await vscode.commands.executeCommand(command);
@@ -212,7 +336,27 @@ async function perform(action: Action): Promise<unknown> {
 			const find = async () => (await state()).cards.find(card => card.name === action.name);
 			const card = await until(`${action.name}'s card`, find);
 			if (action.set) {
-				await vscode.commands.executeCommand('facade.openTerminal', { run_id: card.runId });
+				const address = action.verifyOpen;
+				const before = address ? await until('the earlier window to release its Attach viewer', async () => {
+					const { agent, viewers } = await inspect(address);
+					return viewers.length === 0 ? agent : undefined;
+				}) : undefined;
+				if (before) {
+					assert.strictEqual(card.runId, `${before.reference.machine_id}/${before.reference.agent_id}`);
+					assert.ok(before.pid && before.process === 'running', 'the exact Core agent is already running');
+					assert.strictEqual((await view()).terminals, 0, 'the fresh window has no terminal tab before Open Terminal');
+				}
+				const opened = await vscode.commands.executeCommand('facade.openTerminal', { run_id: card.runId });
+				if (address && before) {
+					assert.strictEqual(opened, true);
+					await until('Open Terminal to create the native tab for the exact existing run', async () =>
+						hasAgentTab(card) && (await view()).terminals === 1 || undefined);
+					const after = await until('the exact Core agent to gain one Attach viewer', async () => {
+						const { agent, viewers } = await inspect(address);
+						return viewers.length === 1 ? agent : undefined;
+					});
+					assert.deepStrictEqual([after.reference, after.pid, after.process], [before.reference, before.pid, 'running']);
+				}
 				await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
 			}
 			await until(`${action.name}'s pinned terminal`, async () => {
@@ -257,6 +401,31 @@ async function perform(action: Action): Promise<unknown> {
 			return inspect(action.agent);
 		case 'saved-pin':
 			return savedPin(action.agent);
+		case 'resume-saved': {
+			const picker = vscode.commands.executeCommand('facade.resumeAgent');
+			void picker.then(undefined, () => undefined);
+			try {
+				await until(`the saved session ${action.cli}:${action.session} in Resume Agent`, async () => {
+					const rows = await vscode.commands.executeCommand<ResumePickerState>(RESUME_PICKER_STATE).then(value => value, () => undefined);
+					if (!rows || rows.busy) { return undefined; }
+					const target = rows.descriptions.findIndex(description => description?.endsWith(` · ${action.cli}:${action.session}`));
+					if (target < 0) { return undefined; }
+					if (target === rows.active) { return true; }
+					await vscode.commands.executeCommand(target < rows.active ? 'workbench.action.quickOpenSelectPrevious' : 'workbench.action.quickOpenSelectNext');
+					return undefined;
+				});
+				await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+				await picker;
+				const card = await until('the resumed saved session to open its native terminal', async () => {
+					const [candidate] = (await state()).cards;
+					return candidate?.orchestrator?.running && hasAgentTab(candidate) ? candidate : undefined;
+				});
+				return await running(card.alias);
+			} finally {
+				await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
+				await picker;
+			}
+		}
 		case 'adopt':
 		case 'resume': {
 			const card = await (action.kind === 'resume' ? resumeCard(action.agent) : goToCard(action.agent));
@@ -274,11 +443,18 @@ async function perform(action: Action): Promise<unknown> {
 			return agent.address;
 		}
 		case 'pin':
+		case 'unpin':
 		case 'stop':
 		case 'remove': {
 			const card = (await state()).cards.find(each => each.alias === action.agent);
 			assert.ok(card, `#${action.agent} has a visible card`);
 			if (action.kind === 'pin') { await pin(card); }
+			else if (action.kind === 'unpin') {
+				assert.ok(card.pinned);
+				await vscode.commands.executeCommand('facade.unpinAgent', { run_id: card.runId });
+				await until('the same card without its Pin', async () =>
+					(await state()).cards.find(each => each.runId === card.runId && !each.pinned));
+			}
 			else if (action.kind === 'stop') { await stop(card); }
 			else { await vscode.commands.executeCommand('facade.deleteAgent', { run_id: card.runId }); }
 			return true;
@@ -352,7 +528,8 @@ async function actions(): Promise<void> {
 				fs.existsSync(request) ? JSON.parse(fs.readFileSync(request, 'utf8')) as WindowAction : undefined, 120_000);
 			if (action.kind === 'close') {
 				closing = response;
-				void vscode.commands.executeCommand('workbench.action.closeWindow').then(undefined, error => {
+				const command = action.quit ? 'workbench.action.quit' : 'workbench.action.closeWindow';
+				void vscode.commands.executeCommand(command).then(undefined, error => {
 					answer(response, { error: String(error) });
 				});
 				return;
@@ -372,16 +549,26 @@ export async function activate(): Promise<void> {
 			'the window and driver use the test Facade home');
 		const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		assert.ok(folder, 'the test window has a workspace folder');
-		await vscode.extensions.getExtension('facade.facadecode')!.activate();
-		await until('the panel snapshot', async () => (await state())?.loading === false || undefined, 90_000);
+		const extension = vscode.extensions.getExtension('facade.facadecode')!;
+		const incompatible = process.env.FACADE_IT_WINDOW_INCOMPATIBLE === '1';
+		if (incompatible) {
+			assert.strictEqual(vscode.workspace.getConfiguration('facade').get('rustEngine'), 'auto');
+			assert.ok(vscode.extensions.getExtension('facade.facadecode-window'), 'the old engine has its Window Component available');
+			await assert.rejects(async () => extension.activate(), /Facade core did not select an offered daemon API version\./u);
+		} else {
+			await extension.activate();
+			await until('the panel snapshot', async () => (await state())?.loading === false || undefined, 90_000);
+		}
 		if (process.env.FACADE_IT_WINDOW_NO_COMPONENT === '1') {
 			assert.strictEqual(vscode.extensions.getExtension('facade.facadecode-window'), undefined);
 		}
 		const oldEngine = vscode.workspace.getConfiguration('facade').get('rustEngine') === 'off';
+		const fallback = process.env.FACADE_IT_WINDOW_FALLBACK === '1';
 		let machineId: string | null = null;
-		if (oldEngine) {
+		if (oldEngine || fallback) {
 			assert.ok(vscode.extensions.getExtension('facade.facadecode-window'));
-		} else {
+			if (fallback) { assert.strictEqual(vscode.workspace.getConfiguration('facade').get('rustEngine'), 'auto'); }
+		} else if (!incompatible) {
 			const hello = await helloInCore(home);
 			assert.ok('result' in hello, JSON.stringify(hello));
 			const core = hello.result as HelloResult;

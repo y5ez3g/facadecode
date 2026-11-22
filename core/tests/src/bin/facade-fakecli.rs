@@ -14,12 +14,14 @@
 //! the frame it drew is written (`note_key_time`). `FAKECLI_READ_GATE=<file>` holds input reads
 //! until the test creates the file.
 //! For the stress test, `--flood` writes a line every 10 milliseconds until the agent stops.
+//! For the Attach exit test, `--attach-exit` waits for the exact line `finish` and exits with 23.
 //!
 //! Sessions: `--resume <id>` selects session `<id>`, as `FAKECLI_SESSION=<id>` does for a new
 //! start. `FAKECLI_SESSION_HOOK` is the shell command of its session-start hook, which it runs with
 //! the selected session at start and for each message `/session <id>` (`/session none` selects
 //! none), waiting for each hook to end before going on, as a CLI runs its hooks. On Windows it runs
 //! the hook as Muse Code does (`stand_in_shell`). The screen shows `session <id>` for each.
+//! `FAKECLI_LOOK=claude` uses Claude Code's prompt gap and reads its SessionStart hook from `--settings` JSON.
 //! `FAKECLI_FIRST_HOOK_DELAY_MS` delays the first hook's command by that many milliseconds. With `FAKECLI_TRANSCRIPTS`, a folder, the hook names `<folder>/<id>.jsonl` as
 //! the file the session is saved in, which it writes once the session takes its first message, as a
 //! CLI saves a session.
@@ -50,6 +52,7 @@
 //! a draft in color with the cursor before it, as a draft the person moved the cursor back over;
 //! what is typed goes in before it. `FAKECLI_KEYS=<file>` appends every byte it reads to `<file>`.
 //! `FAKECLI_SCREEN_FILE=<file>` prints the file's lines before drawing its input.
+//! `FAKECLI_SIZE_LOG=<file>` records the terminal grid measured in the process, at start and on resize.
 //! `FAKECLI_WRAP_TRANSCRIPT=1` writes full transcript lines so the terminal wraps them.
 //! `FAKECLI_IGNORE_KEYS` lists keys it ignores, `space` and `backspace`, comma-separated;
 //! `FAKECLI_NO_LEADING_SPACE=1` draws no space where its input starts; `FAKECLI_SPACE_SUGGESTS=<text>`
@@ -235,6 +238,8 @@ struct FakeCli {
     agy: bool,
     /// It shows a long paste as Muse does.
     muse: bool,
+    /// It draws the gap Claude Code uses after its prompt.
+    claude: bool,
     /// Antigravity's MCP panel shows.
     panel: bool,
     /// The question `/fake menu` asks in place of the input, until Enter or Escape.
@@ -680,8 +685,9 @@ impl FakeCli {
             .space_suggests
             .as_deref()
             .filter(|_| self.draft_text().starts_with(' '));
+        let gap = if self.claude { '\u{a0}' } else { ' ' };
         frame.push_str(&format!(
-            "\x1b[{};1H{prompt} {}{after}",
+            "\x1b[{};1H{prompt}{gap}{}{after}",
             input_row + 1,
             truncate_chars(&shown, cols.saturating_sub(2))
         ));
@@ -913,6 +919,12 @@ fn main() -> anyhow::Result<()> {
     }
     if std::env::args_os()
         .nth(1)
+        .is_some_and(|arg| arg == "--attach-exit")
+    {
+        std::process::exit(attach_exit()?);
+    }
+    if std::env::args_os()
+        .nth(1)
         .is_some_and(|arg| arg == "--flood")
     {
         let mut out = std::io::stdout().lock();
@@ -953,6 +965,35 @@ fn main() -> anyhow::Result<()> {
         unreachable!("SYS_exit does not return");
     }
     run()
+}
+
+fn attach_exit() -> anyhow::Result<i32> {
+    crossterm::terminal::enable_raw_mode()?;
+    #[cfg(windows)]
+    terminal_input()?;
+    let mut out = std::io::stdout().lock();
+    write!(out, "ATTACH-READY\r\n")?;
+    out.flush()?;
+
+    let mut input = Vec::new();
+    for byte in std::io::stdin().lock().bytes() {
+        match byte? {
+            b'\r' | b'\n' if input == b"finish" => {
+                write!(out, "ATTACH-FINISHED\r\n")?;
+                out.flush()?;
+                return Ok(23);
+            }
+            b'\r' | b'\n' => break,
+            byte => input.push(byte),
+        }
+    }
+    write!(
+        out,
+        "ATTACH-UNEXPECTED-INPUT: {:?}\r\n",
+        String::from_utf8_lossy(&input)
+    )?;
+    out.flush()?;
+    Ok(91)
 }
 
 fn command_from_config(config: &serde_json::Value) -> anyhow::Result<Command> {
@@ -1130,9 +1171,22 @@ fn run() -> anyhow::Result<()> {
         .collect();
     #[cfg(windows)]
     let stand_in = StandIn::of(&std::env::current_exe()?);
-    let commands = std::env::var("FAKECLI_SESSION_HOOK")
-        .ok()
-        .map(|command| vec![command]);
+    let claude = std::env::var("FAKECLI_LOOK").as_deref() == Ok("claude");
+    let commands = if claude {
+        let settings = arguments
+            .windows(2)
+            .find_map(|pair| (pair[0] == "--settings").then_some(&pair[1]))
+            .context("the Claude fixture expects --settings")?;
+        let settings: serde_json::Value = serde_json::from_str(settings)?;
+        let hook = settings["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .context("the Claude fixture expects a SessionStart command")?;
+        Some(vec![hook.to_string()])
+    } else {
+        std::env::var("FAKECLI_SESSION_HOOK")
+            .ok()
+            .map(|command| vec![command])
+    };
     #[cfg(windows)]
     let commands = commands.or_else(|| stand_in.session_hooks(&arguments));
     let hook = commands.map(|commands| SessionHook {
@@ -1175,6 +1229,7 @@ fn run() -> anyhow::Result<()> {
     };
     let agy = std::env::var("FAKECLI_LOOK").is_ok_and(|look| look == "agy");
     let mut app = FakeCli {
+        claude,
         transcript: Vec::new(),
         wrap_transcript: std::env::var("FAKECLI_WRAP_TRANSCRIPT").is_ok_and(|value| value == "1"),
         draft: Vec::new(),
@@ -1284,7 +1339,16 @@ fn run() -> anyhow::Result<()> {
 
     let mut pending: Vec<u8> = Vec::new();
     let mut pasting: Option<Vec<u8>> = None;
-    let mut last_size = crossterm::terminal::size().unwrap_or((80, 24));
+    let mut size_log = std::env::var_os("FAKECLI_SIZE_LOG")
+        .map(std::fs::File::create)
+        .transpose()?;
+    let mut last_size = if let Some(log) = size_log.as_mut() {
+        let size @ (cols, rows) = crossterm::terminal::size()?;
+        writeln!(log, "{cols}x{rows}")?;
+        size
+    } else {
+        crossterm::terminal::size().unwrap_or((80, 24))
+    };
     loop {
         let mut dirty = false;
         // Nothing came for a while: an Escape that may begin a paste's start is the key alone, as a
@@ -1425,6 +1489,10 @@ fn run() -> anyhow::Result<()> {
         if size != last_size {
             last_size = size;
             dirty = true;
+            if let Some(log) = size_log.as_mut() {
+                let (cols, rows) = size;
+                writeln!(log, "{cols}x{rows}")?;
+            }
         }
         if dirty
             || app

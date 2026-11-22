@@ -511,6 +511,96 @@ fn a_send_cut_off_by_a_restart_is_repeated_by_its_request_id_and_typed_once() {
     assert_eq!(typed(&home, "for the replacement"), 1);
 }
 
+/// A committed start survives the loss of its reply and a daemon restart, with its original CLI.
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the test gate of debug builds")]
+fn a_start_whose_reply_is_lost_is_replayed_after_a_daemon_restart() {
+    let home = TestHome::new("relstartlost");
+    let gate = "after-start-record";
+    home.start_facade_with(&[("FACADE_TEST_GATES", gate)]);
+    let keeper = home.lock_record("keeper").expect("the original keeper");
+    let launches = home.project.join("launches");
+    let mut args = fake_start(&home, "worker");
+    args["request_id"] = json!("lost-start");
+    args["env"]["FAKECLI_STARTS"] = json!(launches);
+    args["env"]["FAKECLI_LOG"] = json!(home.fake_log);
+
+    let mut first = ManualReadClient::open(&home);
+    first.send(1, "call", json!({ "op": "agent.start", "args": args }));
+    home.wait_for_gate(gate);
+    // The record is durable and the call cannot answer while it is held here.
+    drop(first);
+    home.release_gate(gate);
+
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .listed_agent("worker")
+        .is_some()));
+    let original = home.inspect_agent("worker")["agent"].clone();
+    let address = original["address"].as_str().unwrap();
+    let pid = original["pid"].as_i64().unwrap() as i32;
+    let process = process_identity(pid);
+    assert_eq!(original["cli"], "fake");
+    let folder = original["cwd"].as_str().unwrap();
+    assert_eq!(
+        facade_base::files::real_path(std::path::Path::new(folder)).unwrap(),
+        facade_base::files::real_path(&home.project).unwrap()
+    );
+    let attach = || {
+        TestTerminal::spawn(
+            home.command(&test_binaries().facade)
+                .args(["attach", address]),
+            80,
+            24,
+        )
+    };
+    let mut terminal = attach();
+    assert!(terminal.wait_for(LOADED_TIMEOUT, |screen| screen.contains("❯")));
+    terminal.send(b"before restart");
+    assert!(terminal.wait_for(LOADED_TIMEOUT, |screen| screen.contains("❯ before restart")));
+    terminal.send(b"\x1d");
+    assert!(
+        terminal
+            .wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|exit| exit.success())
+    );
+    assert!(home.submitted_messages().is_empty());
+
+    let old = home.kill_daemon();
+    let new = home
+        .wait_for_daemon_after(old, LOADED_TIMEOUT)
+        .expect("a replacement daemon");
+    let replayed = connect(&home).call_ok("agent.start", args);
+    assert_eq!(replayed["repeated"], true, "{replayed}");
+    assert_eq!(replayed["agent"]["reference"], original["reference"]);
+    assert_eq!(replayed["agent"]["address"], address);
+    assert_eq!(replayed["agent"]["cwd"], folder);
+    assert_eq!(replayed["agent"]["pid"], pid);
+    assert_eq!(process_identity(pid), process);
+    assert_eq!(home.lock_record("keeper"), Some(keeper));
+    let agents = home.agents();
+    assert_eq!(agents.len(), 1, "{agents:?}");
+    assert_eq!(agents[0]["reference"], original["reference"]);
+
+    let mut terminal = attach();
+    assert!(terminal.wait_for(LOADED_TIMEOUT, |screen| screen.contains("❯ before restart")));
+    terminal.send(b" and after\r");
+    assert!(terminal.wait_for(LOADED_TIMEOUT, |screen| {
+        screen.contains("> before restart and after")
+    }));
+    assert_eq!(home.submitted_messages(), ["before restart and after"]);
+    assert_eq!(
+        std::fs::read_to_string(launches).unwrap(),
+        format!("{pid}\n")
+    );
+    terminal.send(b"\x1d");
+    assert!(
+        terminal
+            .wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|exit| exit.success())
+    );
+    println!("daemon {old} -> {new}, one launch of {address} with process {process:?}");
+}
+
 /// Two starts with one request ID at once start one agent: the second waits for the first's answer
 /// and gives it.
 #[test]
@@ -672,6 +762,68 @@ fn a_cancelled_send_whose_paste_has_not_begun_is_withdrawn_and_kept_nowhere() {
         json!({}),
         "a call no longer under way is left as it ended"
     );
+}
+
+/// An id-less cancel settles only its original request and writes no recipient bytes.
+#[test]
+fn an_idless_cancel_withdraws_the_pending_send_without_replying_to_the_notification() {
+    let home = TestHome::new("cancel-notice");
+    let keys = home.project.join("worker-keys");
+    let worker = home.start_named_fake("worker", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
+    type_draft(&home, &worker.address, "hold the message");
+    let original_input = std::fs::read(&keys).unwrap();
+    assert!(
+        !original_input.is_empty(),
+        "the fake CLI recorded the draft"
+    );
+    let text = "cancel this pending message";
+    let mut wire = ManualReadClient::open(&home);
+    wire.send(
+        1,
+        "call",
+        json!({ "op": "agent.send", "args": { "to": worker.address, "text": text } }),
+    );
+    assert!(wait_until(LOADED_TIMEOUT, || kept_with_text(&home, text) == 1));
+    assert_eq!(std::fs::read(&keys).unwrap(), original_input);
+    let cancel = json!({ "jsonrpc": "2.0", "method": "cancel", "params": { "id": 1 } });
+    std::io::Write::write_all(&mut wire.writer, format!("{cancel}\n").as_bytes()).unwrap();
+    let settled = wire
+        .read_frame()
+        .unwrap()
+        .expect("the original send settles");
+    assert_eq!(settled["id"], 1, "{settled}");
+    assert_eq!(error_reason(&settled), "cancelled", "{settled}");
+    assert_eq!(
+        std::fs::read(&keys).unwrap(),
+        original_input,
+        "cancellation sent no terminal bytes"
+    );
+    assert_eq!(kept_with_text(&home, text), 0);
+
+    // This stream has no subscriptions. A normal request must get the very next frame.
+    wire.send(2, "call", json!({ "op": "daemon.status", "args": {} }));
+    let status = wire
+        .read_frame()
+        .unwrap()
+        .expect("the same connection answers");
+    assert_eq!(status["id"], 2, "unexpected cancel response: {status}");
+    assert_eq!(status["result"]["home"], json!(home.path));
+    wire.set_read_timeout(secs(1));
+    let idle = wire.read_frame();
+    assert!(
+        matches!(&idle, Err(error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)),
+        "expected no separate cancellation response: {idle:?}"
+    );
+
+    clear_draft(&home, &worker.address);
+    let next = connect(&home).call_ok(
+        "agent.send",
+        json!({ "to": worker.address, "text": "after cancellation" }),
+    );
+    assert_eq!(next["message"]["delivery"]["status"], "success", "{next}");
+    assert_eq!(typed(&home, text), 0);
+    assert!(!String::from_utf8_lossy(&std::fs::read(&keys).unwrap()).contains(text));
+    assert_eq!(read_ids(&home, &worker.id, json!({ "last": 10 })), ["m2"]);
 }
 
 /// A `cancel` at the beginning of a paste races it under the lock that guards that beginning:
