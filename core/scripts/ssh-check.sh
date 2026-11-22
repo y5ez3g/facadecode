@@ -70,6 +70,17 @@ open_login() {
 	exec 3> "$tmp/keys"
 }
 
+# Waits for the login's own terminal to render the text, which can arrive after the daemon has it.
+login_shows() {
+	i=0
+	while :; do
+		[ -f "$tmp/$1.out" ] && grep -qF "$2" "$tmp/$1.out" && return 0
+		[ "$i" -lt 100 ] && kill -0 "$ssh_pid" 2>/dev/null || return 1
+		sleep 0.2
+		i=$((i + 1))
+	done
+}
+
 # Waits up to 10 seconds for the login's ssh client to end, and returns its exit code.
 login_ends() {
 	(sleep 10 && kill "$ssh_pid" 2>/dev/null) &
@@ -83,15 +94,15 @@ login_ends() {
 
 # 1. Start an agent, see its screen, detach.
 open_login one "facade start --name one fake"
-if shows one "❯"; then
+if shows one "❯" && login_shows one "❯"; then
 	printf '\035' >&3
-	if login_ends && grep -qF "❯" "$tmp/one.out"; then
+	if login_ends && grep -qF "Detached from one (" "$tmp/one.out"; then
 		ok "1 a login started one, showed its screen, detached with Ctrl-] and ended"
 	else
-		fail "1 the login of one did not show its screen or end normally after Ctrl-]: see $tmp/one.out"
+		fail "1 the login of one did not detach and end normally after Ctrl-]: see $tmp/one.out"
 	fi
 else
-	fail "1 one never showed its input box"
+	fail "1 the daemon or the SSH terminal did not show one's input box: see $tmp/one.out"
 	kill "$ssh_pid" 2>/dev/null
 	login_ends
 fi
@@ -121,12 +132,7 @@ else
 	fail "3 a new login does not list one and two running: see $tmp/list.out and $tmp/list.err"
 fi
 open_login three "facade attach two"
-i=0
-until grep -qF "typed before the drop" "$tmp/three.out" || [ "$i" -ge 100 ]; do
-	sleep 0.2
-	i=$((i + 1))
-done
-if grep -qF "typed before the drop" "$tmp/three.out" && printf ', and after' >&3 && shows two "typed before the drop, and after"; then
+if login_shows three "typed before the drop" && printf ', and after' >&3 && shows two "typed before the drop, and after"; then
 	printf '\035' >&3
 	if login_ends; then
 		ok "3 attaching to two showed its screen as it was, and typing reached it"
