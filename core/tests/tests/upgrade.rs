@@ -1917,6 +1917,47 @@ fn v1_takeover_refuses_disjoint_daemon_and_keeper_sets_before_installing() {
         "refusals preserved daemon {daemon:?}, keeper {keeper:?}, CLI {:?}",
         agent.process
     );
+
+    // Offer the same newer version with both compatible sets through the public operation.
+    let program = program_of_build(&home, &build);
+    let handed = wire.call_ok(
+        "daemon.upgrade",
+        json!({
+            "program": program, "build": build, "daemon_api_versions": [1], "keeper_api_versions": [1],
+        }),
+    );
+    assert_eq!(
+        handed,
+        json!({ "from": CURRENT, "agent_count": 1 }),
+        "{handed}"
+    );
+    drop(wire);
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .hello_result()
+        .is_some_and(|hello| hello["build"] == build)));
+    let replacement = home
+        .lock_record("daemon")
+        .expect("the replacement daemon lock");
+    assert_ne!(replacement.0, daemon.0);
+    assert_ne!(replacement.1, daemon.1);
+    assert_eq!(home.lock_record("keeper"), Some(keeper));
+    assert_eq!(launcher_build(&home.path).as_deref(), Some(build.as_str()));
+    let mut current = connect(&home);
+    let continued = current.call_ok("agent.inspect", json!({ "target": reference }));
+    assert_eq!(continued["agent"]["reference"], reference, "{continued}");
+    assert_eq!(continued["agent"]["pid"], agent.pid, "{continued}");
+    assert_eq!(continued["agent"]["process"], "running", "{continued}");
+    assert_eq!(process_identity(agent.pid), agent.process);
+    type_raw(&mut current, &agent.address, " and typed after takeover");
+    assert!(wait_for_screen_text(
+        &home,
+        &agent.address,
+        "kept after refusal and typed after takeover"
+    ));
+    println!(
+        "compatible offer replaced daemon {daemon:?} with {replacement:?}, kept CLI {:?}",
+        agent.process
+    );
 }
 
 #[test]

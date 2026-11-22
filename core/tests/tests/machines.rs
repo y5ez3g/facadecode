@@ -2653,7 +2653,13 @@ fn a_forwarded_attach_maps_live_peer_changes_and_watch_end() {
     let origin_id = name_machine(&origin, "origin");
     let middle_id = name_machine(&middle, "middle");
     let provider_id = name_machine(&provider, "provider");
-    let worker = provider.start_fake("worker");
+    let remote_keys = provider.folder().join("forwarded-keys");
+    let local_keys = origin.folder().join("local-keys");
+    let worker =
+        provider.start_fake_with("worker", &[("FAKECLI_KEYS", remote_keys.to_str().unwrap())]);
+    let decoy = origin.start_fake_with("worker", &[("FAKECLI_KEYS", local_keys.to_str().unwrap())]);
+    assert_eq!(worker.id, decoy.id);
+    assert_ne!(worker.address, decoy.address);
     let exact = provider.inspect_agent(&worker.address)["agent"]["reference"].clone();
     assert_eq!(exact["machine_id"], provider_id);
     assert!(wait_for_screen_text(&provider, &worker.address, "❯"));
@@ -2673,6 +2679,19 @@ fn a_forwarded_attach_maps_live_peer_changes_and_watch_end() {
     assert_eq!(machines[0]["connections"], json!([]), "{initial}");
 
     let bridge = ObservedMachineLink::open(&origin, &middle);
+    let hello = observed_frame(
+        &bridge.from_front,
+        "the origin's machine introduction",
+        |frame| frame["method"] == "hello",
+    );
+    assert_eq!(hello["id"], 0, "{hello}");
+    assert_eq!(hello["params"]["kind"], "machine", "{hello}");
+    assert_eq!(hello["params"]["api_versions"], json!([1]), "{hello}");
+    assert_eq!(
+        hello["params"]["machine"]["machine_id"], origin_id,
+        "{hello}"
+    );
+    assert_eq!(hello["params"]["machine"]["name"], "origin", "{hello}");
     let connected = observed_frame(&bridge.from_front, "the handoff notification", |frame| {
         frame["method"] == "connected"
     });
@@ -2687,8 +2706,9 @@ fn a_forwarded_attach_maps_live_peer_changes_and_watch_end() {
         "{connected}"
     );
     let greeting = observed_frame(&bridge.from_peer, "the peer's machine hello", |frame| {
-        frame["id"] == 0
+        frame["id"] == hello["id"]
     });
+    assert_eq!(greeting["result"]["api_version"], 1, "{greeting}");
     assert_eq!(greeting["result"]["machine_id"], middle_id, "{greeting}");
     assert!(
         greeting["result"]["machine"]["boot_id"].is_string(),
@@ -2731,6 +2751,38 @@ fn a_forwarded_attach_maps_live_peer_changes_and_watch_end() {
     drop(roster);
     wait_for_route(&origin, &provider_id, &[&middle_id, &provider_id]);
 
+    // The same introduction with a disjoint offer cannot enter the machine protocol.
+    let mut invalid = ManualReadClient::before_hello(&middle);
+    let mut params = hello["params"].clone();
+    params["api_versions"] = json!([2]);
+    invalid.send(7, "hello", params);
+    let rejection = invalid
+        .read_message()
+        .expect("the disjoint hello is refused");
+    assert_eq!(rejection["id"], 7, "{rejection}");
+    assert_eq!(rejection["error"]["code"], -32000, "{rejection}");
+    assert_eq!(
+        error_reason(&rejection),
+        "protocol_incompatible",
+        "{rejection}"
+    );
+    assert_eq!(
+        rejection["error"]["data"]["details"]["supported_api_versions"],
+        json!([1]),
+        "{rejection}"
+    );
+    invalid.send(8, "forward", json!({}));
+    let refused = invalid
+        .read_message()
+        .expect("the unadmitted session is refused");
+    assert_eq!(refused["id"], 8, "{refused}");
+    assert_eq!(refused["error"]["message"], "send hello first", "{refused}");
+    drop(invalid);
+    wait_for_route(&middle, &origin_id, &[&origin_id]);
+    println!(
+        "machine hello {origin_id} -> {middle_id} selected v1, disjoint offer stayed unadmitted"
+    );
+
     let mut user = ManualReadClient::open(&origin);
     let args = json!({ "topic": "attach", "args": { "target": exact } });
     user.send(1, "watch", args.clone());
@@ -2767,17 +2819,50 @@ fn a_forwarded_attach_maps_live_peer_changes_and_watch_end() {
     );
 
     let marker = "output from the exact remote worker";
-    provider.run_facade_ok(&["type", &worker.address, marker]);
+    assert!(wait_until(LOADED_TIMEOUT, || remote_keys.is_file()
+        && local_keys.is_file()));
+    assert_eq!(std::fs::read(&remote_keys).unwrap(), b"");
+    assert_eq!(std::fs::read(&local_keys).unwrap(), b"");
+    let mut terminal = connect(&origin);
+    let input = json!({ "kind": "raw", "raw": facade_base::base64::encode(marker.as_bytes()) });
+    let typed = terminal.send(
+        "call",
+        json!({ "op": "agent.type", "args": { "target": exact, "input": input } }),
+    );
+    let forwarded_input = observed_frame(&bridge.from_front, "the forwarded raw input", |frame| {
+        frame["method"] == "forward" && frame["params"]["params"]["op"] == "agent.type"
+    });
+    let forwarded_id = forwarded_input["id"].as_u64().expect("a peer request ID");
+    assert_eq!(
+        forwarded_input["params"]["caller"],
+        json!({ "kind": "terminal", "machine_id": origin_id }),
+        "{forwarded_input}"
+    );
+    assert_eq!(
+        forwarded_input["params"]["route"],
+        json!([middle_id, provider_id]),
+        "{forwarded_input}"
+    );
+    assert_eq!(
+        forwarded_input["params"]["params"]["args"],
+        json!({ "target": exact, "input": input }),
+        "{forwarded_input}"
+    );
     let output = |frame: &Value| {
         frame["params"]["change"]["data"]
             .as_str()
             .map(|data| facade_base::base64::decode(data).unwrap())
     };
     let mut peer_bytes = Vec::new();
+    let mut peer_receipt = None;
     let peer_change = observed_frame(
         &bridge.from_peer,
         "the remote worker's id-less output",
         |frame| {
+            if frame["id"] == forwarded_id {
+                peer_receipt = Some(frame.clone());
+                return false;
+            }
             if frame["method"] != "changed"
                 || frame["params"]["watch"] != peer_watch
                 || frame["params"]["change"]["kind"] != "output"
@@ -2790,6 +2875,30 @@ fn a_forwarded_attach_maps_live_peer_changes_and_watch_end() {
                 .windows(marker.len())
                 .any(|bytes| bytes == marker.as_bytes())
         },
+    );
+    let peer_receipt = peer_receipt.unwrap_or_else(|| {
+        observed_frame(&bridge.from_peer, "the forwarded input reply", |frame| {
+            frame["id"] == forwarded_id
+        })
+    });
+    let accepted = terminal
+        .wait_for_response(typed, LOADED_TIMEOUT)
+        .expect("the original call answers");
+    assert_eq!(
+        accepted,
+        json!({ "jsonrpc": "2.0", "id": typed, "result": {} }),
+        "{accepted}"
+    );
+    assert_eq!(
+        peer_receipt,
+        json!({ "jsonrpc": "2.0", "id": forwarded_id, "result": {} }),
+        "{peer_receipt}"
+    );
+    assert_eq!(std::fs::read(&remote_keys).unwrap(), marker.as_bytes());
+    assert_eq!(std::fs::read(&local_keys).unwrap(), b"");
+    assert_eq!(process_identity(decoy.pid), decoy.process);
+    println!(
+        "terminal request {typed} used peer request {forwarded_id} for {exact}, local input stayed empty"
     );
     let mut local_bytes = Vec::new();
     loop {

@@ -458,7 +458,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "a_forwarded_attach_maps_live_peer_changes_and_watch_end"
+      }
     },
     {
       "id": "core/daemon/machine-request/hello",
@@ -466,7 +471,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "a_forwarded_attach_maps_live_peer_changes_and_watch_end"
+      }
     },
     {
       "id": "core/daemon/machine-request/unwatch",
@@ -697,7 +707,12 @@
         "core/tests/tests/upgrade.rs:1757",
         "core/tests/tests/upgrade.rs:1826",
         "core/tests/tests/upgrade.rs:1914"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "upgrade",
+        "name": "v1_takeover_refuses_disjoint_daemon_and_keeper_sets_before_installing"
+      }
     },
     {
       "id": "core/daemon/operation/internal.agent_records",
@@ -788,7 +803,12 @@
         "core/tests/tests/cli.rs",
         "core/tests/tests/configuration.rs:548",
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "three_machines_switch_routes_and_keep_saved_ssh_diagnostics"
+      }
     },
     {
       "id": "core/daemon/operation/machine.remove",
@@ -1796,7 +1816,12 @@
         "core/tests/tests/help.rs:25",
         "core/tests/tests/machines.rs",
         "core/tests/tests/upgrade.rs:1693"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "three_machines_switch_routes_and_keep_saved_ssh_diagnostics"
+      }
     },
     {
       "id": "core/shell/command/machine.remove",
