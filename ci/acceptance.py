@@ -8,7 +8,7 @@ from collections import Counter
 from os import environ, fsdecode
 from pathlib import Path
 
-from catalog import AcceptanceError, PRODUCTS, discover_apis, load
+from catalog import AcceptanceError, PRODUCTS, discover_apis, json_object, load
 from evidence import git, make_plan, run_identity, run_pilots, verify_receipts
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -17,6 +17,7 @@ POLICY_PATHS = {
     '.github/workflows/ci-acceptance.yml',
     '.github/workflows/core-check.yml',
     '.github/workflows/extension-check.yml',
+    '.github/workflows/extension-release.yml',
 }
 PRODUCT_GUIDES = {'core/README.md', 'core/AGENTS.md', 'extension/README.md', 'extension/AGENTS.md'}
 
@@ -25,19 +26,54 @@ def affected_products(paths):
     changes = set(paths) - PRODUCT_GUIDES
     if changes & POLICY_PATHS or 'extension/src/base/names.ts' in changes:
         return PRODUCTS
-    if any(path.startswith(('core/', 'ci/')) for path in changes):
+    if any(path.startswith(('core/', 'ci/', '.github/release-mirror/')) for path in changes):
         return PRODUCTS
     if any(path.startswith('extension/') for path in changes):
         return ('extension',)
     return ()
 
 
+def base_commit(root, base):
+    return git(root, 'rev-parse', '--verify', '--end-of-options', f'{base}^{{commit}}')
+
+
 def changed_paths(root, base):
-    tree = git(root, 'rev-parse', '--verify', '--end-of-options', f'{base}^{{commit}}')
+    tree = base_commit(root, base)
     names = subprocess.check_output([
         'git', '-C', str(root), 'diff', '--name-only', '--no-renames', '-z', tree, 'HEAD', '--',
     ])
     return tuple(fsdecode(path) for path in names.split(b'\0') if path)
+
+
+def baseline_cases(root, base):
+    commit = base_commit(root, base)
+    file = 'ci/cases.json'
+    if not git(root, 'ls-tree', '--name-only', commit, '--', file):
+        return []
+    document = json.loads(git(root, 'show', f'{commit}:{file}'), object_pairs_hook=json_object)
+    if not isinstance(document, dict) or not isinstance(document.get('cases'), list):
+        raise AcceptanceError('the base commit has an unreadable acceptance catalog')
+    return document['cases']
+
+
+def review_bound_cases(cases, baseline):
+    lost = []
+    changed = []
+    for old in baseline:
+        if not old.get('test'):
+            continue
+        case_id = old['id']
+        current = cases.get(case_id)
+        if current is None:
+            changed.append((case_id, 'removed from the catalog'))
+        elif current.test is None:
+            lost.append(case_id)
+        elif (old['assertion'], old['stage'], old['test']) != (current.assertion, current.stage, current.test):
+            changed.append((case_id, 'assertion, stage or binding changed'))
+    for case_id, reason in sorted(changed):
+        print(f'Acceptance review for {case_id}: {reason}')
+    if lost:
+        raise AcceptanceError('existing obligations lost their executable binding:\n  ' + '\n  '.join(sorted(lost)))
 
 
 def argument_parser():
@@ -47,6 +83,7 @@ def argument_parser():
     commands.add_parser('inventory', help='emit the API inventory from current product sources')
     catalog = commands.add_parser('catalog', help='reconcile the inventory and report executable bindings')
     catalog.add_argument('--require-bindings', action='store_true')
+    catalog.add_argument('--base', help='compare existing bindings with this Git base commit')
     table = commands.add_parser('table', help='render the reviewed case catalog as Markdown')
     table.add_argument('--product', choices=PRODUCTS)
     scope = commands.add_parser('scope', help='select runtime pilots for changes since the base commit')
@@ -61,6 +98,13 @@ def argument_parser():
     verify = commands.add_parser('verify', help='verify case receipts against the current pilot plan')
     verify.add_argument('--product', choices=PRODUCTS)
     verify.add_argument('receipts', nargs='+', type=Path)
+    install = commands.add_parser('verify-native-install', help='verify the Linux x64 candidate install evidence')
+    for field in ('archive', 'checksums', 'receipt', 'output'):
+        install.add_argument(field, type=Path)
+    ssh = commands.add_parser('verify-native-ssh', help='verify the Linux x64 real machine route evidence')
+    ssh.add_argument('--bin-dir', type=Path, required=True)
+    for field in ('receipt', 'output'):
+        ssh.add_argument(field, type=Path)
     return parser
 
 
@@ -125,8 +169,21 @@ def main():
         if args.command == 'scope':
             print(json.dumps(affected_products(changed_paths(ROOT, args.base)), separators=(',', ':')))
             return 0
+        if args.command == 'verify-native-install':
+            from check_native_install import verified_install
+            passed = verified_install(args.archive, args.checksums, args.receipt, args.output,
+                                      run_identity(args.run_id, environ))
+            print(f'{passed} Linux x64 native install cases passed and matched the candidate archive')
+            return 0
+        if args.command == 'verify-native-ssh':
+            from check_real_ssh_route import verified_ssh
+            verified_ssh(args.bin_dir, args.receipt, args.output, run_identity(args.run_id, environ))
+            print('Linux x64 real SSH machine route passed and matched the tested Core programs')
+            return 0
         cases, inventory, required_p0, pilots = load(ROOT)
         if args.command == 'catalog':
+            if args.base is not None:
+                review_bound_cases(cases, baseline_cases(ROOT, args.base))
             pending = report(cases, inventory, required_p0, pilots)
             if pending and args.require_bindings:
                 raise AcceptanceError('missing executable bindings:\n  ' + '\n  '.join(pending))

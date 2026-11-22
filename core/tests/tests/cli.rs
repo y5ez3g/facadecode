@@ -251,7 +251,19 @@ fn detached_start_names_the_running_agent() {
         ("a2", &["--detach"][..]),
     ] {
         let args = [&["start"][..], options, &["fake"]].concat();
-        let started = facade(&home, &args);
+        let launches = home.project.join(format!("launch-{id}"));
+        let launcher = home
+            .command(&test_binaries().facade)
+            .env("PATH", home.path_with_test_programs())
+            .env("FAKECLI_STARTS", &launches)
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let launcher_pid = launcher.id() as i32;
+        let started = launcher.wait_with_output().unwrap();
         assert_eq!(started.status.code(), Some(0), "{}", stderr(&started));
         let record = home.agent_record(id).expect("a started agent");
         let name = record["name"].as_str().expect("the agent's name");
@@ -265,6 +277,26 @@ fn detached_start_names_the_running_agent() {
             )
         );
         assert_eq!(record["process"], "running");
+        let pid = record["pid"].as_i64().expect("the detached CLI PID") as i32;
+        assert_ne!(
+            pid, launcher_pid,
+            "the launcher exited before checking the fake CLI"
+        );
+        let process = process_identity(pid);
+        assert!(wait_until(LOADED_TIMEOUT, || std::fs::read_to_string(
+            &launches
+        )
+        .is_ok_and(|recorded| recorded == format!("{pid}\n"))));
+        let inspected = home.inspect_agent(reference);
+        assert_eq!(
+            inspected["agent"]["reference"], record["reference"],
+            "{inspected}"
+        );
+        assert_eq!(inspected["agent"]["pid"], pid, "{inspected}");
+        assert!(
+            alive(&process),
+            "the exact detached CLI is alive after the launcher exited zero"
+        );
         if id == "a1" {
             assert_eq!(name, "w1");
         }

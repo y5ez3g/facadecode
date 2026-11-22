@@ -2468,6 +2468,70 @@ fn raw_input_on_a_cut_peer_link_reports_unknown_and_arrives_once() {
     );
 }
 
+/// Only a forwarded call may read the holder's internal agent records.
+#[test]
+fn authenticated_peer_lists_exact_holder_records_and_local_access_is_refused() {
+    let local = TestHome::new("records-origin");
+    let peer = TestHome::new("records-peer");
+    let local_id = name_machine(&local, "origin");
+    let peer_id = name_machine(&peer, "peer");
+    let local_run = local.start_fake("worker");
+    let peer_run = peer.start_fake("worker");
+    assert_eq!(local_run.id, peer_run.id);
+    assert_ne!(local_run.address, peer_run.address);
+    let expected = json!({ "machine_id": peer_id, "agent_id": peer_run.id });
+    let bridge = ObservedMachineLink::open(&local, &peer);
+    wait_for_route(&local, &peer_id, &[&peer_id]);
+
+    let mut person = connect(&local);
+    let listed = person.call_ok(
+        "agent.list",
+        json!({ "scope": { "kind": "machine", "machine": peer_id } }),
+    );
+    let listed = listed["agents"]
+        .as_array()
+        .expect("the selected peer's roster");
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["reference"], expected);
+    assert_eq!(listed[0]["address"], peer_run.address);
+    let request = observed_frame(&bridge.from_front, "the forwarded record query", |frame| {
+        frame["method"] == "forward" && frame["params"]["params"]["op"] == "internal.agent_records"
+    });
+    assert_eq!(
+        request["params"]["caller"],
+        json!({ "kind": "terminal", "machine_id": local_id }),
+        "{request}"
+    );
+    assert_eq!(request["params"]["route"], json!([peer_id]), "{request}");
+    assert_eq!(
+        request["params"]["params"]["args"],
+        json!({ "active": true }),
+        "{request}"
+    );
+    let response = observed_frame(
+        &bridge.from_peer,
+        "the holder's correlated records",
+        |frame| frame["id"] == request["id"],
+    );
+    let records = response["result"].as_array().expect("the holder's records");
+    assert_eq!(records.len(), 1, "{response}");
+    assert_eq!(records[0]["agent"]["reference"], expected, "{response}");
+    assert_eq!(
+        records[0]["agent"]["address"], peer_run.address,
+        "{response}"
+    );
+    assert_eq!(records[0]["agent"]["pid"], peer_run.pid, "{response}");
+
+    let denied = connect(&peer).call("internal.agent_records", json!({ "active": true }));
+    assert_eq!(error_reason(&denied), "refused", "{denied}");
+    assert!(denied.get("result").is_none(), "{denied}");
+    assert_eq!(
+        denied["error"]["message"],
+        "internal.agent_records is unavailable to this client"
+    );
+    assert!(alive(&peer_run.process) && alive(&local_run.process));
+}
+
 /// The first hop stays authenticated while a live subscription loses and regains its provider.
 #[test]
 fn a_forwarded_attach_maps_live_peer_changes_and_watch_end() {

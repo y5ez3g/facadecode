@@ -6,46 +6,76 @@
       "assertion": "Have a stand-in capture argv and compare it with the exact configured strings, including an empty string, combined with per-launch arguments in the documented order.",
       "stage": "pr",
       "existing_tests": [
+        "core/tests/tests/configuration.rs:185",
         "core/tests/tests/configuration.rs:166",
         "core/tests/tests/configuration.rs:497"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "configuration",
+        "name": "a_custom_cli_runs_its_program_as_it_is"
+      }
     },
     {
       "id": "core/configuration/cli-field/command",
       "assertion": "Launch a stand-in using the compatibility command field and verify that specifying command and program together refuses that entry with the expected conflict.",
       "stage": "pr",
       "existing_tests": [
+        "core/tests/tests/configuration.rs:917",
         "core/tests/tests/configuration.rs:737",
         "core/crates/rules/src/command_line/entries.rs:1004"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "configuration",
+        "name": "an_entry_s_command_runs_in_place_of_its_type_s_program"
+      }
     },
     {
       "id": "core/configuration/cli-field/effort",
       "assertion": "Verify the configured effort reaches the stand-in and an explicit per-launch value wins. Check blank or unsupported effort choices fail with a field error.",
       "stage": "pr",
       "existing_tests": [
+        "core/tests/tests/configuration.rs:786",
         "core/tests/tests/configuration.rs:433",
         "core/tests/tests/configuration.rs:670"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "configuration",
+        "name": "start_agent_refuses_a_blank_model_or_effort"
+      }
     },
     {
       "id": "core/configuration/cli-field/enabled",
       "assertion": "Toggle enabled and verify the CLI catalog and start or resume behavior reflect the new value while unrelated entries remain usable.",
       "stage": "pr",
       "existing_tests": [
+        "core/tests/tests/configuration.rs:848",
         "core/tests/tests/configuration.rs:200",
         "core/tests/tests/configuration.rs:615",
         "core/tests/tests/configuration.rs:694"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "configuration",
+        "name": "a_resume_refuses_an_entry_turned_off_or_wrong"
+      }
     },
     {
       "id": "core/configuration/cli-field/env",
       "assertion": "Observe a stand-in's environment after configuration expansion and verify a string override, a null removal and a missing-reference refusal without exposing private values.",
       "stage": "pr",
       "existing_tests": [
+        "core/tests/tests/configuration.rs:1150",
         "core/tests/tests/configuration.rs:964",
         "core/crates/rules/src/command_line/entries.rs:1398"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "configuration",
+        "name": "an_agent_starts_agents_with_its_own_environment"
+      }
     },
     {
       "id": "core/configuration/cli-field/icon",
@@ -61,9 +91,15 @@
       "assertion": "Verify the configured model reaches the stand-in and an explicit per-launch value wins. Check blank or unsupported model choices fail with a field error.",
       "stage": "pr",
       "existing_tests": [
+        "core/tests/tests/configuration.rs:786",
         "core/tests/tests/configuration.rs:433",
         "core/tests/tests/configuration.rs:670"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "configuration",
+        "name": "start_agent_refuses_a_blank_model_or_effort"
+      }
     },
     {
       "id": "core/configuration/cli-field/program",
@@ -79,19 +115,31 @@
       "assertion": "Add an entry with a built-in or custom type, verify the expected invocation rules, and refuse a missing type or a built-in entry that changes its type.",
       "stage": "pr",
       "existing_tests": [
+        "core/tests/tests/configuration.rs:114",
         "core/tests/tests/configuration.rs:108",
         "core/tests/tests/configuration.rs:166",
         "core/tests/tests/configuration.rs:200"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "configuration",
+        "name": "an_added_cli_of_a_built_in_s_type_starts_as_its_entry_says"
+      }
     },
     {
       "id": "core/configuration/environment/FACADE_HOME",
       "assertion": "Use two temporary absolute homes with different settings and verify each launch sees only its own settings and agents. Confirm an empty override uses the temporary user home and a relative override is refused.",
       "stage": "pr",
       "existing_tests": [
+        "core/tests/tests/configuration.rs:452",
         "core/tests/tests/lifecycle.rs:271",
         "core/tests/tests/yolo.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "configuration",
+        "name": "facade_home_selects_only_its_own_settings_and_agents"
+      }
     },
     {
       "id": "core/configuration/file/facade.json",
@@ -116,22 +164,34 @@
     },
     {
       "id": "core/configuration/setting/names",
-      "assertion": "Start an unnamed fake CLI with a controlled name pool, verify trimming and selection, and verify an empty pool falls back to the agent ID.",
+      "assertion": "Start an unnamed fake CLI with a controlled name pool, verify trimming, unused and exhausted pool selection, and verify an empty pool uses the Core built-in names.",
       "stage": "pr",
       "existing_tests": [
+        "core/tests/tests/configuration.rs:421",
         "core/tests/tests/configuration.rs:389",
         "core/tests/tests/configuration.rs:825",
         "core/crates/base/src/settings.rs:654"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "configuration",
+        "name": "an_agent_started_without_a_name_is_named_from_names"
+      }
     },
     {
       "id": "core/configuration/setting/schema",
       "assertion": "Read a settings file with a string $schema and verify the effective launch settings are unchanged. A non-string $schema reports its location and blocks starts.",
       "stage": "pr",
       "existing_tests": [
+        "core/tests/tests/configuration.rs:493",
         "core/crates/base/src/settings.rs:634",
         "core/crates/base/src/settings.rs:751"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "configuration",
+        "name": "schema_is_metadata_and_a_non_string_schema_blocks_launch"
+      }
     },
     {
       "id": "core/configuration/setting/yolo",
@@ -161,7 +221,12 @@
       "existing_tests": [
         "core/tests/tests/upgrade.rs:802",
         "core/tests/tests/upgrade.rs:1914"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "upgrade",
+        "name": "closing_notification_names_the_live_replacement_and_acknowledgement_releases_the_stream"
+      }
     },
     {
       "id": "core/daemon/daemon-notification/connect_failed",
@@ -235,6 +300,7 @@
       "assertion": "Acknowledge takeover with an id-less empty closing frame; verify the old stream ends and a fresh attachment reaches the same surviving CLI.",
       "stage": "pr",
       "existing_tests": [
+        "core/crates/daemon/src/server/tests.rs:185",
         "core/tests/tests/upgrade.rs:1914"
       ]
     },
@@ -603,7 +669,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "authenticated_peer_lists_exact_holder_records_and_local_access_is_refused"
+      }
     },
     {
       "id": "core/daemon/operation/internal.attach_resize",
@@ -709,19 +780,31 @@
       "assertion": "Send an invalid request and verify a JSON-RPC error code, typed reason and the expected response ID, with no result or requested effect.",
       "stage": "pr",
       "existing_tests": [
+        "core/tests/tests/protocol.rs:227",
         "core/tests/tests/protocol.rs:94",
         "core/tests/tests/protocol.rs:197",
         "core/tests/tests/protocol.rs:229"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "protocol",
+        "name": "calls_return_only_the_correlated_result_or_error"
+      }
     },
     {
       "id": "core/daemon/response/result",
       "assertion": "Receive a successful typed result over the daemon socket and verify its JSON-RPC version, original request ID and payload with no error member.",
       "stage": "pr",
       "existing_tests": [
+        "core/tests/tests/protocol.rs:227",
         "core/tests/tests/protocol.rs:19",
         "core/tests/tests/protocol.rs:348"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "protocol",
+        "name": "calls_return_only_the_correlated_result_or_error"
+      }
     },
     {
       "id": "core/daemon/topic/agents",
@@ -923,8 +1006,14 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/lines.rs:142",
+        "core/tests/tests/lines.rs:142",
         "core/crates/daemon/src/mcp/lines.rs:468"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "lines",
+        "name": "facade_mcp_serves_a_line_with_words_this_build_does_not_know"
+      }
     },
     {
       "id": "core/mcp/request/initialize",
@@ -1230,16 +1319,28 @@
       "assertion": "An invalid archive digest or incompatible target leaves the installed programs and state usable.",
       "stage": "native",
       "existing_tests": [
-        "core/tests/tests/upgrade.rs"
-      ]
+        "core/tests/tests/upgrade.rs",
+        "ci/check_native_install.py"
+      ],
+      "test": {
+        "runner": "core-install",
+        "target": "linux-x64",
+        "name": "installed-candidate"
+      }
     },
     {
       "id": "core/p0/install-upgrade/install",
       "assertion": "Install the candidate archive on the native target and use its program to start and query a fake CLI.",
       "stage": "release",
       "existing_tests": [
-        ".github/workflows/extension-check.yml"
-      ]
+        ".github/workflows/extension-check.yml",
+        "ci/check_native_install.py"
+      ],
+      "test": {
+        "runner": "core-install",
+        "target": "linux-x64",
+        "name": "installed-candidate"
+      }
     },
     {
       "id": "core/p0/install-upgrade/upgrade",
@@ -1321,8 +1422,14 @@
       "assertion": "Use actual SSH transport to a disposable peer and observe the selected machine and corresponding agent effect.",
       "stage": "native",
       "existing_tests": [
+        "ci/check_real_ssh_route.py",
         "core/scripts/ssh-check.sh"
-      ]
+      ],
+      "test": {
+        "runner": "core-ssh",
+        "target": "linux-x64",
+        "name": "real-machine-route"
+      }
     },
     {
       "id": "core/p0/remote-execution/remote-worktree",
@@ -1724,7 +1831,12 @@
         "core/tests/tests/guests.rs",
         "core/tests/tests/help.rs:20",
         "core/tests/tests/input.rs:303"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "input",
+        "name": "shell_type_writes_exact_paste_and_enter_bytes_to_its_target"
+      }
     },
     {
       "id": "core/shell/command/upgrade",
@@ -1768,7 +1880,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/cli.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "cli",
+        "name": "detached_start_names_the_running_agent"
+      }
     },
     {
       "id": "core/shell/mode/start.foreground",
@@ -1818,7 +1935,12 @@
         "core/tests/tests/keeper.rs:100",
         "core/tests/tests/lifecycle.rs:20",
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "upgrade",
+        "name": "closing_notification_names_the_live_replacement_and_acknowledgement_releases_the_stream"
+      }
     },
     {
       "id": "core/shell/process/facade-mcp",
@@ -2478,26 +2600,44 @@
       "assertion": "Send the id-less notification, then a request, and verify only the request receives a response. An old-engine cancellation notification produces no reply or cancellation dispatch.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/transport.test.ts:332",
         "extension/src/test/transport.test.ts:302"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "transport.test",
+        "name": "Transport: the run's MCP shim (MCP-1.1, 1.2, 6.1) id-less initialized and cancelled frames neither reply nor reach ptyd during a pending send"
+      }
     },
     {
       "id": "extension/mcp-old/request/initialize",
       "assertion": "Negotiate known versions and unknown-version fallback over real shim stdio. Verify facade capabilities and managed instructions, and verify an unmanaged old shim announces unavailability.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/transport.test.ts:286",
         "extension/src/test/integration/mcp.it.ts:373",
         "extension/src/test/transport.execution.test.ts:145",
         "extension/src/test/transport.test.ts:280"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "transport.test",
+        "name": "Transport: the run's MCP shim (MCP-1.1, 1.2, 6.1) the handshake: the client's protocol version where the shim speaks it, else the newest; the eight tools in order; ping; notifications unanswered; unknown methods and unreadable lines refused"
+      }
     },
     {
       "id": "extension/mcp-old/request/ping",
       "assertion": "Observe an empty successful result correlated to the request ID.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/transport.test.ts:286",
         "extension/src/test/transport.test.ts:304"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "transport.test",
+        "name": "Transport: the run's MCP shim (MCP-1.1, 1.2, 6.1) the handshake: the client's protocol version where the shim speaks it, else the newest; the eight tools in order; ping; notifications unanswered; unknown methods and unreadable lines refused"
+      }
     },
     {
       "id": "extension/mcp-old/request/tools.call",
@@ -2513,9 +2653,15 @@
       "assertion": "Compare the managed shim’s full advertised tool names, argument schemas and metadata against registration. Verify a non-serving shim advertises an empty list.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/transport.test.ts:286",
         "extension/src/test/integration/mcp.it.ts:149",
         "extension/src/test/transport.test.ts:306"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "transport.test",
+        "name": "Transport: the run's MCP shim (MCP-1.1, 1.2, 6.1) the handshake: the client's protocol version where the shim speaks it, else the newest; the eight tools in order; ping; notifications unanswered; unknown methods and unreadable lines refused"
+      }
     },
     {
       "id": "extension/mcp-old/tool/list_agents",
@@ -3016,16 +3162,32 @@
       "stage": "release",
       "existing_tests": [
         "extension/src/test/integration/run.ts",
+        "extension/src/test/integration/updateDriver.ts",
         "extension/scripts/package.test.mjs"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "install-pair",
+        "built_in": "claude",
+        "name": "install-pair"
+      }
     },
     {
       "id": "extension/p0/vsix-upgrade/upgrade-pair",
       "assertion": "Upgrade from the supported prior VSIX pair and verify persisted workspace state, Pins and Window Component operation.",
       "stage": "release",
       "existing_tests": [
-        "extension/src/test/integration/run.ts"
-      ]
+        "extension/src/test/integration/run.ts",
+        "extension/src/test/integration/updateDriver.ts"
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "upgrade-pair",
+        "built_in": "claude",
+        "name": "upgrade-pair"
+      }
     },
     {
       "id": "extension/p0/window-replacement/replacement-in-flight",
@@ -3903,9 +4065,17 @@
       "assertion": "Use the panel Pin button for an exact run and verify the next state contains the corresponding saved Pin.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/journey.it.ts:552",
         "extension/src/test/panel.view.test.ts:190",
         "extension/src/test/webview.test.ts:1364"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: a person starts and closes claude (J07) PANEL-1.3: the Webview Pin and Unpin buttons persist only the exact card’s native session"
+      }
     },
     {
       "id": "extension/webview-old/action/rename",
@@ -3921,9 +4091,17 @@
       "assertion": "Use the panel Unpin button for an exact run and verify the returned state clears its Pin while other cards retain theirs.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/journey.it.ts:552",
         "extension/src/test/panel.view.test.ts:191",
         "extension/src/test/webview.test.ts:1001"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: a person starts and closes claude (J07) PANEL-1.3: the Webview Pin and Unpin buttons persist only the exact card’s native session"
+      }
     },
     {
       "id": "extension/webview-old/host-to-page/details",
@@ -4147,9 +4325,17 @@
       "assertion": "Invoke the workspace-side command with a valid routed operation and observe the exact target effect. Refuse an incomplete request before dispatch.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts:894",
         "extension/src/test/host.client.test.ts:8",
         "extension/src/test/integration/mcp.it.ts:890"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "cross",
+        "built_in": "claude",
+        "name": "Journey: an agent works with an agent of another window on this computer (J15, M01, M03, COLLABORATION-1.1) the actual Window Component routes to the exact peer and refuses stale sessions and malformed calls"
+      }
     },
     {
       "id": "extension/window-component-old/command/facade.window.allocate",
@@ -4191,9 +4377,17 @@
       "assertion": "From the current editor session, send a request to the exact peer and observe its correlated response. A stale session or invalid request dispatches nothing.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts:894",
         "extension/src/test/host.client.test.ts:8",
         "extension/src/test/integration/mcp.it.ts:890"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "cross",
+        "built_in": "claude",
+        "name": "Journey: an agent works with an agent of another window on this computer (J15, M01, M03, COLLABORATION-1.1) the actual Window Component routes to the exact peer and refuses stale sessions and malformed calls"
+      }
     },
     {
       "id": "extension/window-component-old/command/facade.window.terminals",
@@ -4219,45 +4413,75 @@
       "assertion": "Activate a newer session-matched claim and observe that the previous activation loses authority to replace the current terminal. Reject a conflicting token at the same generation.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowTerminals.test.ts:174",
         "extension/src/test/windowTerminals.test.ts:57",
         "extension/src/test/windowTerminals.test.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowTerminals.test",
+        "name": "Window terminal registration: actual objects across workspace host generations old activation, late finish and late cancel cannot replace or clear a newer capture"
+      }
     },
     {
       "id": "extension/window-component-old/registration/begin",
       "assertion": "Begin registration for the chosen run. Verify a nonempty ticket is scoped to its owner and only one terminal capture is active at once.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowTerminals.test.ts:143",
         "extension/src/test/windowTerminals.test.ts:44",
         "extension/src/test/windowTerminals.test.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowTerminals.test",
+        "name": "Window terminal registration: actual objects across workspace host generations one nonempty capture ticket belongs to its session, owner and run"
+      }
     },
     {
       "id": "extension/window-component-old/registration/cancel",
       "assertion": "Cancel a pending capture, verify its ticket can no longer bind a terminal, and show the next registration succeeds without disposing the old terminal.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowTerminals.test.ts:195",
         "extension/src/test/windowTerminals.test.ts:162",
         "extension/src/test/windowTerminals.test.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowTerminals.test",
+        "name": "Window terminal registration: actual objects across workspace host generations expired and cancelled captures dispose nothing, and release the next creation"
+      }
     },
     {
       "id": "extension/window-component-old/registration/finish",
       "assertion": "Use the matching ticket to bind the exact current Terminal object. A stale ticket or ambiguous set of candidate objects preserves the existing binding.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowTerminals.test.ts:131",
         "extension/src/test/windowTerminals.test.ts:48",
         "extension/src/test/windowTerminals.test.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowTerminals.test",
+        "name": "Window terminal registration: actual objects across workspace host generations extra open followed by close remains ambiguous; a later valid capture can replace the retained binding"
+      }
     },
     {
       "id": "extension/window-component-old/registration/retire",
       "assertion": "After pinned opens settle, retire only confirmed obsolete objects in the expected run group. Keep newly registered terminals and unrelated shells intact.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowTerminals.test.ts:317",
         "extension/src/test/windowTerminals.test.ts:190",
         "extension/src/test/windowTerminals.test.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowTerminals.test",
+        "name": "Window terminal registration: actual objects across workspace host generations ARCHITECTURE-2.2, LIFECYCLE-3.5: after pinned tabs open, retirement includes hidden and confirmed unrecreated runs"
+      }
     },
     {
       "id": "extension/window-component-rust/command/facade.window.legacyInstance",
@@ -4300,72 +4524,114 @@
       "assertion": "Activate a newer session-matched claim and observe that the previous activation loses authority to replace the current terminal. Reject a conflicting token at the same generation.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowTerminals.test.ts:174",
         "extension/src/test/windowTerminals.test.ts:57",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
         "extension/src/test/integration/rustMultiWindow.ts:827"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowTerminals.test",
+        "name": "Window terminal registration: actual objects across workspace host generations old activation, late finish and late cancel cannot replace or clear a newer capture"
+      }
     },
     {
       "id": "extension/window-component-rust/registration/begin",
       "assertion": "Begin registration for the chosen run. Verify a nonempty ticket is scoped to its owner and only one terminal capture is active at once.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowTerminals.test.ts:143",
         "extension/src/test/windowTerminals.test.ts:44",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
         "extension/src/test/integration/rustMultiWindow.ts:827"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowTerminals.test",
+        "name": "Window terminal registration: actual objects across workspace host generations one nonempty capture ticket belongs to its session, owner and run"
+      }
     },
     {
       "id": "extension/window-component-rust/registration/cancel",
       "assertion": "Cancel a pending capture, verify its ticket can no longer bind a terminal, and show the next registration succeeds without disposing the old terminal.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowTerminals.test.ts:195",
         "extension/src/test/windowTerminals.test.ts:162",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
         "extension/src/test/integration/rustMultiWindow.ts:827"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowTerminals.test",
+        "name": "Window terminal registration: actual objects across workspace host generations expired and cancelled captures dispose nothing, and release the next creation"
+      }
     },
     {
       "id": "extension/window-component-rust/registration/finish",
       "assertion": "Use the matching ticket to bind the exact current Terminal object. A stale ticket or ambiguous set of candidate objects preserves the existing binding.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowTerminals.test.ts:131",
         "extension/src/test/windowTerminals.test.ts:48",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
         "extension/src/test/integration/rustMultiWindow.ts:827"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowTerminals.test",
+        "name": "Window terminal registration: actual objects across workspace host generations extra open followed by close remains ambiguous; a later valid capture can replace the retained binding"
+      }
     },
     {
       "id": "extension/window-component-rust/registration/retire",
       "assertion": "After pinned opens settle, retire only confirmed obsolete objects in the expected run group. Keep newly registered terminals and unrelated shells intact.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowTerminals.test.ts:317",
         "extension/src/test/windowTerminals.test.ts:190",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
         "extension/src/test/integration/rustMultiWindow.ts:827"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowTerminals.test",
+        "name": "Window terminal registration: actual objects across workspace host generations ARCHITECTURE-2.2, LIFECYCLE-3.5: after pinned tabs open, retirement includes hidden and confirmed unrecreated runs"
+      }
     },
     {
       "id": "extension/window-socket-old/frame/request",
       "assertion": "Write a newline-framed request on the live socket. Verify its sender, operation, arguments and remaining deadline reach the intended peer exactly once.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowNetwork.test.ts",
         "extension/src/test/windowNetwork.test.ts:160"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowNetwork.test",
+        "name": "Window network: window components register and carry requests between windows (ARCHITECTURE-1.1, 2.1) a route reaches the other window's component with who asked, what and how long it has, and brings back its answer"
+      }
     },
     {
       "id": "extension/window-socket-old/frame/response",
       "assertion": "Send concurrent requests and complete their peer operations in reverse order. Each JSON reply ID resolves only its original request and an unmatched reply changes neither.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowNetwork.test.ts",
         "extension/src/test/windowNetwork.test.ts:160",
         "extension/src/test/windowNetwork.test.ts:267"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowNetwork.test",
+        "name": "Window network: window components register and carry requests between windows (ARCHITECTURE-1.1, 2.1) live socket replies match concurrent calls by ID in reverse completion order and ignore an unmatched ID"
+      }
     },
     {
       "id": "extension/window-socket-old/operation/agents",
@@ -4390,10 +4656,18 @@
       "assertion": "Route a tool call between old-engine windows. Verify the receiving window evaluates reach, acts on its own exact target and returns the correlated result for the originating caller.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts:894",
         "extension/src/test/windowNetwork.test.ts:160",
         "extension/src/test/integration/mcp.it.ts:890",
         "extension/src/test/contract.tools.test.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "cross",
+        "built_in": "claude",
+        "name": "Journey: an agent works with an agent of another window on this computer (J15, M01, M03, COLLABORATION-1.1) the actual Window Component routes to the exact peer and refuses stale sessions and malformed calls"
+      }
     },
     {
       "id": "extension/window-socket-old/operation/deliver",
@@ -4420,32 +4694,56 @@
       "assertion": "Cause the remote handler to throw after dispatch and verify the correlated failed reply reports effects unknown. A request missing required fields reports failed with effects none and runs no handler.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowNetwork.test.ts",
         "extension/src/test/windowNetwork.test.ts:227"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowNetwork.test",
+        "name": "Window network: window components register and carry requests between windows (ARCHITECTURE-1.1, 2.1) a request in another protocol, or incomplete, is answered with why and serves nothing"
+      }
     },
     {
       "id": "extension/window-socket-old/outcome/protocol_incompatible",
       "assertion": "Send a correlated request with a different network protocol directly to the socket. Verify protocol_incompatible with effects none and zero handler calls.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowNetwork.test.ts",
         "extension/src/test/windowNetwork.test.ts:322"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowNetwork.test",
+        "name": "Window network: window components register and carry requests between windows (ARCHITECTURE-1.1, 2.1) a request in another protocol, or incomplete, is answered with why and serves nothing"
+      }
     },
     {
       "id": "extension/window-socket-old/outcome/timeout",
       "assertion": "Verify an expired request is rejected before dispatch with effects none. For a sent request whose reply is late, observe timeout with effects unknown and discard the late reply.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowNetwork.test.ts",
         "extension/src/test/windowNetwork.test.ts:267"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowNetwork.test",
+        "name": "Window network: window components register and carry requests between windows (ARCHITECTURE-1.1, 2.1) a request answered later than its deadline times out, its effects unknown; the late answer goes nowhere"
+      }
     },
     {
       "id": "extension/window-socket-old/outcome/window_unavailable",
       "assertion": "Disconnect a peer with an in-flight request and observe window_unavailable with effects unknown. Verify a new request to a peer absent from the directory reports effects none.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowNetwork.test.ts",
         "extension/src/test/windowNetwork.test.ts:281"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowNetwork.test",
+        "name": "Window network: window components register and carry requests between windows (ARCHITECTURE-1.1, 2.1) a request under way when the other window goes may have acted there: unavailable, its effects unknown"
+      }
     }
   ]
 }

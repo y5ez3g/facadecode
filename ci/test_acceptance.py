@@ -18,7 +18,7 @@ from unittest.mock import patch
 from catalog import AcceptanceError, load, read_cases, read_json, reconcile, validate_binding
 from evidence import (
     EDITOR, EDITOR_PASS, binding_paths, binding_product, clean_scope, command_for, completion_record, execute, execution_groups,
-    download_prior_vsix, observed_pass, reclaim_interrupted_scope, run_identity, verify_receipts,
+    download_prior_vsix, observed_mocha_tests, observed_pass, reclaim_interrupted_scope, run_identity, verify_receipts,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -60,8 +60,23 @@ class CatalogTests(unittest.TestCase):
 
     def test_every_bound_pr_case_is_in_the_plan(self):
         cases, pilots = read_cases(ROOT)
-        self.assertEqual(pilots, {case.id: case.test for case in cases.values()
-                                  if case.stage == 'pr' and case.test is not None})
+        self.assertEqual({key: binding for key, binding in pilots.items() if cases[key].stage == 'pr'},
+                         {case.id: case.test for case in cases.values() if case.stage == 'pr' and case.test is not None})
+        self.assertEqual({key for key in pilots if cases[key].stage != 'pr'}, {
+            'extension/p0/vsix-upgrade/install-pair',
+            'extension/p0/vsix-upgrade/upgrade-pair',
+        })
+
+    def test_an_unbound_vsix_rehearsal_fails_the_catalog(self):
+        case_id = 'extension/p0/vsix-upgrade/upgrade-pair'
+        case = self.cases[case_id]
+        row = {'id': case_id, 'assertion': case.assertion, 'stage': case.stage, 'existing_tests': []}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'ci').mkdir()
+            (root / 'ci/cases.json').write_text(json.dumps({'version': 2, 'cases': [row]}))
+            with self.assertRaisesRegex(AcceptanceError, r'missing executable VSIX release rehearsals: .*upgrade-pair'):
+                read_cases(root)
 
     def test_duplicate_json_keys_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -73,6 +88,15 @@ class CatalogTests(unittest.TestCase):
     def test_unknown_runner_is_rejected(self):
         with self.assertRaisesRegex(AcceptanceError, 'unknown runner'):
             validate_binding({'runner': 'shell'}, CORE)
+
+    def test_unit_bindings_use_a_named_test_file_and_cannot_replace_p0_journeys(self):
+        name = 'Extension suite checks its state'
+        binding = {'runner': 'extension-unit', 'target': 'windowTerminals.test', 'name': name}
+        case_id = 'extension/window-component-old/registration/activate'
+        self.assertEqual(validate_binding(binding, case_id), binding)
+        for case, target in ((EDITOR_CASE, 'windowTerminals.test'), (case_id, '../windowTerminals.test')):
+            with self.subTest(case=case, target=target), self.assertRaisesRegex(AcceptanceError, 'invalid Extension unit'):
+                validate_binding({**binding, 'target': target}, case)
 
     def test_unknown_editor_route_is_rejected(self):
         binding = {**self.cases[EDITOR_CASE].test, 'journey': 'remote'}
@@ -209,6 +233,24 @@ class EvidenceTests(unittest.TestCase):
     def test_complete_receipts(self):
         self.assertEqual(verify_receipts(self.plan, [self.receipt(CORE), self.receipt(EDITOR_CASE)]), 2)
 
+    def test_exact_mocha_unit_results_reject_zero_skipped_and_wrong_names(self):
+        title = 'A suite reports (the real result)'
+        target = 'testFixture.test'
+        passed = {'fullTitle': title, 'err': {}, 'file': f'/runner/extension/build/out/test/{target}.js'}
+        report = {'stats': {'tests': 1, 'passes': 1, 'failures': 0, 'pending': 0},
+                  'tests': [passed], 'passes': [passed], 'pending': [], 'failures': []}
+        self.assertTrue(observed_mocha_tests([title], target, json.dumps(report)))
+        for changes in (
+            {'tests': [], 'passes': []},
+            {'pending': [passed]},
+            {'failures': [passed]},
+            {'tests': [{**passed, 'fullTitle': 'a different scenario'}]},
+            {'passes': [{**passed, 'file': '/runner/extension/build/out/test/foreign.test.js'}]},
+            {'passes': [passed, passed]},
+        ):
+            with self.subTest(result=changes):
+                self.assertFalse(observed_mocha_tests([title], target, json.dumps({**report, **changes})))
+
     def test_remote_worktree_binds_the_core_case_to_the_editor_job(self):
         catalog, _ = read_cases(ROOT)
         binding = self.bindings[REMOTE_WORKTREE] = catalog[REMOTE_WORKTREE].test
@@ -267,6 +309,23 @@ class EvidenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(AcceptanceError, 'pinned digests|does not match'):
                     verify_receipts(self.plan, [receipt], 'extension')
                 file.write_bytes(original)
+
+    def test_fresh_vsix_install_uses_the_candidate_pair_only(self):
+        case_id = 'extension/p0/vsix-upgrade/install-pair'
+        catalog, _ = read_cases(ROOT)
+        binding = self.bindings[case_id] = catalog[case_id].test
+        self.plan['cases'] = {case_id: binding}
+        self.editor_log = EDITOR_PASS + json.dumps({'name': binding['name'], 'engine': binding['engine']}) + '\n'
+        directory = self.directory / 'candidate-vsix'
+        directory.mkdir()
+        self.plan['candidate_vsix'] = ['main.vsix', 'window.vsix']
+        for name in self.plan['candidate_vsix']:
+            (directory / name).write_text(name)
+        receipt = self.receipt(case_id)
+        self.assertEqual(verify_receipts(self.plan, [receipt], 'extension'), 1)
+        (directory / 'main.vsix').unlink()
+        with self.assertRaisesRegex(AcceptanceError, 'missing candidate update packages'):
+            verify_receipts(self.plan, [receipt], 'extension')
 
     def test_missing_and_duplicate_results(self):
         path = self.receipt(CORE)

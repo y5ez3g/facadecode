@@ -797,6 +797,104 @@ fn build_doing_as(home: &TestHome, build: &str, role: &str, what: &str) -> PathB
     }
 }
 
+/// A terminal client observes and acknowledges live replacement before reattaching to the same CLI.
+#[test]
+fn closing_notification_names_the_live_replacement_and_acknowledgement_releases_the_stream() {
+    let home = TestHome::new("raw-closing");
+    home.start_facade_with(&[]);
+    let before = home
+        .hello_result()
+        .expect("the launched Daemon answers hello");
+    assert_eq!(before["api_version"], 1);
+    let keeper_before = keeper(&home);
+    let running = home.start_fake("survivor");
+    let reference = home.inspect_agent(&running.address)["agent"]["reference"].clone();
+    let mut prior = ManualReadClient::open(&home);
+    let args = json!({ "topic": "attach", "args": { "target": reference } });
+    prior.send(1, "watch", args.clone());
+    let snapshot = prior
+        .read_frame()
+        .unwrap()
+        .expect("the old Attach snapshot");
+    assert_eq!(snapshot["id"], 1, "{snapshot}");
+    assert_eq!(
+        snapshot["result"]["snapshot"]["reference"], reference,
+        "{snapshot}"
+    );
+
+    let replacement = newer();
+    let program = program_of_build(&home, &replacement);
+    let takeover = home
+        .command(&program)
+        .args(["daemon", "--takeover"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let closing = loop {
+        let frame = prior
+            .read_frame()
+            .unwrap()
+            .expect("closing before the old stream exits");
+        assert!(frame.get("id").is_none(), "{frame}");
+        if frame["method"] == "closing" {
+            break frame;
+        }
+        assert_eq!(frame["method"], "changed", "{frame}");
+    };
+    assert_eq!(closing["jsonrpc"], "2.0", "{closing}");
+    assert_eq!(
+        closing["params"],
+        json!({ "build": replacement }),
+        "{closing}"
+    );
+    let ack = json!({ "jsonrpc": "2.0", "method": "closing", "params": {} });
+    std::io::Write::write_all(&mut prior.writer, format!("{ack}\n").as_bytes()).unwrap();
+    while let Some(frame) = prior
+        .read_frame()
+        .expect("the old connection closes cleanly")
+    {
+        assert!(
+            frame.get("id").is_none() && frame["method"] == "changed",
+            "{frame}"
+        );
+    }
+    let report = takeover.wait_with_output().unwrap();
+    assert!(
+        report.status.success(),
+        "{}\n{}",
+        stdout(&report),
+        stderr(&report)
+    );
+    let after = home.hello_result().expect("the replacement answers hello");
+    assert_eq!(after["api_version"], 1);
+    assert_eq!(after["build"], replacement);
+    assert_eq!(after["machine_id"], before["machine_id"]);
+    assert_ne!(after["pid"], before["pid"]);
+    assert_eq!(keeper(&home), keeper_before);
+    let mut fresh = ManualReadClient::open(&home);
+    fresh.send(2, "watch", args);
+    let snapshot = fresh
+        .read_frame()
+        .unwrap()
+        .expect("the new Attach snapshot");
+    assert_eq!(snapshot["id"], 2, "{snapshot}");
+    assert_eq!(
+        snapshot["result"]["snapshot"]["reference"], reference,
+        "{snapshot}"
+    );
+    assert_eq!(
+        snapshot["result"]["snapshot"]["process"], "running",
+        "{snapshot}"
+    );
+    assert_eq!(
+        home.inspect_agent(&running.address)["agent"]["pid"],
+        running.pid
+    );
+    assert!(alive(&running.process));
+}
+
 /// An IDE reconnects after a v1 takeover and finds its running agent under the same reference.
 #[test]
 fn an_editor_refinds_its_running_agent_after_v1_takeover() {

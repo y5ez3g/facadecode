@@ -14,7 +14,10 @@ import type { Response, DaemonHelloParams, InspectResult, ScreenText } from '../
 import { lineReader } from '../../base/lines';
 import { unspun } from '../../base/tabSpinner';
 import { isWindowIdentity, WINDOW_IDENTITY_COMMAND } from '../../base/windowIdentity';
-import { type Directory, WINDOW_DIRECTORY_COMMAND } from '../../base/windowNetwork';
+import { AGENTS_ROUTE_COMMAND, type Directory, type RouteResponse, WINDOW_DIRECTORY_COMMAND, WINDOW_ROUTE_COMMAND } from '../../base/windowNetwork';
+import type { GuestCaller, RoutedCall } from '../../contract/network';
+import { TOOL_PROTOCOL } from '../../schema/protocol';
+import type { Result } from '../../schema/result';
 import { linesOf as cardLines } from '../detailLines';
 import { coreCall, coreSocket, normalizeDriveLetter } from './editors';
 import { BUILT_IN_ADAPTERS } from '../../clis/catalog';
@@ -886,6 +889,101 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		assert.ok(!(stopped.content('list_agents')?.data.agents as { id: string }[]).some(each => each.id === child), 'the stopped child leaves the active roster');
 		await vscode.commands.executeCommand('facade.deleteAgent', { run_id: card.runId });
 	});
+
+	if (!RUST && !PEER_ELSEWHERE) {
+		test('the actual Window Component routes to the exact peer and refuses stale sessions and malformed calls', async function () {
+			this.timeout(90_000);
+			const { card, alias } = await personAgent();
+			observeAcceptanceEngine(this, card);
+			let child: { run: string; pid: number } | undefined;
+			try {
+				const session = vscode.env.sessionId;
+				const directory = await until('this component’s peer and exact local agent', async () => {
+					const now = await vscode.commands.executeCommand<Directory>(WINDOW_DIRECTORY_COMMAND, session);
+					return now?.windows.some(window => window.window === now.self && window.agents.some(agent => agent.run === card.runId)) &&
+						now.windows.some(window => window.label === PEER) ? now : undefined;
+				});
+				const peer = directory.windows.find(window => window.label === PEER)!;
+				const local = directory.windows.find(window => window.window === directory.self)!.agents.find(agent => agent.run === card.runId)!;
+				const caller: GuestCaller = { id: local.run, alias: local.alias, name: local.name, root: local.root, yolo: false, window: directory.self };
+				const response = (tool: string, args: unknown, id: string): RoutedCall =>
+					({ protocol: TOOL_PROTOCOL, tool, arguments: args, caller, callId: id, elapsedMs: 0, inline: true });
+				const route = async (op: string, args: unknown) => {
+					const answer = await vscode.commands.executeCommand<RouteResponse>(WINDOW_ROUTE_COMMAND, session, { to: peer.window, op, args, deadlineMs: 30_000 });
+					assert.ok(answer?.ok, JSON.stringify(answer));
+					return answer.result;
+				};
+				const received = async <T>(tool: string, args: unknown, id: string): Promise<Result<T>> =>
+					(await route('call', response(tool, args, id)) as { result: Result<T> }).result;
+				const snapshot = await route('agents', { caller }) as {
+					window: { window_id: string; locations: { location_id: string; path: string }[] }; agents: unknown[]
+				};
+				assert.strictEqual(snapshot.window.window_id, peer.window);
+				const location = snapshot.window.locations.find(each => each.path === PEER_DIR);
+				assert.ok(location, 'the receiving workspace supplies its own exact launch location');
+				const launches = () => fs.readdirSync(path.dirname(RECORD))
+					.filter(file => file.startsWith(path.basename(RECORD) + '.starts.')).sort();
+				const original = new Set(launches());
+				const startArgs = { name: 'Exact window route', cli: 'claude', window_id: peer.window, location_id: location.location_id };
+				const request = { to: peer.window, op: 'call', args: response('start_agent', startArgs, 'stale-fixture-route'), deadlineMs: 30_000 };
+				assert.strictEqual(await vscode.commands.executeCommand(WINDOW_ROUTE_COMMAND, session + '-stale', request), undefined);
+				const { deadlineMs: _, ...malformed } = request;
+				assert.strictEqual(await vscode.commands.executeCommand(WINDOW_ROUTE_COMMAND, session, malformed), undefined);
+				await assert.rejects(Promise.resolve(vscode.commands.executeCommand(AGENTS_ROUTE_COMMAND, {
+					op: 'call', args: response('stop_agent', { agent: local.run }, 'incomplete-fixture-route'), deadlineMs: 30_000
+				})), /The routed request was incomplete/);
+				const sourcePid = Number(fs.readFileSync(RECORD + '.' + alias, 'utf8').trim());
+				assert.ok(alive(sourcePid));
+				assert.deepStrictEqual(launches(), [...original], 'invalid requests start no agent');
+				const started = await received<{ agent_id: string; alias: string; window_id: string; cwd: string; root: string; creator: string }>(
+					'start_agent', startArgs, 'valid-fixture-route');
+				assert.strictEqual(started.status, 'success', JSON.stringify(started));
+				const facts = started.data;
+				assert.match(facts.alias, /^#a\d+$/u);
+				assert.notStrictEqual(facts.alias, alias);
+				const launchLog = RECORD + '.starts.' + facts.alias;
+				const pid = await until('the actual peer CLI to record its start', () => {
+					if (!fs.existsSync(launchLog)) { return undefined; }
+					const text = fs.readFileSync(launchLog, 'utf8').trim();
+					return /^\d+$/u.test(text) ? Number(text) : undefined;
+				});
+				child = { run: facts.agent_id, pid };
+				assert.deepStrictEqual([facts.window_id, facts.cwd, facts.root, facts.creator], [peer.window, PEER_DIR, local.root, local.run]);
+				assert.strictEqual(argsOf(facts.alias).cwd, location.path);
+				assert.ok(pid > 0 && alive(pid));
+				assert.deepStrictEqual(launches().filter(name => !original.has(name)), [path.basename(RECORD) + '.starts.' + facts.alias]);
+				assert.deepStrictEqual(fs.readFileSync(RECORD + '.starts.' + facts.alias, 'utf8').trim().split(/\r?\n/u).map(Number), [pid]);
+				await until('the screen from the exact peer agent', async () => {
+					const screen = await received<{ text: string; agent_id: string; window_id: string }>('read_screen', { agent: facts.agent_id }, 'read-fixture-route');
+					assert.strictEqual(screen.status, 'success', JSON.stringify(screen));
+					assert.deepStrictEqual([screen.data.agent_id, screen.data.window_id], [facts.agent_id, peer.window]);
+					return screen.data.text.includes('Try a task') || undefined;
+				});
+				const blocked = await route('call', {
+					...response('stop_agent', { agent: facts.agent_id }, 'blocked-fixture-route'), caller: { ...caller, root: 'run-' + '0'.repeat(32) }
+				}) as { result: Result };
+				assert.deepStrictEqual([blocked.result.status, blocked.result.error?.reason, blocked.result.effects.outcome], ['failure', 'out_of_tree', 'none']);
+				assert.ok(alive(pid) && alive(sourcePid), 'an out-of-tree stop leaves both original processes');
+				const stopped = await received('stop_agent', { agent: child.run }, 'stop-fixture-route');
+				assert.strictEqual(stopped.status, 'success', JSON.stringify(stopped));
+				await until('the exact peer process to stop', () => !alive(pid) || undefined);
+				child = undefined;
+				console.log('  Window route observation ' + JSON.stringify({
+					source: { window: directory.self, run: local.run, pid: sourcePid },
+					peer: { window: facts.window_id, run: facts.agent_id, cwd: facts.cwd, pid },
+					refused: ['stale-session', 'malformed-window-request', 'incomplete-workspace-request', 'out_of_tree']
+				}));
+			} finally {
+				try {
+					if (child && alive(child.pid)) {
+						await script(alias, [{ tool: 'stop_agent', arguments: { agent: child.run } }]);
+					}
+				} finally {
+					await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
+				}
+			}
+		});
+	}
 
 	test('it lists the other window, starts an agent there, messages it, reads its screen and stops it', async function () {
 		this.timeout(120_000);

@@ -332,30 +332,44 @@ export async function until<T>(what: string, probe: () => Promise<T | undefined>
 /**
  * Removes the active managed agents of the run's own Facade home, then waits for its idle daemon to take its socket away.
  * The client only connects to an existing daemon, identifies agents by exact reference, and closes before the idle wait.
+ * The owned-scope runner can retain a strict idle wait for the daemon and Keeper before removing its temporary roots.
  */
-export async function endCore(home: string, ms = 30_000): Promise<void> {
-	if (!coreListens(home)) { return; }
-	try {
-		const hello = await helloInCore(home);
-		if ('error' in hello) { throw new Error(`cleanup hello: ${JSON.stringify(hello.error)}`); }
-		const { machine_id: machine } = hello.result as DaemonHelloResult;
-		const { agents } = await coreCall(home, 'agent.list', { scope: { kind: 'local' } });
-		for (const agent of agents) {
-			if (agent.type === 'managed' && agent.reference.machine_id === machine) {
-				const removed = await coreCall(home, 'agent.remove', { target: agent.reference });
-				assert.deepStrictEqual(removed.reference, agent.reference);
+export async function endCore(home: string, ms = 30_000, deferIdle?: (waiting: Promise<void>) => void): Promise<void> {
+	if (coreListens(home)) {
+		try {
+			const hello = await helloInCore(home);
+			if ('error' in hello) { throw new Error(`cleanup hello: ${JSON.stringify(hello.error)}`); }
+			const { machine_id: machine } = hello.result as DaemonHelloResult;
+			const { agents } = await coreCall(home, 'agent.list', { scope: { kind: 'local' } });
+			for (const agent of agents) {
+				if (agent.type === 'managed' && agent.reference.machine_id === machine) {
+					const removed = await coreCall(home, 'agent.remove', { target: agent.reference });
+					assert.deepStrictEqual(removed.reference, agent.reference);
+				}
 			}
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if ((code !== 'ENOENT' && code !== 'ECONNREFUSED') || coreListens(home)) { throw error; }
 		}
-	} catch (error) {
-		const code = (error as NodeJS.ErrnoException).code;
-		if ((code === 'ENOENT' || code === 'ECONNREFUSED') && !coreListens(home)) { return; }
-		throw error;
 	}
+	if (deferIdle) {
+		deferIdle(waitForCoreIdle(home, ms, true));
+	} else {
+		await waitForCoreIdle(home, ms, false);
+	}
+}
+
+async function waitForCoreIdle(home: string, ms: number, strict: boolean): Promise<void> {
+	const daemon = coreSocket(home);
+	const keeper = path.join(path.dirname(daemon), path.basename(daemon).replace(/^daemon-/u, 'keeper-'));
+	const waiting = () => coreListens(home) || (strict && fs.existsSync(keeper));
 	const end = Date.now() + ms;
-	while (coreListens(home) && Date.now() < end) {
+	while (waiting() && Date.now() < end) {
 		await new Promise(resolve => setTimeout(resolve, 200));
 	}
-	if (coreListens(home)) {
-		console.warn(`Facade core of ${home} still runs after ${ms} ms.`);
+	if (waiting()) {
+		const message = `Facade core of ${home} still runs after ${ms} ms.`;
+		if (strict) { throw new Error(message); }
+		console.warn(message);
 	}
 }

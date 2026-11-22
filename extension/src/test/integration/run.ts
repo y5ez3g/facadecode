@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { parse as parseJsonc, ParseError } from 'jsonc-parser';
+import { pathToFileURL } from 'url';
 import { isDeepStrictEqual } from 'util';
 import { coreCall, coreListens, coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
 import { BUILT_IN_NAMES } from '../../base/names';
@@ -45,6 +46,7 @@ const ACCEPTANCE_DRIVERS = new Map([
 	['conversion', { engine: 'old', cli: 'claude' }],
 	['expiry', { engine: 'old', cli: 'claude' }],
 	['incompatible-activation', { engine: 'rust', cli: 'claude' }],
+	['install-pair', { engine: 'old', cli: 'claude' }],
 	['lifetime', { engine: 'rust', cli: 'claude' }],
 	['missing-session-unpin', { engine: 'rust', cli: 'claude' }],
 	['multi-window', { engine: 'rust', cli: 'claude' }],
@@ -52,7 +54,8 @@ const ACCEPTANCE_DRIVERS = new Map([
 	['replacement-in-flight', { engine: 'old', cli: 'claude' }],
 	['shell-handoff', { engine: 'rust', cli: 'codex' }],
 	['stale-owner', { engine: 'old', cli: 'claude' }],
-	['switch', { engine: 'rust', cli: 'claude' }]
+	['switch', { engine: 'rust', cli: 'claude' }],
+	['upgrade-pair', { engine: 'old', cli: 'claude' }]
 ] as const);
 type AcceptanceDriver = typeof ACCEPTANCE_DRIVERS extends ReadonlyMap<infer Name, unknown> ? Name : never;
 
@@ -99,6 +102,13 @@ async function main(): Promise<void> {
 	const grep = process.env.FACADE_IT_GREP;
 	const expectedTest = process.env.FACADE_IT_EXPECT_TESTS;
 	const expectedDriver = process.env.FACADE_IT_EXPECT_DRIVER;
+	const overlapCoreIdle = process.env.FACADE_IT_OVERLAP_CORE_IDLE === '1';
+	if (overlapCoreIdle) {
+		const scope = process.env.CI_ACCEPTANCE_ROOT;
+		if (process.platform !== 'linux' || !scope || scope !== os.tmpdir() || !/^\/tmp\/fnative-[a-zA-Z0-9_-]+$/u.test(scope)) {
+			throw new Error('Overlapping Core idle cleanup requires the Linux owned-scope native editor runner.');
+		}
+	}
 	// For a look at what a run left: its folder kept, and one part of it alone (`journeys`, `cross` or `conversion`)
 	const keep = !!process.env.FACADE_IT_KEEP;
 	const only = process.env.FACADE_IT_ONLY;
@@ -246,9 +256,16 @@ async function main(): Promise<void> {
 	const windowComponent = path.resolve(__dirname, '..', '..', '..', 'window');
 	/** Core's programs in the stage, and what a run on the Rust engine leaves of them in the Facade root `facade`: ended as core's README ends them. */
 	const corePrograms = coreProgram(path.join(extension, 'bin'));
-	const endRust = async (facade: string) => {
+	const idleChecks: Promise<unknown>[] = [];
+	const endRust = async (facade: string, independentHome = false) => {
 		if (engine === 'rust') {
-			await endCore(facade, expectedTest || expectedDriver ? 45_000 : undefined);
+			const exact = expectedTest || expectedDriver;
+			const overlap = overlapCoreIdle && independentHome && !exact && !keep
+				&& (!only || ['journeys', 'conversion', 'reopen'].includes(only));
+			await endCore(facade, exact || overlap ? 45_000 : undefined, overlap ? waiting => {
+				// Agent removal has already finished. Only this home's idle/socket wait can overlap a different test.
+				idleChecks.push(waiting.then(() => undefined, error => error));
+			} : undefined);
 			if ((expectedTest || expectedDriver) && coreListens(facade)) {
 				throw new Error('The isolated acceptance test daemon did not exit.');
 			}
@@ -295,7 +312,7 @@ async function main(): Promise<void> {
 			// The cross-window fixture owns both editor holds and cleans their shared services after both close.
 			if (name !== 'cross') {
 				endMatching(path.join(facade, 'extension', 'ptyd'));
-				await endRust(facade);
+				await endRust(facade, true);
 			}
 		}
 	};
@@ -438,7 +455,7 @@ async function main(): Promise<void> {
 			} finally {
 				endMatching(user);
 				endMatching(path.join(facade, 'extension', 'ptyd'));
-			await endRust(facade);
+				await endRust(facade, true);
 			}
 		}
 	};
@@ -585,14 +602,20 @@ async function main(): Promise<void> {
 	 * once: with its tab open by the editor, the window passing the answer on; hidden, by the window's headless terminal; open again,
 	 * by the editor once more (ARCHITECTURE-2.3, LIFECYCLE-3.5). It needs the released packages and runs only when asked.
 	 */
-	const update = async (replacement = false) => {
-		if (!released) {
+	const update = async (mode: 'update' | 'replacement-in-flight' | 'install-pair' | 'upgrade-pair' = 'update') => {
+		const replacement = mode === 'replacement-in-flight';
+		const installPair = mode === 'install-pair';
+		const upgradePair = mode === 'upgrade-pair';
+		if ((installPair || upgradePair) && !current) {
+			throw new Error(mode + ' requires a candidate pair directory in FACADE_IT_CURRENT.');
+		}
+		if (!installPair && !released) {
 			throw new Error('FACADE_IT_ONLY=update installs a released build: set FACADE_IT_RELEASED to a folder holding its facadecode and window VSIX files.');
 		}
 		const packages = (dir: string) => {
 			const files = fs.readdirSync(dir, { withFileTypes: true }).filter(file => file.name.endsWith('.vsix'));
-			if (replacement && (files.length !== 2 || files.some(file => !file.isFile()))) {
-				throw new Error(`${dir} must contain exactly two regular VSIX files for replacement testing.`);
+			if ((replacement || installPair || upgradePair) && (files.length !== 2 || files.some(file => !file.isFile()))) {
+				throw new Error(`${dir} must contain exactly two regular VSIX files.`);
 			}
 			const component = files.find(file => file.name.includes('-window-'));
 			const main = files.find(file => !file.name.includes('-window-'));
@@ -602,7 +625,8 @@ async function main(): Promise<void> {
 			// The window component first: the other's extension pack names it
 			return [path.join(dir, component.name), path.join(dir, main.name)];
 		};
-		const from = packages(released), to = packages(current ?? path.resolve(__dirname, '..', '..', '..', 'vsix'));
+		const from = released && !installPair ? packages(released) : [];
+		const to = packages(current ?? path.resolve(__dirname, '..', '..', '..', 'vsix'));
 		const folder = path.join(root, 'update');
 		newRepository(folder);
 		const profile = editorProfile(root, 'upd');
@@ -621,18 +645,39 @@ async function main(): Promise<void> {
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
 			fs.rmSync(path.join(root, file));
 		}
-		const env = { ...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_UPDATE: out, CLAUDE_CONFIG_DIR: claudeConfig };
+		const env = { ...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_UPDATE: out, CLAUDE_CONFIG_DIR: claudeConfig,
+			...(installPair || upgradePair ? { FACADE_IT_UPDATE_ROLE: installPair ? 'install' : 'upgrade' } : {}) };
 		if (replacement) {
 			await replacementInFlight({ root, facade, folder, record, executable, cli: editorCli(executable), driver, from, to, receiver: profile, env, endMatching });
 			driverPassed('replacement-in-flight', 'old');
 			return;
 		}
+		const editorCommand = (args: readonly string[]) => execFileSync(editorCli(executable), [...profile.args, ...args],
+			{ env, encoding: 'utf8', stdio: 'pipe', shell: process.platform === 'win32', timeout: 30_000 });
 		const install = (files: readonly string[]) => {
 			for (const file of files) {
-				execFileSync(editorCli(executable), [...profile.args, '--install-extension', file, '--force'], { env, stdio: 'pipe', shell: process.platform === 'win32' });
+				editorCommand(['--install-extension', file, '--force']);
 			}
 		};
-		install(from);
+		const pairVersion = (pair: string[]): string => {
+			const files = pair.map(file => path.basename(file));
+			const version = /^facadecode-window-(\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?)\.vsix$/iu.exec(files[0])?.[1];
+			assert.ok(version && files[1] === ['facadecode', process.platform, process.arch, version].join('-') + '.vsix', 'the package names are a matching native pair');
+			return version;
+		};
+		const candidateVersion = installPair || upgradePair ? pairVersion(to) : undefined;
+		const priorVersion = upgradePair ? pairVersion(from) : undefined;
+		if (installPair || upgradePair) {
+			assert.strictEqual(editorCommand(['--list-extensions']).trim(), '', 'the editor profile has no installed extensions');
+		}
+		if (upgradePair) {
+			assert.strictEqual(priorVersion, '0.1.5', 'the supported prior pair');
+			assert.notStrictEqual(priorVersion, candidateVersion, 'the candidate updates the prior pair');
+		}
+		if (installPair) {
+			facadeSettings(facade, alone('claude'));
+		}
+		install(installPair ? to : from);
 		let editorOutput = '';
 		const editor = spawn(executable, [folder, '--new-window', ...profile.args,
 			`--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], { stdio: ['ignore', 'pipe', 'pipe'], env });
@@ -678,8 +723,65 @@ async function main(): Promise<void> {
 		};
 		const once = { cursor: 1, attributes: 1, colour: 1 };
 		try {
+			if (upgradePair) {
+				type InstalledUpgrade = { version: string; component: string; componentPath: string; mainPath: string; window: string; token: string;
+					hostPid: number; aliases: string[]; saved: { key: string; workspace: string; pins: unknown[] }; agents: { root: string; session: string }[];
+					marked: { alias: string; pinned: boolean }[] };
+				const observed = (name: string) => phase(name) as unknown as Promise<InstalledUpgrade>;
+				const verifyInstall = (snapshot: InstalledUpgrade, version: string | undefined) => {
+					assert.strictEqual(snapshot.version, version);
+					assert.strictEqual(snapshot.component, version);
+					const dir = path.join(profile.env.VSCODE_PORTABLE, 'extensions');
+					assert.strictEqual(snapshot.mainPath, path.join(dir, 'facade.facadecode-' + version));
+					assert.strictEqual(snapshot.componentPath, path.join(dir, 'facade.facadecode-window-' + version));
+				};
+				const original = await observed('started');
+				verifyInstall(original, priorVersion);
+				assert.strictEqual(new Set(original.agents.map(agent => agent.session)).size, 3);
+				for (const alias of original.aliases) {
+					const launch = JSON.parse(fs.readFileSync(record + '.args.' + alias, 'utf8')) as { cwd: string };
+					assert.strictEqual(launch.cwd, folder, 'the launch ran in the observed workspace');
+				}
+				assert.strictEqual(original.saved.workspace, pathToFileURL(folder).href);
+				assert.strictEqual(original.saved.pins.length, 2);
+				assert.strictEqual(original.marked.length, 3);
+				const pids = original.aliases.map(alias => Number(fs.readFileSync(record + '.' + alias, 'utf8').trim()));
+				assert.ok(pids.every(pid => Number.isSafeInteger(pid) && pid > 0 && alive(pid)));
+				install(to);
+				fs.writeFileSync(out + '.reload', '');
+				const successor = await observed('updated');
+				verifyInstall(successor, candidateVersion);
+				assert.notStrictEqual(successor.hostPid, original.hostPid);
+				assert.deepStrictEqual([successor.window, successor.token], [original.window, original.token]);
+				assert.deepStrictEqual(successor.saved, original.saved);
+				assert.deepStrictEqual(successor.agents, original.agents);
+				assert.deepStrictEqual(successor.marked, original.aliases.slice(0, 2).map(alias => ({ alias, pinned: true })));
+				assert.ok(pids.every(pid => alive(pid)), 'the original fake CLI processes remain live');
+				for (const [index, alias] of original.aliases.entries()) {
+					assert.deepStrictEqual(fs.readFileSync(record + '.starts.' + alias, 'utf8').trim().split(/\r?\n/u).map(Number), [pids[index]]);
+				}
+				console.log('  ✔ candidate update preserves the workspace, two ordered Pins and the live Window Component publication ' + JSON.stringify({ original, successor, pids }));
+				driverPassed('upgrade-pair', 'old');
+				return;
+			}
 			const started = await phase('started') as { phase: string; version: string; alias: string; tabs: string[][] };
 			const pid = Number(fs.readFileSync(`${record}.${started.alias}`, 'utf8').trim());
+			if (installPair) {
+				const observed = started as typeof started & { component: string; componentPath: string; mainPath: string; window: string; run: string };
+				assert.strictEqual(observed.version, candidateVersion);
+				assert.strictEqual(observed.component, candidateVersion);
+				const extensions = path.join(profile.env.VSCODE_PORTABLE, 'extensions');
+				for (const installed of [observed.mainPath, observed.componentPath]) {
+					assert.strictEqual(path.dirname(installed), extensions, 'activation came from the isolated install');
+				}
+				assert.ok(observed.window && observed.run && Number.isSafeInteger(pid) && pid > 0 && alive(pid), 'New Agent has a live fake CLI and Window Component publication');
+				const launches = fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`));
+				assert.deepStrictEqual(launches, [`${path.basename(record)}.starts.${observed.alias}`]);
+				assert.deepStrictEqual(fs.readFileSync(path.join(path.dirname(record), launches[0]), 'utf8').trim().split(/\r?\n/u).map(Number), [pid]);
+				console.log(`  ✔ clean candidate pair activation and one New Agent effect: ${JSON.stringify({ ...observed, pid })}`);
+				driverPassed('install-pair', 'old');
+				return;
+			}
 			// What it got before it first asked - the released build's terminal opening - is not this journey's
 			answered = fs.existsSync(`${record}.stdin.${started.alias}`) ? fs.readFileSync(`${record}.stdin.${started.alias}`, 'utf8').length : 0;
 			const before = await ask(started.alias);
@@ -1133,9 +1235,9 @@ async function main(): Promise<void> {
 		if (only === 'update') {
 			await update();
 		}
-		if (only === 'replacement-in-flight') {
+		if (only === 'replacement-in-flight' || only === 'install-pair' || only === 'upgrade-pair') {
 			assert.strictEqual(engine, 'old');
-			await update(true);
+			await update(only);
 		}
 		// Never unasked: it signs in and uses an account's usage
 		if (only === 'real') {
@@ -1156,8 +1258,11 @@ async function main(): Promise<void> {
 		suiteFailure = error;
 		throw error;
 	} finally {
+		const idleFailures = (await Promise.all(idleChecks)).filter(error => error !== undefined);
 		try {
-			if (keep) {
+			if (overlapCoreIdle) {
+				console.log(`Leaving ${root} to the owned-scope native editor runner.`);
+			} else if (keep) {
 				console.log(`Kept ${root}`);
 			} else {
 				console.log('Removing the isolated editor profiles.');
@@ -1170,6 +1275,10 @@ async function main(): Promise<void> {
 				console.log('Isolated editor profile cleanup finished.');
 			}
 		} catch (cleanup) {
+			idleFailures.push(cleanup);
+		}
+		const cleanup = idleFailures.length > 1 ? new AggregateError(idleFailures, 'Final editor cleanup failed.') : idleFailures[0];
+		if (cleanup !== undefined) {
 			throw suiteFailure === undefined ? cleanup : new AggregateError([suiteFailure, cleanup], 'Editor journey and final cleanup both failed.');
 		}
 	}

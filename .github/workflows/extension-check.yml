@@ -7,6 +7,12 @@ on:
       - 'core/**'
       - 'docs/extension/**'
       - '.github/workflows/extension-check.yml'
+      - 'ci/acceptance.py'
+      - 'ci/catalog.py'
+      - 'ci/check_native_install.py'
+      - 'ci/evidence.py'
+      - 'ci/native_core.py'
+      - 'ci/run_native_extension.py'
   workflow_dispatch:
     inputs:
       sign:
@@ -32,6 +38,10 @@ permissions:
   contents: read
   # For azure/login alone, which signs in to Azure only from the extension-signing environment
   id-token: write
+
+concurrency:
+  group: extension-check-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
@@ -175,6 +185,28 @@ jobs:
           foreach ($file in 'facade-mcp.exe', 'conpty\OpenConsole.exe', 'conpty\conpty.dll') {
             if (-not (Test-Path -LiteralPath "$install\bin\$file" -PathType Leaf)) { throw "Missing $file." }
           }
+      - name: Verify the installed Linux x64 candidate
+        if: github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.engine == 'old'
+        run: |
+          mkdir -p build/native-install
+          (cd ../core && cargo build --locked --release --target x86_64-unknown-linux-musl \
+            -p facade-scenarios --bin facade-fakecli)
+          archive=build/core/facade-core-linux-x64.tar.gz
+          cp build/core/SHA256SUMS build/native-install/SHA256SUMS
+          checksums=build/native-install/SHA256SUMS
+          receipt=build/native-install/receipt.json
+          output=build/native-install/output.log
+          python -B ../ci/check_native_install.py "$archive" "$checksums" \
+            ../core/target/x86_64-unknown-linux-musl/release/facade-fakecli --receipt "$receipt" | tee "$output"
+          python -B ../ci/acceptance.py verify-native-install "$archive" "$checksums" "$receipt" "$output" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Keep the Linux x64 candidate install evidence
+        if: always() && github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.engine == 'old'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-install-linux-x64-${{ github.run_attempt }}
+          path: extension/build/native-install/
+          if-no-files-found: ignore
       # The Rust engine's journeys need the built extension and core's programs (scripts/build-it.mjs), not the packages
       - run: npm run bundle
         if: matrix.engine == 'rust'
@@ -199,7 +231,12 @@ jobs:
         if: "!inputs.package_only && runner.os == 'Linux'"
         env:
           FACADE_IT_ENGINE: ${{ matrix.engine }}
-        run: xvfb-run -a node build/out/test/integration/run.js 2>&1 | tee build/integration.log
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == pull_request && "$FACADE_PACKAGE_TARGET" == linux-x64 && "$FACADE_IT_ENGINE" == rust ]]; then
+            python -B ../ci/run_native_extension.py xvfb-run -a node build/out/test/integration/run.js 2>&1 | tee build/integration.log
+          else
+            xvfb-run -a node build/out/test/integration/run.js 2>&1 | tee build/integration.log
+          fi
       - name: Isolated editor journeys on Windows
         if: "!inputs.package_only && runner.os == 'Windows'"
         env:
@@ -222,6 +259,9 @@ jobs:
           name: editor-tests-${{ matrix.target }}-${{ matrix.engine }}
           path: extension/build/integration.log
           if-no-files-found: ignore
+      - name: Record the tested native package digests
+        if: github.event_name == 'pull_request' && matrix.engine == 'old'
+        run: node scripts/native-package-evidence.mjs stamp build --target "$FACADE_PACKAGE_TARGET"
       - name: Keep tested packages
         if: matrix.engine == 'old'
         uses: actions/upload-artifact@v4
@@ -230,6 +270,8 @@ jobs:
           path: |
             extension/build/vsix/*.vsix
             extension/build/core/facade-core-*
+            extension/build/core/SHA256SUMS
+            extension/build/native-package-evidence.json
           if-no-files-found: error
       - name: Record the checked-out source tree
         if: "!inputs.package_only && matrix.target == 'linux-x64' && matrix.engine == 'old'"

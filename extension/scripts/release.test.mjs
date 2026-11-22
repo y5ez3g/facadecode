@@ -1,24 +1,32 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { test } from 'node:test';
 import mirrorWorker from '../../.github/release-mirror/worker.mjs';
+import { coreArchive, corePrograms } from '../../core/scripts/package-core.mjs';
 import {
 	candidateNeedsBuild, checksumsText, collectFromRun, fileFor, marketplaceFile, parseChecksums, releaseNotes,
 	requiredReleaseFiles, sha256, storeOrder, targetsFor,
 	validateCatalog, versionOfTag
 } from './release.mjs';
 import { publishMirror, pruneMirror } from './release-mirror.mjs';
+import { captureNativePackage, evidenceFile, verifyNativePackages } from './native-package-evidence.mjs';
 
 const catalog = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '../archive/catalog.json'), 'utf8'));
 
 /** A stored (uncompressed) ZIP with the manifests a VSIX carries. */
-function vsix(file, { name, version, target }) {
-	const entries = [
+function vsix(file, { name, version, target, programs = [] }) {
+	writeZip(file, [
 		['extension/package.json', JSON.stringify({ publisher: 'facade', name, version })],
-		['extension.vsixmanifest', `<Identity Id="${name}" Version="${version}" Publisher="facade"${target ? ` TargetPlatform="${target}"` : ''} />`]
-	].map(([entry, text]) => [Buffer.from(entry), Buffer.from(text)]);
+		['extension.vsixmanifest', `<Identity Id="${name}" Version="${version}" Publisher="facade"${target ? ` TargetPlatform="${target}"` : ''} />`],
+		...programs.map(([program, bytes]) => ['extension/bin/' + program, bytes]),
+	]);
+}
+
+function writeZip(file, content) {
+	const entries = content.map(([entry, bytes]) => [Buffer.from(entry), Buffer.from(bytes)]);
 	const locals = [], centrals = [];
 	let offset = 0;
 	for (const [entry, data] of entries) {
@@ -214,6 +222,71 @@ test('a run missing a platform, or holding another version or a mislabelled pack
 	const twice = ciRun('0.1.2');
 	vsix(path.join(twice, 'extra', fileFor('0.1.2', 'linux-x64')), { name: 'facadecode', version: '0.1.2', target: 'linux-x64' });
 	assert.throws(() => collectFromRun('0.1.2', twice), /packaged more than once/);
+});
+
+test('the candidate verifier requires every native target and the tested bytes for this source and attempt', t => {
+	const version = '0.1.6';
+	const source = { revision: 'a'.repeat(40), tree: 'b'.repeat(40), run: '1234', attempt: '1' };
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'facade-candidate-evidence-'));
+	t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+	const targets = targetsFor(version).filter(target => target !== 'universal');
+	const programsFor = target => corePrograms(target).map(program => [program, target + ' ' + program]);
+	const writeArchive = (target, programs, license = 'fixture license') => {
+		const core = path.join(directory, 'extension-' + target, 'core');
+		fs.mkdirSync(core, { recursive: true });
+		const name = coreArchive(target);
+		const archive = path.join(core, name);
+		const files = [...programs, ['VERSION', version + '\n'], ['LICENSE.txt', license]];
+		if (target.startsWith('win32-')) {
+			writeZip(archive, files);
+		} else {
+			const scratch = fs.mkdtempSync(path.join(directory, 'tar-'));
+			try {
+				for (const [file, bytes] of files) fs.writeFileSync(path.join(scratch, file), bytes);
+				execFileSync('tar', ['-czf', archive, '-C', scratch, ...files.map(([file]) => file)]);
+			} finally {
+				fs.rmSync(scratch, { recursive: true, force: true });
+			}
+		}
+		fs.writeFileSync(path.join(core, 'SHA256SUMS'), sha256(fs.readFileSync(archive)) + '  ' + name + '\n');
+	};
+	for (const target of targets) {
+		const root = path.join(directory, 'extension-' + target);
+		const programs = programsFor(target);
+		vsix(path.join(root, 'vsix', fileFor(version, target)), { name: 'facadecode', version, target, programs });
+		vsix(path.join(root, 'vsix', fileFor(version, 'universal')), { name: 'facadecode-window', version });
+		writeArchive(target, programs);
+		fs.writeFileSync(path.join(root, evidenceFile), JSON.stringify(captureNativePackage(root, target, version, source)));
+	}
+	assert.deepStrictEqual(verifyNativePackages(directory, version, source).map(record => record.target), targets);
+	assert.throws(() => verifyNativePackages(directory, version, { ...source, tree: 'c'.repeat(40) }), /stale candidate/);
+	assert.throws(() => verifyNativePackages(directory, version, { ...source, attempt: '2' }), /stale candidate/);
+
+	const root = path.join(directory, 'extension-linux-x64');
+	const moved = path.join(directory, 'withheld');
+	fs.renameSync(root, moved);
+	assert.throws(() => verifyNativePackages(directory, version, source), /Missing or unexpected native package targets/);
+	fs.renameSync(moved, root);
+
+	const filename = coreArchive('linux-x64');
+	const archive = path.join(root, 'core', filename);
+	const original = fs.readFileSync(archive);
+	fs.writeFileSync(archive, 'altered archive');
+	assert.throws(() => verifyNativePackages(directory, version, source), /differs from its candidate SHA256SUMS/);
+	writeArchive('linux-x64', programsFor('linux-x64'), 'changed license');
+	assert.throws(() => verifyNativePackages(directory, version, source), /package bytes differ from the tested files/);
+	writeArchive('linux-x64', programsFor('linux-arm64'));
+	assert.throws(() => captureNativePackage(root, 'linux-x64', version, source), /facade differs from the paired VSIX/);
+	fs.writeFileSync(archive, original);
+	fs.writeFileSync(path.join(root, 'core', 'SHA256SUMS'), sha256(original) + '  ' + filename + '\n');
+
+	const window = path.join(root, 'vsix', fileFor(version, 'universal'));
+	const alternate = path.join(root, 'vsix', 'alternate-window.vsix');
+	fs.copyFileSync(window, alternate);
+	assert.throws(() => verifyNativePackages(directory, version, source), /Missing or unexpected files in vsix/);
+	fs.unlinkSync(alternate);
+	vsix(window, { name: 'facadecode-window', version: '0.1.5' });
+	assert.throws(() => verifyNativePackages(directory, version, source), /wrong version/);
 });
 
 test('the stores get the Window Component before the packages that install it', () => {

@@ -319,6 +319,36 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 		shim.write([{ jsonrpc: '2.0', id: 'b1', method: 'ping' }, { jsonrpc: '2.0', method: 'notifications/initialized' }]);
 		await until('the batch answer', () => shim.messages.some(message => Array.isArray(message) && message.length === 1 && message[0].id === 'b1'));
 		assert.strictEqual(await shim.end(), 0);
+
+		// A person-started CLI in the same folder holds the server entry but has no managed run.
+		const runless = new McpClient({ [SHIM_PTYD]: socketPath });
+		shims.push(runless);
+		const hello = await runless.request('initialize', { protocolVersion: '2025-06-18' }) as { result: { instructions: string } };
+		assert.match(hello.result.instructions, /not started by Facade Code/);
+		assert.deepStrictEqual((await runless.request('tools/list', {})).result, { tools: [] });
+		assert.strictEqual(await runless.end(), 0);
+	});
+
+	test('id-less initialized and cancelled frames neither reply nor reach ptyd during a pending send', async () => {
+		const fake = await ptyd();
+		const shim = shimOf('run-notifications');
+		await shim.request('initialize', { protocolVersion: '2025-06-18' });
+		const pending = shim.call('send_message', { to: '#a1', text: 'pending text' }, 'original-send');
+		const request = await until('the original send over the ptyd socket', () => fake.calls()[0]);
+		assert.strictEqual(request.params.callId, 'original-send');
+		const before = [...fake.asked];
+		const received = shim.messages.length;
+		shim.write({ jsonrpc: '2.0', method: 'notifications/initialized' });
+		shim.write({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 'original-send' } });
+		const ping = { jsonrpc: '2.0', id: 'ping-after-notifications', result: {} };
+		assert.deepStrictEqual(await shim.request('ping', undefined, ping.id), ping);
+		assert.deepStrictEqual(shim.messages.slice(received), [ping]);
+		const settled = answerOf('the original send settled');
+		fake.answer(request, settled);
+		assert.deepStrictEqual((await pending).structuredContent, settled.structured);
+		assert.strictEqual(await shim.end(), 0);
+		assert.deepStrictEqual(shim.messages.slice(received).map(each => each.id), [ping.id, 'original-send']);
+		assert.deepStrictEqual(fake.asked, before);
 	});
 
 	test('with nothing listening on ptyd\'s socket, or no run to speak for, a call is an error result that had no effect', async () => {
@@ -329,14 +359,6 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 		const runless = new McpClient({ [SHIM_PTYD]: socketPath });
 		shims.push(runless);
 		assert.deepStrictEqual(failureOf(await runless.call('list_agents', {})), ['UNAVAILABLE', 'configuration_invalid', 'none']);
-	});
-
-	test('started without a run to speak for - by a session the person started in a folder that holds a running agent\'s server entry - it lists no tools and says why (CLIS-2.2)', async () => {
-		const runless = new McpClient({ [SHIM_PTYD]: socketPath });
-		shims.push(runless);
-		const hello = await runless.request('initialize', { protocolVersion: '2025-06-18' }) as { result: { instructions: string } };
-		assert.match(hello.result.instructions, /not started by Facade Code/);
-		assert.deepStrictEqual((await runless.request('tools/list', {}) as { result: unknown }).result, { tools: [] });
 	});
 
 	test('a call goes to ptyd as the run\'s shim and the window\'s answer comes back as an MCP result; concurrent calls are matched by id; the hello comes once per connection', async () => {

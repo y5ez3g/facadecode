@@ -35,6 +35,11 @@ EDITOR_PASS = 'Facade acceptance test '
 REMOTE_EDITOR_EVIDENCE = 'remote editor evidence '
 REMOTE_WORKTREE_SCENARIO = 'a_remote_worktree_is_shared_by_the_shell_and_editor'
 REPLACEMENT_JOURNEY = 'replacement-in-flight'
+PACKAGE_INPUTS = {
+    REPLACEMENT_JOURNEY: ('prior', 'candidate'),
+    'install-pair': ('candidate',),
+    'upgrade-pair': ('prior', 'candidate'),
+}
 PRIOR_VSIX_URL = 'https://github.com/y5ez3g/facadecode/releases/download/extension/0.1.5/'
 PRIOR_VSIX = {
     'facadecode-linux-x64-0.1.5.vsix': (829818, '9c5e719ff7101a45dded2fae0a2923f521a1c2aceb179b5d6859acf11c0dc523'),
@@ -87,8 +92,10 @@ def make_plan(root, pilots, run_id):
         'implementation': digest(implementation),
         'cases': pilots,
     }
-    if any(binding.get('journey') == REPLACEMENT_JOURNEY for binding in pilots.values()):
+    packages = {stage for binding in pilots.values() for stage in PACKAGE_INPUTS.get(binding.get('journey'), ())}
+    if 'prior' in packages:
         plan['prior_vsix'] = {name: sha for name, (_, sha) in PRIOR_VSIX.items()}
+    if 'candidate' in packages:
         extension = read_json(root / 'extension/package.json')
         window = read_json(root / 'extension/window/package.json')
         plan['candidate_vsix'] = [
@@ -109,7 +116,7 @@ def execution_groups(cases):
     groups = {}
     for case_id, binding in cases.items():
         runner = binding['runner']
-        if runner == 'core-scenario':
+        if runner in ('core-scenario', 'extension-unit'):
             key = (runner, binding['target'])
         else:
             key = (runner, binding['journey'], binding['engine'], binding['built_in'])
@@ -165,6 +172,8 @@ def observed_pass(bindings, output):
     binding = bindings[0]
     if binding['runner'] == 'core-scenario':
         return observed_core_tests([entry['name'] for entry in bindings], output)
+    if binding['runner'] == 'extension-unit':
+        return observed_mocha_tests([entry['name'] for entry in bindings], binding['target'], output)
     markers = [line.removeprefix(EDITOR_PASS) for line in output.splitlines() if line.startswith(EDITOR_PASS)]
     try:
         records = [json.loads(marker, object_pairs_hook=json_object) for marker in markers]
@@ -182,13 +191,53 @@ def observed_pass(bindings, output):
         binding['journey'] != 'remote-worktree' or observed_remote_worktree(output)
     )
 
+def observed_mocha_tests(names, target, output):
+    try:
+        report = json.loads(output, object_pairs_hook=json_object)
+    except ValueError:
+        return False
+    if not isinstance(report, dict) or not isinstance(report.get('stats'), dict):
+        return False
+    counts = [report['stats'].get(key) for key in ('tests', 'passes', 'failures', 'pending')]
+    if not all(type(count) is int for count in counts) or counts != [len(names), len(names), 0, 0]:
+        return False
+    if report.get('failures') != [] or report.get('pending') != []:
+        return False
+    spec = ('build', 'out', 'test', f'{target}.js')
+    for field in ('tests', 'passes'):
+        rows = report.get(field)
+        if not isinstance(rows, list) or not all(
+            isinstance(row, dict) and isinstance(row.get('fullTitle'), str) and row.get('err') == {}
+            and isinstance(row.get('file'), str) and Path(row['file']).is_absolute()
+            and Path(row['file']).parts[-len(spec):] == spec
+            for row in rows
+        ):
+            return False
+        if sorted(row['fullTitle'] for row in rows) != sorted(names):
+            return False
+    return True
+
+
+def mocha_pattern(names):
+    patterns = [re.sub(r'([\\.^$|?*+()[\]{}])', r'\\\1', name) for name in names]
+    return '^(?:' + '|'.join(patterns) + ')$'
+
+
 def command_for(root, bindings, log_path, vscode, env):
     binding = bindings[0]
     if binding['runner'] == 'core-scenario':
         return root / 'core', [
-            'sh', 'scripts/test-all.sh', str(log_path), '--', '--locked', '-p', 'facade-scenarios',
+            'sh', 'scripts/test-all.sh', str(log_path.with_suffix('')), '--', '--locked', '-p', 'facade-scenarios',
             '--test', binding['target'], '--', '--exact', '--test-threads=1',
             *(entry['name'] for entry in bindings),
+        ], env
+    names = [entry['name'] for entry in bindings]
+    if binding['runner'] == 'extension-unit':
+        return root / 'extension', [
+            'node', 'node_modules/mocha/bin/mocha.js', '--ui', 'tdd', '--timeout', '30000',
+            '--require', 'build/out/test/setup.js', '--grep', mocha_pattern(names),
+            '--reporter', 'json', '--reporter-option', f'output={log_path}',
+            f'build/out/test/{binding["target"]}.js',
         ], env
     editor_env = {
         **env,
@@ -198,9 +247,7 @@ def command_for(root, bindings, log_path, vscode, env):
         'FACADE_IT_BUILT_IN': binding['built_in'],
     }
     if binding['journey'] in MOCHA_JOURNEYS:
-        names = [entry['name'] for entry in bindings]
-        patterns = [re.sub(r'([\\.^$|?*+()[\]{}])', r'\\\1', name) for name in names]
-        editor_env['FACADE_IT_GREP'] = '^(?:' + '|'.join(patterns) + ')$'
+        editor_env['FACADE_IT_GREP'] = mocha_pattern(names)
         editor_env['FACADE_IT_EXPECT_TESTS'] = json.dumps(names)
     else:
         editor_env['FACADE_IT_EXPECT_DRIVER'] = binding['name']
@@ -313,13 +360,15 @@ def editor_identity(vscode):
 def binding_paths(directory, bindings):
     base = directory / digest(bindings)[:12]
     console = base.with_suffix('.console.log')
-    observation = base.with_suffix('.log.full') if bindings[0]['runner'] == 'core-scenario' else console
+    suffixes = {'core-scenario': '.log.full', 'extension-unit': '.mocha.json'}
+    observation = base.with_suffix(suffixes.get(bindings[0]['runner'], '.console.log'))
     return observation, console, base.with_suffix('.complete.json')
 
 
-def update_package_digests(plan, output_dir):
+def update_package_digests(plan, output_dir, stages):
     packages = {}
-    for stage, names in (('prior', plan['prior_vsix']), ('candidate', plan['candidate_vsix'])):
+    for stage in stages:
+        names = plan[f'{stage}_vsix']
         folder = output_dir / f'{stage}-vsix'
         if folder.is_symlink() or not folder.is_dir():
             raise AcceptanceError(f'missing or invalid {stage} update package directory')
@@ -330,7 +379,7 @@ def update_package_digests(plan, output_dir):
             if name != Path(name).name or not file.is_file() or file.is_symlink():
                 raise AcceptanceError(f'missing or invalid {stage} update package {name}')
             packages[stage][name] = hashlib.sha256(file.read_bytes()).hexdigest()
-    if packages['prior'] != plan['prior_vsix']:
+    if 'prior' in packages and packages['prior'] != plan['prior_vsix']:
         raise AcceptanceError('the prior update packages do not match the pinned digests')
     return packages
 
@@ -344,8 +393,9 @@ def completion_record(plan, bindings, observation, console):
         'observation': {'name': observation.name, 'sha256': hashlib.sha256(observation.read_bytes()).hexdigest()},
         'cleanup': {'name': console.name, 'sha256': hashlib.sha256(console.read_bytes()).hexdigest()},
     }
-    if bindings[0].get('journey') == REPLACEMENT_JOURNEY:
-        record['vsix'] = update_package_digests(plan, observation.parent)
+    stages = PACKAGE_INPUTS.get(bindings[0].get('journey'))
+    if stages:
+        record['vsix'] = update_package_digests(plan, observation.parent, stages)
     return record
 
 
@@ -423,7 +473,7 @@ def run_binding(root, bindings, output_dir, vscode, env, cancelled=None):
     runtime_dir = isolated / 'runtime'
     runtime_dir.mkdir(mode=0o700)
     cwd, args, test_env = command_for(
-        root, bindings, output.with_suffix(''), vscode,
+        root, bindings, output, vscode,
         {**env, 'CI_ACCEPTANCE_ROOT': str(isolated), 'TMPDIR': str(isolated), 'XDG_RUNTIME_DIR': str(runtime_dir)},
     )
     status = 'interrupted'
@@ -451,7 +501,7 @@ def run_binding(root, bindings, output_dir, vscode, env, cancelled=None):
 
 def binding_product(binding):
     # The remote worktree case needs both products, so its editor binding runs with the editor job.
-    return 'extension' if binding['runner'] == 'extension-editor' else 'core'
+    return 'extension' if binding['runner'] in ('extension-editor', 'extension-unit') else 'core'
 
 
 def run_pilots(root, plan, product, output_dir, vscode=None, *, editor_workers=2):
@@ -480,20 +530,22 @@ def run_pilots(root, plan, product, output_dir, vscode=None, *, editor_workers=2
             raise AcceptanceError(f'expected Node {plan["node_major"]}, observed {node}')
         (output_dir / 'node-version.txt').write_text(node + '\n')
     started = time.monotonic()
-    needs_update = any(binding.get('journey') == REPLACEMENT_JOURNEY for binding in selected.values())
+    package_stages = sorted({
+        stage for binding in selected.values() for stage in PACKAGE_INPUTS.get(binding.get('journey'), ())
+    })
     released = output_dir / 'prior-vsix'
-    if needs_update:
+    if 'prior' in package_stages:
         download_prior_vsix(released)
-    prepared = build_extension(root, env, output_dir, package_update=needs_update) if product == 'extension' else 'pass'
+    prepared = build_extension(root, env, output_dir, package_update='candidate' in package_stages) if product == 'extension' else 'pass'
     candidate_packages = output_dir / 'candidate-vsix'
-    staged_digests = None
-    if needs_update and prepared == 'pass':
+    staged_digests = {}
+    if 'candidate' in package_stages and prepared == 'pass':
         candidate_packages.mkdir()
         for name in plan['candidate_vsix']:
             if name != Path(name).name:
                 raise AcceptanceError(f'invalid candidate update package name {name}')
             shutil.copyfile(root / 'extension' / 'build' / 'vsix' / name, candidate_packages / name)
-        staged_digests = update_package_digests(plan, output_dir)
+        staged_digests = update_package_digests(plan, output_dir, package_stages)
     if product == 'extension' and prepared == 'pass' and vscode is None:
         print(f'Downloading official VS Code {EDITOR["version"]}', flush=True)
         vscode = download_editor(root, env, output_dir)
@@ -507,15 +559,17 @@ def run_pilots(root, plan, product, output_dir, vscode=None, *, editor_workers=2
         print(f'Running {bindings[0]["runner"]} {names}', flush=True)
         started = time.monotonic()
         if prepared == 'pass':
-            group_env = env
-            if bindings[0].get('journey') == REPLACEMENT_JOURNEY:
-                group_env = {**env, 'FACADE_IT_RELEASED': str(released),
-                             'FACADE_IT_CURRENT': str(candidate_packages)}
+            stages = PACKAGE_INPUTS.get(bindings[0].get('journey'), ())
+            group_env = env.copy()
+            if 'prior' in stages:
+                group_env['FACADE_IT_RELEASED'] = str(released)
+            if 'candidate' in stages:
+                group_env['FACADE_IT_CURRENT'] = str(candidate_packages)
             status, log = run_binding(root, bindings, output_dir, vscode, group_env, cancelled)
             if status == 'pass':
                 observation, console, completion = binding_paths(output_dir, bindings)
                 record = completion_record(plan, bindings, observation, console)
-                if 'vsix' in record and record['vsix'] != staged_digests:
+                if stages and record['vsix'] != {stage: staged_digests[stage] for stage in stages}:
                     status = 'update-packages-changed'
                 else:
                     completion.write_text(json.dumps(record, indent=2) + '\n')

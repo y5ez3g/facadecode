@@ -16,7 +16,7 @@ import type { OwnerClaim } from '../../base/ownership';
 import { ptydRecords, recordedPtyds } from '../../base/ptydRegistry';
 import { PtydClient } from '../../host/execution/ptydClient';
 import { isCurrentOwner, writeAsOwner } from '../../record/ownership';
-import type { RustPin } from '../../core/ports';
+import type { Pin, RustPin } from '../../core/ports';
 import { freePort, Workbench } from './cdpInput';
 import { callInCore, coreCall, coreListens, coreSocket, detachedStartReference, endEditors, helloInCore, normalizeDriveLetter, until } from './editors';
 import type { AttachView, SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './rustMultiWindowDriver';
@@ -47,7 +47,7 @@ interface WindowFiles {
 interface DrivenWindow {
 	readonly ready: WindowReady;
 	act<Result>(action: WindowAction): Promise<Result>;
-	close(): Promise<void>;
+	close(options?: { readonly waitForExit: boolean }): Promise<void>;
 	workbench(): Promise<Workbench>;
 }
 
@@ -101,9 +101,9 @@ export async function withRustWindows(files: WindowFiles, start: StartEditor, jo
 		return {
 			ready, act,
 			workbench: () => Workbench.connect(port, path.basename(folder)),
-			close: async () => {
+			close: async (options) => {
 				await act<boolean>({ kind: 'close' });
-				if (process.platform !== 'win32') {
+				if (process.platform !== 'win32' && !options?.waitForExit) {
 					await endEditors([editor]);
 					return;
 				}
@@ -143,11 +143,17 @@ export async function staleOwner(open: OpenWindow, folder: string, env: NodeJS.P
 	for (const run of runs) { await first.act({ kind: 'pin-owned', run }); }
 	const oldPage = await first.act<string>({ kind: 'panel-generation' });
 	const previous = claim();
+	const stateFile = path.join(home, 'workspaces', previous.owner, 'workspace-state.json');
+	const savedPins = (): readonly string[] => {
+		const state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as { readonly 'facade.pins'?: readonly Pick<Pin, 'id'>[] };
+		return (state['facade.pins'] ?? []).map(pin => pin.id);
+	};
 	const services = recordedPtyds(ptydRecords(path.join(home, 'ptyd')));
 	assert.strictEqual(services.length, 1, 'the two actual fake CLIs use one old supervisor');
 	const service = services[0];
 	const ptyd = await PtydClient.connect(service.socket, '', path.join(home, 'ptyd', 'unused.log'), { start: false, protocol: service.protocol });
-	const snapshot = async () => (await ptyd.request('list', { owner: previous.owner })).map(row => ({
+	const list = () => ptyd.request('list', { owner: previous.owner });
+	const snapshot = async () => (await list()).map(row => ({
 		run: row.run, pid: row.pid, cwd: row.cwd, startedAt: row.startedAt, exited: row.exited, name: row.meta.name
 	})).sort((a, b) => a.run.localeCompare(b.run));
 	try {
@@ -158,7 +164,16 @@ export async function staleOwner(open: OpenWindow, folder: string, env: NodeJS.P
 			assert.ok(recorded > 0 && isProcessRunning(recorded));
 			assert.strictEqual(original.find(row => row.run === agent.runId)?.pid, recorded);
 		}
-		await first.close();
+		const pins = await until('both runs’ durable Pins', async () => {
+			const saved = savedPins();
+			const live = await list();
+			const linked = runs.map(run => live.find(row => row.run === run)?.meta.pin);
+			return saved.length === runs.length && new Set(linked).size === runs.length
+				&& linked.every(id => typeof id === 'string' && saved.includes(id)) ? saved : undefined;
+		});
+		await first.close({ waitForExit: true });
+		assert.deepStrictEqual(savedPins(), pins, 'the predecessor saved both exact Pins through normal shutdown');
+		console.log(`  ✔ Both original Pins survived the predecessor’s clean exit (${pins.join(', ')})`);
 		const successor = await open(folder, 'new');
 		assert.strictEqual(successor.ready.machineId, null);
 		assert.notStrictEqual(successor.ready.hostPid, first.ready.hostPid);
@@ -167,7 +182,6 @@ export async function staleOwner(open: OpenWindow, folder: string, env: NodeJS.P
 		assert.strictEqual(current.generation, previous.generation + 1);
 		assert.notStrictEqual(current.token, previous.token);
 		assert.strictEqual(isCurrentOwner(current, home), true);
-		const stateFile = path.join(home, 'workspaces', current.owner, 'workspace-state.json');
 		const before = fs.readFileSync(stateFile);
 		assert.strictEqual(writeAsOwner(previous, home, () => assert.fail('a stale writer reached the current workspace record')), false);
 		assert.deepStrictEqual(fs.readFileSync(stateFile), before);

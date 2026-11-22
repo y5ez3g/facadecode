@@ -11,6 +11,7 @@ import * as vscode from 'vscode';
 import { piSessionFolderName } from '../../clis/history/pi';
 import { BUILT_IN_NAMES } from '../../base/names';
 import type { PanelState } from '../../webview/protocol';
+import type { Pin } from '../../core/ports';
 import { linesOf } from '../detailLines';
 import { unspun } from '../../base/tabSpinner';
 import { observeAcceptanceEngine } from './acceptanceEngine';
@@ -546,6 +547,66 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			'location', [card.runId], 1, 0, [`No agents found in "${filtered.filter?.label}".`], 'noAgents'
 		]);
 	});
+
+	if (!RUST && CLI === 'claude') {
+		test('PANEL-1.3: the Webview Pin and Unpin buttons persist only the exact card’s native session', async function () {
+			const cards: PanelState['cards'][number][] = [];
+			const home = path.join(process.env.FACADE_HOME!, 'extension');
+			const uri = vscode.workspace.workspaceFolders![0].uri.toString();
+			const ledgerKey = process.platform === 'linux' ? uri : uri.toLowerCase();
+			const readJson = <T>(file: string): T | undefined => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) as T : undefined;
+			const saved = (): readonly Pin[] => {
+				const workspace = readJson<{ bindings: Record<string, string> }>(path.join(home, 'workspace-uris.json'))?.bindings[ledgerKey];
+				if (!workspace) { return []; }
+				const file = path.join(home, 'workspaces', workspace, 'workspace-state.json');
+				return readJson<{ 'facade.pins'?: readonly Pin[] }>(file)?.['facade.pins'] ?? [];
+			};
+			const selector = (run: string, pinned: boolean) =>
+				'.agent[data-run=' + JSON.stringify(run) + '] .pin-button:not([hidden])[data-look="' + (pinned ? 'filled' : 'outline') + '"]';
+			const rendered = async (run: string, pinned: boolean) =>
+				(await vscode.commands.executeCommand<string[]>('facade.probe', { op: 'read', selector: selector(run, pinned) }))?.length === 1;
+			const changePin = async (run: string, wasPinned: boolean, wanted: readonly string[]) => {
+				const before = await state();
+				await until('the exact rendered Pin button', async () => await rendered(run, wasPinned) || undefined);
+				assert.strictEqual(await vscode.commands.executeCommand('facade.probe', { op: 'click', selector: selector(run, wasPinned) }), true);
+				return until('the new Webview state and saved Pins for the expected sessions', async () => {
+					const now = await state();
+					const pins = saved();
+					const card = now.cards.find(each => each.runId === run);
+					if (now.revision > before.revision && card && !!card.pinned !== wasPinned && await rendered(run, !wasPinned) &&
+						pins.length === wanted.length && pins.every((pin, index) => pin.conversation.sessionId === wanted[index])) {
+						return pins;
+					}
+					return undefined;
+				});
+			};
+			try {
+				cards.push(await newCard());
+				cards.push(await newCard());
+				const [first, second] = cards;
+				observeAcceptanceEngine(this, first);
+				const [firstSession, secondSession] = await Promise.all(cards.map(card => until('its exact native conversation can be pinned', async () => {
+					const session = readJson<{ session_id?: string }>(path.join(home, 'runs', card.runId + '.session.json'))?.session_id;
+					return typeof session === 'string' && session && (await state()).cards.some(each => each.runId === card.runId && each.menu.pin)
+						? session : undefined;
+				})));
+				assert.notStrictEqual(firstSession, secondSession);
+				assert.deepStrictEqual(saved(), []);
+				await changePin(first.runId, false, [firstSession]);
+				assert.ok(await rendered(second.runId, false), 'the neighboring card remains unpinned');
+				const both = await changePin(second.runId, false, [firstSession, secondSession]);
+				const remaining = await changePin(first.runId, true, [secondSession]);
+				assert.deepStrictEqual(remaining, [both[1]], 'Unpin preserves the neighboring card’s exact Pin');
+				assert.ok(await rendered(second.runId, true), 'the Webview still renders its neighboring Pin');
+				console.log('  Webview Pin observation ' + JSON.stringify({
+					target: { run: first.runId, session: firstSession, pin: both[0].id },
+					retained: { run: second.runId, session: secondSession, pin: remaining[0].id },
+				}));
+			} finally {
+				await Promise.all(cards.map(card => stopAndHide(card.runId)));
+			}
+		});
+	}
 
 	test('CLIS-4.1, ARCHITECTURE-3.3: Show Agent Command Line shows each CLI as a start in this folder would have it, starting none; Show Agents Log shows the log', async function () {
 		// Once, with the first built-in: the documents are the window's, whatever the CLI

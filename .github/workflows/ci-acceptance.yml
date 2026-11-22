@@ -2,7 +2,7 @@ name: CI acceptance shadow
 
 on:
   pull_request:
-    paths:
+    paths: &acceptance-paths
       - 'ci/**'
       - 'core/**'
       - 'extension/**'
@@ -13,14 +13,19 @@ on:
       - '.github/workflows/core-check.yml'
       - '.github/workflows/extension-check.yml'
       - '.github/workflows/ci-acceptance.yml'
+      - '.github/workflows/extension-release.yml'
+      - '.github/release-mirror/**'
+  push:
+    branches: [main]
+    paths: *acceptance-paths
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: acceptance-shadow-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: acceptance-shadow-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   catalog:
@@ -46,7 +51,12 @@ jobs:
       - run: python3 -B -m unittest discover -s ci
       - name: Report catalog coverage
         shell: bash
-        run: python3 -B ci/acceptance.py catalog | tee -a "$GITHUB_STEP_SUMMARY"
+        run: |
+          base=()
+          if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == push ]]; then
+            base=(--base 'HEAD^1')
+          fi
+          python3 -B ci/acceptance.py catalog "${base[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Check the generated acceptance table
         run: |
           python3 -B ci/acceptance.py table > "$RUNNER_TEMP/CI-ACCEPTANCE.md"

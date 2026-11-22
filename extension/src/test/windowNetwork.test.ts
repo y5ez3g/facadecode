@@ -12,6 +12,7 @@ import { registerWindow, registryOf } from '../record/windowRegistry';
 import { tempDir } from './util';
 import { withModules } from './withModules';
 import { connectWithin } from '../base/connect';
+import { lineReader } from '../base/lines';
 
 const TOKEN_A = '11111111-1111-4111-8111-111111111111';
 const TOKEN_B = '22222222-2222-4222-8222-222222222222';
@@ -178,6 +179,51 @@ suite('Window network: window components register and carry requests between win
 		assert.deepStrictEqual([first, second], [{ ok: true, result: { agents: [AGENT], echoed: 1 } }, { ok: true, result: { agents: [AGENT], echoed: 2 } }]);
 	});
 
+	test('live socket replies match concurrent calls by ID in reverse completion order and ignore an unmatched ID', async () => {
+		const a = windowOf(TOKEN_A, 'Design', async () => undefined);
+		await a.start();
+		const peer = windowAddress(TOKEN_B);
+		const socketPath = windowSocketPath(home.dir, peer);
+		const completed: string[] = [];
+		const requests: { id: number; from: string; op: string; args: string }[] = [];
+		const connections = new Set<net.Socket>();
+		const server = net.createServer(socket => {
+			connections.add(socket);
+			socket.once('close', () => connections.delete(socket));
+			socket.on('data', lineReader(line => {
+				requests.push(JSON.parse(line) as typeof requests[number]);
+				if (requests.length === 2) {
+					const first = requests.find(each => each.args === 'first')!;
+					const second = requests.find(each => each.args === 'second')!;
+					for (const [id, result] of [[Math.max(first.id, second.id) + 1, 'unmatched'], [second.id, 'second'], [first.id, 'first']] as const) {
+						socket.write(JSON.stringify({ id, ok: true, result }) + '\n');
+					}
+				}
+			}, () => socket.destroy()));
+		});
+		try {
+			await new Promise<void>((resolve, reject) => {
+				server.once('error', reject);
+				server.listen(socketPath, resolve);
+			});
+			registerWindow(home.dir, { protocol: WINDOW_NETWORK_PROTOCOL, window: peer, socket: socketPath, pid: process.pid,
+				label: 'Backend', environment: 'local', agents: [], updatedAt: Date.now() });
+			const ask = (args: string) => a.route({ to: peer, op: 'call', args, deadlineMs: 5_000 }).then(result => {
+				completed.push(args);
+				return result;
+			});
+			const results = await Promise.all([ask('first'), ask('second')]);
+			assert.strictEqual(connections.size, 1, 'the concurrent requests share the same live peer');
+			assert.strictEqual(new Set(requests.map(each => each.id)).size, 2);
+			assert.deepStrictEqual(requests.map(each => [each.from, each.op, each.args]).sort(), [[a.window, 'call', 'first'], [a.window, 'call', 'second']]);
+			assert.deepStrictEqual(completed, ['second', 'first']);
+			assert.deepStrictEqual(results, [{ ok: true, result: 'first' }, { ok: true, result: 'second' }]);
+		} finally {
+			for (const socket of connections) { socket.destroy(); }
+			if (server.listening) { await new Promise<void>(resolve => server.close(() => resolve())); }
+		}
+	});
+
 	test('an expired connection wait never forwards later; a subsequent caller can use the shared connection', async () => {
 		let release!: () => void;
 		const gate = new Promise<void>(resolve => release = resolve);
@@ -267,15 +313,22 @@ suite('Window network: window components register and carry requests between win
 	test('a request answered later than its deadline times out, its effects unknown; the late answer goes nowhere', async () => {
 		let release!: () => void;
 		const a = windowOf(TOKEN_A, 'Design', async () => undefined);
-		const b = windowOf(TOKEN_B, 'Backend', request => request.args === 'slow' ? new Promise(resolve => release = () => resolve('late')) : Promise.resolve('quick'));
+		const served: unknown[] = [];
+		const b = windowOf(TOKEN_B, 'Backend', request => {
+			served.push(request.args);
+			return request.args === 'slow' ? new Promise(resolve => release = () => resolve('late')) : Promise.resolve('quick');
+		});
 		await a.start();
 		await b.start();
+		const expired = await a.route({ to: b.window, op: 'call', args: 'expired', deadlineMs: 0 });
+		assert.deepStrictEqual([expired.ok, !expired.ok && expired.reason, !expired.ok && expired.effects], [false, 'timeout', 'none']);
 		const response = await a.route({ to: b.window, op: 'call', args: 'slow', deadlineMs: 100 });
 		assert.deepStrictEqual([response.ok, !response.ok && response.reason, !response.ok && response.effects], [false, 'timeout', 'unknown']);
 		release();
 		await new Promise(resolve => setTimeout(resolve, 50));
 		// The late answer is taken for no other request: the next one gets its own answer
 		assert.deepStrictEqual(await a.route({ to: b.window, op: 'call', args: 'next', deadlineMs: 5_000 }), { ok: true, result: 'quick' });
+		assert.deepStrictEqual(served, ['slow', 'next'], 'the expired request was never dispatched');
 	});
 
 	test('a request under way when the other window goes may have acted there: unavailable, its effects unknown', async () => {
@@ -293,6 +346,9 @@ suite('Window network: window components register and carry requests between win
 		b.dispose();
 		const response = await pending;
 		assert.deepStrictEqual([response.ok, !response.ok && response.reason, !response.ok && response.effects], [false, 'window_unavailable', 'unknown']);
+		assert.ok(!a.directory().windows.some(each => each.window === b.window));
+		const absent = await a.route({ to: b.window, op: 'call', args: 'new', deadlineMs: 5_000 });
+		assert.deepStrictEqual([absent.ok, !absent.ok && absent.reason, !absent.ok && absent.effects], [false, 'window_unavailable', 'none']);
 	});
 
 	test('a window that goes unregisters at once, a later route finds nothing; started again with its token, it is reached again', async () => {
@@ -321,7 +377,11 @@ suite('Window network: window components register and carry requests between win
 
 	test('a request in another protocol, or incomplete, is answered with why and serves nothing', async () => {
 		const served: ServedRoute[] = [];
-		const b = windowOf(TOKEN_B, 'Backend', async request => { served.push(request); return 'served'; });
+		const b = windowOf(TOKEN_B, 'Backend', async request => {
+			served.push(request);
+			if ((request.args as { n?: number }).n === 4) { throw new Error('failed after dispatch'); }
+			return 'served';
+		});
 		await b.start();
 		const socket = net.connect(b.socketPath);
 		await new Promise<void>((resolve, reject) => { socket.once('connect', () => resolve()); socket.once('error', reject); });
@@ -340,16 +400,18 @@ suite('Window network: window components register and carry requests between win
 		socket.write(`${JSON.stringify({ id: 2, protocol: WINDOW_NETWORK_PROTOCOL, op: 'call', args: {}, deadlineMs: 1_000 })}\n`);
 		socket.write('not json\n');
 		socket.write(`${JSON.stringify({ id: 3, protocol: WINDOW_NETWORK_PROTOCOL, from: 'win-x', op: 'call', args: { n: 3 }, deadlineMs: 1_000 })}\n`);
+		socket.write(JSON.stringify({ id: 4, protocol: WINDOW_NETWORK_PROTOCOL, from: 'win-x', op: 'call', args: { n: 4 }, deadlineMs: 1_000 }) + '\n');
 		const deadline = Date.now() + 5_000;
-		while (answers.length < 3 && Date.now() < deadline) {
+		while (answers.length < 4 && Date.now() < deadline) {
 			await new Promise(resolve => setTimeout(resolve, 10));
 		}
 		socket.destroy();
 		assert.deepStrictEqual(answers.map(each => [(each as { id: number }).id, (each as { ok: boolean }).ok, (each as { reason?: string }).reason, (each as { effects?: string }).effects]), [
 			[1, false, 'protocol_incompatible', 'none'],
 			[2, false, 'failed', 'none'],
-			[3, true, undefined, undefined]
+			[3, true, undefined, undefined],
+			[4, false, 'failed', 'unknown']
 		]);
-		assert.deepStrictEqual(served, [{ from: 'win-x', op: 'call', args: { n: 3 }, deadlineMs: 1_000 }]);
+		assert.deepStrictEqual(served, [3, 4].map(n => ({ from: 'win-x', op: 'call', args: { n }, deadlineMs: 1_000 })));
 	});
 });

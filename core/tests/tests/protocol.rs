@@ -223,6 +223,44 @@ fn a_start_with_no_cli_or_no_terminal_size_is_an_invalid_argument() {
     assert_eq!(agents[0]["name"], "w1", "{listed}");
 }
 
+#[test]
+fn calls_return_only_the_correlated_result_or_error() {
+    let home = TestHome::new("callresponses");
+    let agent = home.start_fake("w1");
+    let mut wire = DaemonTestClient::open(&home);
+    let welcome = hello_v1(&mut wire);
+    let target = json!({ "machine_id": welcome["result"]["machine_id"], "agent_id": agent.id });
+    let call = |wire: &mut DaemonTestClient, id, op, args| {
+        wire.write(&json!({
+            "jsonrpc": "2.0", "id": id, "method": "call", "params": { "op": op, "args": args },
+        }));
+        let response = wire
+            .wait_for_response(id, LOADED_TIMEOUT)
+            .expect("the call was answered");
+        assert_eq!(response["jsonrpc"], "2.0", "{response}");
+        assert_eq!(response["id"], id, "{response}");
+        response
+    };
+
+    for (id, op, args) in [
+        (41, "agent.stop", json!({ "selection": [&target] })),
+        (72, "agent.teleport", json!({ "target": target })),
+    ] {
+        let invalid = call(&mut wire, id, op, args);
+        assert_eq!(invalid["error"]["code"], -32602, "{invalid}");
+        assert_eq!(error_reason(&invalid), "invalid_argument", "{invalid}");
+        assert!(invalid.get("result").is_none(), "{invalid}");
+    }
+    let valid = call(&mut wire, 113, "agent.inspect", json!({ "target": target }));
+    assert!(valid.get("error").is_none(), "{valid}");
+    let current = &valid["result"]["agent"];
+    assert_eq!(current["reference"], target, "{valid}");
+    assert_eq!(current["pid"], agent.pid, "{valid}");
+    assert_eq!(current["process"], "running", "{valid}");
+    assert!(alive(&agent.process));
+    assert_eq!(home.agents().len(), 1);
+}
+
 /// Malformed requests receive JSON-RPC errors with null IDs: -32700 for invalid JSON, -32600 for an
 /// invalid request. Reading continues. Oversized lines receive an error and close the connection.
 #[test]

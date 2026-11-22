@@ -13,17 +13,28 @@ CASE_NAME = re.compile(r'\x60([A-Za-z0-9._-]+)\x60')
 NAME = re.compile(r'[a-z][a-z0-9_]*', re.ASCII)
 FIELDS = {'id', 'assertion', 'stage', 'existing_tests'}
 MOCHA_JOURNEYS = ('journeys', 'cross')
+VSIX_REHEARSALS = ('install-pair', 'upgrade-pair')
+NATIVE_INSTALL_CASES = (
+    'core/p0/install-upgrade/install',
+    'core/p0/install-upgrade/bad-archive',
+)
+NATIVE_INSTALL_BINDING = {'runner': 'core-install', 'target': 'linux-x64', 'name': 'installed-candidate'}
+NATIVE_SSH_CASE = 'core/p0/remote-execution/real-ssh'
+NATIVE_SSH_BINDING = {'runner': 'core-ssh', 'target': 'linux-x64', 'name': 'real-machine-route'}
 REQUIRED_EDITOR_ROUTES = {
     'core/p0/remote-execution/remote-worktree': 'remote-worktree',
     'extension/p0/activation-shell/activation-failure': 'incompatible-activation',
     'extension/p0/window-replacement/replacement-in-flight': 'replacement-in-flight',
     'extension/p0/window-replacement/stale-owner': 'stale-owner',
+    'extension/p0/vsix-upgrade/install-pair': 'install-pair',
+    'extension/p0/vsix-upgrade/upgrade-pair': 'upgrade-pair',
 }
 EDITOR_DRIVERS = {
     'activation-failure': ('old', 'claude'),
     'conversion': ('old', 'claude'),
     'expiry': ('old', 'claude'),
     'incompatible-activation': ('none', 'claude'),
+    'install-pair': ('old', 'claude'),
     'lifetime': ('rust', 'claude'),
     'missing-session-unpin': ('rust', 'claude'),
     'multi-window': ('rust', 'claude'),
@@ -32,6 +43,7 @@ EDITOR_DRIVERS = {
     'shell-handoff': ('rust', 'codex'),
     'stale-owner': ('old', 'claude'),
     'switch': ('rust', 'claude'),
+    'upgrade-pair': ('old', 'claude'),
 }
 
 
@@ -81,6 +93,14 @@ def validate_binding(value, case_id):
     ):
         raise AcceptanceError(f'{case_id}: invalid test binding')
     runner = value.get('runner')
+    if case_id in NATIVE_INSTALL_CASES or runner == 'core-install':
+        if case_id not in NATIVE_INSTALL_CASES or value != NATIVE_INSTALL_BINDING:
+            raise AcceptanceError(f'{case_id}: invalid native install binding')
+        return value
+    if case_id == NATIVE_SSH_CASE or runner == 'core-ssh':
+        if case_id != NATIVE_SSH_CASE or value != NATIVE_SSH_BINDING:
+            raise AcceptanceError(f'{case_id}: invalid native SSH binding')
+        return value
     required_route = REQUIRED_EDITOR_ROUTES.get(case_id)
     if required_route and (runner != 'extension-editor' or value.get('journey') != required_route):
         raise AcceptanceError(f'{case_id}: requires the {required_route} editor route')
@@ -91,6 +111,11 @@ def validate_binding(value, case_id):
             or not all(NAME.fullmatch(value[key]) for key in ('target', 'name'))
         ):
             raise AcceptanceError(f'{case_id}: invalid Core scenario binding')
+    elif runner == 'extension-unit':
+        if (not case_id.startswith('extension/') or '/p0/' in case_id
+                or value.keys() != {'runner', 'target', 'name'}
+                or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*\.test', value['target'])):
+            raise AcceptanceError(f'{case_id}: invalid Extension unit binding')
     elif runner == 'extension-editor':
         _, boundary, _, name = case_id.split('/')
         variants = set((name if boundary == 'p0' else boundary).split('-')) & {'old', 'rust'}
@@ -153,15 +178,25 @@ def read_cases(root):
         if not isinstance(refs, list) or not all(reference_exists(root, ref) for ref in refs):
             raise AcceptanceError(f'{case_id}: invalid existing test reference')
         test = validate_binding(row['test'], case_id) if 'test' in row else None
+        if test == NATIVE_INSTALL_BINDING and row['stage'] not in ('native', 'release'):
+            raise AcceptanceError(f'{case_id}: native install requires a native or release stage')
+        if test == NATIVE_SSH_BINDING and row['stage'] != 'native':
+            raise AcceptanceError(f'{case_id}: native SSH requires a native stage')
+        if test and test.get('journey') in VSIX_REHEARSALS and row['stage'] != 'release':
+            raise AcceptanceError(f'{case_id}: installed VSIX rehearsal requires a release stage')
         cases[case_id] = Case(case_id, row['stage'], assertion, tuple(refs), test)
     missing = sorted(case.id for case in cases.values()
                      if case.stage == 'pr' and case.journey and case.test is None)
     if missing:
         raise AcceptanceError('missing executable PR P0 bindings:\n  ' + '\n  '.join(missing))
+    rehearsals = {case_id for case_id, route in REQUIRED_EDITOR_ROUTES.items() if route in VSIX_REHEARSALS}
+    require_same_ids(rehearsals, {
+        case.id for case in cases.values() if case.test and case.test.get('journey') in VSIX_REHEARSALS
+    }, 'executable VSIX release rehearsals')
     pilots = {
         case.id: case.test
         for case in sorted(cases.values(), key=lambda case: case.journey is None)
-        if case.stage == 'pr' and case.test is not None
+        if case.test is not None and (case.stage == 'pr' or case.test.get('journey') in VSIX_REHEARSALS)
     }
     require_same_ids(set(PRODUCTS), {cases[key].product for key in pilots}, 'pilot products')
     return cases, pilots

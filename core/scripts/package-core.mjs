@@ -12,10 +12,13 @@ import { filesOfZip } from '../../extension/scripts/native.mjs';
 export const coreArchive = target => 'facade-core-' + target + (target.startsWith('win32-') ? '.zip' : '.tar.gz');
 export const coreVersionFile = 'facade-core-version.txt';
 export const coreInstallers = ['install.sh', 'install.ps1'];
+export const corePrograms = target => target.startsWith('win32-')
+	? ['facade.exe', 'facade-mcp.exe', 'conpty/conpty.dll', 'conpty/OpenConsole.exe']
+	: ['facade', 'facade-mcp'];
 
 function packageCore(target, vsix, binDir, output) {
 	const windows = target.startsWith('win32-');
-	const programs = windows ? ['facade.exe', 'facade-mcp.exe', 'conpty/conpty.dll', 'conpty/OpenConsole.exe'] : ['facade', 'facade-mcp'];
+	const programs = corePrograms(target);
 	const version = workspaceVersion(fs.readFileSync(path.join(CORE, 'Cargo.toml'), 'utf8'));
 	let packaged;
 	if (vsix) {

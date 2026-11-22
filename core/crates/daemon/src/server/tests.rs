@@ -181,3 +181,69 @@ async fn a_connection_made_while_a_newer_facade_takes_over_is_sent_only_its_hell
     let answer = receive(&mut reader);
     assert_eq!(answer["error"]["data"]["reason"], "upgrading", "{answer}");
 }
+
+#[tokio::test(start_paused = true)]
+async fn an_idless_closing_ends_the_stream_before_the_fallback() {
+    let service = Arc::new(Hellos {
+        closing: watch::channel(None).0,
+        draining: Mutex::new(false),
+    });
+    let (mut acknowledged, mut ack_writer) = open(&service);
+    let (mut unacknowledged, mut control_writer) = open(&service);
+    let mut unacknowledged = tokio::task::spawn_blocking(move || {
+        // Blocking I/O prevents the paused Tokio clock from auto-advancing.
+        for (reader, writer) in [
+            (&mut acknowledged, &mut ack_writer),
+            (&mut unacknowledged, &mut control_writer),
+        ] {
+            reader
+                .get_ref()
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            send(writer, hello());
+            assert_eq!(receive(reader)["result"]["api_version"], 1);
+        }
+        let before_fallback = tokio::time::Instant::now();
+        *service.draining.lock().unwrap() = true;
+        service.closing.send_replace(Some("0.2.1".into()));
+        let announcement = json!({
+            "jsonrpc": "2.0", "method": "closing", "params": { "build": "0.2.1" }
+        });
+        assert_eq!(receive(&mut acknowledged), announcement);
+        assert_eq!(receive(&mut unacknowledged), announcement);
+
+        send(
+            &mut ack_writer,
+            json!({ "jsonrpc": "2.0", "method": "closing", "params": {} }),
+        );
+        assert_eq!(
+            acknowledged
+                .read_line(&mut String::new())
+                .expect("the id-less acknowledgment closes the stream with the clock paused"),
+            0
+        );
+
+        send(
+            &mut control_writer,
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "closing", "params": {} }),
+        );
+        let rejected = receive(&mut unacknowledged);
+        assert_eq!(rejected["id"], 2, "{rejected}");
+        assert_eq!(
+            rejected["error"]["message"], "closing is a notification",
+            "{rejected}"
+        );
+        assert_eq!(tokio::time::Instant::now(), before_fallback);
+        unacknowledged
+    })
+    .await
+    .unwrap();
+
+    // Without an accepted acknowledgment the same server eventually closes its control stream.
+    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::task::spawn_blocking(move || {
+        assert_eq!(unacknowledged.read_line(&mut String::new()).unwrap(), 0);
+    })
+    .await
+    .unwrap();
+}

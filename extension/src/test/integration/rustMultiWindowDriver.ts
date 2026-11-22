@@ -215,10 +215,24 @@ async function perform(action: Action): Promise<unknown> {
 		case 'stale-owner': {
 			const { previous, current, runs } = action;
 			const cards = () => state().then(panel => panel.cards.filter(each => runs.includes(each.runId)));
+			let observedCards: PanelState['cards'] = [];
 			await until('both old-engine Pins and their tabs to return', async () => {
 				const live = await cards();
-				return live.length === 2 && live.every(card => card.pinned && !card.orchestrator && hasAgentTab(card))
+				observedCards = live;
+				const tabs = live.map(agentTab);
+				return live.length === 2 && live.every(card => card.pinned && !card.orchestrator)
+					&& tabs.every(tab => tab !== undefined) && new Set(tabs).size === 2
 					&& vscode.window.terminals.length === 2 || undefined;
+			}).catch(error => {
+				const tabs = vscode.window.tabGroups.all.flatMap(group => group.tabs
+					.filter(tab => tab.input instanceof vscode.TabInputTerminal)
+					.map(tab => ({ label: tab.label, pinned: tab.isPinned, column: group.viewColumn })));
+				const terminals = vscode.window.terminals.map(terminal => ({ name: terminal.name, exit: terminal.exitStatus }));
+				const observed = observedCards.map(card => ({
+					run: card.runId, name: card.name, alias: card.alias, pinned: card.pinned === true,
+					engine: card.orchestrator ? 'rust' : 'old', matchedTab: agentTab(card)?.label
+				}));
+				throw new Error(`${(error as Error).message}: ${JSON.stringify({ expected: runs, cards: observed, tabs, terminals })}`);
 			});
 			const { page } = await panelGeneration();
 			assert.notStrictEqual(page, action.page);

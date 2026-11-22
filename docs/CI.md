@@ -407,19 +407,24 @@ local window transport, supervisor, Webview, MCP and settings from declarations 
 Extension API IDs identify the old or Rust engine when the implementations differ. The P0 table above
 declares each required journey case by name. Every bound PR row enters the plan automatically.
 The catalog rejects any PR P0 row without a binding. Discovery and the P0 table are independent of
-the test bindings. A coordinated reduction of a source registry and its catalog rows requires
-base-to-candidate review before protected enforcement.
+the test bindings. Both installed VSIX rehearsals also require a binding. A surviving obligation
+with a binding at the base commit must keep an executable test. The PR and main checks report
+changed assertions, stages and selectors and flag removed rows for review before protected enforcement.
 
 The [shadow workflow](../.github/workflows/ci-acceptance.yml) checks catalog drift and policy
 regressions on relevant PRs. Core source or CI policy changes select both Linux x64 pilots,
 because the editor also runs Core. Extension source changes select the editor pilot. Changes to
 the shared built-in names select both. Documentation updates run the catalog check. Selection
 compares the first parent of the PR merge tree to that tree and includes both paths of a rename.
-Manual runs select both pilots. The Extension job builds its test stage
+The same shadow checks run on the landed `main` tree after a relevant push. Manual and
+main runs select both pilots. A new PR head cancels the three earlier workflows of that PR.
+The Extension job builds its test stage
 once and uses official VS Code `1.105.1` with isolated profiles and fake CLIs. Core shares one run
 per scenario target and compares its exact test names. Extension shares a fixture for compatible
 Mocha selections with the same engine and route. Multi-window and lifetime drivers use separate
-fixtures. The native Extension matrix pins VS Code `1.147.0` and logs the build commit. Its
+fixtures. Shared Window Component and stdio contracts also use exact compiled Mocha selectors.
+The verifier requires their complete JSON report with the selected titles and zero failures or
+skips. The native Extension matrix pins VS Code `1.147.0` and logs the build commit. Its
 fixture build, editor download and test runtime are separate timed steps. The Intel Rust PR
 job can restore Cargo dependencies for an eligible build. It still builds from source and runs
 every case. The editor pilot runs the remote worktree case with two live Core Shell Attach clients
@@ -429,9 +434,40 @@ The window update installs the digest-pinned Extension 0.1.5 release into two is
 then installs packages built for the current candidate while the same routed message is pending.
 The run retains both VSIX pairs and verifies their digests with the completion record. It proves
 the component replacement and one terminal submission within the original deadline.
+A pair of Linux x64 release rehearsals uses those same verified inputs. The first installs the
+candidate into a fresh profile and exercises the installed New Agent command. The second
+reopens two actual Pins after updating both components, while the unpinned control stays hidden
+and all three original CLI processes and sessions survive. These rows record the unsigned Linux
+x64 candidate's installation and upgrade. Other release targets remain in their owning lanes.
 A separate two-window run checks that an old claim and an old Webview generation
 leave the current owner, both running agents and their terminals intact. The current page then
 changes only its selected agent.
+The Linux x64 PR package job also installs the candidate Core archive with default activation.
+It starts and queries a fake CLI through the installed Shell, checks the installed MCP relay,
+and proves two bad digests leave the install and the same live agent usable. The separate
+native receipt binds the archive and checksum file to the reviewed tree and run attempt. It
+records Linux x64 coverage for these two rows. The other targets and signed candidate are
+tracked in their native and release lanes.
+
+The Linux x64 Core job starts a separate loopback OpenSSH peer with disposable keys and homes.
+It checks the selected machine, compares the same agent and process through the peer and the
+forwarded route, and verifies that only the intended peer receives the exact input bytes.
+The job reconciles the original log and scoped cleanup with the three tested binaries and the
+GitHub run attempt.
+
+Each successful native PR package job records the VSIX pair, Core archive and checksum file
+digests with the checked-out revision, tree and GitHub attempt. Run
+\`extension/scripts/native-package-evidence.mjs verify\` on the downloaded \`extension-*\`
+artifacts to require an exact set of targets and recheck their bytes. The CI canary refuses a
+missing target, a wrong-version VSIX, a stale tree or attempt, and a changed archive even when
+its checksum file has also changed. It reads the Core archive's version and checks its executable
+members byte for byte against the paired VSIX. This verification reads the unsigned PR artifacts.
+
+The Linux x64 Rust PR matrix closes every editor and removes the exact managed agents before
+starting its next independent fixture. Only the previous fixture's daemon and Keeper idle waits
+overlap. The native supervisor joins those waits, checks both endpoints and verifies owned
+process cleanup. It reclaims the disposable scope on an interruption or a failed timeout.
+
 After one shared build, the runner executes at most two isolated editor groups at a time.
 An interrupt stops active owned sessions, cancels waiting groups and runs scoped cleanup.
 Verify requires results, original logs and a post-cleanup record for every
@@ -458,6 +494,16 @@ attempt=$(basename "$work")
 python3 -B ci/acceptance.py --run-id "$attempt" run --product core --output "$work/core"
 python3 -B ci/acceptance.py --run-id "$attempt" run --product extension --output "$work/extension"
 python3 -B ci/acceptance.py --run-id "$attempt" verify "$work/core/receipt.json" "$work/extension/receipt.json"
+```
+
+To compare hosted runs, pass the full candidate head and each applicable workflow's run ID to
+`ci/github_timing.py`. It reads queue and step timestamps, preserves first-attempt job outcomes
+when a workflow is rerun, and rejects a different head. Retain the JSON record with the case
+receipts. Its wall clock starts at workflow creation. The eligibility and denominator for the
+steady-state SLO are defined above. [GitHub Actions jobs API](https://docs.github.com/en/rest/actions/workflow-jobs)
+
+```sh
+python3 -B ci/github_timing.py --repo y5ez3g/facadecode --head "$head" "$shadow_run" "$core_run" "$extension_run"
 ```
 
 `catalog --require-bindings` lists the remaining exact bindings and fails until every catalog row
