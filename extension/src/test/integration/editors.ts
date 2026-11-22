@@ -96,6 +96,11 @@ export function editorProfile(root: string, name: string, extensions?: string) {
 	};
 }
 
+/** Both Facade VSIXs are provided explicitly. Avoid resolving their reciprocal packs through the Marketplace. */
+export function explicitVsixInstallArgs(file: string): string[] {
+	return ['--install-extension', file, '--force', '--do-not-include-pack-dependencies'];
+}
+
 /** Variables an editor, Git or a CLI session could pass on: none of them may reach the test editor. */
 export function sanitizedEnvironment(): void {
 	for (const name of Object.keys(process.env)) {

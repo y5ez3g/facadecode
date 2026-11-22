@@ -439,6 +439,9 @@ candidate into a fresh profile and exercises the installed New Agent command. Th
 reopens two actual Pins after updating both components, while the unpinned control stays hidden
 and all three original CLI processes and sessions survive. These rows record the unsigned Linux
 x64 candidate's installation and upgrade. Other release targets remain in their owning lanes.
+The installed-pair journeys give VS Code both exact archive files and disable reciprocal
+Marketplace pack resolution. The recorded component identities and real install or replacement
+still have to pass within the same deadlines.
 A separate two-window run checks that an old claim and an old Webview generation
 leave the current owner, both running agents and their terminals intact. The current page then
 changes only its selected agent.
@@ -627,7 +630,8 @@ python3 -B ci/acceptance.py --run-id "$attempt" verify "$work/core/receipt.json"
 To compare hosted runs, pass the full candidate head and each applicable workflow's run ID to
 `ci/github_timing.py`. It reads queue and step timestamps, preserves first-attempt job outcomes
 when a workflow is rerun, and rejects a different head. Retain the JSON record with the case
-receipts. Its wall clock starts at workflow creation. The eligibility and denominator for the
+receipts. Its wall clock starts at workflow creation. A job cancelled before GitHub assigns a
+runner records its wait as queue time and records no runner usage. The eligibility and denominator for the
 steady-state SLO are defined above. [GitHub Actions jobs API](https://docs.github.com/en/rest/actions/workflow-jobs)
 
 ```sh

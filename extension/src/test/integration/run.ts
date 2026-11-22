@@ -16,7 +16,7 @@ import * as path from 'path';
 import { parse as parseJsonc, ParseError } from 'jsonc-parser';
 import { pathToFileURL } from 'url';
 import { isDeepStrictEqual } from 'util';
-import { coreCall, coreListens, coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
+import { coreCall, coreListens, coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, explicitVsixInstallArgs, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
 import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { runRemoteWorktree } from './remoteWorktree';
@@ -622,7 +622,6 @@ async function main(): Promise<void> {
 			if (!component || !main) {
 				throw new Error(`${dir} must hold a facadecode and a window VSIX file.`);
 			}
-			// The window component first: the other's extension pack names it
 			return [path.join(dir, component.name), path.join(dir, main.name)];
 		};
 		const from = released && !installPair ? packages(released) : [];
@@ -656,7 +655,7 @@ async function main(): Promise<void> {
 			{ env, encoding: 'utf8', stdio: 'pipe', shell: process.platform === 'win32', timeout: 30_000 });
 		const install = (files: readonly string[]) => {
 			for (const file of files) {
-				editorCommand(['--install-extension', file, '--force']);
+				editorCommand(explicitVsixInstallArgs(file));
 			}
 		};
 		const pairVersion = (pair: string[]): string => {

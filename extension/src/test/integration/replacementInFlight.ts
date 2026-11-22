@@ -8,7 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { isProcessRunning } from '../../base/system';
 import type { MessageRecord } from '../../core/messagePorts';
-import { EDITOR_FLAGS, editorProfile, endEditors, newRepository, until } from './editors';
+import { EDITOR_FLAGS, editorProfile, endEditors, explicitVsixInstallArgs, newRepository, until } from './editors';
 
 interface Options {
 	readonly root: string;
@@ -65,7 +65,7 @@ export async function replacementInFlight(options: Options): Promise<void> {
 	fs.copyFileSync(path.join(receiver.user, 'User', 'settings.json'), path.join(sender.user, 'User', 'settings.json'));
 	const install = (profile: typeof sender, packages: readonly string[]) => {
 		for (const file of packages) {
-			execFileSync(options.cli, [...profile.args, '--install-extension', file, '--force'], {
+			execFileSync(options.cli, [...profile.args, ...explicitVsixInstallArgs(file)], {
 				env: { ...options.env, ...profile.env }, stdio: 'pipe', shell: process.platform === 'win32', timeout: 15_000
 			});
 		}

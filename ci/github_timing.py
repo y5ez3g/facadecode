@@ -22,16 +22,19 @@ def seconds_between(start, end):
 
 
 def job_sample(job):
-    started = job['started_at']
+    # GitHub fills started_at with the creation time even when no runner was assigned.
+    started = job['started_at'] if job['runner_id'] else None
     finished = job['completed_at']
+    queue_end = started if started else (finished if job['conclusion'] == 'cancelled' else None)
     return {
         'name': job['name'],
         'url': job['html_url'],
         'status': job['status'],
         'conclusion': job['conclusion'],
+        'created_at': job['created_at'],
         'started_at': started,
         'completed_at': finished,
-        'queue_seconds': seconds_between(job['created_at'], started),
+        'queue_seconds': seconds_between(job['created_at'], queue_end),
         'runner_seconds': seconds_between(started, finished),
         'steps': [
             {
