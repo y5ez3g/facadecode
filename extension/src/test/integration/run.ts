@@ -16,12 +16,13 @@ import * as path from 'path';
 import { parse as parseJsonc, ParseError } from 'jsonc-parser';
 import { pathToFileURL } from 'url';
 import { isDeepStrictEqual } from 'util';
-import { coreCall, coreListens, coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, explicitVsixInstallArgs, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
+import { coreCall, coreListens, coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
 import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { runRemoteWorktree } from './remoteWorktree';
 import { assertTemporaryState, probeEnvironment } from './probeState';
 import { replacementInFlight } from './replacementInFlight';
+import { installLocalVsixes, runEditorCli } from './vsixInstall';
 import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
 import { activationFailure, coldCutoverJourney, incompatibleActivation, missingSessionUnpin, multiWindowDriverFiles, rustMultiWindow, sharedAttachJourney, shellHandoff, staleOwner, withRustWindows } from './rustMultiWindow';
 
@@ -58,13 +59,6 @@ const ACCEPTANCE_DRIVERS = new Map([
 	['upgrade-pair', { engine: 'old', cli: 'claude' }]
 ] as const);
 type AcceptanceDriver = typeof ACCEPTANCE_DRIVERS extends ReadonlyMap<infer Name, unknown> ? Name : never;
-
-/** The command line of the editor at `executable`, which installs a package into a profile (VERIFICATION E05). */
-function editorCli(executable: string): string {
-	const dir = path.dirname(executable);
-	return process.platform === 'darwin' ? path.join(dir, '..', 'Resources', 'app', 'bin', 'code')
-		: path.join(dir, 'bin', process.platform === 'win32' ? 'code.cmd' : 'code');
-}
 
 /** The suite's program: an entry of type `custom` in Facade's settings file, by its name (CONFIGURATION-2.1, 2.3). */
 const CUSTOM_CLI = 'my-cli';
@@ -647,17 +641,11 @@ async function main(): Promise<void> {
 		const env = { ...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_UPDATE: out, CLAUDE_CONFIG_DIR: claudeConfig,
 			...(installPair || upgradePair ? { FACADE_IT_UPDATE_ROLE: installPair ? 'install' : 'upgrade' } : {}) };
 		if (replacement) {
-			await replacementInFlight({ root, facade, folder, record, executable, cli: editorCli(executable), driver, from, to, receiver: profile, env, endMatching });
+			await replacementInFlight({ root, facade, folder, record, executable, driver, from, to, receiver: profile, env, endMatching });
 			driverPassed('replacement-in-flight', 'old');
 			return;
 		}
-		const editorCommand = (args: readonly string[]) => execFileSync(editorCli(executable), [...profile.args, ...args],
-			{ env, encoding: 'utf8', stdio: 'pipe', shell: process.platform === 'win32', timeout: 30_000 });
-		const install = (files: readonly string[]) => {
-			for (const file of files) {
-				editorCommand(explicitVsixInstallArgs(file));
-			}
-		};
+		const install = (files: readonly string[]) => installLocalVsixes(executable, profile, files, env, 30_000);
 		const pairVersion = (pair: string[]): string => {
 			const files = pair.map(file => path.basename(file));
 			const version = /^facadecode-window-(\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?)\.vsix$/iu.exec(files[0])?.[1];
@@ -667,7 +655,7 @@ async function main(): Promise<void> {
 		const candidateVersion = installPair || upgradePair ? pairVersion(to) : undefined;
 		const priorVersion = upgradePair ? pairVersion(from) : undefined;
 		if (installPair || upgradePair) {
-			assert.strictEqual(editorCommand(['--list-extensions']).trim(), '', 'the editor profile has no installed extensions');
+			assert.strictEqual((await runEditorCli(executable, profile, ['--list-extensions'], env, 30_000)).trim(), '', 'the editor profile has no installed extensions');
 		}
 		if (upgradePair) {
 			assert.strictEqual(priorVersion, '0.1.5', 'the supported prior pair');
@@ -676,7 +664,7 @@ async function main(): Promise<void> {
 		if (installPair) {
 			facadeSettings(facade, alone('claude'));
 		}
-		install(installPair ? to : from);
+		await install(installPair ? to : from);
 		let editorOutput = '';
 		const editor = spawn(executable, [folder, '--new-window', ...profile.args,
 			`--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], { stdio: ['ignore', 'pipe', 'pipe'], env });
@@ -746,7 +734,7 @@ async function main(): Promise<void> {
 				assert.strictEqual(original.marked.length, 3);
 				const pids = original.aliases.map(alias => Number(fs.readFileSync(record + '.' + alias, 'utf8').trim()));
 				assert.ok(pids.every(pid => Number.isSafeInteger(pid) && pid > 0 && alive(pid)));
-				install(to);
+				await install(to);
 				fs.writeFileSync(out + '.reload', '');
 				const successor = await observed('updated');
 				verifyInstall(successor, candidateVersion);
@@ -784,7 +772,7 @@ async function main(): Promise<void> {
 			// What it got before it first asked - the released build's terminal opening - is not this journey's
 			answered = fs.existsSync(`${record}.stdin.${started.alias}`) ? fs.readFileSync(`${record}.stdin.${started.alias}`, 'utf8').length : 0;
 			const before = await ask(started.alias);
-			install(to);
+			await install(to);
 			fs.writeFileSync(`${out}.reload`, '');
 			const updated = await phase('updated') as { phase: string; version: string; tabs: string[][] };
 			// The updated build made Facade's settings file from the editor's settings the released build read (CONFIGURATION-6.1): every

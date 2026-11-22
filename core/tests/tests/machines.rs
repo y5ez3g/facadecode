@@ -2443,7 +2443,7 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     let mut receiver = McpTestClient::open_configured(&second, id);
     let sent = caller.call(
         "send_message",
-        json!({ "to": target, "text": "request across machines" }),
+        json!({ "to": target, "text": "request across machines", "wait_for": "delivery", "timeout_seconds": 30 }),
     );
     assert_eq!(sent["status"], "success", "{sent}");
     assert_eq!(sent["data"]["id"], "m1@second", "{sent}");
@@ -2459,7 +2459,10 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     assert_eq!(received["from"], from);
     let reply = receiver.call(
         "send_message",
-        json!({ "to": received["from"], "text": "reply across machines", "reply_to": received["id"] }),
+        json!({
+            "to": received["from"], "text": "reply across machines", "reply_to": received["id"],
+            "wait_for": "delivery", "timeout_seconds": 30,
+        }),
     );
     assert_eq!(reply["status"], "success", "{reply}");
     let reply_id = reply["data"]["id"].as_str().unwrap();
@@ -2484,6 +2487,7 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
         "send_message",
         json!({
             "to": message["from"], "reply_to": message["id"], "text": "copied both addresses",
+            "wait_for": "delivery", "timeout_seconds": 30,
         }),
     );
     assert_eq!(sent["status"], "success", "{sent}");
@@ -3553,6 +3557,115 @@ fn ensure_route_reopens_the_intermediates_saved_hop() {
         "ensure-route {ensure_id} woke {provider_id} through {middle_id}; peer call {forwarded_id} read CLI {}",
         worker.pid
     );
+}
+
+#[test]
+fn shell_receives_a_linked_reply_from_a_managed_agent_across_machines() {
+    let origin = TestHome::new("shell-send-origin");
+    let peer = TestHome::new("shell-send-peer");
+    let programs = test_binaries();
+    let origin_id = name_machine(&origin, "origin");
+    let peer_id = name_machine(&peer, "peer");
+    let worker = peer.start_named_fake("worker", &[]);
+    let bridge = ObservedMachineLink::open(&origin, &peer);
+    wait_for_route(&origin, &peer_id, &[&peer_id]);
+    wait_for_route(&peer, &origin_id, &[&origin_id]);
+    let mut receiver = McpTestClient::open_configured(&peer, &worker.id);
+
+    let request = "Inspect the build\n  on the peer.";
+    let target = format!("{}@peer", worker.id);
+    let mut shell = origin
+        .command(&programs.facade)
+        .args(["send", &target, request, "-r"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let forwarded = observed_frame(&bridge.from_front, "the original Shell send", |frame| {
+        frame["method"] == "forward" && frame["params"]["params"]["op"] == "agent.send"
+    });
+    assert_eq!(
+        forwarded["params"]["route"],
+        json!([peer_id]),
+        "{forwarded}"
+    );
+    let args = &forwarded["params"]["params"]["args"];
+    let recipient = json!({ "machine_id": peer_id, "agent_id": worker.id });
+    assert_eq!(args["to"], recipient, "{forwarded}");
+    assert_eq!(args["wait_for"], "result", "{forwarded}");
+    assert_eq!(args["text"], request, "{forwarded}");
+    let request_id = args["request_id"].as_str().expect("the Shell request ID");
+    assert!(!request_id.is_empty());
+
+    assert!(
+        wait_until(secs(10), || !peer.submitted_messages().is_empty()),
+        "{}",
+        peer.daemon_log()
+    );
+    assert_eq!(
+        peer.submitted_messages(),
+        [format!(
+            "📨 Message from the command line (#c1@peer) · m1\n{request}"
+        )]
+    );
+    let inbox = receiver.call("read_messages", json!({"last": 1}));
+    assert_eq!(inbox["status"], "success", "{inbox}");
+    let original = &inbox["data"]["messages"][0];
+    assert_eq!(original["from"], "#c1@peer", "{inbox}");
+    assert_eq!(original["id"], "m1", "{inbox}");
+    assert_eq!(original["text"], request, "{inbox}");
+
+    let reply = "Vérifié ✓\nBuild passed";
+    let sent = receiver.call(
+        "send_message",
+        json!({
+            "to": original["from"], "reply_to": original["id"], "text": reply,
+        }),
+    );
+    assert_eq!(sent["status"], "success", "{sent}");
+    assert_eq!(sent["data"]["delivery"], "returned_to_request", "{sent}");
+    let (returned_number, _) = sent["data"]["id"]
+        .as_str()
+        .and_then(|id| id.split_once('@'))
+        .expect("a full reply address");
+    assert_ne!(original["id"], returned_number, "{sent}");
+    let forwarded = observed_frame(&bridge.from_peer, "the linked command reply", |frame| {
+        frame["method"] == "forward" && frame["params"]["params"]["op"] == "internal.command_reply"
+    });
+    let params = &forwarded["params"];
+    assert_eq!(params["route"], json!([origin_id]), "{forwarded}");
+    assert_eq!(params["caller"]["kind"], "agent", "{forwarded}");
+    assert_eq!(params["caller"]["agent"], recipient, "{forwarded}");
+    assert_eq!(
+        params["params"]["args"],
+        json!({
+            "request_id": request_id,
+            "original": { "machine_id": peer_id, "message_id": original["id"] },
+            "reply": {
+                "reference": { "machine_id": peer_id, "message_id": returned_number },
+                "text": reply,
+            },
+        }),
+        "{forwarded}"
+    );
+    let reply_id = forwarded["id"].as_u64().expect("the peer call ID");
+    let receipt = observed_frame(&bridge.from_front, "the accepted command reply", |frame| {
+        frame["id"] == reply_id && frame.get("method").is_none()
+    });
+    assert_eq!(
+        receipt,
+        json!({ "jsonrpc": "2.0", "id": reply_id, "result": {} })
+    );
+
+    if !wait_until(secs(10), || shell.try_wait().unwrap().is_some()) {
+        let _ = shell.kill();
+    }
+    let output = shell.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(output.stderr.is_empty(), "{}", stderr(&output));
+    assert_eq!(output.stdout, reply.as_bytes());
+    assert!(origin.submitted_messages().is_empty());
 }
 
 /// The editor selects the remote run by its roster reference, even when both runs have one number.

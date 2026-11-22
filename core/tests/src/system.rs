@@ -687,35 +687,6 @@ fn working_folder(pid: i32) -> Option<String> {
     found
 }
 
-/// How much of process `pid`'s memory is resident, in KiB: `ps`'s RSS, or on Windows its working
-/// set. 0 where it cannot be read.
-#[cfg(unix)]
-pub fn resident_kib(pid: i32) -> u64 {
-    let out = std::process::Command::new("ps")
-        .args(["-o", "rss=", "-p", &pid.to_string()])
-        .output()
-        .expect("could not run ps");
-    crate::stdout(&out).trim().parse().unwrap_or(0)
-}
-#[cfg(windows)]
-pub fn resident_kib(pid: i32) -> u64 {
-    use windows_sys::Win32::System::ProcessStatus::{
-        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
-    };
-    use windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
-    let mut kib = 0;
-    with_process(pid, PROCESS_QUERY_LIMITED_INFORMATION, |process| {
-        // SAFETY: the counters are plain data, written by the call within their size.
-        let mut counters: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
-        let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
-        // SAFETY: the handle is open, and the counters have the size given.
-        if unsafe { GetProcessMemoryInfo(process, &mut counters, size) } != 0 {
-            kib = counters.WorkingSetSize as u64 / 1024;
-        }
-    });
-    kib
-}
-
 /// `path` as a test's shell script names it: as it is, or on Windows with `/` in place of `\`,
 /// which Git's sh would otherwise read as escapes.
 pub fn sh_path(path: &Path) -> String {

@@ -215,14 +215,29 @@ jobs:
         run: node scripts/build-it.mjs
       - name: Download official VS Code for isolated tests
         if: "!inputs.package_only"
+        timeout-minutes: 6
         env:
           EDITOR_VERSION: '1.147.0'
         run: |
           node <<'JS'
           const fs = require('node:fs');
+          const { downloadAndUnzipVSCode } = require('@vscode/test-electron');
           const { editorBuildCommit } = require('./build/out/test/integration/editors.js');
           const version = process.env.EDITOR_VERSION;
-          require('@vscode/test-electron').downloadAndUnzipVSCode(version).then(executable => {
+          async function downloadEditor() {
+            const options = { version, timeout: 45_000 };
+            try {
+              return await downloadAndUnzipVSCode(options);
+            } catch (error) {
+              if (error?.constructor?.name !== 'TimeoutError' &&
+                  !['ECONNRESET', 'EAI_AGAIN', 'ETIMEDOUT'].includes(error?.code)) {
+                throw error;
+              }
+              console.warn('Transient error fetching the pinned VS Code. Retrying once.', error);
+              return downloadAndUnzipVSCode(options);
+            }
+          }
+          downloadEditor().then(executable => {
             console.log(`Official VS Code ${version} (${editorBuildCommit(executable, version)})`);
             fs.appendFileSync(process.env.GITHUB_ENV, `VSCODE_EXECUTABLE=${executable}\n`);
           }).catch(error => { console.error(error); process.exitCode = 1; });

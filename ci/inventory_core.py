@@ -63,6 +63,17 @@ def shell(root, add):
     cli = SHELL / "cli.rs"
     hooks = SHELL / "hooks.rs"
     cli_text = (root / cli).read_text(encoding="utf-8")
+    # Lexical commands are parsed before their validated Command variants are dispatched.
+    lexical_body = match_one(cli_text, r"^enum LexicalCommand \{\n([\s\S]*?)^\}", cli)
+    flatten = "    #[command(flatten)]\n    Other(Command),\n"
+    require(lexical_body.endswith(flatten), cli, "LexicalCommand must flatten Command")
+    lexical_entries = lexical_body.removesuffix(flatten).splitlines()
+    lexical_pattern = r"    ([A-Z][A-Za-z0-9]*)\([A-Z][A-Za-z0-9]*\),"
+    require(all(re.fullmatch(lexical_pattern, line) for line in lexical_entries), cli,
+            "unrecognized lexical subcommand")
+    lexical = distinct((kebab(re.fullmatch(lexical_pattern, line)[1]) for line in lexical_entries),
+                       cli, "lexical subcommand")
+
     public = set()
     for source, text, enum, parent in (
         (cli, cli_text, "Command", ""),
@@ -103,7 +114,11 @@ def shell(root, add):
                 r"ErrorKind::Display(Help|Version)\) => return selected\(Command::([A-Za-z]+)",
                 cli_text,
             ))
-            reconcile({kebab(name) for name in dispatch.values()}, skipped, source, "help/version dispatch")
+            options = {kebab(name) for name in dispatch.values()}
+            reconcile(lexical | options, skipped, source, "skipped command dispatch")
+            public.update(lexical)
+            for name in lexical:
+                add("shell", "command", name, source)
             for name in dispatch:
                 add("shell", "option", name.lower(), source)
 

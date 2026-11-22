@@ -4,9 +4,10 @@ use std::ffi::OsString;
 use std::sync::OnceLock;
 
 use clap::error::{ContextKind, ContextValue, ErrorKind};
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser, Subcommand};
 use facade_base::address::{is_machine_name, selector::parse_machine_selector};
-use facade_base::key_input::{KeyProblem, MAX_KEYS, NAMED_KEYS, key_problems};
+use facade_base::api_v1::daemon::{InputStep, SendWait, TerminalInput};
+use facade_base::key_input::{KeyProblem, MAX_INPUT_BYTES, MAX_KEYS, NAMED_KEYS, key_problems};
 use facade_base::model::message::{MAX_MESSAGE_CHARS, MAX_MESSAGE_LINES, check_message_text};
 use facade_base::settings::is_space;
 use facade_base::ssh::{SshArgumentError, parse_ssh_destination};
@@ -14,11 +15,50 @@ use facade_base::ssh::{SshArgumentError, parse_ssh_destination};
 use crate::help::{self, Page};
 use crate::hooks::HookEvent;
 
+pub(crate) struct Arguments {
+    pub(crate) command: Option<Command>,
+}
+
 #[derive(Parser)]
 #[command(name = "facade", bin_name = "facade", disable_help_subcommand = true)]
-pub(crate) struct Arguments {
+struct LexicalArguments {
     #[command(subcommand)]
-    pub(crate) command: Option<Command>,
+    command: Option<LexicalCommand>,
+}
+
+#[derive(Subcommand)]
+enum LexicalCommand {
+    Type(TypeOperands),
+    Send(SendOperands),
+    #[command(flatten)]
+    Other(Command),
+}
+
+#[derive(clap::Args)]
+struct TypeOperands {
+    #[command(flatten)]
+    target: Target,
+    #[arg(value_name = "TEXT")]
+    text: Vec<String>,
+    #[arg(long)]
+    enter: bool,
+    #[arg(short = 'k', long = "key", value_name = "KEY")]
+    keys: Vec<String>,
+}
+
+#[derive(clap::Args)]
+struct SendOperands {
+    #[arg(value_name = "RECIPIENT")]
+    to: Option<String>,
+    #[arg(value_name = "TEXT")]
+    text: Option<String>,
+    #[arg(short = 'w', long)]
+    wait_delivery: bool,
+    #[arg(short = 'r', long)]
+    wait_reply: bool,
+    #[arg(short, long, value_name = "SECONDS", default_value_t = 30,
+        allow_negative_numbers = true, value_parser = send_timeout)]
+    timeout: u16,
 }
 
 #[derive(clap::Args)]
@@ -89,21 +129,17 @@ pub(crate) enum Command {
         #[command(flatten)]
         target: Target,
     },
+    #[command(skip)]
     Type {
-        #[command(flatten)]
         target: Target,
-        #[arg(value_name = "TEXT")]
-        text: Option<String>,
-        #[arg(long)]
-        enter: bool,
-        #[arg(short = 'k', long = "key", value_name = "KEY")]
-        keys: Vec<String>,
+        input: TerminalInput,
     },
+    #[command(skip)]
     Send {
-        #[arg(value_name = "RECIPIENT")]
         to: String,
-        #[arg(value_name = "TEXT")]
         text: String,
+        wait_for: SendWait,
+        timeout: u16,
     },
     #[command(disable_help_subcommand = true)]
     Machine {
@@ -149,6 +185,16 @@ fn upgrade_version(value: &str) -> Result<String, &'static str> {
     } else {
         Err("use three decimal numbers, such as 0.1.6")
     }
+}
+
+const TIMEOUT_RANGE: &str = "must be a whole number between 1 and 300";
+
+fn send_timeout(value: &str) -> Result<u16, &'static str> {
+    value
+        .parse::<u16>()
+        .ok()
+        .filter(|seconds| (1..=300).contains(seconds) && value.bytes().all(|b| b.is_ascii_digit()))
+        .ok_or(TIMEOUT_RANGE)
 }
 
 #[derive(Subcommand)]
@@ -254,13 +300,23 @@ pub(crate) fn parse_from(argv: &[OsString]) -> Result<Arguments, ParseError> {
     }
 
     let scope = public_scope(words);
+    if let Some(page) = scope.filter(|page| page.path == "type") {
+        for word in words.iter().skip(1).take_while(|word| *word != "--") {
+            if let Some(option @ ("-key" | "--Key")) = word.to_str() {
+                return Err(option_error(
+                    page,
+                    &format!("Unknown option '{option}'. Use '-k' or '--key'."),
+                ));
+            }
+        }
+    }
     static VERSION: OnceLock<String> = OnceLock::new();
-    let mut arguments = match Arguments::command()
+    let parsed = LexicalArguments::command()
         .version(VERSION.get_or_init(facade_base::version).as_str())
         .try_get_matches_from(argv)
-        .and_then(|matches| Arguments::from_arg_matches(&matches))
-    {
-        Ok(arguments) => arguments,
+        .and_then(|matches| Ok((LexicalArguments::from_arg_matches(&matches)?, matches)));
+    let (lexical, matches) = match parsed {
+        Ok(parsed) => parsed,
         Err(error) => match (scope, error.kind()) {
             (Some(page), ErrorKind::DisplayHelp) => return selected(Command::Help(page)),
             (Some(_), ErrorKind::DisplayVersion) => return selected(Command::PrintVersion),
@@ -269,13 +325,26 @@ pub(crate) fn parse_from(argv: &[OsString]) -> Result<Arguments, ParseError> {
         },
     };
 
-    if let Some(Command::Machine { action }) = arguments.command.as_mut() {
-        keep_ssh_separator(action, &words[2..]);
-    }
-    if let (Some(page), Some(command)) = (scope, &arguments.command) {
-        validate(page, command)?;
-    }
-    Ok(arguments)
+    let command = match lexical.command {
+        None => return Ok(Arguments { command: None }),
+        Some(LexicalCommand::Type(operands)) => operands.validate(
+            scope.expect("type help page"),
+            matches.subcommand_matches("type").expect("type arguments"),
+        )?,
+        Some(LexicalCommand::Send(operands)) => {
+            operands.validate(scope.expect("send help page"))?
+        }
+        Some(LexicalCommand::Other(mut command)) => {
+            if let Command::Machine { action } = &mut command {
+                keep_ssh_separator(action, &words[2..]);
+            }
+            if let Some(page) = scope {
+                validate(page, &command)?;
+            }
+            command
+        }
+    };
+    selected(command)
 }
 
 fn keep_ssh_separator(action: &mut MachineAction, mut words: &[OsString]) {
@@ -380,8 +449,12 @@ fn unknown_command(page: &Page, given: &str) -> ParseError {
 }
 
 fn unknown_option(page: &Page, given: &str) -> ParseError {
+    option_error(page, &format!("Unknown option '{given}'."))
+}
+
+fn option_error(page: &Page, message: &str) -> ParseError {
     usage(format!(
-        "error: Unknown option '{given}'.\n{}\n{}",
+        "error: {message}\n{}\n{}",
         page.usage,
         help_tip(page)
     ))
@@ -424,11 +497,16 @@ fn public_error(page: &Page, words: &[OsString], error: &clap::Error) -> ParseEr
                 help_tip(page)
             ))
         }
-        ErrorKind::InvalidValue if value == Some("") => usage(format!(
-            "error: '{arg}' requires a value.\n{}\n{}",
-            page.usage,
-            help_tip(page)
-        )),
+        ErrorKind::ValueValidation if page.path == "send" && arg.starts_with("--timeout") => {
+            usage(format!(
+                "error: Invalid value {:?} for '--timeout <SECONDS>': {TIMEOUT_RANGE}.\n{}",
+                value.unwrap_or_default(),
+                help_tip(page)
+            ))
+        }
+        ErrorKind::InvalidValue if value == Some("") => {
+            option_error(page, &format!("'{arg}' requires a value."))
+        }
         // Keep clap's details for malformed option values, repeated options and invalid UTF-8.
         _ => {
             let detail = error.to_string();
@@ -501,8 +579,6 @@ fn missing_argument(page: &Page, words: &[OsString], error: &clap::Error) -> Par
         ),
         "rename" if missing_first => ("Choose an agent and its new name.".into(), find_agent),
         "rename" => (format!("Enter a new name for {given:?}."), ""),
-        "send" if missing_first => ("Choose a recipient and enter a message.".into(), find_agent),
-        "send" => (format!("Enter a message to send to {given:?}."), ""),
         "machine add" | "machine connect" => return missing_ssh_destination(page),
         "machine remove" => (
             "Choose a saved machine connection to remove.".into(),
@@ -663,15 +739,6 @@ fn validate(page: &Page, command: &Command) -> Result<(), ParseError> {
                 "",
             ));
         }
-        Command::Send { text, .. } => validate_message(text)?,
-        Command::Type {
-            target,
-            text,
-            enter,
-            keys,
-        } => {
-            validate_type(page, &target.agent, text.as_deref(), *enter, keys)?;
-        }
         Command::Machine {
             action: MachineAction::Rename { name, .. },
         } if !is_machine_name(name) => {
@@ -767,56 +834,143 @@ fn validate_message(text: &str) -> Result<(), ParseError> {
     Ok(())
 }
 
+impl SendOperands {
+    fn validate(self, page: &Page) -> Result<Command, ParseError> {
+        let wait_for = match (self.wait_delivery, self.wait_reply) {
+            (true, true) => {
+                return Err(option_error(
+                    page,
+                    "Cannot combine '--wait-delivery' with '--wait-reply'.",
+                ));
+            }
+            (true, false) => SendWait::Delivery,
+            (false, true) => SendWait::Result,
+            (false, false) => SendWait::Inbox,
+        };
+        let Some(to) = self.to else {
+            return Err(example_error(
+                page,
+                "Choose a recipient and enter a message.",
+                page.first_example(),
+                "Run 'facade list' to find an agent.",
+            ));
+        };
+        let Some(text) = self.text else {
+            return Err(example_error(
+                page,
+                &format!("Enter a message to send to {to:?}."),
+                page.first_example(),
+                "",
+            ));
+        };
+        validate_message(&text)?;
+        Ok(Command::Send {
+            to,
+            text,
+            wait_for,
+            timeout: self.timeout,
+        })
+    }
+}
+
 const TYPE_TEXT_EXAMPLE: &str = r#"facade type Nova "hello" --enter"#;
 const TYPE_KEY_EXAMPLE: &str = "facade type Nova --key Enter";
 
-fn validate_type(
-    page: &Page,
-    agent: &str,
-    text: Option<&str>,
-    enter: bool,
-    keys: &[String],
-) -> Result<(), ParseError> {
-    if let Some(text) = text {
-        if !keys.is_empty() {
-            return Err(usage(format!(
-                "error: Cannot combine <TEXT> with '--key'.\n\
-                 Use '--enter' to press Enter after text, or run separate commands.\n\
-                 Example: {TYPE_TEXT_EXAMPLE}"
-            )));
+impl TypeOperands {
+    fn validate(self, page: &Page, matches: &ArgMatches) -> Result<Command, ParseError> {
+        let Self {
+            target,
+            mut text,
+            enter,
+            keys,
+        } = self;
+        if enter {
+            if text.is_empty() {
+                return Err(usage(format!(
+                    "error: '--enter' requires <TEXT>.\n\
+                     To press Enter by itself, use '--key Enter'.\n\
+                     Example: {TYPE_KEY_EXAMPLE}"
+                )));
+            }
+            if text.len() != 1 || !keys.is_empty() {
+                return Err(option_error(
+                    page,
+                    "'--enter' requires a single <TEXT> with no keys. Use '-k Enter' in an input sequence.",
+                ));
+            }
         }
-        if text.is_empty() {
+        if text.is_empty() && keys.is_empty() {
             return Err(example_error(
                 page,
-                "Text to type cannot be empty.",
+                &format!(
+                    "Enter text or provide a key to press in {:?}.",
+                    target.agent
+                ),
                 TYPE_TEXT_EXAMPLE,
                 "",
             ));
         }
-        if let Some(control) = text.chars().find(|ch| ch.is_control()) {
+        for segment in &text {
+            validate_type_text(page, segment)?;
+        }
+        if !keys.is_empty() {
+            validate_type_keys(page, &keys)?;
+        }
+
+        let input = match (text.len(), keys.is_empty()) {
+            (1, true) => TerminalInput::Text {
+                text: text.pop().expect("single text operand"),
+                enter,
+            },
+            (0, false) => TerminalInput::Keys { keys },
+            _ => {
+                let text_steps = matches
+                    .indices_of("text")
+                    .into_iter()
+                    .flatten()
+                    .zip(text.into_iter().map(|text| InputStep::Text { text }));
+                let key_steps = matches
+                    .indices_of("keys")
+                    .into_iter()
+                    .flatten()
+                    .zip(keys.into_iter().map(|key| InputStep::Key { key }));
+                let mut indexed: Vec<_> = text_steps.chain(key_steps).collect();
+                indexed.sort_unstable_by_key(|(index, _)| *index);
+                TerminalInput::Sequence {
+                    steps: indexed.into_iter().map(|(_, step)| step).collect(),
+                }
+            }
+        };
+        if input.typing_bytes().expect("validated text and keys") > MAX_INPUT_BYTES {
             return Err(usage(format!(
-                "error: Text contains the control character U+{:04X}. Use '-k' or '--key' to press a key.\n\
-                 Example: {TYPE_KEY_EXAMPLE}",
-                u32::from(control)
+                "error: 'facade type' accepts at most {} KiB of input.",
+                MAX_INPUT_BYTES / 1024
             )));
         }
-        return Ok(());
+        Ok(Command::Type { target, input })
     }
-    if enter {
-        return Err(usage(format!(
-            "error: '--enter' requires <TEXT>.\n\
-             To press Enter by itself, use '--key Enter'.\n\
-             Example: {TYPE_KEY_EXAMPLE}"
-        )));
-    }
-    if keys.is_empty() {
+}
+
+fn validate_type_text(page: &Page, text: &str) -> Result<(), ParseError> {
+    if text.is_empty() {
         return Err(example_error(
             page,
-            &format!("Enter text or provide a key to press in {agent:?}."),
+            "Text to type cannot be empty.",
             TYPE_TEXT_EXAMPLE,
             "",
         ));
     }
+    if let Some(control) = text.chars().find(|ch| ch.is_control()) {
+        return Err(usage(format!(
+            "error: Text contains the control character U+{:04X}. Use '-k' or '--key' to press a key.\n\
+             Example: {TYPE_KEY_EXAMPLE}",
+            u32::from(control)
+        )));
+    }
+    Ok(())
+}
+
+fn validate_type_keys(page: &Page, keys: &[String]) -> Result<(), ParseError> {
     match key_problems(keys).next() {
         Some(KeyProblem::Unknown { given, .. }) => Err(usage(format!(
             "error: Unknown key {given:?}.\n\
@@ -853,7 +1007,16 @@ mod tests {
 
         for key in ["eNtEr", "ctrl+m", "界"] {
             let words = ["facade", "type", "Nova", "--key", key].map(OsString::from);
-            assert!(parse_from(&words).is_ok(), "{key}");
+            assert!(
+                matches!(
+                    parse_from(&words).map(|parsed| parsed.command),
+                    Ok(Some(Command::Type {
+                        input: TerminalInput::Keys { keys },
+                        ..
+                    })) if keys == [key]
+                ),
+                "{key}"
+            );
         }
     }
 

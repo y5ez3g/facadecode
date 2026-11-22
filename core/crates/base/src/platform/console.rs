@@ -22,7 +22,14 @@ impl VtModes {
         imp::VtModes::enter().map(VtModes)
     }
 
-    /// Puts back what `enter` changed, once.
+    /// Toggles native mouse capture on Windows, giving scrolling back to the host when disabled.
+    /// Call while the modes are active, serialized with other mode changes and restoration.
+    /// Unix terminals report mouse input as bytes.
+    pub fn set_mouse_capture(&self, enabled: bool) -> io::Result<()> {
+        self.0.set_mouse_capture(enabled)
+    }
+
+    /// Puts back the original console modes, once.
     pub fn restore(&self) {
         self.0.restore();
     }
@@ -47,11 +54,19 @@ pub enum ConsoleRead {
     Keys(usize),
     /// The console changed size.
     Resized,
+    /// A native vertical wheel event. Coordinates are one-based within the visible viewport.
+    /// Delta is positive up, and the modifier bits are Shift=4, Alt=8, Control=16.
+    Wheel {
+        col: u16,
+        row: u16,
+        delta: i16,
+        modifiers: u8,
+    },
 }
 
-/// Reads the person's keys. Unix: standard input's bytes. Windows: the console's input records,
-/// the characters of key-down records as bytes, never those of key-up records, and size changes
-/// as [`ConsoleRead::Resized`].
+/// Reads standard input bytes on Unix. On Windows, reads console input records, yielding
+/// key-down characters (including host VT sequences) as bytes, size changes and native vertical
+/// wheel events.
 pub struct ConsoleReader(imp::ConsoleReader);
 
 impl ConsoleReader {
@@ -59,7 +74,7 @@ impl ConsoleReader {
         imp::ConsoleReader::new().map(ConsoleReader)
     }
 
-    /// Waits for keys or a size change.
+    /// Waits for keys, a size change or a native vertical wheel event.
     pub fn read(&mut self, buf: &mut [u8]) -> io::Result<ConsoleRead> {
         self.0.read(buf)
     }

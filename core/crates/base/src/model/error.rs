@@ -10,7 +10,8 @@ use super::machine::{
     ExecutionOutcome, Kept, MachineIdConflict, MachineQueryResult, SshInteraction, Unavailable,
 };
 use super::message::{
-    MessageRef, TextWritten, WindowDelivery, WindowDeliveryFailure, WindowDeliveryOutcome,
+    DeliveredVia, MessageRef, TextWritten, WindowDelivery, WindowDeliveryFailure,
+    WindowDeliveryOutcome,
 };
 
 /// JSON-RPC's own error codes, and the one it leaves to servers that Facade uses for every other
@@ -109,9 +110,12 @@ pub struct ErrorData {
     /// The receipt for a send whose remote window outcomes could not be confirmed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_delivery: Option<WindowDelivery>,
-    /// The original kept message, where its delivery outcome is unknown.
+    /// The original assigned message when its identity is known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_ref: Option<MessageRef>,
+    /// Delivery confirmed by the original send receipt before a result wait failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivered_via: Option<DeliveredVia>,
     /// A confirmed reason the addressed agent record was removed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub record_removal: Option<AgentRemoval>,
@@ -166,6 +170,8 @@ pub enum Reason {
     /// The operation cannot complete: for example, a stop or a screen watch's snapshot timed out,
     /// or the keeper disconnected.
     Unavailable,
+    /// The command's deadline passed while waiting for a reply.
+    ReplyTimeout,
     /// The two sides share no protocol version, or a required client kind, operation, or field is
     /// unsupported.
     #[serde(rename = "protocol_incompatible")]
@@ -221,6 +227,7 @@ impl ErrorBody {
             windows: None,
             window_delivery: None,
             message_ref: None,
+            delivered_via: None,
             record_removal: None,
             machine_id_conflict: None,
             ssh_interaction: None,
@@ -280,6 +287,7 @@ impl Reason {
             Reason::Ended => "ended",
             Reason::PartialInput => "partial_input",
             Reason::Unavailable => "unavailable",
+            Reason::ReplyTimeout => "reply_timeout",
             Reason::IncompatibleProtocol => "protocol_incompatible",
             Reason::MachineIdConflict => "machine_id_conflict",
             Reason::SshInteractionRequired => "ssh_interaction_required",
@@ -365,6 +373,7 @@ mod tests {
             (Reason::Upgrading, "upgrading"),
             (Reason::NotFound, "not_found"),
             (Reason::InvalidArgument, "invalid_argument"),
+            (Reason::ReplyTimeout, "reply_timeout"),
         ] {
             assert_eq!(reason.canonical_name(), name);
             assert_eq!(serde_json::to_value(reason).unwrap(), json!(name));

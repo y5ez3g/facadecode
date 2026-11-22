@@ -1,9 +1,9 @@
 //! YOLO, folder trust, creation trees and reach (RULES-2.2, 4.2, 4.3; CLIS-1.3, 3.3; MCP-3.1;
 //! CONFIGURATION-1.4, 4.1): each launch reads `yolo` from Facade's settings file, `facade.json`, as
 //! it is accepted, and keeps it for its run; a file that cannot be read as it must refuses it; with
-//! YOLO on its CLI runs without asking and trusts the launch's folder, Claude Code's question
-//! answered on its screen; an agent's record says who started it and the first agent of its tree;
-//! and an agent whose run has YOLO off reaches only its creation tree.
+//! YOLO on its CLI runs without asking. An authenticated Agent start can answer Claude Code's
+//! trust question when the target home permits it. An agent's record says who started it and the
+//! first agent of its tree. An agent whose run has YOLO off reaches only its creation tree.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -625,6 +625,12 @@ fn claude_asking(bin: &Path, keys: &Path, answered: Answered) {
     // on a cleared screen, a question that stays on would be off the screen until its line came, as
     // `Answered::Redrawn` makes it on purpose.
     let again = question.replacen(r"\033[2J", "", 1);
+    let selection = match answered {
+        Answered::UnrecognizedSelection => {
+            question.replace("Yes, I trust this folder", "Proceed with this folder") + "'❯ ' '  '"
+        }
+        _ => format!("{question}'  ' '❯ '"),
+    };
     let keys = keys.display();
     let after = match answered {
         Answered::Leaves => format!(
@@ -635,13 +641,14 @@ fn claude_asking(bin: &Path, keys: &Path, answered: Answered) {
         ),
         Answered::Stays => "sleep 1".to_string(),
         Answered::Redrawn => r"sleep 1; printf '\033[2J\033[H'; sleep 0.3".to_string(),
+        Answered::UnrecognizedSelection => "exec sleep 600".to_string(),
     };
     let script = format!(
         "#!/bin/sh\nstty raw -echo\n{question}'❯ ' '  '\nprintf '\\033[c'\nwhile [ \"$(dd bs=1 \
          count=1 2>/dev/null)\" != c ]; do :; done\n\
          sleep 0.15\nstty min 0 time 0\ndd bs=64 count=1 of='{keys}/lost' 2>/dev/null\nstty min 1 \
          time 0\n\
-         {question}'❯ ' '  '\ndd bs=1 count=3 of='{keys}/down' 2>/dev/null\n{question}'  ' '❯ '\n\
+         {question}'❯ ' '  '\ndd bs=1 count=3 of='{keys}/down' 2>/dev/null\n{selection}\n\
          dd bs=1 count=1 of='{keys}/enter' 2>/dev/null\n\
          {after}\n{again}'❯ ' '  '\ndd bs=1 count=1 of='{keys}/again' 2>/dev/null\n\
          exec sleep 600\n"
@@ -664,6 +671,8 @@ enum Answered {
     /// question 0.3 s after the clear: the frame read in two parts, as a loaded machine can read
     /// it.
     Redrawn,
+    /// The menu changes after Down, and the rule can no longer recognize the trusting option.
+    UnrecognizedSelection,
 }
 
 #[cfg(unix)]
@@ -672,8 +681,121 @@ fn key(keys: &Path, name: &str) -> Option<Vec<u8>> {
     std::fs::read(keys.join(name)).ok()
 }
 
-/// A run with YOLO on answers Claude Code's question about trusting the folder once, as a person
-/// would, each key once the screen is still, as Claude Code 2.1.322 loses the keys that come before
+#[cfg(unix)]
+fn configure_claude(
+    home: &TestHome,
+    name: &str,
+    answered: Answered,
+    yolo: bool,
+) -> std::path::PathBuf {
+    let bin = home.folder().join(format!("bin-{name}"));
+    let keys = home.folder().join(format!("keys-{name}"));
+    claude_asking(&bin, &keys, answered);
+    settings(
+        home,
+        &json!({ "yolo": yolo, "clis": { "claude": { "program": bin.join("claude") } } })
+            .to_string(),
+    );
+    keys
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_and_ide_starts_leave_claude_trust_to_the_person_with_yolo_on() {
+    let home = TestHome::new("persontrust");
+    let shell_keys = configure_claude(&home, "shell", Answered::Leaves, true);
+    let mut shell = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["start", "--name", "shell", "claude"]),
+        80,
+        24,
+    );
+    let question = "Quick safety check: Is this a project you created";
+    assert!(
+        shell.wait_for(LOADED_TIMEOUT, |text| text.contains(question)),
+        "{}",
+        shell.text()
+    );
+
+    let ide_keys = configure_claude(&home, "editor", Answered::Leaves, true);
+    let mut ide = DaemonTestClient::open(&home);
+    let hello = ide.hello("ide", DAEMON_API_VERSIONS, json!({}));
+    assert_eq!(hello["result"]["api_version"], 1, "{hello}");
+    let env: std::collections::BTreeMap<_, _> = home.isolating_env().into_iter().collect();
+    ide.call_ok(
+        "agent.start",
+        json!({
+            "cli": "claude", "name": "editor", "folder": home.project, "env": env,
+            "size": { "cols": 80, "rows": 24 },
+        }),
+    );
+    let mut attached = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["attach", "editor"]),
+        80,
+        24,
+    );
+    assert!(
+        attached.wait_for(LOADED_TIMEOUT, |text| text.contains(question)),
+        "{}",
+        attached.text()
+    );
+
+    let people = [
+        ("shell", &shell_keys, "Shell"),
+        ("editor", &ide_keys, "VS Code"),
+    ];
+    for (name, keys, _) in people {
+        assert!(
+            wait_until(LOADED_TIMEOUT, || key(keys, "down").is_some()
+                && record(&home, name)["state"] == "waiting_for_you"),
+            "{name}: {}",
+            home.screen(name)
+        );
+    }
+    // Let the same stability interval that permits the authenticated Agent's Down key pass.
+    std::thread::sleep(secs(2));
+    for ((name, keys, origin), terminal) in people.into_iter().zip([&mut shell, &mut attached]) {
+        let info = record(&home, name);
+        assert_eq!(info["yolo"], true, "{info}");
+        assert_eq!(info["state"], "waiting_for_you", "{info}");
+        let status = home.run_facade_ok(&["status", name]);
+        assert_eq!(
+            status_field(&status, "Started by"),
+            Some(origin),
+            "{status}"
+        );
+        assert_eq!(key(keys, "lost"), Some(Vec::new()));
+        assert_eq!(key(keys, "down"), Some(Vec::new()));
+        assert_eq!(key(keys, "enter"), None);
+
+        terminal.send(b"\x1b[B");
+        assert!(
+            terminal.wait_for(LOADED_TIMEOUT, |text| text
+                .contains("❯ Yes, I trust this folder")),
+            "{}",
+            terminal.text()
+        );
+        terminal.send(b"\r");
+        assert!(
+            terminal.wait_for(LOADED_TIMEOUT, |text| text.contains("trusted")),
+            "{}",
+            terminal.text()
+        );
+        assert_eq!(key(keys, "down"), Some(b"\x1b[B".to_vec()));
+        assert_eq!(key(keys, "enter"), Some(b"\r".to_vec()));
+        terminal.send(b"\x1d");
+        assert_eq!(
+            terminal
+                .wait_exit(LOADED_TIMEOUT)
+                .and_then(|exit| exit.code()),
+            Some(0)
+        );
+    }
+}
+
+/// An Agent start with YOLO on in the target home answers Claude Code's folder trust question once,
+/// each key once the screen is still, as Claude Code 2.1.322 loses the keys that come before
 /// it draws its question again: Down, then Enter once the selection shows on the answer that
 /// trusts, and nothing when it comes back. The question is answered once no read has shown it for a
 /// second, even while the CLI keeps drawing; one that stays on is left to the person, even when it
@@ -682,27 +804,30 @@ fn key(keys: &Path, name: &str) -> Option<Vec<u8>> {
 // Its stand-in is a sh script that reads keys, which MSYS sh under a pseudo console does not get.
 #[cfg(unix)]
 #[test]
-fn claude_code_s_trust_question_is_answered_once_with_yolo_on_and_left_to_the_person_with_yolo_off()
-{
+fn an_agent_start_answers_claude_s_trust_question_once_when_the_target_home_permits_it() {
     let home = TestHome::new("yolotrust");
-    let base = home.project.parent().unwrap().to_path_buf();
+    let creator = home.start_named_fake("creator", &[]);
+    let mut tools = McpTestClient::open(&home, &creator.id);
     // Each run has a stand-in of its own: a shell reads its script as it runs it.
-    let start = |wire: &mut DaemonTestClient, name: &str, answered: Answered| {
-        let (bin, keys) = (
-            base.join(format!("bin-{name}")),
-            base.join(format!("keys-{name}")),
+    let mut start = |name: &str, answered: Answered, yolo: bool| {
+        let keys = configure_claude(&home, name, answered, yolo);
+        let started = tools.call(
+            "start_agent",
+            json!({ "cli": "claude", "name": name, "folder": home.project }),
         );
-        claude_asking(&bin, &keys, answered);
-        let path = format!("{}{PATH_SEPARATOR}{}", bin.display(), SYSTEM_PATH.as_str());
-        let args = json!({
-            "cli": "claude", "name": name, "folder": home.project,
-            "env": { "PATH": path, "FACADE_HOME": home.path }, "size": { "cols": 80, "rows": 24 },
-        });
-        assert!(wire.call("agent.start", args)["result"].is_object());
+        assert_eq!(started["status"], "success", "{started}");
+        let target = record(&home, name);
+        assert_eq!(target["creator"], record(&home, "creator")["reference"]);
+        assert_eq!(target["yolo"], yolo);
         keys
     };
     let typed = |keys: &[u8]| keys.windows(3).any(|key| key == b"\x1b[B") || keys.contains(&b'\r');
-    let on_keys = start(&mut connect(&home), "on", Answered::Leaves);
+    let note = |name: &str, outcome: &str| {
+        let target = record(&home, name);
+        let id = target["reference"]["agent_id"].as_str().unwrap();
+        format!("#{id}: its CLI's question about trusting the launch's folder was {outcome}")
+    };
+    let on_keys = start("on", Answered::Leaves, true);
     assert!(
         wait_until(LOADED_TIMEOUT, || key(&on_keys, "enter")
             .is_some_and(|key| !key.is_empty())),
@@ -721,10 +846,9 @@ fn claude_code_s_trust_question_is_answered_once_with_yolo_on_and_left_to_the_pe
         ),
         (b"\x1b[B".to_vec(), b"\r".to_vec())
     );
-    let answered =
-        "#a1: its CLI's question about trusting the launch's folder was answered, as YOLO is on";
+    let answered = note("on", "answered, as YOLO is on");
     assert!(
-        wait_until(LOADED_TIMEOUT, || home.daemon_log().contains(answered)),
+        wait_until(LOADED_TIMEOUT, || home.daemon_log().contains(&answered)),
         "{}",
         home.daemon_log()
     );
@@ -740,8 +864,7 @@ fn claude_code_s_trust_question_is_answered_once_with_yolo_on_and_left_to_the_pe
         Some(Vec::new()),
         "the question coming back is the person's"
     );
-    settings(&home, r#"{"yolo": false}"#);
-    let off_keys = start(&mut connect(&home), "off", Answered::Leaves);
+    let off_keys = start("off", Answered::Leaves, false);
     let waiting = wait_until(LOADED_TIMEOUT, || {
         record(&home, "off")["state"] == "waiting_for_you"
     });
@@ -752,19 +875,20 @@ fn claude_code_s_trust_question_is_answered_once_with_yolo_on_and_left_to_the_pe
         Some(Vec::new()),
         "nothing is typed with YOLO off"
     );
-    settings(&home, r#"{"yolo": true}"#);
-    let stays_keys = start(&mut connect(&home), "stays", Answered::Stays);
+    assert_eq!(record(&home, "off")["state"], "waiting_for_you");
+    assert_eq!(key(&off_keys, "enter"), None);
+    let stays_keys = start("stays", Answered::Stays, true);
     assert!(
         wait_until(LOADED_TIMEOUT, || key(&stays_keys, "enter")
             .is_some_and(|key| !key.is_empty())),
         "{}",
         home.screen("stays")
     );
-    let left = "#a3: its CLI's question about trusting the launch's folder was not answered: it \
-                stayed on the screen after its answer, so it \
-                was left to the person";
+    let left =
+        "not answered: it stayed on the screen after its answer, so it was left to the person";
+    let stayed = note("stays", left);
     assert!(
-        wait_until(LOADED_TIMEOUT, || home.daemon_log().contains(left)),
+        wait_until(LOADED_TIMEOUT, || home.daemon_log().contains(&stayed)),
         "{}",
         home.daemon_log()
     );
@@ -781,23 +905,19 @@ fn claude_code_s_trust_question_is_answered_once_with_yolo_on_and_left_to_the_pe
         Some(Vec::new()),
         "nothing more is typed for a question that stays on"
     );
-    assert!(
-        !home
-            .daemon_log()
-            .contains("#a3: its CLI's question about trusting the launch's folder was answered")
-    );
+    assert!(!home.daemon_log().contains(&note("stays", "answered")));
     // Drawn again on a cleared screen, the question is off it for 0.3 s: not long enough to count
     // as gone.
-    let redrawn_keys = start(&mut connect(&home), "redrawn", Answered::Redrawn);
+    let redrawn_keys = start("redrawn", Answered::Redrawn, true);
     assert!(
         wait_until(LOADED_TIMEOUT, || key(&redrawn_keys, "enter")
             .is_some_and(|key| !key.is_empty())),
         "{}",
         home.screen("redrawn")
     );
-    let left = left.replace("#a3", "#a4");
+    let redrawn = note("redrawn", left);
     assert!(
-        wait_until(LOADED_TIMEOUT, || home.daemon_log().contains(&left)),
+        wait_until(LOADED_TIMEOUT, || home.daemon_log().contains(&redrawn)),
         "{}",
         home.daemon_log()
     );
@@ -812,32 +932,38 @@ fn claude_code_s_trust_question_is_answered_once_with_yolo_on_and_left_to_the_pe
         Some(Vec::new()),
         "nothing more is typed for a question drawn again"
     );
-    assert!(
-        !home
-            .daemon_log()
-            .contains("#a4: its CLI's question about trusting the launch's folder was answered")
-    );
+    assert!(!home.daemon_log().contains(&note("redrawn", "answered")));
     // A CLI that keeps drawing once its question left, as one working on a prompt does, was
     // answered all the same.
-    let draws_keys = start(&mut connect(&home), "draws", Answered::Draws);
+    let draws_keys = start("draws", Answered::Draws, true);
     assert!(
         wait_until(LOADED_TIMEOUT, || key(&draws_keys, "enter")
             .is_some_and(|key| !key.is_empty())),
         "{}",
         home.screen("draws")
     );
-    let answered = answered.replace("#a1", "#a5");
+    let answered = note("draws", "answered, as YOLO is on");
     assert!(
         wait_until(LOADED_TIMEOUT, || home.daemon_log().contains(&answered)),
         "{}",
         home.daemon_log()
     );
     std::fs::write(draws_keys.join("ask"), "").unwrap();
-    assert!(
-        !home.daemon_log().contains(
-            "#a5: its CLI's question about trusting the launch's folder was not answered"
-        )
+    assert!(!home.daemon_log().contains(&note("draws", "not answered")));
+
+    let unknown_keys = start("unknown", Answered::UnrecognizedSelection, true);
+    let unknown = note(
+        "unknown",
+        "not answered: the selection did not show on the answer that trusts it",
     );
+    assert!(
+        wait_until(LOADED_TIMEOUT, || home.daemon_log().contains(&unknown)),
+        "{}",
+        home.daemon_log()
+    );
+    assert_eq!(key(&unknown_keys, "down"), Some(b"\x1b[B".to_vec()));
+    assert_eq!(key(&unknown_keys, "enter"), Some(Vec::new()));
+    assert_eq!(record(&home, "unknown")["state"], "waiting_for_you");
 }
 
 /// What the rule of each of the six CLIs adds with YOLO on, as its stand-in records its arguments

@@ -28,7 +28,7 @@ to speak of, so every other crate can depend on it and it depends on none of the
 
 - Dependencies inside the crate run one way: texts uses protocol; protocol, platform and settings
   use only the crate root; platform never uses protocol, and protocol uses of platform only
-  `paths::{ClientSocket, is_connection_lost}`, which the root re-exports.
+  `paths::{ClientSocket, connect_client_until, is_connection_lost}`, which the root re-exports.
 - Every branch by operating system in the crate is in `platform/`, and outside it only `rules`
   reads `system::SYSTEM`. Each public module of platform has the same items with the same
   signatures on every system, unless its documentation says an item is Unix's or Windows' alone.
@@ -62,7 +62,9 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 **The command line and Rust MCP**
 
 - `key_input` defines the public key names and batch limit. `key_problems` checks a batch and gives the current
-  spelling for a recognized alias.
+  spelling for a recognized alias. The shared key encoder and paste delimiters give Shell's preflight and
+  the daemon's typist the same one MiB input limit. `TerminalInput::typing_bytes` counts typed input with
+  the bytes for each paste and key.
 
 **Every program**
 - Build and version helpers include `build_id()`, `version()`, `VERSION`, `build_version(build)`,
@@ -114,6 +116,8 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 
 **The daemon**
 - `address::selector` parses CLI selectors and formats machine-qualified references.
+  `parse_command_reply_address` recognizes `#cN` with an optional machine selector for Send.
+  `format_command_reply_address` uses the assigned message ID and its machine selector.
   `address::mcp` handles the MCP address spelling.
   `ssh` extracts the destination from the supplied OpenSSH login arguments and keeps the original
   arguments in their order. When the remote platform is unknown, Route and Travel identify its
@@ -127,12 +131,16 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   `system::hostname` and `system::login_environment` supply the host name and login environment.
 - `model` groups shared runtime and stored data for agents, machines, messages, terminals and
   errors. `model::agent` provides shared agent identity and session validation.
-  `model::message` validates message text and formats delivery receipts. The daemon keeps the
-  required projections at the API and MCP boundaries.
+  `model::message` validates message text and formats delivery receipts. A command-line reply
+  marker follows the original message through the daemon's store and display projections.
+  `DeliveredVia::ReturnedToRequest` records a confirmed handoff to the waiting command.
 - `api_v1::daemon` supplies typed operation and topic markers, request and response DTOs, and
   audience-aware decoders. The registry records forwarding eligibility. Forwarded calls carry
   exact targets where required. A forwarded Attach watch carries the holder's viewer and daemon
   start ID, scoped to that watch. Saved-connection removal accepts an expected full machine ID.
+  Daemon v1 carries explicit Send waits, an optional reply result, ordered input, and native
+  session names alongside existing requests. `attach.shell` uses the ordinary Attach payloads
+  and is advertised to Terminal clients when the daemon can serve a dedicated watch.
   [Daemon reference](../../../core/protocol/DAEMON.md)
 - `api_v1` supplies shared bounded line framing, `Size`, and the JSON-RPC error envelope.
   A stable reason and optional object details carry information for callers, such as the settings
@@ -157,8 +165,11 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 - `api_v1::daemon_client::DaemonClient` is the blocking terminal client for authenticated local
   hello, typed calls and watches, and reconnect after takeover. It preserves the reader buffer
   when handing the stream over after machine authorization. The terminal can manage its own
-  reconnection through `disable_auto_reconnect`. The client supplies shared timeout and
-  transport helpers. Shell captures its launch environment.
+  reconnection through `disable_auto_reconnect`. `connect` bounds the local open and hello by
+  the given deadline. `reconnect_until` uses the same path and the saved Terminal socket.
+  `call_until` uses the caller's absolute deadline for request writes and response reads on the
+  negotiated connection. Existing calls can use `call_with_request_id` to recover an interrupted
+  start or send. Shell captures its launch environment.
 - `programs::{install_running, current_build, point_launchers_at, launcher}`;
   `service::{create_private_home, launch, live_holder}` to start the keeper;
   `unix_process::calling_program()` for a hook's CLI.
@@ -180,7 +191,10 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   Shell can opt in to a receipt carrying the exact failed file and HTTP status.
 - `console::{VtModes, ConsoleReader, ConsoleSignals, visible_content_end}`: what attach needs of
   the person's console beside crossterm's size and raw mode. On Windows, Attach can read the
-  visible content boundary and consume an exact queued release from its detach chord.
+  visible content boundary and consume an exact queued release from its detach chord. A native
+  wheel record gives one-based viewport coordinates, a signed delta and terminal modifier bits.
+  Attach sets capture according to the viewed screen's tracking mode. `VtModes` restores the
+  console's input and output modes on handback.
 
 **Rules**
 - `settings::{Settings, Member, Json, is_space}`: rules reads the CLI entries of `clis`.
@@ -214,12 +228,12 @@ graph TD
   platform --> root
   settings --> root
   root -. "pub use socket paths, ClientSocket" .-> platform
-  protocol -. "paths::ClientSocket, is_connection_lost" .-> root
+  protocol -. "paths::ClientSocket, connect_client_until, is_connection_lost" .-> root
 ```
 
-The root re-exports the socket paths, the client's socket and `is_connection_lost` from platform
-under `paths`, so a caller finds the home and its sockets in one module, and protocol's daemon
-client reaches the socket through the root alone. That is the only place the root uses a part.
+The root re-exports the socket paths, the client's socket, its bounded open helper and
+`is_connection_lost` from platform under `paths`. Protocol's daemon client reaches the socket
+through the root.
 
 There are no handles or events: each part is plain functions and types, and a part reaches
 another only by the one-way imports above. The one thread is platform's terminal I/O thread on
@@ -237,7 +251,7 @@ The daemon and keeper types and framing, and a blocking daemon client.
   and identity, so it can reach the daemon that takes over; a call whose request ID makes it safe
   to repeat, such as a send or a start, goes again to the daemon that responds next.
 - **Never does:** touches processes, locks, the socket folder or file permissions; uses platform
-  but `paths::{ClientSocket, is_connection_lost}`, settings or texts.
+  but `paths::{ClientSocket, connect_client_until, is_connection_lost}`, settings or texts.
 - **Interface** `api_v1` exports the current wire boundary. The generator verifies both endpoint
   schemas and guide examples. Run `FACADE_REGENERATE=1 cargo test -p facade-base --test protocol_files`
   to refresh the checked-in output.
@@ -301,12 +315,14 @@ What a model reads. `core/crates/base/src/texts/`.
   Facade's skill (`skill.rs`), and the eight tools' definitions as `tools/list` lists them
   (`tools.v3.json`, exposed as `tools::DEFINITIONS`).
 - **Keeps:** `for_connection` describes the tools before a new connection is associated with an
-  actor. `for_managed` adds the run's machine, folder, creator and saved YOLO. The skill explains
-  the workflow and ends with the version that wrote it.
+  actor. `for_managed` adds the run's machine, folder, creator and saved YOLO. Both describe
+  inbox acceptance, optional waits and command-line replies. The skill explains how to find
+  available CLIs, continue a reply wait and use the terminal tools. It ends with the Core version.
 - **Input:** the daemon's MCP server supplies `ManagedRun` from the agent's authenticated run.
 - **Interface:** `instructions::{for_connection, for_managed, Creator, ManagedRun}`,
   `skill::{text_v3, DESCRIPTION, DESCRIPTION_PREFIX, REPEATED_MESSAGE}`, `tools::DEFINITIONS`.
-  The tools themselves are described in [MCP.md](../../extension/engineering/MCP.md).
+  The [Core MCP contract](../../extension/engineering/MCP.md#7-mcp-through-the-orchestrator)
+  describes the tools and their results.
 
 ## Reading the code
 

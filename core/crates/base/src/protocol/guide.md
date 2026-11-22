@@ -62,6 +62,11 @@ and answered records. `machines[].status` is the outcome of this query and `stat
 observed connection state. A failure against a named machine is an outer error. In a reachable
 query the failed machine appears alongside the records obtained.
 
+Terminal roster rows from `agent.list` can include `session_name`, the CLI's native session
+name or preview. The holder can supply it through the existing authenticated Terminal query
+to `internal.agent_records` with `active:true`. If the label is unavailable within the roster
+budget or the holder is older, the field may be absent. `title` still describes the terminal.
+
 `agent.inspect` returns the agent, current input observation, session tracking and viewers.
 For a managed run it can include the recorded launch command with Facade's run credential
 redacted. `agent.screen` returns the tail of the logical screen and scrollback. Its default
@@ -118,6 +123,7 @@ A named machine can be woken. `folder_scope` chooses the current directory or al
 record folders and does not broaden the saved session directory. Pass the returned
 `target` unchanged to `agent.resume` with its runtime `size` and optional environment.
 A full saved-session target includes the machine, CLI, session ID and absolute folder.
+The resume list can also include `session_name` for a managed record or saved session.
 
 `location.list`, `cli.list` and `daemon.status` select one machine and default to local.
 Locations describe known work folders. CLI discovery uses the specified folder and
@@ -131,9 +137,39 @@ The public receipt identifies the assigning machine in a message address such as
 is verified at entry. A managed agent's delivery is confirmed when its terminal takes
 the submission. A Guest can read complete messages inline.
 
+Omitting `wait_for` keeps the released delivery wait, 30-second cap and receipt replay.
+Explicit `wait_for:"inbox"` returns once the message is saved in the recipient's inbox.
+Background delivery keeps its ordinary limit. `"delivery"` waits for the managed
+terminal's submission or the Guest's read. `"result"` waits for delivery and the first
+explicit reply to the original message from its recipient.
+
+Explicit waits use `time_left_ms` as the remaining total budget. The cap is 300 seconds
+for Terminal and 30 seconds for a verified MCP actor. Each forward carries the explicit
+wait mode and only the remaining budget. Older v1 decoders reject `wait_for` with
+`invalid_argument` before admission. A forwarding hop that only relays preserves the
+field. The caller receives the refusal and the operation is never downgraded.
+
+For a Shell result wait, the recipient receives a command address such as `#c42@devbox`.
+Reply through send with that address as `to` and the original `m42` as `reply_to`.
+The holder checks the original command request and the replying actor. An authenticated
+peer can hand off the reply to the origin with `internal.command_reply`. Once the origin
+accepts the first matching handoff, the reply sender can receive `returned_to_request`.
+The original Shell receives the optional `reply:{reference,text}` after confirmed delivery.
+An expired wait after confirmed delivery returns `reply_timeout`. Once the waiter closes,
+a new reply to that command returns `ended`. A verified MCP actor instead waits for its
+result in its own inbox.
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":20,"method":"call","params":{"op":"agent.send","args":{"to":"a2","text":"Run the checks and reply.","wait_for":"result","request_id":"send-20","time_left_ms":29900}}}
+{"jsonrpc":"2.0","id":20,"result":{"id":"m42@devbox","message":{"message_id":"m42","message_ref":{"machine_id":"11111111-1111-4111-8111-111111111111","message_id":"m42"},"from":"command_line","to":"a2","text":"Run the checks and reply.","at":"2026-11-20T17:00:00.000Z","delivery":{"status":"success","text_written":"full","enter_written":true,"delivered_via":"terminal"}},"reply":{"reference":{"machine_id":"11111111-1111-4111-8111-111111111111","message_id":"m43"},"text":"Checks passed.\n"}}}
+```
+
 Automatic retries of `agent.start` and `agent.send` use the original business
 `request_id`, arguments and destination. Its 1–200 Unicode code points identify the
 request for one hour from its first execution. An expired or different ID may execute again.
+Shell gives an explicit wait call the same absolute deadline used for its connection.
+This call uses one exchange and discards the connection on a transport timeout. A replay
+or takeover cannot reopen the original Shell reply waiter.
 `cancel {id}` addresses the original transport request on the same connection. Only an
 `agent.send` that has yet to start pasting can be cancelled. Once the original request
 finishes it reports its actual outcome.
@@ -170,6 +206,19 @@ reports `details.text_written` with optional `enter_written`, or `details.keys_s
 Raw bytes use standard Base64 with padding and require a full agent reference. They can be
 sent without an ID. A raw call with an ID acknowledges entry into the daemon's memory queue.
 
+`input.kind:"sequence"` carries ordered `steps` of `{kind:"text",text}` or `{kind:"key",key}`.
+The daemon checks the complete batch with the existing input size and key limits before
+admitting it once. Other input waits until the batch finishes. An older v1 decoder
+rejects the sequence with `invalid_argument` before any input reaches the terminal.
+A transparent forward preserves the batch. Text, keys and raw remain available in their
+existing forms. Shell preflight and daemon admission count each nonempty paste's UTF-8
+bytes and paste delimiters and each key's terminal bytes against the same 1 MiB limit.
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":21,"method":"call","params":{"op":"agent.type","args":{"target":"a2","input":{"kind":"sequence","steps":[{"kind":"text","text":"hello"},{"kind":"key","key":"Enter"}]}}}}
+{"jsonrpc":"2.0","id":21,"result":{}}
+```
+
 ### Screen text
 
 `agent.screen` joins wrapped rows into logical lines. `older_lines` tells whether additional
@@ -184,6 +233,29 @@ braces and backslashes that occur literally on the screen.
 bytes to the same parser in arrival order. A `redraw` replaces the visible screen and may
 supply a new size. `report_activity` requests the `working` flag and activity changes.
 `allow_ended` with an exact reference reads a final terminal snapshot without an active view.
+
+`watch attach.shell` uses the same arguments, snapshot and changes as `attach`. To open a
+dedicated watch, send it as the first operation after Terminal hello when `hello.topics`
+advertises it. The daemon refuses the watch if the connection already carried another
+operation. After foreground start or resume on a daemon advertising `attach.shell`, release
+the command connection and open a fresh Terminal connection. Preserve the exact target and
+`allow_ended` setting, and select the watch using the new hello. Use ordinary `attach` when
+the dedicated topic is absent, reusing the command connection if it is still open.
+
+Admission dedicates the connection to one watch. The connection accepts raw input to its
+exact target, resize or unwatch for its own view, and connection controls. A failed watch
+can be retried on a fresh connection.
+The daemon sends final screen output before `exit` and closes the dedicated connection
+after a drain grace of up to one second. An already-ended exact snapshot is itself final.
+Remote holders are watched through ordinary `attach`, which remains available to IDEs,
+older terminals and authenticated peers.
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":44,"method":"watch","params":{"topic":"attach.shell","args":{"target":{"machine_id":"11111111-1111-4111-8111-111111111111","agent_id":"a2"}}}}
+{"jsonrpc":"2.0","id":44,"result":{"watch":8,"snapshot":{"reference":{"machine_id":"11111111-1111-4111-8111-111111111111","agent_id":"a2"},"address":"a2","size":{"cols":100,"rows":30},"redraw":"G1sySg=="}}}
+{"jsonrpc":"2.0","method":"changed","params":{"watch":8,"change":{"kind":"output","data":"ZG9uZQ=="}}}
+{"jsonrpc":"2.0","method":"changed","params":{"watch":8,"change":{"kind":"exit","exit":{"code":0,"at":"2026-11-20T17:01:00.000Z"},"exit_status":0}}}
+```
 
 Report initial capacity in the watch and subsequent changes via `attach.resize`. The shared
 grid takes the smallest columns and smallest rows of the active views. `unwatch` releases
@@ -239,6 +311,11 @@ agent targets. An authenticated forwarded Attach can return `view:{viewer,boot_i
 the holder's live view. The entry daemon uses that binding and the original caller for
 `internal.attach_resize`. The public watch response carries `watch` and `snapshot`.
 
+```jsonl daemon-machine
+{"jsonrpc":"2.0","id":74,"method":"forward","params":{"route":["22222222-2222-4222-8222-222222222222"],"caller":{"kind":"agent","agent":{"machine_id":"11111111-1111-4111-8111-111111111111","agent_id":"a2"},"root":{"machine_id":"11111111-1111-4111-8111-111111111111","agent_id":"a2"},"yolo":true},"method":"call","params":{"op":"internal.command_reply","args":{"request_id":"send-20","original":{"machine_id":"11111111-1111-4111-8111-111111111111","message_id":"m42"},"reply":{"reference":{"machine_id":"11111111-1111-4111-8111-111111111111","message_id":"m43"},"text":"Checks passed."}}}}}
+{"jsonrpc":"2.0","id":74,"result":{}}
+```
+
 An installed remote executable tries its existing serve command and negotiates API
 compatibility. Passive queries use `--no-start`. Authenticated exit 3 reports that the
 remote daemon is sleeping. A missing executable can be installed only with explicit
@@ -283,6 +360,14 @@ Outer responses, per-target outcomes and failure notifications share
 and `-32000` cover parse errors, invalid requests, unknown methods, invalid arguments or
 unknown operations, and Facade failures, respectively. Branch on the reason you recognize
 and preserve the message and details for an unknown reason.
+
+An error for an authorized send can include `data.details.message_ref` once the message
+is assigned. It identifies the original send by `machine_id` and `message_id`. A failed
+result wait, such as `reply_timeout` or an interruption reported as `unavailable`, can
+also include `data.details.delivered_via` when the delivery receipt confirms `terminal`
+(terminal submission) or `read` (recipient inbox read). If only assignment is known,
+report the original reference alone. An MCP inbox continuation can report `reply_timeout`
+with just the original message ID.
 
 A failed route can report `unavailable.details.execution`. With `not_executed` the client
 can retry subject to the original permissions and wake policy. With `outcome_unknown` it

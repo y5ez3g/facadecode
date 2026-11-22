@@ -32,6 +32,7 @@ use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use facade_base::address::default_machine_name;
 use facade_base::address::selector::{exact_machine_selector, format_agent_address};
@@ -470,11 +471,20 @@ fn run(command: Command) -> anyhow::Result<i32> {
         } => commands::screen(&mut connect_or_start()?, agent, lines).map(done),
         Command::Type {
             target: Target { agent },
+            input,
+            ..
+        } => commands::type_input(&mut connect_or_start()?, agent, input).map(done),
+        Command::Send {
+            to,
             text,
-            enter,
-            keys,
-        } => commands::type_input(&mut connect_or_start()?, agent, text, enter, keys).map(done),
-        Command::Send { to, text } => commands::send(&mut connect_or_start()?, to, text).map(done),
+            wait_for,
+            timeout,
+            ..
+        } => {
+            let until = Instant::now() + Duration::from_secs(u64::from(timeout));
+            let mut client = daemon_client::connect_or_start_until(until)?;
+            commands::send(&mut client, to, text, wait_for, timeout, until).map(done)
+        }
         Command::Rename {
             target: Target { agent },
             name,

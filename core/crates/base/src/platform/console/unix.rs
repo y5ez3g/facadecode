@@ -13,6 +13,10 @@ impl VtModes {
         Ok(VtModes)
     }
 
+    pub(super) fn set_mouse_capture(&self, _enabled: bool) -> io::Result<()> {
+        Ok(())
+    }
+
     pub(super) fn restore(&self) {}
 }
 

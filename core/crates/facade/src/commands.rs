@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use facade_base::address::default_machine_name;
 use facade_base::address::selector::{exact_machine_selector, parse_machine_selector};
@@ -11,13 +11,13 @@ use facade_base::api_v1::daemon::{
     AgentCreator, AgentInfo, AgentInspect, AgentKind, AgentList, AgentListArgs, AgentListEntry,
     AgentRename, AgentResume, AgentResumeList, AgentScreen, AgentSend, AgentStart, AgentState,
     AgentStop, AgentTarget, AgentTargetArgs, AgentType, AgentTypeArgs, AttachmentKind,
-    BatchStopResult, CliList, CliListArgs, DaemonStatus, FolderScope, InspectResult,
+    BatchStopResult, CliList, CliListArgs, DaemonStatus, FolderScope, InputStep, InspectResult,
     MachineIdentity, MachineList, MachineQuery, MachineState, ProcessState, QueryStatus,
     RenameArgs, ResumeArgs, ResumeCandidate, ResumeListArgs, ResumeTarget, Scope, ScreenArgs,
-    SendArgs, SingleMachineScope, StartArgs, StatusArgs, StatusResult, StopArgs, StopItem,
-    StopOutcome, StopSelection, TerminalInput,
+    SendArgs, SendWait, SingleMachineScope, StartArgs, StatusArgs, StatusResult, StopArgs,
+    StopItem, StopOutcome, StopSelection, TerminalInput,
 };
-use facade_base::api_v1::daemon_client::DaemonClient;
+use facade_base::api_v1::daemon_client::{Cut, DaemonClient, upgrading};
 use facade_base::api_v1::{NoArgs, Size};
 use facade_base::model::agent::{HowEnded, WaitKind};
 use facade_base::model::terminal::{DEFAULT_TERMINAL_SIZE, display_line, plain};
@@ -34,7 +34,7 @@ const ROSTER_COLUMNS: [&str; 8] = [
     "TYPE",
     "WORKING DIRECTORY",
     "STARTED",
-    "TITLE",
+    "SESSION",
 ];
 
 pub(crate) fn start(
@@ -385,28 +385,40 @@ pub(crate) fn screen(client: &mut DaemonClient, agent: String, lines: u16) -> an
 pub(crate) fn type_input(
     client: &mut DaemonClient,
     agent: String,
-    text: Option<String>,
-    enter: bool,
-    keys: Vec<String>,
+    input: TerminalInput,
 ) -> anyhow::Result<()> {
-    let action = match keys.as_slice() {
-        [key] => TypeAction::Key(single_line(key)),
-        [] => TypeAction::Text { enter },
-        keys => TypeAction::Keys(keys.len()),
-    };
-    let typed = client
-        .call::<AgentType>(AgentTypeArgs {
-            target: AgentTarget::Selector(agent.clone()),
-            input: if keys.is_empty() {
-                TerminalInput::Text {
-                    text: text.unwrap_or_default(),
-                    enter,
-                }
+    let sequence = matches!(&input, TerminalInput::Sequence { .. });
+    let action = match &input {
+        TerminalInput::Text { enter, .. } => TypeAction::Text { enter: *enter },
+        TerminalInput::Keys { keys } => match keys.as_slice() {
+            [key] => TypeAction::Key(single_line(key)),
+            keys => TypeAction::Keys(keys.len()),
+        },
+        TerminalInput::Sequence { steps } => {
+            if steps
+                .iter()
+                .any(|step| matches!(step, InputStep::Key { .. }))
+            {
+                TypeAction::Mixed
             } else {
-                TerminalInput::Keys { keys }
-            },
-        })
-        .map_err(|error| errors::agent_failed(AgentCommand::Type, &agent, error))?;
+                TypeAction::Text { enter: false }
+            }
+        }
+        TerminalInput::Raw { .. } => unreachable!("the CLI does not submit raw terminal input"),
+    };
+    let args = AgentTypeArgs {
+        target: AgentTarget::Selector(agent.clone()),
+        input,
+    };
+    let typed = if sequence {
+        client
+            .begin_call::<AgentType>(args)
+            .and_then(|id| client.result::<AgentType>(id))
+    } else {
+        // Keep reconnect on a pre-admission takeover refusal for existing input forms.
+        client.call::<AgentType>(args)
+    }
+    .map_err(|error| errors::type_failed(&agent, sequence, error))?;
     let recipient = typed.agent.as_ref().map_or_else(
         || single_line(&agent),
         |agent| errors::agent_label(Some(&agent.name), &agent.address),
@@ -419,6 +431,7 @@ enum TypeAction {
     Text { enter: bool },
     Key(String),
     Keys(usize),
+    Mixed,
 }
 
 impl TypeAction {
@@ -430,23 +443,87 @@ impl TypeAction {
             Self::Text { enter: false } => format!("Typed into {agent}'s terminal."),
             Self::Key(key) => format!("Pressed {key} in {agent}'s terminal."),
             Self::Keys(count) => format!("Sent {count} key presses to {agent}'s terminal."),
+            Self::Mixed => format!("Typed text and pressed keys in {agent}'s terminal."),
         }
     }
 }
 
-pub(crate) fn send(client: &mut DaemonClient, to: String, text: String) -> anyhow::Result<()> {
+pub(crate) fn send(
+    client: &mut DaemonClient,
+    to: String,
+    text: String,
+    wait_for: SendWait,
+    timeout: u16,
+    until: Instant,
+) -> anyhow::Result<()> {
     let args = SendArgs {
         to: AgentTarget::Selector(to.clone()),
         text,
         reply_to: None,
         request_id: Some(made_request_id()),
         time_left_ms: None,
+        wait_for: Some(wait_for),
         allow_unsupported_receipt: true,
     };
-    let (result, _) = client
-        .call_with_request_id::<AgentSend>(args, false)
-        .map_err(|error| errors::agent_failed(AgentCommand::Send, &to, error))?;
-    println_or_end!("{}", errors::delivery_receipt(&result, &to)?);
+    let mut replaying = false;
+    let result = loop {
+        let time_left_ms = until.saturating_duration_since(Instant::now()).as_millis() as u64;
+        if time_left_ms == 0 {
+            if replaying {
+                break Err(Cut.into());
+            }
+            anyhow::bail!("the delivery time expired before the message was sent");
+        }
+        let attempt = client.call_until::<AgentSend>(
+            SendArgs {
+                time_left_ms: Some(time_left_ms),
+                ..args.clone()
+            },
+            until,
+        );
+        match &attempt {
+            // This refusal comes before the call is admitted, even for a reply wait.
+            Err(error) if upgrading(error) => {}
+            Err(error)
+                if !replaying
+                    && matches!(wait_for, SendWait::Inbox | SendWait::Delivery)
+                    && error.is::<Cut>()
+                    && client.closing.is_some() =>
+            {
+                replaying = true;
+            }
+            _ => break attempt,
+        }
+        if let Err(error) = client.reconnect_until(until) {
+            if replaying {
+                break Err(Cut.into());
+            }
+            return Err(
+                error.context("could not reconnect after Facade refused the send during takeover")
+            );
+        }
+    }
+    .map_err(|error| errors::send_failed(wait_for, &to, timeout, error))?;
+    match wait_for {
+        SendWait::Inbox => {
+            let recipient = result.recipient.as_ref().map_or_else(
+                || single_line(&to),
+                |agent| errors::agent_label(Some(&agent.name), &agent.address),
+            );
+            println_or_end!("Saved {} in {recipient}'s inbox.", result.id);
+        }
+        SendWait::Delivery => {
+            println_or_end!("{}", errors::delivery_receipt(&result, &to, timeout)?)
+        }
+        SendWait::Result => {
+            if let Some(reply) = result.reply.as_ref() {
+                print_or_end!("{}", reply.text);
+            } else {
+                errors::delivery_receipt(&result, &to, timeout)?;
+                anyhow::bail!("the daemon returned delivery without a reply");
+            }
+        }
+    }
     Ok(())
 }
 
@@ -703,9 +780,9 @@ fn value_or_dash(value: &str) -> &str {
     if value.trim().is_empty() { "-" } else { value }
 }
 
-fn title_cell(title: Option<&str>) -> String {
-    let title = title.map_or(String::new(), |title| display_line(title, 40));
-    value_or_dash(&title).into()
+fn session_cell(name: Option<&str>) -> String {
+    let name = name.map_or(String::new(), |name| display_line(name, 40));
+    value_or_dash(&name).into()
 }
 
 pub(crate) fn list_text(agents: &[AgentListEntry], now: SystemTime) -> String {
@@ -724,7 +801,7 @@ pub(crate) fn list_text(agents: &[AgentListEntry], now: SystemTime) -> String {
                     "-".into()
                 },
                 age(&agent.started_at, now),
-                title_cell(agent.title.as_deref()),
+                session_cell(agent.session_name.as_deref()),
             ]
         })
         .collect();
@@ -769,7 +846,7 @@ pub(crate) fn resume_list_text(
                 item.at
                     .as_deref()
                     .map_or_else(|| "-".into(), |at| age(at, now)),
-                title_cell(item.title.as_deref()),
+                session_cell(item.session_name.as_deref()),
             ]
         })
         .collect();

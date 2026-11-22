@@ -132,13 +132,14 @@ question, permission prompt or sign-in. `just_done` means a turn finished and ha
 
 ```text
 $ facade list
-NAME   REF         STATE     CLI      TYPE      WORKING DIRECTORY  STARTED  TITLE
+NAME   REF         STATE     CLI      TYPE      WORKING DIRECTORY  STARTED  SESSION
 Eve    a9@devbox   Idle      claude   Managed   /work/app-wt       1m ago   Write release notes
 Cora   a5@laptop   Online    cursor   Guest     -                  5m ago   -
 Ada    a3@laptop   Working   codex    Managed   /work/app          2h ago   Fix the failing parser test
 ```
 
-`TITLE` is the title the CLI reports. The list truncates it at 40 characters.
+`SESSION` shows the CLI's saved session name or its preview for an unnamed session. The list shows `-` when
+the native session history is unavailable and truncates the name or preview at 40 characters.
 
 ### Permissions and YOLO
 
@@ -148,7 +149,7 @@ it from the machine it joins and keeps that value for the connection.
 
 | | YOLO on | YOLO off |
 | --- | --- | --- |
-| CLI permission prompts and folder trust | Facade bypasses or answers them where supported | The CLI's normal behavior applies |
+| CLI permission prompts and folder trust | Facade bypasses or answers supported prompts according to the CLI's rules and who started the run | The CLI's normal behavior applies |
 | CLI sandbox | Facade disables it where supported | The CLI's normal behavior applies |
 | Questions the CLI asks the person | The person answers | The person answers |
 | Facade tool prompts | Waived | Waived |
@@ -175,26 +176,21 @@ a private identity, and a user-configured entry can also be identified by its se
 started by an agent, such as a `claude -p` process with its own session, joins as a Guest. The first tool call
 fixes the identity for the connection. A Guest can be listed and receive messages from that point.
 
-A Guest normally sends a message first. On successful delivery, the reply includes a `next` tool call with the
-sent message's full address.
+A Guest that needs an answer can ask `send_message` to wait for the first linked reply.
 
 ```json
 {
-  "status": "success",
-  "data": {
-    "id": "m42@laptop",
-    "delivery": "typed_into_input",
-    "next": {
-      "tool": "read_messages",
-      "arguments": {"wait": true, "reply_to": "m42@laptop"}
-    }
-  }
+  "to": "a3@laptop",
+  "text": "Run the checks and reply to this message.",
+  "wait_for": "result",
+  "timeout_seconds": 30
 }
 ```
 
-Each wait can last up to 30 seconds. A Guest must take an incoming message within the delivery deadline. When
-it waits for a particular reply, the sender needs the corresponding `reply_to`. Managed agents receive replies
-in their terminals. A Guest leaves the roster on disconnect and has no session to resume.
+After `reply_timeout`, use the original full `data.id` as `read_messages.reply_to` with a positive `timeout_seconds`.
+Each wait has its own budget of at most 30 seconds. The Guest keeps its connection open and takes incoming messages
+within their delivery deadline. Managed agents normally receive replies in their terminals. A Guest leaves the roster
+on disconnect and has no session to resume.
 
 ## Running agents
 
@@ -283,8 +279,9 @@ to the agent that started it.
   run uses the target login environment.
 - **Models, effort and prompts.** Pass supported native options after the CLI name. The target machine's
   settings can supply defaults. A managed resume reuses the recorded launch choices.
-- **Folder trust and setup.** With YOLO on, Facade handles trust prompts where the CLI supports it. With YOLO
-  off, you answer them. Facade configures `facade-mcp` and hooks per run and leaves global CLI settings alone.
+- **Folder trust and setup.** People who start Claude Code see its native folder trust question. For an
+  agent-initiated start, Facade can confirm the expected trust option when YOLO is on at the target home.
+  Facade configures `facade-mcp` and hooks per run and leaves global CLI settings alone.
 - **Ending and resuming.** A CLI exit, crash or machine reboot ends the run. Use `resume` to continue it.
   VS Code can resume pinned agents when their workspace reopens.
 - **Errors.** Start reports the failing step, such as a connection, folder, worktree, missing program or
@@ -303,7 +300,7 @@ for the full rules.
 
 | CLI | Facade behavior |
 | --- | --- |
-| Claude Code | With YOLO on, Facade recognizes the folder trust prompt and answers it in the terminal. |
+| Claude Code | A person who starts the CLI answers its native folder trust question. For an agent-initiated start with YOLO on, Facade verifies the question and the selected trust option before confirming. |
 | Antigravity | Facade makes a project plugin available under `.agents/plugins/facade/` while needed. A second Antigravity process that reads the same run configuration can be identified as that run. On startup Facade checks that the `facade` MCP tools are ready before delivering a first prompt. |
 | Muse | When the CLI uses an existing `facade` MCP entry in place of the managed entry, Facade resolves identity from the CLI session. |
 | Pi | The managed entry carries the run identity because Pi does not pass a session ID to the MCP server. A manually configured Pi MCP entry joins as a Guest. |
@@ -320,8 +317,8 @@ Use messages to communicate with agents and the terminal to see and interact wit
 
 A message goes to one agent and can contain up to 8,000 Unicode code points and 540 lines of text. A managed
 agent or Guest sends with its own identity through MCP. Shell sends as **the command line**, including when
-run from an agent's terminal. A command-line message has no reply address. In the Orchestrator, message recipients
-are agents. Use the terminal or agent status to keep up with them.
+run from an agent's terminal. The ordinary Shell receipt confirms inbox acceptance. `-w` waits for delivery.
+`-r` gives that invocation a reply address and prints the first linked reply from the original recipient.
 
 The recipient's machine issues the message number. Across machines, use its full address, such as
 `m17@devbox` or `m17@9a0d44b2`. To reply to a message in your own inbox, pass `reply_to` with its local number
@@ -335,13 +332,15 @@ from the receipt into `read_messages`.
 | Ended agent | Facade reports that the agent has stopped. |
 | Agent outside the caller's reach | Facade reports a permissions error and withholds the target's identity. |
 
-Delivery has a 30-second deadline. When delivery fails before submission, Facade withdraws it and gives the sender
-the reason. If you receive an uncertain outcome, check the actual screen or inbox before trying another send.
+Background delivery has a 30-second deadline. An explicit Shell wait uses the remaining command budget, set with
+`-t` from 1 to 300 seconds. When delivery fails before submission, Facade withdraws the message. A caller waiting
+for delivery gets the reason.
 
 ```text
 📨 Message from ada (a3@laptop) · m42
 📨 Message from the command line · m43
-📨 Message from eve (a9@devbox) · m44 · Reply to m17@devbox
+📨 Message from the command line (#c44@devbox) · m44
+📨 Message from eve (a9@devbox) · m45 · Reply to m17@devbox
 ```
 
 Facade marks delivery and wait notices with 🔔. The creator receives the result of an agent's first task delivery.
@@ -360,8 +359,8 @@ receipt. Automatic reconnect retries reuse the original request's outcome when i
 - Active Attach views share one grid. Its columns and rows are the smallest capacity in each dimension across
   the active viewers. A larger Shell draws the shared grid at its upper left. Resizing or closing a view can
   change the shared grid. VS Code can supply terminal colors.
-- Press Ctrl+] to detach from Shell and leave the agent running. `facade status <AGENT>` lists active viewers
-  under `Attached in`.
+- Press Ctrl+] to detach from Shell and leave the agent running. A CLI exit also returns to the same shell and
+  preserves its history. `facade status <AGENT>` lists active viewers under `Attached in`.
 - On reconnect, the client redraws from the current screen. Shell reports any dropped input in bytes.
 - Remote terminal operations use the same permission checks as local operations.
 
@@ -394,8 +393,9 @@ facade start [--machine M] [--workdir D] [--worktree B] [-n N] [-d] <CLI> [CLI_A
 facade list [--local | --machine <MACHINE>]
 facade attach a3@devbox
 facade send ada "Run the tests"
+facade send ada "Run the tests and reply" -r -t 120
 facade screen a3
-facade type a3 "yes" --enter
+facade type a3 "yes" -k Enter
 facade stop <AGENT>...
 facade stop --local
 facade stop --machine <MACHINE>
@@ -427,11 +427,11 @@ Agents and external applications use these eight tools through `facade-mcp`.
 
 | Tool | What it does |
 | --- | --- |
-| `list_agents` | Lists running managed agents and connected Guests within the caller's reach. |
+| `list_agents` | Lists running managed agents, connected Guests and available CLI names on reachable machines. |
 | `start_agent` | Starts a managed agent. Use `machine` to choose a machine and `folder` to choose the working folder. |
 | `stop_agent` | Stops one managed agent. Its helpers keep running. |
-| `send_message` | Sends to one agent and returns the complete message address. A Guest also receives a `next` call for waiting on the reply. |
-| `read_messages` | Reads the caller's inbox without waiting by default. Specify `wait` to wait up to 30 seconds, optionally for one `reply_to`. |
+| `send_message` | Saves a message and returns its full address. Set `wait_for` and a positive `timeout_seconds` to wait for delivery or a linked reply. |
+| `read_messages` | Reads the caller's inbox. Set a positive `timeout_seconds` to wait up to 30 seconds, optionally for one `reply_to`. |
 | `read_screen` | Reads screen text from a managed agent. |
 | `type_text` | Types text in a running managed agent's terminal. |
 | `press_keys` | Presses keys in a running managed agent's terminal. |
@@ -481,7 +481,7 @@ The [VS Code product guide](extension/PRODUCT.md) explains the editor entry in m
 3. **Have agents work together.** Ada can use MCP to start two helpers. Their cards appear in the workspace
    that remembers Ada. The helpers reply using `reply_to`, and Ada can read their screens.
 4. **Join from an external app.** Register `facade-mcp` in Cursor. With YOLO on, the Guest can send Ada a
-   message and use the resulting `read_messages` call to wait for a reply. With YOLO off, it works within its
-   own creation tree.
+   message with `wait_for: "result"` and a positive `timeout_seconds`. If the reply wait ends first, it can
+   read again using the original full message address. With YOLO off, it works within its own creation tree.
 5. **Resume work.** Use `facade resume` to find Ada after it has stopped. `facade resume ada` continues
    the original session with the same reference and model. Reopen a VS Code workspace to resume its Pins.

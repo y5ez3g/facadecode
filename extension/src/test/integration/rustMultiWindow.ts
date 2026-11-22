@@ -102,17 +102,17 @@ export async function withRustWindows(files: WindowFiles, start: StartEditor, jo
 			ready, act,
 			workbench: () => Workbench.connect(port, path.basename(folder)),
 			close: async (options) => {
-				await act<boolean>({ kind: 'close' });
+				await act<boolean>({ kind: 'close', quit: options?.waitForExit });
 				if (process.platform !== 'win32' && !options?.waitForExit) {
 					await endEditors([editor]);
 					return;
 				}
-				// The driver's reply comes during shutdown. Let VS Code finish saving its editor layout before reopening.
+				// The driver's reply comes during shutdown. Wait for VS Code to flush its profile before reopening.
 				try {
 					await until(`the VS Code process for ${profile} to exit`, () =>
 						editor.exitCode !== null || editor.signalCode !== null || undefined, 20_000);
 				} finally {
-					console.log(`  VS Code ${profile} after Close Window has exit code ${editor.exitCode} and signal ${editor.signalCode ?? 'none'}`);
+					console.log(`  VS Code ${profile} after shutdown has exit code ${editor.exitCode} and signal ${editor.signalCode ?? 'none'}`);
 				}
 				assert.strictEqual(editor.exitCode, 0, `VS Code ${profile} did not exit cleanly`);
 			}
@@ -932,7 +932,7 @@ async function sameWorkspace(open: OpenWindow, journey: WindowJourney): Promise<
 	assert.strictEqual(before[1].filter, undefined);
 	assert.deepStrictEqual(before.map(each => each.column), [2, 1]);
 
-	await Promise.all([left.close(), right.close()]);
+	await Promise.all([left.close({ waitForExit: true }), right.close({ waitForExit: true })]);
 	const firstBack = await open(folder, 'c');
 	const secondBack = await open(folder, 'd');
 	for (const window of [firstBack, secondBack]) {

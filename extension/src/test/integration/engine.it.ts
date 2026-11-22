@@ -83,7 +83,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 			assert.deepStrictEqual(created.started_by, { kind: 'vs_code' });
 			assert.strictEqual(resolvedFolder(created.agent.cwd), resolvedFolder(vscode.workspace.workspaceFolders![0].uri.fsPath));
 			const [header, ...rows] = stdout.split(/\r?\n/u);
-			assert.deepStrictEqual(header.trimEnd().split(/ {2,}/u), ['NAME', 'REF', 'STATE', 'CLI', 'TYPE', 'WORKING DIRECTORY', 'STARTED', 'TITLE']);
+			assert.deepStrictEqual(header.trimEnd().split(/ {2,}/u), ['NAME', 'REF', 'STATE', 'CLI', 'TYPE', 'WORKING DIRECTORY', 'STARTED', 'SESSION']);
 			const row = rows.find(line => line.split(/ {2,}/u)[1] === created.agent.address);
 			assert.ok(row, `the terminal lists ${created.agent.address}: ${stdout}`);
 			const [name, , , cli, type] = row.split(/ {2,}/u);

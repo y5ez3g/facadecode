@@ -185,18 +185,39 @@ fn a_synchronized_update_is_one_frame() {
 #[test]
 fn redraw_carries_the_modes_a_viewer_needs() {
     let mut screen = Screen::new(20, 5, 0);
-    screen.feed(b"\x1b[?2004h\x1b[?1h\x1b[?25l");
+    screen.feed(b"\x1b[?2004h\x1b[?1h\x1b[?25l\x1b[?1000h\x1b[?1006h");
     let redraw = String::from_utf8(screen.redraw(false, true)).unwrap();
     assert!(
         redraw.contains("\x1b[?2004h")
             && redraw.contains("\x1b[?1h")
             && redraw.contains("\x1b[?25l")
     );
+    let mut viewer = Screen::new(20, 5, 0);
+    viewer.feed(redraw.as_bytes());
+    assert!(viewer.reports_mouse());
+    assert_eq!(
+        viewer.encode_wheel(20, 5, -240, 12).as_deref(),
+        Some(&b"\x1b[<77;20;5M\x1b[<77;20;5M"[..])
+    );
+    assert_eq!(viewer.encode_wheel(21, 5, 120, 0), None);
+    viewer.feed(b"\x1b[?1006l");
+    assert_eq!(
+        viewer.encode_wheel(20, 5, 120, 16).as_deref(),
+        Some(&b"\x1b[Mp4%"[..])
+    );
+    viewer.resize(250, 5);
+    assert_eq!(viewer.encode_wheel(250, 5, 120, 0), None);
+    viewer.feed(b"\x1b[?1005h");
+    assert_eq!(
+        viewer.encode_wheel(250, 5, 120, 0).as_deref(),
+        Some("\x1b[M`Ě%".as_bytes())
+    );
 }
 
 #[test]
 fn a_redraw_kept_over_the_viewer_s_scrollback_adds_no_rows_to_it() {
     let mut screen = Screen::new(20, 4, 100);
+    assert!(screen.title_output().is_empty());
     for n in 0..10 {
         screen.feed(format!("line {n}\r\n").as_bytes());
     }
@@ -210,6 +231,39 @@ fn a_redraw_kept_over_the_viewer_s_scrollback_adds_no_rows_to_it() {
         shown,
         "redrawing the visible rows must not move them into the viewer's scrollback"
     );
+
+    for (cols, rows) in [(20, 6), (24, 4)] {
+        let mut viewer = Screen::new(cols, rows, 100);
+        viewer.feed(&screen.redraw_in_viewport(true, true));
+        let history = viewer.scrollback_rows();
+        let main = viewer.text(100);
+        screen.feed(b"\x1b[?1049h\x1b[H\x1b[44mold frame\x1b[0m\x1b]2;attach\x07");
+        viewer.feed(b"\x1b[?1049h");
+        let frame = screen.redraw_for_attach(true, false);
+        assert!(frame.ends_with(&screen.title_output()));
+        let attached = viewer.feed(&frame);
+        assert_eq!(attached.title_change.as_deref(), Some("attach"));
+        screen.feed(
+            "\x1b[2;1H01234567890123456789\x1b[H\x1b[Ka\t界\x1b[?1h\x1b]2;updated\x07".as_bytes(),
+        );
+        let frame = screen.redraw_in_viewport_update();
+        assert!(frame.ends_with(&screen.title_output()));
+        let updated = viewer.feed(&frame);
+        assert!(viewer.on_alternate_screen());
+        assert!(viewer.application_cursor_keys());
+        assert_eq!(viewer.cursor(), screen.cursor());
+        assert_eq!(updated.title_change.as_deref(), Some("updated"));
+        assert_eq!(viewer.text(10), vec!["a       界", "01234567890123456789"]);
+        viewer.feed(b"\x1b[?1049l");
+        assert_eq!(viewer.scrollback_rows(), history);
+        assert_eq!(viewer.text(100), main);
+        let return_to_main = b"\x1b]9;4;1;50\x07\x1b[?1049l\x1b]2;main\x07\x1b]9;4;0;0\x1b\\";
+        let fed = screen.feed(return_to_main);
+        assert!(fed.redraw_viewers);
+        assert_eq!(fed.viewer_output, return_to_main);
+        assert_eq!(fed.native_activity, b"\x1b]9;4;1;50\x07\x1b]9;4;0;0\x1b\\");
+        assert_eq!(screen.title_output(), b"\x1b]2;main\x1b\\");
+    }
 }
 
 #[test]
@@ -218,8 +272,17 @@ fn a_redraw_with_all_scrollback_restores_every_retained_row() {
     for n in 0..1500 {
         screen.feed(format!("row-{n:04} \x1b[3{}mcolour\x1b[0m\r\n", n % 8).as_bytes());
     }
+    let old_checkpoint = screen.redraw_with_all_scrollback();
+    screen.restore_title("native title");
+    assert!(screen.feed(b"").title_change.is_none());
+    let mut recovered = Screen::new(20, 3, 2000);
+    recovered.feed(&old_checkpoint);
+    recovered.restore_title("native title");
+    let restored_title = recovered.feed(b"\x1b[22;0t\x1b]2;temporary\x07\x1b[23;0t");
+    assert_eq!(restored_title.title_change.as_deref(), Some("native title"));
     let mut copy = Screen::new(20, 3, 2000);
-    copy.feed(&screen.redraw_with_all_scrollback());
+    let restored = copy.feed(&recovered.redraw_with_all_scrollback());
+    assert_eq!(restored.title_change.as_deref(), Some("native title"));
     assert_eq!(copy.text(2000), screen.text(2000));
     assert_eq!(
         copy.text(2000).first().map(String::as_str),

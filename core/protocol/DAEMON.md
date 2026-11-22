@@ -44,7 +44,7 @@ added optional output and notification fields and skip unknown event kinds.
 
 ```jsonl daemon-local
 {"jsonrpc":"2.0","id":1,"method":"hello","params":{"api_versions":[1],"build":"1.0.0+example","kind":"terminal"}}
-{"jsonrpc":"2.0","id":1,"result":{"api_version":1,"build":"1.0.0+example","machine_id":"11111111-1111-4111-8111-111111111111","pid":4321,"agent_count":1,"ops":["agent.list","agent.start","agent.stop","agent.resume_list","agent.resume","agent.inspect","agent.screen","agent.type","agent.send","agent.remove","agent.rename","attach.resize","cli.list","location.list","machine.list","machine.connect","machine.remove","machine.rename","daemon.status","daemon.log","daemon.upgrade"],"topics":["agents","machines","attach"],"keeper":{"pid":4320,"build":"1.0.0+example"}}}
+{"jsonrpc":"2.0","id":1,"result":{"api_version":1,"build":"1.0.0+example","machine_id":"11111111-1111-4111-8111-111111111111","pid":4321,"agent_count":1,"ops":["agent.list","agent.start","agent.stop","agent.resume_list","agent.resume","agent.inspect","agent.screen","agent.type","agent.send","agent.remove","agent.rename","attach.resize","cli.list","location.list","machine.list","machine.connect","machine.remove","machine.rename","daemon.status","daemon.log","daemon.upgrade"],"topics":["agents","machines","attach","attach.shell"],"keeper":{"pid":4320,"build":"1.0.0+example"}}}
 {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"agent.list","args":{"scope":{"kind":"local"}}}}
 {"jsonrpc":"2.0","id":2,"result":{"agents":[],"machines":[{"machine_id":"11111111-1111-4111-8111-111111111111","short_id":"11111111","name":"laptop","selector":"laptop","state":"online","status":"answered"}]}}
 ```
@@ -65,6 +65,11 @@ probes saved routes concurrently without waking them, waits for the query and re
 and answered records. `machines[].status` is the outcome of this query and `state` is the
 observed connection state. A failure against a named machine is an outer error. In a reachable
 query the failed machine appears alongside the records obtained.
+
+Terminal roster rows from `agent.list` can include `session_name`, the CLI's native session
+name or preview. The holder can supply it through the existing authenticated Terminal query
+to `internal.agent_records` with `active:true`. If the label is unavailable within the roster
+budget or the holder is older, the field may be absent. `title` still describes the terminal.
 
 `agent.inspect` returns the agent, current input observation, session tracking and viewers.
 For a managed run it can include the recorded launch command with Facade's run credential
@@ -122,6 +127,7 @@ A named machine can be woken. `folder_scope` chooses the current directory or al
 record folders and does not broaden the saved session directory. Pass the returned
 `target` unchanged to `agent.resume` with its runtime `size` and optional environment.
 A full saved-session target includes the machine, CLI, session ID and absolute folder.
+The resume list can also include `session_name` for a managed record or saved session.
 
 `location.list`, `cli.list` and `daemon.status` select one machine and default to local.
 Locations describe known work folders. CLI discovery uses the specified folder and
@@ -135,9 +141,39 @@ The public receipt identifies the assigning machine in a message address such as
 is verified at entry. A managed agent's delivery is confirmed when its terminal takes
 the submission. A Guest can read complete messages inline.
 
+Omitting `wait_for` keeps the released delivery wait, 30-second cap and receipt replay.
+Explicit `wait_for:"inbox"` returns once the message is saved in the recipient's inbox.
+Background delivery keeps its ordinary limit. `"delivery"` waits for the managed
+terminal's submission or the Guest's read. `"result"` waits for delivery and the first
+explicit reply to the original message from its recipient.
+
+Explicit waits use `time_left_ms` as the remaining total budget. The cap is 300 seconds
+for Terminal and 30 seconds for a verified MCP actor. Each forward carries the explicit
+wait mode and only the remaining budget. Older v1 decoders reject `wait_for` with
+`invalid_argument` before admission. A forwarding hop that only relays preserves the
+field. The caller receives the refusal and the operation is never downgraded.
+
+For a Shell result wait, the recipient receives a command address such as `#c42@devbox`.
+Reply through send with that address as `to` and the original `m42` as `reply_to`.
+The holder checks the original command request and the replying actor. An authenticated
+peer can hand off the reply to the origin with `internal.command_reply`. Once the origin
+accepts the first matching handoff, the reply sender can receive `returned_to_request`.
+The original Shell receives the optional `reply:{reference,text}` after confirmed delivery.
+An expired wait after confirmed delivery returns `reply_timeout`. Once the waiter closes,
+a new reply to that command returns `ended`. A verified MCP actor instead waits for its
+result in its own inbox.
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":20,"method":"call","params":{"op":"agent.send","args":{"to":"a2","text":"Run the checks and reply.","wait_for":"result","request_id":"send-20","time_left_ms":29900}}}
+{"jsonrpc":"2.0","id":20,"result":{"id":"m42@devbox","message":{"message_id":"m42","message_ref":{"machine_id":"11111111-1111-4111-8111-111111111111","message_id":"m42"},"from":"command_line","to":"a2","text":"Run the checks and reply.","at":"2026-11-20T17:00:00.000Z","delivery":{"status":"success","text_written":"full","enter_written":true,"delivered_via":"terminal"}},"reply":{"reference":{"machine_id":"11111111-1111-4111-8111-111111111111","message_id":"m43"},"text":"Checks passed.\n"}}}
+```
+
 Automatic retries of `agent.start` and `agent.send` use the original business
 `request_id`, arguments and destination. Its 1–200 Unicode code points identify the
 request for one hour from its first execution. An expired or different ID may execute again.
+Shell gives an explicit wait call the same absolute deadline used for its connection.
+This call uses one exchange and discards the connection on a transport timeout. A replay
+or takeover cannot reopen the original Shell reply waiter.
 `cancel {id}` addresses the original transport request on the same connection. Only an
 `agent.send` that has yet to start pasting can be cancelled. Once the original request
 finishes it reports its actual outcome.
@@ -174,6 +210,19 @@ reports `details.text_written` with optional `enter_written`, or `details.keys_s
 Raw bytes use standard Base64 with padding and require a full agent reference. They can be
 sent without an ID. A raw call with an ID acknowledges entry into the daemon's memory queue.
 
+`input.kind:"sequence"` carries ordered `steps` of `{kind:"text",text}` or `{kind:"key",key}`.
+The daemon checks the complete batch with the existing input size and key limits before
+admitting it once. Other input waits until the batch finishes. An older v1 decoder
+rejects the sequence with `invalid_argument` before any input reaches the terminal.
+A transparent forward preserves the batch. Text, keys and raw remain available in their
+existing forms. Shell preflight and daemon admission count each nonempty paste's UTF-8
+bytes and paste delimiters and each key's terminal bytes against the same 1 MiB limit.
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":21,"method":"call","params":{"op":"agent.type","args":{"target":"a2","input":{"kind":"sequence","steps":[{"kind":"text","text":"hello"},{"kind":"key","key":"Enter"}]}}}}
+{"jsonrpc":"2.0","id":21,"result":{}}
+```
+
 ### Screen text
 
 `agent.screen` joins wrapped rows into logical lines. `older_lines` tells whether additional
@@ -188,6 +237,29 @@ braces and backslashes that occur literally on the screen.
 bytes to the same parser in arrival order. A `redraw` replaces the visible screen and may
 supply a new size. `report_activity` requests the `working` flag and activity changes.
 `allow_ended` with an exact reference reads a final terminal snapshot without an active view.
+
+`watch attach.shell` uses the same arguments, snapshot and changes as `attach`. To open a
+dedicated watch, send it as the first operation after Terminal hello when `hello.topics`
+advertises it. The daemon refuses the watch if the connection already carried another
+operation. After foreground start or resume on a daemon advertising `attach.shell`, release
+the command connection and open a fresh Terminal connection. Preserve the exact target and
+`allow_ended` setting, and select the watch using the new hello. Use ordinary `attach` when
+the dedicated topic is absent, reusing the command connection if it is still open.
+
+Admission dedicates the connection to one watch. The connection accepts raw input to its
+exact target, resize or unwatch for its own view, and connection controls. A failed watch
+can be retried on a fresh connection.
+The daemon sends final screen output before `exit` and closes the dedicated connection
+after a drain grace of up to one second. An already-ended exact snapshot is itself final.
+Remote holders are watched through ordinary `attach`, which remains available to IDEs,
+older terminals and authenticated peers.
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":44,"method":"watch","params":{"topic":"attach.shell","args":{"target":{"machine_id":"11111111-1111-4111-8111-111111111111","agent_id":"a2"}}}}
+{"jsonrpc":"2.0","id":44,"result":{"watch":8,"snapshot":{"reference":{"machine_id":"11111111-1111-4111-8111-111111111111","agent_id":"a2"},"address":"a2","size":{"cols":100,"rows":30},"redraw":"G1sySg=="}}}
+{"jsonrpc":"2.0","method":"changed","params":{"watch":8,"change":{"kind":"output","data":"ZG9uZQ=="}}}
+{"jsonrpc":"2.0","method":"changed","params":{"watch":8,"change":{"kind":"exit","exit":{"code":0,"at":"2026-11-20T17:01:00.000Z"},"exit_status":0}}}
+```
 
 Report initial capacity in the watch and subsequent changes via `attach.resize`. The shared
 grid takes the smallest columns and smallest rows of the active views. `unwatch` releases
@@ -228,7 +300,7 @@ going idle.
 
 ```jsonl daemon-machine
 {"jsonrpc":"2.0","id":1,"method":"hello","params":{"api_versions":[1],"build":"1.0.0+example","kind":"machine","machine":{"machine_id":"11111111-1111-4111-8111-111111111111","boot_id":"33333333-3333-4333-8333-333333333333","name":"laptop"}}}
-{"jsonrpc":"2.0","id":1,"result":{"api_version":1,"build":"1.0.1+example","machine_id":"22222222-2222-4222-8222-222222222222","pid":4322,"agent_count":1,"ops":["agent.start","agent.stop","agent.resume_list","agent.resume","agent.inspect","agent.screen","agent.type","agent.send","agent.remove","agent.rename","cli.list","location.list","machine.rename","daemon.status","internal.agent_records","internal.resume_records","internal.ensure_route","internal.attach_resize","internal.deliver_start_result","internal.deliver_wait_notice"],"topics":["agents","attach"],"machine":{"boot_id":"55555555-5555-4555-8555-555555555555","name":"devbox","ssh_cleans_processes":true}}}
+{"jsonrpc":"2.0","id":1,"result":{"api_version":1,"build":"1.0.1+example","machine_id":"22222222-2222-4222-8222-222222222222","pid":4322,"agent_count":1,"ops":["agent.start","agent.stop","agent.resume_list","agent.resume","agent.inspect","agent.screen","agent.type","agent.send","agent.remove","agent.rename","cli.list","location.list","machine.rename","daemon.status","internal.agent_records","internal.resume_records","internal.ensure_route","internal.attach_resize","internal.deliver_start_result","internal.deliver_wait_notice","internal.command_reply"],"topics":["agents","attach"],"machine":{"boot_id":"55555555-5555-4555-8555-555555555555","name":"devbox","ssh_cleans_processes":true}}}
 {"jsonrpc":"2.0","id":2,"method":"advertise","params":{"machines":[]}}
 {"jsonrpc":"2.0","id":2,"result":{}}
 {"jsonrpc":"2.0","method":"advertise","params":{"machines":[]}}
@@ -242,6 +314,11 @@ checks the next machine and the remaining time budget. Use exact references for 
 agent targets. An authenticated forwarded Attach can return `view:{viewer,boot_id}` for
 the holder's live view. The entry daemon uses that binding and the original caller for
 `internal.attach_resize`. The public watch response carries `watch` and `snapshot`.
+
+```jsonl daemon-machine
+{"jsonrpc":"2.0","id":74,"method":"forward","params":{"route":["22222222-2222-4222-8222-222222222222"],"caller":{"kind":"agent","agent":{"machine_id":"11111111-1111-4111-8111-111111111111","agent_id":"a2"},"root":{"machine_id":"11111111-1111-4111-8111-111111111111","agent_id":"a2"},"yolo":true},"method":"call","params":{"op":"internal.command_reply","args":{"request_id":"send-20","original":{"machine_id":"11111111-1111-4111-8111-111111111111","message_id":"m42"},"reply":{"reference":{"machine_id":"11111111-1111-4111-8111-111111111111","message_id":"m43"},"text":"Checks passed."}}}}}
+{"jsonrpc":"2.0","id":74,"result":{}}
+```
 
 An installed remote executable tries its existing serve command and negotiates API
 compatibility. Passive queries use `--no-start`. Authenticated exit 3 reports that the
@@ -287,6 +364,14 @@ Outer responses, per-target outcomes and failure notifications share
 and `-32000` cover parse errors, invalid requests, unknown methods, invalid arguments or
 unknown operations, and Facade failures, respectively. Branch on the reason you recognize
 and preserve the message and details for an unknown reason.
+
+An error for an authorized send can include `data.details.message_ref` once the message
+is assigned. It identifies the original send by `machine_id` and `message_id`. A failed
+result wait, such as `reply_timeout` or an interruption reported as `unavailable`, can
+also include `data.details.delivered_via` when the delivery receipt confirms `terminal`
+(terminal submission) or `read` (recipient inbox read). If only assignment is known,
+report the original reference alone. An MCP inbox continuation can report `reply_timeout`
+with just the original message ID.
 
 A failed route can report `unavailable.details.execution`. With `not_executed` the client
 can retry subject to the original permissions and wake policy. With `outcome_unknown` it
@@ -363,6 +448,7 @@ Topics available to `watch`. Their types are defined below.
 | `agents` | `NoArgs` | `AgentsSnapshot` | `AgentsChange` | terminal, ide, MCP actor, machine forward | Watch visible agent records. |
 | `machines` | `NoArgs` | `MachineInfo[]` | `MachinesChange` | terminal, ide, MCP actor | Watch the local machine roster. |
 | `attach` | `AttachArgs` | `ScreenSnapshot` | `ScreenChange` | terminal, ide, machine forward | Watch an agent's live or final terminal screen. |
+| `attach.shell` | `AttachArgs` | `ScreenSnapshot` | `ScreenChange` | terminal | Watch an agent's terminal screen on a dedicated Shell connection. |
 
 ## Operations
 
@@ -397,6 +483,7 @@ Operations available to `call`. Set `op` to the name and `args` to its arguments
 | `internal.attach_resize` | `InternalAttachResizeArgs` | `EmptyResult` | machine forward | Set the capacity of a forwarded view at its holder. |
 | `internal.deliver_start_result` | `InternalDeliverStartResultArgs` | `EmptyResult` | machine forward | Deliver a start receipt to its recipient. |
 | `internal.deliver_wait_notice` | `InternalDeliverWaitNoticeArgs` | `EmptyResult` | machine forward | Deliver a wait notice to its recipient. |
+| `internal.command_reply` | `CommandReplyArgs` | `EmptyResult` | machine forward | Return a reply to the daemon waiting for it. |
 
 ## Error reasons
 
@@ -504,6 +591,7 @@ The source of an agent's start, as displayed to the caller.
 | `folder` | `string` | yes |  |
 | `started_at` | `string` | yes |  |
 | `title` | `string` | no |  |
+| `session_name` | `string` | no |  |
 
 ### AgentListResult
 
@@ -518,6 +606,7 @@ The source of an agent's start, as displayed to the caller.
 |---|---|---|---|
 | `agent` | `AgentInfo` | yes |  |
 | `has_rule` | `boolean` | yes |  |
+| `session_name` | `string` | no |  |
 
 ### AgentMachineState
 
@@ -629,7 +718,7 @@ The agent's current state.
 
 ### CallParams
 
-`{ readonly op: 'agent.list'; readonly args: AgentListArgs } \| { readonly op: 'agent.start'; readonly args: StartArgs } \| { readonly op: 'agent.stop'; readonly args: StopArgs } \| { readonly op: 'agent.resume_list'; readonly args: ResumeListArgs } \| { readonly op: 'agent.resume'; readonly args: ResumeArgs } \| { readonly op: 'agent.inspect'; readonly args: AgentTargetArgs } \| { readonly op: 'agent.screen'; readonly args: ScreenArgs } \| { readonly op: 'agent.type'; readonly args: AgentTypeArgs } \| { readonly op: 'agent.send'; readonly args: SendArgs } \| { readonly op: 'agent.remove'; readonly args: AgentTargetArgs } \| { readonly op: 'agent.rename'; readonly args: RenameArgs } \| { readonly op: 'attach.resize'; readonly args: AttachResizeArgs } \| { readonly op: 'cli.list'; readonly args: CliListArgs } \| { readonly op: 'location.list'; readonly args: LocationListArgs } \| { readonly op: 'machine.list'; readonly args: NoArgs } \| { readonly op: 'machine.connect'; readonly args: MachineConnectArgs } \| { readonly op: 'machine.remove'; readonly args: MachineRemoveArgs } \| { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } \| { readonly op: 'daemon.status'; readonly args: StatusArgs } \| { readonly op: 'daemon.log'; readonly args: LogArgs } \| { readonly op: 'daemon.upgrade'; readonly args: DaemonUpgradeArgs } \| { readonly op: 'internal.agent_records'; readonly args: InternalAgentRecordsArgs } \| { readonly op: 'internal.resume_records'; readonly args: NoArgs } \| { readonly op: 'internal.ensure_route'; readonly args: InternalEnsureRouteArgs } \| { readonly op: 'internal.attach_resize'; readonly args: InternalAttachResizeArgs } \| { readonly op: 'internal.deliver_start_result'; readonly args: InternalDeliverStartResultArgs } \| { readonly op: 'internal.deliver_wait_notice'; readonly args: InternalDeliverWaitNoticeArgs }`
+`{ readonly op: 'agent.list'; readonly args: AgentListArgs } \| { readonly op: 'agent.start'; readonly args: StartArgs } \| { readonly op: 'agent.stop'; readonly args: StopArgs } \| { readonly op: 'agent.resume_list'; readonly args: ResumeListArgs } \| { readonly op: 'agent.resume'; readonly args: ResumeArgs } \| { readonly op: 'agent.inspect'; readonly args: AgentTargetArgs } \| { readonly op: 'agent.screen'; readonly args: ScreenArgs } \| { readonly op: 'agent.type'; readonly args: AgentTypeArgs } \| { readonly op: 'agent.send'; readonly args: SendArgs } \| { readonly op: 'agent.remove'; readonly args: AgentTargetArgs } \| { readonly op: 'agent.rename'; readonly args: RenameArgs } \| { readonly op: 'attach.resize'; readonly args: AttachResizeArgs } \| { readonly op: 'cli.list'; readonly args: CliListArgs } \| { readonly op: 'location.list'; readonly args: LocationListArgs } \| { readonly op: 'machine.list'; readonly args: NoArgs } \| { readonly op: 'machine.connect'; readonly args: MachineConnectArgs } \| { readonly op: 'machine.remove'; readonly args: MachineRemoveArgs } \| { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } \| { readonly op: 'daemon.status'; readonly args: StatusArgs } \| { readonly op: 'daemon.log'; readonly args: LogArgs } \| { readonly op: 'daemon.upgrade'; readonly args: DaemonUpgradeArgs } \| { readonly op: 'internal.agent_records'; readonly args: InternalAgentRecordsArgs } \| { readonly op: 'internal.resume_records'; readonly args: NoArgs } \| { readonly op: 'internal.ensure_route'; readonly args: InternalEnsureRouteArgs } \| { readonly op: 'internal.attach_resize'; readonly args: InternalAttachResizeArgs } \| { readonly op: 'internal.deliver_start_result'; readonly args: InternalDeliverStartResultArgs } \| { readonly op: 'internal.deliver_wait_notice'; readonly args: InternalDeliverWaitNoticeArgs } \| { readonly op: 'internal.command_reply'; readonly args: CommandReplyArgs }`
 
 ### Caller
 
@@ -685,6 +774,28 @@ A CLI a start can run: an entry of Facade's settings file (CONFIGURATION-2.1).
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `build` | `string` | yes |  |
+
+### CommandReply
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `reference` | `MessageRef` | yes |  |
+| `text` | `string` | yes |  |
+
+### CommandReplyArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `request_id` | `string` | yes |  |
+| `original` | `{ readonly machine_id: string; readonly message_id: string }` | yes |  |
+| `reply` | `CommandReplyInput` | yes |  |
+
+### CommandReplyInput
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `reference` | `{ readonly machine_id: string; readonly message_id: string }` | yes |  |
+| `text` | `string` | yes |  |
 
 ### ConnectFailedParams
 
@@ -749,7 +860,7 @@ A CLI a start can run: an entry of Facade's settings file (CONFIGURATION-2.1).
 
 How a message was delivered.
 
-`'terminal' \| 'read' \| 'notified'`
+`'terminal' \| 'read' \| 'notified' \| 'returned_to_request'`
 
 ### Delivery
 
@@ -881,6 +992,10 @@ The layout a CLI's rule reads its input from.
 How an agent's message input reads on its screen. A reading never means input may be typed.
 
 `'usable' \| 'draft' \| 'interaction' \| 'unknown'`
+
+### InputStep
+
+`{ readonly kind: 'text'; readonly text: string } \| { readonly kind: 'key'; readonly key: string }`
 
 ### InspectResult
 
@@ -1258,6 +1373,7 @@ A start prompt's message ID and what became of it.
 | `stopped` | `boolean` | no |  |
 | `title` | `string` | no |  |
 | `at` | `string` | no |  |
+| `session_name` | `string` | no |  |
 
 ### ResumeCandidateTarget
 
@@ -1361,6 +1477,7 @@ The screen buffer a CLI shows.
 | `request_id` | `string` | no |  |
 | `time_left_ms` | `number` | no |  |
 | `allow_unsupported_receipt` | `boolean` | no |  |
+| `wait_for` | `SendWait` | no |  |
 
 ### SendResult
 
@@ -1372,6 +1489,11 @@ The screen buffer a CLI shows.
 | `repeated` | `boolean` | no |  |
 | `withdrawn` | `boolean` | no |  |
 | `expected_reply_to` | `MessageRef` | no |  |
+| `reply` | `CommandReply` | no |  |
+
+### SendWait
+
+`'inbox' \| 'delivery' \| 'result'`
 
 ### SingleMachineScope
 
@@ -1499,7 +1621,7 @@ Why nothing shows what an agent's CLI is doing, or what Facade found wrong with 
 
 ### TerminalInput
 
-`{ readonly kind: 'text'; readonly text: string; readonly enter?: boolean } \| { readonly kind: 'keys'; readonly keys: string[] } \| { readonly kind: 'raw'; readonly raw: string }`
+`{ readonly kind: 'text'; readonly text: string; readonly enter?: boolean } \| { readonly kind: 'keys'; readonly keys: string[] } \| { readonly kind: 'raw'; readonly raw: string } \| { readonly kind: 'sequence'; readonly steps: InputStep[] }`
 
 ### TextWritten
 
@@ -1546,7 +1668,7 @@ What a CLI waits for.
 
 ### WatchParams
 
-`{ readonly topic: 'agents'; readonly args: NoArgs } \| { readonly topic: 'machines'; readonly args: NoArgs } \| { readonly topic: 'attach'; readonly args: AttachArgs }`
+`{ readonly topic: 'agents'; readonly args: NoArgs } \| { readonly topic: 'machines'; readonly args: NoArgs } \| { readonly topic: 'attach'; readonly args: AttachArgs } \| { readonly topic: 'attach.shell'; readonly args: AttachArgs }`
 
 ### WatchResult
 

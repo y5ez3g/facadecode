@@ -24,7 +24,7 @@ Agents
 
 Interact
   attach    Open an agent's terminal
-  send      Send a message to an agent
+  send      Send a message to an agent or guest
   screen    Read an agent's terminal output
   type      Type text or press keys in an agent's terminal
 

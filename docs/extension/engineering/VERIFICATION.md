@@ -385,7 +385,7 @@ covers that island's scope; cross-entry and multi-machine behavior require integ
 | Shell to VS Code | Go to Agent selects a running managed agent from `facade list`, Attach shows the same terminal, and closing VS Code leaves the same process, agent address and screen available on reopen. |
 | SSH and worktree | Register a remote machine. Start there in a new worktree from Shell and exercise New Worktree as part of a VS Code start on that machine. Check the target's CLI choices and open the same terminal in Shell and VS Code. A Remote-SSH editor connects to its own host's Orchestrator. |
 | Agent team | Helpers appear after a start from the workspace or Go to Agent, including earlier descendants; their cards open terminals on request. |
-| External application | A Guest joins with `facade-mcp`, sends an agent a message and picks up its reply via the returned next step; YOLO off limits its reach. |
+| External application | A Guest joins with `facade-mcp`, sends a message, and takes the first linked reply with an explicit result wait or an inbox read filtered by the original message ID. YOLO off limits its reach. |
 | Resume and Pin | Compare Shell and VS Code with the same local and folder scope. Stop retains the card and Pin, and reopening restores the Pin. Observe one recovery per workspace and distinguish prior expiry, explicit removal and temporary unreachability under RULES-6.4. |
 
 ### 5.2 Verify upgrade and compatibility against the previous build

@@ -92,6 +92,7 @@ pub(super) fn spawn(
     start: ActorStart,
     links: Links,
     commands: mpsc::Receiver<AgentCommand>,
+    allow_auto_trust: bool,
 ) -> anyhow::Result<()> {
     let ActorStart {
         info,
@@ -155,6 +156,7 @@ pub(super) fn spawn(
         person: PersonKeys::default(),
         submitting: None,
         held: VecDeque::new(),
+        ordered_input: false,
         input_rule: rule.map(|rule| &rule.input),
         captures,
         launch_command,
@@ -187,8 +189,7 @@ pub(super) fn spawn(
     actor.record_state();
     // Read once more as the task begins.
     actor.state_at = Some(Instant::now());
-    let yolo = info.yolo;
-    tokio::spawn(actor.run(commands, recovered, yolo, colors));
+    tokio::spawn(actor.run(commands, recovered, allow_auto_trust, colors));
     Ok(())
 }
 
@@ -218,8 +219,10 @@ struct Actor {
     ready_at: Option<Instant>,
     person: PersonKeys,
     submitting: Option<Submitting>,
-    /// Keys and calls that came while the start readies the tools, in their order.
+    /// External input held by startup, the hint probe or an ordered sequence.
     held: VecDeque<Input>,
+    /// Keep the held FIFO ordered through a sequence and the input it held back.
+    ordered_input: bool,
     input_rule: Option<&'static InputRule>,
     /// Whether the running CLI reports its session.
     captures: bool,
@@ -321,10 +324,10 @@ impl Actor {
         mut self,
         mut commands: mpsc::Receiver<AgentCommand>,
         recovered: bool,
-        yolo: bool,
+        allow_auto_trust: bool,
         colors: TerminalColors,
     ) {
-        self.begin(recovered, yolo, colors).await;
+        self.begin(recovered, allow_auto_trust, colors).await;
         loop {
             if !self.typist.pasting()
                 && !self.holds_input_for_probe
@@ -397,6 +400,9 @@ impl Actor {
     /// What every turn of the loop ends with: the state into the record, the start prompt told the
     /// start settled, and an unneeded screen let go.
     async fn end_turn(&mut self) {
+        if self.ordered_input {
+            self.release_ordered_input();
+        }
         if self.state_changed {
             match self.record_state() {
                 Some(true) => self.publish_now(),
@@ -419,7 +425,7 @@ impl Actor {
     }
 
     /// Sets the screen up, starts keeping the state's facts, and takes up a run that is under way.
-    async fn begin(&mut self, recovered: bool, yolo: bool, colors: TerminalColors) {
+    async fn begin(&mut self, recovered: bool, allow_auto_trust: bool, colors: TerminalColors) {
         let (cols, rows) = {
             let record = self.links.shared.record.lock().unwrap();
             (
@@ -450,11 +456,13 @@ impl Actor {
             (true, false) => Some("the CLI has not written since Facade recovered it"),
             (false, _) => Some("the CLI has not written yet"),
         };
-        // A new run readies its tools and answers its trust question; a recovered one is under way.
+        // A new run readies its tools and may answer its trust question.
         if !recovered && self.exit.is_none() {
-            self.ready_at =
-                self.readiness
-                    .begin(self.state.started(), self.state.tools_given(), yolo);
+            self.ready_at = self.readiness.begin(
+                self.state.started(),
+                self.state.tools_given(),
+                allow_auto_trust,
+            );
         }
         // An agent recovered without a terminal has no output left to drain.
         if self.exit.is_some() && !self.terminal.is_open() {
@@ -663,10 +671,9 @@ impl Actor {
                 self.typist.clear_probes();
                 self.untouched_input = false;
                 self.holds_input_for_probe = false;
-                let yolo = self.links.shared.record.lock().unwrap().info.yolo;
                 self.ready_at =
                     self.readiness
-                        .begin(self.state.started(), self.state.tools_given(), yolo);
+                        .begin(self.state.started(), self.state.tools_given(), false);
                 self.record_state();
                 let record = {
                     let mut record = self.links.shared.record.lock().unwrap();
@@ -762,14 +769,13 @@ impl Actor {
             facade_base::service::mark_for_test("input-without-room");
             return Err(InputRejection::Backpressured(input));
         }
-        let external = matches!(input, Input::Raw(_) | Input::Typed(_));
-        if external {
+        if matches!(input, Input::Raw(_) | Input::Typed(_)) {
             self.untouched_input = false;
-        }
-        if external && (self.holds_input_for_probe || self.start_holds_input()) {
-            // Let the start or the unstyled hint probe finish before forwarding external input.
-            self.held.push_back(input);
-            return Ok(());
+            self.ordered_input |= input.is_sequence();
+            if self.ordered_input || self.holds_input_for_probe || self.start_holds_input() {
+                self.held.push_back(input);
+                return Ok(());
+            }
         }
         match input {
             Input::Raw(keys) => {
@@ -1179,6 +1185,7 @@ impl Actor {
         self.process = ProcessState::Ended;
         self.record_state();
         self.publish();
+        self.viewers.note_exit(Instant::now());
         self.stop_input(&format!("#{} ended", self.id));
         self.readiness.end();
         self.ready_at = None;
@@ -1431,7 +1438,7 @@ impl Actor {
 
     /// The held keys and calls go on in their original order after the probe has finished.
     fn release_held(&mut self) {
-        if self.holds_input_for_probe {
+        if self.holds_input_for_probe || self.ordered_input {
             return;
         }
         for input in std::mem::take(&mut self.held) {
@@ -1442,10 +1449,53 @@ impl Actor {
         }
     }
 
+    /// Advances the same held FIFO after a sequence or an earlier held call is written.
+    fn release_ordered_input(&mut self) {
+        if self.typist.sequence_pending() {
+            return;
+        }
+        if self.held.is_empty() {
+            self.ordered_input = false;
+            return;
+        }
+        if self.quiet
+            || self.typist.types_calls()
+            || self.holds_input_for_probe
+            || self.start_holds_input()
+        {
+            return;
+        }
+        while let Some(next) = self.held.front() {
+            // A person's earlier Enter and following keys leave together.
+            if matches!(next, Input::Typed(_))
+                && matches!(self.submitting, Some(Submitting::Held { .. }))
+            {
+                return;
+            }
+            // Let the first prompt arrive unless the native CLI is asking for input.
+            if next.is_sequence()
+                && self.awaits_prompt
+                && self.read_screen_input().info.state != InputState::Interaction
+            {
+                return;
+            }
+            match self.held.pop_front().expect("held input") {
+                Input::Raw(keys) => self.take_keys(keys),
+                typed => {
+                    self.give_typist(typed);
+                    self.type_next();
+                    return;
+                }
+            }
+        }
+        self.ordered_input = false;
+    }
+
     /// Drops queued input and fails the typist's calls: `why` typing stopped.
     fn stop_input(&mut self, why: &str) {
         self.terminal.clear();
         self.holds_input_for_probe = false;
+        self.ordered_input = false;
         (self.person, self.submitting) = (PersonKeys::default(), None);
         // Held calls fail with the others; held keys go with the queued ones.
         for input in std::mem::take(&mut self.held) {

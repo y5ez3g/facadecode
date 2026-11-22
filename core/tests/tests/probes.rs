@@ -15,6 +15,8 @@ use facade_scenarios::*;
 
 const SESSION: &str = "5a7c1e42-9d3b-4f60-8a21-0c4b7d9e6f13";
 const DRAFT: &str = "hello there";
+// The explicit Shell delivery wait uses the command budget, including time for its receipt.
+const SEND_TIMEOUT: &str = "9";
 
 /// The file the test CLI of agent `name` writes the bytes it reads to.
 fn keys_file(home: &TestHome, name: &str) -> PathBuf {
@@ -97,9 +99,9 @@ fn report_session(home: &TestHome, agent: &str, name: &str) {
     );
 }
 
-/// `facade send <name> <text>`: whether it was delivered, and what it said.
+/// `facade send <name> <text> -w`: whether it was delivered, and what it said.
 fn send(home: &TestHome, name: &str, text: &str) -> (bool, String) {
-    let sent = home.run_facade(&["send", name, text]);
+    let sent = home.run_facade(&["send", name, text, "-w", "-t", SEND_TIMEOUT]);
     (
         sent.status.success(),
         format!("{}{}", stdout(&sent), stderr(&sent)),
@@ -167,7 +169,6 @@ fn a_hint_is_probed_once_a_run_and_the_message_goes_in() {
 #[test]
 fn a_draft_before_the_cursor_is_probed_once_and_holds_the_message() {
     let home = TestHome::new("probedraft");
-    home.start_facade_with(&[("FACADE_TEST_DELIVERY_MS", "8000")]);
     let file = keys_file(&home, "muse");
     start(&home, "muse", &[("FAKECLI_DRAFT_AT_START", DRAFT)], DRAFT);
     let (sent, said) = send(&home, "muse", "a message");
@@ -190,7 +191,6 @@ fn a_draft_before_the_cursor_is_probed_once_and_holds_the_message() {
 #[test]
 fn a_probe_that_finds_neither_takes_its_space_out_and_reads_unknown() {
     let home = TestHome::new("probeother");
-    home.start_facade_with(&[("FACADE_TEST_DELIVERY_MS", "8000")]);
     let file = keys_file(&home, "muse");
     let env = [
         ("FAKECLI_DRAFT_AT_START", DRAFT),
@@ -225,7 +225,6 @@ fn a_space_that_does_not_show_gets_no_backspace() {
         ("undrawn", ("FAKECLI_NO_LEADING_SPACE", "1")),
     ] {
         let home = TestHome::new(&format!("probe{label}"));
-        home.start_facade_with(&[("FACADE_TEST_DELIVERY_MS", "8000")]);
         let file = keys_file(&home, "muse");
         start(
             &home,
@@ -247,7 +246,6 @@ fn a_space_that_does_not_show_gets_no_backspace() {
 #[test]
 fn a_probe_whose_backspace_does_not_restore_the_row_presses_nothing_more() {
     let home = TestHome::new("probenorestore");
-    home.start_facade_with(&[("FACADE_TEST_DELIVERY_MS", "8000")]);
     let file = keys_file(&home, "muse");
     let env = [
         ("FAKECLI_DRAFT_AT_START", DRAFT),
@@ -268,7 +266,6 @@ fn a_probe_whose_backspace_does_not_restore_the_row_presses_nothing_more() {
 #[test]
 fn the_person_s_key_during_a_probe_stops_it_before_its_backspace() {
     let home = TestHome::new("probeperson");
-    home.start_facade_with(&[("FACADE_TEST_DELIVERY_MS", "8000")]);
     let file = keys_file(&home, "muse");
     let id = start(&home, "muse", &[("FAKECLI_DRAFT_AT_START", DRAFT)], DRAFT);
     let mut wire = connect(&home);
@@ -280,7 +277,7 @@ fn the_person_s_key_during_a_probe_stops_it_before_its_backspace() {
     });
     let mut sending = home
         .command(&test_binaries().facade)
-        .args(["send", "muse", "a message"])
+        .args(["send", "muse", "a message", "-w", "-t", SEND_TIMEOUT])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

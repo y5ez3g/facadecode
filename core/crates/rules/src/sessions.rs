@@ -15,7 +15,7 @@
 
 mod history;
 
-pub use history::{SavedSession, list_sessions};
+pub use history::{SavedSession, list_sessions, session_for_id};
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -278,6 +278,16 @@ pub fn read_session_file(path: &Path) -> SessionFile {
         }) if !kept.exists() => SessionFile::NoSession,
         Some(Recorded { id, .. }) => SessionFile::Session(id.to_string()),
     }
+}
+
+/// The absolute native file reported for this session, if the report can supply one.
+fn reported_path(report: &Path, id: &str) -> Option<PathBuf> {
+    let text = read_limited(report, SESSION_FILE_LIMIT).ok()?;
+    let record = recorded(&text)?;
+    if record.id != id {
+        return None;
+    }
+    record.saved_in.map(Path::to_path_buf)
 }
 
 /// `path`'s text, or an error if it is longer than `limit` bytes.

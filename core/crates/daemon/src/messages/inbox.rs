@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use facade_base::model::agent::AgentRef;
 use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::model::message::MessageRef;
 #[cfg(test)]
@@ -24,7 +25,7 @@ use super::warn;
 use super::{
     Deliveries, Due, GuestReplyWait, KEPT_FOR, Messages, OpenMap, Settled, number, parse_number,
 };
-use crate::store::{Gone, InboxPage};
+use crate::store::{CommandRequest, Gone, InboxPage};
 use crate::{Cancel, an_hour_ago, blocking_in_place, pause_for_test, send_route_cutoff};
 
 /// Selection for an inbox read. Cursors name local inbox messages, replies use stable references.
@@ -34,6 +35,13 @@ pub(crate) struct InboxRead {
     pub(crate) last: Option<u16>,
     pub(crate) reply_to: Option<MessageRef>,
     pub(crate) wait_until: Option<Instant>,
+}
+
+/// Selection for the first reply from the recipient of a specific send.
+pub(crate) struct ReplyRead {
+    pub(crate) original: MessageRef,
+    pub(crate) sender: AgentRef,
+    pub(crate) wait_until: Instant,
 }
 
 #[derive(Clone, Copy)]
@@ -51,7 +59,39 @@ impl Messages {
         &self,
         owner: &str,
         is_guest: bool,
+        mut read: InboxRead,
+        cancel: Cancel,
+        project: impl Fn(&MessagesSnapshot) -> Result<(usize, T), ErrorBody> + Send,
+    ) -> Result<T, ErrorBody> {
+        read.wait_until = read.wait_until.map(Due::inbox_wait);
+        self.read_selected(owner, is_guest, read, None, cancel, project)
+            .await
+    }
+
+    /// Takes one complete matching reply within the send's remaining time.
+    pub(crate) async fn read_first_reply<T>(
+        &self,
+        owner: &str,
+        is_guest: bool,
+        read: ReplyRead,
+        cancel: Cancel,
+        project: impl Fn(&MessagesSnapshot) -> Result<(usize, T), ErrorBody> + Send,
+    ) -> Result<T, ErrorBody> {
+        let inbox = InboxRead {
+            reply_to: Some(read.original),
+            wait_until: Some(read.wait_until),
+            ..InboxRead::default()
+        };
+        self.read_selected(owner, is_guest, inbox, Some(&read.sender), cancel, project)
+            .await
+    }
+
+    async fn read_selected<T>(
+        &self,
+        owner: &str,
+        is_guest: bool,
         read: InboxRead,
+        sender: Option<&AgentRef>,
         mut cancel: Cancel,
         project: impl Fn(&MessagesSnapshot) -> Result<(usize, T), ErrorBody> + Send,
     ) -> Result<T, ErrorBody> {
@@ -69,9 +109,7 @@ impl Messages {
                 Ok::<_, ErrorBody>((reference.machine_id.as_str(), number))
             })
             .transpose()?;
-        let mut wait = read
-            .wait_until
-            .map(|until| (Due::inbox_wait(until), self.subscribe()));
+        let mut wait = read.wait_until.map(|until| (until, self.subscribe()));
         let mut reply_wait = None;
         let deliveries = &self.deliveries;
         let limit = usize::from(DEFAULT_MESSAGES_LIMIT);
@@ -93,13 +131,15 @@ impl Messages {
                     machine_id: &deliveries.machine_id,
                     after,
                     last,
-                    limit: limit + 1,
+                    limit: if sender.is_some() { 1 } else { limit + 1 },
                     reply_to,
                     now: &at,
                 };
-                let mut messages =
-                    blocking_in_place(|| deliveries.table.readable_inbox(owner, &page))
-                        .map_err(ErrorBody::internal)?;
+                let mut messages = blocking_in_place(|| match sender {
+                    Some(sender) => deliveries.table.readable_replies(owner, &page, sender),
+                    None => deliveries.table.readable_inbox(owner, &page),
+                })
+                .map_err(ErrorBody::internal)?;
                 if !messages.is_empty() || wait.is_none() {
                     drop(reply_wait.take());
                     let next_cursor = page_cursor(&mut messages, last.unwrap_or(limit));
@@ -168,6 +208,23 @@ impl Messages {
         }
         drop(reply_wait);
         project(&MessagesSnapshot::default()).map(|(_, result)| result)
+    }
+
+    /// Finds the marked command request in the original recipient's local mailbox.
+    pub(crate) fn command_request(
+        &self,
+        owner: &str,
+        reference: &MessageRef,
+    ) -> Result<Option<CommandRequest>, ErrorBody> {
+        let deliveries = &self.deliveries;
+        if reference.machine_id != deliveries.machine_id {
+            return Ok(None);
+        }
+        let Some(number) = stored_number(&reference.message_id) else {
+            return Ok(None);
+        };
+        blocking_in_place(|| deliveries.table.command_request(owner, number))
+            .map_err(ErrorBody::internal)
     }
 
     /// Reads `owner`'s inbox as `args` select, oldest first. Each message read that was not yet

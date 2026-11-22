@@ -7,7 +7,7 @@ use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Grid};
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{Config, Term, TermMode};
-use alacritty_terminal::vte::ansi::{NamedColor, Processor, Rgb, StdSyncHandler};
+use alacritty_terminal::vte::ansi::{Handler, NamedColor, Processor, Rgb, StdSyncHandler};
 
 use crate::TerminalColors;
 use crate::store::StoreFeed;
@@ -67,6 +67,7 @@ pub(crate) struct Requests {
 pub(crate) struct Terminal {
     pub(crate) term: Term<Outbox>,
     pub(crate) colors: TerminalColors,
+    pub(crate) title: Option<String>,
     parser: Processor<StdSyncHandler>,
     outbox: Outbox,
 }
@@ -89,6 +90,7 @@ impl Terminal {
         Terminal {
             term,
             colors: TerminalColors::default(),
+            title: None,
             parser: Processor::new(),
             outbox,
         }
@@ -96,6 +98,12 @@ impl Terminal {
 
     pub(crate) fn parse(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.term, bytes);
+    }
+
+    pub(crate) fn restore_title(&mut self, title: &str) {
+        // Seed alacritty too, so a subsequent native title-stack push sees the restored title.
+        self.term.set_title(Some(title.to_owned()));
+        self.take_requests();
     }
 
     /// Applies the output an open synchronized update holds back, and closes the update.
@@ -135,7 +143,7 @@ impl Terminal {
     }
 
     /// Takes what alacritty asked for, replying to color queries only with supplied colors.
-    pub(crate) fn take_requests(&self) -> Requests {
+    pub(crate) fn take_requests(&mut self) -> Requests {
         let queued = match self.outbox.0.lock() {
             Ok(mut queued) => std::mem::take(&mut *queued),
             Err(_) => return Requests::default(),
@@ -161,6 +169,9 @@ impl Terminal {
                 Event::ResetTitle => requests.title = Some(String::new()),
                 _ => {}
             }
+        }
+        if let Some(title) = &requests.title {
+            self.title = Some(title.clone());
         }
         requests
     }

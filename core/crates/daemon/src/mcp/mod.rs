@@ -30,7 +30,7 @@ use serde_json::{Map, Value};
 
 pub(crate) use inbox_page::project_inbox;
 pub(crate) use result_files::{clean_results, results_folder};
-pub(crate) use verified::{ActorIdentity, ActorServices};
+pub(crate) use verified::{ActorIdentity, ActorServices, DiscoverClis, ReadReply};
 
 /// The instructions for the managed run that the daemon can verify during initialization.
 pub(crate) type ManagedInstructions =
@@ -123,6 +123,16 @@ impl Relay {
         }
     }
 
+    pub(crate) fn with_actor_queries(
+        mut self,
+        read_reply: ReadReply,
+        discover_clis: DiscoverClis,
+    ) -> Self {
+        self.verified.read_reply = Some(read_reply);
+        self.verified.discover_clis = Some(discover_clis);
+        self
+    }
+
     /// Whether the relay connected to a daemon before.
     pub(crate) fn reconnect(&self) -> bool {
         self.hello.reconnect
@@ -204,7 +214,7 @@ struct ToolCall {
     id: String,
     /// Its JSON-RPC ID as JSON text, as the client's cancellation names it.
     key: String,
-    /// When its line arrived, before it waited for a thread: a send's 30 seconds count from then.
+    /// When its line arrived, before it waited for a thread. Tool deadlines start here.
     arrived: Instant,
     /// The request ID it goes to the daemon with, where the model gives none: the relay's process
     /// and the call's ID, the same at every daemon, so that a call the relay gives the next daemon

@@ -9,7 +9,7 @@ use facade_base::api_v1::{
     NoArgs, Operation, Size,
     daemon::{self as wire, Caller},
 };
-use facade_base::model::agent::{HowEnded, is_session_id};
+use facade_base::model::agent::{HowEnded, ManagedAgent, is_session_id};
 use facade_base::model::{
     agent::SessionMatch,
     machine::{MachineQueryResult, MachineState},
@@ -22,9 +22,11 @@ use facade_base::{
 use facade_base::{model::agent::AgentRef, model::machine::MachineQueryStatus};
 use facade_rules::entries;
 use tokio::task::JoinSet;
+use tokio::time::Instant;
 
+use crate::agent::AgentHandle;
 use crate::api;
-use crate::network_operations::{machine_query_result, require_person};
+use crate::network_operations::{LIST_DEADLINE, machine_query_result, require_person};
 use crate::operations::{RestartRequest, StartOrigin, StartRequest};
 use crate::records::{self, OperationTarget, Reach};
 use crate::service::{check_size, sender_from, value_of};
@@ -60,6 +62,7 @@ pub(crate) struct ResumeCandidate {
     name: Option<String>,
     stopped: bool,
     title: Option<String>,
+    session_name: Option<String>,
     at: Option<String>,
 }
 
@@ -87,6 +90,7 @@ impl ResumeCandidate {
             name: self.name,
             stopped: self.stopped,
             title: self.title,
+            session_name: self.session_name,
             at: self.at,
         }
     }
@@ -111,6 +115,7 @@ impl ResumeCandidate {
             name: candidate.name,
             stopped: candidate.stopped,
             title: candidate.title,
+            session_name: candidate.session_name,
             at: candidate.at,
         })
     }
@@ -217,7 +222,13 @@ impl Daemon {
         if reachable && !args.all && args.folder.is_none() {
             args.folder = Some(self.login_environment().await?.1);
         }
-        let mut local = self.local_resume_candidates(&args, !named_records).await?;
+        let mut local = self
+            .local_resume_candidates(
+                &args,
+                !named_records,
+                matches!(caller, Caller::Terminal { .. }),
+            )
+            .await?;
         let mut machines = Vec::new();
         let mut jobs = JoinSet::new();
         for mut row in rows {
@@ -273,9 +284,10 @@ impl Daemon {
     }
 
     pub(crate) async fn local_resume_candidates(
-        &self,
+        self: &Arc<Self>,
         args: &ResumeFilter,
         include_sessions: bool,
+        include_labels: bool,
     ) -> Result<Vec<ResumeCandidate>, ErrorBody> {
         let folder = match (&args.folder, include_sessions || !args.all) {
             (Some(folder), _) => Some(PathBuf::from(folder)),
@@ -292,6 +304,7 @@ impl Daemon {
         }
         let mut items = Vec::new();
         let mut used = BTreeSet::new();
+        let label_deadline = Instant::now() + LIST_DEADLINE;
         for agent in self.agents() {
             let info = agent.info();
             let Some(session) = info.session.clone() else {
@@ -310,6 +323,14 @@ impl Daemon {
             {
                 continue;
             }
+            let session_name = if include_labels && Instant::now() < label_deadline {
+                tokio::time::timeout_at(label_deadline, self.native_session_name(&agent, &info))
+                    .await
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            };
             let info = self.public_agent(info)?;
             let reference = api::agent_ref(info.reference);
             items.push(ResumeCandidate {
@@ -323,6 +344,7 @@ impl Daemon {
                 stopped: info.state_detail.as_ref().and_then(|detail| detail.how)
                     == Some(HowEnded::Stopped),
                 title: info.title,
+                session_name,
                 at: info.exit.map(|exit| exit.at),
             });
         }
@@ -336,6 +358,9 @@ impl Daemon {
                 if !used.contains(&(rule.clone(), item.session.clone()))
                     && listed.insert((rule, item.session.clone()))
                 {
+                    if !include_labels {
+                        item.session_name = None;
+                    }
                     self.project_resume_candidate(&mut item, false)?;
                     items.push(item);
                 }
@@ -343,6 +368,55 @@ impl Daemon {
         }
         items.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| a.address.cmp(&b.address)));
         Ok(items)
+    }
+
+    pub(crate) async fn native_session_name(
+        self: &Arc<Self>,
+        agent: &AgentHandle,
+        info: &ManagedAgent,
+    ) -> Option<String> {
+        let session = info.session.clone()?;
+        let rule = facade_rules::find(agent.rule()?).ok().flatten()?;
+        let settings = command_line::read_settings().ok();
+        let configured = settings.as_ref().map(entries::read).unwrap_or_default();
+        let entry = entries::find(&configured, &info.cli);
+        let kept = blocking_in_place(|| self.store.launch_details(&info.agent_id)).ok();
+        let args = kept
+            .and_then(|details| details.options)
+            .or_else(|| entry.and_then(|entry| entry.launch_options(None, None, &[]).ok()))
+            .map(|options| options.args)
+            .unwrap_or_default();
+        let environment = if info.process == ProcessState::Running {
+            blocking_in_place(|| self.runs.environment_of(&info.agent_id))
+                .ok()
+                .flatten()?
+        } else {
+            let (login, _) = self.login_environment().await.ok()?;
+            match entry {
+                Some(entry) => entry.environment(&login),
+                None => login,
+            }
+        };
+        let folder = PathBuf::from(&info.cwd);
+        let daemon = self.clone();
+        let agent_id = info.agent_id.clone();
+        tokio::task::spawn_blocking(move || {
+            let report = daemon.runs.session_report_path(&agent_id);
+            facade_rules::session_for_id(
+                rule,
+                &folder,
+                &environment,
+                &args,
+                &session,
+                report.as_deref(),
+            )
+            .ok()
+            .flatten()?
+            .title
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     pub(crate) async fn api_resume(
@@ -680,7 +754,7 @@ impl Daemon {
                 machine_id: id.into(),
             }),
             key => {
-                let (records, _) = self.query_agents(caller, Some(id), false).await?;
+                let records = self.query_agents(caller, Some(id), false).await?.agents;
                 records::lookup(key, &Reach::from(caller), OperationTarget::Resume, &records)
             }
         };
@@ -865,6 +939,7 @@ impl Daemon {
                             agent: None,
                             name: None,
                             stopped: false,
+                            session_name: session.title.clone(),
                             title: session.title,
                             at: session.modified_at.map(facade_base::time::iso_time),
                         },

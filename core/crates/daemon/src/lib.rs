@@ -38,6 +38,7 @@ mod windows;
 
 mod api;
 mod command_line;
+mod command_replies;
 mod delivery;
 mod machine_service;
 mod network_operations;
@@ -94,6 +95,7 @@ const REQUEST_HOUR: Duration = Duration::from_secs(60 * 60);
 
 /// The longest a message may take from its call reaching the daemon to its delivery.
 const DELIVERY_TIME: Duration = Duration::from_millis(29_500);
+const MAX_TERMINAL_SEND: Duration = Duration::from_secs(300);
 
 /// The time an hour before now, as request IDs look back to.
 fn an_hour_ago() -> String {
@@ -107,12 +109,17 @@ fn an_hour_ago() -> String {
 /// The origin sets a route before the receiver dates its receipt. Keep the route for the
 /// one-hour receipt window plus the maximum time a send can spend getting there.
 fn send_route_cutoff() -> String {
-    let age = REQUEST_HOUR.saturating_add(delivery_limit());
+    let age = REQUEST_HOUR.saturating_add(delivery_ceiling());
     facade_base::time::iso_time(
         SystemTime::now()
             .checked_sub(age)
             .unwrap_or(SystemTime::UNIX_EPOCH),
     )
+}
+
+/// The largest persisted delivery window this daemon can admit.
+pub(crate) fn delivery_ceiling() -> Duration {
+    delivery_limit().max(MAX_TERMINAL_SEND)
 }
 
 /// The longest a message may take from its call reaching the daemon to its delivery. A debug build
@@ -285,6 +292,7 @@ pub(crate) struct Daemon {
     claimed_sessions: Mutex<HashMap<SessionKey, String>>,
     screens: Screens,
     messages: Arc<Messages>,
+    command_replies: command_replies::CommandReplies,
     runs: Runs,
     records: Records,
     windows: Windows,
@@ -511,6 +519,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         results: mcp::results_folder(&core),
         watch_ends: Mutex::default(),
         messages,
+        command_replies: command_replies::CommandReplies::default(),
         runs,
         records,
         machine_id: opened.machine_id,

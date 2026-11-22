@@ -757,6 +757,19 @@
       }
     },
     {
+      "id": "core/daemon/operation/internal.command_reply",
+      "assertion": "Observe the authenticated peer call returning the exact original Shell request ID, replying AgentRef, distinct message references and full reply text. Reconcile the peer acknowledgement.",
+      "stage": "pr",
+      "existing_tests": [
+        "core/tests/tests/machines.rs:3563"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "shell_receives_a_linked_reply_from_a_managed_agent_across_machines"
+      }
+    },
+    {
       "id": "core/daemon/operation/internal.deliver_start_result",
       "assertion": "Read the remote start outcome at the requester and correlate the receipt and exact Agent reference with the single remote process started.",
       "stage": "pr",
@@ -912,6 +925,19 @@
         "runner": "core-scenario",
         "target": "watches",
         "name": "screen_watch_delivers_snapshot_then_output"
+      }
+    },
+    {
+      "id": "core/daemon/topic/attach.shell",
+      "assertion": "Open the selected agent's dedicated watch on a fresh Terminal connection. Refuse an IDE or previously used Terminal connection. Verify that exit closes the unread transport and both services exit naturally.",
+      "stage": "pr",
+      "existing_tests": [
+        "core/tests/tests/lifecycle.rs:197"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "lifecycle",
+        "name": "unread_dedicated_shell_attach_closes_and_allows_natural_idle_exit"
       }
     },
     {
@@ -1188,10 +1214,10 @@
     },
     {
       "id": "core/mcp/tool/read_messages",
-      "assertion": "Read complete messages with the expected IDs and verify cursor or unread state. For a Guest verify a reply filtered by the original address is delivered once to its owner.",
+      "assertion": "Verify the owning Guest reads the complete correlated reply and can find its retained record by the original address. The unread list clears and a different Guest cannot fetch or settle that reply.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/mcp.rs:80",
+        "core/tests/tests/guests.rs:175",
         "core/tests/tests/mcp.rs:2035",
         "core/tests/tests/mcp.rs:2346",
         "core/tests/tests/guests.rs:166"
@@ -1219,7 +1245,7 @@
     },
     {
       "id": "core/mcp/tool/send_message",
-      "assertion": "Correlate one complete message receipt with the intended recipient's delivery. For a Guest verify the result also gives a next call with the matching reply address.",
+      "assertion": "Correlate the original full receipt with complete delivery to the intended managed terminal through Guest MCP. An explicit read wait uses that message ID and accepts only a linked reply, and the send offers no implicit next call.",
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/guests.rs:20",
@@ -1276,6 +1302,19 @@
       ]
     },
     {
+      "id": "core/p0/attach/alternate-screen",
+      "assertion": "A foreground start preserves native titles and alternate screen output. Detach restores the original shell page, scrollback and input mode while the exact agent stays running.",
+      "stage": "pr",
+      "existing_tests": [
+        "core/tests/tests/attach.rs:90"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "attach",
+        "name": "foreground_alternate_first_start_hands_the_same_shell_page_back"
+      }
+    },
+    {
       "id": "core/p0/attach/detach-reconnect",
       "assertion": "Detach restores the caller terminal and a second Attach reaches the same live run.",
       "stage": "pr",
@@ -1316,6 +1355,19 @@
       }
     },
     {
+      "id": "core/p0/authority/agent-claude-trust",
+      "assertion": "An authenticated agent start confirms a recognized Claude trust choice once when the target home enables YOLO. YOLO off and an unrecognized choice do not confirm trust.",
+      "stage": "pr",
+      "existing_tests": [
+        "core/tests/tests/yolo.rs:807"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "yolo",
+        "name": "an_agent_start_answers_claude_s_trust_question_once_when_the_target_home_permits_it"
+      }
+    },
+    {
       "id": "core/p0/authority/authorized",
       "assertion": "An authorized caller can operate on the selected agent and see its own result.",
       "stage": "pr",
@@ -1339,6 +1391,19 @@
         "runner": "core-scenario",
         "target": "yolo",
         "name": "a_refused_peer_action_preserves_the_run_inbox_files_and_saved_route"
+      }
+    },
+    {
+      "id": "core/p0/authority/person-claude-trust",
+      "assertion": "A Claude start by a person in Shell or VS Code leaves its folder trust prompt pending with YOLO enabled. Only the person's explicit Down and Enter reach the fake CLI.",
+      "stage": "pr",
+      "existing_tests": [
+        "core/tests/tests/yolo.rs:704"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "yolo",
+        "name": "shell_and_ide_starts_leave_claude_trust_to_the_person_with_yolo_on"
       }
     },
     {
@@ -1369,11 +1434,24 @@
       }
     },
     {
+      "id": "core/p0/guest-reply/result-wait",
+      "assertion": "A Guest receives the first linked reply under a result wait. On reply timeout, a filtered read with the same original message ID gets the eventual reply without sending the request again.",
+      "stage": "pr",
+      "existing_tests": [
+        "core/tests/tests/guests.rs:284"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "guests",
+        "name": "a_guest_result_wait_returns_the_linked_reply_or_continues_by_the_same_id"
+      }
+    },
+    {
       "id": "core/p0/guest-reply/wrong-caller",
       "assertion": "A second caller cannot fetch the original Guest’s reply.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/guests.rs:166",
+        "core/tests/tests/guests.rs:175",
         "core/tests/tests/mcp.rs"
       ],
       "test": {
@@ -1408,6 +1486,19 @@
         "runner": "core-scenario",
         "target": "mcp",
         "name": "press_keys_checks_normalized_batches_before_typing"
+      }
+    },
+    {
+      "id": "core/p0/input-draft/ordered-sequence",
+      "assertion": "Send mixed text and keys through Shell and the wire. Observe all steps in order on the terminal before later raw input, and reject invalid Shell spellings before input.",
+      "stage": "pr",
+      "existing_tests": [
+        "core/tests/tests/input.rs:554"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "input",
+        "name": "mixed_typing_keeps_all_five_steps_ahead_of_following_input"
       }
     },
     {
@@ -1461,6 +1552,19 @@
       ]
     },
     {
+      "id": "core/p0/message-receipt/acceptance-and-delivery",
+      "assertion": "By default Shell reports the exact inbox receipt while a draft still blocks delivery. After clearing it, the explicit delivery wait returns a distinct receipt and each message is submitted once.",
+      "stage": "pr",
+      "existing_tests": [
+        "core/tests/tests/messages.rs:600"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "messages",
+        "name": "shell_send_saves_behind_a_draft_and_waits_for_delivery_when_requested"
+      }
+    },
+    {
       "id": "core/p0/message-receipt/delivery",
       "assertion": "One target receives the intended body, sender identity and receipt correlation.",
       "stage": "pr",
@@ -1489,6 +1593,19 @@
       }
     },
     {
+      "id": "core/p0/message-receipt/mcp-zero-wait",
+      "assertion": "Zero-budget MCP sends return accepted inbox IDs while a draft blocks delivery, and a read returns exactly those messages. Invalid waits allocate no message.",
+      "stage": "pr",
+      "existing_tests": [
+        "core/tests/tests/mcp.rs:23"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "mcp",
+        "name": "mcp_zero_wait_sends_are_kept_and_invalid_waits_send_nothing"
+      }
+    },
+    {
       "id": "core/p0/message-receipt/raw-disconnect",
       "assertion": "Disconnect during raw input and verify the returned partial or unknown outcome matches the effect observed at the target.",
       "stage": "pr",
@@ -1500,6 +1617,19 @@
         "runner": "core-scenario",
         "target": "machines",
         "name": "raw_input_on_a_cut_peer_link_reports_unknown_and_arrives_once"
+      }
+    },
+    {
+      "id": "core/p0/message-receipt/shell-linked-reply",
+      "assertion": "Shell waits for the original remote recipient’s linked reply and writes the exact multiline reply to stdout. The remote fake CLI sees one request and the origin sees no terminal input.",
+      "stage": "pr",
+      "existing_tests": [
+        "core/tests/tests/machines.rs:3563"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "shell_receives_a_linked_reply_from_a_managed_agent_across_machines"
       }
     },
     {
@@ -1656,6 +1786,19 @@
         "runner": "core-scenario",
         "target": "recovery",
         "name": "a_start_interrupted_before_its_record_is_undone_and_its_number_never_reused"
+      }
+    },
+    {
+      "id": "core/p0/start-stop/native-session-name",
+      "assertion": "Show current Claude and Pi session labels in running and resumable lists, including renamed and unnamed sessions. Resume the same saved session using its original full ID.",
+      "stage": "pr",
+      "existing_tests": [
+        "core/tests/tests/resume.rs:1525"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "resume",
+        "name": "claude_and_pi_show_current_native_names_through_resume"
       }
     },
     {
@@ -3178,6 +3321,21 @@
         "journey": "activation-failure",
         "built_in": "claude",
         "name": "activation-failure"
+      }
+    },
+    {
+      "id": "extension/p0/message-delivery/draft-protection-rust",
+      "assertion": "In the actual Rust editor, wait explicitly for delivery while a draft is present. Verify no input or submission reaches the recipient, clearing the draft cannot deliver the withdrawn message, and unrecognized input is refused.",
+      "stage": "pr",
+      "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts:648"
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) messages: one paste and Enter into the input box; a draft there is waited for, never typed over, and the send fails within its thirty seconds, nothing coming after; an input it cannot read fails the same; reading delivers it once"
       }
     },
     {

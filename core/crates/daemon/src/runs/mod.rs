@@ -409,6 +409,11 @@ impl Runs {
         self.preparation.read_session(id).await
     }
 
+    /// Finds the current run's session report path. Blocking.
+    pub(crate) fn session_report_path(&self, id: &str) -> Option<PathBuf> {
+        self.preparation.session_report_path(id)
+    }
+
     /// Whether the CLI reported a session whose saved file is not there yet.
     pub(crate) async fn has_unsaved_session(&self, id: &str) -> bool {
         self.preparation.has_unsaved_session(id).await

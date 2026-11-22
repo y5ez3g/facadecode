@@ -127,6 +127,7 @@ operations! {
     InternalAttachResize: "internal.attach_resize", "Set the capacity of a forwarded view at its holder.", InternalAttachResizeArgs => EmptyResult, PEER, true;
     InternalDeliverStartResult: "internal.deliver_start_result", "Deliver a start receipt to its recipient.", InternalDeliverStartResultArgs => EmptyResult, PEER, true;
     InternalDeliverWaitNotice: "internal.deliver_wait_notice", "Deliver a wait notice to its recipient.", InternalDeliverWaitNoticeArgs => EmptyResult, PEER, true;
+    InternalCommandReply: "internal.command_reply", "Return a reply to the daemon waiting for it.", CommandReplyArgs => EmptyResult, PEER, true;
 }
 
 fn validate_call(call: &DaemonCall) -> Result<(), ErrorBody> {
@@ -202,10 +203,11 @@ topics! {
     AgentsTopic / Agents: "agents", "Watch visible agent records.", NoArgs => (AgentsSnapshot, AgentsChange), ALL, true;
     MachinesTopic / Machines: "machines", "Watch the local machine roster.", NoArgs => (Vec<MachineInfo>, MachinesChange), ALL, false;
     AttachTopic / Attach: "attach", "Watch an agent's live or final terminal screen.", AttachArgs => (ScreenSnapshot, ScreenChange), PEOPLE, true;
+    AttachShellTopic / AttachShell: "attach.shell", "Watch an agent's terminal screen on a dedicated Shell connection.", AttachArgs => (ScreenSnapshot, ScreenChange), TERMINAL, false;
 }
 
 fn validate_watch(watch: &DaemonWatch) -> Result<(), ErrorBody> {
-    if let DaemonWatch::Attach(args) = watch
+    if let DaemonWatch::Attach(args) | DaemonWatch::AttachShell(args) = watch
         && args.allow_ended
         && !matches!(args.target, AgentTarget::Reference(_))
     {

@@ -27,6 +27,7 @@ import { observeAcceptanceEngine } from './acceptanceEngine';
 const RECORD = process.env.FACADE_IT_RECORD!;
 /** Whether the windows run on the Rust engine: Facade's tools are core's, with core's arguments and results. */
 const RUST = process.env.FACADE_IT_ENGINE === 'rust';
+const DELIVERY_WAIT = RUST ? { wait_for: 'delivery', timeout_seconds: 30 } : {};
 const CLI = process.env.FACADE_IT_CLI ?? 'claude';
 /** The label of the other editor window of a cross-window run, and its folder: none in a run of one window. */
 const PEER = process.env.FACADE_IT_PEER;
@@ -666,7 +667,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const greeting = 'Hello from your creator.\nTwo lines, one message.';
 		const forbidden = 'Second message.';
 		const drafting: Step[] = [
-			{ tool: 'send_message', arguments: { to: '$child', text: greeting } },
+			{ tool: 'send_message', arguments: { to: '$child', text: greeting, ...DELIVERY_WAIT } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Two lines, one message.' },
 			// A draft left in its box: the next message never goes over it, waiting for it within its thirty seconds (RULES-1.4, 1.5)
 			{ tool: 'type_text', arguments: { agent: '$child', text: 'half-written' } },
@@ -692,7 +693,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			const submitted = received(childAlias);
 			assert.ok(submitted.every(text => !text.includes('half-written')), 'the held draft has never been submitted');
 			const sending = await script(alias, [
-				{ tool: 'send_message', arguments: { to: '$child', text: forbidden } },
+				{ tool: 'send_message', arguments: { to: '$child', text: forbidden, ...DELIVERY_WAIT } },
 				askHuman
 			]);
 			const held = sending.content('send_message');
@@ -730,7 +731,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			fs.writeFileSync(`${RECORD}.quirks.${childAlias}`, JSON.stringify({ garble: true }));
 			const third = (await script(alias, [
 				{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Still loading the workspace', wait: 10_000 },
-				{ tool: 'send_message', arguments: { to: '$child', text: 'Third message.' } }
+				{ tool: 'send_message', arguments: { to: '$child', text: 'Third message.', ...DELIVERY_WAIT } }
 			])).content('send_message');
 			assert.deepStrictEqual([third?.status, third?.reason], ['failure', 'input_unknown'], JSON.stringify(third));
 			fs.rmSync(`${RECORD}.quirks.${childAlias}`);
@@ -826,7 +827,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		for (const [quirk, text] of [[{ slowMs: 4_500 }, 'Taken slowly.'], [{ swallow: 1 }, 'Enter missed once.']] as const) {
 			const before = input().length;
 			fs.writeFileSync(quirks, JSON.stringify(quirk));
-			const sent = (await script(alias, [{ tool: 'send_message', arguments: { to: '$child', text } }])).content('send_message');
+			const sent = (await script(alias, [{ tool: 'send_message', arguments: { to: '$child', text, ...DELIVERY_WAIT } }])).content('send_message');
 			await expectSent(sent, childAlias, RUST ? started.data.id : undefined);
 			await new Promise(resolve => setTimeout(resolve, 5_000));
 			const missed = RUST && 'swallow' in quirk;
@@ -868,7 +869,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const ran = await script(alias, [
 			{ tool: 'start_agent', arguments: { name: 'Other folder helper', folder, cli: 'claude', prompt: 'Help from afar.' }, save: { child: 'data.id' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Try a task' },
-			{ tool: 'send_message', arguments: { to: '$child', text: 'Hello across windows.' } },
+			{ tool: 'send_message', arguments: { to: '$child', text: 'Hello across windows.', ...DELIVERY_WAIT } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Hello across windows.' },
 			{ tool: 'list_agents', arguments: {} }
 		], 90_000);

@@ -20,7 +20,7 @@ use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::model::terminal::display_line;
 use facade_base::system::{env_var, home_folder_in};
 
-use super::parse_session_id;
+use super::{parse_session_id, reported_path};
 use crate::Rule;
 
 /// A resumable session that its CLI has saved in the selected folder's history.
@@ -40,7 +40,58 @@ pub fn list_sessions(
     environment: &BTreeMap<String, String>,
     args: &[String],
 ) -> Result<Vec<SavedSession>, ErrorBody> {
-    let scope = Folder::new(folder);
+    read_sessions(rule, &Folder::new(folder, None), environment, args)
+}
+
+/// Reads the saved session with this full canonical ID in the supplied launch context.
+/// The run's session report can locate its native file before using the configured history.
+pub fn session_for_id(
+    rule: &Rule,
+    folder: &Path,
+    environment: &BTreeMap<String, String>,
+    args: &[String],
+    id: &str,
+    report: Option<&Path>,
+) -> Result<Option<SavedSession>, ErrorBody> {
+    if parse_session_id(id).as_deref() != Some(id) {
+        return Ok(None);
+    }
+    let scope = Folder::new(folder, Some(id));
+    if let Some(report) = report
+        && let Some(session) = read_reported_session(rule.cli.as_str(), report, id, &scope)?
+    {
+        return Ok(Some(session));
+    }
+    Ok(read_sessions(rule, &scope, environment, args)?
+        .into_iter()
+        .next())
+}
+
+fn read_reported_session(
+    cli: &str,
+    report: &Path,
+    id: &str,
+    scope: &Folder<'_>,
+) -> Result<Option<SavedSession>, ErrorBody> {
+    let read: fn(&Path, &Folder<'_>) -> Result<Option<SavedSession>, ErrorBody> = match cli {
+        "claude" => claude::conversation,
+        "codex" => codex::reported,
+        "pi" => pi::conversation,
+        _ => return Ok(None),
+    };
+    let Some(path) = reported_path(report, id) else {
+        return Ok(None);
+    };
+    read(&path, scope)
+}
+
+fn read_sessions(
+    rule: &Rule,
+    scope: &Folder<'_>,
+    environment: &BTreeMap<String, String>,
+    args: &[String],
+) -> Result<Vec<SavedSession>, ErrorBody> {
+    let folder = scope.selected;
     let home = home_folder_in(environment).map(|home| folder.join(home));
     let home = home.as_deref();
     let value = |name| env_var(environment, name).filter(|value| !value.is_empty());
@@ -57,13 +108,12 @@ pub fn list_sessions(
     };
     match rule.cli.as_str() {
         "claude" => {
-            configured("CLAUDE_CONFIG_DIR", ".claude").map(|root| claude::list(&root, &scope))
+            configured("CLAUDE_CONFIG_DIR", ".claude").map(|root| claude::list(&root, scope))
         }
-        "codex" => configured("CODEX_HOME", ".codex").map(|root| codex::list(&root, &scope)),
-        "agy" => home.map(|home| {
-            indexes::antigravity(&home.join(".gemini").join("antigravity-cli"), &scope)
-        }),
-        "muse" => data().map(|root| indexes::muse(&root.join("muse"), &scope)),
+        "codex" => configured("CODEX_HOME", ".codex").map(|root| codex::list(&root, scope)),
+        "agy" => home
+            .map(|home| indexes::antigravity(&home.join(".gemini").join("antigravity-cli"), scope)),
+        "muse" => data().map(|root| indexes::muse(&root.join("muse"), scope)),
         "opencode" => {
             let file = value("OPENCODE_DB").unwrap_or("opencode.db");
             if file == ":memory:" {
@@ -75,9 +125,9 @@ pub fn list_sessions(
             } else {
                 data().map(|data| data.join("opencode").join(file))
             };
-            path.map(|file| indexes::opencode(&file, &scope))
+            path.map(|file| indexes::opencode(&file, scope))
         }
-        "pi" => return pi::list(rule, &scope, home, environment, args),
+        "pi" => return pi::list(rule, scope, home, environment, args),
         _ => None,
     }
     .unwrap_or_else(|| Ok(Vec::new()))
@@ -86,14 +136,23 @@ pub fn list_sessions(
 struct Folder<'a> {
     selected: &'a Path,
     resolved: Option<PathBuf>,
+    id: Option<&'a str>,
 }
 
 impl<'a> Folder<'a> {
-    fn new(selected: &'a Path) -> Self {
+    fn new(selected: &'a Path, id: Option<&'a str>) -> Self {
         let resolved = real_path(selected)
             .ok()
             .filter(|real| real.as_os_str() != selected.as_os_str());
-        Self { selected, resolved }
+        Self {
+            selected,
+            resolved,
+            id,
+        }
+    }
+
+    fn includes_id(&self, id: &str) -> bool {
+        self.id.is_none_or(|selected| selected == id)
     }
 
     fn matches(&self, recorded: &Path) -> bool {

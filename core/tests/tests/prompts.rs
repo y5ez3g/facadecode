@@ -181,7 +181,7 @@ fn a_message_sent_while_the_prompt_waits_goes_after_it() {
     let host = host(&home);
     start_child(&mut boss, &here, "fix the bug");
     home.wait_for_gate("before-prompt-delivery");
-    let send = send_in_background(&home, &["child", "and then this"]);
+    let send = send_in_background(&home, &["child", "and then this", "-w"]);
     // The send answers only once the message is delivered, after the gate: the store alone shows
     // that it is kept while the prompt waits.
     assert!(
@@ -302,7 +302,7 @@ fn a_guest_s_start_prompt_owes_it_a_result_that_a_read_delivers() {
     let (mut guest, address) = guest(&home, &[]);
     let waiting = guest.send(
         "tools/call",
-        json!({ "name": "read_messages", "arguments": { "wait": true } }),
+        json!({ "name": "read_messages", "arguments": { "timeout_seconds": 30 } }),
     );
     start_from_the_guest(&home, &mut guest, "hello child");
     assert!(
@@ -411,7 +411,7 @@ fn a_guest_s_start_prompt_that_outlives_its_daemon_still_owes_it_its_result() {
         home.submitted_messages(),
         home.daemon_log()
     );
-    let read = guest.call("read_messages", json!({ "wait": true }));
+    let read = guest.call("read_messages", json!({ "timeout_seconds": 30 }));
     let taken = &read["data"]["messages"];
     assert_eq!(
         (taken.as_array().map(Vec::len), &taken[0]["from"]),
@@ -525,7 +525,7 @@ fn a_caller_removed_before_its_result_gets_none() {
         home.submitted_messages()
     );
     assert_eq!(
-        home.run_facade_ok(&["send", "child", "next"]).trim(),
+        home.run_facade_ok(&["send", "child", "next", "-w"]).trim(),
         format!(
             "Delivered m3@{host} to child ({}).",
             record(&home, "child")["address"].as_str().unwrap()
@@ -573,7 +573,7 @@ fn a_terminal_start_s_prompt_comes_from_the_command_line_and_owes_no_result() {
     );
     let host = host(&home);
     assert_eq!(
-        home.run_facade_ok(&["send", "child", "next"]).trim(),
+        home.run_facade_ok(&["send", "child", "next", "-w"]).trim(),
         format!(
             "Delivered m3@{host} to child ({}).",
             record(&home, "child")["address"].as_str().unwrap()

@@ -3,13 +3,13 @@
 
 use std::path::PathBuf;
 
-use facade_base::api_v1::daemon::AgentLabel;
+use facade_base::api_v1::daemon::{AgentLabel, SendWait};
 use facade_base::api_v1::{ErrorBody, ErrorData};
 use serde_json::{Value, json};
 
 use crate::errors::{
-    AgentCommand, Problem, about_connection, agent_failed, exit_code, stop_diagnostic, stop_failed,
-    words,
+    AgentCommand, Problem, about_connection, agent_failed, exit_code, send_failed, stop_diagnostic,
+    stop_failed, words,
 };
 
 fn given(text: &str) -> String {
@@ -205,7 +205,7 @@ fn a_send_to_an_ended_agent_names_the_agent_the_service_gives() {
         "a2@gpu has ended",
         json!({ "agents": [agent_label("a2", "gpu", "Bob", "ended", true)] }),
     );
-    let error = agent_failed(AgentCommand::Send, "bob", ended.into());
+    let error = send_failed(SendWait::Delivery, "bob", 30, ended.into());
     assert_eq!(
         words(&error),
         "error: Bob (a2@gpu) has stopped and cannot receive messages.\n\

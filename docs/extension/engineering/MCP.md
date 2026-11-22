@@ -524,17 +524,24 @@ preserves the identity rules for already-running managed agents through the end 
 resumes use the current rules. A migrated Guest keeps its relay identity and inbox. If its saved YOLO value is
 missing, migration reads the machine's setting once and saves the value.
 
-`list_agents` rows and requested screen lines are returned in full inline. Use `after` to continue from `next_cursor` and
-`last` to select recent messages. Each delivered message has its full text in `data.messages`.
+`list_agents` rows and requested screen lines are returned in full inline. Use `after` to continue from `next_cursor`
+with the same filter, or use `last` to select recent messages. Each returned inbox message has its full text in
+`data.messages`.
 
 ### 7.3 Start on the selected machine
 
 **The target machine supplies the available CLI entries and creates the worktree a start asks for.**
 
 `start_agent` takes a CLI entry and can specify a machine, folder and worktree branch. The target's settings
-extend the built-in CLI catalog. If the selected entry is unavailable, report the reason and the entries available
-on that machine. A request for a model or effort the CLI does not accept uses the same refusal in Shell, MCP and
-settings validation. See the [product's CLI table](../../PRODUCT.md#cli-differences).
+extend the built-in CLI catalog. For each responding machine, `list_agents` can return a `clis` array of available
+CLI names in its default start context. Copy a name and the machine's `selector` into `start_agent`. If the lookup
+fails, the machine row can report `cli_error` with no `clis` field. Start checks the selected entry in the requested
+context and reports the reason and available entries on refusal. A request for an unsupported model or effort uses
+the same refusal in Shell, MCP and settings validation. See the [product's CLI table](../../PRODUCT.md#cli-differences).
+
+For a Guest or a remote machine, the catalog uses the target login environment and directory. A local Guest start
+uses its verified relay environment. A local managed agent's catalog uses its verified run environment and
+working directory.
 
 ```json
 {"cli":"claude","machine":"devbox","folder":"/work/app","worktree":"feat-x"}
@@ -558,8 +565,17 @@ the caller can choose from.
 **An automatic resend recovers the original delivery outcome.**
 
 Facade resends with the original caller, target and internal request identity. It reuses the outcome even when the
-original attempt was withdrawn. Calls to `send_message` create new sends. A Guest whose send succeeds receives the
-`read_messages` call for waiting on the reply.
+original attempt was withdrawn. Each new `send_message` call creates a message. By default, its receipt confirms
+inbox acceptance, and `read_messages` takes an immediate snapshot.
+
+Set `timeout_seconds` from 1 to 30 to wait. For a send, also set `wait_for` to `delivery` for receipt by the target or
+`result` for its first linked reply. The duration covers the whole call. After `reply_timeout`, an agent can use the
+original full `data.id` as `read_messages.reply_to` with a fresh timeout. A reply filter includes retained messages
+already delivered or read.
+
+To reply to a Shell request, pass its `#cN@machine` sender address as `to` and its inbox number as `reply_to`.
+Only the original recipient can answer. The first linked reply reaches the waiting invocation and gets a
+`returned_to_request` receipt. A reply after that wait ends fails with `ended`.
 
 ## Checks
 

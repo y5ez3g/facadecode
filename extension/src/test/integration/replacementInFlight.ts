@@ -3,12 +3,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { execFileSync, spawn, type ChildProcess } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { isProcessRunning } from '../../base/system';
 import type { MessageRecord } from '../../core/messagePorts';
-import { EDITOR_FLAGS, editorProfile, endEditors, explicitVsixInstallArgs, newRepository, until } from './editors';
+import { EDITOR_FLAGS, editorProfile, endEditors, newRepository, until } from './editors';
+import { installLocalVsixes } from './vsixInstall';
 
 interface Options {
 	readonly root: string;
@@ -16,7 +17,6 @@ interface Options {
 	readonly folder: string;
 	readonly record: string;
 	readonly executable: string;
-	readonly cli: string;
 	readonly driver: string;
 	readonly from: readonly string[];
 	readonly to: readonly string[];
@@ -63,13 +63,8 @@ export async function replacementInFlight(options: Options): Promise<void> {
 	newRepository(otherFolder);
 	fs.mkdirSync(path.join(sender.user, 'User'), { recursive: true });
 	fs.copyFileSync(path.join(receiver.user, 'User', 'settings.json'), path.join(sender.user, 'User', 'settings.json'));
-	const install = (profile: typeof sender, packages: readonly string[]) => {
-		for (const file of packages) {
-			execFileSync(options.cli, [...profile.args, ...explicitVsixInstallArgs(file)], {
-				env: { ...options.env, ...profile.env }, stdio: 'pipe', shell: process.platform === 'win32', timeout: 15_000
-			});
-		}
-	};
+	const install = (profile: typeof sender, packages: readonly string[]) =>
+		installLocalVsixes(executable, profile, packages, options.env, 15_000);
 	const editors: ChildProcess[] = [];
 	const tail = new Map<string, string>();
 	const start = (role: string, profile: typeof sender, cwd: string) => {
@@ -115,8 +110,8 @@ export async function replacementInFlight(options: Options): Promise<void> {
 	let target: PublishedAgent | undefined;
 	let author: PublishedAgent | undefined;
 	try {
-		install(receiver, from);
-		install(sender, from);
+		await install(receiver, from);
+		await install(sender, from);
 		const receiverOut = start('receiver', receiver, folder);
 		target = await phase<PublishedAgent>(receiverOut, 'started', 90_000);
 		const senderOut = start('sender', sender, otherFolder);
@@ -140,7 +135,7 @@ export async function replacementInFlight(options: Options): Promise<void> {
 		assert.deepStrictEqual([initial.from.run, initial.to.run, initial.window, initial.fromWindow], [author.run, target.run, target.window, author.window]);
 		assert.ok(!calls(author.alias).some(each => each.step === 'send_message'), 'the original sender is still waiting when the upgrade begins');
 		console.log('  Routed message in flight ' + JSON.stringify({ target, sender: author, message: initial.id, deadline: initial.delivery.deadline, pid }));
-		install(receiver, to);
+		await install(receiver, to);
 		assert.strictEqual(originals()[0]?.delivery.status, 'pending');
 		fs.writeFileSync(`${receiverOut}.reload`, '');
 		const reload = await phase<{ at: number }>(receiverOut, 'reloading');

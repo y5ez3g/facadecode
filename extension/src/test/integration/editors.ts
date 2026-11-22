@@ -42,7 +42,7 @@ export function officialEditor(): string {
 }
 
 /** The official VS Code only: a derived editor can load its own agent extension and share a data folder with a person's live state. */
-function officialProducts(executable: string) {
+export function officialProducts(executable: string) {
 	const dir = path.dirname(executable);
 	const candidates = [
 		path.join(dir, '..', 'Resources', 'app', 'product.json'),
@@ -94,11 +94,6 @@ export function editorProfile(root: string, name: string, extensions?: string) {
 		args: ['--user-data-dir', user, '--extensions-dir', extensions ?? path.join(portable, 'extensions'), '--shared-data-dir', path.join(portable, 'shared-data')],
 		env: { VSCODE_PORTABLE: portable }
 	};
-}
-
-/** Both Facade VSIXs are provided explicitly. Avoid resolving their reciprocal packs through the Marketplace. */
-export function explicitVsixInstallArgs(file: string): string[] {
-	return ['--install-extension', file, '--force', '--do-not-include-pack-dependencies'];
 }
 
 /** Variables an editor, Git or a CLI session could pass on: none of them may reach the test editor. */

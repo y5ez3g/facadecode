@@ -62,7 +62,7 @@
       "readOnlyHint": true,
       "openWorldHint": false
     },
-    "description": "List reachable running managed agents and online Guests, newest start or resume first. Returns data.agents with each row's address as id and type as managed or guest. data.machines reports machine states.",
+    "description": "List reachable running managed agents and online Guests, newest start or resume first. data.agents identifies each agent by id and type. Each data.machines row reports machine state, a copyable selector for start_agent.machine, and clis as a list of CLI names available in that machine's default start context. Copy a clis string directly into start_agent.cli. Unavailable CLIs are omitted. A missing clis field means the list was not obtained; cli_error explains a separate CLI lookup failure when known.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -102,14 +102,14 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Send a message to an agent and wait up to 30 seconds for delivery. A Guest must take it with read_messages in that time. On success, data.id is the canonical receipt, such as m42@laptop. data.delivery reports how it arrived. A Guest sender gets data.next with a read_messages call to wait for the reply.",
+    "description": "Send one complete message. With timeout_seconds omitted or 0, return after Facade saves it in the recipient's inbox; success confirms acceptance for delivery. To wait, set timeout_seconds to 1–30 and wait_for to \"delivery\" for confirmed delivery, or \"result\" for the first reply from the original recipient linked to this message. A positive timeout requires wait_for and is one total call budget. data.id identifies this send; data.delivery states the confirmed delivery fact. Managed agents usually wait for delivery and receive replies through their terminals. Guests needing an answer should wait for result. On reply_timeout, continue with read_messages using the same full data.id as reply_to and a positive timeout_seconds; do not resend the task. To answer a command-line request, copy its sender address, such as #c42@devbox, into to and its received message number into reply_to. The first matching reply goes directly to the command while it is waiting. returned_to_request confirms that handoff. If the command has finished waiting, the reply fails with ended.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "to": {
           "type": "string",
           "minLength": 1,
-          "description": "An address such as a3@devbox or a3@9a0d44b2, an agent number such as a3, or a name."
+          "description": "An agent address such as a3@devbox or a3@9a0d44b2, an agent number such as a3, or a name. To answer a command-line request, copy its sender address such as #c42@devbox and set reply_to to that request. A #c address accepts a reply only while its original command is waiting."
         },
         "text": {
           "type": "string",
@@ -119,7 +119,22 @@
         "reply_to": {
           "type": "string",
           "minLength": 1,
-          "description": "Inbox message number you are replying to, such as m17. Address the reply to that message's sender."
+          "description": "Inbox message number you are replying to, such as m17. Set the to field to its sender, including a #c command-line reply address while that command is waiting. Only the original recipient can reply to that message. Facade notifications and plain command_line messages cannot receive replies."
+        },
+        "wait_for": {
+          "type": "string",
+          "enum": [
+            "delivery",
+            "result"
+          ],
+          "description": "What to wait for when timeout_seconds is positive: delivery for confirmed terminal submission, an inbox read, or handoff to the waiting command-line request; result for the first linked reply from the original recipient. Omit when no wait is needed. Setting this alone does not enable waiting. A command-line request address does not accept result waits."
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30,
+          "default": 0,
+          "description": "Seconds for this call's wait, default 0. Omitted or 0 disables waiting even when wait_for is set. Positive values require wait_for and bound the whole call, including connection, resolution, acceptance, the selected wait and the answer. Each continuation read has its own budget. This does not extend the message's delivery deadline."
         }
       },
       "required": [
@@ -137,7 +152,7 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Read your inbox. Omit after and last for undelivered messages. Each data.messages row includes id, from, at, full text and reply_to when present. Messages already being typed into your terminal are skipped. To continue a page, pass data.next_cursor as after with the same reply_to filter. If a wait returns no match, call again with the same arguments.",
+    "description": "Read your own inbox. timeout_seconds defaults to 0: return a snapshot without waiting. A value from 1 to 30 returns existing matches or waits up to that total call budget. Omit after, last and reply_to for undelivered messages. To read or continue waiting for replies to one send, copy its full data.id into reply_to; this also includes retained replies already delivered or read. Each data.messages row contains id, from, at and full text, plus reply_to when present. A replyable command-line request has a #c command-line reply address in from; copy it into send_message.to and its id into reply_to to answer while the command is waiting. Messages being typed into your terminal are skipped until delivery settles. An empty snapshot succeeds; an expired positive wait fails with timeout or reply_timeout. Use next_cursor as after with the same reply_to filter for another page. Reading takes only the complete messages returned. It does not resend a task or extend delivery deadlines.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -152,15 +167,17 @@
           "maximum": 100,
           "description": "Number of newest inbox messages to read, including delivered history. Omit after."
         },
-        "wait": {
-          "type": "boolean",
-          "default": false,
-          "description": "Wait up to 30 seconds for a matching inbox message."
-        },
         "reply_to": {
           "type": "string",
           "minLength": 1,
-          "description": "Only read replies to this receipt. Copy the full data.id from send_message, such as m42@laptop."
+          "description": "Only read replies to this send. Copy its full data.id, such as m42@laptop. Includes retained matching replies already delivered or read. Without after or last, read from the earliest retained match."
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30,
+          "default": 0,
+          "description": "0 or omitted returns an immediate snapshot. A value from 1 to 30 returns existing matches or waits for them. Connection, resolution, waiting and the answer share one total budget. An empty snapshot succeeds; an expired positive wait fails."
         }
       },
       "required": [],

@@ -19,6 +19,7 @@
 
 mod compact;
 mod kept_modes;
+mod mouse;
 mod program_status;
 mod read;
 mod redraw;
@@ -74,6 +75,8 @@ pub struct ParsedOutput {
     pub title_change: Option<String>,
     /// The output for viewers: whole characters and sequences, no queries.
     pub viewer_output: Vec<u8>,
+    /// The complete OSC 9;4 activity sequences in this batch's viewer output, in order.
+    pub native_activity: Vec<u8>,
     /// Viewers need a redraw rather than `viewer_output`: the CLI went back to the main screen,
     /// which a viewer may have kept differently.
     pub redraw_viewers: bool,
@@ -111,6 +114,11 @@ impl Screen {
     /// Sets the colors used to reply to subsequent OSC 10, 11 and 12 queries.
     pub fn set_colors(&mut self, colors: TerminalColors) {
         self.terminal.colors = colors;
+    }
+
+    /// Seeds the native title saved alongside a checkpoint's redraw.
+    pub fn restore_title(&mut self, title: &str) {
+        self.terminal.restore_title(title);
     }
 
     /// What the scrollback takes in memory.
@@ -190,6 +198,7 @@ impl Screen {
             query_replies: requests.replies,
             title_change: requests.title,
             viewer_output: filtered.viewer_output,
+            native_activity: filtered.native_activity,
             redraw_viewers: left_alternate,
             status,
         }

@@ -41,7 +41,7 @@ type Action =
 	| { readonly kind: 'worktree'; readonly branch: string }
 	| { readonly kind: 'delete-worktree'; readonly folder: string };
 
-export type WindowAction = Action | { readonly kind: 'close' };
+export type WindowAction = Action | { readonly kind: 'close'; readonly quit?: boolean };
 
 export interface WindowReady {
 	readonly folder: string;
@@ -468,7 +468,7 @@ async function perform(action: Action): Promise<unknown> {
 		}
 		case 'send': {
 			const { agent } = await inspect(action.to);
-			const sent = facade('send', action.to, action.text).trimEnd();
+			const sent = facade('send', '-w', action.to, action.text).trimEnd();
 			const message = /^Delivered (m\d+@[^\s]+) to /u.exec(sent)?.[1];
 			assert.ok(message, sent);
 			assert.strictEqual(sent, `Delivered ${message} to ${agent.name} (${agent.address}).`);
@@ -528,7 +528,8 @@ async function actions(): Promise<void> {
 				fs.existsSync(request) ? JSON.parse(fs.readFileSync(request, 'utf8')) as WindowAction : undefined, 120_000);
 			if (action.kind === 'close') {
 				closing = response;
-				void vscode.commands.executeCommand('workbench.action.closeWindow').then(undefined, error => {
+				const command = action.quit ? 'workbench.action.quit' : 'workbench.action.closeWindow';
+				void vscode.commands.executeCommand(command).then(undefined, error => {
 					answer(response, { error: String(error) });
 				});
 				return;

@@ -284,6 +284,9 @@
         },
         "title": {
           "type": "string"
+        },
+        "session_name": {
+          "type": "string"
         }
       },
       "required": [
@@ -326,6 +329,9 @@
         },
         "has_rule": {
           "type": "boolean"
+        },
+        "session_name": {
+          "type": "string"
         }
       },
       "required": [
@@ -1159,6 +1165,22 @@
             "op",
             "args"
           ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "internal.command_reply"
+            },
+            "args": {
+              "$ref": "#/$defs/CommandReplyArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
         }
       ]
     },
@@ -1283,6 +1305,9 @@
             },
             {
               "$ref": "#/$defs/ScreenChange"
+            },
+            {
+              "$ref": "#/$defs/ScreenChange"
             }
           ]
         }
@@ -1381,6 +1406,83 @@
       },
       "required": [
         "build"
+      ]
+    },
+    "CommandReply": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/MessageRef"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference",
+        "text"
+      ]
+    },
+    "CommandReplyArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "original": {
+          "type": "object",
+          "properties": {
+            "machine_id": {
+              "type": "string"
+            },
+            "message_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "machine_id",
+            "message_id"
+          ],
+          "additionalProperties": false
+        },
+        "reply": {
+          "$ref": "#/$defs/CommandReplyInput"
+        }
+      },
+      "required": [
+        "request_id",
+        "original",
+        "reply"
+      ]
+    },
+    "CommandReplyInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reference": {
+          "type": "object",
+          "properties": {
+            "machine_id": {
+              "type": "string"
+            },
+            "message_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "machine_id",
+            "message_id"
+          ],
+          "additionalProperties": false
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference",
+        "text"
       ]
     },
     "ConnectFailedParams": {
@@ -1625,6 +1727,11 @@
           "type": "string",
           "const": "notified",
           "description": "A message to the person: delivered to one or more member windows' subscriptions."
+        },
+        {
+          "type": "string",
+          "const": "returned_to_request",
+          "description": "Returned to the sending command as its reply."
         }
       ],
       "description": "How a message was delivered."
@@ -1911,6 +2018,9 @@
             },
             {
               "$ref": "#/$defs/ScreenSnapshot"
+            },
+            {
+              "$ref": "#/$defs/ScreenSnapshot"
             }
           ]
         },
@@ -2123,6 +2233,44 @@
         }
       ],
       "description": "How an agent's message input reads on its screen. A reading never means input may be typed."
+    },
+    "InputStep": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "text"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "key"
+            },
+            "key": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "key"
+          ]
+        }
+      ]
     },
     "InspectResult": {
       "type": "object",
@@ -3150,6 +3298,22 @@
                     "topic",
                     "args"
                   ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "topic": {
+                      "const": "attach.shell"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/AttachArgs"
+                    }
+                  },
+                  "required": [
+                    "topic",
+                    "args"
+                  ]
                 }
               ]
             },
@@ -4164,6 +4328,22 @@
                             "op",
                             "args"
                           ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "internal.command_reply"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/CommandReplyArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
                         }
                       ]
                     }
@@ -4892,6 +5072,9 @@
         },
         "at": {
           "type": "string"
+        },
+        "session_name": {
+          "type": "string"
         }
       },
       "required": [
@@ -5398,6 +5581,9 @@
         },
         "allow_unsupported_receipt": {
           "type": "boolean"
+        },
+        "wait_for": {
+          "$ref": "#/$defs/SendWait"
         }
       },
       "required": [
@@ -5425,11 +5611,22 @@
         },
         "expected_reply_to": {
           "$ref": "#/$defs/MessageRef"
+        },
+        "reply": {
+          "$ref": "#/$defs/CommandReply"
         }
       },
       "required": [
         "id",
         "message"
+      ]
+    },
+    "SendWait": {
+      "type": "string",
+      "enum": [
+        "inbox",
+        "delivery",
+        "result"
       ]
     },
     "SingleMachineScope": {
@@ -5990,6 +6187,9 @@
             },
             {
               "$ref": "#/$defs/EmptyResult"
+            },
+            {
+              "$ref": "#/$defs/EmptyResult"
             }
           ]
         }
@@ -6073,6 +6273,26 @@
           "required": [
             "kind",
             "raw"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "sequence"
+            },
+            "steps": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/InputStep"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "steps"
           ]
         }
       ]
@@ -6270,6 +6490,22 @@
             "topic",
             "args"
           ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "topic": {
+              "const": "attach.shell"
+            },
+            "args": {
+              "$ref": "#/$defs/AttachArgs"
+            }
+          },
+          "required": [
+            "topic",
+            "args"
+          ]
         }
       ]
     },
@@ -6291,6 +6527,9 @@
               "items": {
                 "$ref": "#/$defs/MachineInfo"
               }
+            },
+            {
+              "$ref": "#/$defs/ScreenSnapshot"
             },
             {
               "$ref": "#/$defs/ScreenSnapshot"
@@ -6654,6 +6893,16 @@
         },
         "local": [],
         "forwarded": true
+      },
+      "internal.command_reply": {
+        "args": {
+          "$ref": "#/$defs/CommandReplyArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/EmptyResult"
+        },
+        "local": [],
+        "forwarded": true
       }
     },
     "topics": {
@@ -6709,6 +6958,21 @@
           "ide"
         ],
         "forwarded": true
+      },
+      "attach.shell": {
+        "args": {
+          "$ref": "#/$defs/AttachArgs"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/ScreenSnapshot"
+        },
+        "change": {
+          "$ref": "#/$defs/ScreenChange"
+        },
+        "local": [
+          "terminal"
+        ],
+        "forwarded": false
       }
     },
     "methods": [

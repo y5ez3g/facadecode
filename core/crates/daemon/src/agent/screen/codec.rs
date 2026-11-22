@@ -42,6 +42,9 @@ impl Checkpoint {
     pub(super) fn restore(&self) -> Screen {
         let mut restored = Screen::new(self.cols, self.rows, SCROLLBACK_ROWS);
         restored.feed(self.redraw.as_slice());
+        if let Some(title) = self.title.as_deref() {
+            restored.restore_title(title);
+        }
         restored
     }
 

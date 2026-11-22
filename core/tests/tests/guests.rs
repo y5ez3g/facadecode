@@ -13,9 +13,9 @@ fn managed_relay(home: &TestHome, name: &str) -> (String, McpTestClient) {
     (address.into(), McpTestClient::open_configured(home, id))
 }
 
-/// An external MCP connection follows the reply instruction a successful send gives it. When
-/// the managed sender omits the reference, a send queued before or during the wait explains how
-/// to resend the reply after withdrawal.
+/// A Guest waits by its original send ID and continues with the same ID after a reply timeout.
+/// When the managed sender omits the reference, a send queued before or during the wait explains
+/// how to resend the reply after withdrawal.
 #[test]
 fn a_guest_waits_for_the_reply_to_its_message() {
     let home = TestHome::new("guest-reply");
@@ -51,7 +51,7 @@ fn a_guest_waits_for_the_reply_to_its_message() {
     let request = "Please check the isolated test project";
     let sent = guest.call(
         "send_message",
-        json!({ "to": ada_address, "text": request }),
+        json!({ "to": ada_address, "text": request, "wait_for": "delivery", "timeout_seconds": 30 }),
     );
     assert_eq!(sent["status"], "success", "{sent}");
     assert_eq!(sent["data"]["delivery"], "typed_into_input", "{sent}");
@@ -69,17 +69,16 @@ fn a_guest_waits_for_the_reply_to_its_message() {
         "the fake terminal did not accept the Guest's message: {}",
         home.screen(ada_address)
     );
-    let next = &sent["data"]["next"];
-    assert_eq!(next["tool"], "read_messages", "{sent}");
-    assert_eq!(next["arguments"]["wait"], true, "{sent}");
-    assert_eq!(next["arguments"]["reply_to"], original, "{sent}");
+    assert!(sent["data"].get("next").is_none(), "{sent}");
     let response = "I checked the isolated test project";
     let send_without_reference = |ada: &mut McpTestClient| {
         ada.send(
             "tools/call",
             json!({
                 "name": "send_message",
-                "arguments": { "to": guest_address, "text": response },
+                "arguments": {
+                    "to": guest_address, "text": response, "wait_for": "delivery", "timeout_seconds": 15,
+                },
             }),
         )
     };
@@ -88,10 +87,17 @@ fn a_guest_waits_for_the_reply_to_its_message() {
         wait_until(secs(10), || waiting_for(&home, guest_id) == 1),
         "the Guest's inbox has the first send before it starts waiting"
     );
-    let waiting = guest.send(
-        "tools/call",
-        json!({ "name": next["tool"], "arguments": next["arguments"] }),
-    );
+    // The unlinked sends must reach their delivery deadlines while the Guest is still waiting.
+    let read_reply = |guest: &mut McpTestClient, reply_to: &str| {
+        guest.send(
+            "tools/call",
+            json!({
+                "name": "read_messages",
+                "arguments": { "reply_to": reply_to, "timeout_seconds": 30 },
+            }),
+        )
+    };
+    let waiting = read_reply(&mut guest, original);
     assert!(
         guest
             .answer(waiting, std::time::Duration::from_millis(250))
@@ -125,16 +131,19 @@ fn a_guest_waits_for_the_reply_to_its_message() {
     });
     assert_eq!(hints[0], hints[1], "both orders suggest the same reply");
     let unmatched = guest.tool_answer(waiting);
-    assert_eq!(unmatched["status"], "success", "{unmatched}");
-    assert_eq!(unmatched["data"]["messages"], json!([]), "{unmatched}");
+    assert_eq!(unmatched["status"], "failure", "{unmatched}");
+    assert_eq!(unmatched["reason"], "reply_timeout", "{unmatched}");
+    assert_eq!(unmatched["data"]["id"], original, "{unmatched}");
+    assert!(unmatched["data"].get("delivery").is_none(), "{unmatched}");
+    assert!(unmatched["data"].get("next").is_none(), "{unmatched}");
 
-    let waiting = guest.send(
-        "tools/call",
-        json!({ "name": next["tool"], "arguments": next["arguments"] }),
-    );
+    let waiting = read_reply(&mut guest, original);
     let replied = ada.call(
         "send_message",
-        json!({ "to": guest_address, "text": response, "reply_to": hints[0] }),
+        json!({
+            "to": guest_address, "text": response, "reply_to": hints[0],
+            "wait_for": "delivery", "timeout_seconds": 30,
+        }),
     );
     assert_eq!(replied["status"], "success", "{replied}");
     assert_eq!(
@@ -188,9 +197,13 @@ fn a_guest_cannot_fetch_another_guests_pending_reply() {
 
     let request = recipient.call(
         "send_message",
-        json!({ "to": ada_address, "text": "request from the recipient" }),
+        json!({
+            "to": ada_address, "text": "request from the recipient",
+            "wait_for": "delivery", "timeout_seconds": 30,
+        }),
     );
     assert_eq!(request["status"], "success", "{request}");
+    assert_eq!(request["data"]["delivery"], "typed_into_input", "{request}");
     let original = request["data"]["id"].as_str().unwrap();
     let (original_number, machine) = original.split_once('@').unwrap();
     let owner_history = ada.call("read_messages", json!({ "last": 10 }));
@@ -213,7 +226,13 @@ fn a_guest_cannot_fetch_another_guests_pending_reply() {
     let reply = "reply for the recipient only";
     let pending = ada.send(
         "tools/call",
-        json!({ "name": "send_message", "arguments": { "to": address, "text": reply, "reply_to": original } }),
+        json!({
+            "name": "send_message",
+            "arguments": {
+                "to": address, "text": reply, "reply_to": original,
+                "wait_for": "delivery", "timeout_seconds": 30,
+            },
+        }),
     );
     let mut wire = connect(&home);
     let posted = format!("#{ada_id} sent ");
@@ -252,10 +271,127 @@ fn a_guest_cannot_fetch_another_guests_pending_reply() {
     assert_eq!(sent["data"]["id"], format!("{number}@{machine}"), "{sent}");
     let settled = recipient.call("read_messages", json!({ "reply_to": original }));
     assert_eq!(settled["status"], "success", "{settled}");
-    assert_eq!(settled["data"]["messages"], json!([]), "{settled}");
+    // The reply filter can read the same retained record. It is no longer unread.
+    assert_eq!(
+        settled["data"]["messages"], read["data"]["messages"],
+        "{settled}"
+    );
+    let unread = recipient.call("read_messages", json!({}));
+    assert_eq!(unread["status"], "success", "{unread}");
+    assert_eq!(unread["data"]["messages"], json!([]), "{unread}");
     let history = other.call("read_messages", json!({ "last": 10 }));
     assert_eq!(history["status"], "success", "{history}");
     assert_eq!(history["data"]["messages"], json!([]), "{history}");
+}
+
+#[test]
+fn a_guest_result_wait_returns_the_linked_reply_or_continues_by_the_same_id() {
+    let home = TestHome::new("guest-result");
+    std::fs::write(home.path.join("facade.json"), r#"{"yolo":true}"#).unwrap();
+    let (ada_address, mut ada) = managed_relay(&home, "ada");
+    let (mut guest, row) = member(&home);
+    let guest_address = row["address"].as_str().unwrap();
+
+    for (request, response, timeout, continue_wait) in [
+        ("Answer while I wait", "Here is the result", 30, false),
+        (
+            "Answer after my send returns",
+            "Here is the late result",
+            5,
+            true,
+        ),
+    ] {
+        let sending = guest.send(
+            "tools/call",
+            json!({
+                "name": "send_message",
+                "arguments": {
+                    "to": ada_address, "text": request,
+                    "wait_for": "result", "timeout_seconds": timeout,
+                },
+            }),
+        );
+        assert!(
+            wait_until(secs(10), || home
+                .submitted_messages()
+                .iter()
+                .any(|message| { message.lines().skip(1).eq([request]) })),
+            "the request did not reach the fake terminal: {}",
+            home.screen(&ada_address)
+        );
+        let inbox = ada.call("read_messages", json!({ "last": 1 }));
+        assert_eq!(inbox["status"], "success", "{inbox}");
+        let original = &inbox["data"]["messages"][0];
+        assert_eq!(original["text"], request, "{inbox}");
+        assert_eq!(original["from"], guest_address, "{inbox}");
+        let inbox_id = original["id"].as_str().unwrap();
+
+        let expired_id = continue_wait.then(|| {
+            let expired = guest.tool_answer(sending);
+            assert_eq!(expired["status"], "failure", "{expired}");
+            assert_eq!(expired["reason"], "reply_timeout", "{expired}");
+            assert_eq!(expired["data"]["delivery"], "typed_into_input", "{expired}");
+            assert!(expired["data"].get("next").is_none(), "{expired}");
+            let id = expired["data"]["id"]
+                .as_str()
+                .expect("original full send ID");
+            assert_eq!(id.split_once('@').unwrap().0, inbox_id, "{expired}");
+            id.to_owned()
+        });
+        let reading = expired_id.as_ref().map_or(sending, |id| {
+            guest.send(
+                "tools/call",
+                json!({
+                    "name": "read_messages",
+                    "arguments": { "reply_to": id, "timeout_seconds": 30 },
+                }),
+            )
+        });
+        let replied = ada.call(
+            "send_message",
+            json!({
+                "to": guest_address, "text": response, "reply_to": inbox_id,
+                "wait_for": "delivery", "timeout_seconds": 30,
+            }),
+        );
+        assert_eq!(replied["status"], "success", "{replied}");
+        assert_eq!(
+            replied["data"]["delivery"], "read_by_recipient",
+            "{replied}"
+        );
+        let read = guest.tool_answer(reading);
+        assert_eq!(read["status"], "success", "{read}");
+        assert!(read["data"].get("next").is_none(), "{read}");
+        if !continue_wait {
+            let id = read["data"]["id"].as_str().expect("original full send ID");
+            assert_eq!(id.split_once('@').unwrap().0, inbox_id, "{read}");
+            assert_eq!(read["data"]["delivery"], "typed_into_input", "{read}");
+        }
+        let messages = read["data"]["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1, "{read}");
+        let reply_id = replied["data"]["id"]
+            .as_str()
+            .unwrap()
+            .split_once('@')
+            .unwrap()
+            .0;
+        assert_eq!(messages[0]["id"], reply_id, "{read}");
+        assert_eq!(messages[0]["from"], ada_address, "{read}");
+        assert_eq!(messages[0]["text"], response, "{read}");
+        assert_eq!(messages[0]["reply_to"], inbox_id, "{read}");
+    }
+    let inbox = ada.call("read_messages", json!({ "last": 10 }));
+    assert_eq!(inbox["status"], "success", "{inbox}");
+    let requests: Vec<_> = inbox["data"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|message| message["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        requests,
+        ["Answer while I wait", "Answer after my send returns"]
+    );
 }
 
 /// With YOLO off, a Guest starts and can reach a child but cannot reach a separate creation tree.
@@ -312,13 +448,17 @@ fn guest_history_keeps_long_messages_inline_across_pages() {
     for text in &texts {
         let pending = sender.send(
             "tools/call",
-            json!({ "name": "send_message", "arguments": { "to": guest_id, "text": text } }),
+            json!({
+                "name": "send_message",
+                "arguments": { "to": guest_id, "text": text, "wait_for": "delivery", "timeout_seconds": 30 },
+            }),
         );
-        let read = guest.call("read_messages", json!({ "wait": true }));
+        let read = guest.call("read_messages", json!({ "timeout_seconds": 30 }));
         assert_eq!(read["status"], "success", "{read}");
         assert_eq!(read["data"]["messages"][0]["text"], text.as_str(), "{read}");
         let sent = sender.tool_answer(pending);
         assert_eq!(sent["status"], "success", "{sent}");
+        assert_eq!(sent["data"]["delivery"], "read_by_recipient", "{sent}");
     }
 
     let mut query = json!({ "last": texts.len() });
@@ -650,9 +790,12 @@ fn an_mcp_client_joins_as_a_member_reads_its_messages_and_leaves_with_its_relay(
     let mut sender = McpTestClient::open(&home, &ada.id);
     let sending = sender.send(
         "tools/call",
-        json!({ "name": "send_message", "arguments": { "to": address, "text": "for the member" } }),
+        json!({
+            "name": "send_message",
+            "arguments": { "to": address, "text": "for the member", "wait_for": "delivery", "timeout_seconds": 30 },
+        }),
     );
-    let read = member.call("read_messages", json!({ "wait": true }));
+    let read = member.call("read_messages", json!({ "timeout_seconds": 30 }));
     assert_eq!(
         read["data"]["messages"][0]["text"], "for the member",
         "{read}"
@@ -669,6 +812,67 @@ fn an_mcp_client_joins_as_a_member_reads_its_messages_and_leaves_with_its_relay(
     );
 }
 
+/// A recipient leaving before it reads ends the delivery wait with the number Facade assigned.
+#[test]
+fn a_guest_leaving_before_read_keeps_the_admitted_message_id() {
+    use rusqlite::{Connection, OpenFlags, OptionalExtension};
+
+    let home = TestHome::new("guest-leaves");
+    std::fs::write(home.path.join("facade.json"), r#"{"yolo":true}"#).unwrap();
+    let (mut sender, sender_row) = member(&home);
+    let mut recipient = McpTestClient::spawn(&home, home.command(&test_binaries().mcp));
+    let listed = recipient.call("list_agents", json!({}));
+    assert_eq!(listed["status"], "success", "{listed}");
+    let guests = guest_rows(&home);
+    assert_eq!(guests.len(), 2, "{guests:?}");
+    let recipient_row = guests
+        .iter()
+        .find(|row| row["reference"] != sender_row["reference"])
+        .expect("the other Guest");
+    let address = recipient_row["address"].as_str().unwrap();
+    let recipient_id = recipient_row["reference"]["agent_id"].as_str().unwrap();
+    let machine = recipient_row["reference"]["machine_id"].as_str().unwrap();
+
+    let text = "Waiting for the Guest to read";
+    let send = sender.send(
+        "tools/call",
+        json!({
+            "name": "send_message",
+            "arguments": { "to": address, "text": text, "wait_for": "delivery", "timeout_seconds": 30 },
+        }),
+    );
+    let db = Connection::open_with_flags(
+        home.path.join("core/facade.db"),
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let mut number = None;
+    assert!(wait_until(secs(10), || {
+        number = db
+            .query_row(
+                "SELECT number FROM messages WHERE \"to\" = ?1 AND text = ?2 AND status = 'pending'",
+                [recipient_id, text],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .unwrap();
+        number.is_some()
+    }));
+    let expected = facade_base::address::selector::format_message_address(
+        &format!("m{}", number.unwrap()),
+        machine,
+    );
+    drop(db);
+    let (_, closed) = recipient.close(secs(10));
+    assert!(closed.success(), "{closed:?}");
+
+    let ended = sender.tool_answer(send);
+    assert_eq!(ended["status"], "failure", "{ended}");
+    assert_eq!(ended["reason"], "ended", "{ended}");
+    assert_eq!(ended["data"]["id"], expected, "{ended}");
+    assert!(ended["data"].get("delivery").is_none(), "{ended}");
+}
+
 /// A Guest outlasts the daemon: its relay reconnects to the next daemon, which knows it by the same
 /// address, and a message sent to it across the restart reaches it once it reads.
 #[test]
@@ -682,7 +886,10 @@ fn a_member_and_what_waits_for_it_outlast_a_daemon_restart() {
         "tools/call",
         json!({
             "name": "send_message",
-            "arguments": { "to": address, "text": "kept for the member" },
+            "arguments": {
+                "to": address, "text": "kept for the member",
+                "wait_for": "delivery", "timeout_seconds": 30,
+            },
         }),
     );
     let old = home.kill_daemon();
@@ -692,13 +899,14 @@ fn a_member_and_what_waits_for_it_outlast_a_daemon_restart() {
             .is_some_and(|hello| hello["pid"].as_i64() != Some(old as i64))),
         "no daemon took over"
     );
-    let read = member.call("read_messages", json!({ "wait": true }));
+    let read = member.call("read_messages", json!({ "timeout_seconds": 30 }));
     assert_eq!(
         read["data"]["messages"][0]["text"], "kept for the member",
         "{read}"
     );
     let sent = sender.tool_answer(sending);
     assert_eq!(sent["status"], "success", "{sent}");
+    assert_eq!(sent["data"]["delivery"], "read_by_recipient", "{sent}");
     let kept = guest_rows(&home);
     assert_eq!(
         kept.iter().map(|row| &row["address"]).collect::<Vec<_>>(),
@@ -731,7 +939,9 @@ fn a_read_delivers_only_what_it_returns_and_last_is_the_newest() {
         numbers
             .map(|n| {
                 let waiting = waiting_for(&home, &id);
-                let arguments = json!({ "to": address, "text": text(n) });
+                let arguments = json!({
+                    "to": address, "text": text(n), "wait_for": "delivery", "timeout_seconds": 30,
+                });
                 let call = sender.send(
                     "tools/call",
                     json!({ "name": "send_message", "arguments": arguments }),
@@ -747,6 +957,7 @@ fn a_read_delivers_only_what_it_returns_and_last_is_the_newest() {
     let mut read = |arguments: Value| {
         let read = member.call("read_messages", arguments);
         assert_eq!(read["status"], "success", "{read}");
+        assert!(read["data"].get("next").is_none(), "{read}");
         let texts: Vec<String> = read["data"]["messages"]
             .as_array()
             .expect("inline messages")
@@ -779,6 +990,7 @@ fn a_read_delivers_only_what_it_returns_and_last_is_the_newest() {
     for call in first.into_iter().chain(second) {
         let sent = sender.tool_answer(call);
         assert_eq!(sent["status"], "success", "{sent}");
+        assert_eq!(sent["data"]["delivery"], "read_by_recipient", "{sent}");
     }
 }
 

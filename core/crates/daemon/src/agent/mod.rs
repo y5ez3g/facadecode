@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use facade_base::api_v1::{Size, daemon::AttachmentInfo};
+use facade_base::key_input::{PASTE_END, PASTE_START};
 use facade_base::model::error::ErrorBody;
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::terminal::PtyMaster;
@@ -40,23 +41,21 @@ use tokio::time::Instant;
 use crate::messages::DeliveryHandle;
 use crate::{Sender, ToolsGiven};
 
+pub(crate) use facade_base::key_input::MAX_INPUT_BYTES;
 pub(crate) use screen::{ScreenLog, recover, recover_after_clean_end, saved_size, screen_writes};
 pub(crate) use state::{Kept, instant_of, read_kept, state_file};
 pub(crate) use typist::{MessageTyping, Typing, TypingAnswer};
-pub(crate) use viewers::{ViewerChange, ViewerSender, ViewerSnapshot, viewer_channel};
+pub(crate) use viewers::{
+    ViewerChange, ViewerSender, ViewerSnapshot, viewer_channel, viewer_channel_with_exit,
+};
 
 /// Rows of scrollback each agent's screen keeps.
 pub(crate) const SCROLLBACK_ROWS: usize = 10_000;
-/// The most bytes of input that may wait for an agent's terminal.
-pub(crate) const MAX_INPUT_BYTES: usize = 1024 * 1024;
 /// The room of an agent's command channel.
 pub(crate) const MAX_QUEUED_COMMANDS: usize = 1024;
 /// The number of an agent's first run.
 pub(crate) const FIRST_RUN: u64 = 1;
 
-/// What a terminal sends before and after a bracketed paste.
-const PASTE_START: &[u8] = b"\x1b[200~";
-const PASTE_END: &[u8] = b"\x1b[201~";
 /// The pause after an Escape, so that the CLI does not read it with the next key as Alt.
 const ESCAPE_DELAY: Duration = Duration::from_millis(50);
 /// How long a run's start may take before its CLI should show its input.
@@ -77,7 +76,7 @@ pub(crate) struct Submission {
 pub(crate) enum Input {
     /// Keys from an attached terminal, written as they come.
     Raw(Vec<u8>),
-    /// Text or keys from a program, which the typist types in turn.
+    /// Program input with a receipt once it reaches the terminal.
     Typed(Typing),
     /// A message for the typist to deliver into the CLI's input.
     Message(MessageTyping),
@@ -87,6 +86,10 @@ pub(crate) enum Input {
 }
 
 impl Input {
+    fn is_sequence(&self) -> bool {
+        matches!(self, Self::Typed(typing) if typing.is_sequence())
+    }
+
     /// The most bytes this input writes into the terminal.
     pub(crate) fn most_bytes(&self) -> usize {
         match self {
@@ -291,12 +294,23 @@ pub(crate) enum ScreenStart {
 }
 
 /// Starts the actor of an agent at run [`FIRST_RUN`]. `rx` and `tx` are made before the CLI starts
-/// or is recovered, so that an exit sent meanwhile waits for the actor.
+/// or is recovered, so that an exit sent meanwhile waits for the actor. Trust stays with the person.
 pub(crate) fn spawn(
     start: ActorStart,
     rx: mpsc::Receiver<AgentCommand>,
     tx: mpsc::Sender<AgentCommand>,
     changes: broadcast::Sender<AgentsUpdate>,
+) -> anyhow::Result<AgentHandle> {
+    spawn_with_trust(start, rx, tx, changes, false)
+}
+
+/// Starts the actor with the daemon's explicit decision for this run's native trust prompt.
+pub(crate) fn spawn_with_trust(
+    start: ActorStart,
+    rx: mpsc::Receiver<AgentCommand>,
+    tx: mpsc::Sender<AgentCommand>,
+    changes: broadcast::Sender<AgentsUpdate>,
+    allow_auto_trust: bool,
 ) -> anyhow::Result<AgentHandle> {
     let shared = Arc::new(Shared::new(start.info.clone()));
     let room = Arc::new(Notify::new());
@@ -328,7 +342,7 @@ pub(crate) fn spawn(
         _tools: tools,
         tools_connections: tools_rx,
     };
-    actor::spawn(start, links, rx)?;
+    actor::spawn(start, links, rx, allow_auto_trust)?;
     Ok(handle)
 }
 

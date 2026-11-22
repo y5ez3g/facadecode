@@ -26,7 +26,9 @@ pub(super) fn antigravity(root: &Path, scope: &Folder<'_>) -> Result<Vec<SavedSe
             let Some(id) = uuid(native_id) else {
                 return Ok(None);
             };
-            if !text(row, 4).is_some_and(|uris| contains_folder(uris, scope)) {
+            if !scope.includes_id(&id)
+                || !text(row, 4).is_some_and(|uris| contains_folder(uris, scope))
+            {
                 return Ok(None);
             }
             // The index retains rows even after Antigravity has dropped their conversation files.
@@ -85,7 +87,10 @@ pub(super) fn muse(root: &Path, scope: &Folder<'_>) -> Result<Vec<SavedSession>,
             else {
                 return Ok(None);
             };
-            if !scope.matches(Path::new(cwd)) || !saved_file(Path::new(log))? {
+            if !scope.includes_id(&id)
+                || !scope.matches(Path::new(cwd))
+                || !saved_file(Path::new(log))?
+            {
                 return Ok(None);
             }
             let at = unix_time(integer(row, 4), Duration::from_micros);
@@ -133,10 +138,11 @@ pub(super) fn opencode(path: &Path, scope: &Folder<'_>) -> Result<Vec<SavedSessi
             let Some(id) = parse_session_id(id).filter(|id| id.starts_with("ses_")) else {
                 return Ok(None);
             };
+            if !scope.includes_id(&id) || !scope.matches(Path::new(cwd)) {
+                return Ok(None);
+            }
             let at = unix_time(integer(row, 3), Duration::from_millis);
-            Ok(scope
-                .matches(Path::new(cwd))
-                .then(|| scope.session(id, title(text(row, 2), None), at)))
+            Ok(Some(scope.session(id, title(text(row, 2), None), at)))
         },
     )
 }

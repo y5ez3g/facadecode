@@ -31,6 +31,8 @@ Other programs and protocols keep their own words: the standard library's `spawn
 | run | One execution of a managed agent's CLI, from a start or a resume until it ends | process, child, session (for this) |
 | process | An operating system's process: its ID, its group (on Windows, its job), its exit | run (for this) |
 | session | A CLI's own session, the one it can resume | conversation |
+| session name | A name the CLI saved for its session. Shell shows it in the `SESSION` column | terminal title |
+| session preview | Text from the native session history that identifies an unnamed session in `SESSION` | session ID (for this) |
 | Guest | An agent created for a single `facade-mcp` connection with its own identity. It has a name and inbox for the life of that connection | MCP member, hook-based guest |
 | CLI | A coding program the Orchestrator runs, such as Claude Code or Codex | tool, client (for this) |
 | rule | A CLI's built-in knowledge file, `core/rules/<cli>.json` | — |
@@ -61,16 +63,18 @@ the identity of that run or matches the agent's own CLI session. Each other conn
 
 | Use | Means | Not these |
 |---|---|---|
-| message | Text sent to one agent, with its own message number such as `m17` | mail, letter, note |
+| message | Text sent to one recipient, with its own message number such as `m17` | mail, letter, note |
 | send | Put a message on its way | post |
-| deliver, delivery | Submit a message to a managed agent's input box and press Enter, or have a Guest take it with `read_messages` | hand over |
+| save | Commit a message to the recipient's inbox for delivery. Shell reports `Saved` | deliver (for this) |
+| deliver, delivery | Submit a message with Enter in a managed agent's terminal, have a Guest take it with `read_messages`, or return a linked reply to a waiting Shell command | hand over |
 | take | Collect a waiting message with `read_messages` | — |
 | inbox | The messages waiting for one agent | mailbox |
 | settle | A delivery getting its outcome: delivered or failed | — |
-| withdraw | Remove a waiting message when its send is canceled. If the recipient has yet to take the message or receive it through Enter by the 30-second deadline, remove it and erase any text already pasted for it | retract |
+| withdraw | Remove a waiting message after a successful cancellation or when its delivery deadline passes. Clear a draft that still belongs to that message | retract |
+| reply | A message from the original recipient to the original sender, linked with `reply_to` | result (for this) |
 | result | A message the Orchestrator sends about first-prompt delivery or an agent waiting, shown with 🔔 | notice |
 | person | Someone using Facade, addressed as "you" in help | user |
-| command line | The sender of a message from Shell, shown as "the command line". It has no address or inbox | human, anonymous (for the sender) |
+| command line | The sender of a message from Shell, shown as "the command line". When the command waits for a reply, its message carries a command-line reply address | human, anonymous (for the sender) |
 | sender, recipient | Who sent a message and who it is for | from, to (outside the wire fields) |
 | first prompt | The task an agent is started with, delivered once its CLI is ready | — |
 
@@ -84,8 +88,9 @@ the identity of that run or matches the agent's own CLI session. Each other conn
 | hint | Text a CLI draws in its empty input box that is not a draft, dim or colored, such as a suggestion | placeholder (for this) |
 | probe | A space typed into the input box and taken back, to tell a hint from a draft where a reading cannot | — |
 | type | Write text or keys into a terminal, as `agent.type` does | — |
+| input sequence | The ordered text segments and key presses in one call to `agent.type`. The daemon queues the whole sequence once | — |
 | typist | The one writer of an agent's automatic input: messages, the first prompt, typed calls | — |
-| paste | The typist putting a message's text into the input box as a bracketed paste | — |
+| paste | Put a text segment into the terminal in one operation. The typist uses bracketed paste when the CLI enables it | — |
 | confirm | The CLI showing it accepted a paste, as in `submission_unconfirmed` | settle (for this) |
 | said | The text last entered into the input box | — |
 | readiness | Everything between a run's start and its first prompt: answering the trust question, waiting for the tools | warmup, boot |
@@ -100,7 +105,8 @@ the identity of that run or matches the agent's own CLI session. Each other conn
 | terminal app | The program a person sees terminals in, such as Terminal or iTerm, named by `TERM_PROGRAM` | — |
 | output | The bytes a terminal writes | — |
 | scrollback | The lines that scrolled off the top of a screen | history |
-| redraw | Draw a whole screen again for a viewer | repaint, refresh |
+| terminal title | A title the CLI sets through its terminal output and the terminal app displays | session name (for this) |
+| redraw | Draw the shared grid again for a viewer. A full redraw restores the frame. A viewport update writes rows in place | repaint, refresh |
 | screen log | An agent's screen changes, logged on disk before the screen takes them | — |
 | checkpoint | A saved screen in the screen log, which a recovery replays from | snapshot (for this) |
 | replay | Rebuild a screen from its log | — |
@@ -171,10 +177,12 @@ the identity of that run or matches the agent's own CLI session. Each other conn
 | reach | The agents an MCP caller can find, message, reply to and operate on. With YOLO on, this is all agents. With YOLO off, it is the caller's entire creation tree | access, scope |
 | YOLO | A machine setting that defaults to on. A managed agent reads it at start or resume and keeps it for that run. A Guest reads it when it joins and keeps it for that connection | — |
 
-YOLO on lets the Orchestrator bypass a CLI's permissions, trust questions and sandbox where supported. YOLO off leaves the
-CLI's own permission prompts, trust questions and sandbox in effect. Both modes waive Facade tool confirmations for every
-CLI. Questions a CLI asks the person remain available in both modes. For a Guest, YOLO determines reach. Shell and VS Code
-have full reach for the actions they offer.
+YOLO on lets the Orchestrator bypass a CLI's permissions and sandbox where supported. With YOLO off, the CLI applies its
+own permissions and sandbox. For a start requested by an agent, the target Facade home's YOLO setting can authorize the
+Orchestrator to answer the native workspace trust question. When that question appears on a start or resume from Shell
+or VS Code, the person answers it. Both modes waive Facade tool confirmations for every CLI. Questions a CLI asks the
+person remain available in both modes. For a Guest, YOLO determines reach. Shell and VS Code have full reach for the
+actions they offer.
 
 ## Wiring and hooks
 
@@ -239,9 +247,10 @@ have full reach for the actions they offer.
 | Use | Means | Not these |
 |---|---|---|
 | agent number | A number such as `a3`, issued once on the agent's machine | name, address (for this) |
-| message number | A number such as `m17`, issued once on the recipient's machine | address (for this) |
-| structured identity | The full machine ID and agent or message number used in storage, protocol and forwarding. An `AgentRef` identifies the agent's machine, and a `MessageRef` identifies the recipient's machine | name, address (for this) |
-| address | A number qualified by a machine, such as `a3@devbox`, `a3@9a0d44b2` or `m17@devbox`. Facade gives a machine-qualified agent address, including for agents on the local machine. MCP uses the single field `id` for it | `#a3`, `@name`, `id:` prefix |
+| message number | A local number such as `m17`, issued once. The recipient's machine assigns inbox message numbers | address (for this) |
+| structured identity | The full machine ID and agent or message number used in storage, protocol and forwarding. An `AgentRef` identifies the agent's machine. A `MessageRef` identifies the machine that assigned the message number | name, address (for this) |
+| address | A number qualified by a machine, such as `a3@devbox`, `a3@9a0d44b2` or `m17@devbox`. Facade gives a machine-qualified agent address, including for agents on the local machine. MCP lists an agent's address in `id` | `#a3`, `@name`, `id:` prefix |
+| command-line reply address | An address such as `#c42@devbox`, derived from the original message `m42@devbox`. The waiting Shell command receives the first linked reply from the original recipient | agent reference (for this) |
 | agent reference | The Shell term in prose for a copyable agent address such as `a3@devbox`. Tables use the heading `REF`, and output templates use `{ref}` | — |
 | saved session ID | The CLI's identifier for a session it saved. For a saved session, the `facade resume` table shows an eight-character ID prefix in `REF` when the prefix is unique, or the full ID when prefixes collide | — |
 
@@ -330,6 +339,13 @@ code that mirrors them keeps it too.
 |---|---|
 | `address` in an agent record | The copyable address that Shell calls an agent reference |
 | `reference` of type `AgentRef` | The agent's structured identity, with its full `machine_id` and `agent_id` |
+| `session_name` | The session name or preview for the Shell tables' `SESSION` column |
+| `attach.shell` | A dedicated Shell Attach watch. On the target run's exit, the daemon gives the client time to read the final output and exit result before closing the connection |
+| `clis` and `cli_error` in MCP | The available CLI names in a machine's discovery context, or the reason the lookup failed |
+| `timeout_seconds` in MCP | The total budget when a send or inbox read waits. A value of zero skips the wait |
+| `wait_for: "result"` in MCP | Wait for the first linked reply from the original recipient |
+| `reply_timeout` | The wait expired before it returned a linked reply |
+| `returned_to_request` | Facade handed the reply to the waiting Shell command |
 | `daemon.upgrade`, reason `upgrading` | A newer build taking over: take over |
 | `status`: the MCP result's field, the `facade status` command, the Program Status Protocol (OSC 7501) | The outcome of a call; Facade's own state; a CLI reporting its state |
 | reason `configuration_invalid` | The settings file has problems |
