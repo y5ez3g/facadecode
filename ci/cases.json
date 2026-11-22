@@ -566,7 +566,7 @@
       "assertion": "Start a fake CLI with a chosen folder and request ID, read back the resulting stable address and location, and submit the same request ID twice to ensure only one process exists.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/reliability.rs:507"
+        "core/tests/tests/reliability.rs:597"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1972,7 +1972,7 @@
       "existing_tests": [
         "extension/src/test/configuration.test.ts:121",
         "extension/src/test/configuration.test.ts:144",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -1982,7 +1982,7 @@
       "existing_tests": [
         "extension/src/test/configuration.test.ts:121",
         "extension/src/test/configuration.test.ts:144",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -1992,7 +1992,7 @@
       "existing_tests": [
         "extension/src/test/configuration.test.ts:121",
         "extension/src/test/configuration.test.ts:144",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2002,7 +2002,7 @@
       "existing_tests": [
         "extension/src/test/configuration.test.ts:121",
         "extension/src/test/configuration.test.ts:144",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2012,7 +2012,7 @@
       "existing_tests": [
         "extension/src/test/configuration.test.ts:121",
         "extension/src/test/configuration.test.ts:144",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2022,7 +2022,7 @@
       "existing_tests": [
         "extension/src/test/configuration.test.ts:121",
         "extension/src/test/configuration.test.ts:144",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2032,7 +2032,7 @@
       "existing_tests": [
         "extension/src/test/configuration.test.ts:121",
         "extension/src/test/configuration.test.ts:144",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2042,7 +2042,7 @@
       "existing_tests": [
         "extension/src/test/configuration.test.ts:121",
         "extension/src/test/configuration.test.ts:144",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2053,7 +2053,7 @@
         "extension/src/test/integration/journey.it.ts",
         "extension/src/test/configuration.test.ts:121",
         "extension/src/test/configuration.test.ts:144",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ],
       "test": {
         "runner": "extension-editor",
@@ -2070,7 +2070,7 @@
       "existing_tests": [
         "extension/src/test/configuration.test.ts:121",
         "extension/src/test/configuration.test.ts:144",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2080,7 +2080,7 @@
       "existing_tests": [
         "extension/src/test/configuration.test.ts:121",
         "extension/src/test/configuration.test.ts:144",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2090,7 +2090,7 @@
       "existing_tests": [
         "extension/src/test/configuration.test.ts:121",
         "extension/src/test/configuration.test.ts:144",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2100,7 +2100,7 @@
       "existing_tests": [
         "extension/src/test/configuration.test.ts:121",
         "extension/src/test/configuration.test.ts:144",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2149,7 +2149,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/configuration.test.ts:253",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2246,7 +2246,7 @@
       "existing_tests": [
         "core/tests/tests/configuration.rs:108",
         "core/tests/tests/configuration.rs:166",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2256,7 +2256,7 @@
       "existing_tests": [
         "core/tests/tests/configuration.rs:108",
         "core/tests/tests/configuration.rs:166",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2266,7 +2266,7 @@
       "existing_tests": [
         "core/tests/tests/configuration.rs:108",
         "core/tests/tests/configuration.rs:166",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2276,7 +2276,7 @@
       "existing_tests": [
         "core/tests/tests/configuration.rs:108",
         "core/tests/tests/configuration.rs:166",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2286,7 +2286,7 @@
       "existing_tests": [
         "core/tests/tests/configuration.rs:108",
         "core/tests/tests/configuration.rs:166",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2296,7 +2296,7 @@
       "existing_tests": [
         "core/tests/tests/configuration.rs:108",
         "core/tests/tests/configuration.rs:166",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2306,7 +2306,7 @@
       "existing_tests": [
         "core/tests/tests/configuration.rs:108",
         "core/tests/tests/configuration.rs:166",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2316,7 +2316,7 @@
       "existing_tests": [
         "core/tests/tests/configuration.rs:108",
         "core/tests/tests/configuration.rs:166",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2327,7 +2327,7 @@
         "extension/src/test/integration/journey.it.ts",
         "core/tests/tests/configuration.rs:108",
         "core/tests/tests/configuration.rs:166",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ],
       "test": {
         "runner": "extension-editor",
@@ -2344,7 +2344,7 @@
       "existing_tests": [
         "core/tests/tests/configuration.rs:108",
         "core/tests/tests/configuration.rs:166",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2354,7 +2354,7 @@
       "existing_tests": [
         "core/tests/tests/configuration.rs:108",
         "core/tests/tests/configuration.rs:166",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2364,7 +2364,7 @@
       "existing_tests": [
         "core/tests/tests/configuration.rs:108",
         "core/tests/tests/configuration.rs:166",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2374,7 +2374,7 @@
       "existing_tests": [
         "core/tests/tests/configuration.rs:108",
         "core/tests/tests/configuration.rs:166",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2424,7 +2424,7 @@
       "existing_tests": [
         "core/crates/rules/src/command_line/entries.rs:1293",
         "extension/src/test/configuration.test.ts:253",
-        "extension/src/test/integration/journey.it.ts:169"
+        "extension/src/test/integration/journey.it.ts:171"
       ]
     },
     {
@@ -2510,7 +2510,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/engineDriver.ts",
-        "extension/src/test/integration/run.ts:860"
+        "extension/src/test/integration/run.ts:940"
       ],
       "test": {
         "runner": "extension-editor",
@@ -2533,7 +2533,7 @@
       "assertion": "Negotiate known versions and unknown-version fallback over real shim stdio. Verify facade capabilities and managed instructions, and verify an unmanaged old shim announces unavailability.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/mcp.it.ts:360",
+        "extension/src/test/integration/mcp.it.ts:373",
         "extension/src/test/transport.execution.test.ts:145",
         "extension/src/test/transport.test.ts:280"
       ]
@@ -2560,7 +2560,7 @@
       "assertion": "Compare the managed shim’s full advertised tool names, argument schemas and metadata against registration. Verify a non-serving shim advertises an empty list.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/mcp.it.ts:137",
+        "extension/src/test/integration/mcp.it.ts:149",
         "extension/src/test/transport.test.ts:306"
       ]
     },
@@ -2570,7 +2570,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
-        "extension/src/test/integration/mcp.it.ts:337",
+        "extension/src/test/integration/mcp.it.ts:349",
         "extension/src/test/contract.outcomes.test.ts:77",
         "extension/src/test/contract.tools.test.ts:36",
         "extension/src/test/transport.execution.test.ts:148"
@@ -2588,7 +2588,7 @@
       "assertion": "Observe the exact ordered keys at the target. An invalid batch is refused without writing part of it.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/mcp.it.ts:345",
+        "extension/src/test/integration/mcp.it.ts:357",
         "extension/src/test/contract.tools.test.ts:1022",
         "extension/src/test/transport.test.ts:308"
       ]
@@ -2599,7 +2599,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
-        "extension/src/test/integration/mcp.it.ts:345",
+        "extension/src/test/integration/mcp.it.ts:357",
         "extension/src/test/contract.outcomes.test.ts:30",
         "extension/src/test/contract.tools.test.ts:355",
         "extension/src/test/transport.test.ts:308"
@@ -2618,7 +2618,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
-        "extension/src/test/integration/mcp.it.ts:345",
+        "extension/src/test/integration/mcp.it.ts:357",
         "extension/src/test/contract.tools.test.ts:377",
         "extension/src/test/transport.test.ts:308"
       ],
@@ -2636,7 +2636,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
-        "extension/src/test/integration/mcp.it.ts:345",
+        "extension/src/test/integration/mcp.it.ts:357",
         "extension/src/test/contract.tools.test.ts:48",
         "extension/src/test/mcpReliability.test.ts:67",
         "extension/src/test/transport.execution.test.ts:206"
@@ -2655,7 +2655,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
-        "extension/src/test/integration/mcp.it.ts:340",
+        "extension/src/test/integration/mcp.it.ts:352",
         "extension/src/test/contract.outcomes.test.ts:21",
         "extension/src/test/contract.tools.test.ts:38",
         "extension/src/test/mcpReliability.test.ts:52"
@@ -2673,7 +2673,7 @@
       "assertion": "Verify the requested agent stops or reaches the documented pending result, and its unrelated helpers keep running.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/mcp.it.ts:345",
+        "extension/src/test/integration/mcp.it.ts:357",
         "extension/src/test/contract.outcomes.test.ts:67",
         "extension/src/test/contract.tools.test.ts:618",
         "extension/src/test/transport.execution.test.ts:155"
@@ -2685,7 +2685,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
-        "extension/src/test/integration/mcp.it.ts:345",
+        "extension/src/test/integration/mcp.it.ts:357",
         "extension/src/test/contract.tools.test.ts:981",
         "extension/src/test/transport.test.ts:308"
       ],
@@ -2703,7 +2703,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/mcp.rs:1846",
-        "extension/src/test/integration/mcp.it.ts:426"
+        "extension/src/test/integration/mcp.it.ts:463"
       ]
     },
     {
@@ -2712,7 +2712,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/mcp.rs:167",
-        "extension/src/test/integration/mcp.it.ts:426",
+        "extension/src/test/integration/mcp.it.ts:463",
         "core/crates/daemon/src/mcp/lines.rs"
       ]
     },
@@ -2722,7 +2722,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/mcp.rs:167",
-        "extension/src/test/integration/mcp.it.ts:426",
+        "extension/src/test/integration/mcp.it.ts:463",
         "core/crates/daemon/src/mcp/lines.rs"
       ]
     },
@@ -2732,7 +2732,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/mcp.rs:167",
-        "extension/src/test/integration/mcp.it.ts:426",
+        "extension/src/test/integration/mcp.it.ts:463",
         "core/crates/daemon/src/mcp/lines.rs"
       ]
     },
@@ -2742,7 +2742,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/mcp.rs:2009",
-        "extension/src/test/integration/mcp.it.ts:426",
+        "extension/src/test/integration/mcp.it.ts:463",
         "core/crates/daemon/src/mcp/lines.rs"
       ]
     },
@@ -2752,7 +2752,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/mcp.rs:2009",
-        "extension/src/test/integration/mcp.it.ts:426",
+        "extension/src/test/integration/mcp.it.ts:463",
         "core/crates/daemon/src/mcp/lines.rs"
       ]
     },
@@ -2762,7 +2762,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/mcp.rs:167",
-        "extension/src/test/integration/mcp.it.ts:426"
+        "extension/src/test/integration/mcp.it.ts:463"
       ]
     },
     {
@@ -2771,7 +2771,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/mcp.rs:24",
-        "extension/src/test/integration/mcp.it.ts:426"
+        "extension/src/test/integration/mcp.it.ts:463"
       ]
     },
     {
@@ -2780,7 +2780,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/mcp.rs:80",
-        "extension/src/test/integration/mcp.it.ts:426"
+        "extension/src/test/integration/mcp.it.ts:463"
       ]
     },
     {
@@ -2790,7 +2790,7 @@
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
         "core/tests/tests/mcp.rs:254",
-        "extension/src/test/integration/mcp.it.ts:426"
+        "extension/src/test/integration/mcp.it.ts:463"
       ],
       "test": {
         "runner": "extension-editor",
@@ -2807,7 +2807,7 @@
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
         "core/tests/tests/mcp.rs:1846",
-        "extension/src/test/integration/mcp.it.ts:426"
+        "extension/src/test/integration/mcp.it.ts:463"
       ],
       "test": {
         "runner": "extension-editor",
@@ -2824,7 +2824,7 @@
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
         "core/tests/tests/mcp.rs:500",
-        "extension/src/test/integration/mcp.it.ts:426"
+        "extension/src/test/integration/mcp.it.ts:463"
       ],
       "test": {
         "runner": "extension-editor",
@@ -2840,7 +2840,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/mcp.rs:324",
-        "extension/src/test/integration/mcp.it.ts:426"
+        "extension/src/test/integration/mcp.it.ts:463"
       ]
     },
     {
@@ -2850,7 +2850,7 @@
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
         "core/tests/tests/mcp.rs:167",
-        "extension/src/test/integration/mcp.it.ts:426"
+        "extension/src/test/integration/mcp.it.ts:463"
       ],
       "test": {
         "runner": "extension-editor",
@@ -3395,8 +3395,8 @@
       "assertion": "Choose the saved session in Continue Session and verify the old-engine CLI launch uses the exact saved directory and session ID.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/journey.it.ts:399",
-        "extension/src/test/integration/journey.it.ts:408",
+        "extension/src/test/integration/journey.it.ts:426",
+        "extension/src/test/integration/journey.it.ts:435",
         "extension/src/test/commands.test.ts:426"
       ],
       "test": {
@@ -3412,7 +3412,7 @@
       "assertion": "Dismiss the chosen ended card and verify its tab and card are removed. The same command on a still-running card keeps its process and card.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/mcp.it.ts:240",
+        "extension/src/test/integration/mcp.it.ts:252",
         "extension/src/test/catalog.test.ts:36",
         "extension/src/test/commands.test.ts:214"
       ]
@@ -3423,8 +3423,8 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
-        "extension/src/test/integration/journey.it.ts:501",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:135",
+        "extension/src/test/integration/journey.it.ts:530",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:138",
         "extension/src/test/catalog.test.ts:38"
       ],
       "test": {
@@ -3449,7 +3449,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/conversionDriver.ts:224",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:96",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:99",
         "extension/src/test/integration/updateDriver.ts:88",
         "extension/src/test/catalog.test.ts:29"
       ]
@@ -3477,9 +3477,9 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
-        "extension/src/test/integration/journey.it.ts:169",
-        "extension/src/test/integration/journey.it.ts:119",
-        "extension/src/test/integration/mcp.it.ts:119",
+        "extension/src/test/integration/journey.it.ts:171",
+        "extension/src/test/integration/journey.it.ts:121",
+        "extension/src/test/integration/mcp.it.ts:131",
         "extension/src/test/integration/real.it.ts:117",
         "extension/src/test/integration/conversionDriver.ts:144"
       ],
@@ -3515,7 +3515,7 @@
       "assertion": "Open the current execution host facade.json document. Generate the old-engine settings once when missing and preserve existing content on later opens.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/rustMultiWindowDriver.ts:162",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:199",
         "extension/src/test/catalog.test.ts:50",
         "extension/src/test/configuration.test.ts:964",
         "extension/src/test/host.activation.test.ts:290"
@@ -3526,8 +3526,8 @@
       "assertion": "Invoke Pin Agent for a specific resumable run. Verify its card is marked and its native terminal tab is pinned for that same run.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/journey.it.ts:399",
-        "extension/src/test/integration/journey.it.ts:436",
+        "extension/src/test/integration/journey.it.ts:426",
+        "extension/src/test/integration/journey.it.ts:464",
         "extension/src/test/integration/conversionDriver.ts:165",
         "extension/src/test/integration/focusProbeDriver.ts:1110"
       ],
@@ -3552,7 +3552,7 @@
       "assertion": "Pass the exact run ID to Reveal Agent and verify its terminal comes to the front. A missing argument is rejected and a stale run leaves focus and selection intact.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/journey.it.ts:465",
+        "extension/src/test/integration/journey.it.ts:493",
         "extension/src/test/integration/conversionDriver.ts:128",
         "extension/src/test/integration/focusProbeDriver.ts:1205",
         "extension/src/test/integration/pinsDriver.ts:214"
@@ -3573,7 +3573,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
-        "extension/src/test/integration/journey.it.ts:536",
+        "extension/src/test/integration/journey.it.ts:558",
         "extension/src/test/catalog.test.ts:40"
       ],
       "test": {
@@ -3590,7 +3590,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
-        "extension/src/test/integration/journey.it.ts:529",
+        "extension/src/test/integration/journey.it.ts:582",
         "extension/src/test/catalog.test.ts:41"
       ],
       "test": {
@@ -3608,8 +3608,8 @@
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/engine.it.ts:141",
-        "extension/src/test/integration/journey.it.ts:138",
-        "extension/src/test/integration/mcp.it.ts:240",
+        "extension/src/test/integration/journey.it.ts:140",
+        "extension/src/test/integration/mcp.it.ts:252",
         "extension/src/test/integration/real.it.ts:111"
       ],
       "test": {
@@ -3625,8 +3625,8 @@
       "assertion": "Invoke Unpin Agent for a specific pinned run. Verify the same card is unmarked and its native tab is unpinned.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/journey.it.ts:399",
-        "extension/src/test/integration/journey.it.ts:442",
+        "extension/src/test/integration/journey.it.ts:426",
+        "extension/src/test/integration/journey.it.ts:470",
         "extension/src/test/integration/conversionDriver.ts:204",
         "extension/src/test/integration/pinsDriver.ts:305"
       ],
@@ -3653,8 +3653,8 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/engine.it.ts:94",
-        "extension/src/test/integration/mcp.it.ts:724",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:283",
+        "extension/src/test/integration/mcp.it.ts:887",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:327",
         "extension/src/test/catalog.test.ts:34"
       ]
     },
@@ -3664,8 +3664,8 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
-        "extension/src/test/integration/journey.it.ts:501",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:135",
+        "extension/src/test/integration/journey.it.ts:530",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:138",
         "extension/src/test/catalog.test.ts:38"
       ],
       "test": {
@@ -3691,7 +3691,7 @@
       "existing_tests": [
         "extension/src/test/integration/rustMultiWindow.ts",
         "extension/src/test/integration/conversionDriver.ts:224",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:96",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:99",
         "extension/src/test/integration/updateDriver.ts:88",
         "extension/src/test/catalog.test.ts:29"
       ],
@@ -3709,8 +3709,8 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/rustMultiWindow.ts",
-        "extension/src/test/integration/journey.it.ts:139",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:234",
+        "extension/src/test/integration/journey.it.ts:141",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:271",
         "extension/src/test/catalog.test.ts:31"
       ],
       "test": {
@@ -3727,7 +3727,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
-        "extension/src/test/integration/journey.it.ts:169",
+        "extension/src/test/integration/journey.it.ts:171",
         "extension/src/test/integration/engine.it.ts:61"
       ],
       "test": {
@@ -3744,7 +3744,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/configuration.test.ts:985",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:162"
+        "extension/src/test/integration/rustMultiWindowDriver.ts:199"
       ]
     },
     {
@@ -3753,7 +3753,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/configuration.test.ts:985",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:162"
+        "extension/src/test/integration/rustMultiWindowDriver.ts:199"
       ]
     },
     {
@@ -3761,7 +3761,7 @@
       "assertion": "Open a tab for the exact existing agent and verify the underlying process stays the same.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/rustMultiWindowDriver.ts:215",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:252",
         "extension/src/test/catalog.test.ts:30"
       ]
     },
@@ -3770,9 +3770,9 @@
       "assertion": "Invoke Pin Agent for a specific resumable run. Verify the exact workspace card has a Pin and that this workspace Pin is distinct from a native tab mark.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/journey.it.ts:399",
+        "extension/src/test/integration/journey.it.ts:426",
         "extension/src/test/integration/engine.it.ts:99",
-        "extension/src/test/integration/rustMultiWindow.ts:527"
+        "extension/src/test/integration/rustMultiWindow.ts:665"
       ],
       "test": {
         "runner": "extension-editor",
@@ -3795,7 +3795,7 @@
       "assertion": "Choose the saved session in Resume Agent and verify the new CLI launch uses the exact original native session identifier and working directory.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/journey.it.ts:399",
+        "extension/src/test/integration/journey.it.ts:426",
         "extension/src/test/integration/engine.it.ts:99"
       ],
       "test": {
@@ -3830,7 +3830,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
-        "extension/src/test/integration/journey.it.ts:521"
+        "extension/src/test/integration/journey.it.ts:550"
       ],
       "test": {
         "runner": "extension-editor",
@@ -3847,8 +3847,8 @@
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/engine.it.ts:141",
-        "extension/src/test/integration/journey.it.ts:138",
-        "extension/src/test/integration/mcp.it.ts:240",
+        "extension/src/test/integration/journey.it.ts:140",
+        "extension/src/test/integration/mcp.it.ts:252",
         "extension/src/test/integration/real.it.ts:111"
       ],
       "test": {
@@ -3864,7 +3864,7 @@
       "assertion": "Invoke Unpin Agent for a specific pinned run. Verify the exact workspace card loses its Pin and subsequently marking its native tab leaves the workspace Pin absent.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/journey.it.ts:399",
+        "extension/src/test/integration/journey.it.ts:426",
         "extension/src/test/integration/rustMultiWindowDriver.ts"
       ],
       "test": {
@@ -4168,7 +4168,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/host.client.test.ts:8",
-        "extension/src/test/integration/mcp.it.ts:727"
+        "extension/src/test/integration/mcp.it.ts:890"
       ]
     },
     {
@@ -4185,7 +4185,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/host.client.test.ts:8",
-        "extension/src/test/integration/mcp.it.ts:727"
+        "extension/src/test/integration/mcp.it.ts:890"
       ]
     },
     {
@@ -4203,7 +4203,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/host.client.test.ts:8",
-        "extension/src/test/integration/mcp.it.ts:727"
+        "extension/src/test/integration/mcp.it.ts:890"
       ]
     },
     {
@@ -4212,7 +4212,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/host.client.test.ts:8",
-        "extension/src/test/integration/mcp.it.ts:727"
+        "extension/src/test/integration/mcp.it.ts:890"
       ]
     },
     {
@@ -4231,7 +4231,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/host.client.test.ts:8",
-        "extension/src/test/integration/mcp.it.ts:727"
+        "extension/src/test/integration/mcp.it.ts:890"
       ]
     },
     {
@@ -4323,7 +4323,7 @@
         "extension/src/test/windowTerminals.test.ts:57",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:527"
+        "extension/src/test/integration/rustMultiWindow.ts:665"
       ]
     },
     {
@@ -4334,7 +4334,7 @@
         "extension/src/test/windowTerminals.test.ts:44",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:527"
+        "extension/src/test/integration/rustMultiWindow.ts:665"
       ]
     },
     {
@@ -4345,7 +4345,7 @@
         "extension/src/test/windowTerminals.test.ts:162",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:527"
+        "extension/src/test/integration/rustMultiWindow.ts:665"
       ]
     },
     {
@@ -4356,7 +4356,7 @@
         "extension/src/test/windowTerminals.test.ts:48",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:527"
+        "extension/src/test/integration/rustMultiWindow.ts:665"
       ]
     },
     {
@@ -4367,7 +4367,7 @@
         "extension/src/test/windowTerminals.test.ts:190",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:527"
+        "extension/src/test/integration/rustMultiWindow.ts:665"
       ]
     },
     {
@@ -4394,7 +4394,7 @@
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/windowNetwork.test.ts:139",
-        "extension/src/test/integration/mcp.it.ts:727",
+        "extension/src/test/integration/mcp.it.ts:890",
         "extension/src/test/contract.tools.test.ts"
       ],
       "test": {
@@ -4411,7 +4411,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/windowNetwork.test.ts:160",
-        "extension/src/test/integration/mcp.it.ts:727",
+        "extension/src/test/integration/mcp.it.ts:890",
         "extension/src/test/contract.tools.test.ts"
       ]
     },
@@ -4421,7 +4421,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/windowNetwork.test.ts:160",
-        "extension/src/test/integration/mcp.it.ts:727",
+        "extension/src/test/integration/mcp.it.ts:890",
         "extension/src/test/contract.tools.test.ts"
       ]
     },
@@ -4431,7 +4431,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/windowNetwork.test.ts:160",
-        "extension/src/test/integration/mcp.it.ts:727",
+        "extension/src/test/integration/mcp.it.ts:890",
         "extension/src/test/contract.tools.test.ts"
       ]
     },
