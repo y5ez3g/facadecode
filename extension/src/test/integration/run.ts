@@ -18,9 +18,10 @@ import { isDeepStrictEqual } from 'util';
 import { coreCall, coreListens, coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
 import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
+import { runRemoteWorktree } from './remoteWorktree';
 import { assertTemporaryState, probeEnvironment } from './probeState';
 import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
-import { activationFailure, coldCutoverJourney, missingSessionUnpin, multiWindowDriverFiles, rustMultiWindow, sharedAttachJourney, shellHandoff, withRustWindows } from './rustMultiWindow';
+import { activationFailure, coldCutoverJourney, incompatibleActivation, missingSessionUnpin, multiWindowDriverFiles, rustMultiWindow, sharedAttachJourney, shellHandoff, withRustWindows } from './rustMultiWindow';
 
 /** An entry of Facade's settings file, by its fields (CONFIGURATION-2.2). */
 type Entry = { readonly [field: string]: unknown };
@@ -42,9 +43,11 @@ const ACCEPTANCE_DRIVERS = new Map([
 	['activation-failure', { engine: 'rust', cli: 'claude' }],
 	['conversion', { engine: 'old', cli: 'claude' }],
 	['expiry', { engine: 'old', cli: 'claude' }],
+	['incompatible-activation', { engine: 'rust', cli: 'claude' }],
 	['lifetime', { engine: 'rust', cli: 'claude' }],
 	['missing-session-unpin', { engine: 'rust', cli: 'claude' }],
 	['multi-window', { engine: 'rust', cli: 'claude' }],
+	['remote-worktree', { engine: 'rust', cli: 'fake' }],
 	['shell-handoff', { engine: 'rust', cli: 'codex' }],
 	['switch', { engine: 'rust', cli: 'claude' }]
 ] as const);
@@ -149,10 +152,11 @@ async function main(): Promise<void> {
 			throw new Error('An exact acceptance driver requires the matching isolated mode, engine and fake CLI.');
 		}
 	}
-	let observedDriver: { name: AcceptanceDriver; engine: 'old' | 'rust' } | undefined;
-	const driverPassed = (name: AcceptanceDriver, actual: 'old' | 'rust') => {
+	type ServingEngine = 'old' | 'rust' | 'none';
+	let observedDriver: { name: AcceptanceDriver; engine: ServingEngine } | undefined;
+	const driverPassed = (name: AcceptanceDriver, actual: ServingEngine) => {
 		if (expectedDriver === name) {
-			const serving = name === 'activation-failure' ? 'old' : engine;
+			const serving = name === 'activation-failure' ? 'old' : name === 'incompatible-activation' ? 'none' : engine;
 			assert.strictEqual(actual, serving, 'the completed driver exercised its expected serving engine');
 			assert.ok(!observedDriver, 'the exact driver runs once');
 			observedDriver = { name, engine: actual };
@@ -810,7 +814,7 @@ async function main(): Promise<void> {
 			await endRust(facade);
 		}
 	};
-	const rustWindows = async (runName: 'multi' | 'handoff' | 'attach' | 'cutover' | 'missing-session-unpin' | 'activation-failure') => {
+	const rustWindows = async (runName: 'multi' | 'handoff' | 'attach' | 'cutover' | 'missing-session-unpin' | 'activation-failure' | 'incompatible-activation') => {
 		const driver = path.join(root, `driver-${runName}`);
 		const facade = path.join(home, runName);
 		const peer = path.join(root, `${runName}-peer`);
@@ -868,6 +872,7 @@ async function main(): Promise<void> {
 		// Each journey has its own Facade home and can start an a1.
 		const env = { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: path.join(root, `${runName}-cli`), CLAUDE_CONFIG_DIR: claudeConfig };
 		const fallback = runName === 'activation-failure';
+		const incompatible = runName === 'incompatible-activation';
 		const faultStage = path.join(root, 'extension-with-fault');
 		const faultProgram = coreProgram(path.join(faultStage, 'bin'));
 		if (fallback) {
@@ -879,7 +884,7 @@ async function main(): Promise<void> {
 		}
 		const start = (folder: string, name: string, control: string, port: number) => {
 			const oldEngine = runName === 'attach' && name === 'old-engine';
-			const withComponent = runName === 'multi' || oldEngine || fallback;
+			const withComponent = runName === 'multi' || oldEngine || fallback || incompatible;
 			const profile = editorProfile(root, `${runName[0]}-${name}`);
 			const userSettings = path.join(profile.user, 'User', 'settings.json');
 			if (!fs.existsSync(userSettings)) {
@@ -894,7 +899,8 @@ async function main(): Promise<void> {
 				`--extensionDevelopmentPath=${prior?.driver ?? driver}`, `--remote-debugging-port=${port}`, '--locale=en', ...EDITOR_FLAGS],
 				{ env: { ...env, ...profile.env, FACADE_IT_WINDOW_CONTROL: control,
 					...withComponent ? {} : { FACADE_IT_WINDOW_NO_COMPONENT: '1' },
-					...fallback ? { FACADE_IT_WINDOW_FALLBACK: '1' } : {} }, stdio: ['ignore', 'pipe', 'pipe'] });
+					...fallback ? { FACADE_IT_WINDOW_FALLBACK: '1' } : {},
+					...incompatible ? { FACADE_IT_WINDOW_INCOMPATIBLE: '1' } : {} }, stdio: ['ignore', 'pipe', 'pipe'] });
 		};
 		try {
 			await withRustWindows(files, start, open => {
@@ -903,6 +909,7 @@ async function main(): Promise<void> {
 				}
 				if (runName === 'missing-session-unpin') { return missingSessionUnpin(open, repo, env); }
 				if (fallback) { return activationFailure(open, repo, env, faultProgram); }
+				if (incompatible) { return incompatibleActivation(open, repo, env); }
 				const shellEnv = {
 					...env, ...isolatedStorage, HOME: agentsHome, USERPROFILE: agentsHome,
 					APPDATA: path.join(agentsHome, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(agentsHome, 'AppData', 'Local')
@@ -919,6 +926,7 @@ async function main(): Promise<void> {
 			if (runName === 'handoff') { driverPassed('shell-handoff', 'rust'); }
 			if (runName === 'missing-session-unpin') { driverPassed('missing-session-unpin', 'rust'); }
 			if (fallback) { driverPassed('activation-failure', 'old'); }
+			if (incompatible) { driverPassed('incompatible-activation', 'none'); }
 		} finally {
 			if (prior) {
 				endMatching(facade);
@@ -929,7 +937,7 @@ async function main(): Promise<void> {
 				endMatching(facade);
 				endMatching(path.join(root, 'a-old-engine'));
 			}
-			if (fallback) { endMatching(path.join(facade, 'extension', 'ptyd')); }
+			if (fallback || incompatible) { endMatching(path.join(facade, 'extension', 'ptyd')); }
 		}
 	};
 	/**
@@ -1058,7 +1066,7 @@ async function main(): Promise<void> {
 			await conversion(BUILT_INS[0], true, true);
 		}
 		// The Rust engine's acceptance on the extension's side: with the engine on, a run of the whole suite has it, and each is asked for alone
-		if (['activation-failure', 'engine', 'switch', 'lifetime', 'multi-window', 'missing-session-unpin', 'shell-handoff', 'shared-attach', 'cold-cutover'].includes(only ?? '') && engine !== 'rust') {
+		if (['activation-failure', 'engine', 'incompatible-activation', 'switch', 'lifetime', 'multi-window', 'missing-session-unpin', 'remote-worktree', 'shell-handoff', 'shared-attach', 'cold-cutover'].includes(only ?? '') && engine !== 'rust') {
 			throw new Error(`FACADE_IT_ONLY=${only} runs on the Rust engine: set FACADE_IT_ENGINE=rust.`);
 		}
 		if (only === 'engine' || (!only && engine === 'rust')) {
@@ -1075,6 +1083,12 @@ async function main(): Promise<void> {
 		}
 		if (only === 'activation-failure') {
 			await rustWindows('activation-failure');
+		}
+		if (only === 'incompatible-activation') {
+			await rustWindows('incompatible-activation');
+		}
+		if (only === 'remote-worktree') {
+			driverPassed('remote-worktree', runRemoteWorktree(home, executable));
 		}
 		if (engine === 'rust' && (!only || only === 'shell-handoff')) {
 			await rustWindows('handoff');

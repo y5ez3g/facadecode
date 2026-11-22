@@ -915,6 +915,27 @@ fn wait_for_route(home: &TestHome, target: &str, hops: &[&str]) {
 fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     let local = TestHome::new("worktree-local");
     let remote = TestHome::new("worktree-remote");
+    check_remote_worktree(&local, &remote, &test_binaries().fakecli, |_, _, _| {});
+}
+
+fn worktree_git(home: &TestHome, folder: &Path, args: &[&str]) -> String {
+    let output = home
+        .command("git")
+        .current_dir(folder)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git {args:?}: {}", stderr(&output));
+    stdout(&output).trim_end_matches(['\r', '\n']).to_string()
+}
+
+// Keep the two real Shell Attach views alive for the optional editor observation.
+fn check_remote_worktree(
+    local: &TestHome,
+    remote: &TestHome,
+    worker: &Path,
+    observe: impl FnOnce(&str, &Value, [&TestTerminal; 2]),
+) {
     let programs = test_binaries();
     let settings = |home: &TestHome, clis: Value| {
         std::fs::write(
@@ -924,33 +945,27 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
         .unwrap();
     };
     settings(
-        &local,
+        local,
         json!({ "laptop-only": { "type": "fake", "command": programs.fakecli } }),
     );
     settings(
-        &remote,
+        remote,
         json!({
-            "devbox-only": { "type": "fake", "command": programs.fakecli },
+            "devbox-only": {
+                "type": "fake", "command": worker,
+                "env": { "FAKECLI_STARTS": remote.folder().join("worker-pids") },
+            },
             "devbox-missing": { "type": "fake", "command": remote.folder().join("missing-cli") },
         }),
     );
     install_machine_ssh(
-        &[("qa-laptop", &local), ("devbox", &remote)],
+        &[("qa-laptop", local), ("devbox", remote)],
         &programs.facade,
     );
-    let local_id = name_machine(&local, "qa-laptop");
-    let remote_id = name_machine(&remote, "devbox");
+    let local_id = name_machine(local, "qa-laptop");
+    let remote_id = name_machine(remote, "devbox");
 
-    let git = |folder: &std::path::Path, args: &[&str]| {
-        let output = remote
-            .command("git")
-            .current_dir(folder)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "git {args:?}: {}", stderr(&output));
-        stdout(&output).trim().to_string()
-    };
+    let git = |folder, args: &[&str]| worktree_git(remote, folder, args);
     let commit = |message: &str| {
         git(
             &remote.project,
@@ -999,7 +1014,7 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     let added = stdout(&output);
     assert!(output.status.success(), "{added}\n{}", stderr(&output));
     assert!(added.contains("Saved the connection to"), "{added}");
-    let attempts = ssh_attempts(&remote);
+    let attempts = ssh_attempts(remote);
     assert!(!attempts.is_empty(), "add did not try SSH");
     assert!(
         attempts
@@ -1007,7 +1022,7 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
             .all(|attempt| attempt.starts_with("batch 2222 ")),
         "add should reuse the existing noninteractive login: {attempts}"
     );
-    let status = connect(&local).call_ok(
+    let status = connect(local).call_ok(
         "daemon.status",
         json!({ "scope": { "kind": "machine", "machine": "devbox" } }),
     );
@@ -1017,15 +1032,15 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
         "the first call immediately reaches the saved machine"
     );
     assert_eq!(
-        ssh_attempts(&remote),
+        ssh_attempts(remote),
         attempts,
         "the first operation reuses the saved machine session"
     );
-    let machine = machine_json(&local, &remote_id).expect("the saved devbox");
+    let machine = machine_json(local, &remote_id).expect("the saved devbox");
     assert_eq!(machine["state"], "online", "{machine}");
     assert_eq!(machine["route"], json!([remote_id]), "{machine}");
     let connection = saved_ssh(
-        &machine_json(&local, &local_id).unwrap(),
+        &machine_json(local, &local_id).unwrap(),
         &local_id,
         &remote_id,
     );
@@ -1040,7 +1055,7 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
         .isolating_env()
         .into_iter()
         .collect::<std::collections::BTreeMap<_, _>>();
-    let mut wire = connect(&local);
+    let mut wire = connect(local);
     let local_clis = wire.call_ok("cli.list", json!({ "folder": local.project, "env": env }));
     assert!(
         local_clis["clis"]
@@ -1088,7 +1103,7 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     );
 
     let observer = local.start_named_fake("observer", &[]);
-    let mut relay = McpTestClient::open_configured(&local, &observer.id);
+    let mut relay = McpTestClient::open_configured(local, &observer.id);
     let refused = relay.call(
         "start_agent",
         json!({ "machine": "devbox", "folder": folder, "cli": "laptop-only" }),
@@ -1153,6 +1168,7 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     }
     let marker = "typed through the remote worktree";
     first.send(format!("{marker}\r").as_bytes());
+    observe(&local_id, agent, [&first, &second]);
     for terminal in [&mut first, &mut second] {
         assert!(
             terminal.wait_for(LOADED_TIMEOUT, |screen| screen.contains(marker)),
@@ -1174,7 +1190,7 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     );
     remote.wait_for_idle_exit();
     local.run_facade_ok(&["list"]);
-    let sleeping = wait_for_machine_state(&local, &remote_id, "sleeping");
+    let sleeping = wait_for_machine_state(local, &remote_id, "sleeping");
     assert!(sleeping.get("route").is_none(), "{sleeping}");
     let machine_table = local.run_facade(&["machine", "list"]);
     assert_eq!(
@@ -1204,7 +1220,7 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
         "a bare roster leaves the peer asleep"
     );
 
-    let status = connect(&local).call_ok(
+    let status = connect(local).call_ok(
         "daemon.status",
         json!({ "scope": { "kind": "machine", "machine": "devbox" } }),
     );
@@ -1214,7 +1230,149 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
         "naming the saved machine wakes its daemon"
     );
     assert_eq!(remote.hello_result().unwrap()["machine_id"], remote_id);
-    wait_for_route(&local, &remote_id, &[&remote_id]);
+    wait_for_route(local, &remote_id, &[&remote_id]);
+}
+
+/// The same routed worktree and live worker are visible to Shell and to the actual Extension.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+#[ignore = "requires the isolated VS Code bridge and Xvfb display from the editor test runner"]
+fn a_remote_worktree_is_shared_by_the_shell_and_editor() {
+    let fixture_file = |name: &str| {
+        let path = std::path::PathBuf::from(
+            std::env::var_os(name)
+                .unwrap_or_else(|| panic!("set {name} to the absolute fixture path")),
+        );
+        assert!(
+            path.is_absolute() && path.is_file(),
+            "{name} must name an absolute fixture file: {path:?}"
+        );
+        path
+    };
+    let node = fixture_file("FACADE_TEST_REMOTE_WORKTREE_NODE");
+    let bridge = fixture_file("FACADE_TEST_REMOTE_WORKTREE_BRIDGE");
+    let vscode = fixture_file("VSCODE_EXECUTABLE");
+    let display =
+        std::env::var_os("DISPLAY").expect("run this fixture on the editor runner's Xvfb display");
+    let local = TestHome::new("worktree-local");
+    let remote = TestHome::new("worktree-remote");
+    let git = |args: &[&str]| worktree_git(&local, &local.project, args);
+    let tracked = local.project.join("keep.txt");
+    let untracked = local.project.join("untracked.txt");
+    git(&["init", "-q", "-b", "local-trunk"]);
+    std::fs::write(&tracked, b"committed locally\n").unwrap();
+    git(&["add", "keep.txt"]);
+    git(&[
+        "-c",
+        "user.name=Facade QA",
+        "-c",
+        "user.email=qa@example.invalid",
+        "commit",
+        "-qm",
+        "local HEAD",
+    ]);
+    std::fs::write(&tracked, b"staged local change\n").unwrap();
+    git(&["add", "keep.txt"]);
+    std::fs::write(&tracked, b"unstaged local change\n").unwrap();
+    std::fs::write(&untracked, b"untracked local file\n").unwrap();
+    let git_snapshot = || {
+        let state: [&[&str]; 6] = [
+            &["rev-parse", "HEAD"],
+            &["symbolic-ref", "HEAD"],
+            &["show-ref"],
+            &["status", "--porcelain=v1", "--untracked-files=all"],
+            &["ls-files", "--stage"],
+            &["worktree", "list", "--porcelain"],
+        ];
+        (
+            state.map(|args| (args, git(args))),
+            [&tracked, &untracked].map(|file| std::fs::read(file).unwrap()),
+        )
+    };
+    let local_before = git_snapshot();
+
+    let editor_runtime = local.folder().join("editor-runtime");
+    facade_base::files::create_private_folder_all(&editor_runtime).unwrap();
+    // Keep the running executable's identity stable if Cargo relinks another test's binaries.
+    let worker = remote.folder().join("facade-fakecli");
+    std::fs::copy(&test_binaries().fakecli, &worker).unwrap();
+    check_remote_worktree(&local, &remote, &worker, |origin, agent, shells| {
+        let address = agent["address"].as_str().expect("the remote address");
+        let pid = agent["pid"].as_u64().expect("the remote PID");
+        let cwd = Path::new(agent["cwd"].as_str().expect("the remote cwd"));
+        assert_eq!(agent["process"], "running");
+        let expected = json!({ "reference": agent["reference"], "pid": pid, "cwd": cwd });
+        let proc = Path::new("/proc").join(pid.to_string());
+        let check_process = || {
+            for home in [&local, &remote] {
+                let observed = home.inspect_agent(address);
+                for field in ["reference", "pid", "cwd", "process"] {
+                    assert_eq!(observed["agent"][field], agent[field], "{address}: {field}");
+                }
+            }
+            assert_eq!(std::fs::read_link(proc.join("cwd")).unwrap(), cwd);
+            assert_eq!(
+                std::fs::read_link(proc.join("exe")).unwrap(),
+                real_path(&worker).unwrap(),
+            );
+        };
+        check_process();
+
+        let marker = "Editor typed into the remote worktree";
+        let mut command = local.command(&node);
+        command
+            .env("VSCODE_EXECUTABLE", &vscode)
+            .env("DISPLAY", &display)
+            .env("XDG_RUNTIME_DIR", &editor_runtime)
+            .env("XDG_DATA_HOME", local.folder().join("editor-data"))
+            .env("XDG_CACHE_HOME", local.folder().join("editor-cache"))
+            .env("XDG_STATE_HOME", local.folder().join("editor-state"))
+            .arg(&bridge)
+            .arg(&local.project)
+            .arg(&local.path)
+            .arg(origin)
+            .arg(address)
+            .arg(expected.to_string())
+            .arg(marker)
+            .stdin(Stdio::null());
+        if let Some(authority) = std::env::var_os("XAUTHORITY") {
+            command.env("XAUTHORITY", authority);
+        }
+        let output = command.output().expect("launch the isolated editor bridge");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            stdout(&output),
+            stderr(&output)
+        );
+        println!("remote editor evidence {}", stdout(&output).trim());
+        for shell in shells {
+            assert!(
+                shell.wait_for(LOADED_TIMEOUT, |screen| screen.contains(marker)),
+                "{}",
+                shell.text()
+            );
+        }
+        assert!(remote.screen(address).contains(marker));
+        check_process();
+        assert_eq!(
+            std::fs::read_to_string(remote.folder().join("worker-pids"))
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            [pid.to_string()],
+            "the remote fake CLI launched once at the original PID",
+        );
+    });
+    assert_eq!(
+        git_snapshot(),
+        local_before,
+        "the local Git state and file bytes stayed unchanged"
+    );
+    assert!(!local.project.with_extension("worktrees").exists());
+    println!(
+        "both Shell views read the editor input; one original worker PID; local Git snapshot unchanged"
+    );
 }
 
 fn ssh_attempts(home: &TestHome) -> String {

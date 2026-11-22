@@ -11,16 +11,19 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
+from unittest.mock import patch
 
 from catalog import AcceptanceError, load, read_cases, read_json, reconcile, validate_binding
 from evidence import (
-    EDITOR, EDITOR_PASS, binding_paths, command_for, completion_record, execute, execution_groups,
+    EDITOR, EDITOR_PASS, binding_paths, binding_product, clean_scope, command_for, completion_record, execute, execution_groups,
     observed_pass, reclaim_interrupted_scope, run_identity, verify_receipts,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
 CORE = 'core/daemon/local-client-request/hello'
 EDITOR_CASE = 'extension/p0/pin-reload/resume-rust'
+REMOTE_WORKTREE = 'core/p0/remote-execution/remote-worktree'
+HARD_FAILURE = 'extension/p0/activation-shell/activation-failure'
 
 
 class CatalogTests(unittest.TestCase):
@@ -99,6 +102,34 @@ class CatalogTests(unittest.TestCase):
         self.assertFalse(observed_pass([binding], marker.replace('"old"', '"rust"')))
 
 
+    def test_incompatible_activation_requires_no_serving_engine(self):
+        binding = self.cases[HARD_FAILURE].test
+        self.assertEqual(binding['engine'], 'none')
+        self.assertEqual(validate_binding(binding, HARD_FAILURE), binding)
+        _, _, env = command_for(ROOT, [binding], None, Path('/tmp/code'), {})
+        self.assertEqual(env['FACADE_IT_ENGINE'], 'rust')
+        marker = EDITOR_PASS + '{"name":"incompatible-activation","engine":"none"}'
+        self.assertTrue(observed_pass([binding], marker))
+        self.assertFalse(observed_pass([binding], marker.replace('"none"', '"rust"')))
+        fallback = self.cases['extension/p0/activation-shell/startup-fallback'].test
+        with self.assertRaisesRegex(AcceptanceError, 'requires the incompatible-activation editor route'):
+            validate_binding(fallback, HARD_FAILURE)
+        for unrelated in (binding, {**self.cases[EDITOR_CASE].test, 'engine': 'none'}):
+            with self.assertRaisesRegex(AcceptanceError, 'invalid Extension editor binding'):
+                validate_binding(unrelated, EDITOR_CASE)
+
+    def test_remote_worktree_editor_route_applies_to_its_case(self):
+        binding = self.cases[REMOTE_WORKTREE].test
+        self.assertEqual(validate_binding(binding, REMOTE_WORKTREE), binding)
+        with self.assertRaisesRegex(AcceptanceError, 'invalid Extension editor binding'):
+            validate_binding(binding, EDITOR_CASE)
+        portable = {
+            'runner': 'core-scenario', 'target': 'machines', 'name': 'a_remote_start_opens_a_worktree_at_the_remote_head',
+        }
+        with self.assertRaisesRegex(AcceptanceError, 'requires the remote-worktree editor route'):
+            validate_binding(portable, REMOTE_WORKTREE)
+
+
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
         self.tmp = self.enterContext(tempfile.TemporaryDirectory())
@@ -119,8 +150,8 @@ class EvidenceTests(unittest.TestCase):
         self.editor_log = EDITOR_PASS + json.dumps({'name': self.editor['name'], 'engine': self.editor['engine']}) + '\n'
 
     def receipt(self, case_id, **changes):
-        product = case_id.split('/')[0]
         binding = self.bindings[case_id]
+        product = binding_product(binding)
         observation, console, completion = binding_paths(self.directory, [binding])
         if product == 'core':
             observation.write_text(self.core_log)
@@ -142,6 +173,29 @@ class EvidenceTests(unittest.TestCase):
 
     def test_complete_receipts(self):
         self.assertEqual(verify_receipts(self.plan, [self.receipt(CORE), self.receipt(EDITOR_CASE)]), 2)
+
+    def test_remote_worktree_binds_the_core_case_to_the_editor_job(self):
+        catalog, _ = read_cases(ROOT)
+        binding = self.bindings[REMOTE_WORKTREE] = catalog[REMOTE_WORKTREE].test
+        self.plan['cases'] = {REMOTE_WORKTREE: binding}
+        scenario = 'a_remote_worktree_is_shared_by_the_shell_and_editor'
+        core = (f'running 1 test\ntest {scenario} ... ok\n'
+                'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out\n')
+        editor = {
+            'origin': 'origin-id', 'reference': {'machine_id': 'remote-id', 'agent_id': 'a1'},
+            'address': 'a1@devbox', 'pid': 41, 'cwd': '/fixture/project.worktrees/feat-x',
+            'engine': 'rust', 'viewers': [2, 3, 2], 'marker': 'Editor typed into the remote worktree',
+        }
+        evidence = 'remote editor evidence ' + json.dumps(editor) + '\n'
+        marker = EDITOR_PASS + json.dumps({'name': binding['name'], 'engine': binding['engine']}) + '\n'
+        self.editor_log = core + evidence + marker
+        self.assertEqual(verify_receipts(self.plan, [self.receipt(REMOTE_WORKTREE)], 'extension'), 1)
+        for invalid in (marker, core + marker, evidence + marker,
+                        core + evidence + evidence + marker, core + evidence.replace('remote-id', 'origin-id') + marker):
+            with self.subTest(log=invalid):
+                self.assertFalse(observed_pass([binding], invalid))
+        with self.assertRaisesRegex(AcceptanceError, 'wrong receipt product'):
+            verify_receipts(self.plan, [self.receipt(REMOTE_WORKTREE, product='core', editor=None)])
 
     def test_missing_and_duplicate_results(self):
         path = self.receipt(CORE)
@@ -265,6 +319,13 @@ class CleanupTests(unittest.TestCase):
                     if process.poll() is None:
                         process.terminate()
                     process.wait(timeout=5)
+
+    def test_interrupted_cleanup_reclaims_a_late_child_and_scans_again(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryFile(mode='w+') as stream:
+            with patch('evidence.reclaim_interrupted_scope') as reclaim, patch('evidence.execute', side_effect=['fail', 'pass']) as scan:
+                self.assertEqual(clean_scope(ROOT, Path(directory), {}, stream, interrupted=True), 'pass')
+                self.assertEqual(reclaim.call_count, 2)
+                self.assertEqual(scan.call_count, 2)
 
     def test_editor_group_cancellation_stops_an_active_child(self):
         with tempfile.TemporaryDirectory() as directory:

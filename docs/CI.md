@@ -415,7 +415,10 @@ parallel in the same PR. Manual runs select both pilots. The Extension job build
 once and uses official VS Code `1.105.1` with isolated profiles and fake CLIs. Core shares one run
 per scenario target and compares its exact test names. Extension shares a fixture for compatible
 Mocha selections with the same engine and route. Multi-window and lifetime drivers use separate
-fixtures. After one shared build, the runner executes at most two isolated editor groups at a time.
+fixtures. The editor job runs the remote worktree case with two live Core Shell Attach clients
+and a real editor attached to the same process through a fixture SSH route. An incompatible
+Core hello must show its error inside the actual panel, with no serving engine or CLI launch.
+After one shared build, the runner executes at most two isolated editor groups at a time.
 An interrupt stops active owned sessions, cancels waiting groups and runs scoped cleanup.
 Verify requires results, original logs and a post-cleanup record for every
 planned case on the same source, plan, platform and run attempt. The editor tests identify the

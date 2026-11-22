@@ -17,6 +17,7 @@
     "core/p0/input-draft/invalid-batch",
     "core/p0/input-draft/type",
     "extension/p0/activation-shell/old-supervisor",
+    "extension/p0/activation-shell/activation-failure",
     "extension/p0/activation-shell/startup-fallback",
     "extension/p0/activation-shell/rust-handoff",
     "extension/p0/pin-reload/close-one-window",
@@ -32,6 +33,7 @@
     "extension/p0/window-replacement/window-activation-old",
     "extension/p0/window-replacement/window-activation-rust",
     "core/p0/remote-execution/retry-lost-reply",
+    "core/p0/remote-execution/remote-worktree",
     "core/p0/remote-execution/route-recovery",
     "core/p0/watch/reconnect",
     "core/p0/watch/snapshot-update",
@@ -552,7 +554,7 @@
       "assertion": "Correlate the delivery receipt and verify a single delivery at the intended target after reconnect and replay with the original request ID.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2071",
+        "core/tests/tests/machines.rs:2229",
         "core/tests/tests/reliability.rs"
       ],
       "test": {
@@ -766,7 +768,7 @@
       "assertion": "Rename a remote peer through the allowed session and read its new name under the same machine ID.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2540"
+        "core/tests/tests/machines.rs:2698"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1322,7 +1324,7 @@
       "assertion": "Drop the reply after delivery and retry the original request ID. The result settles once with one delivery.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2071",
+        "core/tests/tests/machines.rs:2229",
         "core/tests/tests/reliability.rs"
       ],
       "test": {
@@ -1336,7 +1338,7 @@
       "assertion": "Disconnect during raw input and verify the returned partial or unknown outcome matches the effect observed at the target.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2151",
+        "core/tests/tests/machines.rs:2309",
         "core/tests/tests/messages.rs"
       ],
       "test": {
@@ -1383,16 +1385,23 @@
       "assertion": "Discover the selected remote machine, create the worktree from its HEAD and observe the same CLI from Shell and Extension. The local repository stays intact.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs",
-        "extension/src/test/integration/rustMultiWindow.ts"
-      ]
+        "core/tests/tests/machines.rs:1240",
+        "extension/src/test/integration/remoteWorktree.ts"
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "remote-worktree",
+        "built_in": "fake",
+        "name": "remote-worktree"
+      }
     },
     {
       "id": "core/p0/remote-execution/retry-lost-reply",
       "assertion": "Lose the cross-machine reply after delivery. A retry with the original ID observes the same settlement and one delivery.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2071",
+        "core/tests/tests/machines.rs:2229",
         "core/tests/tests/reliability.rs"
       ],
       "test": {
@@ -1406,7 +1415,7 @@
       "assertion": "Route loss is visible and the route can recover to the original agent identity.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2214"
+        "core/tests/tests/machines.rs:2372"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1662,7 +1671,7 @@
       "assertion": "Read the changed peer name from the roster under the original machine ID.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2540"
+        "core/tests/tests/machines.rs:2698"
       ],
       "test": {
         "runner": "core-scenario",
@@ -2510,7 +2519,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/engineDriver.ts",
-        "extension/src/test/integration/run.ts:940"
+        "extension/src/test/integration/run.ts:948"
       ],
       "test": {
         "runner": "extension-editor",
@@ -2865,8 +2874,17 @@
       "assertion": "When the serving engine is unavailable, the panel exposes the observed activation failure without creating a second agent.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/run.ts"
-      ]
+        "extension/src/test/integration/run.ts",
+        "extension/src/test/integration/rustMultiWindow.ts:261",
+        "extension/src/test/integration/rustMultiWindowDriver.ts"
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "none",
+        "journey": "incompatible-activation",
+        "built_in": "claude",
+        "name": "incompatible-activation"
+      }
     },
     {
       "id": "extension/p0/activation-shell/old-supervisor",
@@ -3515,7 +3533,7 @@
       "assertion": "Open the current execution host facade.json document. Generate the old-engine settings once when missing and preserve existing content on later opens.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/rustMultiWindowDriver.ts:199",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:207",
         "extension/src/test/catalog.test.ts:50",
         "extension/src/test/configuration.test.ts:964",
         "extension/src/test/host.activation.test.ts:290"
@@ -3654,7 +3672,7 @@
       "existing_tests": [
         "extension/src/test/integration/engine.it.ts:94",
         "extension/src/test/integration/mcp.it.ts:887",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:327",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:335",
         "extension/src/test/catalog.test.ts:34"
       ]
     },
@@ -3710,7 +3728,7 @@
       "existing_tests": [
         "extension/src/test/integration/rustMultiWindow.ts",
         "extension/src/test/integration/journey.it.ts:141",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:271",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:279",
         "extension/src/test/catalog.test.ts:31"
       ],
       "test": {
@@ -3744,7 +3762,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/configuration.test.ts:985",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:199"
+        "extension/src/test/integration/rustMultiWindowDriver.ts:207"
       ]
     },
     {
@@ -3753,7 +3771,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/configuration.test.ts:985",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:199"
+        "extension/src/test/integration/rustMultiWindowDriver.ts:207"
       ]
     },
     {
@@ -3761,7 +3779,7 @@
       "assertion": "Open a tab for the exact existing agent and verify the underlying process stays the same.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/rustMultiWindowDriver.ts:252",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:260",
         "extension/src/test/catalog.test.ts:30"
       ]
     },
@@ -3772,7 +3790,7 @@
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts:426",
         "extension/src/test/integration/engine.it.ts:99",
-        "extension/src/test/integration/rustMultiWindow.ts:665"
+        "extension/src/test/integration/rustMultiWindow.ts:763"
       ],
       "test": {
         "runner": "extension-editor",
@@ -4323,7 +4341,7 @@
         "extension/src/test/windowTerminals.test.ts:57",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:665"
+        "extension/src/test/integration/rustMultiWindow.ts:763"
       ]
     },
     {
@@ -4334,7 +4352,7 @@
         "extension/src/test/windowTerminals.test.ts:44",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:665"
+        "extension/src/test/integration/rustMultiWindow.ts:763"
       ]
     },
     {
@@ -4345,7 +4363,7 @@
         "extension/src/test/windowTerminals.test.ts:162",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:665"
+        "extension/src/test/integration/rustMultiWindow.ts:763"
       ]
     },
     {
@@ -4356,7 +4374,7 @@
         "extension/src/test/windowTerminals.test.ts:48",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:665"
+        "extension/src/test/integration/rustMultiWindow.ts:763"
       ]
     },
     {
@@ -4367,7 +4385,7 @@
         "extension/src/test/windowTerminals.test.ts:190",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:665"
+        "extension/src/test/integration/rustMultiWindow.ts:763"
       ]
     },
     {

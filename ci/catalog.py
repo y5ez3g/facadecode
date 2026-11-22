@@ -13,13 +13,19 @@ CASE_NAME = re.compile(r'\x60([A-Za-z0-9._-]+)\x60')
 NAME = re.compile(r'[a-z][a-z0-9_]*', re.ASCII)
 FIELDS = {'id', 'assertion', 'stage', 'existing_tests'}
 MOCHA_JOURNEYS = ('journeys', 'cross')
+REQUIRED_EDITOR_ROUTES = {
+    'core/p0/remote-execution/remote-worktree': 'remote-worktree',
+    'extension/p0/activation-shell/activation-failure': 'incompatible-activation',
+}
 EDITOR_DRIVERS = {
     'activation-failure': ('old', 'claude'),
     'conversion': ('old', 'claude'),
     'expiry': ('old', 'claude'),
+    'incompatible-activation': ('none', 'claude'),
     'lifetime': ('rust', 'claude'),
     'missing-session-unpin': ('rust', 'claude'),
     'multi-window': ('rust', 'claude'),
+    'remote-worktree': ('rust', 'fake'),
     'shell-handoff': ('rust', 'codex'),
     'switch': ('rust', 'claude'),
 }
@@ -71,6 +77,9 @@ def validate_binding(value, case_id):
     ):
         raise AcceptanceError(f'{case_id}: invalid test binding')
     runner = value.get('runner')
+    required_route = REQUIRED_EDITOR_ROUTES.get(case_id)
+    if required_route and (runner != 'extension-editor' or value.get('journey') != required_route):
+        raise AcceptanceError(f'{case_id}: requires the {required_route} editor route')
     if runner == 'core-scenario':
         if (
             not case_id.startswith('core/')
@@ -82,18 +91,21 @@ def validate_binding(value, case_id):
         _, boundary, _, name = case_id.split('/')
         variants = set((name if boundary == 'p0' else boundary).split('-')) & {'old', 'rust'}
         if (
-            not case_id.startswith('extension/')
-            or value.keys() != {'runner', 'engine', 'journey', 'built_in', 'name'}
-            or value['engine'] not in ('old', 'rust')
+            value.keys() != {'runner', 'engine', 'journey', 'built_in', 'name'}
+            or value['engine'] not in ('old', 'rust', 'none')
             or (variants and value['engine'] not in variants)
         ):
             raise AcceptanceError(f'{case_id}: invalid Extension editor binding')
         journey = value['journey']
         if journey in MOCHA_JOURNEYS:
-            matches_route = value['built_in'] == 'claude'
+            matches_route = value['built_in'] == 'claude' and value['engine'] in ('old', 'rust')
         else:
             matches_route = value['name'] == journey and EDITOR_DRIVERS.get(journey) == (value['engine'], value['built_in'])
-        if not matches_route:
+        if journey in REQUIRED_EDITOR_ROUTES.values():
+            applies = required_route == journey
+        else:
+            applies = case_id.startswith('extension/')
+        if not (applies and matches_route):
             raise AcceptanceError(f'{case_id}: invalid Extension editor binding for {journey}')
     else:
         raise AcceptanceError(f'{case_id}: unknown runner {runner!r}')

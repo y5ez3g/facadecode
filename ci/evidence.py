@@ -31,6 +31,8 @@ HARNESS_FILES = (
 )
 INPUT_FILES = (*HARNESS_FILES, '.github/workflows/ci-acceptance.yml', 'docs/CI.md')
 EDITOR_PASS = 'Facade acceptance test '
+REMOTE_EDITOR_EVIDENCE = 'remote editor evidence '
+REMOTE_WORKTREE_SCENARIO = 'a_remote_worktree_is_shared_by_the_shell_and_editor'
 SCOPE_PATHS = {b'CI_ACCEPTANCE_ROOT', b'FACADE_HOME', b'HOME', b'TMPDIR', b'VSCODE_PORTABLE', b'XDG_RUNTIME_DIR'}
 
 
@@ -102,20 +104,52 @@ def execution_groups(cases):
         yield cases_in_group, [unique[name] for name in sorted(unique)]
 
 
+def observed_core_tests(names, output):
+    count = len(names)
+    results = re.findall(r'^test (.+?) \.\.\. (.+)$', output, re.M)
+    summaries = re.findall(r'^test result: (.+)$', output, re.M)
+    return (
+        re.findall(r'^running (\d+) tests?\s*$', output, re.M) == [str(count)]
+        and sorted(results) == [(name, 'ok') for name in sorted(names)]
+        and len(summaries) == 1
+        and summaries[0].startswith(f'ok. {count} passed; 0 failed; 0 ignored;')
+    )
+
+
+def observed_remote_worktree(output):
+    if not observed_core_tests([REMOTE_WORKTREE_SCENARIO], output):
+        return False
+    records = [line.removeprefix(REMOTE_EDITOR_EVIDENCE)
+               for line in output.splitlines() if line.startswith(REMOTE_EDITOR_EVIDENCE)]
+    if len(records) != 1:
+        return False
+    try:
+        record = json.loads(records[0], object_pairs_hook=json_object)
+    except ValueError:
+        return False
+    if not isinstance(record, dict) or not isinstance(record.get('reference'), dict):
+        return False
+    reference = record['reference']
+    return (
+        record.get('engine') == 'rust'
+        and record.get('viewers') == [2, 3, 2]
+        and isinstance(record.get('origin'), str) and bool(record['origin'])
+        and isinstance(reference.get('machine_id'), str) and bool(reference['machine_id'])
+        and reference['machine_id'] != record['origin']
+        and re.fullmatch(r'a[0-9]+', str(reference.get('agent_id'))) is not None
+        and record.get('address') == f'{reference["agent_id"]}@devbox'
+        and type(record.get('pid')) is int and record['pid'] > 0
+        and isinstance(record.get('cwd'), str) and Path(record['cwd']).is_absolute()
+        and Path(record['cwd']).parts[-2:] == ('project.worktrees', 'feat-x')
+        and record.get('marker') == 'Editor typed into the remote worktree'
+    )
+
+
 def observed_pass(bindings, output):
     output = ANSI.sub('', output)
     binding = bindings[0]
     if binding['runner'] == 'core-scenario':
-        names = sorted(entry['name'] for entry in bindings)
-        count = len(names)
-        results = re.findall(r'^test (.+?) \.\.\. (.+)$', output, re.M)
-        summaries = re.findall(r'^test result: (.+)$', output, re.M)
-        return (
-            re.findall(r'^running (\d+) tests?\s*$', output, re.M) == [str(count)]
-            and sorted(results) == [(name, 'ok') for name in names]
-            and len(summaries) == 1
-            and summaries[0].startswith(f'ok. {count} passed; 0 failed; 0 ignored;')
-        )
+        return observed_core_tests([entry['name'] for entry in bindings], output)
     markers = [line.removeprefix(EDITOR_PASS) for line in output.splitlines() if line.startswith(EDITOR_PASS)]
     try:
         records = [json.loads(marker, object_pairs_hook=json_object) for marker in markers]
@@ -127,10 +161,11 @@ def observed_pass(bindings, output):
         for record in records
     ):
         return False
-    return sorted((record['name'], record['engine']) for record in records) == sorted(
-        (entry['name'], entry['engine']) for entry in bindings
+    observations = sorted((record['name'], record['engine']) for record in records)
+    expected = sorted((entry['name'], entry['engine']) for entry in bindings)
+    return observations == expected and (
+        binding['journey'] != 'remote-worktree' or observed_remote_worktree(output)
     )
-
 
 def command_for(root, bindings, log_path, vscode, env):
     binding = bindings[0]
@@ -154,8 +189,8 @@ def command_for(root, bindings, log_path, vscode, env):
         editor_env['FACADE_IT_EXPECT_TESTS'] = json.dumps(names)
     else:
         editor_env['FACADE_IT_EXPECT_DRIVER'] = binding['name']
-        if binding['journey'] == 'activation-failure':
-            # Request Rust startup and verify the old engine that actually serves the window.
+        if binding['journey'] in ('activation-failure', 'incompatible-activation'):
+            # Observe the outcome of Rust startup through the real workbench.
             editor_env['FACADE_IT_ENGINE'] = 'rust'
     return root / 'extension', ['xvfb-run', '-a', 'node', 'build/out/test/integration/run.js'], editor_env
 
@@ -315,6 +350,21 @@ def reclaim_interrupted_scope(isolated, stream):
             continue
 
 
+def clean_scope(root, isolated, env, stream, interrupted):
+    command = ['sh', 'core/scripts/leftovers.sh', str(isolated)]
+    # Detached services can finish a launch after an interrupted process's first sweep.
+    for _ in range(3 if interrupted else 1):
+        if interrupted:
+            try:
+                reclaim_interrupted_scope(isolated, stream)
+            except OSError as error:
+                print(f'Interrupted fixture cleanup: {error}', file=stream, flush=True)
+        cleanup = execute(command, root, env, stream, timeout=10)
+        if cleanup == 'pass':
+            break
+    return cleanup
+
+
 def run_binding(root, bindings, output_dir, vscode, env, cancelled=None):
     output, stdout, _ = binding_paths(output_dir, bindings)
     isolated = Path(tempfile.mkdtemp(prefix='fci-', dir='/tmp'))
@@ -329,12 +379,8 @@ def run_binding(root, bindings, output_dir, vscode, env, cancelled=None):
         try:
             status = execute(args, cwd, test_env, stream, cancelled=cancelled)
         finally:
-            if status in ('cancelled', 'interrupted', 'timeout'):
-                try:
-                    reclaim_interrupted_scope(isolated, stream)
-                except OSError as error:
-                    print(f'Interrupted fixture cleanup: {error}', file=stream, flush=True)
-            cleanup = execute(['sh', 'core/scripts/leftovers.sh', str(isolated)], root, env, stream)
+            interrupted = status in ('cancelled', 'interrupted', 'timeout')
+            cleanup = clean_scope(root, isolated, env, stream, interrupted)
             if cleanup == 'pass':
                 try:
                     shutil.rmtree(isolated)
@@ -351,9 +397,14 @@ def run_binding(root, bindings, output_dir, vscode, env, cancelled=None):
     return status, output.name if output.is_file() else stdout.name
 
 
+def binding_product(binding):
+    # The remote worktree case needs both products, so its editor binding runs with the editor job.
+    return 'extension' if binding['runner'] == 'extension-editor' else 'core'
+
+
 def run_pilots(root, plan, product, output_dir, vscode=None):
     host = runtime()
-    selected = {key: binding for key, binding in plan['cases'].items() if key.startswith(product + '/')}
+    selected = {key: binding for key, binding in plan['cases'].items() if binding_product(binding) == product}
     if not selected:
         raise AcceptanceError(f'{product}: no executable PR pilot bindings')
     editor = editor_identity(vscode) if product == 'extension' and vscode is not None else None
@@ -441,7 +492,7 @@ def verify_receipts(plan, receipts, product=None):
         raise AcceptanceError('no pilot receipts supplied')
     expected = {
         case_id: binding for case_id, binding in plan['cases'].items()
-        if product is None or case_id.startswith(product + '/')
+        if product is None or binding_product(binding) == product
     }
     if not expected:
         raise AcceptanceError('no cases selected for verification')
@@ -473,11 +524,11 @@ def verify_receipts(plan, receipts, product=None):
             if not isinstance(item, dict) or item.keys() != {'id', 'status', 'binding', 'log', 'elapsed_ms'}:
                 raise AcceptanceError('invalid case result')
             case_id = item['id']
-            if not isinstance(case_id, str) or not case_id.startswith(receipt_product + '/') or case_id in seen:
+            if not isinstance(case_id, str) or case_id not in expected or case_id in seen:
                 raise AcceptanceError(f'invalid or duplicate result for {case_id!r}')
+            if binding_product(expected[case_id]) != receipt_product:
+                raise AcceptanceError(f'{case_id}: wrong receipt product')
             seen.add(case_id)
-            if case_id not in expected:
-                continue
             if item['binding'] != expected[case_id]:
                 failures.append(f'{case_id}: wrong runner, engine or selector')
             if item['status'] != 'pass':

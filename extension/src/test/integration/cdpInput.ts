@@ -208,19 +208,19 @@ export class Cdp {
 		this.waiting.clear();
 	}
 
-	send<T = unknown>(method: string, params: object = {}): Promise<T> {
+	send<T = unknown>(method: string, params: object = {}, sessionId?: string): Promise<T> {
 		if (this.closed || !this.socket) {
 			return Promise.reject(new Error('The DevTools connection is closed.'));
 		}
 		const id = ++this.next;
 		return new Promise<T>((resolve, reject) => {
 			this.waiting.set(id, { resolve: value => resolve(value as T), reject });
-			this.socket!.send(JSON.stringify({ id, method, params }));
+			this.socket!.send(JSON.stringify({ id, method, params, sessionId }));
 		});
 	}
 
-	async evaluate<T>(expression: string): Promise<T> {
-		const answer = await this.send<{ result: { value?: unknown }; exceptionDetails?: { text?: string; exception?: { description?: string } } }>('Runtime.evaluate', { expression, returnByValue: true });
+	async evaluate<T>(expression: string, sessionId?: string): Promise<T> {
+		const answer = await this.send<{ result: { value?: unknown }; exceptionDetails?: { text?: string; exception?: { description?: string } } }>('Runtime.evaluate', { expression, returnByValue: true }, sessionId);
 		if (answer.exceptionDetails) {
 			throw new Error(`Evaluation failed: ${answer.exceptionDetails.exception?.description ?? answer.exceptionDetails.text ?? 'unknown'}`);
 		}

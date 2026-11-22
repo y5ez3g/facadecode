@@ -5,14 +5,16 @@
 import * as assert from 'assert';
 import { execFile, execFileSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
+import { createInterface } from 'readline';
 import { isDeepStrictEqual } from 'util';
-import type { AgentInfo, DaemonHelloResult, InspectResult } from '../../base/coreProtocol';
+import type { AgentInfo, DaemonHelloResult, HelloParams, HelloResult, InspectResult } from '../../base/coreProtocol';
 import { isProcessRunning } from '../../base/system';
 import type { RustPin } from '../../core/ports';
 import { freePort, Workbench } from './cdpInput';
-import { callInCore, coreCall, coreListens, detachedStartReference, endEditors, helloInCore, normalizeDriveLetter, until } from './editors';
+import { callInCore, coreCall, coreListens, coreSocket, detachedStartReference, endEditors, helloInCore, normalizeDriveLetter, until } from './editors';
 import type { AttachView, SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './rustMultiWindowDriver';
 import type { RunningAgent } from './rustWindowDriver';
 
@@ -253,6 +255,102 @@ export async function activationFailure(open: OpenWindow, folder: string, env: N
 	assert.ok(!coreListens(home));
 	console.log('  ✔ Rust startup failed visibly. The old panel served one requested agent and its process stopped. ' +
 		JSON.stringify({ home, warning, before: 0, after: { alias: agent.alias, pids: pids() }, cliStopped: true }));
+}
+
+/** An incompatible hello refuses activation, including the actual Facade webview and commands. */
+export async function incompatibleActivation(open: OpenWindow, folder: string, env: NodeJS.ProcessEnv): Promise<void> {
+	const home = env.FACADE_HOME!;
+	const endpoint = coreSocket(home);
+	if (process.platform !== 'win32') { fs.mkdirSync(path.dirname(endpoint), { mode: 0o700, recursive: true }); }
+	assert.ok(!coreListens(home), 'the fixture home has no daemon');
+	const incompatible: HelloResult = {
+		api_version: 999, build: 'incompatible-editor-fixture', machine_id: '98367538-470c-4f4e-8503-f2bd9b9339ba',
+		pid: process.pid, agent_count: 0, ops: [], topics: []
+	};
+	const requests: { id: number; method: string; params: HelloParams }[] = [];
+	const connections = new Set<net.Socket>();
+	const failures: Error[] = [];
+	const server = net.createServer(socket => {
+		connections.add(socket);
+		socket.on('close', () => connections.delete(socket));
+		socket.on('error', error => failures.push(error));
+		createInterface({ input: socket }).on('line', line => {
+			try {
+				const request = JSON.parse(line) as (typeof requests)[number];
+				requests.push(request);
+				if (request.method === 'hello') {
+					socket.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: incompatible }) + '\n');
+				}
+			} catch (error) {
+				failures.push(error as Error);
+			}
+		});
+	});
+	const closeServer = () => {
+		for (const connection of connections) { connection.destroy(); }
+		return new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+	};
+	const terminate = () => void closeServer().then(
+		() => process.exit(143),
+		error => { console.error(error); process.exit(1); },
+	);
+	process.once('SIGTERM', terminate);
+	const reason = 'Facade core did not select an offered daemon API version.';
+	try {
+		await new Promise<void>((resolve, reject) => {
+			server.once('error', reject);
+			server.listen(endpoint, resolve);
+		});
+		const window = await open(folder, 'reject');
+		assert.deepStrictEqual([normalizeDriveLetter(window.ready.home), window.ready.remote, window.ready.machineId],
+			[normalizeDriveLetter(home), null, null]);
+		await window.act({ kind: 'show-failure-panel' });
+		const workbench = await window.workbench();
+		try {
+			const facadeFrame = `Array.from(document.querySelectorAll('iframe.webview')).find(frame => frame.getClientRects().length
+				&& getComputedStyle(frame).visibility === 'visible' && new URL(frame.src).searchParams.get('extensionId') === 'facade.facadecode')?.src`;
+			const viewUrl = await until('the visible Facade webview frame', () => workbench.cdp.evaluate<string | undefined>(facadeFrame));
+			const target = await until('the Facade webview target in this isolated workbench', async () => {
+				const listed = await workbench.cdp.send<{ targetInfos: { targetId: string; type: string; url: string }[] }>('Target.getTargets');
+				return listed.targetInfos.find(each => each.type === 'iframe' && each.url === viewUrl);
+			});
+			const { sessionId } = await workbench.cdp.send<{ sessionId: string }>('Target.attachToTarget', { targetId: target.targetId, flatten: true });
+			try {
+				await until('the exact activation error rendered inside the Facade panel', async () => {
+					const body = await workbench.cdp.evaluate<string | undefined>(
+						"document.querySelector('#active-frame')?.contentDocument?.body?.innerText.trim()", sessionId);
+					return body === reason ? body : undefined;
+				});
+			} finally {
+				await workbench.cdp.send('Target.detachFromTarget', { sessionId });
+			}
+			await window.act({ kind: 'request-refused-agent' });
+			await window.act({ kind: 'show-notifications' });
+			await until('the activation error notification after New Agent', async () => {
+				const notices = await workbench.cdp.evaluate<string[]>(
+					"Array.from(document.querySelectorAll('.notification-list-item-message')).map(node => node.textContent?.trim() ?? '')");
+				assert.ok(!notices.some(text => text.startsWith('The old engine is active on ')));
+				return notices.includes(reason) || undefined;
+			});
+		} finally {
+			workbench.cdp.close();
+		}
+		await window.close();
+		assert.deepStrictEqual(failures, []);
+		assert.deepStrictEqual(requests.map(request => request.method), ['hello']);
+		const offered = requests[0].params;
+		assert.deepStrictEqual([offered.kind, offered.api_versions], ['ide', [1]]);
+		assert.ok(!fs.existsSync(path.join(home, 'core')) && !fs.existsSync(path.join(home, 'extension', 'ptyd')));
+		const record = env.FACADE_IT_RECORD!;
+		assert.deepStrictEqual(fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`)), []);
+		console.log('  ✔ The incompatible hello was refused by the real Facade panel and New Agent. ' +
+			JSON.stringify({ home, endpoint, offered: offered.api_versions, selected: incompatible.api_version, panel: reason,
+				newAgent: 'refused', fallback: false, launches: 0 }));
+	} finally {
+		process.removeListener('SIGTERM', terminate);
+		if (server.listening) { await closeServer(); }
+	}
+	assert.ok(!coreListens(home), 'the private endpoint was removed');
 }
 
 /** Go to Agent attaches to a Shell run that survives closing the VS Code window. */

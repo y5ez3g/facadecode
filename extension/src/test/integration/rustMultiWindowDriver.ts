@@ -19,7 +19,7 @@ import { agentTab, facade, hasAgentTab, inspect, keepConversation, newCard, pin,
 import type { WindowTerminalIdentity } from '../../base/windowIdentity';
 
 type Action =
-	| { readonly kind: 'snapshot' | 'filter' | 'window-component' | 'terminal-owner' | 'show-notifications' }
+	| { readonly kind: 'snapshot' | 'filter' | 'window-component' | 'terminal-owner' | 'show-notifications' | 'show-failure-panel' | 'request-refused-agent' }
 	| { readonly kind: 'start-fallback' }
 	| { readonly kind: 'stop-fallback'; readonly runId: string }
 	| { readonly kind: 'open-shell-agent'; readonly name: string; readonly address: string; readonly text: string }
@@ -161,6 +161,14 @@ async function perform(action: Action): Promise<unknown> {
 			return view();
 		case 'show-notifications':
 			await vscode.commands.executeCommand('notifications.showList');
+			return true;
+		case 'show-failure-panel':
+			await vscode.commands.executeCommand('facade.agents.focus');
+			return true;
+		case 'request-refused-agent':
+			await vscode.commands.executeCommand('notifications.clearAll');
+			assert.strictEqual(await vscode.commands.executeCommand('facade.newAgent'), undefined);
+			assert.strictEqual(vscode.window.terminals.length, 0);
 			return true;
 		case 'start-fallback': {
 			const picker = vscode.commands.executeCommand('facade.newAgent');
@@ -416,8 +424,16 @@ export async function activate(): Promise<void> {
 			'the window and driver use the test Facade home');
 		const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		assert.ok(folder, 'the test window has a workspace folder');
-		await vscode.extensions.getExtension('facade.facadecode')!.activate();
-		await until('the panel snapshot', async () => (await state())?.loading === false || undefined, 90_000);
+		const extension = vscode.extensions.getExtension('facade.facadecode')!;
+		const incompatible = process.env.FACADE_IT_WINDOW_INCOMPATIBLE === '1';
+		if (incompatible) {
+			assert.strictEqual(vscode.workspace.getConfiguration('facade').get('rustEngine'), 'auto');
+			assert.ok(vscode.extensions.getExtension('facade.facadecode-window'), 'the old engine has its Window Component available');
+			await assert.rejects(async () => extension.activate(), /Facade core did not select an offered daemon API version\./u);
+		} else {
+			await extension.activate();
+			await until('the panel snapshot', async () => (await state())?.loading === false || undefined, 90_000);
+		}
 		if (process.env.FACADE_IT_WINDOW_NO_COMPONENT === '1') {
 			assert.strictEqual(vscode.extensions.getExtension('facade.facadecode-window'), undefined);
 		}
@@ -427,7 +443,7 @@ export async function activate(): Promise<void> {
 		if (oldEngine || fallback) {
 			assert.ok(vscode.extensions.getExtension('facade.facadecode-window'));
 			if (fallback) { assert.strictEqual(vscode.workspace.getConfiguration('facade').get('rustEngine'), 'auto'); }
-		} else {
+		} else if (!incompatible) {
 			const hello = await helloInCore(home);
 			assert.ok('result' in hello, JSON.stringify(hello));
 			const core = hello.result as HelloResult;
