@@ -5,6 +5,8 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use facade_base::files::real_path;
 use facade_base::ssh::{SshMode, decode_home_hex, machine_ssh_args};
@@ -1027,8 +1029,31 @@ struct ObservedMachineLink {
     from_peer: std::sync::mpsc::Receiver<Value>,
 }
 
+const LIVE_ADVERTISE_PROBE: u64 = 10_000;
+
+struct AdvertiseProbe {
+    allow_live_tables: AtomicBool,
+    destination: String,
+}
+
+fn advertises_route(frame: &Value, destination: &str) -> bool {
+    frame["method"] == "advertise"
+        && frame["params"]["machines"].as_array().is_some_and(|rows| {
+            rows.iter()
+                .any(|row| row["machine_id"] == destination && row["route"] == json!([destination]))
+        })
+}
+
 impl ObservedMachineLink {
     fn open(front: &TestHome, peer: &TestHome) -> Self {
+        Self::with_advertise_probe(front, peer, None)
+    }
+
+    fn with_advertise_probe(
+        front: &TestHome,
+        peer: &TestHome,
+        probe: Option<Arc<AdvertiseProbe>>,
+    ) -> Self {
         let mut outgoing = ManualReadClient::open(front);
         outgoing.send(
             1,
@@ -1053,7 +1078,9 @@ impl ObservedMachineLink {
                      mut target: facade_base::paths::ClientSocket,
                      front: bool| {
             let (observed, frames) = std::sync::mpsc::channel();
+            let probe = probe.clone();
             let pump = std::thread::spawn(move || {
+                let mut probed = false;
                 while let Ok(Some(frame)) = source.read_frame() {
                     // The foreground Shell consumes this local handoff result before forwarding.
                     let endpoint_notice = front
@@ -1062,8 +1089,37 @@ impl ObservedMachineLink {
                             Some("connected" | "connect_failed")
                         );
                     let _ = observed.send(frame.clone());
-                    if !endpoint_notice && writeln!(target, "{frame}").is_err() {
+                    let live_table = frame["method"] == "advertise" && frame.get("id").is_none();
+                    let control_reply = probe.is_some()
+                        && front
+                        && frame["id"] == LIVE_ADVERTISE_PROBE
+                        && frame.get("method").is_none();
+                    let held_table = !front
+                        && live_table
+                        && probe
+                            .as_ref()
+                            .is_some_and(|probe| !probe.allow_live_tables.load(Ordering::SeqCst));
+                    if endpoint_notice || control_reply || held_table {
+                        continue;
+                    }
+                    if writeln!(target, "{frame}").is_err() {
                         break;
+                    }
+                    if !front
+                        && live_table
+                        && !probed
+                        && probe
+                            .as_ref()
+                            .is_some_and(|probe| advertises_route(&frame, &probe.destination))
+                    {
+                        // An ID-bearing copy immediately after the live notification is an ordered
+                        // barrier. Its error is observed here and never sent to the other Daemon.
+                        let mut control = frame;
+                        control["id"] = json!(LIVE_ADVERTISE_PROBE);
+                        if writeln!(target, "{control}").is_err() {
+                            break;
+                        }
+                        probed = true;
                     }
                 }
             });
@@ -1115,6 +1171,131 @@ fn wait_for_route(home: &TestHome, target: &str, hops: &[&str]) {
         "expected {target} via {hops:?}, found {:?}; {}",
         machines_json(home),
         home.daemon_log()
+    );
+}
+
+/// Initial tables are acknowledged after machine hello. Later announcements are id-less.
+#[test]
+fn initial_and_live_machine_advertisements_route_exact_calls() {
+    let origin = TestHome::new("advertise-origin");
+    let middle = TestHome::new("advertise-middle");
+    let first = TestHome::new("advertise-first");
+    let later = TestHome::new("advertise-later");
+    install_machine_ssh(
+        &[("middle", &middle), ("first", &first), ("later", &later)],
+        &test_binaries().facade,
+    );
+    let origin_id = name_machine(&origin, "origin");
+    let middle_id = name_machine(&middle, "middle");
+    let first_id = name_machine(&first, "first");
+    let later_id = name_machine(&later, "later");
+    let initial_run = first.start_fake("worker");
+    let later_run = later.start_fake("worker");
+    assert_eq!(initial_run.id, later_run.id);
+    let _first_link = MachineLink::open(&middle, "first", &first);
+    wait_for_route(&middle, &first_id, &[&first_id]);
+    assert!(machine_json(&origin, &first_id).is_none());
+    assert!(machine_json(&origin, &later_id).is_none());
+
+    let probe = Arc::new(AdvertiseProbe {
+        allow_live_tables: AtomicBool::new(false),
+        destination: later_id.clone(),
+    });
+    let bridge = ObservedMachineLink::with_advertise_probe(&origin, &middle, Some(probe.clone()));
+    let welcomed = observed_frame(&bridge.from_peer, "authenticated machine hello", |frame| {
+        frame["id"] == 0 && frame["result"]["machine_id"] == middle_id
+    });
+    assert_eq!(welcomed["result"]["api_version"], 1, "{welcomed}");
+    let announced = observed_frame(&bridge.from_peer, "ID-bearing initial table", |frame| {
+        frame["id"].is_u64() && advertises_route(frame, &first_id)
+    });
+    let table_id = announced["id"].as_u64().unwrap();
+    let receipt = observed_frame(
+        &bridge.from_front,
+        "correlated initial table success",
+        |frame| frame["id"] == table_id && frame.get("method").is_none(),
+    );
+    assert_eq!(
+        receipt,
+        json!({"jsonrpc": "2.0", "id": table_id, "result": {}})
+    );
+
+    let mut caller = connect(&origin);
+    let verify_call = |caller: &mut DaemonTestClient, target: &str, worker: &TestAgent| {
+        wait_for_route(&origin, target, &[&middle_id, target]);
+        let reference = json!({ "machine_id": target, "agent_id": worker.id });
+        let id = caller.send(
+            "call",
+            json!({ "op": "agent.inspect", "args": { "target": reference } }),
+        );
+        let forwarded = observed_frame(&bridge.from_front, "the exact routed call", |frame| {
+            frame["method"] == "forward" && frame["params"]["params"]["op"] == "agent.inspect"
+        });
+        assert_eq!(
+            forwarded["params"]["route"],
+            json!([middle_id, target]),
+            "{forwarded}"
+        );
+        assert_eq!(
+            forwarded["params"]["caller"]["machine_id"], origin_id,
+            "{forwarded}"
+        );
+        assert_eq!(
+            forwarded["params"]["params"]["args"]["target"], reference,
+            "{forwarded}"
+        );
+        let peer_id = forwarded["id"]
+            .as_u64()
+            .expect("the forwarded call has an ID");
+        let peer = observed_frame(&bridge.from_peer, "the peer's correlated result", |frame| {
+            frame["id"] == peer_id && frame.get("method").is_none()
+        });
+        let answer = caller
+            .wait_for_response(id, LOADED_TIMEOUT)
+            .expect("the caller receives its answer");
+        assert_eq!(answer["id"], id, "{answer}");
+        assert_eq!(peer["result"]["agent"]["reference"], reference, "{peer}");
+        assert_eq!(
+            answer["result"]["agent"]["reference"], reference,
+            "{answer}"
+        );
+        assert_eq!(answer["result"]["agent"]["pid"], worker.pid, "{answer}");
+        assert_eq!(process_identity(worker.pid), worker.process);
+    };
+    // The bridge discards id-less peer tables here, so the initial table owns this route.
+    verify_call(&mut caller, &first_id, &initial_run);
+    assert!(machine_json(&origin, &later_id).is_none());
+
+    probe.allow_live_tables.store(true, Ordering::SeqCst);
+    let _later_link = MachineLink::open(&middle, "later", &later);
+    let notification = observed_frame(&bridge.from_peer, "id-less route announcement", |frame| {
+        frame.get("id").is_none() && advertises_route(frame, &later_id)
+    });
+    assert_eq!(notification["jsonrpc"], "2.0", "{notification}");
+    wait_for_route(&origin, &later_id, &[&middle_id, &later_id]);
+    let rejected = observed_frame(
+        &bridge.from_front,
+        "the post-announcement barrier",
+        |frame| {
+            if frame["id"] == LIVE_ADVERTISE_PROBE && frame.get("method").is_none() {
+                return true;
+            }
+            assert!(
+                frame.get("result").is_none() && frame.get("error").is_none(),
+                "the id-less table received an unexpected response: {frame}"
+            );
+            false
+        },
+    );
+    assert_eq!(
+        rejected,
+        json!({ "jsonrpc": "2.0", "id": LIVE_ADVERTISE_PROBE,
+                "error": {"code": -32601, "message": "Unexpected machine request.",
+                          "data": {"reason": "invalid_argument"}} }),
+    );
+    verify_call(&mut caller, &later_id, &later_run);
+    println!(
+        "initial table {table_id} routed {first_id}; live notification routed {later_id}; only the barrier got a reply"
     );
 }
 
@@ -3050,6 +3231,157 @@ fn a_lost_route_recovers_to_the_same_live_remote_terminal() {
     }));
     assert!(alive(&decoy.process));
     assert!(local.submitted_messages().is_empty());
+}
+
+/// The authenticated route request opens the intermediate's saved hop before forwarding the call.
+#[test]
+fn ensure_route_reopens_the_intermediates_saved_hop() {
+    let origin = TestHome::new("ensure-origin");
+    let middle = TestHome::new("ensure-middle");
+    let provider = TestHome::new("ensure-provider");
+    install_machine_ssh(
+        &[("middle", &middle), ("provider", &provider)],
+        &test_binaries().facade,
+    );
+    let origin_id = name_machine(&origin, "origin");
+    let middle_id = name_machine(&middle, "middle");
+    let provider_id = name_machine(&provider, "provider");
+    let worker = provider.start_fake("worker");
+    let reference = json!({ "machine_id": provider_id, "agent_id": worker.id });
+    let marker = "terminal kept behind the saved hop";
+    provider.run_facade_ok(&["type", &worker.address, marker]);
+    assert!(wait_for_screen_text(&provider, &worker.address, marker));
+    add_saved(&middle, "provider", &provider);
+    wait_for_route(&middle, &provider_id, &[&provider_id]);
+    let saved = || {
+        saved_ssh(
+            &machine_json(&middle, &middle_id).unwrap(),
+            &middle_id,
+            &provider_id,
+        )
+    };
+    let transport = saved()["transport"].clone();
+    assert_eq!(transport["ssh_destination"], "provider");
+    assert_eq!(transport["remote_home"], json!(provider.path));
+    let bridge = ObservedMachineLink::open(&origin, &middle);
+    wait_for_route(&origin, &provider_id, &[&middle_id, &provider_id]);
+
+    let old = provider.kill_daemon();
+    provider
+        .wait_for_daemon_after(old, LOADED_TIMEOUT)
+        .expect("the provider recovers its live agent");
+    let no_route = |home: &TestHome| {
+        machine_json(home, &provider_id).is_none_or(|row| row.get("route").is_none())
+    };
+    assert!(wait_until(LOADED_TIMEOUT, || no_route(&middle) && no_route(&origin)));
+    assert_eq!(saved()["state"], "disconnected");
+    assert_eq!(saved()["transport"], transport);
+    assert_eq!(process_identity(worker.pid), worker.process);
+
+    let hold = provider.folder().join("ssh-hold");
+    std::fs::write(&hold, []).unwrap();
+    let attempts = ssh_attempts(&provider);
+    let serves = ssh_serves(&provider);
+    let mut caller = connect(&origin);
+    let denied = caller.call("internal.ensure_route", json!({ "wake": true }));
+    assert_eq!(error_reason(&denied), "refused", "{denied}");
+    assert_eq!(ssh_attempts(&provider), attempts);
+    let screen_call = caller.send(
+        "call",
+        json!({ "op": "agent.screen", "args": { "target": reference } }),
+    );
+    let ensure = observed_frame(
+        &bridge.from_front,
+        "the authenticated route wake",
+        |frame| {
+            frame["method"] == "forward"
+                && frame["params"]["params"]["op"] == "internal.ensure_route"
+        },
+    );
+    let ensure_id = ensure["id"].as_u64().expect("a peer wake request");
+    assert_eq!(
+        ensure["params"]["route"],
+        json!([middle_id, provider_id]),
+        "{ensure}"
+    );
+    assert_eq!(
+        ensure["params"]["caller"],
+        json!({ "kind": "terminal", "machine_id": origin_id }),
+        "{ensure}"
+    );
+    assert_eq!(
+        ensure["params"]["params"]["args"],
+        json!({ "wake": true }),
+        "{ensure}"
+    );
+    assert!(wait_until(LOADED_TIMEOUT, || ssh_attempts(&provider) != attempts));
+    assert_eq!(ssh_serves(&provider), serves);
+    let dialing = wait_for_machine_state(&middle, &provider_id, "connecting");
+    assert!(dialing.get("route").is_none(), "{dialing}");
+    assert_eq!(saved()["state"], "disconnected");
+    assert!(no_route(&middle) && no_route(&origin));
+    assert!(
+        caller
+            .wait_for_response(screen_call, std::time::Duration::ZERO)
+            .is_none(),
+        "the exact call is still blocked by the saved hop"
+    );
+
+    std::fs::remove_file(hold).unwrap();
+    let opened = observed_frame(
+        &bridge.from_peer,
+        "the correlated route-wake receipt",
+        |frame| frame["id"] == ensure_id && frame.get("method").is_none(),
+    );
+    assert_eq!(
+        opened,
+        json!({ "jsonrpc": "2.0", "id": ensure_id, "result": {} })
+    );
+    assert_eq!(ssh_serves(&provider), format!("{serves}wake\n"));
+    wait_for_route(&middle, &provider_id, &[&provider_id]);
+    wait_for_route(&origin, &provider_id, &[&middle_id, &provider_id]);
+    assert_eq!(saved()["transport"], transport);
+    assert_eq!(saved()["state"], "connected");
+
+    let forwarded = observed_frame(
+        &bridge.from_front,
+        "the call on the opened route",
+        |frame| frame["method"] == "forward" && frame["params"]["params"]["op"] == "agent.screen",
+    );
+    assert_eq!(
+        forwarded["params"]["route"],
+        json!([middle_id, provider_id]),
+        "{forwarded}"
+    );
+    assert_eq!(
+        forwarded["params"]["params"]["args"]["target"], reference,
+        "{forwarded}"
+    );
+    let forwarded_id = forwarded["id"].as_u64().expect("a peer call ID");
+    let response = observed_frame(
+        &bridge.from_peer,
+        "the provider's screen response",
+        |frame| frame["id"] == forwarded_id && frame.get("method").is_none(),
+    );
+    assert!(
+        response["result"]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains(marker)),
+        "{response}"
+    );
+    let received = caller
+        .wait_for_response(screen_call, LOADED_TIMEOUT)
+        .expect("the caller's screen result");
+    assert_eq!(received["id"], screen_call, "{received}");
+    assert_eq!(
+        received["result"]["text"], response["result"]["text"],
+        "{received}"
+    );
+    assert_eq!(process_identity(worker.pid), worker.process);
+    println!(
+        "ensure-route {ensure_id} woke {provider_id} through {middle_id}; peer call {forwarded_id} read CLI {}",
+        worker.pid
+    );
 }
 
 /// The editor selects the remote run by its roster reference, even when both runs have one number.

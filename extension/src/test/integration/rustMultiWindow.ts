@@ -10,7 +10,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { createInterface } from 'readline';
 import { isDeepStrictEqual } from 'util';
-import type { AgentInfo, DaemonHelloResult, HelloParams, HelloResult, InspectResult } from '../../base/coreProtocol';
+import type { AgentInfo, AgentRef, DaemonHelloResult, HelloParams, HelloResult, InspectResult } from '../../base/coreProtocol';
 import { isProcessRunning } from '../../base/system';
 import type { OwnerClaim } from '../../base/ownership';
 import { ptydRecords, recordedPtyds } from '../../base/ptydRegistry';
@@ -481,13 +481,17 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	const session = await until('the fake CLI to report its session', async () => (await inspect()).session);
 	const startLog = `${env.FACADE_IT_RECORD}.starts.#${before.reference.agent_id}`;
 	const starts = () => fs.readFileSync(startLog, 'utf8').trim().split(/\r?\n/u).map(Number);
-	const priorStarts = starts().length;
-	const pinWindow = await open(folder, 'sh');
-	const peerWindow = await open(folder, 'sh2');
+	const launchPids = starts();
+	const priorStarts = launchPids.length;
+	// The fresh profile has never had this run's native tab.
+	const pinWindow = await open(folder, 'sh2');
+	const peerWindow = await open(folder, 'sh');
 	const cardIn = async (window: DrivenWindow) =>
 		(await window.act<WindowView>({ kind: 'snapshot' })).cards.find(card => card.name === name);
 	await until('the other window to see the same workspace card', () => cardIn(peerWindow));
-	await pinWindow.act({ kind: 'shell-pin', name, set: true });
+	await pinWindow.act({ kind: 'shell-pin', name, set: true, verifyOpen: address });
+	assert.deepStrictEqual(starts(), launchPids, 'Open Terminal did not launch a second fake CLI');
+	console.log('  ✔ Open Terminal attached the exact Core run with a new native tab and the original PID');
 	await until('Pin to be visible in the other window', async () => (await cardIn(peerWindow))?.pinned || undefined);
 	await Promise.all([pinWindow.close(), peerWindow.close()]);
 	// Pin recovery groups live extension hosts. Let both hosts exit before the next opening.
@@ -811,10 +815,67 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 	assert.notStrictEqual(left.pid, before.pid, 'the original process ended before the resume');
 	console.log('  ✔ Both Pins restore the same stopped agent with its original session');
 
-	await restored[0].act({ kind: 'remove', agent: before.id });
+	if (remote === null) {
+		await removeAndResume(restored, home, left);
+	} else {
+		await restored[0].act({ kind: 'remove', agent: before.id });
+	}
 	await worktreeLifetime(restored[0], restored[1]);
 	await Promise.all(restored.map(window => window.close()));
 	await sameWorkspace(start, journey);
+}
+
+/** Remove running and stopped workspace members, preserving their native session (RULES-6.2, 6.3). */
+async function removeAndResume(windows: readonly DrivenWindow[], home: string, live: RunningAgent): Promise<void> {
+	const source = windows[0];
+	const machine = source.ready.machineId;
+	assert.ok(machine);
+	const reference = (id: string): AgentRef => ({ machine_id: machine, agent_id: id });
+	const workspaces = path.join(home, 'extension', 'workspaces');
+	const savedPins = (id: string) => fs.readdirSync(workspaces).filter(key => {
+		const file = path.join(workspaces, key, 'orchestrator-workspace.json');
+		if (!fs.existsSync(file)) { return false; }
+		const { pins } = JSON.parse(fs.readFileSync(file, 'utf8')) as { readonly pins: readonly RustPin[] };
+		return pins.some(pin => pin.machine_id === machine && pin.agent === id);
+	});
+	const assertRemoved = async (id: string) => {
+		await until(`${id}'s cards, native tabs and saved Pins to clear`, async () => {
+			const views = await Promise.all(windows.map(window => window.act<WindowView>({ kind: 'snapshot' })));
+			return views.every(view => view.cards.length === 0 && view.terminals === 0) && savedPins(id).length === 0 || undefined;
+		});
+		const reply = await callInCore(home, 'agent.inspect', { target: reference(id) });
+		assert.ok('error' in reply, JSON.stringify(reply));
+		assert.deepStrictEqual([reply.error.data.reason, reply.error.data.details?.record_removal], ['not_found', 'removed']);
+	};
+	const findSaved = () => until('the exact native session to be discoverable in this workspace', async () => {
+		const { items } = await coreCall(home, 'agent.resume_list', {
+			folder: source.ready.folder, scope: { kind: 'local' }, folder_scope: 'cwd'
+		});
+		return items.find(item => item.target.kind === 'session' && item.session === live.session
+			&& item.machine_id === machine && normalizeDriveLetter(item.folder) === normalizeDriveLetter(live.cwd));
+	});
+
+	await until('both running-agent Pins to be saved', () => savedPins(live.id).length === 2 || undefined);
+	await source.act({ kind: 'remove', agent: live.id });
+	await source.act({ kind: 'wait-for-exit', pid: live.pid });
+	await assertRemoved(live.id);
+	const saved = await findSaved();
+	const resumed = await source.act<RunningAgent>({ kind: 'resume-saved', cli: saved.cli, session: saved.session });
+	assert.notStrictEqual(resumed.id, live.id, 'Resume Agent gives the saved session a fresh identity');
+	assert.deepStrictEqual([resumed.session, normalizeDriveLetter(resumed.cwd)], [live.session, normalizeDriveLetter(live.cwd)]);
+	await source.act({ kind: 'pin', agent: resumed.id });
+	await expectAgent(source, resumed.id, true);
+	await until('the resumed agent Pin to be saved', () => savedPins(resumed.id).length === 1 || undefined);
+	await source.act({ kind: 'stop', agent: resumed.id });
+	await source.act({ kind: 'wait-for-exit', pid: resumed.pid });
+	const stopped = await source.act<WindowView>({ kind: 'snapshot' });
+	assert.deepStrictEqual(stopped.cards.map(card => [card.id, card.pinned, card.running]), [[resumed.id, true, false]]);
+	assert.strictEqual(stopped.terminals, 0, 'Stop detached the tab');
+	assert.strictEqual(savedPins(resumed.id).length, 1, 'Stop retained the saved Pin');
+	await source.act({ kind: 'remove', agent: resumed.id });
+	await assertRemoved(resumed.id);
+	await findSaved();
+	console.log('  ✔ Remove cleared running and stopped cards, native tabs and saved Pins, and Resume kept the native session under a new identity');
 }
 
 async function worktreeLifetime(source: DrivenWindow, peer: DrivenWindow): Promise<void> {

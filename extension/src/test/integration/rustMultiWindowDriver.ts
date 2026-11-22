@@ -29,10 +29,11 @@ type Action =
 	| { readonly kind: 'open-shell-agent'; readonly name: string; readonly address: string; readonly text: string }
 	| { readonly kind: 'shell-attach-view'; readonly grid?: vscode.TerminalDimensions; readonly text?: string; readonly resize?: boolean }
 	| { readonly kind: 'settings-path'; readonly file: string }
-	| { readonly kind: 'shell-pin'; readonly name: string; readonly set?: boolean }
+	| { readonly kind: 'shell-pin'; readonly name: string; readonly set?: boolean; readonly verifyOpen?: string }
 	| { readonly kind: 'hide-shell-agent'; readonly name: string }
 	| { readonly kind: 'start'; readonly screen?: string; readonly secondGroup?: boolean }
 	| { readonly kind: 'adopt' | 'resume' | 'pin' | 'unpin' | 'stop' | 'remove' | 'inspect' | 'saved-pin'; readonly agent: string }
+	| { readonly kind: 'resume-saved'; readonly session: string; readonly cli: string }
 	| { readonly kind: 'remote-card'; readonly agent: string; readonly machine: string }
 	| { readonly kind: 'running'; readonly agent: string; readonly screen?: string }
 	| { readonly kind: 'send'; readonly to: string; readonly text: string }
@@ -335,7 +336,27 @@ async function perform(action: Action): Promise<unknown> {
 			const find = async () => (await state()).cards.find(card => card.name === action.name);
 			const card = await until(`${action.name}'s card`, find);
 			if (action.set) {
-				await vscode.commands.executeCommand('facade.openTerminal', { run_id: card.runId });
+				const address = action.verifyOpen;
+				const before = address ? await until('the earlier window to release its Attach viewer', async () => {
+					const { agent, viewers } = await inspect(address);
+					return viewers.length === 0 ? agent : undefined;
+				}) : undefined;
+				if (before) {
+					assert.strictEqual(card.runId, `${before.reference.machine_id}/${before.reference.agent_id}`);
+					assert.ok(before.pid && before.process === 'running', 'the exact Core agent is already running');
+					assert.strictEqual((await view()).terminals, 0, 'the fresh window has no terminal tab before Open Terminal');
+				}
+				const opened = await vscode.commands.executeCommand('facade.openTerminal', { run_id: card.runId });
+				if (address && before) {
+					assert.strictEqual(opened, true);
+					await until('Open Terminal to create the native tab for the exact existing run', async () =>
+						hasAgentTab(card) && (await view()).terminals === 1 || undefined);
+					const after = await until('the exact Core agent to gain one Attach viewer', async () => {
+						const { agent, viewers } = await inspect(address);
+						return viewers.length === 1 ? agent : undefined;
+					});
+					assert.deepStrictEqual([after.reference, after.pid, after.process], [before.reference, before.pid, 'running']);
+				}
 				await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
 			}
 			await until(`${action.name}'s pinned terminal`, async () => {
@@ -380,6 +401,31 @@ async function perform(action: Action): Promise<unknown> {
 			return inspect(action.agent);
 		case 'saved-pin':
 			return savedPin(action.agent);
+		case 'resume-saved': {
+			const picker = vscode.commands.executeCommand('facade.resumeAgent');
+			void picker.then(undefined, () => undefined);
+			try {
+				await until(`the saved session ${action.cli}:${action.session} in Resume Agent`, async () => {
+					const rows = await vscode.commands.executeCommand<ResumePickerState>(RESUME_PICKER_STATE).then(value => value, () => undefined);
+					if (!rows || rows.busy) { return undefined; }
+					const target = rows.descriptions.findIndex(description => description?.endsWith(` · ${action.cli}:${action.session}`));
+					if (target < 0) { return undefined; }
+					if (target === rows.active) { return true; }
+					await vscode.commands.executeCommand(target < rows.active ? 'workbench.action.quickOpenSelectPrevious' : 'workbench.action.quickOpenSelectNext');
+					return undefined;
+				});
+				await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+				await picker;
+				const card = await until('the resumed saved session to open its native terminal', async () => {
+					const [candidate] = (await state()).cards;
+					return candidate?.orchestrator?.running && hasAgentTab(candidate) ? candidate : undefined;
+				});
+				return await running(card.alias);
+			} finally {
+				await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
+				await picker;
+			}
+		}
 		case 'adopt':
 		case 'resume': {
 			const card = await (action.kind === 'resume' ? resumeCard(action.agent) : goToCard(action.agent));

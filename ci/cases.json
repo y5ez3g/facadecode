@@ -390,7 +390,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "initial_and_live_machine_advertisements_route_exact_calls"
+      }
     },
     {
       "id": "core/daemon/machine-notification/cancel",
@@ -441,7 +446,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "initial_and_live_machine_advertisements_route_exact_calls"
+      }
     },
     {
       "id": "core/daemon/machine-request/cancel",
@@ -758,7 +768,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "ensure_route_reopens_the_intermediates_saved_hop"
+      }
     },
     {
       "id": "core/daemon/operation/internal.resume_records",
@@ -4102,7 +4117,14 @@
         "extension/src/test/integration/mcp.it.ts:887",
         "extension/src/test/integration/rustMultiWindowDriver.ts:399",
         "extension/src/test/catalog.test.ts:34"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "multi-window",
+        "built_in": "claude",
+        "name": "multi-window"
+      }
     },
     {
       "id": "extension/vscode-rust/command/facade.filter",
@@ -4215,7 +4237,14 @@
       "existing_tests": [
         "extension/src/test/integration/rustMultiWindowDriver.ts:324",
         "extension/src/test/catalog.test.ts:30"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "shell-handoff",
+        "built_in": "codex",
+        "name": "shell-handoff"
+      }
     },
     {
       "id": "extension/vscode-rust/command/facade.pinAgent",
