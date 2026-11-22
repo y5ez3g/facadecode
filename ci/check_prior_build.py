@@ -15,9 +15,10 @@ import sys
 import tarfile
 import tempfile
 import time
+import tomllib
 
-from catalog import AcceptanceError, NATIVE_PRIOR_CASE
-from evidence import execute, git, observed_core_tests, run_identity
+from catalog import AcceptanceError, NATIVE_PRIOR_CASE, read_json
+from evidence import digest, execute, git, observed_core_tests, run_identity
 from native_core import (
     ROOT, SYSTEM_PATH, clean_native_scope, hash_file, interrupted, read_markers,
     source_identity, verify_native_cleanup, write_receipt,
@@ -30,6 +31,175 @@ TARGET = 'x86_64-unknown-linux-musl'
 PROGRAMS = ('facade', 'facade-mcp')
 TRACE = 'Facade cold cutover evidence '
 SUCCESS_MARKER = 'Facade native prior build test '
+RUN_LOG = 'cold-cutover.log'
+HOME_LOG = 'scenario-homes.txt'
+SESSION = '86da4482-2bae-4a45-b193-a5664c19826a'
+DELIVERY_TEXT = 'cold cutover delivery from the old Daemon'
+HEX_DIGEST = re.compile(r'[0-9a-f]{64}')
+PRIOR_BUILD_ARGS = ('build', '--locked', '--release', '--target', TARGET, '-p', 'facade', '-p', 'facade-relay',
+                    '--bin', 'facade', '--bin', 'facade-mcp')
+PRIOR_BUILD_LOGS = ('prior-source.log', 'prior-rustc.log', 'prior-build.log')
+CANDIDATE_BUILD_LOGS = ('candidate-facade-fakecli.log', 'candidate-machines.log')
+TEST_ARGS = ('--show-output', '--ignored', '--exact', '--test-threads=1', SELECTOR)
+
+
+def harness_hashes():
+    return {path: hash_file(ROOT / path) for path in (
+        'ci/check_prior_build.py', 'ci/native_core.py', 'ci/evidence.py',
+        'core/tests/tests/machines.rs', 'core/tests/src/bin/facade-fakecli.rs',
+    )}
+
+
+def owned_homes(log, test_tmp):
+    homes = []
+    if log.is_file():
+        for line in log.read_text().splitlines():
+            home = Path(line)
+            if not home.is_absolute() or not home.resolve().is_relative_to(test_tmp):
+                raise AcceptanceError(f'scenario reported an unowned home {home}')
+            homes.append(home)
+    return homes
+
+
+def cold_observation(output, scope):
+    output_log = output / RUN_LOG
+    home_log = output / HOME_LOG
+    if not observed_core_tests([SELECTOR], output_log.read_text()):
+        raise AcceptanceError('expected exactly one passing cold-cutover selector')
+    markers = read_markers(output_log, TRACE)
+    if len(markers) != 1:
+        raise AcceptanceError('expected exactly one cold-cutover trace')
+    homes = owned_homes(home_log, scope / 'tmp')
+    if len(homes) != 2 or len({home.resolve() for home in homes}) != 2:
+        raise AcceptanceError('expected two distinct scoped cold-cutover homes')
+    trace = markers[0]
+    validate_trace(trace, homes)
+    return {'log': RUN_LOG, 'sha256': hash_file(output_log), 'trace': trace,
+            'homes_sha256': hash_file(home_log), 'homes': [str(home) for home in homes]}
+
+
+def validate_trace(trace, homes):
+    def require(condition, label):
+        if not condition:
+            raise AcceptanceError(f'cold-cutover trace did not establish {label}')
+
+    try:
+        old, new = trace['prior'], trace['candidate']
+        previous, current = old['agent'], new['agent']
+        local, peer = previous['machine_id'], old['peer']['machine_id']
+        reference = {'machine_id': local, 'agent_id': 'a1'}
+        require(old['protocol'] == 3 and new['api_version'] == 1, 'the v3 and v1 handshakes')
+        require(isinstance(local, str) and isinstance(peer, str) and local and peer and local != peer
+                and previous['agent_id'] == 'a1' and current['reference'] == reference and new['peer']['machine_id'] == peer,
+                'the original distinct machine and Agent identities')
+        require((previous['address'], previous['name'], previous['cli']) == ('a1@laptop', 'kept', 'fake')
+                and previous['cwd'] == str(homes[0].parent / 'project')
+                and previous['process'] == 'ended' and isinstance(previous['exit'], dict) and previous['exit']
+                and previous['session'] == SESSION
+                and all(previous[key] == current[key] for key in ('address', 'name', 'cli', 'cwd', 'exit', 'process', 'session')),
+                'the original ended record, working directory and saved session')
+
+        saved, migrated = old['saved'], new['saved']
+        route = {'machine_id': peer, 'initiator_machine_id': local, 'kind': 'saved'}
+        transport = {'ssh_destination': 'devbox', 'ssh_args': ['-p', '2222', 'devbox'], 'remote_home': str(homes[1])}
+        require(all(saved[key] == migrated[key] == value for key, value in route.items())
+                and all(saved[key] == value for key, value in transport.items())
+                and migrated['transport'] == {'kind': 'ssh', **transport}
+                and new['peer']['state'] == 'disconnected'
+                and trace['ssh_attempts']['before'] == trace['ssh_attempts']['after'] == 'interactive 2222 login\n',
+                'the saved transport and no new dial')
+
+        history = trace['receipt']
+        original = history['original']
+        message = original['message']
+        delivered = message['delivery']
+        require(message['message_id'] == 'm1' and original['id'] == 'm1@laptop' and 'repeated' not in original
+                and message['to'] == 'a1'
+                and message['from'] == 'command_line' and message['text'] == DELIVERY_TEXT
+                and delivered['status'] == 'success' and delivered['text_written'] == 'full'
+                and delivered['enter_written'] is True and delivered['delivered_via'] == 'terminal'
+                and isinstance(delivered['delivered_at'], str) and bool(delivered['delivered_at']),
+                'the original complete delivery and receipt')
+        require(original['recipient']['reference'] == reference
+                and all(history[role]['id'] == original['id'] and history[role]['repeated'] is True
+                        and history[role]['message'] == message and history[role]['recipient']['reference'] == reference
+                        for role in ('prior_replay', 'candidate_replay'))
+                and trace['new_request']['error']['data']['reason'] == 'ended',
+                'both replays of the same receipt and refusal of a fresh request')
+        body = 'the command line · m1'
+        expected = f'📨 Message from \x1b[200~{body}\r{DELIVERY_TEXT}\x1b[201~\r'.encode()
+        require(bytes(trace['cli_bytes']) == expected
+                and json.loads(trace['transcript']) == {'message': f'📨 Message from {body}\n{DELIVERY_TEXT}'},
+                'one exact CLI delivery and one transcript entry')
+    except AcceptanceError:
+        raise
+    except (KeyError, TypeError, ValueError) as error:
+        raise AcceptanceError('cold-cutover trace is incomplete or malformed') from error
+
+
+def prior_success(receipt):
+    return {'case': NATIVE_PRIOR_CASE, 'selector': SELECTOR, 'role': receipt['prior']['role'],
+            'evidence_sha256': digest({key: value for key, value in receipt.items() if key != 'success'})}
+
+
+def verify_command_logs(receipt, output):
+    prior = receipt['prior']
+    build_prior = prior['role'] == 'prior-main'
+    paths = (*PRIOR_BUILD_LOGS, *CANDIDATE_BUILD_LOGS, RUN_LOG) if build_prior else (*CANDIDATE_BUILD_LOGS, RUN_LOG)
+    commands = receipt['commands']
+    if tuple(record['log'] for record in commands) != paths:
+        raise AcceptanceError('native prior-build command logs are incomplete')
+    content = {}
+    for record in commands:
+        name = record['log']
+        path = output / name
+        lines = path.read_text().splitlines()
+        if (record['status'] != 'pass' or record['sha256'] != hash_file(path)
+                or lines[:1] != ['$ ' + shlex.join(record['argv'])]):
+            raise AcceptanceError(f'native prior-build command log changed or failed: {name}')
+        content[name] = lines[1:]
+    scope = Path(receipt['scope'])
+    if commands[-1]['argv'] != [str(scope / 'candidate-bin' / 'machines'), *TEST_ARGS]:
+        raise AcceptanceError('native prior-build selector did not run from the staged candidate')
+    if build_prior:
+        source, rustc, build = (record['argv'] for record in commands[:3])
+        channel = tomllib.loads(git(ROOT, 'show', f'{PRIOR_MAIN}:core/rust-toolchain.toml'))['toolchain']['channel']
+        if (source[:2] != ['git', '-C']
+                or source[3:] != ['archive', '--format=tar', '--output', str(scope / 'prior.tar'), PRIOR_MAIN, 'core']
+                or rustc != ['rustc', '--version', '--verbose'] or f'release: {channel}' not in prior['rustc']
+                or prior['rustc'] != content['prior-rustc.log']
+                or Path(build[0]).name != 'cargo' or build[1:] != list(PRIOR_BUILD_ARGS)
+                or not any(line.strip().startswith('Finished `release` profile') for line in content['prior-build.log'])):
+            raise AcceptanceError('native prior-build logs did not establish the pinned source, toolchain and build')
+
+
+def verified_prior(candidate_bin, output, console, run, prior_bin=None, manifest=None):
+    receipt = read_json(output / 'receipt.json')
+    if not isinstance(receipt, dict) or receipt.get('source') != source_identity(run):
+        raise AcceptanceError('native prior-build receipt is for a different source or attempt')
+    if receipt.get('harness_sha256') != harness_hashes():
+        raise AcceptanceError('native prior-build receipt is for a different test harness')
+    candidate = receipt['candidate']
+    if (candidate['program_sha256'] != binary_hashes(candidate_bin) or not all(
+            HEX_DIGEST.fullmatch(candidate[key]) for key in ('facade-fakecli_sha256', 'machines_sha256'))):
+        raise AcceptanceError('native prior-build receipt is for a different candidate or test binaries')
+    prior = receipt['prior']
+    if prior['role'] == 'prior-main':
+        expected = {'revision': PRIOR_MAIN, 'tree': git(ROOT, 'rev-parse', f'{PRIOR_MAIN}^{{tree}}'), 'run': run}
+        digests = prior['program_sha256']
+        if (prior['source'] != expected or prior['target'] != TARGET or set(digests) != set(PROGRAMS)
+                or not all(HEX_DIGEST.fullmatch(value) for value in digests.values())):
+            raise AcceptanceError('native prior-build evidence does not name the pinned source, target and programs')
+    elif prior['role'] != 'pinned-binaries' or prior_bin is None or manifest is None or prior != pinned_programs(prior_bin, manifest):
+        raise AcceptanceError('native prior-build evidence does not match the pinned binary inputs')
+    verify_command_logs(receipt, output)
+    verify_native_cleanup(receipt)
+    if (receipt.get('fallback_home_empty') is not True
+            or receipt.get('observation') != cold_observation(output, Path(receipt['scope']))):
+        raise AcceptanceError('native prior-build receipt does not match the original observed output')
+    expected = prior_success(receipt)
+    if receipt.get('success') != expected or read_markers(console, SUCCESS_MARKER) != [expected]:
+        raise AcceptanceError('native prior-build marker does not match the cleaned evidence record')
 
 
 def binary_hashes(directory):
@@ -70,7 +240,7 @@ def logged_command(command, cwd, env, log, receipt, *, timeout=900):
     with log.open('w') as stream:
         print('$ ' + shlex.join(argv), file=stream, flush=True)
         status = execute(argv, cwd, env, stream, timeout=timeout)
-    receipt['commands'].append({'argv': argv, 'status': status, 'log': log.name})
+    receipt['commands'].append({'argv': argv, 'status': status, 'log': log.name, 'sha256': hash_file(log)})
     if status != 'pass':
         raise AcceptanceError(f'{status} running {argv[0]} ({log})')
 
@@ -96,8 +266,7 @@ def compile_prior(scope, cargo, env, output, receipt):
     logged_command(['rustc', '--version', '--verbose'], prior / 'core', prior_env, rust_log, receipt)
     provenance['rustc'] = rust_log.read_text().splitlines()[1:]
     logged_command(
-        [*cargo, 'build', '--locked', '--release', '--target', TARGET, '-p', 'facade', '-p', 'facade-relay',
-         '--bin', 'facade', '--bin', 'facade-mcp'],
+        [*cargo, *PRIOR_BUILD_ARGS],
         prior / 'core', prior_env, output / 'prior-build.log', receipt, timeout=1800,
     )
     programs = prior_target / TARGET / 'release'
@@ -134,16 +303,10 @@ def compile_candidate(cargo, env, output, receipt):
 
 
 def scenario_sockets(home_log, test_tmp):
-    endpoints = {}
-    if home_log.exists():
-        for line in home_log.read_text().splitlines():
-            home = Path(line)
-            if not home.is_absolute() or not home.resolve().is_relative_to(test_tmp):
-                raise AcceptanceError(f'scenario reported an unowned home {home}')
-            key = sha256(os.fsencode(home)).hexdigest()[:10]
-            for role in ('daemon', 'keeper'):
-                endpoints[(home, role)] = Path(f'/tmp/facade-core-{os.getuid()}/{role}-{key}.sock')
-    return endpoints
+    return {
+        (home, role): Path(f'/tmp/facade-core-{os.getuid()}/{role}-{sha256(os.fsencode(home)).hexdigest()[:10]}.sock')
+        for home in owned_homes(home_log, test_tmp) for role in ('daemon', 'keeper')
+    }
 
 
 def run_cold_cutover(args, output, receipt, scope, home_log, test_tmp):
@@ -184,17 +347,16 @@ def run_cold_cutover(args, output, receipt, scope, home_log, test_tmp):
         'FACADE_HOME': str(home / '.facade'), 'FACADE_SCENARIO_HOME_LOG': str(home_log),
         'FACADE_TEST_API_V1_PRERELEASE': str(scope / 'prior-bin/facade'),
     }
-    log = output / 'cold-cutover.log'
-    logged_command([staged_test, '--show-output', '--ignored', '--exact', '--test-threads=1', SELECTOR],
+    log = output / RUN_LOG
+    logged_command([staged_test, *TEST_ARGS],
                    ROOT / 'core/tests', test_env, log, receipt, timeout=180)
-    if not observed_core_tests([SELECTOR], log.read_text()):
-        raise AcceptanceError('the cold-cutover command did not run exactly the expected ignored selector')
     if any(home.iterdir()):
         raise AcceptanceError('the scenario wrote to the fallback HOME')
-    markers = read_markers(log, TRACE)
-    if len(markers) != 1 or not isinstance(markers[0], dict):
-        raise AcceptanceError('the selector did not publish its cold-cutover trace')
-    receipt['observation'] = {'log': log.name, 'sha256': hash_file(log), 'trace': markers[0]}
+    receipt['fallback_home_empty'] = True
+    if not home_log.is_file():
+        raise AcceptanceError('the fixture did not record its scoped homes')
+    shutil.copyfile(home_log, output / HOME_LOG)
+    receipt['observation'] = cold_observation(output, scope)
 
 
 def main():
@@ -215,10 +377,7 @@ def main():
     try:
         os.close(os.pidfd_open(os.getpid()))
         receipt = {'source': source_identity(run_identity(args.run_id, os.environ)), 'commands': []}
-        receipt['harness_sha256'] = {
-            path: hash_file(ROOT / path) for path in (
-                'ci/check_prior_build.py', 'core/tests/tests/machines.rs', 'core/tests/src/bin/facade-fakecli.rs')
-        }
+        receipt['harness_sha256'] = harness_hashes()
         receipt['candidate'] = {'program_sha256': binary_hashes(args.candidate_bin)}
         if args.role == 'pinned-binaries':
             receipt['prior'] = pinned_programs(args.prior_bin, args.manifest)
@@ -231,6 +390,7 @@ def main():
     scope = Path(tempfile.mkdtemp(prefix='fci-prior-core-', dir='/tmp'))
     home_log, test_tmp = scope / 'scenario-homes', scope / 'tmp'
     receipt['scope'] = str(scope)
+    passed = False
     try:
         try:
             run_cold_cutover(args, args.output_dir, receipt, scope, home_log, test_tmp)
@@ -241,16 +401,14 @@ def main():
             finally:
                 clean_native_scope(scope, sockets, receipt)
         verify_native_cleanup(receipt)
-        receipt['success'] = {
-            'case': NATIVE_PRIOR_CASE, 'selector': SELECTOR, 'role': args.role, 'source': receipt['source'],
-            'prior_sha256': receipt['prior']['program_sha256'],
-            'observation_sha256': receipt['observation']['sha256'],
-        }
+        passed = True
     except (AcceptanceError, OSError, RuntimeError, ValueError, subprocess.CalledProcessError, KeyboardInterrupt) as error:
         receipt['error'] = str(error)
         print(f'native prior build: {error}', file=sys.stderr)
     finally:
         receipt['elapsed_seconds'] = round(time.monotonic() - started, 3)
+        if passed:
+            receipt['success'] = prior_success(receipt)
         write_receipt(args.output_dir / 'receipt.json', receipt)
     if 'success' not in receipt:
         return 1

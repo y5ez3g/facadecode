@@ -489,6 +489,10 @@ Use a fresh output directory per invocation. For GitHub jobs omit `--run-id` so 
 uses the run and attempt. Make the pinned Git object and Rust musl target available before
 running the source mode. Use `--offline` when Cargo dependencies are already cached.
 Retain the output directory containing the raw test and build logs and `receipt.json`.
+Save the console output with the receipt. Run `ci/acceptance.py verify-native-prior` with the
+same candidate directory and attempt to recheck the two fixture homes, original libtest
+result, session, SSH route, delivery replay and post-cleanup marker. Binary replay also takes
+the original `--prior-bin` and `--manifest`.
 
 Each successful native PR package job records the VSIX pair, Core archive and checksum file
 digests with the checked-out revision, tree and GitHub attempt. Run

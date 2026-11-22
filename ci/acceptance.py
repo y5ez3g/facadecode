@@ -106,6 +106,12 @@ def argument_parser():
     ssh.add_argument('--bin-dir', type=Path, required=True)
     for field in ('receipt', 'output'):
         ssh.add_argument(field, type=Path)
+    prior = commands.add_parser('verify-native-prior', help='verify the native Core cold-cutover evidence')
+    prior.add_argument('--candidate-bin', type=Path, required=True)
+    prior.add_argument('--prior-bin', type=Path)
+    prior.add_argument('--manifest', type=Path)
+    prior.add_argument('evidence', type=Path)
+    prior.add_argument('console', type=Path)
     return parser
 
 
@@ -180,6 +186,15 @@ def main():
             from check_real_ssh_route import verified_ssh
             verified_ssh(args.bin_dir, args.receipt, args.output, run_identity(args.run_id, environ))
             print('Linux x64 real SSH machine route passed and matched the tested Core programs')
+            return 0
+        if args.command == 'verify-native-prior':
+            from check_prior_build import verified_prior
+            try:
+                verified_prior(args.candidate_bin, args.evidence, args.console, run_identity(args.run_id, environ),
+                               args.prior_bin, args.manifest)
+            except (KeyError, TypeError) as error:
+                raise AcceptanceError('native prior-build evidence is incomplete or malformed') from error
+            print('Linux x64 Core cold migration passed and matched the tested inputs and cleanup')
             return 0
         cases, inventory, required_p0, pilots = load(ROOT)
         if args.command == 'catalog':

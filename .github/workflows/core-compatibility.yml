@@ -3,10 +3,12 @@ name: Core prior-build compatibility
 on:
   pull_request:
     paths:
+      - 'ci/acceptance.py'
       - 'ci/check_prior_build.py'
       - 'ci/catalog.py'
       - 'ci/evidence.py'
       - 'ci/native_core.py'
+      - 'ci/test_prior_build.py'
       - 'core/Cargo.lock'
       - 'core/Cargo.toml'
       - 'core/rust-toolchain.toml'
@@ -75,6 +77,10 @@ jobs:
             --candidate-bin core/target/x86_64-unknown-linux-musl/release \
             --output-dir "$RUNNER_TEMP/core-compatibility/cold-cutover" prior-main \
             2>&1 | tee "$RUNNER_TEMP/core-compatibility/console.log"
+          python3 -B ci/acceptance.py verify-native-prior \
+            --candidate-bin core/target/x86_64-unknown-linux-musl/release \
+            "$RUNNER_TEMP/core-compatibility/cold-cutover" "$RUNNER_TEMP/core-compatibility/console.log" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Keep the prior and candidate evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
