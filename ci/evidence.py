@@ -413,7 +413,7 @@ def verify_completion(plan, bindings, directory):
     return observation.name
 
 
-def reclaim_interrupted_scope(isolated, stream):
+def reclaim_scope_processes(isolated, stream, executable=None):
     # PID handles prevent signaling a reused PID after verifying the live process's scope.
     if not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
         print('PID handles are unavailable for interrupted fixture cleanup.', file=stream)
@@ -432,6 +432,8 @@ def reclaim_interrupted_scope(isolated, stream):
             pid = int(entry.name)
             descriptor = os.pidfd_open(pid)
             try:
+                if executable is not None and not (entry / 'exe').samefile(executable):
+                    continue
                 try:
                     cwd = os.fsencode(os.readlink(entry / 'cwd'))
                 except OSError:
@@ -445,20 +447,29 @@ def reclaim_interrupted_scope(isolated, stream):
                     if not completed.poll(1000):
                         signal.pidfd_send_signal(descriptor, signal.SIGKILL)
                         completed.poll(1000)
-                    print(f'Stopped owned fixture process {pid}.', file=stream, flush=True)
+                    name = f' ({executable.name})' if executable is not None else ''
+                    print(f'Stopped owned fixture process {pid}{name}.', file=stream, flush=True)
             finally:
                 os.close(descriptor)
         except (FileNotFoundError, ProcessLookupError, PermissionError):
             continue
 
 
-def clean_scope(root, isolated, env, stream, interrupted):
+def clean_scope(root, isolated, env, stream, interrupted, *, editor=None):
+    if not interrupted and editor is not None:
+        # Chromium can leave its detached crash-reporting helper after the editor exits.
+        crashpad = editor.resolve().with_name('chrome_crashpad_handler')
+        if crashpad.is_file():
+            try:
+                reclaim_scope_processes(isolated, stream, executable=crashpad)
+            except OSError as error:
+                print(f'Editor crash reporter cleanup: {error}', file=stream, flush=True)
     command = ['sh', 'core/scripts/leftovers.sh', str(isolated)]
     # Detached services can finish a launch after an interrupted process's first sweep.
     for _ in range(3 if interrupted else 1):
         if interrupted:
             try:
-                reclaim_interrupted_scope(isolated, stream)
+                reclaim_scope_processes(isolated, stream)
             except OSError as error:
                 print(f'Interrupted fixture cleanup: {error}', file=stream, flush=True)
         cleanup = execute(command, root, env, stream, timeout=30)
@@ -482,7 +493,8 @@ def run_binding(root, bindings, output_dir, vscode, env, cancelled=None):
             status = execute(args, cwd, test_env, stream, cancelled=cancelled)
         finally:
             interrupted = status in ('cancelled', 'interrupted', 'timeout')
-            cleanup = clean_scope(root, isolated, env, stream, interrupted)
+            editor = vscode if bindings[0]['runner'] == 'extension-editor' else None
+            cleanup = clean_scope(root, isolated, env, stream, interrupted, editor=editor)
             if cleanup == 'pass':
                 try:
                     shutil.rmtree(isolated)

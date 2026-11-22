@@ -11,6 +11,7 @@ on:
       - 'docs/core/**'
       - 'docs/extension/**'
       - '.github/workflows/core-check.yml'
+      - '.github/workflows/core-compatibility.yml'
       - '.github/workflows/extension-check.yml'
       - '.github/workflows/ci-acceptance.yml'
       - '.github/workflows/extension-release.yml'

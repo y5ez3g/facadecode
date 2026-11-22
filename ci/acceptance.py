@@ -16,6 +16,7 @@ POLICY_PATHS = {
     'docs/CI.md',
     '.github/workflows/ci-acceptance.yml',
     '.github/workflows/core-check.yml',
+    '.github/workflows/core-compatibility.yml',
     '.github/workflows/extension-check.yml',
     '.github/workflows/extension-release.yml',
 }

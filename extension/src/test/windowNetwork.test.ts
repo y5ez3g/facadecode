@@ -9,10 +9,18 @@ import * as path from 'path';
 import { WINDOW_NETWORK_PROTOCOL, type DirectoryAgent, type ServedRoute } from '../base/windowNetwork';
 import { NotServed, windowAddress, WindowNetwork, type WindowNetworkOptions, windowSocketPath } from '../host/windowNetwork';
 import { registerWindow, registryOf } from '../record/windowRegistry';
-import { tempDir } from './util';
+import { tempDir, waitFor } from './util';
 import { withModules } from './withModules';
 import { connectWithin } from '../base/connect';
 import { lineReader } from '../base/lines';
+import { directoryAgentOf, type NetworkPort } from '../contract/network';
+import { createToolServices, type ToolServices } from '../contract/tools';
+import type { InputEffects, InputPort, MessageRecord } from '../core/messagePorts';
+import { MessageService, STAGE_MS } from '../core/messages';
+import type { RunFacts, RunId } from '../core/ports';
+import { MessageFile } from '../record/messages';
+import { TOOL_PROTOCOL } from '../schema/protocol';
+import { resultOf, runFacts, setUp as toolFixture } from './contractFakes';
 
 const TOKEN_A = '11111111-1111-4111-8111-111111111111';
 const TOKEN_B = '22222222-2222-4222-8222-222222222222';
@@ -373,6 +381,119 @@ suite('Window network: window components register and carry requests between win
 		a.dispose();
 		const closing = await a.route({ to: b.window, op: 'summary', args: {}, deadlineMs: 5_000 });
 		assert.deepStrictEqual([closing.ok, !closing.ok && closing.reason, !closing.ok && closing.effects], [false, 'window_unavailable', 'none']);
+	});
+
+	test('a peer send preserves its exact sender, recipient, message and reply, and a result returns once to the sender copy over live sockets (RULES-1.1, 1.7)', async function () {
+		this.timeout(15_000);
+		const sender = runFacts(1, { name: 'Gauge', yolo: true });
+		const recipient = runFacts(2, { name: 'Shaft', yolo: true });
+		const lookalike = runFacts(3, { name: 'Shaft', yolo: true });
+		const cleanup: { dispose(): void }[] = [];
+		const confirmed: InputEffects = { outcome: 'confirmed', text_written: 'full', enter_written: true };
+
+		function endpoint(token: string, label: string, ...runs: RunFacts[]) {
+			const fixture = toolFixture();
+			cleanup.push(fixture);
+			fixture.agents.add(...runs);
+			let tools: ToolServices;
+			const window = windowOf(token, label, route => tools.serve(route));
+			const descriptor = { id: window.window, label, environment: 'local' };
+			const transport: NetworkPort = {
+				self: window.window, directory: async () => window.directory(),
+				route: (to, op, args, deadlineMs) => window.route({ to, op, args, deadlineMs })
+			};
+			const terminal: { run: RunId; text: string }[] = [];
+			const drafts = new Set<RunId>();
+			const reports: { to: string; reply: Promise<unknown> }[] = [];
+			const input: InputPort = {
+				capability: () => ({ state: 'supported', reason: 'fixture terminal' }),
+				inspect: async run => drafts.has(run) ? 'draft' : 'usable',
+				submit: async (run, text) => { terminal.push({ run, text }); return { effects: confirmed, shown: true }; },
+				enter: async () => confirmed
+			};
+			const messageHome = path.join(home.dir, label);
+			const sent = new MessageFile<MessageRecord>(messageHome, Date.now, path.join('messages', 'sent'));
+			const messages = new MessageService({
+				window: descriptor, environment: 'local', workspace: label,
+				agents: { get: run => fixture.agents.get(run), onDidChange: () => ({ dispose() {} }), owned: () => true, creationPending: () => false },
+				input, human: { contact: () => assert.fail('a routed agent message alerted a person') },
+				store: new MessageFile<MessageRecord>(messageHome), sent,
+				ids: { next: () => window.allocate('message', 1).first }, clock: { now: Date.now }, log: { event: () => undefined },
+				results: { report: async (to, result) => {
+					const reply = transport.route(to, 'result', result, STAGE_MS);
+					reports.push({ to, reply });
+					return (await reply).ok;
+				} }
+			});
+			cleanup.push(messages);
+			tools = createToolServices({ ...fixture.deps, window: descriptor, messages, network: transport, clock: { now: Date.now }, monotonic: () => performance.now() });
+			return {
+				window, messages, sent, terminal, drafts, reports,
+				start: async () => { await window.start(); window.publish(runs.map(directoryAgentOf)); },
+				send: async (from: RunFacts, callId: string, args: unknown) => {
+					const { answer } = await tools.answer({ protocol: TOOL_PROTOCOL, caller: from.id, tool: 'send_message', arguments: args, elapsedMs: 0, callId });
+					return resultOf(answer);
+				}
+			};
+		}
+
+		const design = endpoint(TOKEN_A, 'Design', sender);
+		const backend = endpoint(TOKEN_B, 'Backend', recipient, lookalike);
+		try {
+			await design.start();
+			await backend.start();
+
+			const first = await backend.send(recipient, 'reference-call', { to: sender.id, text: 'Original reference.' });
+			assert.strictEqual(first.status, 'success');
+			assert.strictEqual(first.data.message_id, '#m1');
+			const body = 'One complete line.\nAnd a reply line.';
+			const delivered = await design.send(sender, 'delivery-call', { to: recipient.id, text: body, reply_to: first.data.message_id, request_id: 'delivery-request' });
+			assert.strictEqual(delivered.status, 'success');
+			assert.deepStrictEqual([delivered.data.message_id, delivered.data.target, delivered.data.reply_to, delivered.effects],
+				['#m2', recipient.alias, '#m1', confirmed]);
+			assert.deepStrictEqual(backend.terminal, [{
+				run: recipient.id, text: '📨 Message from Gauge (#a1) · #m2 · From Design · Reply to #m1\n' + body
+			}]);
+			const [message] = backend.messages.inbox(recipient.id, { ids: ['m-2'], limit: 1 }).records;
+			assert.deepStrictEqual([message.id, message.from.run, message.fromWindow, message.to.run, message.window, message.replyTo, message.text, message.callId, message.requestId],
+				['m-2', sender.id, design.window.window, recipient.id, backend.window.window, 'm-1', body, 'delivery-call', 'delivery-request']);
+			assert.deepStrictEqual(design.sent.list().find(record => record.id === 'm-2'), message);
+			assert.deepStrictEqual(backend.messages.inbox(lookalike.id, { all: true, limit: 10 }).records, []);
+
+			// An accepted post-start prompt reports its later outcome; a plain routed send answers directly above.
+			const prompt = design.messages.allocate({ from: sender.id, text: 'Work from an accepted prompt.' });
+			assert.strictEqual(prompt.id, 'm-3');
+			backend.drafts.add(recipient.id);
+			const accepted = await backend.messages.send({
+				id: prompt.id, from: sender.id, sender: { party: { run: sender.id, alias: sender.alias, name: sender.name }, window: design.window.window, label: 'Design' },
+				to: recipient.id, text: 'Work from an accepted prompt.', elapsedMs: 0, callId: 'prompt-call', requestId: 'prompt-request',
+				initialPrompt: { path: 'post_start', capability: { state: 'supported', reason: 'fixture terminal' } }
+			});
+			assert.deepStrictEqual([accepted.status, accepted.record.delivery.status, backend.terminal.length, backend.reports.length],
+				['accepted', 'pending', 1, 0]);
+			design.messages.keepSent(accepted.record);
+			backend.drafts.delete(recipient.id);
+
+			await waitFor(() => backend.reports.length > 0, 8_000);
+			assert.strictEqual(backend.reports.length, 1);
+			assert.strictEqual(backend.reports[0].to, design.window.window);
+			assert.deepStrictEqual(await backend.reports[0].reply, { ok: true, result: { taken: true } });
+			await waitFor(() => design.terminal.length >= 2, 4_000);
+
+			const receipts = design.messages.inbox(sender.id, { all: true, limit: 10 }).records.filter(record => record.kind === 'result');
+			assert.deepStrictEqual(receipts.map(record => record.id), ['m-4']);
+			const [receipt] = receipts;
+			assert.strictEqual(design.terminal.length, 2);
+			assert.deepStrictEqual([receipt.about, receipt.to.run, receipt.callId, receipt.requestId], ['m-3', sender.id, 'prompt-call', 'prompt-request']);
+			assert.strictEqual(design.terminal[1].run, sender.id);
+			assert.strictEqual(design.terminal[1].text, '🔔 Your message #m3 has been passed on to Shaft (#a2).');
+			const copy = design.sent.list().find(record => record.id === prompt.id);
+			assert.ok(copy);
+			assert.deepStrictEqual([copy.delivery.status, copy.delivery.effects, copy.requestId], ['success', confirmed, 'prompt-request']);
+			assert.strictEqual(backend.terminal.length, 2);
+		} finally {
+			for (const item of cleanup.reverse()) { item.dispose(); }
+		}
 	});
 
 	test('a request in another protocol, or incomplete, is answered with why and serves nothing', async () => {

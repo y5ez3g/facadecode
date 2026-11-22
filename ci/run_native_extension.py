@@ -68,7 +68,9 @@ def main(args):
         runtime.chmod(0o700)
         status = execute(args, root / 'extension', test_env, sys.stdout, timeout=60 * 60, cancelled=cancelled)
     finally:
-        cleanup = clean_scope(root, scope, env, sys.stdout, status != 'pass' or cancelled.is_set())
+        executable = env.get('VSCODE_EXECUTABLE')
+        cleanup = clean_scope(root, scope, env, sys.stdout, status != 'pass' or cancelled.is_set(),
+                              editor=Path(executable) if executable else None)
         if cleanup != 'pass' and status == 'pass':
             status = 'cleanup-fail'
             cleanup = clean_scope(root, scope, env, sys.stdout, True)

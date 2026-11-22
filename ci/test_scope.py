@@ -27,6 +27,7 @@ class PilotScopeTests(unittest.TestCase):
             'docs and IDE': (('docs/CI-ACCEPTANCE.md', 'docs/core/protocol.md', 'core/README.md', 'ide/src/change.ts'), ()),
             'policy': (('ci/evidence.py',), both),
             'workflow': (('.github/workflows/extension-check.yml',), both),
+            'native compatibility workflow': (('.github/workflows/core-compatibility.yml',), both),
             'release workflow': (('.github/workflows/extension-release.yml',), both),
             'release mirror': (('.github/release-mirror/worker.mjs',), both),
             'design': (('docs/CI.md',), both),

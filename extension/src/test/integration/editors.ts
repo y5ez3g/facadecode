@@ -19,6 +19,17 @@ export function normalizeDriveLetter(file: string): string {
 	return process.platform === 'win32' ? file.replace(/^[A-Z]:/u, drive => drive.toLowerCase()) : file;
 }
 
+/** Compare an existing folder on this host by its filesystem path, independent of URI or process drive-letter spelling. */
+export function localFolderIdentity(file: unknown): string | undefined {
+	if (typeof file !== 'string' || !path.isAbsolute(file)) { return undefined; }
+	try {
+		const canonical = fs.realpathSync.native(file);
+		return fs.statSync(canonical).isDirectory() ? normalizeDriveLetter(canonical) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /** The official VS Code `VSCODE_EXECUTABLE` names, else macOS's standard installation where there is one. */
 export function officialEditor(): string {
 	const standard = '/Applications/Visual Studio Code.app/Contents/MacOS/Code';

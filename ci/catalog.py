@@ -21,6 +21,14 @@ NATIVE_INSTALL_CASES = (
 NATIVE_INSTALL_BINDING = {'runner': 'core-install', 'target': 'linux-x64', 'name': 'installed-candidate'}
 NATIVE_SSH_CASE = 'core/p0/remote-execution/real-ssh'
 NATIVE_SSH_BINDING = {'runner': 'core-ssh', 'target': 'linux-x64', 'name': 'real-machine-route'}
+NATIVE_PRIOR_CASE = 'core/p0/prior-build/cold-migration'
+NATIVE_PRIOR_BINDING = {'runner': 'core-prior', 'target': 'linux-x64', 'name': 'cold-cutover'}
+NATIVE_BINDINGS = {
+    **dict.fromkeys(NATIVE_INSTALL_CASES, NATIVE_INSTALL_BINDING),
+    NATIVE_SSH_CASE: NATIVE_SSH_BINDING,
+    NATIVE_PRIOR_CASE: NATIVE_PRIOR_BINDING,
+}
+NATIVE_ROUTES = {binding['runner'] for binding in NATIVE_BINDINGS.values()}
 REQUIRED_EDITOR_ROUTES = {
     'core/p0/remote-execution/remote-worktree': 'remote-worktree',
     'extension/p0/activation-shell/activation-failure': 'incompatible-activation',
@@ -93,13 +101,9 @@ def validate_binding(value, case_id):
     ):
         raise AcceptanceError(f'{case_id}: invalid test binding')
     runner = value.get('runner')
-    if case_id in NATIVE_INSTALL_CASES or runner == 'core-install':
-        if case_id not in NATIVE_INSTALL_CASES or value != NATIVE_INSTALL_BINDING:
-            raise AcceptanceError(f'{case_id}: invalid native install binding')
-        return value
-    if case_id == NATIVE_SSH_CASE or runner == 'core-ssh':
-        if case_id != NATIVE_SSH_CASE or value != NATIVE_SSH_BINDING:
-            raise AcceptanceError(f'{case_id}: invalid native SSH binding')
+    if case_id in NATIVE_BINDINGS or runner in NATIVE_ROUTES:
+        if value != NATIVE_BINDINGS.get(case_id):
+            raise AcceptanceError(f'{case_id}: invalid native binding')
         return value
     required_route = REQUIRED_EDITOR_ROUTES.get(case_id)
     if required_route and (runner != 'extension-editor' or value.get('journey') != required_route):
@@ -180,8 +184,8 @@ def read_cases(root):
         test = validate_binding(row['test'], case_id) if 'test' in row else None
         if test == NATIVE_INSTALL_BINDING and row['stage'] not in ('native', 'release'):
             raise AcceptanceError(f'{case_id}: native install requires a native or release stage')
-        if test == NATIVE_SSH_BINDING and row['stage'] != 'native':
-            raise AcceptanceError(f'{case_id}: native SSH requires a native stage')
+        if test in (NATIVE_SSH_BINDING, NATIVE_PRIOR_BINDING) and row['stage'] != 'native':
+            raise AcceptanceError(f'{case_id}: this native route requires a native stage')
         if test and test.get('journey') in VSIX_REHEARSALS and row['stage'] != 'release':
             raise AcceptanceError(f'{case_id}: installed VSIX rehearsal requires a release stage')
         cases[case_id] = Case(case_id, row['stage'], assertion, tuple(refs), test)

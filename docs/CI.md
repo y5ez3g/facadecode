@@ -455,6 +455,41 @@ forwarded route, and verifies that only the intended peer receives the exact inp
 The job reconciles the original log and scoped cleanup with the three tested binaries and the
 GitHub run attempt.
 
+### Native Core cold cutover
+
+On Linux x64, point the runner at the verified candidate lane's Shell and MCP directory.
+It builds the candidate's exact ignored scenario and test CLI, stages both program pairs in
+a private scope, and emits its marker after the exact test and owned cleanup pass.
+The native workflow runs this replay for changes to the relevant protocol, Core lifecycle
+or migration inputs. It builds the pinned prior source and the current candidate on Linux
+x64 and records the program digests and raw results. [Core compatibility workflow](../.github/workflows/core-compatibility.yml)
+
+Replay a Shell and MCP pair with an externally pinned SHA-256 manifest. The manifest must
+contain one entry for each executable.
+
+```sh
+python3 -B ci/check_prior_build.py --candidate-bin "$candidate_bin" \
+    --output-dir "$work/cold-pinned" --run-id cold-pinned-local \
+    pinned-binaries --prior-bin "$prior_bin" --manifest "$prior_manifest"
+```
+
+The source-compatibility mode instead archives immutable prior main
+`870891350e49c75dec316b9df37554557e257263` from the local Git object store. It compiles
+that source with the pinned Rust toolchain, the Linux musl target, and Cargo's locked
+dependencies. The receipt binds the actual binary hashes, toolchain and source tree to the
+run. The two modes keep their own provenance records. A prior-main build records the hashes
+it produced on the current runner.
+
+```sh
+python3 -B ci/check_prior_build.py --candidate-bin "$candidate_bin" \
+    --output-dir "$work/cold-source" --run-id cold-source-local prior-main
+```
+
+Use a fresh output directory per invocation. For GitHub jobs omit `--run-id` so the receipt
+uses the run and attempt. Make the pinned Git object and Rust musl target available before
+running the source mode. Use `--offline` when Cargo dependencies are already cached.
+Retain the output directory containing the raw test and build logs and `receipt.json`.
+
 Each successful native PR package job records the VSIX pair, Core archive and checksum file
 digests with the checked-out revision, tree and GitHub attempt. Run
 \`extension/scripts/native-package-evidence.mjs verify\` on the downloaded \`extension-*\`
@@ -470,6 +505,9 @@ process cleanup. It reclaims the disposable scope on an interruption or a failed
 
 After one shared build, the runner executes at most two isolated editor groups at a time.
 An interrupt stops active owned sessions, cancels waiting groups and runs scoped cleanup.
+After normal editor teardown it reclaims the detached Chromium crash reporter from the
+same fixture using the pinned editor's executable identity. The final scoped scan still
+checks all remaining processes and blocks a receipt when any are left.
 Verify requires results, original logs and a post-cleanup record for every
 planned case on the same source, plan, platform and run attempt. The editor tests identify the
 serving engine from the live host. The status describes the shadow pilot only. The existing product
@@ -504,6 +542,17 @@ steady-state SLO are defined above. [GitHub Actions jobs API](https://docs.githu
 
 ```sh
 python3 -B ci/github_timing.py --repo y5ez3g/facadecode --head "$head" "$shadow_run" "$core_run" "$extension_run"
+```
+
+For an independent verification of a hosted PR shadow run, check out the reviewed head when
+its tree matches the tested merge tree, or use the exact merge checkout. The command requires
+each selected job to have passed in the current attempt. It checks the GitHub ZIP digests and
+the merge parents, then reconciles the original selected cases with their logged evidence.
+Use `--output` with a new local directory to keep the original downloads.
+[GitHub Actions artifacts API](https://docs.github.com/en/rest/actions/artifacts)
+
+```sh
+python3 -B ci/github_evidence.py --repo y5ez3g/facadecode --run "$shadow_run" --head "$head" --base "$base"
 ```
 
 `catalog --require-bindings` lists the remaining exact bindings and fails until every catalog row

@@ -1397,9 +1397,15 @@
       "assertion": "Start from the pinned pre-v1 build and migrate durable agent, session, route and receipt state.",
       "stage": "native",
       "existing_tests": [
+        "ci/check_prior_build.py",
         "docs/core/ENGINEERING.md",
         "extension/src/test/integration/rustMultiWindow.ts"
-      ]
+      ],
+      "test": {
+        "runner": "core-prior",
+        "target": "linux-x64",
+        "name": "cold-cutover"
+      }
     },
     {
       "id": "core/p0/prior-build/hot-replacement",
@@ -3259,29 +3265,47 @@
       "assertion": "Observe the shim call event on the owning window, with its exact ID and payload on the subscribed connection, correlated to its exact run or owner.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptydCalls.test.ts",
         "extension/src/test/ptyd.test.ts:274",
         "extension/src/test/ptydCalls.test.ts:80",
         "extension/src/test/windowNetwork.test.ts:190"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptydCalls.test",
+        "name": "ptyd: a run's tool calls carried to the window that claims it, and its answers back (MCP-6.1, RULES-1.2) a call goes to the window that claims its caller, its time in ptyd added; that window's answer goes back, concurrent calls of the run matched by number"
+      }
     },
     {
       "id": "extension/ptyd-old/event/exit",
       "assertion": "Correlate the exit event with the known process and exit status on the subscribed connection, correlated to its exact run or owner.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptyd.test.ts",
         "extension/src/test/ptyd.test.ts:345",
         "extension/src/test/ptydTransport.test.ts:80"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptyd.test",
+        "name": "ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1) a run started is claimed by its window: its numbered output, what it is typed and its end reach that window"
+      }
     },
     {
       "id": "extension/ptyd-old/event/output",
       "assertion": "Receive correctly sequenced output from the intended process on the subscribed connection, correlated to its exact run or owner.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptyd.test.ts",
         "extension/src/test/ptyd.test.ts:98",
         "extension/src/test/ptydBackpressure.test.ts:54",
         "extension/src/test/ptydTransport.test.ts:80"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptyd.test",
+        "name": "ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1) a run started is claimed by its window: its numbered output, what it is typed and its end reach that window"
+      }
     },
     {
       "id": "extension/ptyd-old/event/ownerLost",
@@ -3291,16 +3315,27 @@
         "extension/src/test/ptyd.test.ts",
         "extension/src/test/ptydAttach.test.ts",
         "extension/src/test/ptydBuild.test.ts:111"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptyd.test",
+        "name": "ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1) a newer activation takes the same process immediately and fences every stale effect and later reconnect"
+      }
     },
     {
       "id": "extension/ptyd-old/event/status",
       "assertion": "Observe a real status transition or its documented removal on the subscribed connection, correlated to its exact run or owner.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptyd.test.ts",
         "extension/src/test/ptyd.test.ts:742",
         "extension/src/test/ptydTransport.test.ts:16"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptyd.test",
+        "name": "ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1) a program that asks whether its terminal takes reports is answered at once; its reports, the title among them, reach the window that claims it"
+      }
     },
     {
       "id": "extension/ptyd-old/event/title",
@@ -3315,101 +3350,167 @@
       "assertion": "Observe tool availability when the intended run shim connects on the subscribed connection, correlated to its exact run or owner.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptydCalls.test.ts",
         "extension/src/test/ptydCalls.test.ts:105"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptydCalls.test",
+        "name": "ptyd: a run's tool calls carried to the window that claims it, and its answers back (MCP-6.1, RULES-1.2) a shim's hello tells the window that claims its run that its tools are there, and a window that claims the run later as well"
+      }
     },
     {
       "id": "extension/ptyd-old/event/toolsGone",
       "assertion": "Observe tool unavailability when its last shim disconnects on the subscribed connection, correlated to its exact run or owner.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptydCalls.test.ts",
         "extension/src/test/ptydCalls.test.ts:132"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptydCalls.test",
+        "name": "ptyd: a run's tool calls carried to the window that claims it, and its answers back (MCP-6.1, RULES-1.2) once its run's last shim goes, the window that claims the run is told its tools are gone, and a window that claims it with none connected (RULES-3.1)"
+      }
     },
     {
       "id": "extension/ptyd-old/request/answer",
       "assertion": "Deliver the response to the originating shim and confirm delivery.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptydCalls.test.ts",
         "extension/src/test/ptyd.test.ts:258",
         "extension/src/test/ptydCalls.test.ts:164"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptydCalls.test",
+        "name": "ptyd: a run's tool calls carried to the window that claims it, and its answers back (MCP-6.1, RULES-1.2) a call goes to the window that claims its caller, its time in ptyd added; that window's answer goes back, concurrent calls of the run matched by number"
+      }
     },
     {
       "id": "extension/ptyd-old/request/attach",
       "assertion": "Observe the correct screen snapshot and then newer numbered output for that run.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptyd.test.ts",
         "extension/src/test/ptyd.test.ts:159",
         "extension/src/test/ptydCalls.test.ts:120"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptyd.test",
+        "name": "ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1) a window that goes leaves its runs running, unclaimed; a window of the same workspace claims and draws one again, every output after its screen once"
+      }
     },
     {
       "id": "extension/ptyd-old/request/call",
       "assertion": "Send a shim tool request across the supervisor socket. Verify the correct owning window and exact numbered call receive it, and the original shim gets the matching result before its deadline.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptydCalls.test.ts",
         "extension/src/test/ptyd.test.ts:274",
         "extension/src/test/ptydCalls.test.ts:80",
         "extension/src/test/windowNetwork.test.ts:190"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptydCalls.test",
+        "name": "ptyd: a run's tool calls carried to the window that claims it, and its answers back (MCP-6.1, RULES-1.2) a call goes to the window that claims its caller, its time in ptyd added; that window's answer goes back, concurrent calls of the run matched by number"
+      }
     },
     {
       "id": "extension/ptyd-old/request/claim",
       "assertion": "Accept the new workspace owner and fence effects from the old owner.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptyd.test.ts",
         "extension/src/test/ptyd.test.ts:72",
         "extension/src/test/ptydBuild.test.ts:111",
         "extension/src/test/ptydCalls.test.ts:55",
         "extension/src/test/ptydClient.test.ts:94"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptyd.test",
+        "name": "ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1) a newer activation takes the same process immediately and fences every stale effect and later reconnect"
+      }
     },
     {
       "id": "extension/ptyd-old/request/colours",
       "assertion": "Verify the CLI receives the configured colors to a terminal query.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptyd.test.ts",
         "extension/src/test/ptyd.test.ts:880"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptyd.test",
+        "name": "ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1) a program asking its terminal's colours is answered by ptyd at once with those its window said, and not at all before (ARCHITECTURE-2.3)"
+      }
     },
     {
       "id": "extension/ptyd-old/request/conversations",
       "assertion": "Return the exact known test CLI sessions in this environment.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptyd.test.ts",
         "extension/src/test/ptyd.test.ts:112",
         "extension/src/test/ptydCalls.test.ts:368"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptyd.test",
+        "name": "ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1) two windows racing to resume one exact conversation start it only once, without exposing other metadata"
+      }
     },
     {
       "id": "extension/ptyd-old/request/endWindow",
       "assertion": "End exactly the live runs owned by the requested window.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptyd.test.ts",
         "extension/src/test/ptyd.test.ts:497",
         "extension/src/test/ptydCalls.test.ts:323"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptyd.test",
+        "name": "ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1) endWindow requires current ownership and ends only that workspace"
+      }
     },
     {
       "id": "extension/ptyd-old/request/forget",
       "assertion": "Remove the run from the correct listing and observe its record cleanup.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptyd.test.ts",
         "extension/src/test/ptyd.test.ts:190",
         "extension/src/test/ptydCalls.test.ts:341"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptyd.test",
+        "name": "ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1) a run ID is never started twice, even once its run was forgotten (RULES-2.2)"
+      }
     },
     {
       "id": "extension/ptyd-old/request/hello",
       "assertion": "Negotiate with the expected role and demonstrate the incompatible shim is refused.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptydCalls.test.ts",
         "extension/src/test/ptyd.test.ts:120",
         "extension/src/test/ptydAttach.test.ts:206",
         "extension/src/test/ptydCalls.test.ts:79",
         "extension/src/test/ptydClient.test.ts:83"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptydCalls.test",
+        "name": "ptyd: a run's tool calls carried to the window that claims it, and its answers back (MCP-6.1, RULES-1.2) a shim of another protocol is refused protocol_incompatible and its connection closed; a shim makes no window's requests, nor a window calls"
+      }
     },
     {
       "id": "extension/ptyd-old/request/input",
@@ -3433,104 +3534,170 @@
       "assertion": "Read the actual input state while sending no terminal input.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptydCalls.test.ts",
         "extension/src/test/transport.execution.test.ts:215",
         "extension/src/test/ptydInput.test.ts",
         "extension/src/test/ptydAttach.test.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptydCalls.test",
+        "name": "ptyd: a run's terminal read and written for its owner (MCP-5, CLIS-2.1, RULES-1.10) type pastes text and Enter in turn; read gives the rendered lines; keys press named keys; a reader that does not recognize the screen says unknown"
+      }
     },
     {
       "id": "extension/ptyd-old/request/keys",
       "assertion": "Observe ordered keys and fence the remaining probe keys when the person types first.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptydCalls.test.ts",
         "extension/src/test/transport.execution.test.ts:215",
         "extension/src/test/ptydInput.test.ts",
         "extension/src/test/ptydAttach.test.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptydCalls.test",
+        "name": "ptyd: a run's terminal read and written for its owner (MCP-5, CLIS-2.1, RULES-1.10) type pastes text and Enter in turn; read gives the rendered lines; keys press named keys; a reader that does not recognize the screen says unknown"
+      }
     },
     {
       "id": "extension/ptyd-old/request/list",
       "assertion": "Verify the live or retained runs of the requested owner and scope.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptydCalls.test.ts",
         "extension/src/test/ptyd.test.ts:187",
         "extension/src/test/ptydBuild.test.ts:87",
         "extension/src/test/ptydCalls.test.ts:363",
         "extension/src/test/ptydClient.test.ts:85"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptydCalls.test",
+        "name": "ptyd: a run's tool calls carried to the window that claims it, and its answers back (MCP-6.1, RULES-1.2) `list` with no owner gives every run ptyd holds, of every owner and removed or not; with one, that owner's shown runs"
+      }
     },
     {
       "id": "extension/ptyd-old/request/read",
       "assertion": "Read the requested logical screen lines after the expected draw.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptydCalls.test.ts",
         "extension/src/test/ptyd.test.ts:596",
         "extension/src/test/ptydCalls.test.ts:368"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptydCalls.test",
+        "name": "ptyd: a run's terminal read and written for its owner (MCP-5, CLIS-2.1, RULES-1.10) type pastes text and Enter in turn; read gives the rendered lines; keys press named keys; a reader that does not recognize the screen says unknown"
+      }
     },
     {
       "id": "extension/ptyd-old/request/resize",
       "assertion": "Observe the requested PTY size at the process.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptyd.test.ts",
         "extension/src/test/ptyd.test.ts:493",
         "extension/src/test/ptydResize.test.ts:14"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptyd.test",
+        "name": "ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1) a resize reaches the process"
+      }
     },
     {
       "id": "extension/ptyd-old/request/setMeta",
       "assertion": "Read the replacement metadata with the same run attached.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptyd.test.ts",
         "extension/src/test/ptyd.test.ts:494"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptyd.test",
+        "name": "ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1) a newer activation takes the same process immediately and fences every stale effect and later reconnect"
+      }
     },
     {
       "id": "extension/ptyd-old/request/spawn",
       "assertion": "Verify the selected fake CLI process and its returned run identity.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptyd.test.ts",
         "extension/src/test/ptyd.test.ts:77",
         "extension/src/test/ptydBuild.test.ts:135",
         "extension/src/test/ptydCalls.test.ts:59"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptyd.test",
+        "name": "ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1) a run started is claimed by its window: its numbered output, what it is typed and its end reach that window"
+      }
     },
     {
       "id": "extension/ptyd-old/request/terminate",
       "assertion": "Observe the expected end of the selected process and the reported termination outcome.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptyd.test.ts",
         "extension/src/test/ptyd.test.ts:114",
         "extension/src/test/ptydCalls.test.ts:368"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptyd.test",
+        "name": "ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1) terminate hangs up the process group and answers its actual end; one that ignores the hang-up is killed after the grace, its children with it; an ended or unknown run already exited (LIFECYCLE-4.2)"
+      }
     },
     {
       "id": "extension/ptyd-old/request/type",
       "assertion": "Observe the intended paste or Enter operation in order at the target.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptydCalls.test.ts",
         "extension/src/test/transport.execution.test.ts:215",
         "extension/src/test/ptydInput.test.ts",
         "extension/src/test/ptydAttach.test.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptydCalls.test",
+        "name": "ptyd: a run's terminal read and written for its owner (MCP-5, CLIS-2.1, RULES-1.10) type pastes text and Enter in turn; read gives the rendered lines; keys press named keys; a reader that does not recognize the screen says unknown"
+      }
     },
     {
       "id": "extension/ptyd-old/response/error",
       "assertion": "Send an unsupported or refused request through the supervisor socket. Verify matching ID and error. For a failed shim call check the reason and effects, with none before dispatch and unknown after the serving window disconnects.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptydCalls.test.ts",
         "extension/src/test/ptydCalls.test.ts:120",
         "extension/src/test/ptyd.test.ts:274"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptydCalls.test",
+        "name": "ptyd: a run's tool calls carried to the window that claims it, and its answers back (MCP-6.1, RULES-1.2) a window that goes holding a call leaves its effects unknown; a shim that goes cancels nothing a window took"
+      }
     },
     {
       "id": "extension/ptyd-old/response/result",
       "assertion": "Send two requests concurrently through the supervisor socket. Each success frame carries the originating request ID and the expected operation result.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/ptydCalls.test.ts",
         "extension/src/test/ptydCalls.test.ts:79",
         "extension/src/test/ptydClient.test.ts:83"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "ptydCalls.test",
+        "name": "ptyd: a run's tool calls carried to the window that claims it, and its answers back (MCP-6.1, RULES-1.2) a call goes to the window that claims its caller, its time in ptyd added; that window's answer goes back, concurrent calls of the run matched by number"
+      }
     },
     {
       "id": "extension/vscode-old/command/facade.continueSession",
@@ -4342,35 +4509,59 @@
       "assertion": "Request agent and message numbers over the current session. Verify contiguous, disjoint ranges across windows and that the requested floor is respected.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/host.activation.test.ts",
         "extension/src/test/host.client.test.ts:8"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "host.activation.test",
+        "name": "A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-2.4) agent and message allocations use one counter per kind across listening windows and honor the session and floor (ARCHITECTURE-2.1, RULES-2.2)"
+      }
     },
     {
       "id": "extension/window-component-old/command/facade.window.directory",
       "assertion": "Through the current editor session, read the local directory with this window first, peer labels and exact agent identities, and a separate unavailable entry for an incompatible peer. Reject a different session.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/host.activation.test.ts",
         "extension/src/test/host.client.test.ts:8",
         "extension/src/test/integration/mcp.it.ts:890"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "host.activation.test",
+        "name": "A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-2.4) window directory and roster publication require the current session and expose exact public identities while distinguishing an incompatible peer (ARCHITECTURE-2.1)"
+      }
     },
     {
       "id": "extension/window-component-old/command/facade.window.identity",
       "assertion": "Check version, session, window token and component version for the current Window Component. A different session is refused and a damaged record reports damage without minting a replacement identity.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/host.activation.test.ts",
         "extension/src/test/host.activation.test.ts:10",
         "extension/src/test/host.windowComponent.test.ts:8"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "host.activation.test",
+        "name": "A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-2.4) the identity command answers the current session with the persisted window token and component version, refuses stale sessions and leaves damaged records intact (ARCHITECTURE-2.2)"
+      }
     },
     {
       "id": "extension/window-component-old/command/facade.window.publish",
       "assertion": "Publish the workspace roster and label through the current editor session. Verify listening status and the matching public roster in a second window without exposing agent activity.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/host.activation.test.ts",
         "extension/src/test/host.client.test.ts:8",
         "extension/src/test/integration/mcp.it.ts:890"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "host.activation.test",
+        "name": "A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-2.4) window directory and roster publication require the current session and expose exact public identities while distinguishing an incompatible peer (ARCHITECTURE-2.1)"
+      }
     },
     {
       "id": "extension/window-component-old/command/facade.window.route",
@@ -4404,9 +4595,15 @@
       "assertion": "Restart the isolated Window Component and verify a session-matched republish makes the unchanged current roster visible immediately.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/host.activation.test.ts",
         "extension/src/test/host.client.test.ts:8",
         "extension/src/test/integration/mcp.it.ts:890"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "host.activation.test",
+        "name": "A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-2.4) a restarted listening Window Component requests a session-matched republish of the unchanged workspace roster (ARCHITECTURE-2.1)"
+      }
     },
     {
       "id": "extension/window-component-old/registration/activate",
@@ -4674,20 +4871,32 @@
       "assertion": "Route a message to a peer-owned agent. Correlate sender, recipient, original message ID and reply reference with one complete message in the intended fake terminal.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowNetwork.test.ts",
         "extension/src/test/windowNetwork.test.ts:160",
         "extension/src/test/integration/mcp.it.ts:890",
         "extension/src/test/contract.tools.test.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowNetwork.test",
+        "name": "Window network: window components register and carry requests between windows (ARCHITECTURE-1.1, 2.1) a peer send preserves its exact sender, recipient, message and reply, and a result returns once to the sender copy over live sockets (RULES-1.1, 1.7)"
+      }
     },
     {
       "id": "extension/window-socket-old/operation/result",
       "assertion": "Route a delivery result back to its originating agent and verify one receipt with the original call or request ID updates the sender copy.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/windowNetwork.test.ts",
         "extension/src/test/windowNetwork.test.ts:160",
         "extension/src/test/integration/mcp.it.ts:890",
         "extension/src/test/contract.tools.test.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "windowNetwork.test",
+        "name": "Window network: window components register and carry requests between windows (ARCHITECTURE-1.1, 2.1) a peer send preserves its exact sender, recipient, message and reply, and a result returns once to the sender copy over live sockets (RULES-1.1, 1.7)"
+      }
     },
     {
       "id": "extension/window-socket-old/outcome/failed",

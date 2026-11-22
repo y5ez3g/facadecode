@@ -269,6 +269,21 @@ fn cold_cutover_keeps_prerelease_agent_records_and_saved_transport() {
     assert!(old.is_absolute() && old.is_file(), "{}", old.display());
     let local = TestHome::new("v1-cutover-a");
     let remote = TestHome::new("v1-cutover-b");
+    let session = "86da4482-2bae-4a45-b193-a5664c19826a";
+    let keys = local.folder().join("cli-keys");
+    let transcripts = local.folder().join("transcripts");
+    std::fs::create_dir(&transcripts).unwrap();
+    let transcript = transcripts.join(format!("{session}.jsonl"));
+    std::fs::write(
+        local.path.join("facade.json"),
+        json!({ "clis": { "fake": {
+            "type": "claude", "command": test_binaries().fakecli,
+            "env": { "FAKECLI_LOOK": "claude", "FAKECLI_SESSION": session,
+                "FAKECLI_TRANSCRIPTS": transcripts, "FAKECLI_KEYS": keys }
+        } } })
+        .to_string(),
+    )
+    .unwrap();
     let machines = [("laptop", &local), ("devbox", &remote)];
     install_machine_ssh(&machines, &old);
     let old_call = |home: &TestHome, args: &[&str]| {
@@ -295,10 +310,69 @@ fn cold_cutover_keeps_prerelease_agent_records_and_saved_transport() {
     drop(remote_wire);
     let out = old_call(&local, &["start", "-d", "--name", "kept", "fake"]);
     let address = started_ref(&out);
+    let text = "cold cutover delivery from the old Daemon";
+    let send = json!({
+        "to": address, "text": text, "request_id": "cold-cutover-prior-terminal-send"
+    });
+    let receipt = prior.call_ok("agent.send", send.clone());
+    assert_eq!(receipt["id"], "m1@laptop", "{receipt}");
+    assert!(receipt.get("repeated").is_none(), "{receipt}");
+    assert_eq!(receipt["message"]["from"], "command_line", "{receipt}");
+    assert_eq!(receipt["message"]["text"], text, "{receipt}");
+    assert_eq!(
+        receipt["message"]["delivery"]["status"], "success",
+        "{receipt}"
+    );
+    assert_eq!(
+        receipt["message"]["delivery"]["delivered_via"], "terminal",
+        "{receipt}"
+    );
+    assert_eq!(
+        receipt["message"]["delivery"]["text_written"], "full",
+        "{receipt}"
+    );
+    assert_eq!(
+        receipt["message"]["delivery"]["enter_written"], true,
+        "{receipt}"
+    );
+    let repeat = |wire: &mut DaemonTestClient| {
+        let replay = wire.call_ok("agent.send", send.clone());
+        assert_eq!(replay["repeated"], true, "{replay}");
+        assert_eq!(replay["id"], receipt["id"], "{replay}");
+        assert_eq!(replay["message"], receipt["message"], "{replay}");
+        assert_eq!(
+            replay["recipient"]["reference"], receipt["recipient"]["reference"],
+            "{replay}"
+        );
+        replay
+    };
+    let mut old_reconnect = DaemonTestClient::open(&local);
+    let hello = old_reconnect.hello_prerelease("terminal", [3, 3], json!({}));
+    assert_eq!(hello["result"]["machine_id"], local_id, "{hello}");
+    let prior_replay = repeat(&mut old_reconnect);
+    drop(old_reconnect);
+    assert!(wait_until(LOADED_TIMEOUT, || {
+        transcript.is_file()
+            && prior.call_ok("agent.inspect", json!({ "agent": address }))["agent"]["session"]
+                == session
+    }));
+    let original_keys = std::fs::read(&keys).unwrap();
+    let header = "📨 Message from the command line · m1";
+    assert_eq!(
+        original_keys,
+        format!("📨 Message from \x1b[200~the command line · m1\r{text}\x1b[201~\r").as_bytes()
+    );
+    let original_transcript = std::fs::read(&transcript).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&original_transcript).unwrap(),
+        json!({ "message": format!("{header}\n{text}") })
+    );
     old_call(&local, &["stop", address]);
     let record = prior.call_ok("agent.inspect", json!({ "agent": address }))["agent"].clone();
     assert_eq!(record["process"], "ended", "{record}");
     assert_eq!(record["machine_id"], local_id, "{record}");
+    assert_eq!(record["session"], session, "{record}");
+    assert_eq!(receipt["message"]["to"], record["agent_id"], "{receipt}");
     old_call(
         &local,
         &[
@@ -311,13 +385,11 @@ fn cold_cutover_keeps_prerelease_agent_records_and_saved_transport() {
             "devbox",
         ],
     );
-    let old_row = machine_in(&prior.call_ok("machine.list", json!({})), &remote_id).unwrap();
-    let old_route = old_row["connections"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|link| link["kind"] == "saved" && link["initiator_machine_id"] == local_id)
-        .expect("the prerelease saved SSH link");
+    let old_roster = prior.call_ok("machine.list", json!({}));
+    let old_peer = machine_in(&old_roster, &remote_id).expect("the prerelease peer");
+    // The initiating machine owns the saved transport, including while the peer is online.
+    let old_row = machine_in(&old_roster, &local_id).expect("the prerelease initiator");
+    let old_route = saved_ssh(&old_row, &local_id, &remote_id);
     assert_eq!(old_route["remote_home"], json!(remote.path));
     assert!(!old_route["ssh_args"].as_array().unwrap().is_empty());
     let old_keeper = local.lock_record("keeper").expect("the prerelease keeper");
@@ -337,18 +409,28 @@ fn cold_cutover_keeps_prerelease_agent_records_and_saved_transport() {
     install_machine_ssh(&machines, &test_binaries().facade);
 
     let mut current = connect(&local);
-    assert_eq!(local.hello_result().unwrap()["machine_id"], local_id);
+    let welcome = local.hello_result().unwrap();
+    assert_eq!(welcome["api_version"], 1);
+    assert_eq!(welcome["machine_id"], local_id);
     let reference = json!({ "machine_id": local_id, "agent_id": record["agent_id"] });
+    assert_eq!(receipt["recipient"]["reference"], reference);
     let after = current.call_ok("agent.inspect", json!({ "target": reference }));
     assert_eq!(after["agent"]["reference"], reference);
-    for field in ["address", "name", "cli", "cwd", "process", "exit"] {
+    for field in [
+        "address", "name", "cli", "cwd", "process", "exit", "session",
+    ] {
         assert_eq!(after["agent"][field], record[field], "{field}: {after}");
     }
+    let migrated_replay = repeat(&mut current);
+    let mut fresh = send;
+    fresh["request_id"] = json!("cold-cutover-new-request");
+    let denied = current.call("agent.send", fresh);
+    assert_eq!(error_reason(&denied), "ended", "{denied}");
+    assert_eq!(std::fs::read(&keys).unwrap(), original_keys);
+    assert_eq!(std::fs::read(&transcript).unwrap(), original_transcript);
     let roster = current.call_ok("machine.list", json!({}));
-    assert_eq!(
-        machine_in(&roster, &remote_id).unwrap()["state"],
-        "disconnected"
-    );
+    let cold_peer = machine_in(&roster, &remote_id).unwrap();
+    assert_eq!(cold_peer["state"], "disconnected");
     let row = machine_in(&roster, &local_id).unwrap();
     let route = saved_ssh(&row, &local_id, &remote_id);
     assert_eq!(route["transport"]["kind"], "ssh", "{route}");
@@ -358,13 +440,22 @@ fn cold_cutover_keeps_prerelease_agent_records_and_saved_transport() {
             "{field}: {route}"
         );
     }
-    assert_eq!(
-        ssh_attempts(&remote),
-        previous,
-        "the cold read does not dial"
-    );
+    let attempts = ssh_attempts(&remote);
+    assert_eq!(attempts, previous, "the cold read does not dial");
     drop(connect(&remote));
     assert_eq!(remote.hello_result().unwrap()["machine_id"], remote_id);
+    println!(
+        "Facade cold cutover evidence {}",
+        json!({
+            "prior": { "protocol": 3, "agent": record, "saved": old_route, "peer": old_peer },
+            "candidate": { "api_version": welcome["api_version"], "agent": after["agent"],
+                "saved": route, "peer": cold_peer },
+            "ssh_attempts": { "before": previous, "after": attempts },
+            "receipt": { "original": receipt, "prior_replay": prior_replay, "candidate_replay": migrated_replay },
+            "new_request": denied, "cli_bytes": original_keys,
+            "transcript": String::from_utf8_lossy(&original_transcript)
+        })
+    );
 }
 
 #[test]

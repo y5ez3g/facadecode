@@ -18,7 +18,7 @@ from unittest.mock import patch
 from catalog import AcceptanceError, load, read_cases, read_json, reconcile, validate_binding
 from evidence import (
     EDITOR, EDITOR_PASS, binding_paths, binding_product, clean_scope, command_for, completion_record, execute, execution_groups,
-    download_prior_vsix, observed_mocha_tests, observed_pass, reclaim_interrupted_scope, run_identity, verify_receipts,
+    download_prior_vsix, observed_mocha_tests, observed_pass, reclaim_scope_processes, run_identity, verify_receipts,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -441,7 +441,7 @@ class CleanupTests(unittest.TestCase):
             owned, sibling = processes
             try:
                 with tempfile.TemporaryFile(mode='w+') as log:
-                    reclaim_interrupted_scope(root, log)
+                    reclaim_scope_processes(root, log)
                 self.assertEqual(owned.wait(timeout=5), -signal.SIGTERM)
                 self.assertIsNone(sibling.poll())
             finally:
@@ -452,10 +452,55 @@ class CleanupTests(unittest.TestCase):
 
     def test_interrupted_cleanup_reclaims_a_late_child_and_scans_again(self):
         with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryFile(mode='w+') as stream:
-            with patch('evidence.reclaim_interrupted_scope') as reclaim, patch('evidence.execute', side_effect=['fail', 'pass']) as scan:
+            with patch('evidence.reclaim_scope_processes') as reclaim, patch('evidence.execute', side_effect=['fail', 'pass']) as scan:
                 self.assertEqual(clean_scope(ROOT, Path(directory), {}, stream, interrupted=True), 'pass')
                 self.assertEqual(reclaim.call_count, 2)
                 self.assertEqual(scan.call_count, 2)
+
+    @unittest.skipUnless(hasattr(os, 'pidfd_open') and hasattr(signal, 'pidfd_send_signal'), 'Linux PID handles required.')
+    def test_editor_cleanup_reclaims_only_its_exact_crash_reporter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scope = root / 'owned'
+            scope.mkdir()
+            editor = root / 'editor/code'
+            editor.parent.mkdir()
+            crashpad = editor.with_name('chrome_crashpad_handler')
+            unrelated = root / crashpad.name
+            for executable in (crashpad, unrelated):
+                shutil.copy2('/bin/sh', executable)
+            processes = [
+                subprocess.Popen(['sh', '-c', 'read unused'], executable=executable, start_new_session=True,
+                                 stdin=subprocess.PIPE, env={'CI_ACCEPTANCE_ROOT': str(owned)})
+                for executable, owned in (
+                    (crashpad, scope), (crashpad, scope.with_name('owned-sibling')), (unrelated, scope),
+                )
+            ]
+            helper, sibling, decoy = processes
+            try:
+                with tempfile.TemporaryFile(mode='w+') as log:
+                    self.assertEqual(clean_scope(ROOT, scope, dict(os.environ), log, False, editor=editor), 'fail')
+                    self.assertEqual(helper.wait(timeout=5), -signal.SIGTERM)
+                    self.assertIsNone(sibling.poll())
+                    self.assertIsNone(decoy.poll())
+                    log.seek(0)
+                    text = log.read()
+                    self.assertIn(f'Stopped owned fixture process {helper.pid} (chrome_crashpad_handler).', text)
+                    self.assertIn('processes left:', text)
+                    self.assertNotIn('no processes left', text)
+                decoy.terminate()
+                decoy.wait(timeout=5)
+                with tempfile.TemporaryFile(mode='w+') as log:
+                    self.assertEqual(clean_scope(ROOT, scope, dict(os.environ), log, False, editor=editor), 'pass')
+                    log.seek(0)
+                    self.assertEqual(log.read().splitlines()[-1], 'no processes left')
+                self.assertIsNone(sibling.poll())
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        process.terminate()
+                    process.wait(timeout=5)
+                    process.stdin.close()
 
     def test_editor_group_cancellation_stops_an_active_child(self):
         with tempfile.TemporaryDirectory() as directory:

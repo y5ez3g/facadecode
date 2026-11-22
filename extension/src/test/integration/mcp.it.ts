@@ -19,7 +19,7 @@ import type { GuestCaller, RoutedCall } from '../../contract/network';
 import { TOOL_PROTOCOL } from '../../schema/protocol';
 import type { Result } from '../../schema/result';
 import { linesOf as cardLines } from '../detailLines';
-import { coreCall, coreSocket, normalizeDriveLetter } from './editors';
+import { coreCall, coreSocket, localFolderIdentity, normalizeDriveLetter } from './editors';
 import { BUILT_IN_ADAPTERS } from '../../clis/catalog';
 import type { Card, PanelState } from '../../webview/protocol';
 import { observeAcceptanceEngine } from './acceptanceEngine';
@@ -916,11 +916,30 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 				const received = async <T>(tool: string, args: unknown, id: string): Promise<Result<T>> =>
 					(await route('call', response(tool, args, id)) as { result: Result<T> }).result;
 				const snapshot = await route('agents', { caller }) as {
-					window: { window_id: string; locations: { location_id: string; path: string }[] }; agents: unknown[]
+					window: {
+						window_id: string;
+						folders: { path: string; uri: string }[];
+						locations: { location_id: string; path: string; opened: boolean; folder_uris: string[] }[];
+					};
 				};
 				assert.strictEqual(snapshot.window.window_id, peer.window);
-				const location = snapshot.window.locations.find(each => each.path === PEER_DIR);
-				assert.ok(location, 'the receiving workspace supplies its own exact launch location');
+				const expected = localFolderIdentity(PEER_DIR);
+				assert.ok(expected, `the fixture peer folder exists: ${PEER_DIR}`);
+				const source = vscode.workspace.workspaceFolders![0].uri;
+				const sourceFolder = localFolderIdentity(source.fsPath);
+				assert.ok(sourceFolder, `the fixture source folder exists: ${source.toString()}`);
+				assert.notStrictEqual(sourceFolder, expected, 'the two workspaces have distinct folders');
+
+				const folders = snapshot.window.folders.filter(each => localFolderIdentity(each.path) === expected);
+				assert.strictEqual(folders.length, 1, `the receiving window opened the exact fixture folder: ${JSON.stringify({ expected: PEER_DIR, folders: snapshot.window.folders })}`);
+				const folder = folders[0];
+				const uri = vscode.Uri.parse(folder.uri, true);
+				assert.deepStrictEqual([uri.scheme, uri.authority], [source.scheme, source.authority], 'the receiving workspace URI is on this host');
+				assert.strictEqual(localFolderIdentity(uri.fsPath), expected, `the receiving workspace URI names the fixture folder: ${folder.uri}`);
+				const locations = snapshot.window.locations.filter(each =>
+					each.opened && each.folder_uris.includes(folder.uri) && localFolderIdentity(each.path) === expected);
+				assert.strictEqual(locations.length, 1, `the receiving workspace supplies its own exact launch location: ${JSON.stringify({ folder, locations: snapshot.window.locations })}`);
+				const location = locations[0];
 				const launches = () => fs.readdirSync(path.dirname(RECORD))
 					.filter(file => file.startsWith(path.basename(RECORD) + '.starts.')).sort();
 				const original = new Set(launches());
@@ -948,8 +967,10 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 					return /^\d+$/u.test(text) ? Number(text) : undefined;
 				});
 				child = { run: facts.agent_id, pid };
-				assert.deepStrictEqual([facts.window_id, facts.cwd, facts.root, facts.creator], [peer.window, PEER_DIR, local.root, local.run]);
-				assert.strictEqual(argsOf(facts.alias).cwd, location.path);
+				assert.deepStrictEqual([facts.window_id, facts.root, facts.creator], [peer.window, local.root, local.run]);
+				assert.strictEqual(localFolderIdentity(facts.cwd), expected, `the routed start records the receiving folder: ${facts.cwd}`);
+				const fakeCwd = argsOf(facts.alias).cwd;
+				assert.strictEqual(localFolderIdentity(fakeCwd), expected, `the actual fake process runs in the receiving folder: ${fakeCwd}`);
 				assert.ok(pid > 0 && alive(pid));
 				assert.deepStrictEqual(launches().filter(name => !original.has(name)), [path.basename(RECORD) + '.starts.' + facts.alias]);
 				assert.deepStrictEqual(fs.readFileSync(RECORD + '.starts.' + facts.alias, 'utf8').trim().split(/\r?\n/u).map(Number), [pid]);
@@ -971,6 +992,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 				console.log('  Window route observation ' + JSON.stringify({
 					source: { window: directory.self, run: local.run, pid: sourcePid },
 					peer: { window: facts.window_id, run: facts.agent_id, cwd: facts.cwd, pid },
+					folders: { fixture: PEER_DIR, workspace: folder.path, uri: folder.uri, location: location.path, process: fakeCwd },
 					refused: ['stale-session', 'malformed-window-request', 'incomplete-workspace-request', 'out_of_tree']
 				}));
 			} finally {

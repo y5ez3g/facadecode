@@ -163,7 +163,9 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 		// Answered in the other order: each reaches its own call
 		await window.request('answer', { id: b.id, answer: answerOf('B') });
 		await window.request('answer', { id: a.id, answer: answerOf('A') });
-		assert.deepStrictEqual([(await first).result, (await second).result], [answerOf('A'), answerOf('B')]);
+		assert.deepStrictEqual([await first, await second], [
+			{ id: 2, result: answerOf('A') }, { id: 3, result: answerOf('B') }
+		]);
 		await assert.rejects(window.request('answer', { id: a.id, answer: answerOf('again') }), /No call \d+ waits for this window's answer/);
 		// Only the window a call was given to answers it
 		const third = shim.call({ callId: 'c' });
@@ -230,12 +232,17 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 		const window = await connect();
 		const calls = callsOf(window);
 		await spawn(window, 'r4');
+		const unmatched = await shimOf('absent');
+		const undispatched = await unmatched.call();
+		assert.deepStrictEqual([undispatched.id, undispatched.reason, undispatched.effects], [2, 'not_found', 'none']);
+		assert.match(undispatched.error ?? '', /holds no agent run absent/);
+		assert.strictEqual(calls.length, 0);
 		const shim = await shimOf('r4');
 		const lost = shim.call();
 		await until('the call', () => calls.length === 1);
 		window.dispose();
 		const refused = await lost;
-		assert.deepStrictEqual([refused.reason, refused.effects], ['window_unavailable', 'unknown']);
+		assert.deepStrictEqual([refused.id, refused.reason, refused.effects], [2, 'window_unavailable', 'unknown']);
 		assert.match(refused.error ?? '', /went before it answered: the call may have taken effect/);
 		const next = await connect();
 		const nextCalls = callsOf(next);
@@ -360,6 +367,7 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 		assert.match('error' in older.hello ? older.hello.error : '', new RegExp(`speaks protocol ${PTYD_PROTOCOL - 1}, and its agent runtime \\(ptyd\\) protocol ${PTYD_PROTOCOL}`));
 		await until('its connection to close', () => older.socket.destroyed || older.socket.readableEnded);
 		const shim = await shimOf('r7');
+		assert.deepStrictEqual(shim.hello, { id: 1, result: { protocol: PTYD_PROTOCOL, pid: process.pid } });
 		assert.match((await shim.ask('list', {})).error ?? '', /A run's MCP shim does not list/);
 		assert.match((await shim.ask('spawn', {})).error ?? '', /does not spawn/);
 		const window = await connect();
@@ -449,8 +457,16 @@ suite('ptyd: a run\'s terminal read and written for its owner (MCP-5, CLIS-2.1, 
 	 * A program like `cat` in a terminal that echoes, alike on every platform: what is typed is shown as it comes, and each line again
 	 * once Enter ends it; Ctrl+D ends it.
 	 */
+	const inputPath = (run: string) => path.join(socketDir, run + '.input');
 	const cat = (client: PtydClient, run: string, owner = 'w1') => client.request('spawn', {
-		run, owner, ...program(`process.stdin.setRawMode(true); let line = ''; process.stdin.on('data', chunk => { for (const char of String(chunk)) { if (char === '\\x04') { process.exit(0); } else if (char === '\\r' || char === '\\n') { process.stdout.write('\\r\\n' + line + '\\r\\n'); line = ''; } else { line += char; process.stdout.write(char); } } });`),
+		run, owner, ...program(`process.stdin.setRawMode(true); let line = ''; process.stdin.on('data', chunk => {
+			require('fs').appendFileSync(${JSON.stringify(inputPath(run))}, chunk);
+			for (const char of String(chunk)) {
+				if (char === '\\x04') { process.exit(0); }
+				else if (char === '\\r' || char === '\\n') { process.stdout.write('\\r\\n' + line + '\\r\\n'); line = ''; }
+				else { line += char; process.stdout.write(char); }
+			}
+		});`),
 		cwd: os.tmpdir(), cols: 80, rows: 24, meta: {}
 	});
 	const screenUntil = async (client: PtydClient, run: string, check: (read: ScreenRead) => boolean): Promise<ScreenRead> => {
@@ -476,16 +492,34 @@ suite('ptyd: a run\'s terminal read and written for its owner (MCP-5, CLIS-2.1, 
 		// The terminal's echo of the input, and cat's own copy of the line
 		assert.ok(read.text.filter(line => line.includes('hello facade')).length >= 2, JSON.stringify(read.text));
 		assert.deepStrictEqual([read.buffer, read.exited], ['normal', false]);
+		const last = await owner.request('read', { run: 't1', lines: 2 });
+		assert.deepStrictEqual(last.text, read.text.slice(-2));
+		assert.strictEqual(last.older, true);
 		// cat draws no Claude Code input frame: never a guess that the input is empty (RULES-1.4)
+		const beforeInspect = await owner.request('read', { run: 't1', lines: 10 });
+		const input = fs.readFileSync(inputPath('t1'));
+		assert.match(input.toString(), /^hello facade[\r\n]$/);
 		const reading: InputReading = await owner.request('inspect', { run: 't1', adapter: 'claude-frame' });
 		assert.strictEqual(reading.state, 'unknown');
 		assert.strictEqual((await owner.request('inspect', { run: 't1', adapter: 'no-such-reader' })).state, 'unknown');
+		const afterInspect = await owner.request('read', { run: 't1', lines: 10 });
+		assert.deepStrictEqual(afterInspect.text, beforeInspect.text);
+		assert.deepStrictEqual(fs.readFileSync(inputPath('t1')), input);
 		// A lead is typed ahead of the paste, in the same write; one with a control in it is refused before anything goes in (COLLABORATION-2.1)
 		assert.deepStrictEqual(await owner.request('type', { run: 't1', text: 'the message', enter: false, lead: 'Act on this: ' }), { outcome: 'applied', pasted: true, entered: false });
 		assert.deepStrictEqual(await owner.request('type', { run: 't1', text: '', enter: true }), { outcome: 'applied', pasted: false, entered: true });
 		await screenUntil(owner, 't1', each => each.text.some(line => line.includes('Act on this: the message')));
 		await assert.rejects(owner.request('type', { run: 't1', text: 'x', enter: false, lead: 'go\r' }), /without control characters/);
 		await assert.rejects(owner.request('keys', { run: 't1', keys: ['Hyper+Q'] }), /Not a key: "Hyper\+Q"/);
+		assert.strictEqual(typeof reading.typed, 'number');
+		const beforeKeys = fs.readFileSync(inputPath('t1'));
+		assert.deepStrictEqual(await owner.request('keys', { run: 't1', keys: ['A', 'B'], unlessTyped: reading.typed }),
+			{ outcome: 'applied', keysSent: 2 });
+		await owner.request('input', { run: 't1', data: 'C' });
+		assert.deepStrictEqual(await owner.request('keys', { run: 't1', keys: ['Space', 'Backspace'], unlessTyped: reading.typed }),
+			{ outcome: 'not_applied', typedFirst: true, keysSent: 0 });
+		await screenUntil(owner, 't1', each => each.text.some(line => line.endsWith('ABC')));
+		assert.deepStrictEqual(fs.readFileSync(inputPath('t1')), Buffer.concat([beforeKeys, Buffer.from('ABC')]));
 		assert.deepStrictEqual(await owner.request('keys', { run: 't1', keys: ['Ctrl+D'] }), { outcome: 'applied', keysSent: 1 });
 		const ended = await screenUntil(owner, 't1', each => each.exited);
 		assert.strictEqual(ended.exited, true);
