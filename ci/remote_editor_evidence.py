@@ -8,12 +8,11 @@ import re
 import sys
 from uuid import UUID
 
-from catalog import AcceptanceError, read_json
+from catalog import AcceptanceError, NATIVE_REMOTE_EDITOR_CASE, read_json
 from evidence import digest, run_identity
 from native_core import ROOT, hash_file, read_markers, source_identity, write_receipt
 
 
-CASE = 'extension/p0/remote-host/ssh-connect'
 OBSERVATION = 'Facade native SSH connect observation '
 FIXTURE = ROOT / 'ci/fixtures/remote-ssh'
 
@@ -91,7 +90,7 @@ def completed_receipt(output, inputs):
             or (output / 'cleanup.log').read_text().splitlines()[-1:] != ['no processes left']):
         raise AcceptanceError('Remote SSH guest or local process cleanup did not complete')
     logs = ('editor.log', 'sshd.log', 'guest-build.log', 'guest-cleanup.log', 'guest-absence.txt', 'cleanup.log')
-    return {'case': CASE, 'inputs': inputs, 'observation': observed,
+    return {'case': NATIVE_REMOTE_EDITOR_CASE, 'inputs': inputs, 'observation': observed,
             'logs': {file: hash_file(output / file) for file in logs}, 'cleanup': 'pass'}
 
 

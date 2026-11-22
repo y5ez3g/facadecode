@@ -3,7 +3,7 @@
 Generated from [ci/cases.json](../ci/cases.json) by `python3 -B ci/acceptance.py table`.
 See the [CI design](CI.md) for the acceptance policy.
 
-347 API obligations and 55 P0 cases. 230 have exact bindings and 172 are pending.
+347 API obligations and 55 P0 cases. 232 have exact bindings and 170 are pending.
 
 A bound row requires passing evidence for the current run. Candidate test references are for review.
 
@@ -124,7 +124,7 @@ A bound row requires passing evidence for the current run. Candidate test refere
 | `core/p0/message-receipt/raw-disconnect` | pr | `machines` · `raw_input_on_a_cut_peer_link_reports_unknown_and_arrives_once` | Disconnect during raw input and verify the returned partial or unknown outcome matches the effect observed at the target. | [machines.rs](../core/tests/tests/machines.rs#L2410), [messages.rs](../core/tests/tests/messages.rs) |
 | `core/p0/prior-build/cold-migration` | native | `linux-x64` · `cold-cutover` | Start from the pinned pre-v1 build and migrate durable agent, session, route and receipt state. | [check_prior_build.py](../ci/check_prior_build.py), [ENGINEERING.md](../docs/core/ENGINEERING.md), [rustMultiWindow.ts](../extension/src/test/integration/rustMultiWindow.ts) |
 | `core/p0/prior-build/hot-replacement` | native | `linux-x64` · `hot-qa` | Replace a pinned compatible v1 build in place, preserve the live PID and resume its interaction. | [check_prior_build.py](../ci/check_prior_build.py), [upgrade.rs](../core/tests/tests/upgrade.rs) |
-| `core/p0/prior-build/incompatible-version` | native | Pending | An offer with no compatible version is refused before program or state changes. | [upgrade.rs](../core/tests/tests/upgrade.rs) |
+| `core/p0/prior-build/incompatible-version` | native | `linux-x64` · `incompatible-qa` | An offer with no compatible version is refused before program or state changes. | [upgrade.rs](../core/tests/tests/upgrade.rs), [check_incompatible_build.py](../ci/check_incompatible_build.py) |
 | `core/p0/remote-execution/real-ssh` | native | `linux-x64` · `real-machine-route` | Use actual SSH transport to a disposable peer and observe the selected machine and corresponding agent effect. | [check_real_ssh_route.py](../ci/check_real_ssh_route.py), [ssh-check.sh](../core/scripts/ssh-check.sh) |
 | `core/p0/remote-execution/remote-worktree` | pr | `rust` · `remote-worktree` | Discover the selected remote machine, create the worktree from its HEAD and observe the same CLI from Shell and Extension. The local repository stays intact. | [machines.rs](../core/tests/tests/machines.rs#L1341), [remoteWorktree.ts](../extension/src/test/integration/remoteWorktree.ts) |
 | `core/p0/remote-execution/retry-lost-reply` | pr | `machines` · `a_cross_machine_send_replays_its_original_settlement_after_reconnect` | Lose the cross-machine reply after delivery. A retry with the original ID observes the same settlement and one delivery. | [machines.rs](../core/tests/tests/machines.rs#L2330), [reliability.rs](../core/tests/tests/reliability.rs) |
@@ -273,7 +273,7 @@ A bound row requires passing evidence for the current run. Candidate test refere
 | `extension/p0/release/invalid-artifact` | release | Pending | A corrupt, missing, wrong-version or stale-source artifact prevents promotion. | [release.test.mjs](../extension/scripts/release.test.mjs) |
 | `extension/p0/release/signed-artifacts` | release | Pending | The trusted candidate record identifies every expected signed package, its native target, source and digest. | [extension-release.yml](../.github/workflows/extension-release.yml) |
 | `extension/p0/release/stable-pointer` | release | Pending | Verify the promoted bytes and stable pointer against the accepted candidate record. | [release.test.mjs](../extension/scripts/release.test.mjs) |
-| `extension/p0/remote-host/ssh-connect` | native | Pending | Use an actual Remote SSH host and confirm the window takes ownership for the expected remote agent identity. | [remote.ts](../extension/src/test/integration/remote.ts) |
+| `extension/p0/remote-host/ssh-connect` | native | `linux-x64` · `ssh-connect` | Use an actual Remote SSH host and confirm the window takes ownership for the expected remote agent identity. | [remote.ts](../extension/src/test/integration/remote.ts), [check_remote_editor.sh](../ci/check_remote_editor.sh) |
 | `extension/p0/remote-host/ssh-reconnect` | native | Pending | Disconnect and reconnect the host, preserve the original identity and reconcile any pending message once. | [remote.ts](../extension/src/test/integration/remote.ts) |
 | `extension/p0/vsix-upgrade/install-pair` | release | `old` · `install-pair` | Install the candidate main and Window Component VSIX in clean editor profiles and observe activation and a real command effect. | [run.ts](../extension/src/test/integration/run.ts), [updateDriver.ts](../extension/src/test/integration/updateDriver.ts), [package.test.mjs](../extension/scripts/package.test.mjs) |
 | `extension/p0/vsix-upgrade/upgrade-pair` | release | `old` · `upgrade-pair` | Upgrade from the supported prior VSIX pair and verify persisted workspace state, Pins and Window Component operation. | [run.ts](../extension/src/test/integration/run.ts), [updateDriver.ts](../extension/src/test/integration/updateDriver.ts) |

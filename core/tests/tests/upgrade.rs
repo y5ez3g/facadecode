@@ -2014,7 +2014,10 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
     let original = format!(
         "📨 Message from the command line · {message_id}\nreceipt before the live takeover"
     );
-    assert_eq!(home.submitted_messages(), [original.clone()]);
+    assert_eq!(
+        home.submitted_messages().as_slice(),
+        std::slice::from_ref(&original)
+    );
     let fresh_text = "fresh message after hot takeover";
     let fresh = reconnected.call_ok(
         "agent.send",

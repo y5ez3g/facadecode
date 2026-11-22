@@ -1491,8 +1491,14 @@
       "assertion": "An offer with no compatible version is refused before program or state changes.",
       "stage": "native",
       "existing_tests": [
-        "core/tests/tests/upgrade.rs"
-      ]
+        "core/tests/tests/upgrade.rs",
+        "ci/check_incompatible_build.py"
+      ],
+      "test": {
+        "runner": "core-prior",
+        "target": "linux-x64",
+        "name": "incompatible-qa"
+      }
     },
     {
       "id": "core/p0/remote-execution/real-ssh",
@@ -3245,8 +3251,14 @@
       "assertion": "Use an actual Remote SSH host and confirm the window takes ownership for the expected remote agent identity.",
       "stage": "native",
       "existing_tests": [
-        "extension/src/test/integration/remote.ts"
-      ]
+        "extension/src/test/integration/remote.ts",
+        "ci/check_remote_editor.sh"
+      ],
+      "test": {
+        "runner": "extension-ssh",
+        "target": "linux-x64",
+        "name": "ssh-connect"
+      }
     },
     {
       "id": "extension/p0/remote-host/ssh-reconnect",

@@ -25,11 +25,17 @@ NATIVE_PRIOR_CASE = 'core/p0/prior-build/cold-migration'
 NATIVE_PRIOR_BINDING = {'runner': 'core-prior', 'target': 'linux-x64', 'name': 'cold-cutover'}
 NATIVE_HOT_CASE = 'core/p0/prior-build/hot-replacement'
 NATIVE_HOT_BINDING = {'runner': 'core-prior', 'target': 'linux-x64', 'name': 'hot-qa'}
+NATIVE_INCOMPATIBLE_CASE = 'core/p0/prior-build/incompatible-version'
+NATIVE_INCOMPATIBLE_BINDING = {'runner': 'core-prior', 'target': 'linux-x64', 'name': 'incompatible-qa'}
+NATIVE_REMOTE_EDITOR_CASE = 'extension/p0/remote-host/ssh-connect'
+NATIVE_REMOTE_EDITOR_BINDING = {'runner': 'extension-ssh', 'target': 'linux-x64', 'name': 'ssh-connect'}
 NATIVE_BINDINGS = {
     **dict.fromkeys(NATIVE_INSTALL_CASES, NATIVE_INSTALL_BINDING),
     NATIVE_SSH_CASE: NATIVE_SSH_BINDING,
     NATIVE_PRIOR_CASE: NATIVE_PRIOR_BINDING,
     NATIVE_HOT_CASE: NATIVE_HOT_BINDING,
+    NATIVE_INCOMPATIBLE_CASE: NATIVE_INCOMPATIBLE_BINDING,
+    NATIVE_REMOTE_EDITOR_CASE: NATIVE_REMOTE_EDITOR_BINDING,
 }
 NATIVE_ROUTES = {binding['runner'] for binding in NATIVE_BINDINGS.values()}
 REQUIRED_EDITOR_ROUTES = {
@@ -187,8 +193,11 @@ def read_cases(root):
         test = validate_binding(row['test'], case_id) if 'test' in row else None
         if test == NATIVE_INSTALL_BINDING and row['stage'] not in ('native', 'release'):
             raise AcceptanceError(f'{case_id}: native install requires a native or release stage')
-        if test in (NATIVE_SSH_BINDING, NATIVE_PRIOR_BINDING, NATIVE_HOT_BINDING) and row['stage'] != 'native':
-            raise AcceptanceError(f'{case_id}: this native route requires a native stage')
+        if case_id in NATIVE_BINDINGS:
+            if test is None:
+                raise AcceptanceError(f'{case_id}: missing executable native binding')
+            if test != NATIVE_INSTALL_BINDING and row['stage'] != 'native':
+                raise AcceptanceError(f'{case_id}: this native route requires a native stage')
         if test and test.get('journey') in VSIX_REHEARSALS and row['stage'] != 'release':
             raise AcceptanceError(f'{case_id}: installed VSIX rehearsal requires a release stage')
         cases[case_id] = Case(case_id, row['stage'], assertion, tuple(refs), test)

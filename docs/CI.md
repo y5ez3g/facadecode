@@ -524,6 +524,56 @@ handshakes and owned cleanup. Separate tests exercise same-version, older-versio
 disjoint offers. This is opt-in source QA. Actual incompatible builds and signed release
 artifacts have their own catalog rows.
 
+### Native Core incompatible takeover QA
+
+On unprivileged Linux x64 with OpenSSH server and pidfds, build the lower and higher
+Linux x64 pairs as described for hot takeover. Apply [the test Keeper API patch](../ci/fixtures/core-keeper-api2.patch)
+in the separate higher worktree before compiling. It leaves Daemon API 1 available so
+the higher Shell reaches the actual takeover call, and makes its Keeper negotiate API 2.
+Keep the source versions, the numeric and API diffs, the build logs and the archive checksums.
+
+```sh
+# From the root of each build checkout, with a separate package directory.
+node core/scripts/package-core.mjs --target linux-x64 \
+    --bin-dir core/target/x86_64-unknown-linux-gnu/debug --out-dir "$package_dir"
+# From the original checkout, build the stand-in CLI.
+(cd core && cargo build --locked --target x86_64-unknown-linux-gnu \
+    -p facade-scenarios --bin facade-fakecli)
+
+python3 -B ci/check_incompatible_build.py \
+    --lower-archive "$lower_dir/facade-core-linux-x64.tar.gz" --lower-manifest "$lower_dir/SHA256SUMS" \
+    --higher-archive "$higher_dir/facade-core-linux-x64.tar.gz" --higher-manifest "$higher_dir/SHA256SUMS" \
+    --fake-executable core/target/x86_64-unknown-linux-gnu/debug/facade-fakecli \
+    --output-dir "$work/incompatible" --run-id incompatible-local
+```
+
+The higher build negotiates Keeper API 2 in a fresh home. Its direct `daemon --takeover`
+against the older live Keeper refuses the exact Agent before changing program or durable
+state. The original process, route, session and receipt stay usable. A repeat produces no
+new terminal input and a fresh message reaches the same CLI once. The separate installer
+check records the verified inactive version cache it can leave when activation fails and
+checks the active installation. This is local source QA for the native incompatible case.
+
+### Native Extension Remote SSH
+
+The Linux x64 connect proof opens official VS Code 1.147.0 against a disposable loopback
+Docker SSH guest. Use a local Docker daemon, OpenSSH client, Xvfb, Node 24 and Python 3.
+Put the four files named in the pinned manifests into a local asset directory. The server
+file is `vscode-server-linux-x64-1.147.0.tar.gz`. Each extension file is `ID-VERSION.vsix`.
+The runner stages and hashes the four files before opening the editor. [Server pin](../ci/fixtures/remote-ssh/official-server-linux-x64.json) · [Marketplace pins](../ci/fixtures/remote-ssh/pinned-marketplace.json)
+
+```sh
+(cd extension && npm ci && npm run compile && npm run bundle && node scripts/build-it.mjs)
+ci/check_remote_editor.sh "$asset_dir" "$vscode_executable" "$work/remote-ssh"
+```
+
+The native test reads the actual remote Extension Host executable and the original Agent
+identity from the guest. The exact workspace owns one pinned viewer, and the fake CLI
+records one startup. The receipt includes the staged program and editor digests, the
+authenticated SSH observation and the verified removal of the exact guest and scratch
+scope. The connect case is opt-in. The reconnect case stays pending because the official
+workbench failed to reconnect after a real carrier drop even when SSH transport recovered.
+
 Each successful native PR package job records the VSIX pair, Core archive and checksum file
 digests with the checked-out revision, tree and GitHub attempt. Run
 `extension/scripts/native-package-evidence.mjs verify` on the downloaded `extension-*`
