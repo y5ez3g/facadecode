@@ -6,10 +6,29 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 from catalog import AcceptanceError
-from github_evidence import artifact_manifest, check_jobs, unpack_artifact
+from github_evidence import artifact_manifest, check_jobs, check_pull_run, current_pull_merge, unpack_artifact
 
 
 class HostedEvidence(unittest.TestCase):
+    def test_current_pr_requires_the_exact_open_head_base_and_workflow(self):
+        repo, pull, head, base, merge = 'owner/name', 15, 'a' * 40, 'b' * 40, 'c' * 40
+        linkage = {'number': pull, 'head': {'sha': head}, 'base': {'sha': base}}
+        candidate = {**linkage, 'state': 'open', 'merge_commit_sha': merge}
+        with patch('github_evidence.gh_json', return_value=candidate) as gh:
+            self.assertEqual(current_pull_merge(repo, pull, head, base), merge)
+            gh.assert_called_once_with('repos/owner/name/pulls/15')
+            for changed in (
+                {'state': 'closed'}, {'head': {'sha': 'd' * 40}}, {'base': {'sha': 'd' * 40}},
+                {'number': 16}, {'merge_commit_sha': None},
+            ):
+                gh.return_value = {**candidate, **changed}
+                with self.subTest(changed=changed), self.assertRaises(AcceptanceError):
+                    current_pull_merge(repo, pull, head, base)
+        check_pull_run({'pull_requests': [linkage]}, pull, head, base)
+        for records in ([], [linkage, linkage], [{**linkage, 'base': {'sha': 'd' * 40}}]):
+            with self.subTest(records=records), self.assertRaises(AcceptanceError):
+                check_pull_run({'pull_requests': records}, pull, head, base)
+
     def test_requires_this_attempts_product_and_artifact_identity(self):
         run = {'run_attempt': 2, 'id': 7, 'head_sha': 'a' * 40, 'repository': {'id': 3}}
         core = {

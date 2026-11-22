@@ -33,6 +33,23 @@ def check_run(run, repo, head):
         raise AcceptanceError('the current workflow attempt has no successful completed result')
 
 
+def current_pull_merge(repo, pull, head, base):
+    candidate = gh_json(f'repos/{repo}/pulls/{pull}')
+    if ((candidate['number'], candidate['state'], candidate['head']['sha'], candidate['base']['sha'])
+            != (pull, 'open', head, base)):
+        raise AcceptanceError(f'PR #{pull} no longer matches the reviewed open candidate')
+    merge = candidate.get('merge_commit_sha')
+    if not isinstance(merge, str) or not SHA.fullmatch(merge):
+        raise AcceptanceError(f'PR #{pull} has no current GitHub merge revision')
+    return merge
+
+
+def check_pull_run(run, pull, head, base):
+    matches = [candidate for candidate in run['pull_requests'] if candidate['number'] == pull]
+    if len(matches) != 1 or (matches[0]['head']['sha'], matches[0]['base']['sha']) != (head, base):
+        raise AcceptanceError(f'workflow run is not for the reviewed revision of PR #{pull}')
+
+
 def check_jobs(jobs, products):
     required = {'Shadow catalog and policy tests'}
     if products:
@@ -103,12 +120,15 @@ def download_receipts(repo, artifacts, output):
     return receipts
 
 
-def verify_hosted(root, repo, run_id, head, base, output):
+def verify_hosted(root, repo, run_id, head, base, output, *, pull=None):
+    current_merge = current_pull_merge(repo, pull, head, base) if pull is not None else None
     endpoint = f'repos/{repo}/actions/runs/{run_id}'
     run = gh_json(endpoint)
     check_run(run, repo, head)
     if run['id'] != run_id:
         raise AcceptanceError('GitHub returned an unexpected workflow run')
+    if pull is not None:
+        check_pull_run(run, pull, head, base)
     attempt = run['run_attempt']
     products = affected_products(changed_paths(root, base))
     if not products:
@@ -124,6 +144,8 @@ def verify_hosted(root, repo, run_id, head, base, output):
     merge = revisions.pop()
     if not isinstance(merge, str) or not SHA.fullmatch(merge):
         raise AcceptanceError('the receipts do not name a valid merge commit')
+    if current_merge is not None and merge != current_merge:
+        raise AcceptanceError(f'the receipts do not match the current GitHub merge revision of PR #{pull}')
     commit = gh_json(f'repos/{repo}/git/commits/{merge}')
     if commit['sha'] != merge or [parent['sha'] for parent in commit['parents']] != [base, head]:
         raise AcceptanceError('the receipts do not match this PR merge revision')
@@ -143,7 +165,10 @@ def verify_hosted(root, repo, run_id, head, base, output):
     check_run(latest, repo, head)
     if (latest['id'], latest['run_attempt']) != (run_id, attempt):
         raise AcceptanceError('a new attempt started while verifying the receipts')
+    if pull is not None and current_pull_merge(repo, pull, head, base) != current_merge:
+        raise AcceptanceError(f'PR #{pull} acquired a new GitHub merge revision while verifying the receipts')
     return {
+        **({'pull': pull} if pull is not None else {}),
         'head': head, 'base': base, 'attempt': attempt_id, 'merge': merge, 'tree': plan['tree'],
         'plan': plan['id'], 'verified': verified, 'scope': dict(by_stage),
         'per_job': {product: len(document['results']) for product, document in documents.items()},
@@ -157,21 +182,24 @@ def main():
     parser.add_argument('--run', type=int, required=True)
     parser.add_argument('--head', required=True, help='reviewed PR head commit')
     parser.add_argument('--base', required=True, help='first parent of the tested GitHub merge commit')
+    parser.add_argument('--pr', type=int, help='also require the current head, base and merge revision of this open PR')
     parser.add_argument('--checkout', type=Path, default=ROOT, help='reviewed checkout with the tested source and policy')
     parser.add_argument('--output', type=Path, help='retain the downloaded ZIPs and receipts in a new directory')
     args = parser.parse_args()
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', args.repo):
         parser.error('expected a GitHub repository as owner/name')
-    if args.run <= 0 or not all(SHA.fullmatch(sha) for sha in (args.head, args.base)):
-        parser.error('expected a positive run ID and full head and base commit hashes')
+    if not all(SHA.fullmatch(sha) for sha in (args.head, args.base)):
+        parser.error('expected full head and base commit hashes')
+    if args.run <= 0 or (args.pr is not None and args.pr <= 0):
+        parser.error('expected a positive run ID and PR number')
     try:
         arguments = (args.checkout.resolve(), args.repo, args.run, args.head, args.base)
         if args.output:
             args.output.mkdir()
-            observed = verify_hosted(*arguments, args.output)
+            observed = verify_hosted(*arguments, args.output, pull=args.pr)
         else:
             with tempfile.TemporaryDirectory(prefix='facade-hosted-evidence-') as directory:
-                observed = verify_hosted(*arguments, Path(directory))
+                observed = verify_hosted(*arguments, Path(directory), pull=args.pr)
         print(json.dumps(observed, indent=2))
     except (OSError, ValueError, KeyError, TypeError, BadZipFile, subprocess.SubprocessError) as error:
         print(f'Could not reconcile hosted evidence: {error}', file=sys.stderr)

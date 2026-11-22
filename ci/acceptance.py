@@ -103,6 +103,8 @@ def argument_parser():
     install = commands.add_parser('verify-native-install', help='verify the Linux x64 candidate install evidence')
     for field in ('archive', 'checksums', 'receipt', 'output'):
         install.add_argument(field, type=Path)
+    install.add_argument('--producer-checkout', type=Path, default=ROOT,
+                         help='absolute checkout path on the runner that recorded the install commands')
     ssh = commands.add_parser('verify-native-ssh', help='verify the Linux x64 real machine route evidence')
     ssh.add_argument('--bin-dir', type=Path, required=True)
     for field in ('receipt', 'output'):
@@ -180,7 +182,7 @@ def main():
         if args.command == 'verify-native-install':
             from check_native_install import verified_install
             passed = verified_install(args.archive, args.checksums, args.receipt, args.output,
-                                      run_identity(args.run_id, environ))
+                                      run_identity(args.run_id, environ), producer_checkout=args.producer_checkout)
             print(f'{passed} Linux x64 native install cases passed and matched the candidate archive')
             return 0
         if args.command == 'verify-native-ssh':

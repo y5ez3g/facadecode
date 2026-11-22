@@ -450,6 +450,9 @@ live identities, and reconciles each refusal with the unchanged state and later 
 The completion marker binds those observations and cleanup to the reviewed tree and run
 attempt. It records Linux x64 coverage for these two rows. The other targets and signed candidate are
 tracked in their native and release lanes.
+When checking retained logs from a different runner, pass the known absolute runner checkout
+path as `verify-native-install --producer-checkout`. The current local checkout supplies the
+inspected installer source and tree.
 
 The Linux x64 Core job starts a separate loopback OpenSSH peer with disposable keys and homes.
 It checks the selected machine, compares the same agent and process through the peer and the
@@ -635,6 +638,8 @@ For an independent verification of a hosted PR shadow run, check out the reviewe
 its tree matches the tested merge tree, or use the exact merge checkout. The command requires
 each selected job to have passed in the current attempt. It checks the GitHub ZIP digests and
 the merge parents, then reconciles the original selected cases with their logged evidence.
+Supply `--pr` to also confirm the workflow belongs to the open PR and verify its current head,
+base and GitHub merge revision at both ends of the audit.
 Use `--output` with a new local directory to keep the original downloads.
 [GitHub Actions artifacts API](https://docs.github.com/en/rest/actions/artifacts)
 
