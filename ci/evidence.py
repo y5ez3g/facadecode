@@ -5,14 +5,16 @@ import json
 import os
 import platform
 import re
+import select
 import shutil
 import signal
 import subprocess
 import tempfile
 import time
 import tomllib
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import CancelledError, ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 from catalog import AcceptanceError, MOCHA_JOURNEYS, json_object, read_json, require_same_ids
 
@@ -28,6 +30,7 @@ HARNESS_FILES = (
 )
 INPUT_FILES = (*HARNESS_FILES, '.github/workflows/ci-acceptance.yml', 'docs/CI.md')
 EDITOR_PASS = 'Facade acceptance test '
+SCOPE_PATHS = {b'CI_ACCEPTANCE_ROOT', b'FACADE_HOME', b'HOME', b'TMPDIR', b'VSCODE_PORTABLE', b'XDG_RUNTIME_DIR'}
 
 
 def digest(value):
@@ -156,21 +159,37 @@ def command_for(root, bindings, log_path, vscode, env):
     return root / 'extension', ['xvfb-run', '-a', 'node', 'build/out/test/integration/run.js'], editor_env
 
 
-def execute(args, cwd, env, log, *, timeout=900):
+def child_exit_code(process, timeout, cancelled):
+    if cancelled is None:
+        return process.wait(timeout=timeout)
+    deadline = time.monotonic() + timeout
+    while not cancelled.is_set():
+        remaining = max(0, deadline - time.monotonic())
+        try:
+            return process.wait(timeout=min(0.25, remaining))
+        except subprocess.TimeoutExpired:
+            if time.monotonic() >= deadline:
+                raise
+    raise CancelledError()
+
+
+def execute(args, cwd, env, log, *, timeout=900, cancelled=None):
+    if cancelled is not None and cancelled.is_set():
+        return 'cancelled'
     try:
         with subprocess.Popen(
             args, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
         ) as process:
             try:
-                return 'pass' if process.wait(timeout=timeout) == 0 else 'fail'
-            except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
+                return 'pass' if child_exit_code(process, timeout, cancelled) == 0 else 'fail'
+            except (subprocess.TimeoutExpired, KeyboardInterrupt, CancelledError) as error:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
                 if isinstance(error, KeyboardInterrupt):
                     raise
-                return 'timeout'
+                return 'cancelled' if isinstance(error, CancelledError) else 'timeout'
     except OSError as error:
         print(error, file=log, flush=True)
         return 'infra-error'
@@ -249,20 +268,62 @@ def verify_completion(plan, bindings, directory):
     return observation.name
 
 
-def run_binding(root, bindings, output_dir, vscode, env):
+def reclaim_interrupted_scope(isolated, stream):
+    # PID handles prevent signaling a reused PID after verifying the live process's scope.
+    if not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
+        print('PID handles are unavailable for interrupted fixture cleanup.', file=stream)
+        return
+    scope = os.fsencode(isolated)
+
+    def inside(value):
+        return value == scope or value.startswith(scope + b'/')
+
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdecimal():
+            continue
+        try:
+            if entry.stat().st_uid != os.getuid():
+                continue
+            pid = int(entry.name)
+            descriptor = os.pidfd_open(pid)
+            try:
+                try:
+                    cwd = os.fsencode(os.readlink(entry / 'cwd'))
+                except OSError:
+                    cwd = b''
+                env = (entry / 'environ').read_bytes().split(b'\0')
+                paths = (item.partition(b'=') for item in env)
+                if inside(cwd) or any(name in SCOPE_PATHS and inside(value) for name, _, value in paths):
+                    signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                    print(f'Stopped owned fixture process {pid}.', file=stream)
+                    completed = select.poll()
+                    completed.register(descriptor, select.POLLIN)
+                    completed.poll(1000)
+            finally:
+                os.close(descriptor)
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+
+
+def run_binding(root, bindings, output_dir, vscode, env, cancelled=None):
     output, stdout, _ = binding_paths(output_dir, bindings)
     isolated = Path(tempfile.mkdtemp(prefix='fci-', dir='/tmp'))
     runtime_dir = isolated / 'runtime'
     runtime_dir.mkdir(mode=0o700)
     cwd, args, test_env = command_for(
         root, bindings, output.with_suffix(''), vscode,
-        {**env, 'TMPDIR': str(isolated), 'XDG_RUNTIME_DIR': str(runtime_dir)},
+        {**env, 'CI_ACCEPTANCE_ROOT': str(isolated), 'TMPDIR': str(isolated), 'XDG_RUNTIME_DIR': str(runtime_dir)},
     )
     status = 'interrupted'
     with stdout.open('w') as stream:
         try:
-            status = execute(args, cwd, test_env, stream)
+            status = execute(args, cwd, test_env, stream, cancelled=cancelled)
         finally:
+            if status in ('cancelled', 'interrupted', 'timeout'):
+                try:
+                    reclaim_interrupted_scope(isolated, stream)
+                except OSError as error:
+                    print(f'Interrupted fixture cleanup: {error}', file=stream)
             cleanup = execute(['sh', 'core/scripts/leftovers.sh', str(isolated)], root, env, stream)
             if cleanup == 'pass':
                 try:
@@ -312,13 +373,15 @@ def run_pilots(root, plan, product, output_dir, vscode=None):
         vscode = download_editor(root, env, output_dir)
         editor = editor_identity(vscode)
     preparation_ms = round((time.monotonic() - started) * 1000)
+    cancelled = Event() if product == 'extension' and prepared == 'pass' else None
+
     def run_group(group):
         group_cases, bindings = group
         names = ', '.join(binding['name'] for binding in bindings)
         print(f'Running {bindings[0]["runner"]} {names}', flush=True)
         started = time.monotonic()
         if prepared == 'pass':
-            status, log = run_binding(root, bindings, output_dir, vscode, env)
+            status, log = run_binding(root, bindings, output_dir, vscode, env, cancelled)
             if status == 'pass':
                 observation, console, completion = binding_paths(output_dir, bindings)
                 completion.write_text(json.dumps(completion_record(plan, bindings, observation, console), indent=2) + '\n')
@@ -332,11 +395,20 @@ def run_pilots(root, plan, product, output_dir, vscode=None):
 
     results = []
     groups = execution_groups(selected)
-    if product == 'extension' and prepared == 'pass':
+    if cancelled is not None:
         # Test contexts and displays are isolated. The staged binaries are shared and read-only here.
         with ThreadPoolExecutor(max_workers=2) as workers:
-            for observed in workers.map(run_group, groups):
-                results.extend(observed)
+            pending = []
+            try:
+                for group in groups:
+                    pending.append(workers.submit(run_group, group))
+                for future in pending:
+                    results.extend(future.result())
+            except (Exception, KeyboardInterrupt):
+                cancelled.set()
+                for future in pending:
+                    future.cancel()
+                raise
     else:
         for group in groups:
             results.extend(run_group(group))

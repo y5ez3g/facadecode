@@ -416,6 +416,7 @@ once and uses official VS Code `1.105.1` with isolated profiles and fake CLIs. C
 per scenario target and compares its exact test names. Extension shares a fixture for compatible
 Mocha selections with the same engine and route. Multi-window and lifetime drivers use separate
 fixtures. After one shared build, the runner executes at most two isolated editor groups at a time.
+An interrupt stops active owned sessions, cancels waiting groups and runs scoped cleanup.
 Verify requires results, original logs and a post-cleanup record for every
 planned case on the same source, plan, platform and run attempt. The editor tests identify the
 serving engine from the live host. The status describes the shadow pilot only. The existing product

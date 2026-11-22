@@ -39,7 +39,7 @@ environment_pids=$(printf '%s\n' "$processes" | awk -v tmp="$tmp" -v real="$real
 	$1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { exit 2 }
 	{
 		for (i = 3; i <= NF; i++) {
-			if ($i !~ /^(FACADE_HOME|HOME|TMPDIR|VSCODE_PORTABLE|XDG_RUNTIME_DIR)=/) continue
+			if ($i !~ /^(CI_ACCEPTANCE_ROOT|FACADE_HOME|HOME|TMPDIR|VSCODE_PORTABLE|XDG_RUNTIME_DIR)=/) continue
 			value = substr($i, index($i, "=") + 1)
 			if (inside(value, tmp) || inside(value, real)) { print $1; break }
 		}

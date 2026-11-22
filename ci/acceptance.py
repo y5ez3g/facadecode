@@ -114,6 +114,9 @@ def main():
         passed = verify_receipts(plan, receipts, args.product)
         print(f'{passed} pilot cases passed and matched the current plan')
         return 0
+    except KeyboardInterrupt:
+        print('Acceptance interrupted.', file=sys.stderr)
+        return 130
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f'Acceptance failed: {error}', file=sys.stderr)
         return 1

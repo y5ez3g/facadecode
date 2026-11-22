@@ -6,13 +6,16 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 from catalog import AcceptanceError, load, read_cases, read_json, reconcile, validate_binding
 from evidence import (
     EDITOR, EDITOR_PASS, binding_paths, command_for, completion_record, execute, execution_groups,
-    observed_pass, run_identity, verify_receipts,
+    observed_pass, reclaim_interrupted_scope, run_identity, verify_receipts,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -239,6 +242,52 @@ class EvidenceTests(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == 'linux', 'The pilot process scan targets Linux.')
 class CleanupTests(unittest.TestCase):
+    @unittest.skipUnless(hasattr(os, 'pidfd_open') and hasattr(signal, 'pidfd_send_signal'), 'Linux PID handles required.')
+    def test_interrupted_cleanup_reaps_only_the_owned_detached_process(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'owned'
+            root.mkdir()
+            processes = [
+                subprocess.Popen(
+                    ['sleep', '30'], start_new_session=True,
+                    env={'PATH': os.environ['PATH'], 'TMPDIR': str(path)},
+                )
+                for path in (root, root.with_name('owned-sibling'))
+            ]
+            owned, sibling = processes
+            try:
+                with tempfile.TemporaryFile(mode='w+') as log:
+                    reclaim_interrupted_scope(root, log)
+                self.assertEqual(owned.wait(timeout=5), -signal.SIGKILL)
+                self.assertIsNone(sibling.poll())
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        process.terminate()
+                    process.wait(timeout=5)
+
+    def test_editor_group_cancellation_stops_an_active_child(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / 'child.log'
+            cancelled = Event()
+            script = 'import os, time\nprint(os.getpid(), flush=True)\ntime.sleep(30)\n'
+            with log.open('w') as stream, ThreadPoolExecutor(max_workers=1) as worker:
+                future = worker.submit(
+                    execute, [sys.executable, '-c', script], ROOT, dict(os.environ),
+                    stream, timeout=30, cancelled=cancelled,
+                )
+                try:
+                    deadline = time.monotonic() + 10
+                    while log.stat().st_size == 0 and time.monotonic() < deadline:
+                        time.sleep(0.025)
+                    pid = int(log.read_text().strip())
+                    self.assertTrue(Path(f'/proc/{pid}').exists())
+                finally:
+                    cancelled.set()
+                self.assertEqual(future.result(timeout=5), 'cancelled')
+                self.assertFalse(Path(f'/proc/{pid}').exists())
+
     def test_core_process_list_is_portable_to_awk_without_multiline_arguments(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
