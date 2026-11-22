@@ -13,7 +13,7 @@ import time
 import tomllib
 from pathlib import Path
 
-from catalog import AcceptanceError, read_json, require_same_ids
+from catalog import AcceptanceError, MOCHA_JOURNEYS, json_object, read_json, require_same_ids
 
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 PLATFORM = 'linux-x64'
@@ -87,7 +87,10 @@ def execution_groups(cases):
     groups = {}
     for case_id, binding in cases.items():
         runner = binding['runner']
-        key = (runner, binding['target'] if runner == 'core-scenario' else digest(binding))
+        if runner == 'core-scenario':
+            key = (runner, binding['target'])
+        else:
+            key = (runner, binding['journey'], binding['engine'], binding['built_in'])
         groups.setdefault(key, {})[case_id] = binding
     for cases_in_group in groups.values():
         unique = {binding['name']: binding for binding in cases_in_group.values()}
@@ -110,9 +113,18 @@ def observed_pass(bindings, output):
         )
     markers = [line.removeprefix(EDITOR_PASS) for line in output.splitlines() if line.startswith(EDITOR_PASS)]
     try:
-        return [json.loads(marker) for marker in markers] == [{'name': binding['name'], 'engine': binding['engine']}]
+        records = [json.loads(marker, object_pairs_hook=json_object) for marker in markers]
     except ValueError:
         return False
+    if not all(
+        isinstance(record, dict) and record.keys() == {'name', 'engine'}
+        and isinstance(record['name'], str) and isinstance(record['engine'], str)
+        for record in records
+    ):
+        return False
+    return sorted((record['name'], record['engine']) for record in records) == sorted(
+        (entry['name'], entry['engine']) for entry in bindings
+    )
 
 
 def command_for(root, bindings, log_path, vscode, env):
@@ -123,16 +135,20 @@ def command_for(root, bindings, log_path, vscode, env):
             '--test', binding['target'], '--', '--exact', '--test-threads=1',
             *(entry['name'] for entry in bindings),
         ], env
-    title = re.sub(r'([\\.^$|?*+()[\]{}])', r'\\\1', binding['name'])
     editor_env = {
         **env,
         'VSCODE_EXECUTABLE': str(vscode),
         'FACADE_IT_ENGINE': binding['engine'],
         'FACADE_IT_ONLY': binding['journey'],
         'FACADE_IT_BUILT_IN': binding['built_in'],
-        'FACADE_IT_GREP': f'^{title}$',
-        'FACADE_IT_EXPECT_TEST': binding['name'],
     }
+    if binding['journey'] in MOCHA_JOURNEYS:
+        names = [entry['name'] for entry in bindings]
+        patterns = [re.sub(r'([\\.^$|?*+()[\]{}])', r'\\\1', name) for name in names]
+        editor_env['FACADE_IT_GREP'] = '^(?:' + '|'.join(patterns) + ')$'
+        editor_env['FACADE_IT_EXPECT_TESTS'] = json.dumps(names)
+    else:
+        editor_env['FACADE_IT_EXPECT_DRIVER'] = binding['name']
     return root / 'extension', ['xvfb-run', '-a', 'node', 'build/out/test/integration/run.js'], editor_env
 
 

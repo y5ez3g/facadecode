@@ -139,15 +139,23 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	const home = env.FACADE_HOME!;
 	const name = 'shell-ada';
 	const prompt = 'Review the isolated Shell handoff';
-	const address = detachedStartReference(run('start', '-d', '--name', name, 'codex', '--', prompt), name);
+	const branch = 'shell-handoff-worktree';
+	const worktree = path.join(`${folder}.worktrees`, branch);
+	const [started, location, ...extra] = run('start', '-d', '--name', name, '--worktree', branch, 'codex', '--', prompt).trimEnd().split(/\r?\n/u);
+	const address = detachedStartReference(started, name);
+	assert.ok(location?.startsWith('Worktree: '));
+	assert.deepStrictEqual([normalizeDriveLetter(location.slice('Worktree: '.length)), extra], [normalizeDriveLetter(worktree), []]);
 	const inspect = async () => (await coreCall(home, 'agent.inspect', { target: address })).agent;
 	const before = await inspect();
 	assert.ok(before.pid && before.process === 'running');
 	assert.strictEqual(before.address, address);
+	assert.strictEqual(normalizeDriveLetter(fs.realpathSync(before.cwd)), normalizeDriveLetter(fs.realpathSync(worktree)));
+	assert.strictEqual(execFileSync('git', ['branch', '--show-current'], { cwd: worktree, encoding: 'utf8' }).trim(), branch);
 	const launchFile = `${env.FACADE_IT_RECORD}.args.#${before.reference.agent_id}`;
 	const launch = await until('the Shell start argv at the fake CLI', () => fs.existsSync(launchFile)
-		? JSON.parse(fs.readFileSync(launchFile, 'utf8')) as { readonly args: string[] }
+		? JSON.parse(fs.readFileSync(launchFile, 'utf8')) as { readonly args: string[]; readonly cwd: string }
 		: undefined);
+	assert.strictEqual(normalizeDriveLetter(fs.realpathSync(launch.cwd)), normalizeDriveLetter(fs.realpathSync(worktree)));
 	assert.deepStrictEqual(launch.args.filter(arg => arg === '--' || arg === prompt), ['--', prompt], 'the two Shell arguments each arrive once');
 	assert.deepStrictEqual(launch.args.slice(-2), ['--', prompt], 'the prompt follows its separator at the end of argv');
 	const window = await open(folder, 'sh');
@@ -165,6 +173,7 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	const after = await inspect();
 	assert.strictEqual(after.address, address);
 	assert.strictEqual(after.pid, before.pid);
+	assert.strictEqual(after.cwd, before.cwd);
 	assert.strictEqual(after.process, 'running');
 
 	execFileSync(process.execPath, [path.join(__dirname, 'shellAttachFixture.js'), facade, address, marker], { cwd: folder, env, timeout: 65_000 });
@@ -224,8 +233,12 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	assert.notStrictEqual(restored.pid, before.pid);
 	assert.deepStrictEqual(starts().slice(priorStarts), [restored.pid], 'reopening started the saved Pin once');
 	await restoredPeer.act({ kind: 'hide-shell-agent', name });
-	await until('the hidden card to leave both windows', async () =>
-		!await cardIn(restoredWindow) && !await cardIn(restoredPeer) || undefined);
+	await until('the hidden card, tab, workspace member and Pin to go', async () => {
+		const views = await Promise.all([restoredWindow, restoredPeer].map(window => window.act<WindowView>({ kind: 'snapshot' })));
+		const saved = roster();
+		return views.every(view => !view.cards.some(card => card.name === name) && view.terminals === 0)
+			&& saved.members.length === 0 && saved.pins.length === 0 || undefined;
+	});
 	assert.strictEqual((await inspect()).pid, restored.pid, 'Hide leaves the resumed agent running');
 	await restoredWindow.act({ kind: 'open-shell-agent', name, address, text: 'reopened before removal' });
 	await restoredWindow.act({ kind: 'shell-pin', name, set: true });
@@ -457,6 +470,9 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 	};
 
 	const first = await start(folder, 'a');
+	if (journey.remote === null) {
+		assert.ok(await first.act<boolean>({ kind: 'terminal-owner' }), 'the local Window Component owns this VS Code session');
+	}
 	const screen = 'Shared agent screen';
 	const before = await first.act<RunningAgent>({ kind: 'start', screen });
 	await expectAgent(first, before.id, false);

@@ -14,16 +14,23 @@
     "core/p0/input-draft/draft-protection",
     "core/p0/input-draft/invalid-batch",
     "core/p0/input-draft/type",
+    "extension/p0/activation-shell/old-supervisor",
+    "extension/p0/activation-shell/rust-handoff",
+    "extension/p0/pin-reload/close-one-window",
+    "extension/p0/pin-reload/pinned-reload",
+    "extension/p0/pin-reload/resume-old",
+    "extension/p0/pin-reload/resume-rust",
     "core/p0/guest-reply/correlated-reply",
     "core/p0/guest-reply/wrong-caller",
     "core/p0/authority/authorized",
     "core/p0/authority/permission-denied",
+    "extension/p0/window-replacement/window-activation-old",
+    "extension/p0/window-replacement/window-activation-rust",
     "core/p0/remote-execution/retry-lost-reply",
+    "core/p0/remote-execution/route-recovery",
     "core/p0/watch/reconnect",
     "core/p0/watch/snapshot-update",
     "core/p0/watch/unwatch",
-    "extension/p0/pin-reload/resume-old",
-    "extension/p0/pin-reload/resume-rust",
     "core/daemon/local-client-request/call",
     "core/daemon/local-client-request/cancel",
     "core/daemon/local-client-request/hello",
@@ -65,12 +72,39 @@
     "core/shell/process/hook.approve",
     "core/shell/process/hook.instructions",
     "core/shell/process/hook.title",
+    "extension/configuration-old/built-in/claude",
+    "extension/configuration-rust/built-in/claude",
+    "extension/configuration/vscode/facade.rustEngine",
+    "extension/mcp-old/tool/list_agents",
+    "extension/mcp-old/tool/read_messages",
+    "extension/mcp-old/tool/read_screen",
+    "extension/mcp-old/tool/send_message",
+    "extension/mcp-old/tool/start_agent",
+    "extension/mcp-old/tool/type_text",
+    "extension/mcp-rust/tool/read_screen",
+    "extension/mcp-rust/tool/send_message",
+    "extension/mcp-rust/tool/start_agent",
+    "extension/mcp-rust/tool/type_text",
+    "extension/ptyd-old/request/input",
     "extension/vscode-old/command/facade.continueSession",
+    "extension/vscode-old/command/facade.filter",
+    "extension/vscode-old/command/facade.newAgent",
     "extension/vscode-old/command/facade.pinAgent",
+    "extension/vscode-old/command/facade.showAgentLaunch",
+    "extension/vscode-old/command/facade.showAgentsLog",
+    "extension/vscode-old/command/facade.stopAgent",
     "extension/vscode-old/command/facade.unpinAgent",
+    "extension/vscode-rust/command/facade.filter",
+    "extension/vscode-rust/command/facade.goToAgent",
+    "extension/vscode-rust/command/facade.hideAgent",
+    "extension/vscode-rust/command/facade.newAgent",
     "extension/vscode-rust/command/facade.pinAgent",
     "extension/vscode-rust/command/facade.resumeAgent",
-    "extension/vscode-rust/command/facade.unpinAgent"
+    "extension/vscode-rust/command/facade.showAgentsLog",
+    "extension/vscode-rust/command/facade.stopAgent",
+    "extension/vscode-rust/command/facade.unpinAgent",
+    "extension/window-component-rust/command/facade.window.terminalOwner",
+    "extension/window-socket-old/operation/agents"
   ],
   "cases": [
     {
@@ -235,8 +269,7 @@
       "assertion": "Deny a foreground handoff and observe a connect_failed frame with the reason, no connected notification and no recorded successful connection.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:649",
-        "core/tests/tests/machines.rs:1509"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -244,7 +277,7 @@
       "assertion": "Observe the id-less foreground handoff notification with the authenticated peer identity and verify the roster shows its connected state.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:649"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -252,8 +285,7 @@
       "assertion": "Lose a live forwarded subscription and observe the daemon's watch_ended carrying the former local watch ID and reason, then establish a fresh watch.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:694",
-        "core/tests/tests/machines.rs:2280"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -354,7 +386,7 @@
       "assertion": "Send id-less topology on an authenticated machine link, verify the receiving roster learns the route, and observe a subsequent remote call use it without an advertisement response.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2280"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -363,7 +395,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/reliability.rs",
-        "core/tests/tests/machines.rs:1951"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -371,7 +403,7 @@
       "assertion": "Observe an authenticated peer's id-less changed frame mapped to the matching local watch and verify the payload came from the expected remote agent.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:1660"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -379,8 +411,7 @@
       "assertion": "Observe an authenticated peer's idle shutdown report the correct machine as sleeping, leaving other peers unchanged and ordinary roster queries passive.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:450",
-        "core/tests/tests/machines.rs:522"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -388,8 +419,7 @@
       "assertion": "Observe the peer's id-less watch_ended for the forwarded subscription and verify the owning local watch closes with the corresponding reason.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:694",
-        "core/tests/tests/machines.rs:2280"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -397,7 +427,7 @@
       "assertion": "Advertise topology with a request ID over an authenticated link, verify the correlated response and observe a subsequent call taking the advertised route.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2280"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -406,7 +436,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/reliability.rs",
-        "core/tests/tests/machines.rs:1951"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -414,8 +444,7 @@
       "assertion": "Forward a call or watch on an authenticated peer link. Verify only the intended remote run receives the effect and the peer response or watch snapshot correlates with the original ID.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:1660",
-        "core/tests/tests/machines.rs:1951"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -423,9 +452,7 @@
       "assertion": "Send a machine hello over an authenticated isolated peer connection; verify v1 negotiation and peer identity, then reject an invalid offer or mismatched machine identity before admitting it.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:16",
-        "core/tests/tests/machines.rs:82",
-        "core/tests/tests/machines.rs:1509"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -433,7 +460,7 @@
       "assertion": "Send an authenticated peer unwatch for its own remote subscription, observe the acknowledged remote ID, and verify the former watch ceases delivering output.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:694"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -442,7 +469,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/configuration.rs:139",
-        "core/tests/tests/machines.rs:299",
+        "core/tests/tests/machines.rs",
         "core/tests/tests/mcp.rs:635",
         "core/tests/tests/probes.rs:276"
       ]
@@ -452,7 +479,7 @@
       "assertion": "Return the expected live identities and visible Guests without exposing unauthorized records.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2048",
+        "core/tests/tests/machines.rs",
         "core/tests/tests/windows.rs:238"
       ]
     },
@@ -501,7 +528,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/resume.rs:580",
-        "core/tests/tests/machines.rs:522"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -511,7 +538,7 @@
       "existing_tests": [
         "core/tests/tests/input.rs:269",
         "core/tests/tests/keeper.rs:377",
-        "core/tests/tests/machines.rs:1829",
+        "core/tests/tests/machines.rs",
         "core/tests/tests/mcp.rs:297"
       ]
     },
@@ -595,8 +622,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs:795",
-        "core/tests/tests/configuration.rs:243",
-        "core/tests/tests/machines.rs:924"
+        "core/tests/tests/configuration.rs:243"
       ],
       "test": {
         "runner": "core-scenario",
@@ -618,7 +644,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/cli.rs:617",
-        "core/tests/tests/machines.rs:891"
+        "core/tests/tests/machines.rs"
       ],
       "test": {
         "runner": "core-scenario",
@@ -641,8 +667,7 @@
       "assertion": "Read expected visible agent records from their holder across an authenticated peer link; check that the same operation is unavailable on an ordinary local client connection.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:1566",
-        "core/tests/tests/machines.rs:2030"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -650,7 +675,7 @@
       "assertion": "Resize a forwarded Attach view through its holder and observe the correct remote watch and terminal apply the new dimensions.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:1660",
+        "core/tests/tests/machines.rs",
         "core/tests/tests/attach.rs:450"
       ]
     },
@@ -659,8 +684,7 @@
       "assertion": "Read the remote start outcome at the requester and correlate the receipt and exact Agent reference with the single remote process started.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:795",
-        "core/tests/tests/machines.rs:1660"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -676,7 +700,7 @@
       "assertion": "Use the saved route between isolated peers, observe that the required intermediate link opens, and verify the subsequent operation reaches the intended machine.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2280"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -684,7 +708,6 @@
       "assertion": "Read the holder's resumable records through the authenticated peer route; verify exact saved session identity, with no local-client access.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:522",
         "core/tests/tests/machines.rs"
       ]
     },
@@ -694,7 +717,6 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs:795",
-        "core/tests/tests/machines.rs:934",
         "core/tests/tests/windows.rs:176"
       ],
       "test": {
@@ -723,7 +745,7 @@
       "existing_tests": [
         "core/tests/tests/cli.rs",
         "core/tests/tests/configuration.rs:548",
-        "core/tests/tests/machines.rs:50"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -731,7 +753,7 @@
       "assertion": "Remove the expected saved connection and observe the roster change with other routes intact.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:434"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -739,7 +761,7 @@
       "assertion": "Rename a remote peer through the allowed session and read its new name under the same machine ID.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2280"
+        "core/tests/tests/machines.rs:2356"
       ],
       "test": {
         "runner": "core-scenario",
@@ -793,8 +815,7 @@
       "assertion": "Read the roster snapshot and observe a subsequent matching peer and connection-state update on that watch.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:694",
-        "core/tests/tests/machines.rs:2280"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -1352,7 +1373,6 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs:1951",
-        "core/tests/tests/machines.rs",
         "core/tests/tests/reliability.rs"
       ],
       "test": {
@@ -1366,8 +1386,13 @@
       "assertion": "Route loss is visible and the route can recover to the original agent identity.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs"
-      ]
+        "core/tests/tests/machines.rs:2030"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "a_lost_route_recovers_to_the_same_live_remote_terminal"
+      }
     },
     {
       "id": "core/p0/service-recovery/daemon-restart",
@@ -1555,7 +1580,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/commands.rs:118",
-        "core/tests/tests/machines.rs:450"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -1573,8 +1598,7 @@
       "existing_tests": [
         "core/tests/tests/machines.rs:795",
         "core/tests/tests/cli.rs",
-        "core/tests/tests/help.rs:23",
-        "core/tests/tests/machines.rs:1200"
+        "core/tests/tests/help.rs:23"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1602,7 +1626,7 @@
       "existing_tests": [
         "core/tests/tests/cli.rs",
         "core/tests/tests/help.rs:25",
-        "core/tests/tests/machines.rs:473",
+        "core/tests/tests/machines.rs",
         "core/tests/tests/upgrade.rs:1693"
       ]
     },
@@ -1611,7 +1635,7 @@
       "assertion": "Remove the saved peer by exact ID and verify that peer's saved route disappears while another matching name stays intact.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:417"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -1619,7 +1643,7 @@
       "assertion": "Read the changed peer name from the roster under the original machine ID.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2280"
+        "core/tests/tests/machines.rs:2356"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1635,7 +1659,7 @@
         "core/tests/tests/cli.rs",
         "core/tests/tests/configuration.rs:790",
         "core/tests/tests/help.rs:18",
-        "core/tests/tests/machines.rs:2331"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -1647,7 +1671,7 @@
         "core/tests/tests/cli.rs",
         "core/tests/tests/configuration.rs:351",
         "core/tests/tests/help.rs:17",
-        "core/tests/tests/machines.rs:498"
+        "core/tests/tests/machines.rs"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1821,7 +1845,7 @@
         "core/tests/tests/commands.rs:518",
         "core/tests/tests/keeper.rs:100",
         "core/tests/tests/lifecycle.rs:20",
-        "core/tests/tests/machines.rs:285"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -1903,8 +1927,7 @@
       "assertion": "Start the background SSH link in an isolated home and verify the command returns with the expected saved peer and the link still carrying requests.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:371",
-        "core/tests/tests/machines.rs:694"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -1912,8 +1935,7 @@
       "assertion": "Pass an authenticated machine hello over the process's stdio and verify malformed or incompatible offers are refused before opening the daemon or changing running agents.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:16",
-        "core/tests/tests/machines.rs:82"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -1921,8 +1943,7 @@
       "assertion": "Exercise SSH administration in two isolated homes and verify that only the paired authorization is installed or removed, including refusal for a mismatched peer.",
       "stage": "native",
       "existing_tests": [
-        "core/tests/tests/machines.rs:1341",
-        "core/tests/tests/machines.rs:1509"
+        "core/tests/tests/machines.rs"
       ]
     },
     {
@@ -2010,10 +2031,18 @@
       "assertion": "With no added entry, discover the built-in Claude Code under its canonical ID claude. Override its executable to the fake CLI in facade.json and observe that entry’s identity and expected native adapter launch.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/journey.it.ts",
         "extension/src/test/configuration.test.ts:121",
         "extension/src/test/configuration.test.ts:144",
         "extension/src/test/integration/journey.it.ts:169"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: a person starts and closes claude (J07) New Agent with the preselected CLI creates the card and terminal at once, and its CLI runs in the folder"
+      }
     },
     {
       "id": "extension/configuration-old/built-in/codex",
@@ -2276,10 +2305,18 @@
       "assertion": "With no added entry, discover the built-in Claude Code under its canonical ID claude. Override its executable to the fake CLI in facade.json and observe that entry’s identity and expected native adapter launch.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/journey.it.ts",
         "core/tests/tests/configuration.rs:108",
         "core/tests/tests/configuration.rs:166",
         "extension/src/test/integration/journey.it.ts:169"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: a person starts and closes claude (J07) New Agent with the preselected CLI creates the card and terminal at once, and its CLI runs in the folder"
+      }
     },
     {
       "id": "extension/configuration-rust/built-in/codex",
@@ -2455,7 +2492,14 @@
       "existing_tests": [
         "extension/src/test/integration/engineDriver.ts",
         "extension/src/test/integration/run.ts:860"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "switch",
+        "built_in": "claude",
+        "name": "switch"
+      }
     },
     {
       "id": "extension/mcp-old/notification/notifications.initialized",
@@ -2506,11 +2550,19 @@
       "assertion": "List the expected agent or window using the allowed caller and verify scope and identity.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/mcp.it.ts:337",
         "extension/src/test/contract.outcomes.test.ts:77",
         "extension/src/test/contract.tools.test.ts:36",
         "extension/src/test/transport.execution.test.ts:148"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) its CLI gets the Facade server; it lists, starts a child with a first task, reads and types into it and stops it"
+      }
     },
     {
       "id": "extension/mcp-old/tool/press_keys",
@@ -2527,43 +2579,75 @@
       "assertion": "Read full expected messages with their IDs and verify unread or cursor state after fetching.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/mcp.it.ts:345",
         "extension/src/test/contract.outcomes.test.ts:30",
         "extension/src/test/contract.tools.test.ts:355",
         "extension/src/test/transport.test.ts:308"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) messages: one paste and Enter into the input box; a draft there is waited for, never typed over, and the send fails within its thirty seconds, nothing coming after; an input it cannot read fails the same; reading delivers it once"
+      }
     },
     {
       "id": "extension/mcp-old/tool/read_screen",
       "assertion": "Assert known terminal lines and the result shape advertised by this engine.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/mcp.it.ts:345",
         "extension/src/test/contract.tools.test.ts:377",
         "extension/src/test/transport.test.ts:308"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) its CLI gets the Facade server; it lists, starts a child with a first task, reads and types into it and stops it"
+      }
     },
     {
       "id": "extension/mcp-old/tool/send_message",
       "assertion": "Correlate the tool result with one complete delivered message to the intended recipient.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/mcp.it.ts:345",
         "extension/src/test/contract.tools.test.ts:48",
         "extension/src/test/mcpReliability.test.ts:67",
         "extension/src/test/transport.execution.test.ts:206"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) messages: one paste and Enter into the input box; a draft there is waited for, never typed over, and the send fails within its thirty seconds, nothing coming after; an input it cannot read fails the same; reading delivers it once"
+      }
     },
     {
       "id": "extension/mcp-old/tool/start_agent",
       "assertion": "Verify the tool creates exactly one child in the expected context and correlates its result with that run.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/mcp.it.ts:340",
         "extension/src/test/contract.outcomes.test.ts:21",
         "extension/src/test/contract.tools.test.ts:38",
         "extension/src/test/mcpReliability.test.ts:52"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) the old supervisor serves editor terminal input and starts an MCP child in a linked worktree"
+      }
     },
     {
       "id": "extension/mcp-old/tool/stop_agent",
@@ -2581,10 +2665,18 @@
       "assertion": "Observe exactly the requested terminal text and Enter behavior in the target CLI.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/mcp.it.ts:345",
         "extension/src/test/contract.tools.test.ts:981",
         "extension/src/test/transport.test.ts:308"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) its CLI gets the Facade server; it lists, starts a child with a first task, reads and types into it and stops it"
+      }
     },
     {
       "id": "extension/mcp-rust/notification/notifications.cancelled",
@@ -2677,27 +2769,51 @@
       "assertion": "Read known terminal lines for the exact live or retained managed agent. Verify the output is complete and inline and attributed to the correct address.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts",
         "core/tests/tests/mcp.rs:254",
         "extension/src/test/integration/mcp.it.ts:426"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) two helpers appear in their creator's workspace and reply through MCP"
+      }
     },
     {
       "id": "extension/mcp-rust/tool/send_message",
       "assertion": "Send through the connected relay and correlate the returned message ID, original sender, recipient and receipt with exactly one CLI paste and submission.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts",
         "core/tests/tests/mcp.rs:1846",
         "extension/src/test/integration/mcp.it.ts:426"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) two helpers appear in their creator's workspace and reply through MCP"
+      }
     },
     {
       "id": "extension/mcp-rust/tool/start_agent",
       "assertion": "Through an editor-launched managed agent relay, start a fake CLI in the selected machine and folder. Match one authenticated child at the returned address, its creator and its first task delivery.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts",
         "core/tests/tests/mcp.rs:500",
         "extension/src/test/integration/mcp.it.ts:426"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) two helpers appear in their creator's workspace and reply through MCP"
+      }
     },
     {
       "id": "extension/mcp-rust/tool/stop_agent",
@@ -2713,9 +2829,17 @@
       "assertion": "Type the exact Unicode text at the target process over the relay. Verify the requested Enter behavior and that the lookalike process received no input.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts",
         "core/tests/tests/mcp.rs:167",
         "extension/src/test/integration/mcp.it.ts:426"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) two helpers appear in their creator's workspace and reply through MCP"
+      }
     },
     {
       "id": "extension/p0/activation-shell/activation-failure",
@@ -2730,8 +2854,16 @@
       "assertion": "With old serving the panel, perform start, MCP, terminal and worktree actions and verify effects in the old supervisor.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/journey.it.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) the old supervisor serves editor terminal input and starts an MCP child in a linked worktree"
+      }
     },
     {
       "id": "extension/p0/activation-shell/rust-handoff",
@@ -2739,7 +2871,14 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/rustMultiWindow.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "shell-handoff",
+        "built_in": "codex",
+        "name": "shell-handoff"
+      }
     },
     {
       "id": "extension/p0/pin-reload/close-one-window",
@@ -2747,7 +2886,14 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/rustMultiWindow.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "multi-window",
+        "built_in": "claude",
+        "name": "multi-window"
+      }
     },
     {
       "id": "extension/p0/pin-reload/missing-session-unpin",
@@ -2763,16 +2909,30 @@
       "stage": "scheduled",
       "existing_tests": [
         "extension/src/test/integration/run.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "expiry",
+        "built_in": "claude",
+        "name": "expiry"
+      }
     },
     {
       "id": "extension/p0/pin-reload/pinned-reload",
       "assertion": "Reload a pinned workspace and restore the exact saved session once.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/rustMultiWindow.ts",
-        "extension/src/test/integration/run.ts"
-      ]
+        "extension/src/test/integration/run.ts",
+        "extension/src/test/integration/rustMultiWindow.ts"
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "lifetime",
+        "built_in": "claude",
+        "name": "lifetime"
+      }
     },
     {
       "id": "extension/p0/pin-reload/resume-old",
@@ -2882,8 +3042,16 @@
       "assertion": "The Window Component activates with the old engine and claims the matching local window.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/run.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) the old supervisor serves editor terminal input and starts an MCP child in a linked worktree"
+      }
     },
     {
       "id": "extension/p0/window-replacement/window-activation-rust",
@@ -2891,7 +3059,14 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/rustMultiWindow.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "multi-window",
+        "built_in": "claude",
+        "name": "multi-window"
+      }
     },
     {
       "id": "extension/ptyd-old/event/call",
@@ -3055,9 +3230,17 @@
       "assertion": "Observe exact direct input bytes at the intended CLI.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/journey.it.ts",
         "extension/src/test/ptyd.test.ts:180",
         "extension/src/test/ptydTransport.test.ts:48"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: a person starts and closes claude (J07) LIFECYCLE-2.2: a person types English, Chinese and emoji in an agent terminal, unchanged and without submitting"
+      }
     },
     {
       "id": "extension/ptyd-old/request/inspect",
@@ -3195,10 +3378,18 @@
       "assertion": "Apply an intended location filter and verify card membership and counts.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/journey.it.ts:501",
         "extension/src/test/integration/rustMultiWindowDriver.ts:135",
         "extension/src/test/catalog.test.ts:38"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: a person starts and closes claude (J07) PANEL-1.2, 2.3: a card's location filter keeps the count; with no card left the page says none is in its location, and its Clear Filter shows every agent again"
+      }
     },
     {
       "id": "extension/vscode-old/command/facade.filterOn",
@@ -3241,12 +3432,20 @@
       "assertion": "Execute the contributed command and assert the chosen CLI starts in the chosen location and opens its card and terminal.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/journey.it.ts:169",
         "extension/src/test/integration/journey.it.ts:119",
         "extension/src/test/integration/mcp.it.ts:119",
         "extension/src/test/integration/real.it.ts:117",
         "extension/src/test/integration/conversionDriver.ts:144"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: a person starts and closes claude (J07) New Agent with the preselected CLI creates the card and terminal at once, and its CLI runs in the folder"
+      }
     },
     {
       "id": "extension/vscode-old/command/facade.newWorktree",
@@ -3329,29 +3528,53 @@
       "assertion": "Open Show Agent Command Line for a configured CLI and folder. Verify the rendered executable and current launch arguments and observe zero new agent processes.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/journey.it.ts:536",
         "extension/src/test/catalog.test.ts:40"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: a person starts and closes claude (J07) CLIS-4.1, ARCHITECTURE-3.3: Show Agent Command Line shows each CLI as a start in this folder would have it, starting none; Show Agents Log shows the log"
+      }
     },
     {
       "id": "extension/vscode-old/command/facade.showAgentsLog",
       "assertion": "Open Agents Log via the command and verify the active workspace log document contains a known event from that workspace.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/journey.it.ts:529",
         "extension/src/test/catalog.test.ts:41"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: a person starts and closes claude (J07) CLIS-4.1, ARCHITECTURE-3.3: Show Agent Command Line shows each CLI as a start in this folder would have it, starting none; Show Agents Log shows the log"
+      }
     },
     {
       "id": "extension/vscode-old/command/facade.stopAgent",
       "assertion": "Observe that the selected process stops and unaffected runs keep running.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/engine.it.ts:141",
         "extension/src/test/integration/journey.it.ts:138",
         "extension/src/test/integration/mcp.it.ts:240",
         "extension/src/test/integration/real.it.ts:111"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: a person starts and closes claude (J07) Stop Agent ends the targeted process and leaves a second editor agent running"
+      }
     },
     {
       "id": "extension/vscode-old/command/facade.unpinAgent",
@@ -3396,10 +3619,18 @@
       "assertion": "Apply an intended location filter and verify card membership and counts.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/journey.it.ts:501",
         "extension/src/test/integration/rustMultiWindowDriver.ts:135",
         "extension/src/test/catalog.test.ts:38"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: a person starts and closes claude (J07) PANEL-1.2, 2.3: a card's location filter keeps the count; with no card left the page says none is in its location, and its Clear Filter shows every agent again"
+      }
     },
     {
       "id": "extension/vscode-rust/command/facade.filterOn",
@@ -3414,30 +3645,54 @@
       "assertion": "Choose the exact machine-qualified entry. Confirm the existing process appears under that address in the workspace and opens its terminal.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/rustMultiWindow.ts",
         "extension/src/test/integration/conversionDriver.ts:224",
         "extension/src/test/integration/rustMultiWindowDriver.ts:96",
         "extension/src/test/integration/updateDriver.ts:88",
         "extension/src/test/catalog.test.ts:29"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "shell-handoff",
+        "built_in": "codex",
+        "name": "shell-handoff"
+      }
     },
     {
       "id": "extension/vscode-rust/command/facade.hideAgent",
       "assertion": "Hide the exact target card and terminal tab. Verify its workspace membership and Pin are removed and the same Core process is still running.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/rustMultiWindow.ts",
         "extension/src/test/integration/journey.it.ts:139",
         "extension/src/test/integration/rustMultiWindowDriver.ts:234",
         "extension/src/test/catalog.test.ts:31"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "shell-handoff",
+        "built_in": "codex",
+        "name": "shell-handoff"
+      }
     },
     {
       "id": "extension/vscode-rust/command/facade.newAgent",
       "assertion": "Execute the contributed command and assert the chosen CLI starts in the chosen location and opens its card and terminal.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/journey.it.ts:169",
         "extension/src/test/integration/engine.it.ts:61"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: a person starts and closes claude (J07) New Agent with the preselected CLI creates the card and terminal at once, and its CLI runs in the folder"
+      }
     },
     {
       "id": "extension/vscode-rust/command/facade.openSettings",
@@ -3530,19 +3785,35 @@
       "assertion": "Open Agents Log via the command and verify the document displays events from the selected daemon, including a known event from the isolated workspace.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/journey.it.ts:521"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: a person starts and closes claude (J07) CLIS-4.1, ARCHITECTURE-3.3: Show Agent Command Line shows each CLI as a start in this folder would have it, starting none; Show Agents Log shows the log"
+      }
     },
     {
       "id": "extension/vscode-rust/command/facade.stopAgent",
       "assertion": "Observe that the selected process stops and unaffected runs keep running.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/engine.it.ts:141",
         "extension/src/test/integration/journey.it.ts:138",
         "extension/src/test/integration/mcp.it.ts:240",
         "extension/src/test/integration/real.it.ts:111"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: a person starts and closes claude (J07) Stop Agent ends the targeted process and leaves a second editor agent running"
+      }
     },
     {
       "id": "extension/vscode-rust/command/facade.unpinAgent",
@@ -3978,9 +4249,17 @@
       "assertion": "Read version 1 and the current session and stable handover token from the live component. An earlier editor session receives no identity.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/rustMultiWindow.ts",
         "extension/src/test/host.activation.test.ts:10",
         "extension/src/test/host.windowComponent.test.ts:8"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "multi-window",
+        "built_in": "claude",
+        "name": "multi-window"
+      }
     },
     {
       "id": "extension/window-component-rust/command/facade.window.terminals",
@@ -4069,10 +4348,18 @@
       "assertion": "Route an agent list query and verify the receiving window returns its own locations, CLI availability and caller-visible agent identities.",
       "stage": "pr",
       "existing_tests": [
+        "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/windowNetwork.test.ts:139",
         "extension/src/test/integration/mcp.it.ts:727",
         "extension/src/test/contract.tools.test.ts"
-      ]
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "cross",
+        "built_in": "claude",
+        "name": "Journey: an agent works with an agent of another window on this computer (J15, M01, M03, COLLABORATION-1.1) it lists the other window, starts an agent there, messages it, reads its screen and stops it"
+      }
     },
     {
       "id": "extension/window-socket-old/operation/call",

@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -69,6 +70,17 @@ class CatalogTests(unittest.TestCase):
         for field, value in {'engine': 'old', 'built_in': 'made_up'}.items():
             with self.subTest(field=field), self.assertRaisesRegex(AcceptanceError, 'invalid Extension editor binding'):
                 validate_binding({**self.cases[EDITOR_CASE].test, field: value}, EDITOR_CASE)
+
+    def test_an_editor_driver_requires_its_exact_route(self):
+        driver = {
+            'runner': 'extension-editor', 'journey': 'shell-handoff', 'name': 'shell-handoff',
+            'engine': 'rust', 'built_in': 'codex',
+        }
+        case_id = 'extension/p0/activation-shell/rust-handoff'
+        self.assertEqual(validate_binding(driver, case_id), driver)
+        for field, value in {'built_in': 'claude', 'name': 'another-driver'}.items():
+            with self.subTest(field=field), self.assertRaisesRegex(AcceptanceError, 'invalid Extension editor binding'):
+                validate_binding({**driver, field: value}, case_id)
 
 
 class EvidenceTests(unittest.TestCase):
@@ -193,6 +205,16 @@ class EvidenceTests(unittest.TestCase):
         self.assertFalse(observed_pass(groups[0][1], complete + 'test result: FAILED. 0 passed; 1 failed;\n'))
         self.assertFalse(observed_pass(groups[0][1], complete + 'test unexpected ... ignored\n'))
 
+    def test_editor_group_requires_every_observed_engine_and_title(self):
+        second = {**self.editor, 'name': 'Another editor case'}
+        first_marker = self.editor_log
+        second_marker = EDITOR_PASS + json.dumps({'name': second['name'], 'engine': 'rust'}) + '\n'
+        groups = list(execution_groups({'first': self.editor, 'second': second}))
+        self.assertEqual(len(groups), 1)
+        self.assertTrue(observed_pass(groups[0][1], second_marker + first_marker))
+        self.assertFalse(observed_pass(groups[0][1], first_marker))
+        self.assertFalse(observed_pass(groups[0][1], first_marker + second_marker.replace('"rust"', '"old"')))
+
     def test_local_and_github_attempt_ids(self):
         self.assertEqual(run_identity('local-1', {}), 'local/local-1')
         self.assertEqual(run_identity(None, {'GITHUB_RUN_ID': '1', 'GITHUB_RUN_ATTEMPT': '2'}), 'github/1/2')
@@ -204,6 +226,37 @@ class EvidenceTests(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == 'linux', 'The pilot process scan targets Linux.')
 class CleanupTests(unittest.TestCase):
+    def test_core_process_list_is_portable_to_awk_without_multiline_arguments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            temp = root / 'scratch'
+            checkout = root / 'core'
+            temp.mkdir()
+            checkout.mkdir()
+            awk = shutil.which('awk')
+            stub = root / 'awk'
+            stub.write_text(
+                f'#!{sys.executable}\n'
+                'import os, sys\n'
+                'if any(arg.startswith("pids=") and "\\n" in arg for arg in sys.argv[1:]):\n'
+                '    sys.exit(2)\n'
+                f'os.execv({awk!r}, [{awk!r}, *sys.argv[1:]])\n'
+            )
+            stub.chmod(0o755)
+            env = {**os.environ, 'PATH': str(root) + os.pathsep + os.environ['PATH']}
+            processes = [subprocess.Popen(['sleep', '30'], cwd=checkout) for _ in range(2)]
+            try:
+                scan = subprocess.run(
+                    ['sh', str(ROOT / 'core/scripts/leftovers.sh'), str(temp), str(checkout)],
+                    env=env, text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(scan.returncode, 0, scan.stdout + scan.stderr)
+                self.assertEqual(scan.stdout, 'no processes left\n')
+            finally:
+                for process in processes:
+                    process.terminate()
+                    process.wait(timeout=5)
+
     def test_unavailable_or_invalid_process_table_fails_the_scan(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -16,9 +16,10 @@ import type { PanelState } from '../../webview/protocol';
 import { coreCall, helloInCore, normalizeDriveLetter, until } from './editors';
 import { RESUME_PICKER_STATE, type ResumePickerState } from './resumePickerFixture';
 import { agentTab, facade, hasAgentTab, inspect, keepConversation, newCard, pin, resumeCard, running, state, stop } from './rustWindowDriver';
+import type { WindowTerminalIdentity } from '../../base/windowIdentity';
 
 type Action =
-	| { readonly kind: 'snapshot' | 'filter' | 'window-component' }
+	| { readonly kind: 'snapshot' | 'filter' | 'window-component' | 'terminal-owner' }
 	| { readonly kind: 'open-shell-agent'; readonly name: string; readonly address: string; readonly text: string }
 	| { readonly kind: 'shell-attach-view'; readonly grid?: vscode.TerminalDimensions; readonly text?: string; readonly resize?: boolean }
 	| { readonly kind: 'settings-path'; readonly file: string }
@@ -158,6 +159,19 @@ async function perform(action: Action): Promise<unknown> {
 			return view();
 		case 'window-component':
 			return vscode.extensions.getExtension('facade.facadecode-window') !== undefined;
+		case 'terminal-owner': {
+			assert.ok(vscode.extensions.getExtension('facade.facadecode-window')?.isActive);
+			const session = vscode.env.sessionId;
+			const command = 'facade.window.terminalOwner';
+			const owner = await vscode.commands.executeCommand<WindowTerminalIdentity>(command, session);
+			assert.strictEqual(owner?.version, 1);
+			assert.strictEqual(owner.session, session);
+			assert.match(owner.token, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+			assert.deepStrictEqual(await vscode.commands.executeCommand(command, session), owner,
+				'the local terminal handover identity is stable');
+			assert.strictEqual(await vscode.commands.executeCommand(command, `${session}-stale`), undefined);
+			return true;
+		}
 		case 'settings-path':
 			for (const command of ['facade.openSettings', 'facade.openSettingsFile']) {
 				await vscode.commands.executeCommand(command);

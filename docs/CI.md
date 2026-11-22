@@ -412,11 +412,17 @@ review before protected enforcement.
 The [shadow workflow](../.github/workflows/ci-acceptance.yml) checks catalog drift and policy
 regressions on relevant PRs. CI policy changes select the Linux x64 Core and Extension pilots in
 parallel in the same PR. Manual runs select both pilots. The Extension job builds its test stage
-once and uses official VS Code `1.105.1` with isolated profiles and fake CLIs. Core runs each
-scenario target once for all of its exact test names. Verify requires results, original logs and a post-cleanup record for
-every planned case on the same source, plan, platform and run attempt. The editor test identifies
-the serving engine from its live agent card. The status describes the shadow pilot only. The existing product jobs and
-merge and release rules continue to own their checks.
+once and uses official VS Code `1.105.1` with isolated profiles and fake CLIs. Core shares one run
+per scenario target and compares its exact test names. Extension shares a fixture for compatible
+Mocha selections with the same engine and route. Multi-window and lifetime drivers use separate
+isolated fixtures. Verify requires results, original logs and a post-cleanup record for every
+planned case on the same source, plan, platform and run attempt. The editor tests identify the
+serving engine from the live host. The status describes the shadow pilot only. The existing product
+jobs and merge and release rules continue to own their checks.
+
+VS Code `1.105.1` lacks the built-in Git extension's `Repository.createWorktree` method. The
+old engine's New Worktree success case needs an editor with that capability. The minimum-editor
+pilot exercises the old supervisor using a real linked checkout created by the fixture.
 
 Run from the repository root on Linux x64. Install the pinned Rust toolchain and musl target, the
 Node version from `extension/.nvmrc`, `musl-gcc`, `xvfb-run` and VS Code's runtime libraries.

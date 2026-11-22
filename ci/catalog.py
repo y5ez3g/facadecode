@@ -12,6 +12,15 @@ FLOW_ID = re.compile(r'(?:core|extension)/p0/[A-Za-z0-9._-]+')
 CASE_NAME = re.compile(r'\x60([A-Za-z0-9._-]+)\x60')
 NAME = re.compile(r'[a-z][a-z0-9_]*', re.ASCII)
 FIELDS = {'id', 'assertion', 'stage', 'existing_tests'}
+MOCHA_JOURNEYS = ('journeys', 'cross')
+EDITOR_DRIVERS = {
+    'conversion': ('old', 'claude'),
+    'expiry': ('old', 'claude'),
+    'lifetime': ('rust', 'claude'),
+    'multi-window': ('rust', 'claude'),
+    'shell-handoff': ('rust', 'codex'),
+    'switch': ('rust', 'claude'),
+}
 
 
 class AcceptanceError(ValueError):
@@ -69,16 +78,21 @@ def validate_binding(value, case_id):
             raise AcceptanceError(f'{case_id}: invalid Core scenario binding')
     elif runner == 'extension-editor':
         _, boundary, _, name = case_id.split('/')
-        variant = (name if boundary == 'p0' else boundary).split('-')
+        variants = set((name if boundary == 'p0' else boundary).split('-')) & {'old', 'rust'}
         if (
             not case_id.startswith('extension/')
             or value.keys() != {'runner', 'engine', 'journey', 'built_in', 'name'}
             or value['engine'] not in ('old', 'rust')
-            or value['engine'] not in variant
-            or value['journey'] != 'journeys'
-            or value['built_in'] != 'claude'
+            or (variants and value['engine'] not in variants)
         ):
             raise AcceptanceError(f'{case_id}: invalid Extension editor binding')
+        journey = value['journey']
+        if journey in MOCHA_JOURNEYS:
+            matches_route = value['built_in'] == 'claude'
+        else:
+            matches_route = value['name'] == journey and EDITOR_DRIVERS.get(journey) == (value['engine'], value['built_in'])
+        if not matches_route:
+            raise AcceptanceError(f'{case_id}: invalid Extension editor binding for {journey}')
     else:
         raise AcceptanceError(f'{case_id}: unknown runner {runner!r}')
     return value

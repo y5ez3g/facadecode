@@ -47,9 +47,10 @@ environment_pids=$(printf '%s\n' "$processes" | awk -v tmp="$tmp" -v real="$real
 orphans=""
 if [ -n "$tree" ]; then
 	tree_pids=$(printf '%s\n' "$snapshot" | within "$tree") || fail 'could not match the Core checkout'
+	tree_pids=$(printf '%s' "$tree_pids" | tr '\n' ' ') || fail 'could not prepare the Core process IDs'
 	orphans=$(printf '%s\n' "$processes" | awk -v pids="$tree_pids" '
 		BEGIN {
-			count = split(pids, list, "\n")
+			count = split(pids, list, " ")
 			for (i = 1; i <= count; i++) in_checkout[list[i]] = 1
 		}
 		$2 == 1 && ($1 in in_checkout) { print $1 }

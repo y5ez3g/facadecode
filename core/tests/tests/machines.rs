@@ -2025,6 +2025,82 @@ fn a_cross_machine_send_replays_its_original_settlement_after_reconnect() {
     );
 }
 
+/// Losing the link does not replace its remote CLI or retarget calls to a same-named local run.
+#[test]
+fn a_lost_route_recovers_to_the_same_live_remote_terminal() {
+    let local = TestHome::new("route-recover-local");
+    let peer = TestHome::new("route-recover-peer");
+    install_machine_ssh(
+        &[("origin", &local), ("peer", &peer)],
+        &test_binaries().facade,
+    );
+    name_machine(&local, "origin");
+    let peer_id = name_machine(&peer, "peer");
+    let worker = peer.start_fake("worker");
+    let decoy = local.start_fake("worker");
+    assert_eq!(worker.id, decoy.id);
+    assert_ne!(worker.address, decoy.address);
+
+    let original = peer.inspect_agent(&worker.address)["agent"].clone();
+    let reference = &original["reference"];
+    assert_eq!(reference["machine_id"], peer_id);
+    let daemon = peer.lock_record("daemon").unwrap();
+    let keeper = peer.lock_record("keeper").unwrap();
+    let link = MachineLink::open(&local, "peer", &peer);
+    wait_for_route(&local, &peer_id, &[&peer_id]);
+    let mut origin = connect(&local);
+    let inspect = |origin: &mut DaemonTestClient| {
+        origin.call_ok("agent.inspect", json!({ "target": reference }))["agent"].clone()
+    };
+    let reachable = inspect(&mut origin);
+    assert_eq!(reachable["reference"], *reference);
+    assert_eq!(reachable["pid"], worker.pid);
+    local.run_facade_ok(&["type", &worker.address, "from before the cut"]);
+    assert!(wait_for_screen_text(
+        &peer,
+        &worker.address,
+        "❯ from before the cut"
+    ));
+    assert!(peer.submitted_messages().is_empty());
+
+    drop(link);
+    assert!(
+        wait_until(LOADED_TIMEOUT, || machine_json(&local, &peer_id)
+            .is_none_or(|row| row.get("route").is_none())),
+        "the cut peer still has a route: {}",
+        machines_json(&local)
+    );
+    let lost = origin.call("agent.screen", json!({ "target": reference }));
+    assert_eq!(error_reason(&lost), "unavailable", "{lost}");
+    assert!(alive(&worker.process));
+    assert!(wait_for_screen_text(
+        &peer,
+        &worker.address,
+        "❯ from before the cut"
+    ));
+
+    let _replacement_link = MachineLink::open(&local, "peer", &peer);
+    wait_for_route(&local, &peer_id, &[&peer_id]);
+    let recovered = inspect(&mut origin);
+    assert_eq!(recovered["reference"], *reference);
+    assert_eq!(recovered["address"], worker.address);
+    assert_eq!(recovered["pid"], worker.pid);
+    assert_eq!(process_identity(worker.pid), worker.process);
+    assert_eq!(peer.lock_record("daemon"), Some(daemon));
+    assert_eq!(peer.lock_record("keeper"), Some(keeper));
+    assert!(
+        local
+            .run_facade_ok(&["screen", &worker.address])
+            .contains("❯ from before the cut")
+    );
+    local.run_facade_ok(&["type", &worker.address, " and after", "--enter"]);
+    assert!(wait_until(LOADED_TIMEOUT, || {
+        peer.submitted_messages() == ["from before the cut and after"]
+    }));
+    assert!(alive(&decoy.process));
+    assert!(local.submitted_messages().is_empty());
+}
+
 /// The editor selects the remote run by its roster reference, even when both runs have one number.
 #[test]
 fn the_editor_selects_the_remote_agent_by_its_roster_reference() {

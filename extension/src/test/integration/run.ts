@@ -38,6 +38,16 @@ const BUILT_INS: readonly { readonly id: string; readonly segment: string; reado
 	{ id: 'pi', segment: 'pi', avatar: 'avatar-pi.png' }
 ];
 
+const ACCEPTANCE_DRIVERS = new Map([
+	['conversion', { engine: 'old', cli: 'claude' }],
+	['expiry', { engine: 'old', cli: 'claude' }],
+	['lifetime', { engine: 'rust', cli: 'claude' }],
+	['multi-window', { engine: 'rust', cli: 'claude' }],
+	['shell-handoff', { engine: 'rust', cli: 'codex' }],
+	['switch', { engine: 'rust', cli: 'claude' }]
+] as const);
+type AcceptanceDriver = typeof ACCEPTANCE_DRIVERS extends ReadonlyMap<infer Name, unknown> ? Name : never;
+
 /** The command line of the editor at `executable`, which installs a package into a profile (VERIFICATION E05). */
 function editorCli(executable: string): string {
 	const dir = path.dirname(executable);
@@ -79,7 +89,8 @@ function untrust(file: string, root: string): void {
 async function main(): Promise<void> {
 	const executable = officialEditor();
 	const grep = process.env.FACADE_IT_GREP;
-	const expectedTest = process.env.FACADE_IT_EXPECT_TEST;
+	const expectedTest = process.env.FACADE_IT_EXPECT_TESTS;
+	const expectedDriver = process.env.FACADE_IT_EXPECT_DRIVER;
 	// For a look at what a run left: its folder kept, and one part of it alone (`journeys`, `cross` or `conversion`)
 	const keep = !!process.env.FACADE_IT_KEEP;
 	const only = process.env.FACADE_IT_ONLY;
@@ -126,9 +137,24 @@ async function main(): Promise<void> {
 	const current = process.env.FACADE_IT_CURRENT;
 	// One built-in's journeys and conversion alone, FACADE_IT_BUILT_IN, for a quick look at a change
 	const builtIn = process.env.FACADE_IT_BUILT_IN;
-	if (expectedTest && (only !== 'journeys' || !grep || !BUILT_INS.some(cli => cli.id === builtIn))) {
-		throw new Error('An exact acceptance test requires journeys, a built-in and a test filter.');
+	if (expectedTest && (!grep || !(only === 'journeys' && BUILT_INS.some(cli => cli.id === builtIn)
+		|| only === 'cross' && builtIn === 'claude'))) {
+		throw new Error('An exact acceptance test requires an editor journey, its permitted fake CLI and a test filter.');
 	}
+	if (expectedDriver) {
+		const selected = ACCEPTANCE_DRIVERS.get(expectedDriver as AcceptanceDriver);
+		if (!selected || expectedDriver !== only || engine !== selected.engine || builtIn !== selected.cli || expectedTest || grep || keep) {
+			throw new Error('An exact acceptance driver requires the matching isolated mode, engine and fake CLI.');
+		}
+	}
+	let observedDriver: { name: AcceptanceDriver; engine: 'old' | 'rust' } | undefined;
+	const driverPassed = (name: AcceptanceDriver, actual: 'old' | 'rust') => {
+		if (expectedDriver === name) {
+			assert.strictEqual(actual, engine, 'the completed driver exercised its selected engine');
+			assert.ok(!observedDriver, 'the exact driver runs once');
+			observedDriver = { name, engine: actual };
+		}
+	};
 	const passed = Object.fromEntries((process.env.FACADE_IT_REAL_PASS ?? '').split(',').filter(name => name && process.env[name] !== undefined).map(name => [name, process.env[name]!]));
 	// A prepared temporary home may be used directly, or copied from an isolated state template.
 	const prepared = only === 'real' || nativeLifecycle ? process.env.FACADE_IT_REAL_AGENTS_HOME : undefined;
@@ -212,8 +238,8 @@ async function main(): Promise<void> {
 	const corePrograms = coreProgram(path.join(extension, 'bin'));
 	const endRust = async (facade: string) => {
 		if (engine === 'rust') {
-			await endCore(facade, expectedTest ? 45_000 : undefined);
-			if (expectedTest && coreListens(facade)) {
+			await endCore(facade, expectedTest || expectedDriver ? 45_000 : undefined);
+			if ((expectedTest || expectedDriver) && coreListens(facade)) {
 				throw new Error('The isolated acceptance test daemon did not exit.');
 			}
 		}
@@ -250,15 +276,17 @@ async function main(): Promise<void> {
 					FACADE_IT_ENGINE: engine,
 					CLAUDE_CONFIG_DIR: claude,
 					...(grep ? { FACADE_IT_GREP: grep } : {}),
-					...(expectedTest ? { FACADE_IT_EXPECT_TEST: expectedTest } : {}),
+					...(expectedTest ? { FACADE_IT_EXPECT_TESTS: expectedTest } : {}),
 					...env,
 					...profile.env
 				}
 			});
 		} finally {
-			// The window's ptyd outlives it, as it is made to: it goes with the run, and the agents it holds with it
-			endMatching(path.join(facade, 'extension', 'ptyd'));
-			await endRust(facade);
+			// The cross-window fixture owns both editor holds and cleans their shared services after both close.
+			if (name !== 'cross') {
+				endMatching(path.join(facade, 'extension', 'ptyd'));
+				await endRust(facade);
+			}
 		}
 	};
 	/**
@@ -365,6 +393,10 @@ async function main(): Promise<void> {
 					throw new Error(`Closing and reopening did not ${expiry ? 'restore' : 'preserve'} the pinned conversation: ${JSON.stringify(lines())}`);
 				}
 				console.log(`  ✔ ${cli.id}: real window close and ${expiry ? 'reopen after its grace restore the exact pinned session in a new process' : 'immediate reopen preserve Pin, exact session and process'}, with one terminal: ${JSON.stringify(lines())}`);
+				if (expectedDriver === 'expiry') {
+					assert.match(String(before.runId), /^run-/u, 'the previously pinned run has an old-engine identity');
+					if (expiry) { driverPassed('expiry', 'old'); }
+				}
 				return;
 			}
 			const said = lines();
@@ -382,6 +414,10 @@ async function main(): Promise<void> {
 			console.log(`    reload claims: ${claims.map(each => `${each.ms} ms with ${each.agents} agents`).join(', ')}`);
 			if (claims.length !== 2 || claims.some(each => !Number.isFinite(each.ms) || each.ms > 45_000)) {
 				throw new Error(`A reload's claim took too long or was not timed: ${JSON.stringify(claims)}`);
+			}
+			if (expectedDriver === 'conversion') {
+				assert.match(before.runId, /^run-/u, 'the reloaded pinned run has an old-engine identity');
+				driverPassed('conversion', 'old');
 			}
 		} catch (error) {
 			console.error(`Editor output for ${suffix} (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
@@ -523,10 +559,13 @@ async function main(): Promise<void> {
 			}
 			await run('cross', repo, { FACADE_IT_CLI: 'claude', FACADE_IT_PEER: 'peer', FACADE_IT_PEER_DIR: fs.realpathSync(peer) });
 		} finally {
-			editor.kill('SIGTERM');
-			endMatching(user);
-			endMatching(path.join(facade, 'extension', 'ptyd'));
-			await endRust(facade);
+			try {
+				await endEditors([editor]);
+			} finally {
+				endMatching(user);
+				endMatching(path.join(facade, 'extension', 'ptyd'));
+				await endRust(facade);
+			}
 		}
 	};
 	/**
@@ -754,6 +793,16 @@ async function main(): Promise<void> {
 					assert.deepStrictEqual((await coreCall(facade, 'agent.remove', { target: reference })).reference, reference);
 				}
 			});
+			if (expectedDriver === 'lifetime') {
+				const steps = fs.readFileSync(out, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+				const began = steps.find(step => step.phase === 'started')?.agent;
+				const restored = steps.find(step => step.phase === 'done')?.detail;
+				assert.ok(began && restored && /^a\d+$/u.test(began.id), 'the lifetime driver observed a Core agent');
+				assert.deepStrictEqual([restored.id, restored.cwd, restored.session], [began.id, began.cwd, began.session]);
+				const starts = fs.readFileSync(`${env.FACADE_IT_RECORD}.starts.#${began.id}`, 'utf8').trim().split(/\r?\n/u).map(Number);
+				assert.deepStrictEqual(starts, [began.pid, restored.pid], 'one original start and one restoration of the saved Pin');
+				driverPassed('lifetime', 'rust');
+			}
 		} finally {
 			await endRust(facade);
 		}
@@ -848,6 +897,9 @@ async function main(): Promise<void> {
 					? sharedAttachJourney(open, repo, corePrograms, shellEnv, attachUpgrade)
 					: shellHandoff(open, repo, corePrograms, { ...shellEnv, FACADE_IT_AS: 'codex' });
 			});
+			// Both journeys observe the live Core daemon and an editor view of the same machine-qualified agent.
+			if (runName === 'multi') { driverPassed('multi-window', 'rust'); }
+			if (runName === 'handoff') { driverPassed('shell-handoff', 'rust'); }
 		} finally {
 			if (prior) {
 				endMatching(facade);
@@ -903,7 +955,7 @@ async function main(): Promise<void> {
 			const said = lines();
 			console.log(`  Journey: switching engines (spec 验收)\n    ${JSON.stringify(said)}`);
 			const phase = (name: string) => said.find(line => line.phase === name);
-			const two = phase('two') as { agents: { runId: string; alias: string; session: string }[]; core: boolean } | undefined;
+			const two = phase('two') as { before: string; defaultSetting: string; agents: { runId: string; alias: string; session: string }[]; core: boolean } | undefined;
 			const still = phase('old-still') as { cards: string[]; alive: boolean[]; core: boolean; setting: string } | undefined;
 			const refused = phase('refused') as { cards: number; newCli: string[]; core: boolean } | undefined;
 			const rust = phase('rust') as { core: boolean; resumed: { runId: string; session: string }[] } | undefined;
@@ -921,6 +973,12 @@ async function main(): Promise<void> {
 				throw new Error(`Switching engines failed: ${problems.join('; ')}`);
 			}
 			console.log('    ✔ off → auto keeps the live old agents through one reload. After they end, the next reload starts core and Resume Agent continues both saved sessions');
+			if (expectedDriver === 'switch') {
+				assert.ok(two);
+				assert.deepStrictEqual([two.defaultSetting, two.before], ['auto', 'off']);
+				assert.ok(two.agents.every(agent => /^#a\d+$/u.test(agent.alias)), 'the first two agents are old-engine runs');
+				driverPassed('switch', 'rust');
+			}
 		} catch (error) {
 			console.error(`Editor output for the engine switch (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
 			throw error;
@@ -976,6 +1034,7 @@ async function main(): Promise<void> {
 		}
 		if (engine === 'old' && (!only || only === 'expiry')) {
 			// The shared supervisor's real local grace, not a shortened fixture timer.
+			if (expectedDriver === 'expiry') { await conversion(BUILT_INS[0], true); }
 			await conversion(BUILT_INS[0], true, true);
 		}
 		// The Rust engine's acceptance on the extension's side: with the engine on, a run of the whole suite has it, and each is asked for alone
@@ -1051,6 +1110,10 @@ async function main(): Promise<void> {
 		} catch (cleanup) {
 			throw suiteFailure === undefined ? cleanup : new AggregateError([suiteFailure, cleanup], 'Editor journey and final cleanup both failed.');
 		}
+	}
+	if (expectedDriver) {
+		assert.ok(observedDriver, 'the selected acceptance driver completed its assertions');
+		console.log('Facade acceptance test ' + JSON.stringify(observedDriver));
 	}
 }
 

@@ -75,7 +75,10 @@ def render_table(cases, inventory, product):
     print('| Case | Stage | Exact binding | Expected behavior | Code and candidate tests |')
     print('| --- | --- | --- | --- | --- |')
     for case in selected:
-        binding = f'`{case.test["name"]}`' if case.test else 'Pending'
+        binding = 'Pending'
+        if case.test:
+            variant = case.test.get('engine') or case.test['target']
+            binding = f'`{variant}` · `{case.test["name"]}`'
         origin = inventory.get(case.id)
         refs = (origin, *case.existing_tests) if origin else case.existing_tests
         links = ', '.join(source_link(ref) for ref in dict.fromkeys(refs))
