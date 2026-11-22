@@ -580,7 +580,12 @@
       "existing_tests": [
         "core/tests/tests/resume.rs:580",
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones"
+      }
     },
     {
       "id": "core/daemon/operation/agent.screen",
@@ -744,7 +749,12 @@
       "existing_tests": [
         "core/tests/tests/machines.rs",
         "core/tests/tests/attach.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "a_forwarded_attach_maps_live_peer_changes_and_watch_end"
+      }
     },
     {
       "id": "core/daemon/operation/internal.deliver_start_result",

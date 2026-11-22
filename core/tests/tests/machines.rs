@@ -758,8 +758,8 @@ fn reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones() {
         ],
         &test_binaries().facade,
     );
-    name_machine(&local, "laptop");
-    name_machine(&awake, "devbox");
+    let local_id = name_machine(&local, "laptop");
+    let awake_id = name_machine(&awake, "devbox");
     name_machine(&sleeping, "staging");
     name_machine(&unavailable, "gpu");
     for (destination, peer) in [
@@ -782,7 +782,11 @@ fn reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones() {
     assert!(wait_until(LOADED_TIMEOUT, || awake
         .inspect_agent(&worker.address)["agent"]["session"]
         == session));
-    let pixel = local.start_fake("Pixel");
+    let local_session = "77bc3b1c-ba9c-41c3-9043-1a5c63e71b77";
+    let pixel = local.start_fake_with("Pixel", &[("FAKECLI_SESSION", local_session)]);
+    assert!(wait_until(LOADED_TIMEOUT, || local
+        .inspect_agent(&pixel.address)["agent"]["session"]
+        == local_session));
 
     let previous = ssh_serves(&sleeping);
     let named = local.run_facade(&["stop", "--machine", "staging"]);
@@ -874,6 +878,51 @@ fn reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones() {
     let table = Table::parse(&stdout(&resumable));
     assert_eq!(table.column("TYPE"), ["Managed"]);
     assert_eq!(table.column("REF"), [worker.address.as_str()]);
+    // Query each eligible stopped run from the same caller, changing only the machine.
+    let folder = real_path(&awake.project).unwrap();
+    let mut client = connect(&local);
+    for (selector, holder, machine_id, run, name, session) in [
+        ("laptop", &local, &local_id, &pixel, "Pixel", local_session),
+        ("devbox", &awake, &awake_id, &worker, "Worker", session),
+    ] {
+        let stopped = holder.inspect_agent(&run.address)["agent"].clone();
+        let reference = &stopped["reference"];
+        let expected_folder = real_path(&holder.project).unwrap();
+        assert_eq!(stopped["process"], "ended", "{stopped}");
+        assert_eq!(reference["machine_id"], *machine_id, "{stopped}");
+        assert_eq!(stopped["session"], session, "{stopped}");
+        assert_eq!(stopped["cwd"], json!(expected_folder), "{stopped}");
+        let listed = client.call_ok(
+            "agent.resume_list",
+            json!({
+                "scope": { "kind": "machine", "machine": selector },
+                "folder": folder, "folder_scope": "all",
+            }),
+        );
+        let [machine] = listed["machines"].as_array().unwrap().as_slice() else {
+            panic!("expected only {selector} to answer: {listed}");
+        };
+        assert_eq!(machine["machine_id"], *machine_id, "{listed}");
+        assert_eq!(machine["name"], selector, "{listed}");
+        assert_eq!(machine["status"], "answered", "{listed}");
+        let [item] = listed["items"].as_array().unwrap().as_slice() else {
+            panic!("expected only {name} to be resumable on {selector}: {listed}");
+        };
+        assert_eq!(
+            item["target"],
+            json!({ "kind": "agent", "reference": reference }),
+            "{listed}"
+        );
+        assert_eq!(item["agent"], *reference, "{listed}");
+        assert_eq!(item["machine_id"], *machine_id, "{listed}");
+        assert_eq!(item["cli"], "fake", "{listed}");
+        assert_eq!(item["folder"], json!(expected_folder), "{listed}");
+        assert_eq!(item["session"], session, "{listed}");
+        assert_eq!(item["name"], name, "{listed}");
+        assert_eq!(item["stopped"], true, "{listed}");
+        println!("agent.resume_list selected {selector} {machine_id}: {item}");
+    }
+
     let resumed = local.run_facade(&["resume", "-d", table.column("REF")[0]]);
     assert_eq!(resumed.status.code(), Some(0), "{}", stderr(&resumed));
     assert!(resumed.stderr.is_empty(), "{}", stderr(&resumed));
@@ -2836,9 +2885,22 @@ fn a_forwarded_attach_maps_live_peer_changes_and_watch_end() {
     let provider_id = name_machine(&provider, "provider");
     let remote_keys = provider.folder().join("forwarded-keys");
     let local_keys = origin.folder().join("local-keys");
-    let worker =
-        provider.start_fake_with("worker", &[("FAKECLI_KEYS", remote_keys.to_str().unwrap())]);
-    let decoy = origin.start_fake_with("worker", &[("FAKECLI_KEYS", local_keys.to_str().unwrap())]);
+    let remote_sizes = provider.folder().join("forwarded-sizes");
+    let local_sizes = origin.folder().join("local-sizes");
+    let worker = provider.start_fake_with(
+        "worker",
+        &[
+            ("FAKECLI_KEYS", remote_keys.to_str().unwrap()),
+            ("FAKECLI_SIZE_LOG", remote_sizes.to_str().unwrap()),
+        ],
+    );
+    let decoy = origin.start_fake_with(
+        "worker",
+        &[
+            ("FAKECLI_KEYS", local_keys.to_str().unwrap()),
+            ("FAKECLI_SIZE_LOG", local_sizes.to_str().unwrap()),
+        ],
+    );
     assert_eq!(worker.id, decoy.id);
     assert_ne!(worker.address, decoy.address);
     let exact = provider.inspect_agent(&worker.address)["agent"]["reference"].clone();
@@ -2998,6 +3060,13 @@ fn a_forwarded_attach_maps_live_peer_changes_and_watch_end() {
         accepted["result"]["snapshot"]["reference"], exact,
         "{accepted}"
     );
+    let initial_size = accepted["result"]["snapshot"]["size"].clone();
+    assert_eq!(local["result"]["snapshot"]["size"], initial_size, "{local}");
+    let binding = accepted["result"]["view"].clone();
+    let holder_boot = machine_json(&middle, &provider_id).unwrap()["boot_id"].clone();
+    assert!(holder_boot.is_string(), "{holder_boot}");
+    assert_eq!(binding["boot_id"], holder_boot, "{accepted}");
+    assert!(binding["viewer"].is_u64(), "{accepted}");
 
     let marker = "output from the exact remote worker";
     assert!(wait_until(LOADED_TIMEOUT, || remote_keys.is_file()
@@ -3102,6 +3171,108 @@ fn a_forwarded_attach_maps_live_peer_changes_and_watch_end() {
             break;
         }
     }
+
+    // Resize the exact watch from its owning socket, then observe the holder's redraw and PTY.
+    let grid_line = |size: &Value| format!("{}x{}", size["cols"], size["rows"]);
+    let measured = |path: &Path| std::fs::read_to_string(path).unwrap_or_default();
+    let initial_grid = grid_line(&initial_size);
+    assert!(
+        measured(&remote_sizes).lines().last() == Some(&initial_grid),
+        "the remote process reported {}, expected {initial_grid}",
+        measured(&remote_sizes)
+    );
+    let decoy_grid = measured(&local_sizes);
+    assert!(!decoy_grid.is_empty());
+    let new_size = json!({ "cols": 103, "rows": 31 });
+    assert_ne!(initial_size, new_size);
+    let resize_id = 9;
+    user.send(
+        resize_id,
+        "call",
+        json!({
+            "op": "attach.resize", "args": { "watch": local_watch, "size": new_size },
+        }),
+    );
+    let resize = observed_frame(&bridge.from_front, "the forwarded Attach resize", |frame| {
+        frame["method"] == "forward" && frame["params"]["params"]["op"] == "internal.attach_resize"
+    });
+    let peer_resize = resize["id"].as_u64().expect("the peer resize request ID");
+    assert_eq!(
+        resize["params"]["route"],
+        json!([middle_id, provider_id]),
+        "{resize}"
+    );
+    assert_eq!(
+        resize["params"]["caller"]["machine_id"], origin_id,
+        "{resize}"
+    );
+    assert_eq!(resize["params"]["method"], "call", "{resize}");
+    assert_eq!(
+        resize["params"]["params"]["args"],
+        json!({ "viewer": binding["viewer"], "boot_id": holder_boot, "size": new_size }),
+        "{resize}"
+    );
+    let redraw = |frame: &Value, watch| {
+        frame["method"] == "changed"
+            && frame["params"]["watch"] == watch
+            && frame["params"]["change"]["kind"] == "redraw"
+            && frame["params"]["change"]["size"] == new_size
+    };
+    let mut peer_ack = false;
+    let mut peer_redraw = None;
+    observed_frame(
+        &bridge.from_peer,
+        "the holder's resize reply and redraw",
+        |frame| {
+            if frame["id"] == peer_resize {
+                assert_eq!(
+                    *frame,
+                    json!({ "jsonrpc": "2.0", "id": peer_resize, "result": {} }),
+                    "{frame}"
+                );
+                peer_ack = true;
+            }
+            if redraw(frame, peer_watch) {
+                assert!(frame.get("id").is_none(), "{frame}");
+                peer_redraw = Some(frame["params"]["change"].clone());
+            }
+            peer_ack && peer_redraw.is_some()
+        },
+    );
+    let mut local_ack = false;
+    let mut local_redraw = false;
+    while !local_ack || !local_redraw {
+        let frame = user
+            .read_frame()
+            .unwrap()
+            .expect("the owning watch stays open");
+        if frame["id"] == resize_id {
+            assert_eq!(
+                frame,
+                json!({ "jsonrpc": "2.0", "id": resize_id, "result": {} }),
+                "{frame}"
+            );
+            local_ack = true;
+        }
+        if redraw(&frame, local_watch) {
+            assert!(frame.get("id").is_none(), "{frame}");
+            assert_eq!(frame["params"]["change"], *peer_redraw.as_ref().unwrap());
+            local_redraw = true;
+        }
+    }
+    let new_grid = grid_line(&new_size);
+    assert!(
+        wait_until(LOADED_TIMEOUT, || measured(&remote_sizes).lines().last()
+            == Some(&new_grid)),
+        "the remote process reported {}, expected {new_grid}",
+        measured(&remote_sizes)
+    );
+    assert_eq!(process_identity(worker.pid), worker.process);
+    assert_eq!(measured(&local_sizes), decoy_grid);
+    println!(
+        "Attach resize {resize_id} forwarded as {peer_resize} to {exact}, watch {peer_watch} redrew as local {local_watch}, PID {} measured {} -> {}",
+        worker.pid, initial_grid, new_grid
+    );
 
     drop(downstream);
     let ended = observed_frame(

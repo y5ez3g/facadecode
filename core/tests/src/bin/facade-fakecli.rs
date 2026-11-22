@@ -51,6 +51,7 @@
 //! a draft in color with the cursor before it, as a draft the person moved the cursor back over;
 //! what is typed goes in before it. `FAKECLI_KEYS=<file>` appends every byte it reads to `<file>`.
 //! `FAKECLI_SCREEN_FILE=<file>` prints the file's lines before drawing its input.
+//! `FAKECLI_SIZE_LOG=<file>` records the terminal grid measured in the process, at start and on resize.
 //! `FAKECLI_WRAP_TRANSCRIPT=1` writes full transcript lines so the terminal wraps them.
 //! `FAKECLI_IGNORE_KEYS` lists keys it ignores, `space` and `backspace`, comma-separated;
 //! `FAKECLI_NO_LEADING_SPACE=1` draws no space where its input starts; `FAKECLI_SPACE_SUGGESTS=<text>`
@@ -1328,7 +1329,16 @@ fn run() -> anyhow::Result<()> {
 
     let mut pending: Vec<u8> = Vec::new();
     let mut pasting: Option<Vec<u8>> = None;
-    let mut last_size = crossterm::terminal::size().unwrap_or((80, 24));
+    let mut size_log = std::env::var_os("FAKECLI_SIZE_LOG")
+        .map(std::fs::File::create)
+        .transpose()?;
+    let mut last_size = if let Some(log) = size_log.as_mut() {
+        let size @ (cols, rows) = crossterm::terminal::size()?;
+        writeln!(log, "{cols}x{rows}")?;
+        size
+    } else {
+        crossterm::terminal::size().unwrap_or((80, 24))
+    };
     loop {
         let mut dirty = false;
         // Nothing came for a while: an Escape that may begin a paste's start is the key alone, as a
@@ -1469,6 +1479,10 @@ fn run() -> anyhow::Result<()> {
         if size != last_size {
             last_size = size;
             dirty = true;
+            if let Some(log) = size_log.as_mut() {
+                let (cols, rows) = size;
+                writeln!(log, "{cols}x{rows}")?;
+            }
         }
         if dirty
             || app
