@@ -258,7 +258,7 @@ class CleanupTests(unittest.TestCase):
             try:
                 with tempfile.TemporaryFile(mode='w+') as log:
                     reclaim_interrupted_scope(root, log)
-                self.assertEqual(owned.wait(timeout=5), -signal.SIGKILL)
+                self.assertEqual(owned.wait(timeout=5), -signal.SIGTERM)
                 self.assertIsNone(sibling.poll())
             finally:
                 for process in processes:
@@ -271,7 +271,12 @@ class CleanupTests(unittest.TestCase):
             root = Path(directory)
             log = root / 'child.log'
             cancelled = Event()
-            script = 'import os, time\nprint(os.getpid(), flush=True)\ntime.sleep(30)\n'
+            script = (
+                'import os, signal, time\n'
+                'signal.signal(signal.SIGTERM, signal.SIG_IGN)\n'
+                'print(os.getpid(), flush=True)\n'
+                'time.sleep(30)\n'
+            )
             with log.open('w') as stream, ThreadPoolExecutor(max_workers=1) as worker:
                 future = worker.submit(
                     execute, [sys.executable, '-c', script], ROOT, dict(os.environ),

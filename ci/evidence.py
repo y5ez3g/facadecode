@@ -13,6 +13,7 @@ import tempfile
 import time
 import tomllib
 from concurrent.futures import CancelledError, ThreadPoolExecutor
+from contextlib import suppress
 from pathlib import Path
 from threading import Event
 
@@ -173,6 +174,16 @@ def child_exit_code(process, timeout, cancelled):
     raise CancelledError()
 
 
+def stop_child_group(process):
+    with suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+
+
 def execute(args, cwd, env, log, *, timeout=900, cancelled=None):
     if cancelled is not None and cancelled.is_set():
         return 'cancelled'
@@ -183,10 +194,7 @@ def execute(args, cwd, env, log, *, timeout=900, cancelled=None):
             try:
                 return 'pass' if child_exit_code(process, timeout, cancelled) == 0 else 'fail'
             except (subprocess.TimeoutExpired, KeyboardInterrupt, CancelledError) as error:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                stop_child_group(process)
                 if isinstance(error, KeyboardInterrupt):
                     raise
                 return 'cancelled' if isinstance(error, CancelledError) else 'timeout'
@@ -294,11 +302,13 @@ def reclaim_interrupted_scope(isolated, stream):
                 env = (entry / 'environ').read_bytes().split(b'\0')
                 paths = (item.partition(b'=') for item in env)
                 if inside(cwd) or any(name in SCOPE_PATHS and inside(value) for name, _, value in paths):
-                    signal.pidfd_send_signal(descriptor, signal.SIGKILL)
-                    print(f'Stopped owned fixture process {pid}.', file=stream)
                     completed = select.poll()
                     completed.register(descriptor, select.POLLIN)
-                    completed.poll(1000)
+                    signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+                    if not completed.poll(1000):
+                        signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                        completed.poll(1000)
+                    print(f'Stopped owned fixture process {pid}.', file=stream, flush=True)
             finally:
                 os.close(descriptor)
         except (FileNotFoundError, ProcessLookupError, PermissionError):
@@ -323,7 +333,7 @@ def run_binding(root, bindings, output_dir, vscode, env, cancelled=None):
                 try:
                     reclaim_interrupted_scope(isolated, stream)
                 except OSError as error:
-                    print(f'Interrupted fixture cleanup: {error}', file=stream)
+                    print(f'Interrupted fixture cleanup: {error}', file=stream, flush=True)
             cleanup = execute(['sh', 'core/scripts/leftovers.sh', str(isolated)], root, env, stream)
             if cleanup == 'pass':
                 try:
