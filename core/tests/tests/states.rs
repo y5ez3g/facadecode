@@ -585,7 +585,9 @@ fn what_an_agent_types_or_sends_is_said_by_that_agent() {
     );
     let sent = tools.call(
         "send_message",
-        json!({ "to": "bob", "text": "run the tests" }),
+        json!({
+            "to": "bob", "text": "run the tests", "wait_for": "delivery", "timeout_seconds": 30,
+        }),
     );
     assert_eq!(sent["status"], "success", "{sent}");
     let sent = said(&home, "bob", "run the tests");
@@ -608,7 +610,7 @@ fn what_an_agent_types_or_sends_is_said_by_that_agent() {
             ["type", "bob", "typed in a terminal", "--enter"].as_slice(),
             "typed in a terminal",
         ),
-        (["send", "bob", "hello"].as_slice(), "hello"),
+        (["send", "bob", "hello", "-w"].as_slice(), "hello"),
     ] {
         in_ada_s_terminal(args);
         let said = said(&home, "bob", text);

@@ -97,9 +97,9 @@ fn report_session(home: &TestHome, agent: &str, name: &str) {
     );
 }
 
-/// `facade send <name> <text>`: whether it was delivered, and what it said.
+/// `facade send <name> <text> -w`: whether it was delivered, and what it said.
 fn send(home: &TestHome, name: &str, text: &str) -> (bool, String) {
-    let sent = home.run_facade(&["send", name, text]);
+    let sent = home.run_facade(&["send", name, text, "-w"]);
     (
         sent.status.success(),
         format!("{}{}", stdout(&sent), stderr(&sent)),
@@ -280,7 +280,7 @@ fn the_person_s_key_during_a_probe_stops_it_before_its_backspace() {
     });
     let mut sending = home
         .command(&test_binaries().facade)
-        .args(["send", "muse", "a message"])
+        .args(["send", "muse", "a message", "-w"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

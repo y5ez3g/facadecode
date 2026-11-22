@@ -149,7 +149,10 @@ fn a_send_repeated_by_its_request_id_answers_its_message_and_types_it_once() {
         .map(|agent| {
             McpTestClient::relay_configured(&home, agent).call(
                 "send_message",
-                json!({ "to": "worker", "text": format!("from {agent}") }),
+                json!({
+                    "to": "worker", "text": format!("from {agent}"),
+                    "wait_for": "delivery", "timeout_seconds": 30,
+                }),
             )
         })
         .into_iter()
@@ -258,7 +261,7 @@ fn a_repeated_send_to_a_guest_is_answered_at_once_as_its_first_call_was() {
     let mut person = connect(&home);
     let send = json!({ "to": address, "text": "read me", "request_id": "g1" });
     let sending = person.send("call", json!({ "op": "agent.send", "args": send.clone() }));
-    let read = guest.call("read_messages", json!({ "wait": true }));
+    let read = guest.call("read_messages", json!({ "timeout_seconds": 30 }));
     assert_eq!(read["data"]["messages"][0]["id"], "m1", "{read}");
     let first = person
         .wait_for_response(sending, secs(10))
@@ -350,12 +353,19 @@ fn a_send_cut_off_by_a_restart_is_repeated_by_its_request_id_and_typed_once() {
         "tools/call",
         json!({
             "name": "send_message",
-            "arguments": { "to": "worker", "text": "survive" },
+            "arguments": {
+                "to": "worker", "text": "survive", "wait_for": "delivery", "timeout_seconds": 30,
+            },
         }),
     );
     let made = boss.send(
         "tools/call",
-        json!({ "name": "send_message", "arguments": { "to": "worker", "text": "also" } }),
+        json!({
+            "name": "send_message",
+            "arguments": {
+                "to": "worker", "text": "also", "wait_for": "delivery", "timeout_seconds": 30,
+            },
+        }),
     );
     assert!(
         wait_until(secs(10), || kept(&home, 1).is_some()

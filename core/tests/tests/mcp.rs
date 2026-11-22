@@ -88,7 +88,10 @@ fn a_managed_read_delivers_only_whole_inline_messages() {
     let sends = long.each_ref().map(|text| {
         sender.send(
             "tools/call",
-            json!({ "name": "send_message", "arguments": { "to": "ada", "text": text } }),
+            json!({
+                "name": "send_message",
+                "arguments": { "to": "ada", "text": text, "wait_for": "delivery", "timeout_seconds": 30 },
+            }),
         )
     });
     let store = rusqlite::Connection::open_with_flags(
@@ -1851,7 +1854,10 @@ fn a_send_cancelled_over_a_relay_connection_is_withdrawn_and_answered() {
     let mut boss = McpTestClient::relay_configured(&home, &boss.id);
     let held = boss.send(
         "tools/call",
-        json!({ "name": "send_message", "arguments": { "to": worker.address, "text": "held" } }),
+        json!({
+            "name": "send_message",
+            "arguments": { "to": worker.address, "text": "held", "wait_for": "delivery", "timeout_seconds": 30 },
+        }),
     );
     let store = rusqlite::Connection::open_with_flags(
         home.path.join("core/facade.db"),
@@ -2064,10 +2070,11 @@ fn each_tool_responds_as_recorded(through: Through) {
         &mut ada,
         "send_message",
         "send_message",
-        json!({ "to": "a2@golden-host", "text": "hello bob" }),
+        json!({ "to": "a2@golden-host", "text": "hello bob", "wait_for": "delivery", "timeout_seconds": 30 }),
     );
     assert_eq!(sent["status"], "success", "{sent}");
     assert_eq!(sent["data"]["id"], "m1@golden-host", "{sent}");
+    assert_eq!(sent["data"]["delivery"], "typed_into_input", "{sent}");
     assert!(sent["data"].get("next").is_none(), "{sent}");
     golden.call(
         &mut ada,
@@ -2097,12 +2104,15 @@ fn each_tool_responds_as_recorded(through: Through) {
     type_draft(&home, "ada", "my draft");
     let waiting = json!({
         "name": "read_messages",
-        "arguments": { "wait": true, "reply_to": sent["data"]["id"] },
+        "arguments": { "timeout_seconds": 30, "reply_to": sent["data"]["id"] },
     });
     let awaiting = ada.send("tools/call", waiting.clone());
     let reply = json!({
         "name": "send_message",
-        "arguments": { "to": "ada", "text": "hi ada", "reply_to": "m1" },
+        "arguments": {
+            "to": "ada", "text": "hi ada", "reply_to": "m1",
+            "wait_for": "delivery", "timeout_seconds": 30,
+        },
     });
     let replying = bob.send("tools/call", reply.clone());
     let read = ada
@@ -2120,6 +2130,10 @@ fn each_tool_responds_as_recorded(through: Through) {
     let replied = bob
         .answer(replying, secs(40))
         .expect("bob's send is answered");
+    assert_eq!(
+        replied["result"]["structuredContent"]["data"]["delivery"], "read_by_recipient",
+        "{replied}"
+    );
     golden.record(
         "send_message replying to a local inbox number",
         json!({ "method": "tools/call", "params": reply }),
@@ -2401,7 +2415,9 @@ fn record_guest_exchange(
     guest: &mut McpTestClient,
     meta: &Value,
 ) {
-    let message = json!({ "to": "a2@golden-host", "text": "hello guest" });
+    let message = json!({
+        "to": "a2@golden-host", "text": "hello guest", "wait_for": "delivery", "timeout_seconds": 30,
+    });
     let sent = host.send(
         "tools/call",
         json!({ "name": "send_message", "arguments": message }),
@@ -2410,7 +2426,7 @@ fn record_guest_exchange(
         guest,
         "read_messages waiting as a guest",
         "read_messages",
-        json!({ "wait": true }),
+        json!({ "timeout_seconds": 30 }),
         meta.clone(),
     );
     assert_eq!(read["data"]["messages"][0]["text"], "hello guest", "{read}");
@@ -2432,14 +2448,14 @@ fn record_guest_exchange(
             "to": "a1@golden-host",
             "text": "hello host",
             "reply_to": read["data"]["messages"][0]["id"],
+            "wait_for": "delivery",
+            "timeout_seconds": 30,
         }),
         meta.clone(),
     );
     assert_eq!(reply["status"], "success", "{reply}");
-    assert_eq!(
-        reply["data"]["next"],
-        json!({ "tool": "read_messages", "arguments": { "wait": true, "reply_to": reply["data"]["id"] } }),
-    );
+    assert_eq!(reply["data"]["delivery"], "typed_into_input", "{reply}");
+    assert!(reply["data"].get("next").is_none(), "{reply}");
 }
 
 /// A line of 1 MiB goes through the relay each way, and the connection goes on: a request whose

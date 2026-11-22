@@ -1,25 +1,25 @@
 Type text or press keys in a running agent's terminal.
 
+Use '-k' to press a key. Text and keys go in the order you give them.
+Put text that contains spaces in quotes.
+
 Use 'facade send' to deliver a complete message safely without overwriting a
 draft. Use 'facade type' to edit a draft, navigate menus, or answer prompts.
 
-Usage:
-  facade type <AGENT> <TEXT> [--enter]
-  facade type <AGENT> --key <KEY> [--key <KEY>]...
+Usage: facade type <AGENT> (<TEXT> | -k <KEY>)...
 
 Examples
-  facade type Nova "draft"
-  facade type Nova "hello" --enter
-  facade type Nova --key Esc
-  facade type Nova --key Down --key Enter
+  facade type Nova "hello world"
+  facade type Nova -k Down -k Enter
+  facade type Nova "hello" -k Enter "again" -k Enter
 
 Arguments
   <AGENT>  Running managed agent reference, agent ID, or unique name
   <TEXT>   Text to type
 
 Options
-      --enter      Press Enter after typing <TEXT>
-  -k, --key <KEY>  Press a key (repeat for more): Enter, Esc, Tab, Shift+Tab,
-                   Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp,
-                   PageDown, Space, Ctrl+A to Ctrl+Z, or one character
+  -k, --key <KEY>  Press a key (repeat for more, up to 100): Enter, Esc,
+                   Tab, Shift+Tab, Backspace, Delete, Up, Down, Left,
+                   Right, Home, End, PageUp, PageDown, Space, Ctrl+A to
+                   Ctrl+Z, or one character
   -h, --help       Show help

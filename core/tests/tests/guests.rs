@@ -13,9 +13,9 @@ fn managed_relay(home: &TestHome, name: &str) -> (String, McpTestClient) {
     (address.into(), McpTestClient::open_configured(home, id))
 }
 
-/// An external MCP connection follows the reply instruction a successful send gives it. When
-/// the managed sender omits the reference, a send queued before or during the wait explains how
-/// to resend the reply after withdrawal.
+/// A Guest waits by its original send ID and continues with the same ID after a reply timeout.
+/// When the managed sender omits the reference, a send queued before or during the wait explains
+/// how to resend the reply after withdrawal.
 #[test]
 fn a_guest_waits_for_the_reply_to_its_message() {
     let home = TestHome::new("guest-reply");
@@ -51,7 +51,7 @@ fn a_guest_waits_for_the_reply_to_its_message() {
     let request = "Please check the isolated test project";
     let sent = guest.call(
         "send_message",
-        json!({ "to": ada_address, "text": request }),
+        json!({ "to": ada_address, "text": request, "wait_for": "delivery", "timeout_seconds": 30 }),
     );
     assert_eq!(sent["status"], "success", "{sent}");
     assert_eq!(sent["data"]["delivery"], "typed_into_input", "{sent}");
@@ -69,17 +69,16 @@ fn a_guest_waits_for_the_reply_to_its_message() {
         "the fake terminal did not accept the Guest's message: {}",
         home.screen(ada_address)
     );
-    let next = &sent["data"]["next"];
-    assert_eq!(next["tool"], "read_messages", "{sent}");
-    assert_eq!(next["arguments"]["wait"], true, "{sent}");
-    assert_eq!(next["arguments"]["reply_to"], original, "{sent}");
+    assert!(sent["data"].get("next").is_none(), "{sent}");
     let response = "I checked the isolated test project";
     let send_without_reference = |ada: &mut McpTestClient| {
         ada.send(
             "tools/call",
             json!({
                 "name": "send_message",
-                "arguments": { "to": guest_address, "text": response },
+                "arguments": {
+                    "to": guest_address, "text": response, "wait_for": "delivery", "timeout_seconds": 15,
+                },
             }),
         )
     };
@@ -88,10 +87,17 @@ fn a_guest_waits_for_the_reply_to_its_message() {
         wait_until(secs(10), || waiting_for(&home, guest_id) == 1),
         "the Guest's inbox has the first send before it starts waiting"
     );
-    let waiting = guest.send(
-        "tools/call",
-        json!({ "name": next["tool"], "arguments": next["arguments"] }),
-    );
+    // The unlinked sends must reach their delivery deadlines while the Guest is still waiting.
+    let read_reply = |guest: &mut McpTestClient, reply_to: &str| {
+        guest.send(
+            "tools/call",
+            json!({
+                "name": "read_messages",
+                "arguments": { "reply_to": reply_to, "timeout_seconds": 30 },
+            }),
+        )
+    };
+    let waiting = read_reply(&mut guest, original);
     assert!(
         guest
             .answer(waiting, std::time::Duration::from_millis(250))
@@ -125,16 +131,19 @@ fn a_guest_waits_for_the_reply_to_its_message() {
     });
     assert_eq!(hints[0], hints[1], "both orders suggest the same reply");
     let unmatched = guest.tool_answer(waiting);
-    assert_eq!(unmatched["status"], "success", "{unmatched}");
-    assert_eq!(unmatched["data"]["messages"], json!([]), "{unmatched}");
+    assert_eq!(unmatched["status"], "failure", "{unmatched}");
+    assert_eq!(unmatched["reason"], "reply_timeout", "{unmatched}");
+    assert_eq!(unmatched["data"]["id"], original, "{unmatched}");
+    assert!(unmatched["data"].get("delivery").is_none(), "{unmatched}");
+    assert!(unmatched["data"].get("next").is_none(), "{unmatched}");
 
-    let waiting = guest.send(
-        "tools/call",
-        json!({ "name": next["tool"], "arguments": next["arguments"] }),
-    );
+    let waiting = read_reply(&mut guest, original);
     let replied = ada.call(
         "send_message",
-        json!({ "to": guest_address, "text": response, "reply_to": hints[0] }),
+        json!({
+            "to": guest_address, "text": response, "reply_to": hints[0],
+            "wait_for": "delivery", "timeout_seconds": 30,
+        }),
     );
     assert_eq!(replied["status"], "success", "{replied}");
     assert_eq!(
@@ -215,13 +224,17 @@ fn guest_history_keeps_long_messages_inline_across_pages() {
     for text in &texts {
         let pending = sender.send(
             "tools/call",
-            json!({ "name": "send_message", "arguments": { "to": guest_id, "text": text } }),
+            json!({
+                "name": "send_message",
+                "arguments": { "to": guest_id, "text": text, "wait_for": "delivery", "timeout_seconds": 30 },
+            }),
         );
-        let read = guest.call("read_messages", json!({ "wait": true }));
+        let read = guest.call("read_messages", json!({ "timeout_seconds": 30 }));
         assert_eq!(read["status"], "success", "{read}");
         assert_eq!(read["data"]["messages"][0]["text"], text.as_str(), "{read}");
         let sent = sender.tool_answer(pending);
         assert_eq!(sent["status"], "success", "{sent}");
+        assert_eq!(sent["data"]["delivery"], "read_by_recipient", "{sent}");
     }
 
     let mut query = json!({ "last": texts.len() });
@@ -553,9 +566,12 @@ fn an_mcp_client_joins_as_a_member_reads_its_messages_and_leaves_with_its_relay(
     let mut sender = McpTestClient::open(&home, &ada.id);
     let sending = sender.send(
         "tools/call",
-        json!({ "name": "send_message", "arguments": { "to": address, "text": "for the member" } }),
+        json!({
+            "name": "send_message",
+            "arguments": { "to": address, "text": "for the member", "wait_for": "delivery", "timeout_seconds": 30 },
+        }),
     );
-    let read = member.call("read_messages", json!({ "wait": true }));
+    let read = member.call("read_messages", json!({ "timeout_seconds": 30 }));
     assert_eq!(
         read["data"]["messages"][0]["text"], "for the member",
         "{read}"
@@ -585,7 +601,10 @@ fn a_member_and_what_waits_for_it_outlast_a_daemon_restart() {
         "tools/call",
         json!({
             "name": "send_message",
-            "arguments": { "to": address, "text": "kept for the member" },
+            "arguments": {
+                "to": address, "text": "kept for the member",
+                "wait_for": "delivery", "timeout_seconds": 30,
+            },
         }),
     );
     let old = home.kill_daemon();
@@ -595,13 +614,14 @@ fn a_member_and_what_waits_for_it_outlast_a_daemon_restart() {
             .is_some_and(|hello| hello["pid"].as_i64() != Some(old as i64))),
         "no daemon took over"
     );
-    let read = member.call("read_messages", json!({ "wait": true }));
+    let read = member.call("read_messages", json!({ "timeout_seconds": 30 }));
     assert_eq!(
         read["data"]["messages"][0]["text"], "kept for the member",
         "{read}"
     );
     let sent = sender.tool_answer(sending);
     assert_eq!(sent["status"], "success", "{sent}");
+    assert_eq!(sent["data"]["delivery"], "read_by_recipient", "{sent}");
     let kept = guest_rows(&home);
     assert_eq!(
         kept.iter().map(|row| &row["address"]).collect::<Vec<_>>(),
@@ -634,7 +654,9 @@ fn a_read_delivers_only_what_it_returns_and_last_is_the_newest() {
         numbers
             .map(|n| {
                 let waiting = waiting_for(&home, &id);
-                let arguments = json!({ "to": address, "text": text(n) });
+                let arguments = json!({
+                    "to": address, "text": text(n), "wait_for": "delivery", "timeout_seconds": 30,
+                });
                 let call = sender.send(
                     "tools/call",
                     json!({ "name": "send_message", "arguments": arguments }),
@@ -682,6 +704,7 @@ fn a_read_delivers_only_what_it_returns_and_last_is_the_newest() {
     for call in first.into_iter().chain(second) {
         let sent = sender.tool_answer(call);
         assert_eq!(sent["status"], "success", "{sent}");
+        assert_eq!(sent["data"]["delivery"], "read_by_recipient", "{sent}");
     }
 }
 

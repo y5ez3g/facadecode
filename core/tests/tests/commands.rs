@@ -102,12 +102,15 @@ fn interactive_start_propagates_process_exit_status() {
             "{script}: {}",
             term.text()
         );
+        assert_eq!(term.output_count(&said), 1);
         if id == "a1" {
             let text = term.text_with_scrollback();
             assert!(text.contains("INTERACTIVE-FRAME"), "{text}");
+            assert_eq!(term.output_count("To continue this session, run:"), 1);
+            assert_eq!(term.output_count("demo resume stored-session"), 1);
             assert!(
                 text.trim_end()
-                    .ends_with(&format!("  demo resume stored-session\n\n{said}")),
+                    .ends_with(&format!("  demo resume stored-session\n{said}")),
                 "{text}"
             );
         }
@@ -130,7 +133,7 @@ fn commands_start_list_read_and_stop_agents() {
             "TYPE",
             "WORKING DIRECTORY",
             "STARTED",
-            "TITLE"
+            "SESSION"
         ],
         "{table:?}"
     );
@@ -145,7 +148,7 @@ fn commands_start_list_read_and_stop_agents() {
             && table.cell(row, "TYPE") == "Managed"
             && table.cell(row, "STATE") == "Starting"
             && table.cell(row, "CLI") == "fake"
-            && table.cell(row, "TITLE") == "-"
+            && table.cell(row, "SESSION") == "-"
             && !age.is_empty()
             && age.bytes().all(|byte| byte.is_ascii_digit()),
         "{table:?}"

@@ -1726,7 +1726,7 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     let mut receiver = McpTestClient::open_configured(&second, id);
     let sent = caller.call(
         "send_message",
-        json!({ "to": target, "text": "request across machines" }),
+        json!({ "to": target, "text": "request across machines", "wait_for": "delivery", "timeout_seconds": 30 }),
     );
     assert_eq!(sent["status"], "success", "{sent}");
     assert_eq!(sent["data"]["id"], "m1@second", "{sent}");
@@ -1742,7 +1742,10 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     assert_eq!(received["from"], from);
     let reply = receiver.call(
         "send_message",
-        json!({ "to": received["from"], "text": "reply across machines", "reply_to": received["id"] }),
+        json!({
+            "to": received["from"], "text": "reply across machines", "reply_to": received["id"],
+            "wait_for": "delivery", "timeout_seconds": 30,
+        }),
     );
     assert_eq!(reply["status"], "success", "{reply}");
     let reply_id = reply["data"]["id"].as_str().unwrap();
@@ -1767,6 +1770,7 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
         "send_message",
         json!({
             "to": message["from"], "reply_to": message["id"], "text": "copied both addresses",
+            "wait_for": "delivery", "timeout_seconds": 30,
         }),
     );
     assert_eq!(sent["status"], "success", "{sent}");

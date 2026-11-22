@@ -245,7 +245,7 @@ fn a_session_counts_once_its_cli_saved_it() {
         "not saved yet: {:?}",
         home.listed_agent("saved")
     );
-    home.run_facade_ok(&["send", "saved", "hello"]);
+    home.run_facade_ok(&["send", "saved", "hello", "-w"]);
     assert!(
         records_session(&home, "saved", Some(SECOND)),
         "saved with its first message"
@@ -632,11 +632,15 @@ fn resume_lists_a_stopped_agent_and_reuses_its_launch_choices() {
     home.run_facade_ok(&["stop", address]);
     assert!(wait_until(LOADED_TIMEOUT, || inspect()["process"] == "ended"));
     let choices = home.run_facade_ok(&["resume"]);
-    assert!(
-        choices
-            .lines()
-            .any(|line| line.split_whitespace().any(|word| word == address)),
-        "{choices}"
+    let table = Table::parse(&choices);
+    let row = table
+        .row("REF", address)
+        .expect("the stopped agent is listed");
+    assert_eq!(table.cell(row, "STATE"), "Stopped", "{choices}");
+    assert_eq!(table.cell(row, "SESSION"), "-", "{choices}");
+    assert_eq!(
+        status_field(&home.run_facade_ok(&["status", address]), "Session"),
+        Some(FIRST)
     );
     std::fs::write(
         home.path.join("facade.json"),
@@ -1474,6 +1478,8 @@ fn resuming_a_saved_session_after_removal_creates_a_new_agent() {
         let table = Table::parse(&stdout(&listed));
         assert_eq!(table.column("TYPE"), ["Session"]);
         assert_eq!(table.column("REF"), [&session[..8]]);
+        assert_eq!(table.column("STATE"), ["Saved"]);
+        assert_eq!(table.column("SESSION"), ["resume this saved conversation"]);
     }
     let started = wire.call(
         "agent.resume",

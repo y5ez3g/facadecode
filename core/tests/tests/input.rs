@@ -300,7 +300,10 @@ fn type_pastes_text_and_presses_keys() {
         .as_str()
         .expect("an address")
         .to_string();
-    home.run_facade_ok(&["type", "worker", "hello there", "--enter"]);
+    assert_eq!(
+        home.run_facade_ok(&["type", "worker", "hello there", "--enter"]),
+        format!("Typed into worker ({address})'s terminal and pressed Enter.\n")
+    );
     let multiline = "two\nlines";
     for (args, control) in [
         (&["type", "a1", multiline, "--enter"][..], "U+000A"),

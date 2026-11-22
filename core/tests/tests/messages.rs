@@ -189,7 +189,11 @@ fn a_message_is_typed_into_its_recipient_s_input_under_a_header_naming_its_sende
     let ada_address = format!("{}@laptop", ada.id);
     let bob_address = format!("{}@laptop", bob.id);
 
-    let from_command = facade_as(&home, "a9", &["send", "ada", "hi from the command line"]);
+    let from_command = facade_as(
+        &home,
+        "a9",
+        &["send", "ada", "hi from the command line", "-w"],
+    );
     assert!(from_command.status.success(), "{}", stderr(&from_command));
     assert_eq!(
         stdout(&from_command).trim(),
@@ -197,7 +201,7 @@ fn a_message_is_typed_into_its_recipient_s_input_under_a_header_naming_its_sende
     );
     let sent = bob_relay.call(
         "send_message",
-        json!({ "to": ada_address, "text": "hi ada" }),
+        json!({ "to": ada_address, "text": "hi ada", "wait_for": "delivery", "timeout_seconds": 30 }),
     );
     assert_eq!(sent["status"], "success", "{sent}");
     assert_eq!(sent["data"]["id"], "m2@laptop", "{sent}");
@@ -209,7 +213,10 @@ fn a_message_is_typed_into_its_recipient_s_input_under_a_header_naming_its_sende
     assert_eq!(original["text"], "hi ada", "{inbox}");
     let reply = ada_relay.call(
         "send_message",
-        json!({ "to": original["from"], "text": "hi bob\nsecond line", "reply_to": original["id"] }),
+        json!({
+            "to": original["from"], "text": "hi bob\nsecond line", "reply_to": original["id"],
+            "wait_for": "delivery", "timeout_seconds": 30,
+        }),
     );
     assert_eq!(reply["status"], "success", "{reply}");
     assert_eq!(reply["data"]["id"], "m3@laptop", "{reply}");
@@ -299,7 +306,7 @@ fn a_message_is_typed_into_its_recipient_s_input_under_a_header_naming_its_sende
     );
     home.run_facade_ok(&["rename", &ada_address, "human"]);
     assert_eq!(
-        home.run_facade_ok(&["send", "human", "an Agent named human"])
+        home.run_facade_ok(&["send", "human", "an Agent named human", "-w"])
             .trim(),
         delivered(&home, &ada.id, "m4")
     );
@@ -313,7 +320,10 @@ fn a_sender_s_name_cannot_break_out_of_its_message_s_header() {
     let home = TestHome::new("sendname");
     let evil = home.start_named_fake("evil\u{1b}[201~\rINJECTED", &[]);
     home.start_named_fake("bob", &[]);
-    let sent = tools_of(&home, &evil.id).call("send_message", json!({ "to": "bob", "text": "hi" }));
+    let sent = tools_of(&home, &evil.id).call(
+        "send_message",
+        json!({ "to": "bob", "text": "hi", "wait_for": "delivery", "timeout_seconds": 30 }),
+    );
     assert_eq!(sent["status"], "success", "{sent}");
     assert_eq!(
         home.submitted_messages(),
@@ -335,7 +345,7 @@ fn a_send_a_draft_held_until_its_deadline_says_so() {
     let home = TestHome::new("sendheld");
     let worker = home.start_named_fake("worker", &[]);
     type_draft(&home, "worker", "my draft");
-    let sent = home.run_facade(&["send", "worker", "hello"]);
+    let sent = home.run_facade(&["send", "worker", "hello", "-w"]);
     assert_eq!(sent.status.code(), Some(1));
     let said = stderr(&sent);
     assert!(
@@ -386,11 +396,12 @@ fn a_read_delivers_a_waiting_message_so_it_is_never_typed() {
     let mut tools = tools_of(&home, &worker.id);
     // A message to another agent is not in this inbox.
     assert_eq!(
-        home.run_facade_ok(&["send", "other", "not for a1"]).trim(),
+        home.run_facade_ok(&["send", "other", "not for a1", "-w"])
+            .trim(),
         delivered(&home, &other.id, "m1")
     );
     let send = begin_send(&home, "worker", "read me", None);
-    let read = read_messages(&mut tools, json!({ "wait": true }));
+    let read = read_messages(&mut tools, json!({ "timeout_seconds": 30 }));
     assert_eq!(
         read,
         [json!({ "id": "m2", "from": "command_line", "at": read[0]["at"], "text": "read me" })]
@@ -404,7 +415,7 @@ fn a_read_delivers_a_waiting_message_so_it_is_never_typed() {
     // The draft clears and a later message goes in alone: the one read was dropped from the typist.
     home.run_facade_ok(&["type", "worker", "--key", "Ctrl+C"]);
     assert_eq!(
-        home.run_facade_ok(&["send", "worker", "next"]).trim(),
+        home.run_facade_ok(&["send", "worker", "next", "-w"]).trim(),
         delivered(&home, &worker.id, "m3")
     );
     assert_eq!(
@@ -458,8 +469,10 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
             .is_some_and(|row| table.cell(row, "REF") == worker_address),
         "{table:?}"
     );
-    let sent =
-        tools_of(&home, &worker.id).call("send_message", json!({ "to": "other", "text": "hi" }));
+    let sent = tools_of(&home, &worker.id).call(
+        "send_message",
+        json!({ "to": "other", "text": "hi", "wait_for": "delivery", "timeout_seconds": 30 }),
+    );
     assert_eq!(sent["status"], "success", "{sent}");
     assert_eq!(
         home.submitted_messages(),
@@ -502,14 +515,16 @@ fn message_numbers_are_never_given_twice_across_daemons() {
     let home = TestHome::new("sendnumbers");
     let worker = home.start_named_fake("worker", &[]);
     assert_eq!(
-        home.run_facade_ok(&["send", "worker", "first"]).trim(),
+        home.run_facade_ok(&["send", "worker", "first", "-w"])
+            .trim(),
         delivered(&home, &worker.id, "m1")
     );
     let old = home.kill_daemon();
     home.wait_for_daemon_after(old, secs(30))
         .expect("a replacement daemon");
     assert_eq!(
-        home.run_facade_ok(&["send", "worker", "second"]).trim(),
+        home.run_facade_ok(&["send", "worker", "second", "-w"])
+            .trim(),
         delivered(&home, &worker.id, "m2")
     );
 }
@@ -534,7 +549,7 @@ fn a_command_in_an_agent_s_terminal_acts_as_the_command_line() {
         .command(&test_binaries().facade)
         .env("FACADE_AGENT", &worker.id)
         .env("CODEX_SESSION_ID", session)
-        .args(["send", "other", "from a terminal"])
+        .args(["send", "other", "from a terminal", "-w"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -699,7 +714,7 @@ fn a_send_whose_recipient_is_removed_before_its_answer_still_answers() {
     home.start_facade_with(&[("FACADE_TEST_GATES", "before-send-answer")]);
     let worker = home.start_named_fake("worker", &[]);
     let receipt = delivered(&home, &worker.id, "m1");
-    let send = send_in_background(&home, &["worker", "hello"]);
+    let send = send_in_background(&home, &["worker", "hello", "-w"]);
     home.wait_for_gate("before-send-answer");
     home.remove_agent("worker");
     home.release_gate("before-send-answer");
@@ -835,13 +850,14 @@ fn messages_and_what_became_of_them_outlive_their_daemon() {
     let mut tools = tools_of(&home, &worker.id);
     let read = begin_send(&home, "worker", "read me", None);
     assert_eq!(
-        ids(&read_messages(&mut tools, json!({ "wait": true }))),
+        ids(&read_messages(&mut tools, json!({ "timeout_seconds": 30 }))),
         ["m1"]
     );
     assert_eq!(delivery_of(&read.receipt()).3, "read");
     home.run_facade_ok(&["type", "worker", "--key", "Ctrl+C"]);
     assert_eq!(
-        home.run_facade_ok(&["send", "worker", "typed"]).trim(),
+        home.run_facade_ok(&["send", "worker", "typed", "-w"])
+            .trim(),
         delivered(&home, &worker.id, "m2")
     );
     let refused = wire.call("agent.send", json!({ "to": "plain", "text": "no reader" }));
@@ -1094,7 +1110,7 @@ fn a_message_read_when_its_daemon_crashes_is_never_typed_by_the_next() {
     let mut reader = McpTestClient::relay_configured(&home, &worker.id);
     reader.send(
         "tools/call",
-        json!({ "name": "read_messages", "arguments": { "wait": true } }),
+        json!({ "name": "read_messages", "arguments": { "timeout_seconds": 30 } }),
     );
     crash_at(&home, "after-read-commit");
     drop((send, reader));
@@ -1106,7 +1122,7 @@ fn a_message_read_when_its_daemon_crashes_is_never_typed_by_the_next() {
     );
     home.run_facade_ok(&["type", "worker", "--key", "Ctrl+C"]);
     assert_eq!(
-        home.run_facade_ok(&["send", "worker", "next"]).trim(),
+        home.run_facade_ok(&["send", "worker", "next", "-w"]).trim(),
         delivered(&home, &worker.id, "m2")
     );
     assert_eq!(
@@ -1148,12 +1164,13 @@ fn a_removed_agent_s_inbox_goes_and_what_it_sent_stays() {
     let other = home.start_named_fake("other", &[]);
     let worker_address = address(&home, &worker.id);
     assert_eq!(
-        home.run_facade_ok(&["send", "worker", "to worker"]).trim(),
+        home.run_facade_ok(&["send", "worker", "to worker", "-w"])
+            .trim(),
         delivered(&home, &worker.id, "m1")
     );
     let sent = tools_of(&home, &worker.id).call(
         "send_message",
-        json!({ "to": "other", "text": "from worker" }),
+        json!({ "to": "other", "text": "from worker", "wait_for": "delivery", "timeout_seconds": 30 }),
     );
     assert_eq!(sent["status"], "success", "{sent}");
     home.remove_agent("worker");

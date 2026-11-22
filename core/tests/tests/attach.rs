@@ -14,11 +14,10 @@ fn address(home: &TestHome, id: &str) -> String {
 fn assert_detach_receipt(term: &TestTerminal, name: &str, address: &str) {
     let shown = format!("Detached from {name}");
     let detached = format!("{shown} ({address}). The agent is still running.");
-    let reattach = format!("Reattach with 'facade attach {address}'.");
     // The narrow test terminal can wrap the receipt. Check the emitted text and that the detach
     // notice is visible on the restored screen.
     assert!(
-        term.wait_for_output(secs(2), &detached) && term.wait_for_output(secs(2), &reattach),
+        term.wait_for_output(secs(2), &detached),
         "{}",
         term.text_with_scrollback()
     );
@@ -27,14 +26,20 @@ fn assert_detach_receipt(term: &TestTerminal, name: &str, address: &str) {
         "{}",
         term.text()
     );
+    assert_eq!(term.output_count(&detached), 1);
+    assert_eq!(term.output_count("Reattach with 'facade attach"), 0);
 }
 
 #[test]
-fn attach_reports_native_progress_during_work_and_clears_it_on_idle_and_detach() {
+fn attach_preserves_native_progress_without_injecting_its_own() {
     let home = TestHome::new("attachprogress");
     let agent = home.start_named_fake(
         "progress",
-        &[("FAKECLI_STATUS", "1"), ("FAKECLI_TURN_MS", "3000")],
+        &[
+            ("FAKECLI_STATUS", "1"),
+            ("FAKECLI_TURN_MS", "3000"),
+            ("FAKECLI_PROGRESS", "1"),
+        ],
     );
     let mut term = TestTerminal::spawn(
         home.command(&test_binaries().facade)
@@ -47,36 +52,24 @@ fn attach_reports_native_progress_during_work_and_clears_it_on_idle_and_detach()
         home.agent_record(&agent.id)
             .is_some_and(|record| record["state"] == "idle")
     }));
-    let busy = "\x1b]9;4;3";
-    let clear = "\x1b]9;4;0";
+    let busy = b"\x1b]9;4;1;37";
+    let clear = b"\x1b]9;4;0;37";
     let first = term.output_len();
     term.send(b"first turn\r");
-    assert!(wait_until(secs(10), || {
-        let bytes = term.output_since(first);
-        let text = String::from_utf8_lossy(&bytes);
-        text.split_once(busy)
-            .is_some_and(|(_, rest)| rest.contains(clear))
-    }));
+    assert!(term.wait_for_bytes(first, busy, secs(5)));
+    assert!(term.wait_for_bytes(first, clear, secs(10)));
 
     let second = term.output_len();
     term.send(b"second turn\r");
-    assert!(wait_until(secs(5), || {
-        String::from_utf8_lossy(&term.output_since(second)).contains(busy)
-    }));
+    assert!(term.wait_for_bytes(second, busy, secs(5)));
     term.send(b"\x1d");
     assert!(
         term.wait_exit(secs(5))
             .is_some_and(|status| status.success())
     );
+    // The CLI writes two progress starts and one clear. Attach emits no additional progress.
+    assert_eq!(term.output_count("\x1b]9;4;"), 3);
     assert_detach_receipt(&term, "progress", &agent.address);
-    let bytes = term.output_since(second);
-    let text = String::from_utf8_lossy(&bytes);
-    assert!(
-        text.find(clear)
-            .zip(text.find("Detached from progress"))
-            .is_some_and(|(cleared, detached)| cleared < detached),
-        "{text:?}"
-    );
 }
 
 #[cfg(unix)]

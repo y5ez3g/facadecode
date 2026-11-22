@@ -1094,7 +1094,7 @@ fn a_call_made_while_the_daemon_before_drains_is_refused_and_repeated_at_the_nex
     // Both say hello before the drain: a client of the test's, and a send held once it has.
     let mut wire = connect(&home);
     let mut send = home.command(&test_binaries().facade);
-    send.args(["send", "w1", "during the drain"])
+    send.args(["send", "w1", "during the drain", "-w"])
         .env("FACADE_TEST_GATES", "command-connected");
     let sending = send
         .stdin(Stdio::null())
@@ -1156,7 +1156,7 @@ fn a_message_entered_as_a_newer_facade_takes_over_is_settled_by_the_daemon_befor
     home.start_named_fake("w1", &[]);
     let mut send = home.command(&test_binaries().facade);
     let sending = send
-        .args(["send", "w1", "entered as it takes over"])
+        .args(["send", "w1", "entered as it takes over", "-w"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1236,7 +1236,7 @@ fn a_message_waiting_as_the_daemon_before_drains_is_typed_by_the_next_daemon_alo
     );
     let mut send = home.command(&test_binaries().facade);
     let sending = send
-        .args(["send", "w1", "waits through the drain"])
+        .args(["send", "w1", "waits through the drain", "-w"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1576,11 +1576,16 @@ fn sends_waiting_through_a_takeover_are_typed_once_and_answered() {
     let mut boss = McpTestClient::open_configured(&home, &boss.id);
     let tool = boss.send(
         "tools/call",
-        json!({ "name": "send_message", "arguments": { "to": worker.address, "text": "from the tool" } }),
+        json!({
+            "name": "send_message",
+            "arguments": {
+                "to": worker.address, "text": "from the tool", "wait_for": "delivery", "timeout_seconds": 30,
+            },
+        }),
     );
     let command = home
         .command(&test_binaries().facade)
-        .args(["send", "worker", "from the command"])
+        .args(["send", "worker", "from the command", "-w"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2085,12 +2090,15 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
         "tools/call",
         json!({
             "name": "send_message",
-            "arguments": { "to": agents[AGENTS - 1].address, "text": "waiting by the tool" },
+            "arguments": {
+                "to": agents[AGENTS - 1].address, "text": "waiting by the tool",
+                "wait_for": "delivery", "timeout_seconds": 30,
+            },
         }),
     );
     let waiting_command = home
         .command(&test_binaries().facade)
-        .args(["send", &held, "waiting by the command"])
+        .args(["send", &held, "waiting by the command", "-w"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2119,7 +2127,10 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
                 let text = format!("tool {}", sent.len());
                 let answer = client.call(
                     "send_message",
-                    json!({ "to": agents[1 + sent.len() % (AGENTS - 2)].address, "text": text }),
+                    json!({
+                        "to": agents[1 + sent.len() % (AGENTS - 2)].address, "text": text,
+                        "wait_for": "delivery", "timeout_seconds": 30,
+                    }),
                 );
                 sent.push((text, answer));
             }
@@ -2133,6 +2144,7 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
                     "send",
                     &format!("w{}", 1 + sent.len() % (AGENTS - 2)),
                     &text,
+                    "-w",
                 ]);
                 sent.push((text, output.status.success(), stderr(&output)));
             }

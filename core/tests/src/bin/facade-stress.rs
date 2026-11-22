@@ -228,8 +228,8 @@ fn idle(home: &TestHome) -> Value {
     report
 }
 
-/// One message from `guest` to every agent at once: how many succeeded, each response's latency, and
-/// how many the fake CLIs logged as submitted.
+/// One message from `guest` to every agent at once: how many were delivered, each delivery
+/// response's latency, and how many the fake CLIs logged as submitted.
 fn message_everyone(
     home: &TestHome,
     guest: &mut McpTestClient,
@@ -241,7 +241,12 @@ fn message_everyone(
         .enumerate()
         .map(|(k, (id, _))| {
             let at = Instant::now();
-            let params = json!({ "name": "send_message", "arguments": { "to": id, "text": format!("{tag}-{k}") } });
+            let params = json!({
+                "name": "send_message",
+                "arguments": {
+                    "to": id, "text": format!("{tag}-{k}"), "wait_for": "delivery", "timeout_seconds": 30,
+                },
+            });
             (k, guest.send("tools/call", params), at)
         })
         .collect();
@@ -252,10 +257,13 @@ fn message_everyone(
         pending.retain(|(_, id, at)| match guest.answer(*id, Duration::ZERO) {
             Some(response) => {
                 latencies.push(at.elapsed().as_secs_f64() * 1000.0);
-                if response["result"]["structuredContent"]["status"] == "success" {
+                let receipt = &response["result"]["structuredContent"];
+                if receipt["status"] == "success"
+                    && receipt["data"]["delivery"] == "typed_into_input"
+                {
                     succeeded += 1;
                 } else {
-                    eprintln!("a send failed: {response}");
+                    eprintln!("a send did not confirm terminal delivery: {response}");
                 }
                 false
             }
