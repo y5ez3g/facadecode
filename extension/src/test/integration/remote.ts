@@ -36,12 +36,12 @@ import { ChildProcess, execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
-import type { DaemonOperations } from '../../base/coreProtocol';
-import { callInCore, coreCall, detachedStartReference, EDITOR_FLAGS, editorProfile, endCore, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup, until } from './editors';
+import type { DaemonOperations, InspectResult } from '../../base/coreProtocol';
+import { callInCore, coreCall, detachedStartReference, EDITOR_FLAGS, editorBuildCommit, editorProfile, endCore, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup, until } from './editors';
 import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
 import { multiWindowDriverFiles, rustMultiWindow, withRustWindows } from './rustMultiWindow';
 
-const SCENARIOS = ['ssh', 'ssh-ssh', 'local-ssh', 'ssh-local', 'hosts', 'ssh-lifetime', 'ssh-multi-window', 'ssh-network'] as const;
+const SCENARIOS = ['ssh', 'ssh-ssh', 'local-ssh', 'ssh-local', 'hosts', 'ssh-lifetime', 'ssh-multi-window', 'ssh-network', 'ssh-connect'] as const;
 type Scenario = typeof SCENARIOS[number];
 
 /** A computer the run reaches over SSH, or a container it starts, as the editor and the run address it. */
@@ -125,7 +125,20 @@ async function main(): Promise<void> {
 	if (engine !== 'old' && engine !== 'rust') {
 		throw new Error('FACADE_IT_ENGINE is old or rust.');
 	}
-	const rustOnly = only === 'ssh-lifetime' || only === 'ssh-multi-window' || only === 'ssh-network';
+	const connectOnly = only === 'ssh-connect';
+	const attempt = process.env.FACADE_IT_REMOTE_ATTEMPT;
+	if (connectOnly && !/^[0-9a-f]{64}$/u.test(attempt ?? '')) {
+		throw new Error('Select this proof with ci/check_remote_editor.sh to bind its inputs and attempt.');
+	}
+	const pinnedVsix = listed('FACADE_IT_REMOTE_VSIXS');
+	const remoteServerTar = process.env.FACADE_IT_REMOTE_SERVER_TAR;
+	const commit = connectOnly ? editorBuildCommit(executable, '1.147.0') : undefined;
+	if (connectOnly && (aliases.length !== 1 || image || pinnedVsix.length !== 3 || !pinnedVsix.every(file => path.isAbsolute(file) && fs.existsSync(file))
+		|| !remoteServerTar?.startsWith('/'))) {
+		throw new Error('The SSH connect fixture needs one SSH host, three pinned local VSIXs and the pinned remote server tar.');
+	}
+
+	const rustOnly = connectOnly || only === 'ssh-lifetime' || only === 'ssh-multi-window' || only === 'ssh-network';
 	if (rustOnly && (engine !== 'rust' || !aliases.length)) {
 		throw new Error(`The ${only} journey needs the Rust engine and an SSH host.`);
 	}
@@ -223,7 +236,8 @@ async function main(): Promise<void> {
 		'remote.SSH.serverInstallPath': Object.fromEntries(hosts.filter(host => host.kind === 'ssh').map(host => [host.alias, server(host)])),
 		'remote.SSH.remotePlatform': Object.fromEntries(hosts.filter(host => host.kind === 'ssh').map(host => [host.alias, host.platform])),
 		'remote.SSH.showLoginTerminal': false,
-		'remote.SSH.enableRemoteCommand': false
+		'remote.SSH.enableRemoteCommand': false,
+		...connectOnly ? { 'remote.SSH.useExecServer': false, 'remote.SSH.localServerDownload': 'off', 'remote.SSH.useLocalServer': false } : {}
 	};
 	/** A user data folder of the run's own for one editor, new for each scenario: what an earlier one kept there is not this one's. */
 	const profile = (editor: string) => {
@@ -317,6 +331,17 @@ for repo in app remote-peer; do
 	git -C "$repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m first
 done
 `);
+				if (connectOnly) {
+					assert.strictEqual(host.platform, 'linux');
+					const installed = `${server(host)}/.vscode-server/bin/${commit}`;
+					const metadata = host.run(`set -e
+umask 077
+mkdir -p ${quoted(installed)}
+tar -xzf ${quoted(remoteServerTar!)} --strip-components=1 -C ${quoted(installed)}
+node -p ${quoted(`JSON.stringify(require(${JSON.stringify(installed + '/product.json')}))`)}`);
+					assert.strictEqual((JSON.parse(metadata) as { commit: string }).commit, commit);
+				}
+
 				// A machine setting belongs to the remote server, before its first extension activation.
 				if (host.platform !== 'windows') {
 					const qaMachine = host.kind === 'container'
@@ -342,7 +367,9 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 		const [cli, ...cliArgs] = resolveCliArgsFromVSCodeExecutablePath(executable, { reuseMachineInstall: true });
 		const remotes = [...new Set(hosts.map(host => host.kind === 'ssh' ? 'ms-vscode-remote.remote-ssh' : 'ms-vscode-remote.remote-containers'))];
 		const installProfile = profile('install');
-		execFileSync(cli, [...cliArgs, ...installProfile.args, ...remotes.flatMap(id => ['--install-extension', id])],
+		const stagedRemotes = connectOnly ? [...pinnedVsix.flatMap(file => ['--install-extension', file]), '--do-not-include-pack-dependencies']
+			: remotes.flatMap(id => ['--install-extension', id]);
+		execFileSync(cli, [...cliArgs, ...installProfile.args, ...stagedRemotes],
 			{ env: { ...process.env, ...installProfile.env, FACADE_HOME: facade }, stdio: 'inherit' });
 
 		/** An editor of the run that runs no tests, on `folder`; closed with the scenario. */
@@ -462,6 +489,43 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 			const daemonLog = path.join(facade, 'core', 'logs', 'daemon.log');
 			const trace = () => fs.existsSync(daemonLog) ? fs.readFileSync(daemonLog, 'utf8') : '';
 			await withRustWindows(files, start, async open => {
+				if (connectOnly) {
+					const place = `${root}/app`;
+					const window = await open(place, 'a');
+					assert.deepStrictEqual([window.ready.remote, window.ready.folder, window.ready.home, window.ready.platform],
+						['ssh-remote', place, facade, 'linux']);
+					assert.ok(window.ready.machineId && window.ready.hostPid);
+					const remoteProgram = `${server(host)}/.vscode-server/bin/${commit}/node`;
+					const hostBinary = host.run(`readlink -f /proc/${window.ready.hostPid}/exe`).trim();
+					assert.strictEqual(hostBinary, remoteProgram, 'the real workspace host uses the pinned SSH server executable');
+					const command = host.run(`tr '\\000' ' ' </proc/${window.ready.hostPid}/cmdline`).trim();
+					assert.match(command, /--type=extensionHost/u);
+					const marker = 'SSH fixture owned terminal';
+					const original = await window.act<{ id: string; pid: number; session: string; cwd: string }>({ kind: 'start', screen: marker });
+					assert.ok(original.session);
+					assert.strictEqual(original.cwd, place);
+					await window.act({ kind: 'pin', agent: original.id });
+					const owner = await window.act<InspectResult>({ kind: 'inspect', agent: original.id });
+					assert.deepStrictEqual([owner.agent.reference.machine_id, owner.agent.reference.agent_id, owner.agent.pid, owner.agent.session, owner.agent.cwd, owner.agent.process],
+						[window.ready.machineId, original.id, original.pid, original.session, place, 'running']);
+					assert.strictEqual(owner.viewers.length, 1);
+					const guestCwd = host.run(`readlink -f /proc/${original.pid}/cwd`).trim();
+					assert.strictEqual(guestCwd, place);
+					const starts = host.run(`cat ${quoted(record + '.starts.#' + original.id)}`).trim();
+					assert.strictEqual(starts, String(original.pid), 'one source of fake CLI startup on the SSH host');
+					await window.act({ kind: 'remove', agent: original.id });
+					await window.act({ kind: 'wait-for-exit', pid: original.pid });
+					await window.close();
+					const { remote, folder, home, platform, machineId, hostPid } = window.ready;
+					console.log('Facade native SSH connect observation ' + JSON.stringify({
+						attempt, authority: host.alias, ready: { remote, folder, home, platform, machineId, hostPid }, started: original,
+						owner: { agent: owner.agent.reference, pid: owner.agent.pid, session: owner.agent.session,
+							cwd: owner.agent.cwd, process: owner.agent.process, viewers: owner.viewers },
+						hostBinary, guestCwd, starts
+					}));
+					return;
+				}
+
 				if (!network) {
 					await rustMultiWindow(open, {
 						folder: `${root}/app`, peer: `${root}/remote-peer`, shared, home: facade, remote: 'ssh-remote',
@@ -638,6 +702,10 @@ ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 			] as const).filter(each => !inContainer || each.scenario === 'local-ssh').filter(each => engine !== 'rust' || each.scenario === (inContainer ? 'local-ssh' : 'ssh')));
 			if (engine === 'rust') {
 				if (host.kind === 'ssh' && host.platform !== 'windows') {
+					if (connectOnly) {
+						runs.push({ scenario: 'ssh-connect', title: on, go: () => sshMultiWindow(host) });
+					}
+
 					runs.push({ scenario: 'ssh-lifetime', title: on, go: () => sshLifetime(host) });
 					runs.push({ scenario: 'ssh-multi-window', title: on, go: () => sshMultiWindow(host) });
 					runs.push({ scenario: 'ssh-network', title: on, go: () => sshMultiWindow(host, true) });
