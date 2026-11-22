@@ -13,20 +13,20 @@ use std::time::{Duration, Instant};
 
 use facade_base::api_v1::daemon::{
     AgentInfo, AgentInspect, AgentRef, AgentTarget, AgentTargetArgs, AttachArgs, AttachResizeArgs,
-    AttachTopic, MachineQuery, ProcessState, ScreenChange, ScreenSnapshot, attach_resize_line,
-    raw_input_line,
+    AttachShellTopic, AttachTopic, MachineQuery, ProcessState, ScreenChange, ScreenSnapshot,
+    attach_resize_line, raw_input_line,
 };
 use facade_base::api_v1::daemon_client::{
     Cut, DaemonClient, takeover_timeout, transient_transport,
 };
-use facade_base::api_v1::{ErrorBody, ProcessExit, Size};
+use facade_base::api_v1::{ErrorBody, ProcessExit, Size, Topic};
 use facade_base::console::{
     ConsoleRead, ConsoleReader, ConsoleSignal, ConsoleSignals, VtModes, visible_content_end,
 };
 use facade_base::paths::ClientSocket;
 use facade_base::unix_process::signal_number;
 use facade_base::{base64, service, system};
-use facade_screen::{REDRAW_SCROLLBACK_ROWS, Screen};
+use facade_screen::{ParsedOutput, REDRAW_SCROLLBACK_ROWS, Screen};
 use unicode_width::UnicodeWidthChar;
 
 use crate::daemon_client::{ConnectFailure, Reconnect};
@@ -46,15 +46,15 @@ const MAX_QUEUED_KEY_BYTES: usize = 1024 * 1024;
 
 /// Whether raw mode is on and the person's terminal still has to be restored.
 static RAW_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
-/// The progress indicator we have set in the person's terminal.
-static TERMINAL_WORKING: AtomicBool = AtomicBool::new(false);
 /// The console modes entered after raw mode, which the restoration puts back.
 static VT_MODES: Mutex<Option<VtModes>> = Mutex::new(None);
-/// Whether the agent's output has switched to the alternate screen.
-static ALTERNATE_SCREEN_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Held while writing to the person's terminal and while restoring it, so that none of the agent's
 /// output lands in the middle of the restoration or after it.
-static TERMINAL: Mutex<Display> = Mutex::new(Display { shared: None });
+static TERMINAL: Mutex<Display> = Mutex::new(Display {
+    shared: None,
+    host_alternate: false,
+    main_prepared: false,
+});
 
 /// The person's terminal size, when both dimensions are nonzero.
 pub(crate) fn console_size() -> Option<(u16, u16)> {
@@ -72,6 +72,11 @@ pub(crate) fn attach(
     opening: Opening,
     reconnect: &Reconnect,
 ) -> anyhow::Result<i32> {
+    // A foreground start or resume already used its connection for a call.
+    if !matches!(opening, Opening::Attached) && supports_dedicated_watch(&client) {
+        drop(client);
+        client = connect_before_input(reconnect)?;
+    }
     let hostname = system::hostname().unwrap_or_else(|_| client.hello_result.machine_id.clone());
     let viewer = format!("Terminal on {hostname}");
     let address = match &target {
@@ -92,7 +97,6 @@ pub(crate) fn attach(
             let end = AttachEnd::AgentExited {
                 exit: agent.and_then(|agent| agent.exit),
                 status: None,
-                resume_hint: None,
             };
             let code = end.code();
             let mut stderr = std::io::stderr().lock();
@@ -158,7 +162,6 @@ pub(crate) enum AttachEnd {
     AgentExited {
         exit: Option<ProcessExit>,
         status: Option<i32>,
-        resume_hint: Option<String>,
     },
     Removed,
     Unreachable(String),
@@ -194,9 +197,7 @@ pub(crate) fn opening_line(opening: &Opening, shown: &str) -> String {
 /// The result shown after restoring the person's terminal.
 pub(crate) fn result_line(end: &AttachEnd, shown: &str, address: &str) -> String {
     match end {
-        AttachEnd::Detached => format!(
-            "Detached from {shown}. The agent is still running.\nReattach with 'facade attach {address}'."
-        ),
+        AttachEnd::Detached => format!("Detached from {shown}. The agent is still running."),
         AttachEnd::AgentExited {
             exit: Some(exit), ..
         } if exit.code.is_some() => {
@@ -326,12 +327,24 @@ fn watch_first(
         .as_ref()
         .is_err_and(|error| watch_reason(error) == Some("upgrading"))
     {
-        *client = reconnect(Instant::now() + takeover_timeout(), &|| false, &mut |_| {
-            true
-        })?;
+        *client = connect_before_input(reconnect)?;
         return watch_screen(client, target.clone(), viewer, true, allow_ended);
     }
     watched
+}
+
+fn connect_before_input(reconnect: &Reconnect) -> Result<DaemonClient, ConnectFailure> {
+    reconnect(Instant::now() + takeover_timeout(), &|| false, &mut |_| {
+        true
+    })
+}
+
+fn supports_dedicated_watch(client: &DaemonClient) -> bool {
+    client
+        .hello_result
+        .topics
+        .iter()
+        .any(|topic| topic == AttachShellTopic::NAME)
 }
 
 /// Watches the agent's screen. The scrollback comes only on the first watch; after a reconnect
@@ -352,12 +365,16 @@ fn watch_screen(
         include_scrollback,
         viewer: Some(viewer.into()),
         allow_ended,
-        report_activity: true,
+        report_activity: false,
         size: capacity
             .filter(|&(cols, _)| cols >= 2)
             .map(|(cols, rows)| Size { cols, rows }),
     };
-    let (watch, snapshot) = client.watch::<AttachTopic>(args)?;
+    let (watch, snapshot) = if supports_dedicated_watch(client) {
+        client.watch::<AttachShellTopic>(args)?
+    } else {
+        client.watch::<AttachTopic>(args)?
+    };
     Ok(WatchedScreen {
         watch,
         snapshot,
@@ -388,7 +405,6 @@ fn follow_agent(
         input.disconnected(closing);
         if let Some(mut terminal) = attached_terminal() {
             terminal.shared = None;
-            show_activity(false);
         }
         service::mark_for_test("attach-disconnected");
         if input.is_detached() {
@@ -424,7 +440,6 @@ fn show_snapshot(
     let grid = (snapshot.size.cols, snapshot.size.rows);
     let capacity = console_size();
     terminal.draw_frame(&snapshot.redraw, grid, capacity, watched.include_scrollback);
-    show_activity(snapshot.working.unwrap_or_default());
     {
         let mut queue = input.lock();
         queue.agent_name.clone_from(&snapshot.name);
@@ -440,7 +455,6 @@ fn show_snapshot(
         return Ok(Some(AttachEnd::AgentExited {
             exit: snapshot.exit.take(),
             status,
-            resume_hint: snapshot.resume_hint.take(),
         }));
     }
     input.push_resize(capacity);
@@ -470,6 +484,7 @@ fn show_until_closed(
     input: &AgentInput,
 ) -> anyhow::Result<Option<AttachEnd>> {
     let watch = screen.watched.watch;
+    // Changes are keyed by watch ID, and both Attach topics decode the same ScreenChange.
     while let Some(change) = screen.client.next_change::<AttachTopic>(watch)? {
         // Detaching shuts the connection down, whatever the read returned.
         if input.is_detached() {
@@ -488,21 +503,12 @@ fn show_until_closed(
                 }
                 continue;
             }
-            ScreenChange::Activity { working } => {
-                if let Some(_terminal) = attached_terminal() {
-                    show_activity(working);
-                }
-                continue;
-            }
-            ScreenChange::Unknown => continue,
+            ScreenChange::Activity { .. } | ScreenChange::Unknown => continue,
             ScreenChange::Exit {
-                exit,
-                exit_status,
-                resume_hint,
+                exit, exit_status, ..
             } => AttachEnd::AgentExited {
                 exit: Some(exit),
                 status: exit_status,
-                resume_hint,
             },
             ScreenChange::Removed => AttachEnd::Removed,
         }));
@@ -556,11 +562,7 @@ fn reconnect_screen(
                 if input.is_detached() {
                     break;
                 }
-                return Err(AttachEnd::AgentExited {
-                    exit,
-                    status: None,
-                    resume_hint: None,
-                });
+                return Err(AttachEnd::AgentExited { exit, status: None });
             }
             _ if retryable_watch(&error) => {
                 keep_reconnect_failure(&mut last_failure, error);
@@ -673,7 +675,20 @@ fn read_keys(input: &AgentInput) {
                     input.resized();
                     continue;
                 }
-                Ok(ConsoleRead::Wheel { .. }) => continue,
+                Ok(ConsoleRead::Wheel {
+                    col,
+                    row,
+                    delta,
+                    modifiers,
+                }) => {
+                    if let Some(terminal) = attached_terminal()
+                        && let Some(shared) = &terminal.shared
+                        && let Some(keys) = shared.screen.encode_wheel(col, row, delta, modifiers)
+                    {
+                        input.push_keys(&keys);
+                    }
+                    continue;
+                }
                 Ok(ConsoleRead::Keys(read @ 1..)) => read,
                 Ok(ConsoleRead::Keys(0)) | Err(_) => break,
             };
@@ -876,7 +891,7 @@ impl AgentInput {
             && shared.capacity != capacity
         {
             shared.capacity = capacity;
-            shared.draw(None, false);
+            terminal.draw(false, None);
         }
     }
 
@@ -1060,21 +1075,13 @@ fn write_terminal(bytes: &[u8]) {
     let _ = stdout.flush();
 }
 
-/// Reports indeterminate or cleared progress to a terminal that supports OSC 9;4.
-/// The caller holds the terminal lock.
-fn show_activity(working: bool) {
-    if TERMINAL_WORKING.swap(working, SeqCst) != working {
-        write_terminal(if working {
-            b"\x1b]9;4;3;0\x07"
-        } else {
-            b"\x1b]9;4;0;0\x07"
-        });
-    }
-}
-
 /// The terminal drawing for the current watch, held under the same lock as its writes.
 struct Display {
     shared: Option<SharedScreen>,
+    /// The buffer selected on the host, which stays in place when a watch disconnects.
+    host_alternate: bool,
+    /// Whether a full draw has already made room in main-screen history.
+    main_prepared: bool,
 }
 
 impl Display {
@@ -1097,9 +1104,10 @@ impl Display {
             screen: Screen::new(grid.0, grid.1, scrollback),
             capacity,
         };
-        frame.screen.feed(&bytes);
-        frame.draw(Some(&bytes), include_scrollback);
+        let output = frame.screen.feed(&bytes);
+        capture_mouse(frame.screen.reports_mouse());
         self.shared = Some(frame);
+        self.draw(include_scrollback, Some(&output));
     }
 
     fn write_output(&mut self, data: &str) {
@@ -1109,10 +1117,104 @@ impl Display {
         let Ok(bytes) = base64::decode(data) else {
             return;
         };
-        shared.screen.feed(&bytes);
-        if fits(shared.grid(), shared.capacity) {
-            shared.draw(Some(&bytes), false);
+        let mouse = shared.screen.reports_mouse();
+        let alternate = shared.screen.on_alternate_screen();
+        let output = shared.screen.feed(&bytes);
+        let reports_mouse = shared.screen.reports_mouse();
+        if reports_mouse != mouse {
+            capture_mouse(reports_mouse);
         }
+        if !fits(shared.grid(), shared.capacity) {
+            write_activity(&output);
+            return;
+        }
+        let first_draw = !self.main_prepared && !self.host_alternate;
+        if first_draw || alternate != shared.screen.on_alternate_screen() {
+            self.draw(first_draw, Some(&output));
+        } else if shared.uses_viewport() {
+            write_activity(&output);
+            write_terminal(&shared.screen.redraw_in_viewport_update());
+        } else {
+            self.host_alternate = alternate_screen_after(self.host_alternate, &bytes);
+            write_terminal(&bytes);
+        }
+    }
+
+    /// Repaints the selected buffer for a snapshot, a resize or a buffer change.
+    fn draw(&mut self, include_scrollback: bool, output: Option<&ParsedOutput>) {
+        let Some(shared) = &self.shared else {
+            return;
+        };
+        let alternate = shared.screen.on_alternate_screen();
+        let first_main = !alternate && !self.main_prepared;
+        // An empty first main screen can be followed by a CLI that only uses the alternate screen.
+        let empty_main = first_main && shared.screen.text(1).is_empty();
+        if let Some(output) = output {
+            if empty_main && output.title_change.is_some() {
+                write_terminal(&shared.screen.title_output());
+            }
+            write_activity(output);
+        }
+        if !fits(shared.grid(), shared.capacity) {
+            if !empty_main {
+                show_too_small(shared.grid());
+            }
+            return;
+        }
+        if alternate != self.host_alternate {
+            write_terminal(if alternate {
+                b"\x1b[?1049h"
+            } else {
+                b"\x1b[?1049l"
+            });
+            self.host_alternate = alternate;
+        }
+        if empty_main {
+            return;
+        }
+        if first_main {
+            // Scroll from the shell's cursor before any absolute positioning or erasing.
+            let rows = shared.capacity.unwrap_or_else(|| shared.grid()).1;
+            write_terminal(&b"\r\n".repeat(usize::from(rows)));
+            self.main_prepared = true;
+        }
+        let viewport = shared.uses_viewport();
+        write_terminal(
+            &shared
+                .screen
+                .redraw_for_attach(viewport, include_scrollback),
+        );
+    }
+
+    /// Place the receipt after the last row of text, even when the cursor is already below it.
+    fn content_end(&self) -> Option<u16> {
+        let shared = self.shared.as_ref().filter(|shared| {
+            fits(shared.grid(), shared.capacity) && !shared.screen.on_alternate_screen()
+        });
+        shared.map_or_else(visible_content_end, |shared| {
+            let last_text = shared
+                .screen
+                .view()
+                .rows
+                .iter()
+                .rposition(|row| row.iter().any(|cell| cell.text != " "))
+                .unwrap_or_default();
+            Some((last_text + 1) as u16)
+        })
+    }
+}
+
+/// Forwards the CLI's own window activity when rendering replaces the original bytes.
+fn write_activity(output: &ParsedOutput) {
+    if !output.native_activity.is_empty() {
+        write_terminal(&output.native_activity);
+    }
+}
+
+/// Native capture follows the CLI's mouse reporting mode. The console modes are restored on exit.
+fn capture_mouse(enabled: bool) {
+    if let Some(modes) = lock_vt_modes().as_ref() {
+        let _ = modes.set_mouse_capture(enabled);
     }
 }
 
@@ -1127,19 +1229,8 @@ impl SharedScreen {
         (self.screen.cols(), self.screen.rows())
     }
 
-    /// With the same geometry, the daemon's bytes can go straight to the console. A local resize
-    /// needs a full frame even if the console has returned to the exact shared size.
-    fn draw(&self, direct: Option<&[u8]>, include_scrollback: bool) {
-        let grid = self.grid();
-        if !fits(grid, self.capacity) {
-            show_too_small(grid);
-        } else if self.capacity.is_some_and(|size| size != grid) {
-            write_screen(&self.screen.redraw_in_viewport(true, include_scrollback));
-        } else if let Some(bytes) = direct {
-            write_screen(bytes);
-        } else {
-            write_screen(&self.screen.redraw(true, include_scrollback));
-        }
+    fn uses_viewport(&self) -> bool {
+        self.capacity.is_some_and(|size| size != self.grid())
     }
 }
 
@@ -1153,20 +1244,14 @@ fn show_too_small((cols, rows): (u16, u16)) {
     ));
 }
 
-/// Writes screen bytes while the caller holds [`TERMINAL`].
-fn write_screen(bytes: &[u8]) {
-    track_alternate_screen(bytes);
-    write_terminal(bytes);
-}
-
-/// Follows alternate-screen modes 1049, 1047 and 47, also inside combined mode sequences, and the
-/// full reset `ESC c`. The daemon forwards whole sequences.
-fn track_alternate_screen(bytes: &[u8]) {
+/// Tracks host buffer switches in native passthrough, including legacy modes 1047 and 47.
+/// The daemon forwards whole sequences.
+fn alternate_screen_after(mut alternate: bool, bytes: &[u8]) -> bool {
     let mut rest = bytes;
     while let Some(escape) = rest.iter().position(|&byte| byte == 0x1b) {
         rest = &rest[escape + 1..];
         if rest.first() == Some(&b'c') {
-            ALTERNATE_SCREEN_ACTIVE.store(false, SeqCst);
+            alternate = false;
             continue;
         }
         let Some(params) = rest.strip_prefix(b"[?") else {
@@ -1183,10 +1268,11 @@ fn track_alternate_screen(bytes: &[u8]) {
         };
         let mut modes = params[..length].split(|&byte| byte == b';');
         if modes.any(|mode| matches!(mode, b"1049" | b"1047" | b"47")) {
-            ALTERNATE_SCREEN_ACTIVE.store(on, SeqCst);
+            alternate = on;
         }
         rest = &params[length + 1..];
     }
+    alternate
 }
 
 /// Writes the notice to stderr. On a console it uses the bottom rows without scrolling.
@@ -1241,12 +1327,12 @@ fn wrap_status(mut note: &str, width: usize) -> Vec<&str> {
 }
 
 /// Restores plain text, visible cursor, normal keyboard and keypad modes, wrapping, ASCII charset,
-/// and full-screen scrolling. Disables paste, mouse, focus, win32-input-mode and
+/// and full-screen scrolling. Disables paste, mouse, alternate scroll, focus, win32-input-mode and
 /// synchronized-update modes; pops kitty flags and resets modifyOtherKeys. Preserves the cursor
 /// position.
 const RESTORE_TERMINAL_SEQUENCE: &[u8] =
     b"\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1l\x1b>\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?\
-      1006l\x1b[?1015l\x1b[?1004l\x1b[?9001l\x1b[<u\x1b[>4m\x1b[?2026l\x1b[?7h\x1b(B\x0f\x1b7\
+      1006l\x1b[?1007l\x1b[?1015l\x1b[?1004l\x1b[?9001l\x1b[<u\x1b[>4m\x1b[?2026l\x1b[?7h\x1b(B\x0f\x1b7\
       \x1b[r\x1b8";
 
 /// Restores the person's terminal and writes the result and any unsent warning to stderr.
@@ -1258,40 +1344,16 @@ fn finish_attachment(input: &AgentInput, end: anyhow::Result<AttachEnd>) {
     if !RAW_MODE_ACTIVE.swap(false, SeqCst) {
         return;
     }
-    terminal.shared = None;
-    show_activity(false);
-    let alternate = ALTERNATE_SCREEN_ACTIVE.load(SeqCst);
+    let alternate = terminal.host_alternate;
     write_terminal(&restoration(alternate));
-    if !alternate {
-        let retire = matches!(
-            &end,
-            Ok(AttachEnd::Detached
-                | AttachEnd::AgentExited {
-                    resume_hint: Some(_),
-                    ..
-                })
-        );
-        if let Some((_, rows)) = console_size().filter(|_| retire) {
-            // Index at the bottom of the main screen moves the view into scrollback.
-            let scroll = "\x1bD".repeat(usize::from(rows));
-            write_terminal(format!("\x1b[?6l\x1b[{rows};1H{scroll}\x1b[H").as_bytes());
-        } else {
-            let row = visible_content_end().unwrap_or(999);
-            write_terminal(format!("\x1b[{row};1H\r\n").as_bytes());
-        }
+    if !alternate && terminal.main_prepared {
+        let row = terminal.content_end().unwrap_or(999);
+        write_terminal(format!("\x1b[?6l\x1b[{row};1H\r\n").as_bytes());
     }
+    terminal.shared = None;
     drop(lock_vt_modes().take());
     let _ = crossterm::terminal::disable_raw_mode();
 
-    let hint = match &end {
-        Ok(AttachEnd::AgentExited {
-            resume_hint: Some(hint),
-            ..
-        }) if !hint.is_empty() => {
-            Some(hint.lines().map(single_line).collect::<Vec<_>>().join("\n"))
-        }
-        _ => None,
-    };
     let line = match end {
         Ok(end) => {
             let queue = input.lock();
@@ -1301,9 +1363,6 @@ fn finish_attachment(input: &AgentInput, end: anyhow::Result<AttachEnd>) {
         Err(error) => format!("error: attachment failed: {error:#}"),
     };
     let mut stderr = std::io::stderr().lock();
-    if let Some(hint) = hint {
-        let _ = writeln!(stderr, "{hint}\n");
-    }
     let _ = writeln!(stderr, "{line}");
     if let Some(warning) = unsent_line(input.unsent_bytes()) {
         let _ = writeln!(stderr, "{warning}");
@@ -1502,9 +1561,7 @@ mod tests {
             (false, b"\x1b[?10490h", false),
         ];
         for (before, bytes, after) in cases {
-            ALTERNATE_SCREEN_ACTIVE.store(before, SeqCst);
-            track_alternate_screen(bytes);
-            let now = ALTERNATE_SCREEN_ACTIVE.load(SeqCst);
+            let now = alternate_screen_after(before, bytes);
             assert_eq!(now, after, "{}", String::from_utf8_lossy(bytes));
         }
     }

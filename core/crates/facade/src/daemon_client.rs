@@ -61,12 +61,16 @@ fn permanent(error: impl Into<anyhow::Error>) -> ConnectFailure {
 
 /// Connects to the daemon within one attempt, starting Facade where nothing answers.
 pub(super) fn connect_or_start() -> anyhow::Result<DaemonClient> {
-    first_connection().map_err(unreachable)
+    first_connection(None).map_err(unreachable)
 }
 
-/// Makes a command's first connection with default callbacks.
-fn first_connection() -> Result<DaemonClient, ConnectFailure> {
-    let client = connect_with_takeover(Purpose::Command, &|| false, &mut |_| true)?;
+/// Connects or starts Facade within the command's total deadline.
+pub(super) fn connect_or_start_until(until: Instant) -> anyhow::Result<DaemonClient> {
+    first_connection(Some(until)).map_err(unreachable)
+}
+
+fn first_connection(deadline: Option<Instant>) -> Result<DaemonClient, ConnectFailure> {
+    let client = connect_with_takeover(Purpose::Command(deadline), &|| false, &mut |_| true)?;
     // A test can hold a command here, after its hello and before its call.
     service::gate_for_test("command-connected");
     Ok(client)
@@ -142,7 +146,7 @@ pub(super) fn reconnect(
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Purpose {
-    Command,
+    Command(Option<Instant>),
     Attachment(Instant),
     Background,
     Install,
@@ -151,6 +155,7 @@ enum Purpose {
 impl Purpose {
     fn deadline(self) -> Option<Instant> {
         match self {
+            Self::Command(deadline) => deadline,
             Self::Attachment(deadline) => Some(deadline),
             _ => None,
         }
@@ -176,7 +181,7 @@ fn connect_with_takeover(
     }
 
     let asked = Instant::now();
-    let handed = ask_to_take_over(&mut client, &ours, purpose.deadline(), cancelled)?;
+    let handed = ask_to_take_over(&mut client, &ours, purpose, cancelled)?;
     let timeout = takeover_timeout();
     let until = Instant::now() + timeout;
     let until = purpose
@@ -204,7 +209,7 @@ fn connect_with_takeover(
                 &handed.from,
                 &format!("{count} {}", if count == 1 { "agent" } else { "agents" }),
                 asked.elapsed(),
-                purpose != Purpose::Command,
+                !matches!(purpose, Purpose::Command(_)),
             )
         );
     }
@@ -230,7 +235,7 @@ impl std::error::Error for TakeoverRefusal {}
 fn ask_to_take_over(
     client: &mut DaemonClient,
     ours: &str,
-    deadline: Option<Instant>,
+    purpose: Purpose,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<DaemonUpgradeResult, ConnectFailure> {
     let running = client.hello_result.build.clone();
@@ -242,25 +247,27 @@ fn ask_to_take_over(
         keeper_api_versions: takeover_versions(keeper::SUPPORTED_API_VERSIONS),
     };
     client.disable_auto_reconnect();
-    if let Some(until) = deadline {
-        client
-            .writer
-            .set_write_timeout(Some(time_left(until, cancelled)?))
-            .map_err(permanent)?;
-    }
-    let result = match client.begin_call::<DaemonUpgrade>(upgrade) {
-        Ok(id) => {
-            if let Some(until) = deadline {
-                client
-                    .writer
-                    .set_read_timeout(Some(time_left(until, cancelled)?))
-                    .map_err(permanent)?;
+    let result = match purpose {
+        Purpose::Command(Some(until)) => client.call_until::<DaemonUpgrade>(upgrade, until),
+        Purpose::Attachment(until) => {
+            client
+                .writer
+                .set_write_timeout(Some(time_left(until, cancelled)?))
+                .map_err(permanent)?;
+            match client.begin_call::<DaemonUpgrade>(upgrade) {
+                Ok(id) => {
+                    client
+                        .writer
+                        .set_read_timeout(Some(time_left(until, cancelled)?))
+                        .map_err(permanent)?;
+                    client.result::<DaemonUpgrade>(id)
+                }
+                Err(error) => Err(error),
             }
-            client.result::<DaemonUpgrade>(id)
         }
-        Err(error) => Err(error),
+        _ => client.call::<DaemonUpgrade>(upgrade),
     };
-    if let Some(until) = deadline {
+    if let Some(until) = purpose.deadline() {
         time_left(until, cancelled)?;
     }
     result.map_err(|error| {

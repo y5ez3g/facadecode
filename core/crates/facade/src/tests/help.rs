@@ -167,7 +167,15 @@ fn the_shell_splits_example_lines_as_written() {
         ["facade", "rename", "a3", " "]
     );
     assert_eq!(
-        words(r#"facade send a3 "Please review it""#),
-        ["facade", "send", "a3", "Please review it"]
+        words(r#"facade send a5@laptop "Run the tests and reply" -r -t 120"#),
+        [
+            "facade",
+            "send",
+            "a5@laptop",
+            "Run the tests and reply",
+            "-r",
+            "-t",
+            "120"
+        ]
     );
 }

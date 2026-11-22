@@ -80,7 +80,7 @@ managed agents."#,
 
 Interact
   attach    Open an agent's terminal
-  send      Send a message to an agent
+  send      Send a message to an agent or guest
   screen    Read an agent's terminal output
   type      Type text or press keys in an agent's terminal
 
@@ -200,18 +200,24 @@ Options
         path: "send",
         intro: r#"Send a message to an active agent or guest.
 
-Waits up to 30 seconds for delivery: types and submits the message in a
-managed agent's terminal once its input box is free, or waits for a guest to
-read it over MCP. Messages can be up to 8,000 characters and 540 lines."#,
-        usage: r#"Usage: facade send <RECIPIENT> <TEXT>"#,
+By default, the command ends when Facade saves the message in the
+recipient's inbox. Use '-w' to wait until Facade submits the message
+in a managed agent's terminal or a guest reads it. Use '-r' to wait
+for a reply. Set the timeout in seconds with '-t'.
+Messages can be up to 8,000 characters and 540 lines."#,
+        usage: r#"Usage: facade send <RECIPIENT> <TEXT> [OPTIONS]"#,
         examples: r#"  facade send Nova "Check the build"
-  facade send a5@laptop "Please review the diff in src/parser.rs""#,
+  facade send Nova "Check the build" -w
+  facade send a5@laptop "Run the tests and reply" -r -t 120"#,
         details: r#"Arguments
   <RECIPIENT>  Active agent or guest reference, agent ID, or unique name
   <TEXT>       Message text
 
 Options
-  -h, --help  Show help"#,
+  -w, --wait-delivery      Wait for delivery
+  -r, --wait-reply         Wait for a reply and print its text
+  -t, --timeout <SECONDS>  Total time to wait, from 1 to 300 seconds (default: 30)
+  -h, --help               Show help"#,
     },
     Page {
         path: "screen",
@@ -233,24 +239,24 @@ Options
         path: "type",
         intro: r#"Type text or press keys in a running agent's terminal.
 
+Use '-k' to press a key. Text and keys go in the order you give them.
+Put text that contains spaces in quotes.
+
 Use 'facade send' to deliver a complete message safely without overwriting a
 draft. Use 'facade type' to edit a draft, navigate menus, or answer prompts."#,
-        usage: r#"Usage:
-  facade type <AGENT> <TEXT> [--enter]
-  facade type <AGENT> --key <KEY> [--key <KEY>]..."#,
-        examples: r#"  facade type Nova "draft"
-  facade type Nova "hello" --enter
-  facade type Nova --key Esc
-  facade type Nova --key Down --key Enter"#,
+        usage: r#"Usage: facade type <AGENT> (<TEXT> | -k <KEY>)..."#,
+        examples: r#"  facade type Nova "hello world"
+  facade type Nova -k Down -k Enter
+  facade type Nova "hello" -k Enter "again" -k Enter"#,
         details: r#"Arguments
   <AGENT>  Running managed agent reference, agent ID, or unique name
   <TEXT>   Text to type
 
 Options
-      --enter      Press Enter after typing <TEXT>
-  -k, --key <KEY>  Press a key (repeat for more): Enter, Esc, Tab, Shift+Tab,
-                   Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp,
-                   PageDown, Space, Ctrl+A to Ctrl+Z, or one character
+  -k, --key <KEY>  Press a key (repeat for more, up to 100): Enter, Esc,
+                   Tab, Shift+Tab, Backspace, Delete, Up, Down, Left,
+                   Right, Home, End, PageUp, PageDown, Space, Ctrl+A to
+                   Ctrl+Z, or one character
   -h, --help       Show help"#,
     },
     Page {

@@ -91,7 +91,7 @@ fn a_table_pads_each_column_to_its_widest_cell_and_keeps_each_row_on_one_line() 
 }
 
 #[test]
-fn a_narrow_resume_table_fits_wide_titles_and_keeps_the_full_session_ref() {
+fn a_narrow_resume_table_fits_wide_session_names_and_keeps_the_full_session_ref() {
     let headers = [
         "NAME",
         "REF",
@@ -100,13 +100,20 @@ fn a_narrow_resume_table_fits_wide_titles_and_keeps_the_full_session_ref() {
         "TYPE",
         "WORKING DIRECTORY",
         "UPDATED",
-        "TITLE",
+        "SESSION",
     ];
     let reference = "01234567-1234-4000-8000-000000000001";
     let folder = "/work/a/deep/working/directory/for/the/saved/session";
-    let title = "会话🚀".repeat(15);
+    let session_name = "会话🚀".repeat(15);
     let row = [
-        "-", reference, "Saved", "claude", "Session", folder, "16d ago", &title,
+        "-",
+        reference,
+        "Saved",
+        "claude",
+        "Session",
+        folder,
+        "16d ago",
+        &session_name,
     ];
     let rows = [row.map(str::to_owned).to_vec()];
     let terminal = render_table(&headers, &rows, TableLayout::Roster(Some(119)));
@@ -117,8 +124,11 @@ fn a_narrow_resume_table_fits_wide_titles_and_keeps_the_full_session_ref() {
     );
     let pipe = render_table(&headers, &rows, TableLayout::Roster(None));
     assert!(pipe.contains(reference) && pipe.contains(folder), "{pipe}");
-    let title = pipe.rsplit("   ").next().unwrap();
-    assert!(title.ends_with('…') && title.width() <= 40, "{title}");
+    let session_name = pipe.rsplit("   ").next().unwrap();
+    assert!(
+        session_name.ends_with('…') && session_name.width() <= 40,
+        "{session_name}"
+    );
 }
 
 #[test]
@@ -191,7 +201,7 @@ fn every_state_has_its_words() {
 
 #[test]
 fn the_list_is_one_row_per_agent_with_a_copyable_ref() {
-    let title = "A title with forty visible characters and some more";
+    let session_name = "A session with forty visible characters and some more";
     let rows: Vec<AgentListEntry> = serde_json::from_value(json!([
         {
             "reference": { "agent_id": "a5", "machine_id": "11111111-1111-4111-8111-111111111111" },
@@ -201,20 +211,21 @@ fn the_list_is_one_row_per_agent_with_a_copyable_ref() {
         {
             "reference": { "agent_id": "a3", "machine_id": "22222222-2222-4222-8222-222222222222" },
             "address": "a3@devbox", "name": "Pixel", "type": "managed", "state": "working",
-            "cli": "claude", "title": title, "folder": "/work/site", "started_at": before(120),
+            "cli": "claude", "title": "Terminal title", "session_name": session_name,
+            "folder": "/work/site", "started_at": before(120),
         },
         {
             "reference": { "agent_id": "a4", "machine_id": "22222222-2222-4222-8222-222222222222" },
             "address": "a4@devbox", "name": "Ada", "type": "managed", "state": "waiting_for_you",
-            "cli": "codex", "folder": "/work/site", "started_at": before(300),
+            "cli": "codex", "session_name": "  ", "folder": "/work/site", "started_at": before(300),
         },
     ]))
     .unwrap();
     assert_eq!(
         trimmed(&list_text(&rows, now())),
-        "NAME    REF         STATE             CLI      TYPE      WORKING DIRECTORY   STARTED   TITLE\n\
+        "NAME    REF         STATE             CLI      TYPE      WORKING DIRECTORY   STARTED   SESSION\n\
          Visor   a5@laptop   Online            cursor   Guest     -                   1m ago    -\n\
-         Pixel   a3@devbox   Working           claude   Managed   /work/site          2m ago    A title with forty visible characters a…\n\
+         Pixel   a3@devbox   Working           claude   Managed   /work/site          2m ago    A session with forty visible characters…\n\
          Ada     a4@devbox   Waiting for you   codex    Managed   /work/site          5m ago    -"
     );
 }
@@ -431,19 +442,20 @@ fn receipt(delivery: Value) -> SendResult {
 }
 
 #[test]
-fn a_send_only_prints_a_success_receipt_after_delivery() {
+fn waiting_for_delivery_prints_a_success_receipt_after_delivery() {
     for via in ["terminal", "read"] {
         let result = receipt(json!({
             "status": "success", "text_written": "full", "delivered_via": via
         }));
         assert_eq!(
-            delivery_receipt(&result, "a3@peer").unwrap(),
+            delivery_receipt(&result, "a3@peer", 30).unwrap(),
             "Delivered m42@peer to Pixel (a3@peer)."
         );
     }
     let waiting = delivery_receipt(
         &receipt(json!({ "status": "pending", "text_written": "none" })),
         "a3@peer",
+        30,
     )
     .expect_err("a pending delivery has no successful receipt");
     assert!(
@@ -457,6 +469,7 @@ fn a_send_only_prints_a_success_receipt_after_delivery() {
             "enter_written": true,
         })),
         "a3@peer",
+        30,
     )
     .expect_err("an unconfirmed delivery fails");
     assert_eq!(
@@ -469,6 +482,7 @@ fn a_send_only_prints_a_success_receipt_after_delivery() {
             "status": "failure", "reason": "input_draft", "text_written": "none"
         })),
         "a3@peer",
+        30,
     )
     .expect_err("a held message fails");
     assert_eq!(

@@ -8,14 +8,16 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use facade_base::address::selector::format_message_address;
 use facade_base::address::{default_machine_name, short_machine_id};
 use facade_base::api_v1::ErrorBody;
 use facade_base::api_v1::daemon::{
-    AgentKind, AgentLabel, AgentState, MachineIdentity, MachineQuery, MachineState, QueryStatus,
-    SendResult, SessionMatch,
+    AgentKind, AgentLabel, AgentState, MachineIdentity, MachineQuery, MachineState, MessageRef,
+    QueryStatus, SendResult, SendWait, SessionMatch,
 };
+use facade_base::api_v1::daemon_client::Cut;
 use facade_base::model::machine::ExecutionOutcome;
-use facade_base::model::message::{DeliveryFailure, DeliveryStatus};
+use facade_base::model::message::{DeliveredVia, DeliveryFailure, DeliveryStatus};
 use facade_base::model::terminal::display_line;
 use serde::de::DeserializeOwned;
 
@@ -775,7 +777,96 @@ fn resume_tip(address: &str, resumable: bool) -> String {
     }
 }
 
-pub(crate) fn delivery_receipt(result: &SendResult, given: &str) -> Result<String, Problem> {
+pub(crate) fn send_failed(
+    wait_for: SendWait,
+    input: &str,
+    timeout: u16,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let body = service_error(&error);
+    if let Some(body) = body {
+        let reason = body.data.reason.as_str();
+        if reason == "invalid_argument" && body.message.contains("unknown field `wait_for`") {
+            return Problem::Operation(format!(
+                "The Facade build handling this request refused the requested send mode. {}",
+                service_words(&body.message)
+            ))
+            .into();
+        }
+        if matches!(wait_for, SendWait::Result)
+            && let Some(original) = detail::<MessageRef>(body, "message_ref")
+            && (reason == "reply_timeout"
+                || matches!(
+                    detail(body, "delivered_via"),
+                    Some(DeliveredVia::TypedIntoInput | DeliveredVia::ReadByRecipient)
+                ))
+        {
+            let id = format_message_address(&original.message_id, &original.machine_id);
+            let message = if reason == "reply_timeout" {
+                format!("No reply to {id} within {timeout} seconds. The message was delivered.")
+            } else {
+                format!("Could not check for a reply to {id}. The message was delivered.")
+            };
+            return Problem::Operation(message).into();
+        }
+    }
+    if matches!(wait_for, SendWait::Inbox) {
+        let receipt_unknown = match body {
+            Some(body) => {
+                body.data.reason == "unavailable"
+                    && detail(body, "execution") == Some(ExecutionOutcome::OutcomeUnknown)
+                    && detail::<MessageRef>(body, "message_ref").is_none()
+            }
+            None => {
+                error.is::<Cut>()
+                    || error
+                        .downcast_ref::<io::Error>()
+                        .is_some_and(|error| error.kind() == io::ErrorKind::TimedOut)
+            }
+        };
+        if receipt_unknown {
+            let target = single_line(input);
+            return Problem::Operation(format!(
+                "Could not confirm that Facade saved the message in {target}'s inbox."
+            ))
+            .into();
+        }
+    }
+    agent_failed(AgentCommand::Send, input, error)
+}
+
+pub(crate) fn type_failed(input: &str, sequence: bool, error: anyhow::Error) -> anyhow::Error {
+    if sequence && let Some(body) = service_error(&error) {
+        match body.data.reason.as_str() {
+            "invalid_argument" if body.message.contains("unknown variant `sequence`") => {
+                return Problem::Operation(format!(
+                    "The Facade build handling this request refused ordered terminal input. {}",
+                    service_words(&body.message)
+                ))
+                .into();
+            }
+            "partial_input" => {
+                let agent = detail::<Vec<AgentLabel>>(body, "agents")
+                    .and_then(|agents| agents.into_iter().next());
+                let target = agent.as_ref().map_or_else(|| single_line(input), label);
+                let address = single_line(agent.as_ref().map_or(input, |agent| &agent.address));
+                return Problem::Operation(format!(
+                    "Only part of the input reached {target}'s terminal.\n\
+                     Check the terminal with 'facade screen {address}' before typing it again."
+                ))
+                .into();
+            }
+            _ => {}
+        }
+    }
+    agent_failed(AgentCommand::Type, input, error)
+}
+
+pub(crate) fn delivery_receipt(
+    result: &SendResult,
+    given: &str,
+    timeout: u16,
+) -> Result<String, Problem> {
     let recipient = result.recipient.as_ref();
     let target = recipient.map_or_else(|| single_line(given), label);
     let address = single_line(recipient.map_or(given, |agent| agent.address.as_str()));
@@ -817,7 +908,11 @@ pub(crate) fn delivery_receipt(result: &SendResult, given: &str) -> Result<Strin
         Some(DeliveryFailure::Timeout)
             if recipient.is_some_and(|agent| agent.kind == AgentKind::Guest) =>
         {
-            "The guest did not read its inbox within 30 seconds.".into()
+            if timeout == 30 {
+                "The guest did not read its inbox within 30 seconds.".into()
+            } else {
+                "The guest did not read its inbox before the delivery deadline.".into()
+            }
         }
         Some(DeliveryFailure::InputUnknown | DeliveryFailure::Timeout) => {
             format!(
