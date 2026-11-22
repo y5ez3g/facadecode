@@ -57,6 +57,12 @@ impl Outbox {
         self.lines.send(line).is_ok()
     }
 
+    /// Wakes blocked senders without retaining a sender or keeping the writer alive.
+    pub(super) fn close_handle(&self) -> impl FnOnce() + Send + 'static {
+        let room = self.room.clone();
+        move || room.close()
+    }
+
     /// Answers request `id`. A notification gets no answer.
     pub(super) async fn answer(&self, id: Option<u64>, result: Result<Value, ErrorBody>) {
         let Some(id) = id else { return };

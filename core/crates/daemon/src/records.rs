@@ -370,6 +370,14 @@ pub(crate) fn lookup_matches<'a>(
 
 /// The shared Shell, MCP and Go to Agent row for a record with its canonical address filled in.
 pub(crate) fn list_row(info: &wire::AgentInfo) -> wire::AgentListEntry {
+    list_row_with_session(info, None)
+}
+
+/// Projects the record with the session name supplied by its holder.
+pub(crate) fn list_row_with_session(
+    info: &wire::AgentInfo,
+    session_name: Option<String>,
+) -> wire::AgentListEntry {
     wire::AgentListEntry {
         reference: info.reference.clone(),
         address: info.address.clone(),
@@ -378,7 +386,7 @@ pub(crate) fn list_row(info: &wire::AgentInfo) -> wire::AgentListEntry {
         state: info.state,
         cli: info.cli.clone(),
         title: info.title.clone(),
-        session_name: None,
+        session_name,
         folder: info.cwd.clone(),
         started_at: info.started_at.clone(),
     }

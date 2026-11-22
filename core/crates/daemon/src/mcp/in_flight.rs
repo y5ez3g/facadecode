@@ -1,4 +1,4 @@
-//! The `send_message` calls of one relay that were read and not yet answered, by their JSON-RPC ID
+//! The message tool calls of one relay that were read and not yet answered, by their JSON-RPC ID
 //! as JSON text, which the client's `notifications/cancelled` names.
 //!
 //! A cancellation withdraws a call's message where its paste has not begun. Before the call is
@@ -36,10 +36,6 @@ impl Sends {
 
     /// Notes call `key` as its line is read, until [`Sends::finish`].
     pub(super) fn note(&self, key: String) {
-        self.table().insert(key, Pending::default());
-    }
-
-    pub(super) fn note_read(&self, key: String) {
         self.table().insert(
             key,
             Pending {

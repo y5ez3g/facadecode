@@ -180,21 +180,20 @@ impl Harness {
             info,
             output,
             rule,
-            Kept::default(),
-            Instant::now(),
+            (Kept::default(), Instant::now()),
+            false,
             screen,
         )
     }
 
-    /// Starts an actor as [`Harness::start_by_rule`] does, its run's facts `kept`, its run
-    /// started at `started`.
+    /// Starts an actor with kept run facts, its start time and an explicit trust decision.
     fn start_kept(
         home: &Path,
         info: ManagedAgent,
         output: &[u8],
         rule: Option<&str>,
-        kept: Kept,
-        started: Instant,
+        (kept, started): (Kept, Instant),
+        allow_auto_trust: bool,
         screen: impl FnOnce(PathBuf) -> ScreenStart,
     ) -> Harness {
         let (master, mut cli) = raw_terminal(info.cols.unwrap(), info.rows.unwrap());
@@ -221,7 +220,8 @@ impl Harness {
             deliveries: messages.delivery_handle(),
             state,
         };
-        let handle = spawn(start, rx, tx, broadcast::channel(16).0).unwrap();
+        let handle =
+            spawn_with_trust(start, rx, tx, broadcast::channel(16).0, allow_auto_trust).unwrap();
         Harness {
             handle,
             cli,
@@ -1570,8 +1570,8 @@ fn antigravity_started(home: &Path, started: Instant) -> Harness {
         record(ProcessState::Running, None, 80, 24),
         b"",
         Some("agy"),
-        kept,
-        started,
+        (kept, started),
+        false,
         ScreenStart::New,
     )
 }
@@ -2048,8 +2048,8 @@ async fn only_a_start_given_the_tools_readies_them() {
         record(ProcessState::Running, None, 80, 24),
         b"",
         Some("agy"),
-        kept,
-        Instant::now(),
+        (kept, Instant::now()),
+        false,
         recovered,
     );
     let mut plain = Harness::start_by_rule(
@@ -2103,21 +2103,16 @@ async fn a_resumed_run_readies_its_tools_too() {
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// A Claude Code run given Facade's tools, at 80 by 24, with YOLO on or off, whose CLI has
-/// drawn nothing yet.
-fn claude(home: &Path, yolo: bool) -> Harness {
+/// A Claude Code run with Facade's tools and YOLO on, whose CLI has drawn nothing yet.
+fn claude(home: &Path, allow_auto_trust: bool) -> Harness {
     let kept = Kept::new_run(None, ToolsGiven::Injected);
-    let info = ManagedAgent {
-        yolo,
-        ..record(ProcessState::Running, None, 80, 24)
-    };
     Harness::start_kept(
         home,
-        info,
+        record(ProcessState::Running, None, 80, 24),
         b"",
         Some("claude"),
-        kept,
-        Instant::now(),
+        (kept, Instant::now()),
+        allow_auto_trust,
         ScreenStart::New,
     )
 }
@@ -2191,13 +2186,13 @@ impl Harness {
     }
 }
 
-/// A run with YOLO on answers Claude Code's question about trusting the launch's folder as a
+/// A run with permission answers Claude Code's question about trusting the launch's folder as a
 /// person would (CLIS-3.3), each key once the screen has been still for a moment, as Claude
 /// Code 2.1.322 loses keys that come before it draws its question again: Down once the question
 /// shows, then Enter once the selection shows on the answer that trusts, never Enter alone,
 /// which would end the run. It answers once: the question coming back is the person's.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_run_with_yolo_on_answers_claude_code_s_trust_question_once_as_a_person_would() {
+async fn an_allowed_run_answers_claude_code_s_trust_question_once_as_a_person_would() {
     let home = home("trustanswer");
     let mut harness = claude(&home, true);
     assert!(
@@ -2718,12 +2713,12 @@ async fn an_ended_run_is_in_its_record_before_a_message_being_typed_learns_it_en
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// A run with YOLO off answers nothing: Claude Code's trust question is the person's. A run
-/// with YOLO on answers that question alone: not another menu drawn the same way, not the
+/// A run without permission leaves Claude Code's trust question for the person, even with YOLO on.
+/// An allowed run answers that question alone: not another menu drawn the same way, not the
 /// question once the CLI showed its input first, and no Enter where the selection does not show
 /// on the answer that trusts.
 #[tokio::test(flavor = "multi_thread")]
-async fn only_a_run_with_yolo_on_answers_and_only_the_trust_question_with_its_selection_on_yes() {
+async fn only_an_allowed_run_answers_and_only_the_trust_question_with_its_selection_on_yes() {
     let home = home("trustonly");
     let mut off = claude(&home.join("off"), false);
     off.claude_trust(false);

@@ -6,23 +6,30 @@ mod probe;
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
+use facade_base::api_v1::daemon::InputStep;
+use facade_base::key_input::{Key, MAX_INPUT_BYTES, MAX_KEYS, PASTE_END, PASTE_START, paste_bytes};
 use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::terminal::key_down_records;
 use facade_base::{
     model::message::{DeliveryFailure, TextWritten},
-    model::terminal::{InputInfo, InputState},
+    model::terminal::{InputInfo, InputState, first_control},
 };
 use facade_rules::{BoxReading, ConsoleTyping, LineCell, PasteRule, ProbeVerdict};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use self::probe::{Next, PROBE_READ, Probe};
-use super::{ESCAPE_DELAY, PASTE_END, PASTE_START, Submission};
+use super::{ESCAPE_DELAY, Submission};
 use crate::Sender;
 use crate::messages::{DeliveryHandle, Outcome, RESPONSE_GRACE};
 
 const PASTE_DELAY: Duration = Duration::from_millis(100);
 const READ_INTERVAL: Duration = Duration::from_millis(500);
+const KNOWN_KEYS: &str = "keys are Enter (or Return), Escape (or Esc), Tab, Shift+Tab, Backspace, \
+                          Delete, Up, Down, Left, Right (or ArrowUp, \
+                          ArrowDown, ArrowLeft, ArrowRight), Home, End, PageUp, PageDown, Space, \
+                          and Ctrl+A to Ctrl+Z, in any letter case, or any one \
+                          character other than a control character";
 
 /// Terminal modes sampled by the actor; no locks are taken.
 #[derive(Clone, Copy, Debug, Default)]
@@ -56,8 +63,15 @@ pub(crate) struct Typing {
     strokes: VecDeque<Stroke>,
     answer: oneshot::Sender<Result<(), ErrorBody>>,
     submission: Option<Box<Submission>>,
-    key_count: Option<usize>,
+    kind: CallKind,
     completed: usize,
+}
+
+#[derive(Debug)]
+enum CallKind {
+    Text,
+    Keys(usize),
+    Sequence(usize),
 }
 
 impl Typing {
@@ -67,16 +81,9 @@ impl Typing {
         enter: bool,
         sender: Sender,
     ) -> Result<(Typing, TypingAnswer), String> {
-        match facade_base::model::terminal::first_control(&text) {
-            Some(problem) => {
-                return Err(format!(
-                    "{problem}; send Escape and other control keys as keys"
-                ));
-            }
-            None if text.is_empty() && !enter => {
-                return Err("text is empty and enter is false: there is nothing to type".into());
-            }
-            None => {}
+        Self::validate_text(&text)?;
+        if text.is_empty() && !enter {
+            return Err("text is empty and enter is false: there is nothing to type".into());
         }
         let submission = if enter && !text.is_empty() {
             Some(Box::new(Submission {
@@ -93,7 +100,7 @@ impl Typing {
         if enter {
             strokes.push_back(Stroke::Key(Key::Enter));
         }
-        let (mut call, reply) = Self::new(strokes, None);
+        let (mut call, reply) = Self::new(strokes, CallKind::Text);
         call.submission = submission;
         Ok((call, reply))
     }
@@ -112,7 +119,7 @@ impl Typing {
             }
         }
         if unknown.is_empty() {
-            Ok(Self::new(strokes, Some(names.len())))
+            Ok(Self::new(strokes, CallKind::Keys(names.len())))
         } else {
             Err(format!(
                 "unknown keys: {}; {KNOWN_KEYS}",
@@ -121,14 +128,74 @@ impl Typing {
         }
     }
 
-    fn new(strokes: VecDeque<Stroke>, key_count: Option<usize>) -> (Self, TypingAnswer) {
+    /// Validates the complete ordered batch before it can be queued.
+    pub(crate) fn sequence(steps: Vec<InputStep>) -> Result<(Typing, TypingAnswer), String> {
+        if steps.is_empty() {
+            return Err("Sequence is empty. Give at least one step.".into());
+        }
+        let total = steps.len();
+        let mut strokes = VecDeque::new();
+        let mut keys = 0;
+        for (index, step) in steps.into_iter().enumerate() {
+            let stroke = match step {
+                InputStep::Text { text } => {
+                    let number = index + 1;
+                    if text.is_empty() {
+                        return Err(format!("sequence step {number} has empty text"));
+                    }
+                    Self::validate_text(&text)
+                        .map_err(|problem| format!("sequence step {number}: {problem}"))?;
+                    Stroke::Paste(text)
+                }
+                InputStep::Key { key } => {
+                    let key = Key::named(&key).ok_or_else(|| {
+                        format!(
+                            "sequence step {}: unknown key {key:?}; {KNOWN_KEYS}",
+                            index + 1
+                        )
+                    })?;
+                    keys += 1;
+                    Stroke::Key(key)
+                }
+            };
+            strokes.push_back(stroke);
+        }
+        if keys > MAX_KEYS {
+            return Err(format!(
+                "sequence allows at most {MAX_KEYS} keys, got {keys}"
+            ));
+        }
+        let (call, reply) = Self::new(strokes, CallKind::Sequence(total));
+        let bytes = call.most_bytes();
+        if bytes > MAX_INPUT_BYTES {
+            return Err(format!(
+                "sequence uses {bytes} input bytes; the limit is {MAX_INPUT_BYTES}"
+            ));
+        }
+        Ok((call, reply))
+    }
+
+    pub(crate) fn is_sequence(&self) -> bool {
+        matches!(self.kind, CallKind::Sequence(_))
+    }
+
+    fn validate_text(text: &str) -> Result<(), String> {
+        match first_control(text) {
+            Some(problem) => Err(format!(
+                "{problem}; send Escape and other control keys as keys"
+            )),
+            None => Ok(()),
+        }
+    }
+
+    fn new(strokes: VecDeque<Stroke>, kind: CallKind) -> (Self, TypingAnswer) {
         let (answer, receiver) = oneshot::channel();
         (
             Self {
                 strokes,
                 answer,
                 submission: None,
-                key_count,
+                kind,
                 completed: 0,
             },
             receiver,
@@ -144,26 +211,40 @@ impl Typing {
         if self.completed == 0 && !partial {
             return ErrorBody::new(Reason::Ended, format!("{why}; nothing was typed"));
         }
-        let detail = match (self.key_count, partial, self.completed) {
-            (Some(total), true, done) => {
-                format!("{done} of {total} keys and part of the next were pressed")
+        let done = self.completed;
+        let interrupted =
+            |detail: &str| ErrorBody::new(Reason::PartialInput, format!("{why}; {detail}"));
+        match self.kind {
+            CallKind::Text => {
+                let (detail, written) = if done == 0 {
+                    ("part of the text was typed", TextWritten::Partial)
+                } else {
+                    ("the text was typed but not its Enter", TextWritten::Full)
+                };
+                let mut error = interrupted(detail);
+                error.data.enter_written = Some(false);
+                error.data.text_written = Some(written);
+                error
             }
-            (Some(total), false, done) => format!("{done} of {total} keys were pressed"),
-            (None, _, 0) => "part of the text was typed".to_owned(),
-            (None, _, _) => "the text was typed but not its Enter".to_owned(),
-        };
-        let mut error = ErrorBody::new(Reason::PartialInput, format!("{why}; {detail}"));
-        if self.key_count.is_some() {
-            error.data.keys_sent = Some(self.completed as u32);
-        } else {
-            error.data.enter_written = Some(false);
-            error.data.text_written = Some(if self.completed == 0 {
-                TextWritten::Partial
-            } else {
-                TextWritten::Full
-            });
+            CallKind::Keys(total) => {
+                let detail = if partial {
+                    format!("{done} of {total} keys and part of the next were pressed")
+                } else {
+                    format!("{done} of {total} keys were pressed")
+                };
+                let mut error = interrupted(&detail);
+                error.data.keys_sent = Some(done as u32);
+                error
+            }
+            CallKind::Sequence(total) => {
+                let detail = if partial {
+                    format!("{done} of {total} sequence steps were written, plus part of the next")
+                } else {
+                    format!("{done} of {total} sequence steps were written")
+                };
+                ErrorBody::new(Reason::PartialInput, format!("{why}. {detail}."))
+            }
         }
-        error
     }
 }
 
@@ -211,7 +292,7 @@ impl MessageTyping {
 
     /// Maximum bytes for the text, paste brackets and Enter; no I/O or locks.
     pub(crate) fn most_bytes(&self) -> usize {
-        self.text.len() + PASTE_START.len() + PASTE_END.len() + 1
+        paste_bytes(&self.text) + Key::Enter.most_bytes()
     }
 }
 
@@ -661,6 +742,11 @@ impl Typist {
     pub(crate) fn types_calls(&self) -> bool {
         self.current.is_some() || !self.calls.is_empty()
     }
+    /// Reads whether a sequence is queued or still awaiting its final write receipt.
+    pub(crate) fn sequence_pending(&self) -> bool {
+        self.current.as_ref().is_some_and(Typing::is_sequence)
+            || self.calls.iter().any(Typing::is_sequence)
+    }
     /// Reads whether message confirmation needs input observations; no I/O or locks.
     pub(crate) fn reads_input(&self) -> bool {
         self.batch.is_some() || self.late_draft.is_some() || !self.inbox.is_empty()
@@ -689,7 +775,7 @@ impl Typist {
             self.entered |= matches!(stroke, Stroke::Key(Key::Enter));
             receipt.boundaries.push(offset + result.write.len() as u64);
             receipt.delay = stroke.delay(self.paste, self.console);
-            if receipt.delay != Duration::ZERO {
+            if call.is_sequence() || receipt.delay != Duration::ZERO {
                 break;
             }
         }
@@ -1074,12 +1160,10 @@ impl Stroke {
     }
 
     fn most_bytes(&self) -> usize {
-        if let Self::Paste(text) = self {
-            return text.len() + PASTE_START.len() + PASTE_END.len();
+        match self {
+            Self::Paste(text) => paste_bytes(text),
+            Self::Key(key) => key.most_bytes(),
         }
-        let mut bytes = Vec::new();
-        self.write(Modes::default(), false, &mut bytes);
-        bytes.len()
     }
 
     fn delay(&self, rule: Option<&PasteRule>, console: Option<ConsoleTyping>) -> Duration {
@@ -1124,115 +1208,9 @@ fn write_text(text: &str, records: bool, bytes: &mut Vec<u8>) {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Key {
-    Character(char),
-    Ctrl(u8),
-    Space,
-    Enter,
-    Escape,
-    Tab,
-    ShiftTab,
-    Backspace,
-    Delete,
-    Up,
-    Down,
-    Left,
-    Right,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-}
-
-const KEY_NAMES: [(&str, Key); 21] = [
-    ("Enter", Key::Enter),
-    ("Return", Key::Enter),
-    ("Escape", Key::Escape),
-    ("Esc", Key::Escape),
-    ("Tab", Key::Tab),
-    ("Shift+Tab", Key::ShiftTab),
-    ("Backspace", Key::Backspace),
-    ("Delete", Key::Delete),
-    ("Up", Key::Up),
-    ("ArrowUp", Key::Up),
-    ("Down", Key::Down),
-    ("ArrowDown", Key::Down),
-    ("Left", Key::Left),
-    ("ArrowLeft", Key::Left),
-    ("Right", Key::Right),
-    ("ArrowRight", Key::Right),
-    ("Home", Key::Home),
-    ("End", Key::End),
-    ("PageUp", Key::PageUp),
-    ("PageDown", Key::PageDown),
-    ("Space", Key::Space),
-];
-const KNOWN_KEYS: &str = "keys are Enter (or Return), Escape (or Esc), Tab, Shift+Tab, Backspace, \
-                          Delete, Up, Down, Left, Right (or ArrowUp, \
-                          ArrowDown, ArrowLeft, ArrowRight), Home, End, PageUp, PageDown, Space, \
-                          and Ctrl+A to Ctrl+Z, in any letter case, or any one \
-                          character other than a control character";
-
-impl Key {
-    fn named(name: &str) -> Option<Self> {
-        let standard = KEY_NAMES
-            .iter()
-            .position(|(known, _)| name.eq_ignore_ascii_case(known));
-        if let Some(index) = standard {
-            return Some(KEY_NAMES[index].1);
-        }
-        let letters = name.as_bytes();
-        if letters.len() == 6
-            && letters[..5].eq_ignore_ascii_case(b"ctrl+")
-            && letters[5].is_ascii_alphabetic()
-        {
-            return Some(Self::Ctrl(letters[5].to_ascii_lowercase() - b'a' + 1));
-        }
-        let mut chars = name.chars();
-        let character = chars.next()?;
-        (chars.next().is_none() && !character.is_control()).then_some(Self::Character(character))
-    }
-
-    fn write(self, application: bool, bytes: &mut Vec<u8>) {
-        let fixed: &[u8] = match self {
-            Self::Character(c) => {
-                bytes.extend(c.encode_utf8(&mut [0; 4]).as_bytes());
-                return;
-            }
-            Self::Ctrl(value) => {
-                bytes.push(value);
-                return;
-            }
-            Self::Enter => b"\r",
-            Self::Escape => b"\x1b",
-            Self::Tab => b"\t",
-            Self::Space => b" ",
-            Self::Backspace => b"\x7f",
-            Self::ShiftTab => b"\x1b[Z",
-            Self::Delete => b"\x1b[3~",
-            Self::PageUp => b"\x1b[5~",
-            Self::PageDown => b"\x1b[6~",
-            cursor => {
-                let final_byte = match cursor {
-                    Self::Up => b'A',
-                    Self::Down => b'B',
-                    Self::Right => b'C',
-                    Self::Left => b'D',
-                    Self::Home => b'H',
-                    Self::End => b'F',
-                    _ => unreachable!("cursor key"),
-                };
-                bytes.extend([0x1b, if application { b'O' } else { b'[' }, final_byte]);
-                return;
-            }
-        };
-        bytes.extend(fixed);
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use facade_base::key_input::NAMED_KEYS;
     use facade_base::model::message::{DeliveredVia, DeliveryStatus, MessagesWatchArgs};
 
     use super::*;
@@ -1247,6 +1225,14 @@ mod tests {
         bracketed_paste: true,
         application_cursor_keys: false,
     };
+    const ALIASES: [&str; 6] = [
+        "Return",
+        "Escape",
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
+    ];
 
     fn names(keys: &[&str]) -> Vec<String> {
         keys.iter().map(|key| key.to_string()).collect()
@@ -1336,7 +1322,7 @@ mod tests {
         ] {
             assert_eq!(Key::named(name), None, "{name:?}");
         }
-        for (name, _) in KEY_NAMES {
+        for name in NAMED_KEYS.into_iter().chain(ALIASES) {
             assert!(
                 KNOWN_KEYS.contains(name),
                 "the error for an unknown key names {name}"
@@ -1363,13 +1349,10 @@ mod tests {
         assert_eq!(sent("Ctrl+C", false), [3]);
         assert_eq!(sent("Shift+Tab", false), b"\x1b[Z");
         assert_eq!(sent("界", false), "界".as_bytes());
-        for (name, key) in KEY_NAMES {
-            let (mut default, mut application) = (Vec::new(), Vec::new());
-            key.write(false, &mut default);
-            key.write(true, &mut application);
+        for name in NAMED_KEYS.into_iter().chain(ALIASES) {
             assert_eq!(
-                default.len(),
-                application.len(),
+                sent(name, false).len(),
+                sent(name, true).len(),
                 "{name} counts the same in both modes"
             );
         }
@@ -2561,7 +2544,10 @@ mod tests {
         let (typing, number) = message(&post, "hello", deadline);
         typist.deliver(typing);
         terminal.step(&mut typist, start, ANY);
-        let (call, _) = Typing::new(VecDeque::from([Stroke::Paste("never read".into())]), None);
+        let (call, _) = Typing::new(
+            VecDeque::from([Stroke::Paste("never read".into())]),
+            CallKind::Text,
+        );
         typist.push(call);
         terminal.step(&mut typist, start + Duration::from_secs(1), ANY);
         assert!(
@@ -2638,7 +2624,7 @@ mod tests {
             let mut terminal = Terminal::default();
             let (typing, _) = Typing::new(
                 VecDeque::from([Stroke::Paste(text.into()), Stroke::Key(Key::Enter)]),
-                None,
+                CallKind::Text,
             );
             typist.push(typing);
             let start = Instant::now();

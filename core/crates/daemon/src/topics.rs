@@ -18,18 +18,23 @@ use facade_base::{
 };
 use serde_json::{Value, json};
 use tokio::sync::{broadcast::error::RecvError, mpsc, oneshot};
+use tokio::time::Instant;
 
-use crate::agent::{AgentCommand, AgentHandle, ViewerChange, viewer_channel};
+use crate::agent::{
+    AgentCommand, AgentHandle, ViewerChange, viewer_channel, viewer_channel_with_exit,
+};
 use crate::api;
 use crate::network::WatchRoute;
 use crate::records::{OperationTarget, Reach};
-use crate::server::{Watch, WatchChange};
+use crate::server::{ShellWatch, Watch, WatchChange};
 use crate::service::{actor_stopped, check_size, terminal_colors, value_of};
 use crate::store::RemovalCause;
 use crate::{Daemon, blocking_in_place};
 
 const SCREEN_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 const CHANGES_WAITING: usize = 64;
+
+type ExitNotice = oneshot::Receiver<Instant>;
 
 #[derive(Clone)]
 pub(crate) struct ViewerBinding {
@@ -57,41 +62,10 @@ impl Daemon {
         forwarded: bool,
     ) -> Result<Watch, ErrorBody> {
         match topic {
-            wire::DaemonWatch::Attach(args) => {
-                crate::network_operations::require_person(caller)?;
-                if args.allow_ended && !matches!(args.target, wire::AgentTarget::Reference(_)) {
-                    return Err(ErrorBody::invalid_argument(
-                        "an ended screen needs an exact agent reference",
-                    ));
-                }
-                let reference = if forwarded {
-                    match &args.target {
-                        wire::AgentTarget::Reference(reference)
-                            if reference.machine_id == self.machine_id =>
-                        {
-                            api::agent_ref(reference.clone())
-                        }
-                        _ => {
-                            return Err(ErrorBody::invalid_argument(
-                                "a forwarded Attach needs the exact local reference",
-                            ));
-                        }
-                    }
-                } else {
-                    let operation = OperationTarget::Attach {
-                        allow_ended: args.allow_ended,
-                    };
-                    self.addressed_agent(caller, args.target.clone(), operation)
-                        .await?
-                };
-                if reference.machine_id != self.machine_id {
-                    self.watch_remote_screen(reference, caller.clone(), args, viewer)
-                        .await
-                } else {
-                    self.watch_local_screen(caller, &reference, args, viewer)
-                        .await
-                }
-            }
+            wire::DaemonWatch::Attach(args) => self
+                .start_attach_watch(caller, args, viewer, forwarded, false)
+                .await
+                .map(|(watch, _)| watch),
             wire::DaemonWatch::Agents(_)
                 if !forwarded || matches!(caller, Caller::Terminal { .. }) =>
             {
@@ -101,15 +75,75 @@ impl Daemon {
                 caller,
                 Caller::Terminal { .. } | Caller::Ide { .. }
             )),
-            wire::DaemonWatch::AttachShell(_) => Err(ErrorBody::new(
-                Reason::Unsupported,
-                "this daemon does not support dedicated shell attach",
-            )),
             _ => Err(ErrorBody::refused(
                 "this topic has no forwarded subscription",
             )),
         }
     }
+
+    pub(crate) async fn start_shell_watch(
+        self: &Arc<Self>,
+        caller: &Caller,
+        args: wire::AttachArgs,
+        viewer: u64,
+    ) -> Result<ShellWatch, ErrorBody> {
+        if !matches!(caller, Caller::Terminal { .. }) {
+            return Err(ErrorBody::refused(
+                "only a terminal can open a dedicated Attach",
+            ));
+        }
+        let (watch, exit) = self
+            .start_attach_watch(caller, args, viewer, false, true)
+            .await?;
+        Ok(ShellWatch {
+            watch,
+            exit: exit.expect("a dedicated Attach has an exit notice"),
+        })
+    }
+
+    async fn start_attach_watch(
+        self: &Arc<Self>,
+        caller: &Caller,
+        args: wire::AttachArgs,
+        viewer: u64,
+        forwarded: bool,
+        shell: bool,
+    ) -> Result<(Watch, Option<ExitNotice>), ErrorBody> {
+        crate::network_operations::require_person(caller)?;
+        if args.allow_ended && !matches!(args.target, wire::AgentTarget::Reference(_)) {
+            return Err(ErrorBody::invalid_argument(
+                "an ended screen needs an exact agent reference",
+            ));
+        }
+        let reference = if forwarded {
+            match &args.target {
+                wire::AgentTarget::Reference(reference)
+                    if reference.machine_id == self.machine_id =>
+                {
+                    api::agent_ref(reference.clone())
+                }
+                _ => {
+                    return Err(ErrorBody::invalid_argument(
+                        "a forwarded Attach needs the exact local reference",
+                    ));
+                }
+            }
+        } else {
+            let operation = OperationTarget::Attach {
+                allow_ended: args.allow_ended,
+            };
+            self.addressed_agent(caller, args.target.clone(), operation)
+                .await?
+        };
+        if reference.machine_id != self.machine_id {
+            self.watch_remote_screen(reference, caller.clone(), args, viewer, shell)
+                .await
+        } else {
+            self.watch_local_screen(caller, &reference, args, viewer, shell)
+                .await
+        }
+    }
+
     pub(crate) async fn end_viewer(&self, viewer: u64) {
         let ending = self.watch_ends.lock().unwrap().remove(&viewer);
         if let Some(ViewerBinding {
@@ -241,12 +275,13 @@ impl Daemon {
         reference: &AgentRef,
         args: wire::AttachArgs,
         viewer: u64,
-    ) -> Result<Watch, ErrorBody> {
+        shell: bool,
+    ) -> Result<(Watch, Option<ExitNotice>), ErrorBody> {
         let operation = OperationTarget::Attach {
             allow_ended: args.allow_ended,
         };
         let agent = self.local_target(caller, reference, operation)?;
-        self.watch_agent_screen(&agent, caller, args, viewer)
+        self.watch_agent_screen(&agent, caller, args, viewer, shell)
             .await
             .map_err(|error| self.with_agent_error(&agent, error))
     }
@@ -257,13 +292,20 @@ impl Daemon {
         caller: &Caller,
         args: wire::AttachArgs,
         viewer: u64,
-    ) -> Result<Watch, ErrorBody> {
+        shell: bool,
+    ) -> Result<(Watch, Option<ExitNotice>), ErrorBody> {
         if let Some(size) = args.size {
             check_size(size.cols, size.rows)?;
         }
         let reference = agent.info().reference();
         let address = self.agent_address(&reference)?;
-        let (tx, mut feed) = viewer_channel();
+        let (tx, mut feed, exit) = if shell {
+            let (tx, feed, exit) = viewer_channel_with_exit();
+            (tx, feed, Some(exit))
+        } else {
+            let (tx, feed) = viewer_channel();
+            (tx, feed, None)
+        };
         let stalled = feed.stalled();
         let (reply, drawn) = oneshot::channel();
         let kind = match caller {
@@ -330,11 +372,12 @@ impl Daemon {
         };
         let snapshot = value_of(snapshot);
         let (changes, sent) = mpsc::channel(CHANGES_WAITING);
+        let watch = Watch {
+            snapshot,
+            changes: sent,
+        };
         if ended {
-            return Ok(Watch {
-                snapshot,
-                changes: sent,
-            });
+            return Ok((watch, exit));
         }
         self.watch_ends.lock().unwrap().insert(
             viewer,
@@ -361,10 +404,7 @@ impl Daemon {
             }
             daemon.end_viewer(viewer).await;
         });
-        Ok(Watch {
-            snapshot,
-            changes: sent,
-        })
+        Ok((watch, exit))
     }
 
     async fn watch_remote_screen(
@@ -373,7 +413,8 @@ impl Daemon {
         caller: Caller,
         args: wire::AttachArgs,
         viewer: u64,
-    ) -> Result<Watch, ErrorBody> {
+        shell: bool,
+    ) -> Result<(Watch, Option<ExitNotice>), ErrorBody> {
         self.ensure_machine_route(&reference.machine_id, &caller)
             .await?;
         let address = self.agent_address(&reference)?;
@@ -396,17 +437,32 @@ impl Daemon {
             from_name: None,
             start_result: None,
         };
-        let mut subscription = self
-            .network
-            .watch_with_receipt(
-                &reference.machine_id,
-                request,
-                Some(tokio::time::Instant::now() + SCREEN_SNAPSHOT_TIMEOUT),
-            )
-            .await
-            .map_err(|error| {
-                self.remote_screen_error(&reference, api::received_error(error.into()))
-            })?;
+        let deadline = Some(Instant::now() + SCREEN_SNAPSHOT_TIMEOUT);
+        let (subscription, mut exit) = if shell {
+            let (notice, exit) = oneshot::channel();
+            let mut notice = Some(notice);
+            let observe = move |at, change: &Value| {
+                if change.get("kind").and_then(Value::as_str) == Some("exit")
+                    && let Some(notice) = notice.take()
+                {
+                    let _ = notice.send(at);
+                }
+            };
+            let subscription = self
+                .network
+                .watch_observed(&reference.machine_id, request, deadline, observe)
+                .await;
+            (subscription, Some(exit))
+        } else {
+            let subscription = self
+                .network
+                .watch_with_receipt(&reference.machine_id, request, deadline)
+                .await;
+            (subscription, None)
+        };
+        let mut subscription = subscription.map_err(|error| {
+            self.remote_screen_error(&reference, api::received_error(error.into()))
+        })?;
         let mut snapshot: wire::ScreenSnapshot =
             decode_arguments(std::mem::take(&mut subscription.snapshot))?;
         if snapshot.reference.machine_id != reference.machine_id
@@ -418,11 +474,18 @@ impl Daemon {
         }
         snapshot.address = address;
         let (changes, sent) = mpsc::channel(CHANGES_WAITING);
-        if snapshot.process == Some(wire::ProcessState::Ended) || snapshot.exit.is_some() {
-            return Ok(Watch {
-                snapshot: value_of(snapshot),
-                changes: sent,
-            });
+        let ended = snapshot.process == Some(wire::ProcessState::Ended) || snapshot.exit.is_some();
+        let watch = Watch {
+            snapshot: value_of(snapshot),
+            changes: sent,
+        };
+        if ended {
+            if shell {
+                let (notice, ended) = oneshot::channel();
+                let _ = notice.send(Instant::now());
+                exit = Some(ended);
+            }
+            return Ok((watch, exit));
         }
         let attach = subscription.view.take().ok_or_else(|| {
             ErrorBody::invalid_argument("the machine did not confirm its Attach viewer")
@@ -464,10 +527,7 @@ impl Daemon {
             tokio::select! { () = forward => {}, () = changes.closed() => {} }
             daemon.end_viewer(viewer).await;
         });
-        Ok(Watch {
-            snapshot: value_of(snapshot),
-            changes: sent,
-        })
+        Ok((watch, exit))
     }
     fn remote_screen_error(&self, reference: &AgentRef, error: ErrorBody) -> ErrorBody {
         let error = self.project_remote_error(error);

@@ -33,6 +33,7 @@ use super::{BeginSessionWork, RequestFailure, SessionWork, TargetReply};
 type Change = Result<Value, ErrorBody>;
 type Answer = Result<Reply, RequestFailure>;
 pub(super) type Deadline = Option<Instant>;
+pub(super) type WatchObserver = Box<dyn FnMut(Instant, &Value) + Send>;
 
 pub(crate) struct ReceivedChange {
     pub(crate) value: Value,
@@ -128,11 +129,12 @@ impl WatchRoute {
         if forward.route != self.route {
             return Err(view_ended());
         }
-        let mut pending = self.peer.request_on_watch(
+        let mut pending = self.peer.start_request(
             forward,
             deadline,
             self.machine.clone(),
             Some(self.request),
+            None,
         )?;
         let response = pending.answer(deadline).await?;
         Ok(Delivery::Relayed(pending, response))
@@ -312,6 +314,7 @@ enum Outgoing {
         wants_watch: bool,
         reply: oneshot::Sender<Answer>,
         activity: Option<SessionActivity>,
+        observer: Option<WatchObserver>,
     },
     Watching {
         machine: MachineIdentity,
@@ -319,6 +322,7 @@ enum Outgoing {
         view: Option<AttachBinding>,
         changes: mpsc::UnboundedSender<WatchUpdate>,
         activity: Option<SessionActivity>,
+        observer: Option<WatchObserver>,
     },
 }
 
@@ -403,15 +407,26 @@ impl Peer {
         deadline: Deadline,
         machine: MachineIdentity,
     ) -> Result<Pending, ErrorBody> {
-        self.request_on_watch(forward, deadline, machine, None)
+        self.request_with_observer(forward, deadline, machine, None)
     }
 
-    fn request_on_watch(
+    pub(super) fn request_with_observer(
+        self: &Arc<Self>,
+        forward: ForwardParams,
+        deadline: Deadline,
+        machine: MachineIdentity,
+        observer: Option<WatchObserver>,
+    ) -> Result<Pending, ErrorBody> {
+        self.start_request(forward, deadline, machine, None, observer)
+    }
+
+    fn start_request(
         self: &Arc<Self>,
         forward: ForwardParams,
         deadline: Deadline,
         machine: MachineIdentity,
         resize_watch: Option<u64>,
+        observer: Option<WatchObserver>,
     ) -> Result<Pending, ErrorBody> {
         let unavailable = || {
             wire::unavailable(
@@ -449,6 +464,7 @@ impl Peer {
         } else {
             Vec::new()
         };
+        // The writer takes the state lock before sending the request's first bytes.
         self.outbox
             .send(Output::Forward {
                 id,
@@ -464,6 +480,7 @@ impl Peer {
                 wants_watch,
                 reply,
                 activity,
+                observer,
             },
         );
         Ok(Pending {
@@ -585,6 +602,7 @@ impl Peer {
             machine,
             reply,
             mut activity,
+            observer,
             ..
         }) = state.outgoing.remove(&id)
         else {
@@ -610,6 +628,7 @@ impl Peer {
                     view: view.clone(),
                     changes,
                     activity,
+                    observer,
                 },
             );
             let _ = reply.send(Ok(Reply::Watch {
@@ -629,6 +648,7 @@ impl Peer {
 
     fn changed(&self, ChangedParams { watch, change }: ChangedParams) {
         let received_at = SystemTime::now();
+        let arrived_at = Instant::now();
         let mut state = self.state.lock().unwrap();
         let mut ended = None;
         if let Some(id) = state.watches.get(&watch).copied()
@@ -636,12 +656,16 @@ impl Peer {
                 changes,
                 activity,
                 view,
+                observer,
                 ..
             }) = state.outgoing.get_mut(&id)
         {
             if ended_change(&change) {
                 *view = None;
                 ended = activity.take();
+            }
+            if let Some(observe) = observer {
+                observe(arrived_at, &change);
             }
             let _ = changes.send(Ok(ReceivedChange {
                 value: change,

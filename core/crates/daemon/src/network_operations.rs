@@ -22,6 +22,7 @@ use facade_base::{
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
+use tokio::time::Instant;
 
 use crate::api;
 use crate::machine_service::{machine_address_part, offline_machine, project_machine_query};
@@ -30,7 +31,15 @@ use crate::records::{self, LookupCandidate, OperationTarget, Reach};
 use crate::server::{Watch, WatchChange, WhenFull};
 use crate::{Cancel, Daemon, blocking_in_place};
 
-const LIST_DEADLINE: Duration = Duration::from_secs(3);
+pub(crate) const LIST_DEADLINE: Duration = Duration::from_secs(3);
+
+type SessionNames = BTreeMap<wire::AgentRef, String>;
+
+pub(crate) struct QueriedAgents {
+    pub(crate) agents: Vec<LookupCandidate>,
+    pub(crate) machines: Vec<MachineQueryResult>,
+    session_names: SessionNames,
+}
 
 impl Daemon {
     pub(crate) async fn addressed_agent(
@@ -51,7 +60,11 @@ impl Daemon {
         };
         match parsed {
             AgentAddress::Local(key) => {
-                let (rows, machines) = self.query_agents(caller, None, false).await?;
+                let QueriedAgents {
+                    agents: rows,
+                    machines,
+                    ..
+                } = self.query_agents(caller, None, false).await?;
                 let found = resolve(key, &rows);
                 if found
                     .as_ref()
@@ -73,7 +86,11 @@ impl Daemon {
                         if error.data.reason == Reason::NotFound && literal_name.is_some() =>
                     {
                         let literal = AgentKey::Name(literal_name.expect("literal name"));
-                        let (rows, machines) = self.query_agents(caller, None, false).await?;
+                        let QueriedAgents {
+                            agents: rows,
+                            machines,
+                            ..
+                        } = self.query_agents(caller, None, false).await?;
                         let found = resolve(literal, &rows);
                         if found
                             .as_ref()
@@ -92,13 +109,18 @@ impl Daemon {
                         machine_id: target.machine_id,
                     });
                 }
-                let (selected, _) = self
+                let selected = self
                     .query_agents(caller, Some(&target.machine_id), false)
-                    .await?;
+                    .await?
+                    .agents;
                 let Some(literal) = literal_name else {
                     return resolve(agent, &selected);
                 };
-                let (awake, states) = self.query_agents(caller, None, false).await?;
+                let QueriedAgents {
+                    agents: awake,
+                    machines: states,
+                    ..
+                } = self.query_agents(caller, None, false).await?;
                 let literal = AgentKey::Name(literal);
                 if let Some(error) = unanswered_lookup(&states)
                     && resolve(literal, &awake)
@@ -124,7 +146,7 @@ impl Daemon {
         caller: &Caller,
         machine: Option<&str>,
         active: bool,
-    ) -> Result<(Vec<LookupCandidate>, Vec<MachineQueryResult>), ErrorBody> {
+    ) -> Result<QueriedAgents, ErrorBody> {
         if let Some(machine) = machine
             && machine != self.machine_id
         {
@@ -154,7 +176,7 @@ impl Daemon {
         self: &Arc<Self>,
         caller: &Caller,
         scope: wire::Scope,
-    ) -> Result<(Vec<LookupCandidate>, Vec<MachineQueryResult>), ErrorBody> {
+    ) -> Result<QueriedAgents, ErrorBody> {
         let machine = match scope {
             wire::Scope::Reachable => None,
             wire::Scope::Local => Some(self.machine_id.clone()),
@@ -247,12 +269,13 @@ impl Daemon {
         rows: Vec<MachineQueryResult>,
         active: bool,
         strict: bool,
-    ) -> Result<(Vec<LookupCandidate>, Vec<MachineQueryResult>), ErrorBody> {
+    ) -> Result<QueriedAgents, ErrorBody> {
         let visible = self.machine_identities()?;
         let mut jobs = JoinSet::new();
-        let deadline = tokio::time::Instant::now() + LIST_DEADLINE;
+        let deadline = Instant::now() + LIST_DEADLINE;
         let mut agents = Vec::new();
         let mut machines = BTreeMap::new();
+        let include_sessions = active && matches!(caller, Caller::Terminal { .. });
         for mut result in rows {
             if result.machine_id == self.machine_id {
                 result.status = MachineQueryStatus::Answered;
@@ -288,14 +311,29 @@ impl Daemon {
             }
             machines.insert(result.machine_id.clone(), result);
         }
+        let mut session_names = if include_sessions {
+            self.session_names(&agents, deadline).await
+        } else {
+            SessionNames::new()
+        };
         while let Some(task) = jobs.join_next().await {
             let (id, reply) = task.map_err(ErrorBody::internal)?;
             let row = machines.get_mut(&id).expect("each active query has a row");
             match reply {
                 Ok((value, received_at)) => match observe_agent_reply(row, value, received_at) {
-                    Ok(mut records) => {
-                        records.retain(|record| record.info.reference.machine_id == id);
-                        agents.extend(records);
+                    Ok(records) => {
+                        for record in records
+                            .into_iter()
+                            .filter(|record| record.agent.reference.machine_id == id)
+                        {
+                            if include_sessions && let Some(name) = record.session_name {
+                                session_names.insert(record.agent.reference.clone(), name);
+                            }
+                            agents.push(LookupCandidate {
+                                info: record.agent,
+                                has_rule: record.has_rule,
+                            });
+                        }
                     }
                     Err(error) if strict => return Err(self.machine_failure(&id, error)),
                     Err(error) => row.error = Some(error.message),
@@ -322,7 +360,40 @@ impl Daemon {
                 &machine,
             );
         }
-        Ok((agents, machines.into_values().collect()))
+        Ok(QueriedAgents {
+            agents,
+            machines: machines.into_values().collect(),
+            session_names,
+        })
+    }
+
+    pub(crate) async fn session_names(
+        self: &Arc<Self>,
+        agents: &[LookupCandidate],
+        deadline: Instant,
+    ) -> SessionNames {
+        let mut names = SessionNames::new();
+        for candidate in agents {
+            let reference = &candidate.info.reference;
+            let Some(session) = candidate.info.session.as_deref() else {
+                continue;
+            };
+            let Some(agent) = self.get_agent(&reference.agent_id) else {
+                continue;
+            };
+            let info = agent.info();
+            if info.session.as_deref() != Some(session) {
+                continue;
+            }
+            match tokio::time::timeout_at(deadline, self.native_session_name(&agent, &info)).await {
+                Ok(Some(name)) => {
+                    names.insert(reference.clone(), name);
+                }
+                Ok(None) => {}
+                Err(_) => break,
+            }
+        }
+        names
     }
 
     pub(crate) fn local_agent_records(
@@ -348,8 +419,9 @@ impl Daemon {
         machine: Option<&str>,
     ) -> Result<wire::AgentListResult, ErrorBody> {
         let machine = self.machine_for(machine)?;
-        let (agents, machines) = self.query_agents(caller, machine.as_deref(), true).await?;
-        Ok(agent_list_result(agents, machines))
+        Ok(agent_list_result(
+            self.query_agents(caller, machine.as_deref(), true).await?,
+        ))
     }
 
     pub(crate) async fn list_scoped_agents(
@@ -360,8 +432,9 @@ impl Daemon {
         if let wire::Scope::Machine { machine } = scope {
             return self.list_active_agents(caller, Some(&machine)).await;
         }
-        let (agents, machines) = self.query_scoped_agents(caller, scope).await?;
-        Ok(agent_list_result(agents, machines))
+        Ok(agent_list_result(
+            self.query_scoped_agents(caller, scope).await?,
+        ))
     }
 
     pub(crate) fn machine_for(&self, selector: Option<&str>) -> Result<Option<String>, ErrorBody> {
@@ -511,12 +584,18 @@ impl Daemon {
 }
 
 fn agent_list_result(
-    agents: Vec<LookupCandidate>,
-    machines: Vec<MachineQueryResult>,
+    QueriedAgents {
+        agents,
+        machines,
+        mut session_names,
+    }: QueriedAgents,
 ) -> wire::AgentListResult {
     let mut agents: Vec<_> = agents
         .iter()
-        .map(|agent| records::list_row(&agent.info))
+        .map(|agent| match session_names.remove(&agent.info.reference) {
+            Some(name) => records::list_row_with_session(&agent.info, Some(name)),
+            None => records::list_row(&agent.info),
+        })
         .collect();
     agents.sort_by(|a, b| {
         b.started_at
@@ -599,17 +678,9 @@ fn observe_agent_reply(
     row: &mut MachineQueryResult,
     value: Value,
     received_at: SystemTime,
-) -> Result<Vec<LookupCandidate>, ErrorBody> {
+) -> Result<Vec<wire::AgentLookupCandidate>, ErrorBody> {
     row.last_seen = Some(facade_base::time::iso_time(received_at));
-    let records = decode_arguments::<Vec<wire::AgentLookupCandidate>>(value).map(|records| {
-        records
-            .into_iter()
-            .map(|record| LookupCandidate {
-                info: record.agent,
-                has_rule: record.has_rule,
-            })
-            .collect()
-    });
+    let records = decode_arguments(value);
     row.status = if records.is_ok() {
         MachineQueryStatus::Answered
     } else {

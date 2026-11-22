@@ -136,6 +136,15 @@ impl Due {
         Due::within(None)
     }
 
+    /// Projects the caller's bounded deadline to the time kept in the store.
+    pub(crate) fn until(deadline: Instant) -> Due {
+        let left = deadline.saturating_duration_since(Instant::now());
+        Due {
+            instant: deadline,
+            at: facade_base::time::iso_time(SystemTime::now() + left),
+        }
+    }
+
     /// What is left of a send's 30 seconds, `time_left_ms` as the call reached the daemon, and never
     /// more than [`delivery_limit`]: the rest went on the way (RULES-1.2).
     pub(crate) fn within(time_left_ms: Option<u64>) -> Due {

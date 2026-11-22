@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
-use facade_base::api_v1::daemon::AgentKind;
+use facade_base::api_v1::daemon::{self as wire, AgentKind};
 use facade_base::api_v1::daemon_client::{DaemonClient, upgrading};
 use facade_base::model::agent::{AgentRef, AgentsUpdate, is_session_id};
 use facade_base::model::error::{ErrorBody, Reason};
@@ -14,10 +14,13 @@ use serde_json::{Value, json};
 
 use crate::agent::AgentHandle;
 use crate::guests::{GuestJoin, RelayProcess};
-use crate::mcp::{self, ActorIdentity, ActorServices, Relay, RelayHelloParams};
+use crate::mcp::{
+    self, ActorIdentity, ActorServices, DiscoverClis, ReadReply, Relay, RelayHelloParams,
+};
+use crate::messages::{InboxRead, ReplyRead};
 use crate::runs::RunIdentity;
 use crate::server::{self, RelayLines};
-use crate::{Daemon, blocking_in_place};
+use crate::{Cancel, Daemon, api, blocking_in_place};
 
 struct RelayEvidence {
     process: RelayProcess,
@@ -83,6 +86,11 @@ struct RelayConnection {
     process: RelayProcess,
 }
 
+enum RelayInbox {
+    Page(InboxRead),
+    Reply(ReplyRead),
+}
+
 impl Daemon {
     pub(crate) async fn accept_relay(
         self: &Arc<Self>,
@@ -105,13 +113,7 @@ impl Daemon {
                 .windows(2)
                 .find_map(|pair| (pair[0] == "--guest").then(|| pair[1].clone())),
         });
-        let services = self.relay_services(evidence);
-        let relay = Arc::new(Relay::of_verified(
-            hello,
-            process.pid,
-            process.birth.clone(),
-            services,
-        ));
+        let relay = Arc::new(self.relay(hello, evidence));
         if relay.reconnect() {
             let relay = relay.clone();
             tokio::task::spawn_blocking(move || relay.hold_verified_presence());
@@ -124,9 +126,10 @@ impl Daemon {
         Ok((json!({ "relay": mcp::RELAY_CONTRACT }), Arc::new(lines)))
     }
 
-    fn relay_services(self: &Arc<Self>, evidence: Arc<RelayEvidence>) -> ActorServices {
+    fn relay(self: &Arc<Self>, hello: RelayHelloParams, evidence: Arc<RelayEvidence>) -> Relay {
         let runtime = tokio::runtime::Handle::current();
         let bound: Arc<OnceLock<BoundActor>> = Arc::new(OnceLock::new());
+        let (pid, birth) = (evidence.process.pid, evidence.process.birth.clone());
         let authenticate = {
             let (daemon, runtime, evidence, bound) = (
                 self.clone(),
@@ -176,45 +179,51 @@ impl Daemon {
                 bound.clone(),
             );
             Box::new(
-                move |reference: &AgentRef,
-                      read: crate::messages::InboxRead,
-                      cancel: crate::Cancel| {
+                move |reference: &AgentRef, read: InboxRead, cancel: Cancel| {
                     let actor = attached_actor(&bound, reference)?;
-                    let handle = actor.current(&daemon, &evidence.process)?;
-                    let machines = daemon.machine_identities()?;
-                    runtime.block_on(async {
-                        let read = daemon.messages.read_inbox(&reference.agent_id, handle.is_guest(), read, cancel, |page| {
-                            let render = if page.messages.iter().any(|message| message.result.is_some()) {
-                                let mut render = page.clone();
-                                for message in &mut render.messages {
-                                    if let Some(result) = &message.result {
-                                        message.text = crate::delivery::render_start_result(result, &machines)?;
-                                    }
-                                }
-                                Some(render)
-                            } else {
-                                None
-                            };
-                            let projected = mcp::project_inbox(render.as_ref().unwrap_or(page), &daemon.machine_id, &machines)?;
-                            // This callback runs within Post's selection/settlement lock.
-                            actor.current(&daemon, &evidence.process)?;
-                            Ok(projected)
-                        });
-                        if let Some((run, _)) = actor.run {
-                            let mut exit = handle.exit();
-                            tokio::select! {
-                                biased;
-                                _ = exit.wait_for(|exit| exit.is_some() || handle.run() != run) => {
-                                    Err(ErrorBody::new(Reason::Unavailable, "this relay's run has ended"))
-                                }
-                                result = read => result,
-                            }
-                        } else {
-                            read.await
-                        }
-                    })
+                    runtime.block_on(daemon.read_relay_inbox(
+                        actor,
+                        &evidence,
+                        RelayInbox::Page(read),
+                        cancel,
+                    ))
                 },
             )
+        };
+        let read_reply: ReadReply = {
+            let (daemon, runtime, evidence, bound) = (
+                self.clone(),
+                runtime.clone(),
+                evidence.clone(),
+                bound.clone(),
+            );
+            Box::new(move |reference, read, cancel| {
+                let actor = attached_actor(&bound, reference)?;
+                let mut page = runtime.block_on(daemon.read_relay_inbox(
+                    actor,
+                    &evidence,
+                    RelayInbox::Reply(read),
+                    cancel,
+                ))?;
+                Ok(page["data"]["messages"].as_array_mut().and_then(Vec::pop))
+            })
+        };
+        let discover_clis: DiscoverClis = {
+            let (daemon, runtime, evidence) = (self.clone(), runtime.clone(), evidence.clone());
+            Box::new(move |reference, machines, deadline| {
+                let actor = attached_actor(&bound, reference)
+                    .and_then(|actor| actor.current(&daemon, &evidence.process));
+                match actor {
+                    Ok(agent) => {
+                        runtime.block_on(daemon.relay_clis(agent, machines, deadline.into()))
+                    }
+                    Err(error) => machines
+                        .iter()
+                        .filter(|machine| machine.status == wire::QueryStatus::Answered)
+                        .map(|machine| (machine.machine_id.clone(), Err(error.message.clone())))
+                        .collect(),
+                }
+            })
         };
         let managed_instructions = {
             let daemon = self.clone();
@@ -241,13 +250,154 @@ impl Daemon {
                 daemon.connect_relay_actor(&runtime, &evidence.process, &actor)
             })
         };
-        ActorServices {
+        let services = ActorServices {
             authenticate,
             connect,
             read_inbox,
             managed_instructions,
             ready,
+        };
+        Relay::of_verified(hello, pid, birth, services)
+            .with_actor_queries(read_reply, discover_clis)
+    }
+
+    async fn read_relay_inbox(
+        &self,
+        actor: &BoundActor,
+        evidence: &RelayEvidence,
+        selection: RelayInbox,
+        cancel: Cancel,
+    ) -> Result<Value, ErrorBody> {
+        let handle = actor.current(self, &evidence.process)?;
+        let machines = self.machine_identities()?;
+        let project = |page: &facade_base::model::message::MessagesSnapshot| {
+            let render = if page.messages.iter().any(|message| message.result.is_some()) {
+                let mut render = page.clone();
+                for message in &mut render.messages {
+                    if let Some(result) = &message.result {
+                        message.text = crate::delivery::render_start_result(result, &machines)?;
+                    }
+                }
+                Some(render)
+            } else {
+                None
+            };
+            let projected =
+                mcp::project_inbox(render.as_ref().unwrap_or(page), &self.machine_id, &machines)?;
+            // The delivery lock covers projection and recording the returned messages together.
+            actor.current(self, &evidence.process)?;
+            Ok(projected)
+        };
+        let owner = &actor.reference.agent_id;
+        let guest = handle.is_guest();
+        let read = async {
+            match selection {
+                RelayInbox::Page(read) => {
+                    self.messages
+                        .read_inbox(owner, guest, read, cancel, project)
+                        .await
+                }
+                RelayInbox::Reply(read) => {
+                    self.messages
+                        .read_first_reply(owner, guest, read, cancel, project)
+                        .await
+                }
+            }
+        };
+        if let Some((run, _)) = actor.run {
+            let mut exit = handle.exit();
+            tokio::select! {
+                biased;
+                _ = exit.wait_for(|exit| exit.is_some() || handle.run() != run) => {
+                    Err(ErrorBody::new(Reason::Unavailable, "this relay's run has ended"))
+                }
+                result = read => result,
+            }
+        } else {
+            read.await
         }
+    }
+
+    async fn relay_clis(
+        self: &Arc<Self>,
+        agent: AgentHandle,
+        machines: &[wire::MachineQuery],
+        deadline: tokio::time::Instant,
+    ) -> BTreeMap<String, Result<Vec<String>, String>> {
+        let online = self.network.machines();
+        let info = agent.info();
+        let caller = wire::Caller::Agent {
+            agent: api::wire_ref(&info.reference()),
+            root: api::wire_ref(&crate::records::root_of(&info)),
+            yolo: info.yolo,
+        };
+        let mut jobs = tokio::task::JoinSet::new();
+        for machine in machines
+            .iter()
+            .filter(|machine| machine.status == wire::QueryStatus::Answered)
+        {
+            let local = machine.machine_id == self.machine_id;
+            if !local
+                && !online.iter().any(|known| {
+                    known.machine_id == machine.machine_id
+                        && known.state == wire::MachineState::Online
+                })
+            {
+                continue;
+            }
+            let daemon = self.clone();
+            let machine = machine.machine_id.clone();
+            let caller = caller.clone();
+            let managed_folder = (!info.guest).then(|| info.cwd.clone());
+            let agent_id = info.agent_id.clone();
+            jobs.spawn(async move {
+                let lookup = async {
+                    if local {
+                        let environment = if managed_folder.is_some() {
+                            daemon.environment_of(&agent_id).await?
+                        } else {
+                            BTreeMap::new()
+                        };
+                        daemon.cli_list(managed_folder, environment).await
+                    } else {
+                        let value = daemon
+                            .network_call::<wire::CliList>(
+                                &machine,
+                                &caller,
+                                wire::CliListArgs::default(),
+                                Some(
+                                    deadline.saturating_duration_since(tokio::time::Instant::now()),
+                                ),
+                            )
+                            .await?;
+                        facade_base::jsonrpc::decode_arguments::<wire::CliListResult>(value)
+                    }
+                };
+                let result = match tokio::time::timeout_at(deadline, lookup).await {
+                    Err(_) => {
+                        Err("The CLI lookup did not finish before the roster deadline.".into())
+                    }
+                    Ok(Err(error)) => Err(error.message),
+                    Ok(Ok(result)) => match result.settings_problem {
+                        Some(problem) => Err(problem),
+                        None => Ok(result
+                            .clis
+                            .into_iter()
+                            .filter(|cli| cli.available)
+                            .map(|cli| cli.cli)
+                            .collect()),
+                    },
+                };
+                (machine, result)
+            });
+        }
+        let mut results = BTreeMap::new();
+        while let Some(result) = jobs.join_next().await {
+            if let Ok((machine, result)) = result {
+                results.insert(machine, result);
+            }
+        }
+        results
     }
 
     fn relay_run(

@@ -6,6 +6,7 @@ use facade_base::model::agent::AgentRef;
 use facade_base::model::machine::MachineQueryResult;
 use facade_base::model::machine::MachineQueryStatus;
 use facade_base::model::machine::MachineState;
+use facade_base::model::message::DeliveredVia;
 use facade_base::{
     jsonrpc::decode_arguments,
     model::error::{ErrorBody, Reason},
@@ -61,7 +62,7 @@ pub(crate) fn project_error(error: ErrorBody) -> api_v1::ErrorBody {
         "session_not_found" => &["sessions"],
         "ambiguous_reference" => &["candidates", "agents", "machines", "sessions"],
         "ended" | "unsupported" => &["agents"],
-        "partial_input" => &["text_written", "enter_written", "keys_sent"],
+        "partial_input" => &["text_written", "enter_written", "keys_sent", "agents"],
         "unavailable" => &[
             "agents",
             "execution",
@@ -81,7 +82,16 @@ pub(crate) fn project_error(error: ErrorBody) -> api_v1::ErrorBody {
         "worktree_failed" => &["kept"],
         _ => &[],
     };
-    fields.retain(|key, _| allowed.contains(&key.as_str()));
+    let confirmed_delivery = error.data.message_ref.is_some()
+        && matches!(
+            error.data.delivered_via,
+            Some(DeliveredVia::TypedIntoInput | DeliveredVia::ReadByRecipient)
+        );
+    fields.retain(|key, _| {
+        allowed.contains(&key.as_str())
+            || key == "message_ref"
+            || (key == "delivered_via" && confirmed_delivery)
+    });
     // These reasons may report one already-authorized target. A reach refusal has no label.
     if matches!(reason, "unavailable" | "refused") && error.data.agents.len() != 1 {
         fields.remove("agents");

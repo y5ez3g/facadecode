@@ -713,19 +713,21 @@ impl Daemon {
                 started: tokio::time::Instant::now(),
             },
         };
-        let handle = match agent::spawn(actor, rx, tx, self.changes.clone()) {
-            Ok(handle) => handle,
-            Err(err) => {
-                release_name();
-                self.runs.remove_folders(&id);
-                let (store, removed) = (self.store.clone(), id.clone());
-                let _ = blocking(move || store.delete(&removed, an_hour_ago)).await;
-                self.runs.abandon(&id);
-                return Err(ErrorBody::internal(format!(
-                    "could not read agent {id}'s terminal: {err}"
-                )));
-            }
-        };
+        let allow_auto_trust = yolo && matches!(origin.caller, Caller::Agent { .. });
+        let handle =
+            match agent::spawn_with_trust(actor, rx, tx, self.changes.clone(), allow_auto_trust) {
+                Ok(handle) => handle,
+                Err(err) => {
+                    release_name();
+                    self.runs.remove_folders(&id);
+                    let (store, removed) = (self.store.clone(), id.clone());
+                    let _ = blocking(move || store.delete(&removed, an_hour_ago)).await;
+                    self.runs.abandon(&id);
+                    return Err(ErrorBody::internal(format!(
+                        "could not read agent {id}'s terminal: {err}"
+                    )));
+                }
+            };
         // A prompt holds the run's messages from before the agent is listed, so that none goes
         // ahead of it.
         let prompt = match kept {

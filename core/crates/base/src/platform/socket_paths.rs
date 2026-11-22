@@ -3,6 +3,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::paths::{facade_home, home_key};
 
@@ -17,6 +18,78 @@ pub use windows::ClientSocket;
 /// runs as this user before `connect` returns.
 #[cfg(unix)]
 pub type ClientSocket = std::os::unix::net::UnixStream;
+
+/// Opens the client's socket within the deadline. A busy endpoint can be retried by the caller.
+pub(crate) fn connect_client_until(path: &Path, until: Instant) -> io::Result<ClientSocket> {
+    connect_time_left(until)?;
+    #[cfg(unix)]
+    let socket = connect_unix_client_until(path, until)?;
+    #[cfg(windows)]
+    let socket = ClientSocket::try_connect(path)?;
+    connect_time_left(until)?;
+    Ok(socket)
+}
+
+fn connect_time_left(until: Instant) -> io::Result<Duration> {
+    let remaining = until.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(io::ErrorKind::TimedOut.into());
+    }
+    Ok(remaining)
+}
+
+#[cfg(unix)]
+fn connect_unix_client_until(path: &Path, until: Instant) -> io::Result<ClientSocket> {
+    use std::os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd};
+
+    use nix::errno::Errno;
+    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+    use nix::sys::socket::{UnixAddr, connect, getsockopt, sockopt::SocketError};
+
+    let addr = UnixAddr::new(path)?;
+    let socket = {
+        #[cfg(target_os = "macos")]
+        let _forks = loop {
+            connect_time_left(until)?;
+            match super::unix_process::FORK_LOCK.try_lock() {
+                Ok(guard) => break guard,
+                Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    let remaining = connect_time_left(until)?;
+                    std::thread::sleep(remaining.min(Duration::from_millis(1)));
+                }
+            }
+        };
+        tokio::net::UnixSocket::new_stream()?
+    };
+    connect_time_left(until)?;
+    match connect(socket.as_raw_fd(), &addr) {
+        Ok(()) => {}
+        Err(Errno::EINPROGRESS) => {
+            let mut fds = [PollFd::new(socket.as_fd(), PollFlags::POLLOUT)];
+            loop {
+                let remaining = connect_time_left(until)?;
+                let millis = remaining.as_nanos().div_ceil(1_000_000);
+                let timeout = PollTimeout::try_from(millis).unwrap_or(PollTimeout::MAX);
+                match poll(&mut fds, timeout) {
+                    Ok(0) | Err(Errno::EINTR) => continue,
+                    Ok(_) => break,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            connect_time_left(until)?;
+            let error = getsockopt(&socket, SocketError)?;
+            if error != 0 {
+                return Err(io::Error::from_raw_os_error(error));
+            }
+        }
+        Err(error) => return Err(error.into()),
+    }
+    // SAFETY: into_raw_fd transfers ownership of the connected stream descriptor.
+    let stream = unsafe { ClientSocket::from_raw_fd(socket.into_raw_fd()) };
+    stream.set_nonblocking(false)?;
+    Ok(stream)
+}
 
 /// Signals EOF to the peer on Unix while keeping the read side open.
 /// Windows named pipes have no half-close, so their readers stay connected.

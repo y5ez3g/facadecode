@@ -15,7 +15,7 @@ use tokio::time::Instant;
 use super::*;
 use crate::store::{AgentRecord, Store};
 use crate::testing::test_folder::TestFolder;
-use crate::{DELIVERY_TIME, delivery_limit};
+use crate::{DELIVERY_TIME, delivery_ceiling, delivery_limit};
 
 /// Posts `message` with no request ID, as a new message: its numbered self and the receiver its
 /// settlement reaches.
@@ -964,7 +964,7 @@ fn pending(deadline: &str) -> Message {
     message
 }
 
-/// A pending message keeps what is left of its deadline, at most a whole delivery's time; where
+/// A pending message keeps what is left of its deadline, up to the delivery ceiling; where
 /// its recipient is decides the rest. A message whose paste began is never typed again: its
 /// typist finishes the paste.
 #[test]
@@ -1022,8 +1022,7 @@ fn a_pending_message_is_taken_up_by_what_is_left_of_its_deadline_and_where_its_r
         decide(&at_deadline, None, Recipient::Running, now),
         TakeUp::Settle(Outcome::untyped(DeliveryFailure::Timeout))
     );
-    // A deadline far ahead, as a clock set back since leaves it, gives no more than a whole
-    // delivery's time.
+    // A deadline far ahead, as a clock set back since leaves it, is capped at the delivery ceiling.
     assert_eq!(
         decide(
             &pending("2026-11-11T13:00:00.000Z"),
@@ -1031,7 +1030,7 @@ fn a_pending_message_is_taken_up_by_what_is_left_of_its_deadline_and_where_its_r
             Recipient::Running,
             now
         ),
-        TakeUp::Type(delivery_limit())
+        TakeUp::Type(delivery_ceiling())
     );
     // A deadline that cannot be read has passed.
     assert_eq!(

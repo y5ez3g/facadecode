@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use facade_base::api_v1::daemon::Caller;
-use facade_base::api_v1::{self, ApiVersion, Operation, Topic, daemon as wire};
+use facade_base::api_v1::{self, ApiVersion, Operation, daemon as wire};
 use facade_base::model::agent::AgentCreator;
 use facade_base::model::agent::AgentKind;
 use facade_base::model::agent::AgentLabel;
@@ -40,7 +40,9 @@ use crate::api;
 use crate::delivery::InputWait;
 use crate::lifecycle::{Work, WorkGuard};
 use crate::machine_service::MachineStream;
-use crate::network_operations::{machine_query_result, machine_selector, require_person};
+use crate::network_operations::{
+    LIST_DEADLINE, QueriedAgents, machine_query_result, machine_selector, require_person,
+};
 use crate::operations::StartOrigin;
 use crate::records::{self, LookupCandidate, OperationTarget, Reach};
 use crate::server::{self, Client, RelayLines, WhenFull};
@@ -140,10 +142,7 @@ impl server::Service for Daemon {
             agent_count: self.active_count() as u64,
             keeper: self.runs.keeper_info(),
             machine: None,
-            topics: wire::topic_names(hello.kind)
-                .into_iter()
-                .filter(|topic| topic != wire::AttachShellTopic::NAME)
-                .collect(),
+            topics: wire::topic_names(hello.kind),
             ops: wire::operation_names(hello.kind),
         };
         let client = Client {
@@ -174,6 +173,18 @@ impl server::Service for Daemon {
     ) -> Result<server::Watch, api_v1::ErrorBody> {
         let caller = self.local_caller(client).map_err(api::project_error)?;
         self.start_watch(&caller, watch, viewer, false)
+            .await
+            .map_err(api::project_error)
+    }
+
+    async fn watch_shell(
+        self: &Arc<Self>,
+        client: &Client,
+        args: wire::AttachArgs,
+        viewer: u64,
+    ) -> Result<server::ShellWatch, api_v1::ErrorBody> {
+        let caller = self.local_caller(client).map_err(api::project_error)?;
+        self.start_shell_watch(&caller, args, viewer)
             .await
             .map_err(api::project_error)
     }
@@ -343,12 +354,6 @@ impl Daemon {
                 .await
             }
             AgentType(args) => {
-                if matches!(args.input, wire::TerminalInput::Sequence { .. }) {
-                    return Err(ErrorBody::new(
-                        Reason::Unsupported,
-                        "this daemon does not support ordered terminal input",
-                    ));
-                }
                 self.agent_operation(
                     caller,
                     AgentAction::Type(args.input),
@@ -403,13 +408,24 @@ impl Daemon {
             }
             InternalAgentRecords(args) if forwarded => {
                 let records = self.local_agent_records(caller, args.active)?;
+                let mut names = if args.active && matches!(caller, Caller::Terminal { .. }) {
+                    let remaining = incoming
+                        .and_then(|call| call.remaining)
+                        .unwrap_or(LIST_DEADLINE)
+                        .min(LIST_DEADLINE)
+                        .saturating_sub(crate::messages::RESPONSE_GRACE);
+                    self.session_names(&records, tokio::time::Instant::now() + remaining)
+                        .await
+                } else {
+                    Default::default()
+                };
                 Ok(value_of(
                     records
                         .into_iter()
                         .map(|record| wire::AgentLookupCandidate {
+                            session_name: names.remove(&record.info.reference),
                             agent: record.info,
                             has_rule: record.has_rule,
-                            session_name: None,
                         })
                         .collect::<Vec<_>>(),
                 ))
@@ -423,6 +439,7 @@ impl Daemon {
                             ..Default::default()
                         },
                         false,
+                        matches!(caller, Caller::Terminal { .. }),
                     )
                     .await?;
                 Ok(value_of(
@@ -450,10 +467,10 @@ impl Daemon {
                 .await?;
                 Ok(json!({}))
             }
-            InternalCommandReply(_) if forwarded => Err(ErrorBody::new(
-                Reason::Unsupported,
-                "this daemon does not support command-line replies",
-            )),
+            InternalCommandReply(args) if forwarded => {
+                self.accept_command_reply(caller, args)?;
+                Ok(value_of(api_v1::EmptyResult {}))
+            }
             _ => Err(ErrorBody::refused(
                 "the operation is unavailable on this connection",
             )),
@@ -509,7 +526,11 @@ impl Daemon {
             }
             wire::StopSelection::All { scope } => {
                 require_person(caller)?;
-                let (mut agents, machines) = self.query_scoped_agents(caller, scope).await?;
+                let QueriedAgents {
+                    mut agents,
+                    machines,
+                    ..
+                } = self.query_scoped_agents(caller, scope).await?;
                 agents.sort_by(|a, b| {
                     b.info
                         .started_at
@@ -749,6 +770,10 @@ impl Daemon {
         incoming: Option<Forwarded>,
     ) -> Result<Value, ErrorBody> {
         let (operation, capability) = action.operation();
+        let sequence = matches!(
+            action,
+            AgentAction::Type(wire::TerminalInput::Sequence { .. })
+        );
         let reference = if incoming.is_some() {
             match target {
                 wire::AgentTarget::Reference(reference)
@@ -778,12 +803,21 @@ impl Daemon {
                     None,
                     None,
                 )
-                .await?;
+                .await
+                .map_err(|mut error| {
+                    if sequence && error.data.reason == Reason::PartialInput {
+                        error
+                            .data
+                            .agents
+                            .retain(|label| label.reference == reference);
+                    }
+                    error
+                })?;
             return self.project_remote_response(operation, &reference, result);
         }
         let agent = self.local_target(caller, &reference, capability)?;
         let address = self.agent_address(&reference)?;
-        let result = async {
+        let result: Result<Value, ErrorBody> = async {
             let result = match action {
                 AgentAction::Inspect => value_of(self.inspect(&agent).await?),
                 AgentAction::Remove => {
@@ -828,7 +862,12 @@ impl Daemon {
             Ok(result)
         }
         .await;
-        result.map_err(|error| self.with_agent_error(&agent, error))
+        result.map_err(|error| {
+            if error.data.reason == Reason::PartialInput && !sequence {
+                return error;
+            }
+            self.with_agent_error(&agent, error)
+        })
     }
 
     pub(crate) fn local_target(
@@ -1219,8 +1258,9 @@ impl Daemon {
         cancel: Cancel,
     ) -> Result<(), ErrorBody> {
         crate::gate_for_test("before-type-input");
+        let typing_bytes = input.typing_bytes();
         let (input, typed) = input_of(input, sender)?;
-        if input.most_bytes() > MAX_INPUT_BYTES {
+        if typing_bytes.unwrap_or_else(|| input.most_bytes()) > MAX_INPUT_BYTES {
             return Err(ErrorBody::new(
                 Reason::CapacityExceeded,
                 format!(
@@ -1506,8 +1546,8 @@ pub(crate) fn sender_from(caller: &Caller, from_name: Option<String>) -> Sender 
     }
 }
 
-/// Reads the input of an `agent.type` call: exactly one of raw bytes, text from `sender`, or keys.
-/// Text and keys come with the answer the typist gives once they reached the terminal.
+/// Validates an `agent.type` call and builds one unit of input. Typed calls answer once their
+/// bytes have reached the terminal.
 fn input_of(
     input: wire::TerminalInput,
     sender: Sender,
@@ -1520,12 +1560,7 @@ fn input_of(
         }
         wire::TerminalInput::Text { text, enter } => Typing::text(text, enter, sender),
         wire::TerminalInput::Keys { keys } => Typing::keys(&keys),
-        wire::TerminalInput::Sequence { .. } => {
-            return Err(ErrorBody::new(
-                Reason::Unsupported,
-                "this daemon does not support ordered terminal input",
-            ));
-        }
+        wire::TerminalInput::Sequence { steps } => Typing::sequence(steps),
     };
     let (typing, typed) = typing.map_err(ErrorBody::invalid_argument)?;
     Ok((Input::Typed(typing), Some(typed)))

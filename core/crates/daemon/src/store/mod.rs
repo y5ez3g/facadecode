@@ -41,12 +41,13 @@ mod windows;
 
 pub(crate) use guests::{GuestRecord, GuestTable};
 pub(crate) use messages::{
-    Gone, InboxPage, Kept, KeptMessage, MessageTable, RequestId, SendRoute, Settlement,
+    CommandRequest, Gone, InboxPage, Kept, KeptMessage, MessageTable, RequestId, SendRoute,
+    Settlement,
 };
 #[cfg(test)]
 use windows::WindowTable;
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const FILE_NAME: &str = "facade.db";
 
 const SCHEMA: &str = "
@@ -925,7 +926,12 @@ fn migrate(
         )?;
         snapshot_launch_options(&transaction, read_settings)?;
     }
-    transaction.execute("ALTER TABLE agents ADD COLUMN launch_command TEXT", [])?;
+    if version < 4 {
+        transaction.execute("ALTER TABLE agents ADD COLUMN launch_command TEXT", [])?;
+    }
+    if version < 5 {
+        messages::migrate_command_line_replies(&transaction)?;
+    }
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())

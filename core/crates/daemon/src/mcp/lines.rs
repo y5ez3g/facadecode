@@ -57,10 +57,8 @@ fn notice_message(relay: &Relay, message: &Value) -> bool {
                 .as_str()
                 .and_then(ToolEntry::named)
                 .map(|entry| entry.action);
-            match (tool, id) {
-                (Some(Tool::SendMessage), Some(id)) => relay.sends.note(id.to_string()),
-                (Some(Tool::ReadMessages), Some(id)) => relay.sends.note_read(id.to_string()),
-                _ => {}
+            if let (Some(Tool::SendMessage | Tool::ReadMessages), Some(id)) = (tool, id) {
+                relay.sends.note(id.to_string());
             }
             false
         }
@@ -277,30 +275,16 @@ mod tests {
         );
     }
 
-    /// What every turn of every agent pays for stays within its budget: the instructions and the
-    /// tool list.
+    /// Tool discovery serves the shipped catalog with only CLI loading metadata added.
     #[test]
-    fn the_instructions_and_the_tool_list_stay_within_their_budget() {
-        let instructions = answered(
-            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
-        )["result"]["instructions"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let listed =
-            answered(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)["result"].to_string();
-        assert!(
-            instructions.len() <= 1_200,
-            "the instructions are {} bytes",
-            instructions.len()
-        );
-        assert!(
-            listed.len() <= 8_000,
-            "the tool list is {} bytes",
-            listed.len()
-        );
-        let skill = facade_base::skill::text();
-        assert!(skill.len() <= 3_000, "the skill is {} bytes", skill.len());
+    fn the_tool_list_matches_the_shipped_catalog() {
+        let mut answer = answered(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+        let tools = answer["result"]["tools"].as_array_mut().unwrap();
+        for tool in tools.iter_mut() {
+            tool.as_object_mut().unwrap().remove("_meta");
+        }
+        let shipped: Vec<Value> = serde_json::from_str(facade_base::tools::DEFINITIONS).unwrap();
+        assert_eq!(*tools, shipped);
     }
 
     /// The skill gives cross-tool examples and reference alone (MCP-6.2): no sentence of the

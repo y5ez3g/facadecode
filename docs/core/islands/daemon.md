@@ -95,7 +95,7 @@ connection. [Store::open](../../../core/crates/daemon/src/store/mod.rs#L231-L303
 | `machine` singleton, `numbers` and `message_numbers` counters | The local machine UUID and name, and the next Agent and message numbers. Counters only advance. A machine UUID and local `aN` or `mN` identify the record across homes. A new store seeds the Agent counter above IDs held by the keeper. [Identity SQL](../../../core/crates/daemon/src/store/mod.rs#L49-L88) · [Initialization](../../../core/crates/daemon/src/store/mod.rs#L871-L894) |
 | `agents`, `guests` and `agent_removals` by `agent_id` | Managed run and launch facts, session and creation-tree scope. A start receipt within its retention hour matches the request ID, starter machine, creator and nullable legacy window scope. Current v1 starts leave that window field absent. Guest rows retain their session, last-heard time and YOLO snapshot. Removal rows distinguish expiry from explicit removal. [Agent SQL](../../../core/crates/daemon/src/store/mod.rs#L52-L86) · [Start receipt](../../../core/crates/daemon/src/store/mod.rs#L423-L448) · [Guest SQL and saved YOLO](../../../core/crates/daemon/src/store/guests.rs#L56-L73) · [Removal SQL](../../../core/crates/daemon/src/store/mod.rs#L649-L671) |
 | `saved_connections`, `known_machines` and `remembered_routes` by `machine_id` | SSH destination, optional remote Facade home and normalized argument vector, last advertised name and contact time, and remembered hop IDs. Old SSH rows without arguments read as a one-element vector containing the destination. Reachability comes from the live network and query results. [Machine SQL and readers](../../../core/crates/daemon/src/store/machines.rs#L10-L61) |
-| `messages` by number, `send_routes` by `(sender, request_id, target)` | Messages keep inbox, delivery, paste and result facts. A repeat send matches the sender and its machine, recipient and request ID within an hour. The origin keeps its first resolved recipient and checked reply for that window plus the delivery limit. Withdrawals and eligible removed-inbox receipts retain settlement without appearing in history. [Message and route SQL](../../../core/crates/daemon/src/store/messages.rs#L42-L102) · [Receipt lookup](../../../core/crates/daemon/src/store/messages.rs#L333-L352) · [Cutoffs](../../../core/crates/daemon/src/lib.rs#L92-L117) |
+| `messages` by number, `send_routes` by `(sender, request_id, target)` | Messages keep inbox, delivery, paste and result facts, including the reply marker on an original command-line request. A repeat send matches the sender and its machine, recipient and request ID within an hour. The origin keeps its resolved recipient and checked reply for that window plus the maximum send budget. Withdrawals, eligible removed-inbox receipts and confirmed command-line reply receipts are private. [Message and route SQL](../../../core/crates/daemon/src/store/messages.rs) · [Cutoffs](../../../core/crates/daemon/src/lib.rs) |
 
 The persisted launch choices are encoded in `agents.launch_options`. Run authentication has its
 own retained format marker, `run_auth_version`, alongside process birth and the credential digest.
@@ -103,7 +103,7 @@ New runs record marker 3. Recovery can identify a retained live run with marker 
 held process. Relay authentication checks the saved process identity and the evidence for that marker.
 [Launch and authentication fields](../../../core/crates/daemon/src/store/mod.rs#L845-L865) ·
 [Retained run adoption](../../../core/crates/daemon/src/store/mod.rs#L517-L533) ·
-[Relay authentication](../../../core/crates/daemon/src/relays.rs#L295-L324)
+[Relay authentication](../../../core/crates/daemon/src/relays.rs#L403-L487)
 
 The extension keeps current members, hidden members and Pins in
 `$FACADE_HOME/extension/workspaces/<key>/orchestrator-workspace.json`. SQLite preserves the earlier
@@ -141,22 +141,23 @@ the live route. [Start transaction](../../../core/crates/daemon/src/store/mod.rs
 
 ### Opening and upgrading a store
 
-The current database schema is `user_version = 4`. SQLite reserves this number for the application.
+The current database schema is `user_version = 5`. SQLite reserves this number for the application.
 The daemon and Keeper negotiate their API versions independently.
 
 Fresh stores initialize in their own transaction. The open path first refuses a nonempty development
 schema missing `saved_connections` before normal WAL setup. It disables checkpoint-on-close for that
 connection to preserve the existing database and WAL.
 
-Versions below 4 enter one migration transaction. For a version below 3, the daemon first snapshots known
+Versions below 5 enter one migration transaction. For a version below 3, the daemon first snapshots known
 machine names, adds normalized SSH arguments and last-seen timestamps, and creates the remembered-route and
 send-route tables and private receipt field. It adds Guest YOLO at version 0. Below 2 it adds the message
 withdrawal field and replaces the request index. Then it adds the agent start, launch, authentication and
 removal fields. For agents missing launch choices it snapshots configured model and effort where available,
 with empty original arguments.
 
-Every migration adds nullable `agents.launch_command` and commits data changes and version 4 together.
-A failed migration rolls back and open fails. Version 4 or higher skips migration and proceeds to normal
+Below 4 it adds nullable `agents.launch_command`. Below 5 it adds `messages.command_line_reply` with
+default false, preserving existing messages, numbers and receipt keys. The migration writes `user_version`
+in the same transaction. A failed migration rolls back and open fails. Version 5 or higher skips migration and proceeds to normal
 reads. A newer layout may reach the ordinary writers if those reads succeed.
 Recovery keeps unreadable agent rows and reserves their IDs. Keep a consistent backup of the whole stopped home
 and its workspace state before a format change. Opening a migrated store with older code has no general rollback
@@ -191,8 +192,8 @@ Changes to the stored contract follow the [compatibility review](../ENGINEERING.
 | `lib.rs` | Starts and serves this home, schedules the hourly sweep and owns shared saved-connection, numbering and receipt policy. |
 | `store/` | Owns SQLite schema, migrations, table handles and transactions. The daemon publishes saved connections after the store commits. |
 | `operations.rs` | Starts, stops, resumes, renames and removes runs and records their exits. |
-| `resume.rs` | Finds stopped Agents and saved sessions and routes a chosen resume target. A local listing reads this machine and the supplied folder. A named Shell listing reads managed Agents on the selected machine. |
-| `delivery.rs` | Delivers typed input, messages, initial prompts and results. A send keeps its typed target and reply reference through routing and replays receipts by request ID. |
+| `resume.rs` | Finds stopped Agents and saved sessions and routes a chosen resume target. A local listing reads this machine and the supplied folder. A named Shell listing reads managed Agents on the selected machine. The holder reads native names or previews using the recorded session ID and launch choices. |
+| `delivery.rs`, `command_replies.rs` | Deliver typed input, messages, initial prompts and results. A send keeps its typed target and reply reference through routing and replays receipts by request ID. The daemon serving a command-line request owns its in-memory reply waiter. |
 | `presence.rs` | Recovers Guests, retires their inboxes and validates editor terminal colors. |
 | `topics.rs`, `remote_agents.rs` | Maintain subscriptions, terminal viewers and each reachable peer's roster contribution. |
 | `machine_service.rs`, `network_operations.rs` | Authorize and register machine streams, track routes and resolve requests to stable targets. |
@@ -219,6 +220,7 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
 - **Keeps:**
   - Input and exits reach only the run they name. Each run has a number, starting at `FIRST_RUN`; `WriteInput`, `ProcessExited` and `StartPrompt` for any other run are refused as ended or dropped. An exit of a run whose terminal is not installed yet waits until it is.
   - Automatic input never interleaves (RULES 1.10): messages wait behind the start prompt; while the start readies the tools, keys and calls wait and then go in the order they came; the person's Enter waits, with the keys after it, until the input can be read.
+  - An ordered input sequence enters the typist once. Earlier accepted input runs first. Later calls and raw Attach input wait until the sequence's last write.
   - Every screen change goes into the screen log before the screen takes it.
   - The record shows a run's end before anything waiting on the run learns it. The installed run
     number changes when its terminal is installed. Input is fenced from the previous run as soon
@@ -231,6 +233,7 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     leaves.
   - A screen snapshot carries the agent name, process state and any recorded exit from the actor.
     An exact final snapshot waits for the existing exit drain and admits no live viewer.
+    A dedicated Shell viewer signals the watched run's terminal exit independently of queued screen changes.
     Inspect includes the authenticated client kind and source machine of shell and editor viewers.
   - A CLI waiting for the person or reporting an error is published at once; other changes of the record within 200 ms go out together.
   - At most `MAX_INPUT_BYTES` (1 MiB) of input waits; more is refused with the input given back.
@@ -315,18 +318,31 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 
 #### readiness
 
-`Readiness`: decides which keys a run's start presses to ready its CLI's tools and, with YOLO on, to answer its CLI's question about trusting the folder.
+`Readiness`: decides which keys ready the CLI's tools. The daemon permits an automatic trust answer on an
+authenticated Agent start when the target home has YOLO on. On a person's start or resume, the CLI's trust
+question stays available for the person.
 
 - **Owns:** the rule's `ReadyTools` and `TrustQuestion`, how far each has got, and when each wait ends.
 - **Keeps:** No wait goes past the start's 60 seconds. Enter goes only once the rule's text shows alone in the input box. Each key of the trust answer waits for the screen to be still for 1 second, the answer goes only while the selection shows on the answer that trusts, and it is given once per run.
 - **Never does:** type (it hands each `Press` to the actor, which gives it to the typist); read the terminal; hold input; change the state.
-- **Interface:** `new(rule, id)`, `begin(started, tools, yolo) -> Option<Instant>`, `end()`, `step(now, &StartView, press) -> StartStep { wake, release_held, tools_not_started }`, `holds_input(InputState)`, `readies_tools()`, `is_under_way()`.
+- **Interface:** `new(rule, id)`, `begin(started, tools, allow_auto_trust) -> Option<Instant>`, `end()`, `step(now, &StartView, press) -> StartStep { wake, release_held, tools_not_started }`, `holds_input(InputState)`, `readies_tools()`, `is_under_way()`.
 
 ### messages
 
 Post assigns a message number in the SQLite transaction that keeps it. The receiving machine owns
 delivery state. A managed terminal confirms delivery when its Enter is written. A Guest confirms
 delivery by taking the message from its inbox. Both use the same deadline.
+
+An explicit inbox-only send returns after storage commits, and normal delivery continues on its background
+deadline. Delivery and result waits share the caller's remaining budget. The stored delivery deadline stays
+authoritative during daemon recovery and a receipt replay. A legacy v1 send with no wait field keeps its
+existing delivery behavior.
+
+A command-line result wait belongs to the source daemon and closes with its request. The holder stores the
+reply marker with the original message. Only its verified recipient can answer the associated `#c`
+address. The holder assigns a reply number and the source accepts only the first reply that matches the live
+request. If the source is a peer, confirmation goes back along an authenticated route before the sender gets
+the private reply receipt. The persisted original remains identifiable after the waiter ends.
 
 - Post serializes the first terminal paste, inbox settlement and withdrawal under its delivery
   lock. A read takes only pending messages whose paste has yet to begin. An explicit history page
@@ -557,6 +573,11 @@ trait and writes responses and watch changes back, without knowing what any oper
     closes.
   - Once the client closes while its input waits, nothing more from it runs.
   - A watch's response, with its snapshot, is sent before any of its changes.
+  - `attach.shell` is the first operation after a Terminal hello on a fresh connection. Its watch owns the
+    connection. It accepts the exact target's raw input, the watch's resize and unwatch, and connection controls.
+    The run's independent exit signal starts a one-second grace for final screen changes and `Exit`. At its
+    deadline the server cuts both halves, stops a blocked writer and releases the watch and connection work.
+    The origin observes a forwarded `Exit` on the ordinary peer `attach` before it enters the incoming queue.
   - An `attach.resize` uses the watch ID from the requesting connection and runs in received order.
     The source binds a remote viewer to the authenticated caller, viewer number and holder daemon
     start ID. Each shared resize checks that binding at the holder. Unwatch, disconnect and
@@ -580,6 +601,8 @@ trait and writes responses and watch changes back, without knowing what any oper
       server selects a supported API version and checks the client kind.
     - `call(&Client, DaemonCall, WhenFull, Cancel) -> Result<Value>`
     - `watch(&Client, DaemonWatch, viewer) -> Result<Watch>` and `unwatch(&Client, topic, viewer)`
+    - `watch_shell(&Client, AttachArgs, viewer) -> Result<ShellWatch>` returns the snapshot and changes with
+      the independent terminal-exit receiver.
     - `resize_viewer(&Client, viewer, Size, Option<TerminalColors>) -> Result<()>` receives
       only the viewer number resolved by the server from the connection's watch.
     - `relay(params, peer_pid) -> Result<(Value, Arc<dyn RelayLines>)>`: the relay hello's response
@@ -620,12 +643,16 @@ can bring a run's tools online. The connection rechecks the run when it sends a 
 waiting inbox read also ends with its bound run, and Post checks the bound actor while it settles
 the available page.
 
-There are eight tools. They use the same targets, machine routing and operation requirements as
-other daemon clients. `list_agents` returns the complete working roster, and `read_screen` includes
-the requested lines. `read_messages` filters its page before delivery and commits only the complete
-messages that the reply includes. `after` and `last` read history, and `wait` can wait up to the shared
-delivery deadline, including for a specified reply. A successful send by a Guest returns the
-`read_messages` arguments it can use to wait for that reply.
+There are eight tools. They use the same targets, machine routing and operation requirements as other daemon
+clients. `list_agents` adds available CLI names on answered, reachable machines within the roster deadline.
+Local Managed discovery uses the verified run environment and working directory. Guest discovery and remote
+discovery use the target login context. Local Guest start still validates its authenticated relay environment.
+
+`read_messages` filters its page before delivery and commits only complete returned messages. `reply_to`
+includes retained, delivered replies. A positive `timeout_seconds` waits for matches under the call's deadline.
+`send_message` saves by default. A result wait uses confirmed delivery and the first matching reply in the
+sender's own inbox, under the same budget. On timeout the reply can still be read through `read_messages`
+with the original send ID. A `#c` answer returns `returned_to_request` after the active command accepts it.
 
 ## Reading the code
 

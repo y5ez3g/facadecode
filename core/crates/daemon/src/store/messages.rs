@@ -10,7 +10,8 @@
 //! `request_id` keeps the sender's own ID of the send, where it gave one. The same sender's same ID
 //! within the hour finds the message again through `messages_request`, in the transaction that
 //! would keep a new one, so that two calls with one ID keep one message. A withdrawal with a
-//! request ID keeps only its receipt, hidden from all inbox and history reads.
+//! request ID keeps only its receipt. Confirmed command replies are also kept as receipts,
+//! hidden from inbox and history reads.
 //!
 //! A message takes its number in the transaction that writes it, so no message lacks one and no
 //! number goes to two. Deleting messages never lowers the counter. A value this build does not
@@ -35,7 +36,8 @@ const UNDELIVERED: &str = "status != 'success'";
 const COLUMNS: &str = "number, \"from\", from_name, \"to\", text, reply_to, at, status, reason, \
                        text_written, enter_written, deadline, delivered_via, delivered_at, paste, \
                        from_window, call_id, result_owed, result, human_windows, \
-                       from_machine_id, reply_to_machine_id, result_owed_machine_id, withdrawn";
+                       from_machine_id, reply_to_machine_id, result_owed_machine_id, withdrawn, \
+                       command_line_reply";
 
 /// Creates the table and its indexes. `messages_undelivered` lets reads scan only messages that
 /// are still waiting.
@@ -101,6 +103,12 @@ pub(super) fn migrate_send_routes(connection: &Connection) -> rusqlite::Result<(
     )
 }
 
+pub(super) fn migrate_command_line_replies(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "ALTER TABLE messages ADD COLUMN command_line_reply INTEGER NOT NULL DEFAULT 0;",
+    )
+}
+
 /// The first recipient and checked reply of a send, retained by its originating machine.
 pub(crate) struct SendRoute {
     pub(crate) recipient: AgentRef,
@@ -131,6 +139,12 @@ pub(crate) struct RequestId<'a> {
     pub(crate) id: &'a str,
     pub(crate) since: &'a str,
     pub(crate) caller_window_id: Option<&'a str>,
+}
+
+/// The origin of a command-line send that requested a reply.
+pub(crate) struct CommandRequest {
+    pub(crate) origin_machine: String,
+    pub(crate) request_id: String,
 }
 
 /// What keeping a message with a request ID found: the message kept now, or the one its sender
@@ -254,7 +268,7 @@ fn read_message(row: &Row) -> rusqlite::Result<KeptMessage> {
             text: row.get("text")?,
             reply_to: reply_to.map(|reply| format!("m{reply}")),
             reply_to_machine_id: row.get("reply_to_machine_id")?,
-            command_line_reply: false,
+            command_line_reply: row.get("command_line_reply")?,
             from_window: row.get("from_window")?,
             call_id: row.get("call_id")?,
             result: result.and_then(|facts| serde_json::from_str(&facts).ok()),
@@ -302,7 +316,7 @@ fn write(
         &format!(
             "INSERT INTO messages ({COLUMNS}, request_id, request_window_id) VALUES
              (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL, ?15, ?16,
-              NULL, ?17, NULL, NULLIF(?18, (SELECT machine_id FROM machine)), ?19, NULL, 0, ?20, ?21)"
+              NULL, ?17, NULL, NULLIF(?18, (SELECT machine_id FROM machine)), ?19, NULL, 0, ?20, ?21, ?22)"
         ),
         params![
             number,
@@ -324,6 +338,7 @@ fn write(
             result,
             message.from_machine_id,
             message.reply_to_machine_id,
+            message.command_line_reply,
             request.map(|request| request.id),
             request.and_then(|request| request.caller_window_id),
         ],
@@ -557,7 +572,7 @@ impl MessageTable {
         MessageTable(store)
     }
 
-    /// Commits a message number for a result that another machine will send back.
+    /// Commits a message number before a result or command reply crosses a handoff.
     pub(crate) fn reserve_result_number(&self) -> anyhow::Result<u64> {
         self.0.with(
             || "reserve a result message number".to_string(),
@@ -710,6 +725,64 @@ impl MessageTable {
         self.0.with(
             || "read messages".to_string(),
             |connection| find_request(connection, Some(from_machine_id), from, to, request),
+        )
+    }
+
+    /// Finds the origin and request ID of an exact marked send, including a retained withdrawal.
+    pub(crate) fn command_request(
+        &self,
+        owner: &str,
+        number: u64,
+    ) -> anyhow::Result<Option<CommandRequest>> {
+        self.0.with(
+            || format!("read the command-line request for #m{number} in {owner}'s inbox"),
+            |connection| {
+                connection
+                    .query_row(
+                        "SELECT COALESCE(from_machine_id, (SELECT machine_id FROM machine)), request_id
+                         FROM messages WHERE number = ?1 AND \"to\" = ?2 AND command_line_reply = 1
+                         AND \"from\" = 'command_line' AND request_id IS NOT NULL",
+                        params![number as i64, owner],
+                        |row| {
+                            Ok(CommandRequest {
+                                origin_machine: row.get(0)?,
+                                request_id: row.get(1)?,
+                            })
+                        },
+                    )
+                    .optional()
+            },
+        )
+    }
+
+    /// Keeps a confirmed reply at its reserved number as a private request receipt.
+    pub(crate) fn keep_command_reply(
+        &self,
+        message: &Message,
+        request: Option<RequestId<'_>>,
+    ) -> anyhow::Result<Message> {
+        self.0.transaction(
+            || "save a command-line reply receipt".to_string(),
+            |transaction| {
+                if let Some(request) = request
+                    && let Some(earlier) = find_request(
+                        transaction,
+                        message.from_machine_id.as_deref(),
+                        &message.from,
+                        &message.to,
+                        request,
+                    )?
+                {
+                    return Ok(earlier.message);
+                }
+                let number = number_of(message) as i64;
+                write(transaction, number, message, request)?;
+                transaction.execute(
+                    "UPDATE messages SET private_receipt = 1 WHERE number = ?1",
+                    [number],
+                )?;
+                Ok(message.clone())
+            },
         )
     }
 
@@ -996,7 +1069,26 @@ impl MessageTable {
         owner: &str,
         page: &InboxPage<'_>,
     ) -> anyhow::Result<Vec<Message>> {
-        let history = page.after.is_some() || page.last.is_some();
+        self.readable_page(owner, page, None)
+    }
+
+    /// Selects readable replies from the exact agent on its machine before applying the limit.
+    pub(crate) fn readable_replies(
+        &self,
+        owner: &str,
+        page: &InboxPage<'_>,
+        sender: &AgentRef,
+    ) -> anyhow::Result<Vec<Message>> {
+        self.readable_page(owner, page, Some(sender))
+    }
+
+    fn readable_page(
+        &self,
+        owner: &str,
+        page: &InboxPage<'_>,
+        sender: Option<&AgentRef>,
+    ) -> anyhow::Result<Vec<Message>> {
+        let history = page.after.is_some() || page.last.is_some() || page.reply_to.is_some();
         let (reply_machine, reply_number) = page.reply_to.unzip();
         let values = params![
             owner,
@@ -1006,11 +1098,14 @@ impl MessageTable {
             reply_number.map(|number| number as i64),
             page.machine_id,
             reply_machine,
+            sender.map(|sender| &sender.agent_id),
+            sender.map(|sender| &sender.machine_id),
         ];
         let eligible = "\"to\" = ?1 AND number > ?2 \
             AND ((status = 'pending' AND paste IS NULL AND (deadline IS NULL OR deadline > ?3)) \
                  OR (?4 AND status = 'success')) \
-            AND (?5 IS NULL OR (reply_to = ?5 AND COALESCE(reply_to_machine_id, ?6) = ?7))";
+            AND (?5 IS NULL OR (reply_to = ?5 AND COALESCE(reply_to_machine_id, ?6) = ?7)) \
+            AND (?8 IS NULL OR (\"from\" = ?8 AND from_machine_id IS NULLIF(?9, (SELECT machine_id FROM machine))))";
         match page.last {
             Some(last) => self.select_messages(
                 &format!("number IN (SELECT number FROM messages WHERE withdrawn = 0 AND private_receipt = 0 AND ({eligible}) ORDER BY number DESC LIMIT {last})"),
@@ -1323,10 +1418,11 @@ mod tests {
     fn a_message_its_delivery_and_its_paste_survive_a_reopen() {
         let core = Core::new("reopen");
         let store = core.open();
-        let from_person = Message {
-            from: "human".into(),
+        let command = Message {
+            from: "command_line".into(),
             from_name: None,
             reply_to: Some("m9".into()),
+            command_line_reply: true,
             text: "two\nlines\tand a tab".into(),
             ..message(0, "a2")
         };
@@ -1336,7 +1432,14 @@ mod tests {
         };
         let kept = [
             store
-                .insert_message(&from_person, None)
+                .insert_message(
+                    &command,
+                    Some(RequestId {
+                        id: "command-request",
+                        since: &command.at,
+                        caller_window_id: None,
+                    }),
+                )
                 .unwrap()
                 .into_message(),
             store
@@ -1363,6 +1466,13 @@ mod tests {
         );
         drop(store);
         let store = core.open();
+        let table = store.message_table();
+        let request = table.command_request("a2", 1).unwrap().unwrap();
+        assert_eq!(request.request_id, "command-request");
+        assert_eq!(
+            request.origin_machine,
+            local_machine(&store.connection.lock().unwrap()).unwrap()
+        );
         let pending = store.message_table().pending_messages().unwrap();
         assert_eq!(
             pending,
@@ -1724,9 +1834,23 @@ mod tests {
     #[test]
     fn an_inbox_is_read_by_ids_or_a_page_at_a_time() {
         let store = Store::in_memory();
-        for to in ["a2", "a3", "a2", "a2", "a2"] {
+        let machine_id = local_machine(&store.connection.lock().unwrap()).unwrap();
+        for (to, from_machine_id, reply) in [
+            ("a2", Some("another-machine".into()), true),
+            ("a3", None, true),
+            ("a2", Some(machine_id.clone()), true),
+            ("a2", None, true),
+            ("a2", None, false),
+        ] {
             store
-                .insert_message(&message(0, to), None)
+                .insert_message(
+                    &Message {
+                        from_machine_id,
+                        reply_to: reply.then(|| "m9".into()),
+                        ..message(0, to)
+                    },
+                    None,
+                )
                 .unwrap()
                 .into_message();
         }
@@ -1754,6 +1878,36 @@ mod tests {
         assert_eq!(
             numbers(&store.message_table().inbox("a2").unwrap()),
             ["m1", "m3", "m4", "m5"]
+        );
+        let table = store.message_table();
+        table.begin_paste(&[4]).unwrap();
+        let page = InboxPage {
+            machine_id: &machine_id,
+            after: None,
+            last: None,
+            limit: 1,
+            reply_to: Some((&machine_id, 9)),
+            now: "2026-11-10T00:00:01.000Z",
+        };
+        assert_eq!(numbers(&table.readable_inbox("a2", &page).unwrap()), ["m1"]);
+        let sender = AgentRef {
+            machine_id: machine_id.clone(),
+            agent_id: "a1".into(),
+        };
+        assert_eq!(
+            numbers(&table.readable_replies("a2", &page, &sender).unwrap()),
+            ["m3"],
+            "the first local reply stays readable after delivery"
+        );
+        let page = InboxPage {
+            after: Some(3),
+            ..page
+        };
+        assert!(
+            table
+                .readable_replies("a2", &page, &sender)
+                .unwrap()
+                .is_empty()
         );
     }
 
@@ -1824,12 +1978,33 @@ mod tests {
                 .unwrap()
                 .into_message();
         }
+        let table = store.message_table();
+        let number = table.reserve_result_number().unwrap();
+        let reply = Message {
+            reply_to: Some("m1".into()),
+            delivery: Delivery {
+                delivered_via: Some(DeliveredVia::ReturnedToRequest),
+                ..read_at("2026-11-10T00:00:00.000Z")
+            },
+            ..message(number, "#c1")
+        };
+        let request = RequestId {
+            id: "confirmed-reply",
+            since: "2026-11-09T23:00:00.000Z",
+            caller_window_id: None,
+        };
+        assert_eq!(
+            table.keep_command_reply(&reply, Some(request)).unwrap(),
+            reply
+        );
+        assert!(table.message(number).unwrap().is_none());
+        assert!(table.inbox("#c1").unwrap().is_empty());
         assert_eq!(
             store
                 .message_table()
                 .expire_messages(
                     "2026-10-12T00:00:00.000Z",
-                    crate::an_hour_ago,
+                    || request.since.to_string(),
                     crate::send_route_cutoff
                 )
                 .unwrap(),
@@ -1842,21 +2017,32 @@ mod tests {
             !store.message_table().keeps_message(1).unwrap()
                 && store.message_table().keeps_message(2).unwrap()
         );
+        assert_eq!(
+            table.keep_command_reply(&reply, Some(request)).unwrap(),
+            reply
+        );
         store
             .message_table()
             .expire_messages(
                 "2026-12-01T00:00:00.000Z",
-                crate::an_hour_ago,
+                || "2026-11-10T00:00:00.001Z".to_string(),
                 crate::send_route_cutoff,
             )
             .unwrap();
+        let local = local_machine(&store.connection.lock().unwrap()).unwrap();
+        assert!(
+            table
+                .find_request(&local, &reply.from, &reply.to, request)
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             store
                 .insert_message(&message(0, "a2"), None)
                 .unwrap()
                 .into_message()
                 .message_id,
-            "m3"
+            "m4"
         );
     }
 

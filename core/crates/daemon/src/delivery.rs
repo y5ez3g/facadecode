@@ -12,8 +12,8 @@ use facade_base::api_v1::daemon as wire;
 use facade_base::api_v1::daemon::Caller;
 use facade_base::model::agent::AgentLabel;
 use facade_base::model::message::{
-    Delivery, DeliveryFailure, DeliveryStatus, FACADE, Message, SendOutcome, StartOutcome,
-    TextWritten, start_result_text_at,
+    DeliveredVia, Delivery, DeliveryFailure, DeliveryStatus, FACADE, Message, SendOutcome,
+    StartOutcome, TextWritten, start_result_text_at,
 };
 use facade_base::{
     jsonrpc::decode_arguments,
@@ -25,18 +25,24 @@ use facade_base::{
     model::message::MessageRef,
 };
 use tokio::sync::{mpsc, oneshot, watch};
+use tokio::time::Instant;
 
 use crate::agent::{
     self, AgentCommand, AgentHandle, Input, InputRejection, MessageTyping, Submission,
 };
 use crate::api;
+use crate::command_replies::{Answer, CommandWait};
+use crate::lifecycle::Work;
 use crate::machine_service::machine_address_part;
 use crate::messages::{self, Due, Earlier, Outcome, Posted, PostedResult, Settled};
 use crate::operations::{check_request_id, request_words};
 use crate::records::{OperationTarget, Reach};
 use crate::service::{Forwarded, sender_from};
 use crate::store::SendRoute;
-use crate::{Cancel, Daemon, HUMAN, Sender, gate_for_test, log, send_route_cutoff};
+use crate::{
+    Cancel, Daemon, HUMAN, MAX_TERMINAL_SEND, Sender, delivery_limit, gate_for_test, log,
+    send_route_cutoff,
+};
 
 struct SendOrigin<'a> {
     machine: &'a str,
@@ -171,7 +177,16 @@ impl Daemon {
             };
         }
         let sender = if matches!(message.from.as_str(), "human" | "command_line") {
-            "the command line".to_owned()
+            if message.command_line_reply && message.from == "command_line" {
+                let machine = self
+                    .machine_address_part(&self.machine_id)
+                    .unwrap_or_else(|_| self.machine_id.clone());
+                let address =
+                    addresses::format_command_reply_address(&message.message_id, &machine);
+                format!("the command line ({address})")
+            } else {
+                "the command line".to_owned()
+            }
         } else {
             let from = AgentRef {
                 agent_id: message.from.clone(),
@@ -289,12 +304,6 @@ impl Daemon {
         incoming: Option<Forwarded>,
         mut cancel: Cancel,
     ) -> Result<wire::SendResult, ErrorBody> {
-        if args.wait_for.is_some() {
-            return Err(ErrorBody::new(
-                Reason::Unsupported,
-                "this daemon does not support explicit send wait modes",
-            ));
-        }
         if args.allow_unsupported_receipt && !matches!(caller, Caller::Terminal { .. }) {
             return Err(ErrorBody::refused(
                 "only a terminal can request an unsupported delivery receipt",
@@ -309,7 +318,44 @@ impl Daemon {
             (Some(outer), Some(inner)) => Some(outer.min(inner)),
             (outer, inner) => outer.or(inner),
         };
-        let due = Due::within(budget);
+        let due = match args.wait_for {
+            None => Due::within(budget),
+            Some(_) => {
+                let terminal = matches!(caller, Caller::Terminal { .. });
+                let cap = if terminal {
+                    MAX_TERMINAL_SEND
+                } else {
+                    Duration::from_secs(30)
+                };
+                let left = budget
+                    .map(Duration::from_millis)
+                    .unwrap_or_else(delivery_limit)
+                    .min(cap);
+                let left = if terminal && !forwarded {
+                    left.saturating_sub(messages::RESPONSE_GRACE)
+                } else {
+                    left
+                };
+                Due::until(Instant::now() + left)
+            }
+        };
+        if !forwarded
+            && args.wait_for.is_some()
+            && let wire::AgentTarget::Selector(target) = &args.to
+            && let Ok(Some(address)) = addresses::parse_command_reply_address(target)
+            && let Some(result) = self
+                .send_command_reply(caller, &args, address, due.instant, cancel.clone())
+                .await?
+        {
+            return Ok(result);
+        }
+        let command_request = args.wait_for == Some(wire::SendWait::Result)
+            && matches!(caller, Caller::Terminal { .. });
+        if command_request && args.request_id.is_none() {
+            return Err(ErrorBody::invalid_argument(
+                "a command-line reply wait needs a request ID",
+            ));
+        }
         let (recipient, sender, replay) = if let Some(call) = incoming {
             let recipient = match &args.to {
                 wire::AgentTarget::Reference(reference)
@@ -392,6 +438,21 @@ impl Daemon {
                 .reply
                 .map(|reply| wire::ReplyTo::Reference(api::wire_message_ref(reply)));
             (route.recipient, sender, replay)
+        };
+        let until = due.instant;
+        let command_wait = if command_request && !forwarded {
+            if replay {
+                return Err(send_unconfirmed());
+            }
+            send_time_left(until)?;
+            Some(self.command_replies.begin(
+                args.request_id.as_deref().expect("checked request ID"),
+                recipient.clone(),
+                until,
+                cancel.clone(),
+            )?)
+        } else {
+            None
         };
         let allow_reply_hint = matches!(caller, Caller::Agent { .. }) && args.reply_to.is_none();
         if recipient.machine_id != self.machine_id {
@@ -499,14 +560,14 @@ impl Daemon {
                 message_id: result.message.message_id.clone(),
             };
             result.id = self.message_address(&message)?;
-            return Ok(result);
+            return finish_command_send(result, message, command_wait, until, cancel).await;
         }
         let origin = SendOrigin {
             machine: caller.machine_id(),
             sender,
         };
         let (sent, candidate, label) = self
-            .send_to_agent(caller, &recipient, args, origin, due, cancel)
+            .send_to_agent(caller, &recipient, args, origin, due, cancel.clone())
             .await?;
         let candidate = candidate.filter(|_| allow_reply_hint);
         let expected_reply_to = if forwarded {
@@ -518,13 +579,188 @@ impl Daemon {
             machine_id: self.machine_id.clone(),
             message_id: sent.message.message_id.clone(),
         };
-        Ok(wire::SendResult {
+        let result = wire::SendResult {
             id: self.message_address(&reference)?,
             message: self.public_message(sent.message)?,
             recipient: label.map(api::wire_label),
             repeated: sent.repeated,
             withdrawn: sent.withdrawn,
             expected_reply_to: expected_reply_to.map(api::wire_message_ref),
+            reply: None,
+        };
+        finish_command_send(result, reference, command_wait, until, cancel).await
+    }
+
+    async fn send_command_reply(
+        &self,
+        caller: &Caller,
+        args: &wire::SendArgs,
+        address: addresses::CommandReplyAddress<'_>,
+        until: Instant,
+        mut cancel: Cancel,
+    ) -> Result<Option<wire::SendResult>, ErrorBody> {
+        let Caller::Agent { agent, .. } = caller else {
+            return Ok(None);
+        };
+        let Some(reply_to) = args
+            .reply_to
+            .as_ref()
+            .filter(|_| agent.machine_id == self.machine_id)
+        else {
+            return Ok(None);
+        };
+        let original = self.reply_reference(reply_to)?;
+        let Some(request) = self.messages.command_request(&agent.agent_id, &original)? else {
+            return Ok(None);
+        };
+        self.check_message_sender(caller)?;
+        if args.wait_for == Some(wire::SendWait::Result) {
+            return Err(ErrorBody::invalid_argument(
+                "a command-line reply cannot ask for another reply",
+            ));
+        }
+        let request_id = args.request_id.as_deref();
+        if let Some(request_id) = request_id {
+            check_request_id(request_id)?;
+        }
+        facade_base::model::message::check_message_text(&args.text)
+            .map_err(ErrorBody::invalid_argument)?;
+        let addressed_machine = address
+            .machine
+            .map(|selector| self.select_machine(selector).map(|row| row.machine_id))
+            .transpose()?;
+        if original.machine_id != self.machine_id
+            || addressed_machine
+                .as_ref()
+                .is_some_and(|machine| machine != &original.machine_id)
+            || original.message_id.strip_prefix('m') != Some(address.number)
+        {
+            return Err(ErrorBody::invalid_argument(
+                "the command-line address and reply_to must name the same inbox message",
+            ));
+        }
+        let destination = format!("#c{}", address.number);
+        if let Some(request_id) = request_id
+            && let Some(Earlier::Settled(message)) = self.messages.find_request(
+                &self.machine_id,
+                &agent.agent_id,
+                &destination,
+                request_id,
+                None,
+            )?
+        {
+            return self.command_reply_result(message, true).map(Some);
+        }
+        send_time_left(until)?;
+        if cancel.is_requested() {
+            return Err(ErrorBody::new(
+                Reason::Cancelled,
+                "the command-line reply was cancelled before handoff",
+            ));
+        }
+        let reference = self.messages.reserve_result()?;
+        let sender = sender_from(caller, self.caller_name(caller));
+        let answer = wire::CommandReplyArgs {
+            request_id: request.request_id,
+            original: api::wire_message_ref(original.clone()),
+            reply: wire::CommandReply {
+                reference: api::wire_message_ref(reference.clone()),
+                text: args.text.clone(),
+            },
+        };
+        if request.origin_machine == self.machine_id {
+            self.accept_command_reply(caller, answer)?;
+        } else {
+            let sending = self.network_call::<wire::InternalCommandReply>(
+                &request.origin_machine,
+                caller,
+                answer,
+                Some(send_time_left(until)?),
+            );
+            tokio::select! {
+                biased;
+                response = sending => { decode_arguments::<facade_base::api_v1::EmptyResult>(response?)?; }
+                () = cancel.requested() => return Err(send_unconfirmed()),
+            }
+        }
+        let now = facade_base::time::iso_now();
+        let message = Message {
+            message_id: reference.message_id.clone(),
+            message_ref: Some(reference),
+            reply_to_machine_id: Some(original.machine_id),
+            delivery: Delivery {
+                status: DeliveryStatus::Success,
+                reason: None,
+                text_written: TextWritten::None,
+                enter_written: Some(false),
+                deadline: None,
+                delivered_via: Some(DeliveredVia::ReturnedToRequest),
+                delivered_at: Some(now),
+            },
+            ..pending_message(
+                sender,
+                &destination,
+                args.text.clone(),
+                Some(original.message_id),
+                None,
+            )
+        };
+        let message = match self.messages.keep_command_reply(&message, request_id) {
+            Ok(saved) => saved,
+            Err(error) => {
+                log(
+                    "warn",
+                    &format!(
+                        "could not save {}'s command reply receipt: {}",
+                        message.message_id, error.message
+                    ),
+                );
+                message
+            }
+        };
+        self.command_reply_result(message, false).map(Some)
+    }
+
+    pub(crate) fn accept_command_reply(
+        &self,
+        caller: &Caller,
+        args: wire::CommandReplyArgs,
+    ) -> Result<(), ErrorBody> {
+        let Caller::Agent { agent, .. } = caller else {
+            return Err(ErrorBody::refused(
+                "only the original agent can answer the command line",
+            ));
+        };
+        check_request_id(&args.request_id)?;
+        facade_base::model::message::check_message_text(&args.reply.text)
+            .map_err(ErrorBody::invalid_argument)?;
+        self.command_replies.accept(
+            &args.request_id,
+            &api::agent_ref(agent.clone()),
+            Answer {
+                original: api::message_ref(args.original),
+                reference: api::message_ref(args.reply.reference),
+                text: args.reply.text,
+            },
+        )
+    }
+
+    fn command_reply_result(
+        &self,
+        message: Message,
+        repeated: bool,
+    ) -> Result<wire::SendResult, ErrorBody> {
+        let reference = MessageRef {
+            machine_id: self.machine_id.clone(),
+            message_id: message.message_id.clone(),
+        };
+        Ok(wire::SendResult {
+            id: self.message_address(&reference)?,
+            message: self.public_message(message)?,
+            recipient: None,
+            repeated,
+            withdrawn: false,
+            expected_reply_to: None,
             reply: None,
         })
     }
@@ -560,45 +796,25 @@ impl Daemon {
         let Some(reply) = reply else {
             return Ok(None);
         };
-        let (input, exact_machine) = match reply {
-            wire::ReplyTo::Address(address) => (address.as_str(), None),
-            wire::ReplyTo::Reference(reference) => (
-                reference.message_id.as_str(),
-                Some(reference.machine_id.as_str()),
-            ),
-        };
         let Caller::Agent { agent, .. } = caller else {
             return Err(ErrorBody::invalid_argument(
                 "the command line has no inbox; omit reply_to to send a new message",
             ));
         };
-        let parsed = addresses::parse_message_address(input)
-            .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
-        let machine_id = if let Some(machine) = exact_machine {
-            if parsed.machine.is_some() || !crate::network::is_uuid_v4(machine) {
-                return Err(ErrorBody::invalid_argument(
-                    "reply_to requires a full machine ID",
-                ));
-            }
-            machine.to_owned()
-        } else {
-            parsed
-                .machine
-                .map(|selector| self.select_machine(selector).map(|row| row.machine_id))
-                .transpose()?
-                .unwrap_or_else(|| self.machine_id.clone())
-        };
-        let reference = MessageRef {
-            machine_id,
-            message_id: parsed.message_id.into(),
-        };
+        let reference = self.reply_reference(reply)?;
         let original = self
             .messages
             .reply_in_inbox(&agent.agent_id, &reference, None)?
             .ok_or_else(|| {
                 ErrorBody::new(
                     Reason::NotFound,
-                    format!("no message {input} is in the sender's inbox"),
+                    format!(
+                        "no message {} is in the sender's inbox",
+                        match reply {
+                            wire::ReplyTo::Address(address) => address.as_str(),
+                            wire::ReplyTo::Reference(reference) => reference.message_id.as_str(),
+                        }
+                    ),
                 )
             })?;
         match original.from.as_str() {
@@ -616,6 +832,36 @@ impl Daemon {
                 },
             ))),
         }
+    }
+
+    fn reply_reference(&self, reply: &wire::ReplyTo) -> Result<MessageRef, ErrorBody> {
+        let (input, exact_machine) = match reply {
+            wire::ReplyTo::Address(address) => (address.as_str(), None),
+            wire::ReplyTo::Reference(reference) => (
+                reference.message_id.as_str(),
+                Some(reference.machine_id.as_str()),
+            ),
+        };
+        let parsed = addresses::parse_message_address(input)
+            .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
+        let machine_id = if let Some(machine) = exact_machine {
+            if parsed.machine.is_some() || !crate::network::is_uuid_v4(machine) {
+                return Err(ErrorBody::invalid_argument(
+                    "reply_to requires a full machine ID",
+                ));
+            }
+            machine.to_owned()
+        } else {
+            parsed
+                .machine
+                .map(|selector| self.select_machine(selector).map(|row| row.machine_id))
+                .transpose()?
+                .unwrap_or_else(|| self.machine_id.clone())
+        };
+        Ok(MessageRef {
+            machine_id,
+            message_id: parsed.message_id.into(),
+        })
     }
 
     fn checked_reply_hint(
@@ -641,6 +887,9 @@ impl Daemon {
     ) -> Result<(SendOutcome, Option<MessageRef>, Option<AgentLabel>), SendFailure> {
         let inbox = origin.sender.from.clone();
         let machine = origin.machine;
+        let wait_for = args.wait_for;
+        let wait_inbox = wait_for == Some(wire::SendWait::Inbox);
+        let call_until = due.instant;
         if let Some(request_id) = args.request_id.as_deref() {
             check_request_id(request_id)?;
             if let Some(earlier) = self.messages.find_request(
@@ -655,7 +904,9 @@ impl Daemon {
                     .filter(|agent| Reach::from(caller).reaches(&agent.info()))
                     .map(|agent| self.agent_label(&agent))
                     .transpose()?;
-                let (sent, reply) = self.repeat_send(earlier, request_id, cancel).await?;
+                let (sent, reply) = self
+                    .repeat_send(earlier, request_id, wait_for, call_until, cancel)
+                    .await?;
                 return Ok((sent, reply, label));
             }
         }
@@ -700,9 +951,32 @@ impl Daemon {
             );
             return Err(self.with_agent_error(&to, error).into());
         }
+        if args.wait_for.is_some() {
+            send_time_left(due.instant)?;
+            if cancel.is_requested() {
+                return Err(ErrorBody::new(
+                    Reason::Cancelled,
+                    "the send was cancelled before it was saved",
+                )
+                .into());
+            }
+        }
+        let (due, background) = if wait_inbox {
+            let work = self.lifecycle.begin(Work::Send).ok_or_else(|| {
+                ErrorBody::new(
+                    Reason::Unavailable,
+                    "Facade is exiting before the send was saved",
+                )
+            })?;
+            (Due::now(), Some(work))
+        } else {
+            (due, None)
+        };
         let message = Message {
             from_machine_id: (machine != self.machine_id).then(|| machine.to_string()),
             reply_to_machine_id: reply.as_ref().map(|reference| reference.machine_id.clone()),
+            command_line_reply: args.wait_for == Some(wire::SendWait::Result)
+                && matches!(caller, Caller::Terminal { .. }),
             from_window: None,
             ..pending_message(
                 origin.sender,
@@ -721,7 +995,9 @@ impl Daemon {
                 // A call with the same ID kept its message first: this one joins it.
                 Posted::Earlier(earlier) => {
                     let request_id = args.request_id.as_deref().unwrap_or_default();
-                    let (sent, reply) = self.repeat_send(earlier, request_id, cancel).await?;
+                    let (sent, reply) = self
+                        .repeat_send(earlier, request_id, wait_for, call_until, cancel)
+                        .await?;
                     return Ok((sent, reply, Some(self.agent_label(&to)?)));
                 }
             };
@@ -734,15 +1010,30 @@ impl Daemon {
                 request_words(args.request_id.as_deref())
             ),
         );
+        if let Some(work) = background {
+            let daemon = self.clone();
+            let agent = to.clone();
+            let deliver = message.clone();
+            tokio::spawn(async move {
+                let _work = work;
+                daemon
+                    .deliver_message(&agent, &deliver, &mut settled, due.instant)
+                    .await;
+            });
+            return Ok((
+                SendOutcome {
+                    message,
+                    repeated: false,
+                    withdrawn: false,
+                    window_delivery: None,
+                },
+                None,
+                Some(self.agent_label(&to)?),
+            ));
+        }
         let number = messages::number(&message);
         {
-            let delivered = async {
-                if to.is_guest() || self.hand_to_typist(&to, &message, due.instant).await {
-                    self.messages
-                        .settle_by_deadline(number, &mut settled, due.instant)
-                        .await;
-                }
-            };
+            let delivered = self.deliver_message(&to, &message, &mut settled, due.instant);
             tokio::pin!(delivered);
             tokio::select! {
                 () = &mut delivered => {}
@@ -768,8 +1059,9 @@ impl Daemon {
         gate_for_test("before-send-answer");
         let answer = settled.borrow().clone();
         let (message, withdrawn, expected_reply_to) =
-            settled_answer(answer, to.id(), &message.message_id)
-                .map_err(|error| self.with_agent_error(&to, error))?;
+            settled_answer(answer, to.id(), &message.message_id).map_err(|error| {
+                self.with_agent_error(&to, self.admitted_send_error(error, &message, wait_for))
+            })?;
         Ok((
             SendOutcome {
                 message,
@@ -782,6 +1074,20 @@ impl Daemon {
         ))
     }
 
+    async fn deliver_message(
+        &self,
+        agent: &AgentHandle,
+        message: &Message,
+        settled: &mut watch::Receiver<Option<Settled>>,
+        deadline: Instant,
+    ) {
+        if agent.is_guest() || self.hand_to_typist(agent, message, deadline).await {
+            self.messages
+                .settle_by_deadline(messages::number(message), settled, deadline)
+                .await;
+        }
+    }
+
     /// Answers a send that repeats an earlier one by its request ID with the message that one
     /// kept, joining its delivery while it lasts. A cancel of the repeat withdraws the message
     /// while its paste has not begun, as one of the first call would.
@@ -789,6 +1095,8 @@ impl Daemon {
         &self,
         earlier: Earlier,
         request_id: &str,
+        wait_for: Option<wire::SendWait>,
+        until: Instant,
         mut cancel: Cancel,
     ) -> Result<(SendOutcome, Option<MessageRef>), SendFailure> {
         let (message, settled) = match earlier {
@@ -814,6 +1122,7 @@ impl Daemon {
                             expected_reply_to,
                         )
                     })
+                    .map_err(|error| self.admitted_send_error(error, &message, wait_for))
                     .map_err(Into::into);
                 }
                 log_repeat(&message, request_id);
@@ -833,9 +1142,12 @@ impl Daemon {
         log_repeat(&message, request_id);
         let (message, withdrawn, expected_reply_to) = match settled {
             // A guest's message waits with no deadline for its next turn.
-            Some(mut settled) if message.delivery.deadline.is_some() => {
+            Some(mut settled)
+                if wait_for != Some(wire::SendWait::Inbox)
+                    && message.delivery.deadline.is_some() =>
+            {
                 let number = messages::number(&message);
-                {
+                let delivery = async {
                     let settling = async {
                         let _ = settled.wait_for(Option::is_some).await;
                     };
@@ -857,9 +1169,26 @@ impl Daemon {
                             }
                         }
                     }
+                };
+                if wait_for.is_some() {
+                    tokio::time::timeout_at(until, delivery)
+                        .await
+                        .map_err(|_| {
+                            self.admitted_send_error(
+                                ErrorBody::new(
+                                    Reason::Unavailable,
+                                    "the send deadline expired while checking delivery",
+                                ),
+                                &message,
+                                wait_for,
+                            )
+                        })?;
+                } else {
+                    delivery.await;
                 }
                 let answer = settled.borrow().clone();
-                settled_answer(answer, &message.to, &message.message_id)?
+                settled_answer(answer, &message.to, &message.message_id)
+                    .map_err(|error| self.admitted_send_error(error, &message, wait_for))?
             }
             _ => (message, false, None),
         };
@@ -872,6 +1201,22 @@ impl Daemon {
             },
             expected_reply_to,
         ))
+    }
+
+    /// Retains the number this daemon assigned, even if settlement no longer has the message.
+    fn admitted_send_error(
+        &self,
+        mut error: ErrorBody,
+        message: &Message,
+        wait_for: Option<wire::SendWait>,
+    ) -> ErrorBody {
+        if wait_for.is_some() {
+            error.data.message_ref = Some(MessageRef {
+                machine_id: self.machine_id.clone(),
+                message_id: message.message_id.clone(),
+            });
+        }
+        error
     }
 
     /// Delivers `agent`'s start prompt once its start settled (`started`): its CLI's tools
@@ -1136,6 +1481,51 @@ fn send_time_left(deadline: tokio::time::Instant) -> Result<Duration, ErrorBody>
     } else {
         Ok(left)
     }
+}
+
+async fn finish_command_send(
+    mut result: wire::SendResult,
+    original: MessageRef,
+    wait: Option<CommandWait<'_>>,
+    until: Instant,
+    mut cancel: Cancel,
+) -> Result<wire::SendResult, ErrorBody> {
+    let Some(mut wait) = wait.filter(|_| result.message.delivery.status == DeliveryStatus::Success)
+    else {
+        return Ok(result);
+    };
+    let failed = |reason, message: String| {
+        let mut error = ErrorBody::new(reason, message);
+        error.data.message_ref = Some(original.clone());
+        error.data.delivered_via = result.message.delivery.delivered_via;
+        error
+    };
+    let answer = tokio::select! {
+        biased;
+        reply = &mut wait.reply => reply.map_err(|_| {
+            failed(Reason::Unavailable, format!("Could not check for a reply to {}. The message was delivered.", result.id))
+        })?,
+        () = cancel.requested() => {
+            return Err(failed(Reason::Cancelled, format!("Stopped waiting for a reply to {}. The message was delivered.", result.id)));
+        }
+        () = tokio::time::sleep_until(until) => {
+            return Err(failed(Reason::ReplyTimeout, format!("No reply to {} before the deadline. The message was delivered.", result.id)));
+        }
+    };
+    if answer.original != original {
+        return Err(failed(
+            Reason::Unavailable,
+            format!(
+                "Could not check for a reply to {}. The message was delivered.",
+                result.id
+            ),
+        ));
+    }
+    result.reply = Some(wire::CommandReply {
+        reference: api::wire_message_ref(answer.reference),
+        text: answer.text,
+    });
+    Ok(result)
 }
 
 fn send_unconfirmed() -> ErrorBody {

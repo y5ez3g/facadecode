@@ -63,7 +63,15 @@ impl ClientSocket {
     /// Connects to the named pipe `path`, waiting while every instance is busy. Fails with
     /// `PermissionDenied` where the server runs as another user.
     pub fn connect<P: AsRef<Path>>(path: P) -> io::Result<ClientSocket> {
-        let name = wide(path.as_ref().as_os_str());
+        Self::open(path.as_ref(), true)
+    }
+
+    pub(super) fn try_connect(path: &Path) -> io::Result<ClientSocket> {
+        Self::open(path, false)
+    }
+
+    fn open(path: &Path, wait_for_instance: bool) -> io::Result<ClientSocket> {
+        let name = wide(path.as_os_str());
         let handle = loop {
             // SAFETY: `name` is a NUL-terminated wide string that outlives the call.
             let handle = unsafe {
@@ -84,6 +92,9 @@ impl ClientSocket {
             let error = io::Error::last_os_error();
             if error.raw_os_error() != Some(ERROR_PIPE_BUSY as i32) {
                 return Err(error);
+            }
+            if !wait_for_instance {
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, error));
             }
             // Every instance is busy: wait for one. Where the pipe is gone meanwhile, the next
             // open says so.

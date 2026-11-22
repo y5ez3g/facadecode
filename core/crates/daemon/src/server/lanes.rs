@@ -8,7 +8,7 @@ use facade_base::api_v1::ErrorBody;
 use facade_base::api_v1::daemon::{AgentRef, AgentTarget, AgentTypeArgs, DaemonCall};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
-use super::connection::Peer;
+use super::connection::{Peer, shell_ended};
 use super::outbox::Outbox;
 use super::{Client, Service, WhenFull};
 use crate::Cancel;
@@ -59,6 +59,7 @@ pub(super) struct LaneContext<S> {
     pub(super) client: Arc<Client>,
     pub(super) outbox: Outbox,
     pub(super) peer: Arc<Peer>,
+    pub(super) shell_exited: Cancel,
 }
 
 impl<S> Clone for LaneContext<S> {
@@ -68,6 +69,7 @@ impl<S> Clone for LaneContext<S> {
             client: self.client.clone(),
             outbox: self.outbox.clone(),
             peer: self.peer.clone(),
+            shell_exited: self.shell_exited.clone(),
         }
     }
 }
@@ -90,6 +92,7 @@ impl Lanes {
         }
         let lane = self.0.entry(agent).or_insert_with(|| open(context.clone()));
         let bytes = size.clamp(1, MAX_LANE_BYTES) as u32;
+        let mut exited = context.shell_exited.clone();
         let room = match lane.room.clone().try_acquire_many_owned(bytes) {
             Ok(room) => room,
             Err(_) if id.is_some() => {
@@ -100,6 +103,7 @@ impl Lanes {
                     room.expect("a lane's room stays open")
                 }
                 () = context.peer.closed() => return,
+                () = exited.requested() => return,
             },
         };
         let _ = lane.queue.send(Queued {
@@ -136,15 +140,23 @@ fn open<S: Service>(context: LaneContext<S>) -> Lane {
                 Some(_) => (WhenFull::Refuse, Cancel::default()),
                 None => (WhenFull::Wait, context.peer.hangup()),
             };
-            let result = context
-                .service
-                .call(
-                    &context.client,
-                    DaemonCall::AgentType(request.args),
-                    when_full,
-                    cancel,
-                )
-                .await;
+            let call = async {
+                context
+                    .service
+                    .call(
+                        &context.client,
+                        DaemonCall::AgentType(request.args),
+                        when_full,
+                        cancel,
+                    )
+                    .await
+            };
+            let mut exited = context.shell_exited.clone();
+            let result = tokio::select! {
+                biased;
+                () = exited.requested() => Err(shell_ended()),
+                result = call => result,
+            };
             // Input that stopped waiting because its client closed: nothing after it runs.
             if result.is_err() && request.id.is_none() && context.peer.is_closed() {
                 context.peer.give_up();
