@@ -26,12 +26,12 @@ export function officialEditor(): string {
 	if (!executable || !path.isAbsolute(executable) || !fs.statSync(executable, { throwIfNoEntry: false })?.isFile()) {
 		throw new Error('Set VSCODE_EXECUTABLE to the absolute path of an official VS Code executable, for example "/Applications/Visual Studio Code.app/Contents/MacOS/Code".');
 	}
-	officialVsCode(executable);
+	officialProducts(executable);
 	return executable;
 }
 
 /** The official VS Code only: a derived editor can load its own agent extension and share a data folder with a person's live state. */
-function officialVsCode(executable: string): void {
+function officialProducts(executable: string) {
 	const dir = path.dirname(executable);
 	const candidates = [
 		path.join(dir, '..', 'Resources', 'app', 'product.json'),
@@ -44,12 +44,28 @@ function officialVsCode(executable: string): void {
 	if (!files.length) {
 		throw new Error(`Cannot find product.json beside ${executable}; refusing to run the suite in an unknown editor.`);
 	}
-	for (const file of files) {
-		const product = JSON.parse(fs.readFileSync(file, 'utf8')) as { nameShort?: string; dataFolderName?: string; applicationName?: string };
+	return files.map(file => {
+		const product = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+			nameShort?: string; dataFolderName?: string; applicationName?: string; commit?: string
+		};
 		if (product.dataFolderName !== '.vscode' || product.applicationName !== 'code') {
 			throw new Error(`${executable} is ${product.nameShort ?? 'not VS Code'} (data folder ${product.dataFolderName}); the suite runs only in official VS Code.`);
 		}
+		return { file, commit: product.commit };
+	});
+}
+
+export function editorBuildCommit(executable: string, expectedVersion: string): string {
+	const commits = new Set<string>();
+	for (const { file, commit } of officialProducts(executable)) {
+		const pkg = JSON.parse(fs.readFileSync(path.join(path.dirname(file), 'package.json'), 'utf8')) as { version?: string };
+		if (pkg.version !== expectedVersion || typeof commit !== 'string' || !/^[a-f0-9]{40}$/u.test(commit)) {
+			throw new Error(`Expected official VS Code ${expectedVersion}, got ${pkg.version} (${commit}).`);
+		}
+		commits.add(commit);
 	}
+	assert.strictEqual(commits.size, 1, `Conflicting VS Code build commits beside ${executable}.`);
+	return [...commits][0];
 }
 
 /**

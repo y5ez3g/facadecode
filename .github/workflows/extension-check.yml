@@ -188,17 +188,10 @@ jobs:
         run: |
           node <<'JS'
           const fs = require('node:fs');
-          const path = require('node:path');
+          const { editorBuildCommit } = require('./build/out/test/integration/editors.js');
           const version = process.env.EDITOR_VERSION;
           require('@vscode/test-electron').downloadAndUnzipVSCode(version).then(executable => {
-            const app = path.resolve(path.dirname(executable),
-              process.platform === 'darwin' ? '../Resources/app' : 'resources/app');
-            const editor = JSON.parse(fs.readFileSync(path.join(app, 'package.json'), 'utf8'));
-            const product = JSON.parse(fs.readFileSync(path.join(app, 'product.json'), 'utf8'));
-            if (editor.version !== version || !/^[a-f0-9]{40}$/.test(product.commit)) {
-              throw new Error(`Expected official VS Code ${version}, got ${editor.version} (${product.commit})`);
-            }
-            console.log(`Official VS Code ${editor.version} (${product.commit})`);
+            console.log(`Official VS Code ${version} (${editorBuildCommit(executable, version)})`);
             fs.appendFileSync(process.env.GITHUB_ENV, `VSCODE_EXECUTABLE=${executable}\n`);
           }).catch(error => { console.error(error); process.exitCode = 1; });
           JS
