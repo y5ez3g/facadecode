@@ -1,5 +1,6 @@
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::ops::Range;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -15,12 +16,44 @@ const TAIL_BYTES: u64 = 64 * 1024;
 pub(super) struct Transcript {
     pub head: Vec<Value>,
     tail: Option<Vec<Value>>,
+    file: File,
+    middle: Range<u64>,
     pub modified_at: Option<SystemTime>,
 }
 
 impl Transcript {
     pub fn tail(&self) -> &[Value] {
         self.tail.as_deref().unwrap_or(&self.head)
+    }
+
+    /// Keeps the last matching name from the records between the metadata windows.
+    pub fn latest_middle(
+        &self,
+        path: &Path,
+        kind: &str,
+        field: &str,
+    ) -> Result<Option<String>, ErrorBody> {
+        if self.middle.is_empty() {
+            return Ok(None);
+        }
+        let result = (|| {
+            let mut file = &self.file;
+            file.seek(SeekFrom::Start(self.middle.start))?;
+            let mut reader = BufReader::new(file.take(self.middle.end - self.middle.start));
+            let mut bytes = Vec::new();
+            let mut name = None;
+            while reader.read_until(b'\n', &mut bytes)? != 0 {
+                if let Ok(record) = serde_json::from_slice::<Value>(&bytes)
+                    && record["type"] == kind
+                    && let Some(text) = record[field].as_str()
+                {
+                    name = Some(text.to_owned());
+                }
+                bytes.clear();
+            }
+            Ok(name)
+        })();
+        result.map_err(|error: std::io::Error| store_error(path, error))
     }
 }
 
@@ -36,18 +69,26 @@ pub(super) fn read(path: &Path, tail: bool) -> Result<Option<Transcript>, ErrorB
         let len = meta.len();
         let mut bytes = Vec::new();
         (&mut file).take(HEAD_BYTES).read_to_end(&mut bytes)?;
+        let mut head_end = bytes.len() as u64;
         let mut head = bytes.split(|&byte| byte == b'\n');
-        if len > HEAD_BYTES && !bytes.ends_with(b"\n") {
-            head.next_back();
+        if len > HEAD_BYTES
+            && !bytes.ends_with(b"\n")
+            && let Some(partial) = head.next_back()
+        {
+            head_end -= partial.len() as u64;
         }
         let head = records(head);
+        // Include the records cut by either window edge in the middle scan.
+        let mut middle = 0..0;
         let tail = if tail && len > TAIL_BYTES {
-            file.seek(SeekFrom::Start(len - TAIL_BYTES - 1))?;
-            let mut file = BufReader::new(file.take(TAIL_BYTES + 1));
+            let offset = len - TAIL_BYTES - 1;
+            file.seek(SeekFrom::Start(offset))?;
+            let mut reader = BufReader::new((&mut file).take(TAIL_BYTES + 1));
             bytes.clear();
-            file.read_until(b'\n', &mut bytes)?;
+            let skipped = reader.read_until(b'\n', &mut bytes)?;
+            middle = head_end..offset + skipped as u64;
             bytes.clear();
-            file.read_to_end(&mut bytes)?;
+            reader.read_to_end(&mut bytes)?;
             Some(records(bytes.split(|&byte| byte == b'\n')))
         } else {
             None
@@ -55,6 +96,8 @@ pub(super) fn read(path: &Path, tail: bool) -> Result<Option<Transcript>, ErrorB
         Ok(Transcript {
             head,
             tail,
+            file,
+            middle,
             modified_at: meta.modified().ok(),
         })
     })();

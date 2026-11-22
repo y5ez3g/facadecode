@@ -258,6 +258,9 @@ a folder (`sessions.rs` and `sessions/history/`).
   - History readers use the selected CLI's effective configuration, environment and arguments.
     They return sessions saved in the requested folder and read the CLI's stores without
     writing the session data.
+  - `SavedSession.title` uses the saved native name when available and falls back to the existing
+    conversation preview. The Claude Code and Pi readers find names between the transcript's
+    head and tail windows, so later output does not hide a saved rename.
   - A session ID has one spelling: a UUID in lowercase, or OpenCode's `ses_` followed by 1 to 64 letters and digits.
   - A session counts only once it is saved. If the file names a path that does not exist yet, it reads as no session, so a session the CLI has not saved cannot be resumed. This holds for every CLI.
   - A write goes to a temporary file that only its owner can read (base's `files::private_options`). The file is synced, then renamed over the session file, so a reader sees the old file or the new one, never part of either; the folder is synced through `files::sync_folder`.
@@ -281,6 +284,12 @@ a folder (`sessions.rs` and `sessions/history/`).
       -> Result<Vec<SavedSession>, ErrorBody>` reads the selected CLI's history.
       Each result has a session ID, folder and optional title and activity time. The daemon checks
       which sessions are in use and projects the resume targets for all entry points.
+    - `session_for_id(rule: &Rule, folder: &Path, environment: &BTreeMap<String, String>, args: &[String],
+      id: &str, report: Option<&Path>) -> Result<Option<SavedSession>, ErrorBody>` finds the full
+      canonical ID in the same native history. The daemon supplies the run's launch context and
+      optional session report file on the machine that holds the record. A matching report can
+      locate the original Claude Code, Codex or Pi transcript. The same native eligibility checks
+      apply, and the supplied launch context is used when the report cannot locate a session.
     - `session_evidence(rule: &Rule, recorded: &str, relay_env: &BTreeMap<String, String>,
       call_meta: Option<&serde_json::Value>) -> bool` compares the run's saved session to the
       evidence its CLI supplies. The daemon verifies which current run the operating system's

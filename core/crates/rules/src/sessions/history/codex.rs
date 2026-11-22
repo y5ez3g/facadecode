@@ -13,16 +13,11 @@ use super::{
 
 pub(super) fn list(root: &Path, scope: &Folder<'_>) -> Result<Vec<SavedSession>, ErrorBody> {
     let mut indexed = HashSet::new();
-    let mut sessions = read_threads(&root.join("state_5.sqlite"), scope, &mut indexed)?;
+    let mut sessions = read_threads(root, scope, &mut indexed)?;
     for year in entries(&root.join("sessions"), |name| digits(name, 4))? {
         for month in entries(&year, |name| digits(name, 2))? {
             for day in entries(&month, |name| digits(name, 2))? {
-                for path in entries(&day, |name| {
-                    name.starts_with("rollout-") && name.ends_with(".jsonl")
-                })? {
-                    if transcript::filename_uuid(&path).is_some_and(|id| indexed.contains(&id)) {
-                        continue;
-                    }
+                for path in entries(&day, rollout_name)? {
                     sessions.extend(read_rollout(&path, scope, &indexed)?);
                 }
             }
@@ -31,17 +26,54 @@ pub(super) fn list(root: &Path, scope: &Folder<'_>) -> Result<Vec<SavedSession>,
     Ok(sessions)
 }
 
+pub(super) fn reported(path: &Path, scope: &Folder<'_>) -> Result<Option<SavedSession>, ErrorBody> {
+    let Some(root) = rollout_root(path) else {
+        return Ok(None);
+    };
+    if !saved_file(path)? {
+        return Ok(None);
+    }
+    let mut indexed = HashSet::new();
+    let sessions = read_threads(root, scope, &mut indexed)?;
+    if let Some(session) = sessions.into_iter().next() {
+        return Ok(Some(session));
+    }
+    read_rollout(path, scope, &indexed)
+}
+
+fn rollout_name(name: &str) -> bool {
+    name.starts_with("rollout-") && name.ends_with(".jsonl")
+}
+
+/// The Codex home above an existing sessions/YYYY/MM/DD rollout path.
+fn rollout_root(path: &Path) -> Option<&Path> {
+    if !rollout_name(path.file_name()?.to_str()?) {
+        return None;
+    }
+    let mut dirs = path.ancestors().skip(1);
+    for width in [2, 2, 4] {
+        if !digits(dirs.next()?.file_name()?.to_str()?, width) {
+            return None;
+        }
+    }
+    if dirs.next()?.file_name()?.to_str()? != "sessions" {
+        return None;
+    }
+    dirs.next()
+}
+
 fn digits(name: &str, len: usize) -> bool {
     name.len() == len && name.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn read_threads(
-    path: &Path,
+    root: &Path,
     scope: &Folder<'_>,
     indexed: &mut HashSet<String>,
 ) -> Result<Vec<SavedSession>, ErrorBody> {
-    Ok(sqlite::read(path, |db| {
-        let error = |error| store_error(path, error);
+    let path = root.join("state_5.sqlite");
+    Ok(sqlite::read(&path, |db| {
+        let error = |error| store_error(&path, error);
         let columns = sqlite::columns(db, "threads").map_err(error)?;
         let mut sessions = Vec::new();
         // Installations without the supported index can still have native rollouts.
@@ -85,6 +117,9 @@ fn read_threads(
             };
             // A known thread, including an archive, takes precedence over its rollout.
             indexed.insert(id.clone());
+            if !scope.includes_id(&id) {
+                continue;
+            }
             let in_scope = text(row, 1).is_some_and(|cwd| scope.matches(Path::new(cwd)));
             let archived = integer(row, 6).unwrap_or_default() != 0;
             let delegated = text(row, 7).is_some_and(|source| source.contains("subagent"));
@@ -112,6 +147,9 @@ fn read_rollout(
     scope: &Folder<'_>,
     indexed: &HashSet<String>,
 ) -> Result<Option<SavedSession>, ErrorBody> {
+    if transcript::filename_uuid(path).is_some_and(|id| indexed.contains(&id)) {
+        return Ok(None);
+    }
     let Some(log) = transcript::read(path, false)? else {
         return Ok(None);
     };
@@ -130,7 +168,8 @@ fn read_rollout(
         return Ok(None);
     };
     let source = &payload["source"];
-    if indexed.contains(&id)
+    if !scope.includes_id(&id)
+        || indexed.contains(&id)
         || !scope.matches(Path::new(cwd))
         || source
             .as_str()

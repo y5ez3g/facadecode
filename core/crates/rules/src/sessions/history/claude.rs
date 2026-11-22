@@ -10,16 +10,8 @@ use super::{Folder, SavedSession, entries, title, uuid};
 pub(super) fn list(config: &Path, scope: &Folder<'_>) -> Result<Vec<SavedSession>, ErrorBody> {
     let mut sessions = Vec::new();
     for project in scope.stores_at(&config.join("projects"), project_name)? {
-        for path in entries(&project, |name| {
-            name.strip_suffix(".jsonl").and_then(uuid).is_some()
-        })? {
-            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
-                continue;
-            };
-            let Some(id) = uuid(stem) else {
-                continue;
-            };
-            sessions.extend(conversation(&path, &project, stem, id, scope)?);
+        for path in entries(&project, |name| name.ends_with(".jsonl"))? {
+            sessions.extend(conversation(&path, scope)?);
         }
     }
     Ok(sessions)
@@ -35,13 +27,23 @@ fn project_name(path: &Path) -> String {
         .collect()
 }
 
-fn conversation(
+pub(super) fn conversation(
     path: &Path,
-    project: &Path,
-    stem: &str,
-    id: String,
     scope: &Folder<'_>,
 ) -> Result<Option<SavedSession>, ErrorBody> {
+    let Some(stem) = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_suffix(".jsonl"))
+    else {
+        return Ok(None);
+    };
+    let (Some(project), Some(id)) = (path.parent(), uuid(stem)) else {
+        return Ok(None);
+    };
+    if !scope.includes_id(&id) {
+        return Ok(None);
+    }
     let Some(log) = read(path, true)? else {
         return Ok(None);
     };
@@ -74,18 +76,22 @@ fn conversation(
         }
     }
 
+    let mut custom = latest(tail, "custom-title", "customTitle");
     let sidecar;
-    let custom = match latest(tail, "custom-title", "customTitle") {
-        Some(custom) => Some(custom),
-        None => {
-            sidecar = json_file(&project.join(stem).join("custom-title.json"))?;
-            sidecar
-                .as_ref()
-                .and_then(|value| value["customTitle"].as_str())
-                .filter(|text| !text.trim().is_empty())
-                .or_else(|| latest(head, "custom-title", "customTitle"))
-        }
-    };
+    if custom.is_none() {
+        sidecar = json_file(&project.join(stem).join("custom-title.json"))?;
+        custom = sidecar
+            .as_ref()
+            .and_then(|value| value["customTitle"].as_str())
+            .filter(|text| !text.trim().is_empty());
+    }
+    let middle;
+    if custom.is_none() {
+        middle = log.latest_middle(path, "custom-title", "customTitle")?;
+        custom = middle
+            .as_deref()
+            .or_else(|| latest(head, "custom-title", "customTitle"));
+    }
     let ai = latest(tail, "ai-title", "aiTitle").or_else(|| latest(head, "ai-title", "aiTitle"));
     let summary = latest(tail, "summary", "summary").or_else(|| latest(head, "summary", "summary"));
     let native = [custom, ai, summary]
