@@ -314,6 +314,116 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
     );
 }
 
+/// Refused calls to an unrelated peer agent leave its run, inbox and saved connection intact.
+#[test]
+fn a_refused_peer_action_preserves_the_run_inbox_files_and_saved_route() {
+    let home = TestHome::new("yolo-peer-local");
+    let peer = TestHome::new("yolo-peer-remote");
+    settings(&home, r#"{"yolo": false}"#);
+    settings(&peer, r#"{"yolo": true}"#);
+    let caller = home.start_fake("caller");
+    let worker = peer.start_fake("worker");
+    let peer_id = peer.hello_result().unwrap()["machine_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    peer.run_facade_ok(&["machine", "rename", &peer_id, "denial-peer"]);
+    let address = format!("{}@denial-peer", worker.id);
+    install_machine_ssh(
+        &[("caller", &home), ("denial-peer", &peer)],
+        &test_binaries().facade,
+    );
+    home.run_facade_ok(&[
+        "machine",
+        "add",
+        "--home",
+        peer.path.to_str().unwrap(),
+        "denial-peer",
+    ]);
+    assert!(
+        home.run_facade_ok(&["screen", &address])
+            .contains("fakecli")
+    );
+
+    let route = || {
+        let roster = connect(&home).call_ok("machine.list", json!({}));
+        let machines = roster["machines"].as_array().unwrap();
+        let remote = machines
+            .iter()
+            .find(|row| row["machine_id"] == peer_id)
+            .unwrap();
+        let saved = machines
+            .iter()
+            .flat_map(|row| row["connections"].as_array().unwrap())
+            .find(|link| link["kind"] == "saved" && link["machine_id"] == peer_id)
+            .unwrap();
+        (remote["route"].clone(), saved.clone())
+    };
+    let saved_route = route();
+    assert_eq!(saved_route.0, json!([peer_id]));
+    assert_eq!(saved_route.1["state"], "connected");
+
+    let run = facade_rules::run_folder(&peer.path.join("core/runs"), &worker.id).unwrap();
+    let files = [
+        home.path.join("facade.json"),
+        peer.path.join("facade.json"),
+        run.join("mcp.json"),
+    ];
+    let contents = files.each_ref().map(|path| std::fs::read(path).unwrap());
+    peer.run_facade_ok(&["send", &address, "already delivered"]);
+    peer.run_facade_ok(&["type", &address, "keep this draft"]);
+    assert!(wait_for_screen_text(&peer, &address, "❯ keep this draft"));
+    let mut inbox = McpTestClient::open_configured(&peer, &worker.id);
+    let inbox_contents = |inbox: &mut McpTestClient| {
+        let reply = inbox.call("read_messages", json!({ "last": 10 }));
+        assert_eq!(reply["status"], "success", "{reply}");
+        reply["data"]["messages"].clone()
+    };
+    let messages = inbox_contents(&mut inbox);
+    assert_eq!(messages.as_array().unwrap().len(), 1, "{messages}");
+    assert_eq!(messages[0]["text"], "already delivered", "{messages}");
+    let submitted = peer.submitted_messages();
+    let reference = peer.inspect_agent(&address)["agent"]["reference"].clone();
+
+    let mut mcp = McpTestClient::open_configured(&home, &caller.id);
+    for (tool, args) in [
+        ("read_screen", json!({ "agent": address })),
+        (
+            "type_text",
+            json!({ "agent": address, "text": "refused input", "enter": true }),
+        ),
+        (
+            "send_message",
+            json!({ "to": address, "text": "refused message" }),
+        ),
+        ("stop_agent", json!({ "agent": address })),
+    ] {
+        let refused = mcp.call(tool, args);
+        assert_eq!(refused["reason"], "refused", "{tool}: {refused}");
+    }
+
+    assert_eq!(route(), saved_route);
+    for (path, before) in files.iter().zip(contents) {
+        assert!(
+            std::fs::read(path).unwrap() == before,
+            "{} changed",
+            path.display()
+        );
+    }
+    let agents = peer.agents();
+    assert_eq!(agents.len(), 1, "{agents:?}");
+    assert_eq!(agents[0]["reference"], reference);
+    assert_eq!(agents[0]["process"], "running");
+    assert_eq!(process_identity(worker.pid), worker.process);
+    assert!(alive(&worker.process) && alive(&caller.process));
+    assert_eq!(inbox_contents(&mut inbox), messages);
+    assert_eq!(peer.submitted_messages(), submitted);
+    assert!(
+        home.run_facade_ok(&["screen", &address])
+            .contains("❯ keep this draft")
+    );
+}
+
 /// A guest, an MCP connection that no managed agent's CLI made, joined at its first tool call:
 /// it, its roster, and its record.
 fn guest(home: &TestHome) -> (McpTestClient, Value, Value) {

@@ -46,16 +46,75 @@ fn agents_watch_delivers_snapshot_and_changes_until_unwatch() {
         "{:?}",
         wire.changes(watch)
     );
-    // No changes should follow unwatch.
+    let remaining =
+        wire.request("watch", json!({ "topic": "agents", "args": {} }))["result"]["watch"]
+            .as_u64()
+            .expect("expected a second watch ID");
+    assert_ne!(watch, remaining);
+    // Unwatch ends this subscription and leaves the other one active.
     assert!(wire.request("unwatch", json!({ "watch": watch }))["result"].is_object());
     let count = wire.changes(watch).len();
-    home.start_fake("w3");
-    std::thread::sleep(secs(1));
+    let third = home.start_fake("w3");
+    assert!(
+        wait_until(LOADED_TIMEOUT, || wire.changes(remaining).iter().any(|c| c
+            ["change"]["agent"]["reference"]["agent_id"]
+            == third.id.as_str())),
+        "the second watch received no change for {}",
+        third.id
+    );
     assert_eq!(wire.changes(watch).len(), count);
     assert_eq!(
         error_reason(&wire.request("unwatch", json!({ "watch": watch }))),
         "not_found"
     );
+}
+
+#[test]
+fn agents_watch_reconnects_with_a_fresh_snapshot() {
+    let home = TestHome::new("watchreconnect");
+    let kept = home.start_fake("kept");
+    let options = json!({ "topic": "agents", "args": {} });
+    let mut prior = connect(&home);
+    let old_watch = prior.request("watch", options.clone())["result"]["watch"]
+        .as_u64()
+        .expect("expected the old watch ID");
+    let retired = home.start_fake("retired");
+    assert!(wait_until(LOADED_TIMEOUT, || prior
+        .changes(old_watch)
+        .iter()
+        .any(
+            |c| c["change"]["agent"]["reference"]["agent_id"] == retired.id.as_str()
+        )));
+    drop(prior);
+    connect(&home).call_ok("agent.remove", json!({ "target": retired.id }));
+
+    let mut current = connect(&home);
+    let watching = current.request("watch", options);
+    let watch = watching["result"]["watch"]
+        .as_u64()
+        .expect("expected the new watch ID");
+    let snapshot = watching["result"]["snapshot"]["agents"]
+        .as_array()
+        .expect("expected the new agent snapshot");
+    assert_eq!(snapshot.len(), 1, "{watching}");
+    assert_eq!(snapshot[0]["reference"]["agent_id"], kept.id.as_str());
+
+    let added = home.start_fake("added");
+    assert!(wait_until(LOADED_TIMEOUT, || current
+        .changes(watch)
+        .iter()
+        .any(
+            |c| c["change"]["agent"]["reference"]["agent_id"] == added.id.as_str()
+        )));
+    for notice in current.changes(watch) {
+        let change = &notice["change"];
+        assert_ne!(
+            change["agent"]["reference"]["agent_id"],
+            retired.id.as_str(),
+            "{notice}"
+        );
+        assert_ne!(change["agent_id"], retired.id.as_str(), "{notice}");
+    }
 }
 
 #[test]

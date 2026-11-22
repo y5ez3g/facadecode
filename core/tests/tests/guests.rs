@@ -161,6 +161,83 @@ fn a_guest_waits_for_the_reply_to_its_message() {
     );
 }
 
+/// A second relay cannot read or settle a reply addressed to the first Guest.
+#[test]
+fn a_guest_cannot_fetch_another_guests_pending_reply() {
+    let home = TestHome::new("guest-reply-owner");
+    let (ada_address, mut ada) = managed_relay(&home, "ada");
+    let (ada_id, _) = ada_address.split_once('@').unwrap();
+    let mut recipient = McpTestClient::spawn(&home, home.command(&test_binaries().mcp));
+    let listed = recipient.call("list_agents", json!({}));
+    let rows = listed["data"]["agents"].as_array().unwrap();
+    let address = rows.iter().find(|row| row["type"] == "guest").unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let (guest_id, _) = address.split_once('@').unwrap();
+    let mut other = McpTestClient::spawn(&home, home.command(&test_binaries().mcp));
+    let joined = other.call("list_agents", json!({}));
+    let guests: Vec<_> = joined["data"]["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["type"] == "guest")
+        .collect();
+    assert_eq!(guests.len(), 2, "{joined}");
+    assert!(guests.iter().any(|row| row["id"] == address), "{joined}");
+    assert_ne!(guests[0]["id"], guests[1]["id"]);
+
+    let request = recipient.call(
+        "send_message",
+        json!({ "to": ada_address, "text": "request from the recipient" }),
+    );
+    assert_eq!(request["status"], "success", "{request}");
+    let original = request["data"]["id"].as_str().unwrap();
+    let (original_number, machine) = original.split_once('@').unwrap();
+    let reply = "reply for the recipient only";
+    let pending = ada.send(
+        "tools/call",
+        json!({ "name": "send_message", "arguments": { "to": address, "text": reply, "reply_to": original } }),
+    );
+    let mut wire = connect(&home);
+    let posted = format!("#{ada_id} sent ");
+    let target = format!(" to #{guest_id}");
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            let log = wire.call_ok("daemon.log", json!({}));
+            log["lines"].as_array().unwrap().iter().any(|line| {
+                line.as_str()
+                    .is_some_and(|line| line.contains(&posted) && line.contains(&target))
+            })
+        }),
+        "the reply was never posted to the intended Guest"
+    );
+
+    let filter = json!({ "reply_to": original });
+    let wrong = other.call("read_messages", filter.clone());
+    assert_eq!(wrong["status"], "success", "{wrong}");
+    assert_eq!(wrong["data"]["messages"], json!([]), "{wrong}");
+    assert!(
+        ada.answer(pending, std::time::Duration::from_millis(250))
+            .is_none()
+    );
+
+    let read = recipient.call("read_messages", filter);
+    assert_eq!(read["status"], "success", "{read}");
+    let messages = read["data"]["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 1, "{read}");
+    assert_eq!(messages[0]["text"], reply, "{read}");
+    assert_eq!(messages[0]["from"], ada_address, "{read}");
+    assert_eq!(messages[0]["reply_to"], original_number, "{read}");
+    let sent = ada.tool_answer(pending);
+    assert_eq!(sent["status"], "success", "{sent}");
+    assert_eq!(sent["data"]["delivery"], "read_by_recipient", "{sent}");
+    let number = messages[0]["id"].as_str().unwrap();
+    assert_eq!(sent["data"]["id"], format!("{number}@{machine}"), "{sent}");
+    let history = other.call("read_messages", json!({ "last": 10 }));
+    assert_eq!(history["status"], "success", "{history}");
+    assert_eq!(history["data"]["messages"], json!([]), "{history}");
+}
+
 /// With YOLO off, a Guest starts and can reach a child but cannot reach a separate creation tree.
 #[test]
 fn a_guest_with_yolo_off_sees_the_agent_it_started() {

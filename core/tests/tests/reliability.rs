@@ -501,6 +501,96 @@ fn a_send_cut_off_by_a_restart_is_repeated_by_its_request_id_and_typed_once() {
     assert_eq!(typed(&home, "for the replacement"), 1);
 }
 
+/// A committed start survives the loss of its reply and a daemon restart, with its original CLI.
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the test gate of debug builds")]
+fn a_start_whose_reply_is_lost_is_replayed_after_a_daemon_restart() {
+    let home = TestHome::new("relstartlost");
+    let gate = "after-start-record";
+    home.start_facade_with(&[("FACADE_TEST_GATES", gate)]);
+    let keeper = home.lock_record("keeper").expect("the original keeper");
+    let launches = home.project.join("launches");
+    let mut args = fake_start(&home, "worker");
+    args["request_id"] = json!("lost-start");
+    args["env"]["FAKECLI_STARTS"] = json!(launches);
+    args["env"]["FAKECLI_LOG"] = json!(home.fake_log);
+
+    let mut first = ManualReadClient::open(&home);
+    first.send(1, "call", json!({ "op": "agent.start", "args": args }));
+    home.wait_for_gate(gate);
+    // The record is durable and the call cannot answer while it is held here.
+    drop(first);
+    home.release_gate(gate);
+
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .listed_agent("worker")
+        .is_some()));
+    let original = home.inspect_agent("worker")["agent"].clone();
+    let address = original["address"].as_str().unwrap();
+    let pid = original["pid"].as_i64().unwrap() as i32;
+    let process = process_identity(pid);
+    assert_eq!(original["cli"], "fake");
+    let folder = original["cwd"].as_str().unwrap();
+    assert_eq!(
+        facade_base::files::real_path(std::path::Path::new(folder)).unwrap(),
+        facade_base::files::real_path(&home.project).unwrap()
+    );
+    let attach = || {
+        TestTerminal::spawn(
+            home.command(&test_binaries().facade)
+                .args(["attach", address]),
+            80,
+            24,
+        )
+    };
+    let mut terminal = attach();
+    assert!(terminal.wait_for(LOADED_TIMEOUT, |screen| screen.contains("❯")));
+    terminal.send(b"before restart");
+    assert!(terminal.wait_for(LOADED_TIMEOUT, |screen| screen.contains("❯ before restart")));
+    terminal.send(b"\x1d");
+    assert!(
+        terminal
+            .wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|exit| exit.success())
+    );
+    assert!(home.submitted_messages().is_empty());
+
+    let old = home.kill_daemon();
+    let new = home
+        .wait_for_daemon_after(old, LOADED_TIMEOUT)
+        .expect("a replacement daemon");
+    let replayed = connect(&home).call_ok("agent.start", args);
+    assert_eq!(replayed["repeated"], true, "{replayed}");
+    assert_eq!(replayed["agent"]["reference"], original["reference"]);
+    assert_eq!(replayed["agent"]["address"], address);
+    assert_eq!(replayed["agent"]["cwd"], folder);
+    assert_eq!(replayed["agent"]["pid"], pid);
+    assert_eq!(process_identity(pid), process);
+    assert_eq!(home.lock_record("keeper"), Some(keeper));
+    let agents = home.agents();
+    assert_eq!(agents.len(), 1, "{agents:?}");
+    assert_eq!(agents[0]["reference"], original["reference"]);
+
+    let mut terminal = attach();
+    assert!(terminal.wait_for(LOADED_TIMEOUT, |screen| screen.contains("❯ before restart")));
+    terminal.send(b" and after\r");
+    assert!(terminal.wait_for(LOADED_TIMEOUT, |screen| {
+        screen.contains("> before restart and after")
+    }));
+    assert_eq!(home.submitted_messages(), ["before restart and after"]);
+    assert_eq!(
+        std::fs::read_to_string(launches).unwrap(),
+        format!("{pid}\n")
+    );
+    terminal.send(b"\x1d");
+    assert!(
+        terminal
+            .wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|exit| exit.success())
+    );
+    println!("daemon {old} -> {new}, one launch of {address} with process {process:?}");
+}
+
 /// Two starts with one request ID at once start one agent: the second waits for the first's answer
 /// and gives it.
 #[test]

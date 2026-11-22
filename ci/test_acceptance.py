@@ -9,7 +9,10 @@ import unittest
 from pathlib import Path
 
 from catalog import AcceptanceError, load, read_cases, read_json, reconcile, validate_binding
-from evidence import EDITOR, EDITOR_PASS, binding_paths, completion_record, execute, observed_pass, run_identity, verify_receipts
+from evidence import (
+    EDITOR, EDITOR_PASS, binding_paths, completion_record, execute, execution_groups,
+    observed_pass, run_identity, verify_receipts,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 CORE = 'core/daemon/local-client-request/hello'
@@ -90,13 +93,13 @@ class EvidenceTests(unittest.TestCase):
     def receipt(self, case_id, **changes):
         product = case_id.split('/')[0]
         binding = self.bindings[case_id]
-        observation, console, completion = binding_paths(self.directory, binding)
+        observation, console, completion = binding_paths(self.directory, [binding])
         if product == 'core':
             observation.write_text(self.core_log)
             console.write_text('tests exit 0\nno processes left\n')
         else:
             observation.write_text(self.editor_log + 'no processes left\n')
-        completion.write_text(json.dumps(completion_record(self.plan, binding, observation, console)))
+        completion.write_text(json.dumps(completion_record(self.plan, [binding], observation, console)))
         item = {'id': case_id, 'status': 'pass', 'binding': copy.copy(binding), 'log': observation.name, 'elapsed_ms': 1}
         receipt = {
             'plan': self.plan['id'], 'revision': self.plan['revision'], 'tree': self.plan['tree'],
@@ -135,21 +138,21 @@ class EvidenceTests(unittest.TestCase):
 
     def test_missing_editor_log_does_not_settle_the_case(self):
         path = self.receipt(EDITOR_CASE)
-        binding_paths(path.parent, self.editor)[0].unlink()
+        binding_paths(path.parent, [self.editor])[0].unlink()
         with self.assertRaisesRegex(AcceptanceError, f'{EDITOR_CASE}: missing log'):
             verify_receipts(self.plan, [path], 'extension')
 
     def test_an_older_completion_cannot_settle_a_new_attempt(self):
         path = self.receipt(CORE)
-        observation, console, completion = binding_paths(path.parent, self.core)
+        observation, console, completion = binding_paths(path.parent, [self.core])
         previous = {**self.plan, 'run': 'github/100/1'}
-        completion.write_text(json.dumps(completion_record(previous, self.core, observation, console)))
+        completion.write_text(json.dumps(completion_record(previous, [self.core], observation, console)))
         with self.assertRaisesRegex(AcceptanceError, 'does not match this binding and attempt'):
             verify_receipts(self.plan, [path], 'core')
 
     def test_an_altered_core_log_and_missing_cleanup_are_rejected(self):
         path = self.receipt(CORE)
-        observation, console, _ = binding_paths(path.parent, self.core)
+        observation, console, _ = binding_paths(path.parent, [self.core])
         observation.write_text(self.core_log + 'output from another run\n')
         with self.assertRaisesRegex(AcceptanceError, 'does not match this binding and attempt'):
             verify_receipts(self.plan, [path], 'core')
@@ -159,7 +162,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_editor_log_truncated_at_the_pass_marker_is_rejected(self):
         path = self.receipt(EDITOR_CASE)
-        binding_paths(path.parent, self.editor)[0].write_text(self.editor_log)
+        binding_paths(path.parent, [self.editor])[0].write_text(self.editor_log)
         with self.assertRaisesRegex(AcceptanceError, 'does not match this binding and attempt'):
             verify_receipts(self.plan, [path], 'extension')
 
@@ -174,7 +177,21 @@ class EvidenceTests(unittest.TestCase):
         )
         for binding, result in fixtures:
             with self.subTest(result=result):
-                self.assertFalse(observed_pass(binding, result))
+                self.assertFalse(observed_pass([binding], result))
+
+    def test_core_group_requires_each_exact_test_and_deduplicates_aliases(self):
+        second = {**self.core, 'name': 'also_negotiates'}
+        selected = {'primary': self.core, 'alias': self.core, 'other': second}
+        groups = list(execution_groups(selected))
+        self.assertEqual(groups, [(selected, [second, self.core])])
+        complete = (
+            f'running 2 tests\ntest {self.core["name"]} ... ok\ntest also_negotiates ... ok\n'
+            'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n'
+        )
+        self.assertTrue(observed_pass(groups[0][1], complete))
+        self.assertFalse(observed_pass(groups[0][1], complete.replace('test also_negotiates ... ok\n', '')))
+        self.assertFalse(observed_pass(groups[0][1], complete + 'test result: FAILED. 0 passed; 1 failed;\n'))
+        self.assertFalse(observed_pass(groups[0][1], complete + 'test unexpected ... ignored\n'))
 
     def test_local_and_github_attempt_ids(self):
         self.assertEqual(run_identity('local-1', {}), 'local/local-1')

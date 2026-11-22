@@ -83,27 +83,45 @@ def runtime():
     raise AcceptanceError('the acceptance pilots require a native Linux x64 runner')
 
 
-def observed_pass(binding, output):
+def execution_groups(cases):
+    groups = {}
+    for case_id, binding in cases.items():
+        runner = binding['runner']
+        key = (runner, binding['target'] if runner == 'core-scenario' else digest(binding))
+        groups.setdefault(key, {})[case_id] = binding
+    for cases_in_group in groups.values():
+        unique = {binding['name']: binding for binding in cases_in_group.values()}
+        yield cases_in_group, [unique[name] for name in sorted(unique)]
+
+
+def observed_pass(bindings, output):
     output = ANSI.sub('', output)
-    name = binding['name']
+    binding = bindings[0]
     if binding['runner'] == 'core-scenario':
+        names = sorted(entry['name'] for entry in bindings)
+        count = len(names)
+        results = re.findall(r'^test (.+?) \.\.\. (.+)$', output, re.M)
+        summaries = re.findall(r'^test result: (.+)$', output, re.M)
         return (
-            re.findall(r'^running (\d+) tests?\s*$', output, re.M) == ['1']
-            and re.findall(r'^test (.+?) \.\.\. ok$', output, re.M) == [name]
-            and re.search(r'^test result: ok\. 1 passed; 0 failed; 0 ignored;', output, re.M) is not None
+            re.findall(r'^running (\d+) tests?\s*$', output, re.M) == [str(count)]
+            and sorted(results) == [(name, 'ok') for name in names]
+            and len(summaries) == 1
+            and summaries[0].startswith(f'ok. {count} passed; 0 failed; 0 ignored;')
         )
     markers = [line.removeprefix(EDITOR_PASS) for line in output.splitlines() if line.startswith(EDITOR_PASS)]
     try:
-        return [json.loads(marker) for marker in markers] == [{'name': name, 'engine': binding['engine']}]
+        return [json.loads(marker) for marker in markers] == [{'name': binding['name'], 'engine': binding['engine']}]
     except ValueError:
         return False
 
 
-def command_for(root, binding, log_path, vscode, env):
+def command_for(root, bindings, log_path, vscode, env):
+    binding = bindings[0]
     if binding['runner'] == 'core-scenario':
         return root / 'core', [
             'sh', 'scripts/test-all.sh', str(log_path), '--', '--locked', '-p', 'facade-scenarios',
-            '--test', binding['target'], binding['name'], '--', '--exact',
+            '--test', binding['target'], '--', '--exact', '--test-threads=1',
+            *(entry['name'] for entry in bindings),
         ], env
     title = re.sub(r'([\\.^$|?*+()[\]{}])', r'\\\1', binding['name'])
     editor_env = {
@@ -179,44 +197,45 @@ def editor_identity(vscode):
     return identity
 
 
-def binding_paths(directory, binding):
-    base = directory / digest(binding)[:12]
+def binding_paths(directory, bindings):
+    base = directory / digest(bindings)[:12]
     console = base.with_suffix('.console.log')
-    observation = base.with_suffix('.log.full') if binding['runner'] == 'core-scenario' else console
+    observation = base.with_suffix('.log.full') if bindings[0]['runner'] == 'core-scenario' else console
     return observation, console, base.with_suffix('.complete.json')
 
 
-def completion_record(plan, binding, observation, console):
+def completion_record(plan, bindings, observation, console):
     return {
         'plan': plan['id'],
         'run': plan['run'],
-        'binding': binding,
+        'bindings': bindings,
         'status': 'pass',
         'observation': {'name': observation.name, 'sha256': hashlib.sha256(observation.read_bytes()).hexdigest()},
         'cleanup': {'name': console.name, 'sha256': hashlib.sha256(console.read_bytes()).hexdigest()},
     }
 
 
-def verify_completion(plan, binding, directory, log):
-    observation, console, completion = binding_paths(directory, binding)
+def verify_completion(plan, bindings, directory):
+    observation, console, completion = binding_paths(directory, bindings)
     for path in dict.fromkeys((observation, console, completion)):
         if not path.is_file() or path.is_symlink():
             raise AcceptanceError(f'missing log or completion record {path.name}')
-    if log != observation.name or read_json(completion) != completion_record(plan, binding, observation, console):
+    if read_json(completion) != completion_record(plan, bindings, observation, console):
         raise AcceptanceError('observation or cleanup does not match this binding and attempt')
     if console.read_text(errors='replace').splitlines()[-1:] != ['no processes left']:
         raise AcceptanceError(f'cleanup did not complete in {console.name}')
-    if not observed_pass(binding, observation.read_text(errors='replace')):
+    if not observed_pass(bindings, observation.read_text(errors='replace')):
         raise AcceptanceError(f'no exact passing observation in {observation.name}')
+    return observation.name
 
 
-def run_binding(root, binding, output_dir, vscode, env):
-    output, stdout, _ = binding_paths(output_dir, binding)
+def run_binding(root, bindings, output_dir, vscode, env):
+    output, stdout, _ = binding_paths(output_dir, bindings)
     isolated = Path(tempfile.mkdtemp(prefix='fci-', dir='/tmp'))
     runtime_dir = isolated / 'runtime'
     runtime_dir.mkdir(mode=0o700)
     cwd, args, test_env = command_for(
-        root, binding, output.with_suffix(''), vscode,
+        root, bindings, output.with_suffix(''), vscode,
         {**env, 'TMPDIR': str(isolated), 'XDG_RUNTIME_DIR': str(runtime_dir)},
     )
     status = 'interrupted'
@@ -234,7 +253,7 @@ def run_binding(root, binding, output_dir, vscode, env):
             if cleanup != 'pass':
                 print(f'Cleanup {cleanup}. Kept {isolated} for diagnosis.', file=stream)
                 status = 'cleanup-fail' if status == 'pass' else f'{status}+cleanup-fail'
-    if status == 'pass' and (not output.is_file() or not observed_pass(binding, output.read_text(errors='replace'))):
+    if status == 'pass' and (not output.is_file() or not observed_pass(bindings, output.read_text(errors='replace'))):
         status = 'missing-pass'
     if status != 'pass':
         return status, stdout.name
@@ -274,22 +293,20 @@ def run_pilots(root, plan, product, output_dir, vscode=None):
         editor = editor_identity(vscode)
     preparation_ms = round((time.monotonic() - started) * 1000)
     results = []
-    observed = {}
-    for case_id, binding in selected.items():
-        key = digest(binding)
-        if key not in observed:
-            print(f'Running {binding["runner"]} {binding["name"]}', flush=True)
-            started = time.monotonic()
-            if prepared == 'pass':
-                status, log = run_binding(root, binding, output_dir, vscode, env)
-                if status == 'pass':
-                    observation, console, completion = binding_paths(output_dir, binding)
-                    completion.write_text(json.dumps(completion_record(plan, binding, observation, console), indent=2) + '\n')
-            else:
-                status, log = f'build-{prepared}', 'editor-build.log'
-            observed[key] = (status, log, round((time.monotonic() - started) * 1000))
-        status, log, elapsed_ms = observed[key]
-        results.append({'id': case_id, 'status': status, 'binding': binding, 'log': log, 'elapsed_ms': elapsed_ms})
+    for group_cases, bindings in execution_groups(selected):
+        names = ', '.join(binding['name'] for binding in bindings)
+        print(f'Running {bindings[0]["runner"]} {names}', flush=True)
+        started = time.monotonic()
+        if prepared == 'pass':
+            status, log = run_binding(root, bindings, output_dir, vscode, env)
+            if status == 'pass':
+                observation, console, completion = binding_paths(output_dir, bindings)
+                completion.write_text(json.dumps(completion_record(plan, bindings, observation, console), indent=2) + '\n')
+        else:
+            status, log = f'build-{prepared}', 'editor-build.log'
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        for case_id, binding in group_cases.items():
+            results.append({'id': case_id, 'status': status, 'binding': binding, 'log': log, 'elapsed_ms': elapsed_ms})
     if make_plan(root, plan['cases'], plan['run']) != plan:
         raise AcceptanceError('acceptance inputs changed during the run')
     receipt = {
@@ -313,6 +330,8 @@ def verify_receipts(plan, receipts, product=None):
     }
     if not expected:
         raise AcceptanceError('no cases selected for verification')
+    groups = {case_id: bindings for cases, bindings in execution_groups(expected) for case_id in cases}
+    verified_logs = {}
     seen = set()
     failures = []
     for path in receipts:
@@ -356,8 +375,13 @@ def verify_receipts(plan, receipts, product=None):
             if not isinstance(log, str) or not log or log != Path(log).name or log in ('.', '..'):
                 failures.append(f'{case_id}: invalid log reference')
             elif item['status'] == 'pass' and item['binding'] == expected[case_id]:
+                bindings = groups[case_id]
+                key = (path.parent, digest(bindings))
                 try:
-                    verify_completion(plan, expected[case_id], path.parent, log)
+                    if key not in verified_logs:
+                        verified_logs[key] = verify_completion(plan, bindings, path.parent)
+                    if log != verified_logs[key]:
+                        raise AcceptanceError('wrong log for this group of exact test bindings')
                 except AcceptanceError as error:
                     failures.append(f'{case_id}: {error}')
     require_same_ids(set(expected), seen, 'pilot results')

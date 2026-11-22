@@ -46,7 +46,9 @@ jobs:
           fi
           echo "pilots=$pilots" >> "$GITHUB_OUTPUT"
       - run: python3 -B -m unittest discover -s ci
-      - run: python3 -B ci/acceptance.py catalog
+      - name: Report catalog coverage
+        shell: bash
+        run: python3 -B ci/acceptance.py catalog | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Check the generated acceptance table
         run: |
           python3 -B ci/acceptance.py table > "$RUNNER_TEMP/CI-ACCEPTANCE.md"
@@ -106,6 +108,7 @@ jobs:
           pattern: shadow-pilot-*-${{ github.run_attempt }}
           path: ${{ runner.temp }}/receipts
       - name: Reconcile the complete pilot
+        shell: bash
         run: |
           mapfile -t receipts < <(find "$RUNNER_TEMP/receipts" -name receipt.json | sort)
-          python3 -B ci/acceptance.py verify "${receipts[@]}"
+          python3 -B ci/acceptance.py verify "${receipts[@]}" | tee -a "$GITHUB_STEP_SUMMARY"

@@ -451,14 +451,20 @@ fn start_workdir_uses_the_invoking_shell_for_local_paths() {
             &app_folder,
         ),
     ];
-    for (options, folder) in cases {
+    for (index, (options, folder)) in cases.iter().enumerate() {
+        let launch_pid = home.project.join(format!("start-{index}-pid"));
+        let launch_args = home.project.join(format!("start-{index}-args.json"));
+        let cli_args = ["--test-flag", "an argument with spaces"];
         let started = home
             .command(&test_binaries().facade)
             .env("PATH", home.path_with_test_programs())
+            .env("FAKECLI_STARTS", &launch_pid)
+            .env("FAKECLI_ARGS", &launch_args)
             .current_dir(&shell_folder)
             .args(["start", "-d"])
             .args(*options)
             .arg("fake")
+            .args(cli_args)
             .stdin(Stdio::null())
             .output()
             .unwrap();
@@ -467,15 +473,42 @@ fn start_workdir_uses_the_invoking_shell_for_local_paths() {
             "{options:?}: {}",
             stderr(&started)
         );
-        let id = started_id(&stdout(&started));
+        let receipt = stdout(&started);
+        let id = started_id(&receipt);
+        let address = started_ref(&receipt);
         let record = home.agent_record(&id).unwrap();
         assert_eq!(record["reference"]["machine_id"], machine_id, "{record}");
+        let inspected = home.inspect_agent(address);
+        let agent = &inspected["agent"];
+        assert_eq!(agent["reference"], record["reference"], "{inspected}");
+        assert_eq!(agent["address"], address, "{inspected}");
+        assert_eq!(agent["cli"], "fake", "{inspected}");
+        let pid = agent["pid"].as_i64().unwrap() as i32;
+        assert_eq!(record["pid"], pid, "{record}");
         let started_folder = Path::new(record["cwd"].as_str().unwrap());
         assert_eq!(
             real_path(started_folder).unwrap(),
             real_path(folder).unwrap(),
             "{record}"
         );
+        assert!(
+            wait_until(LOADED_TIMEOUT, || std::fs::read_to_string(&launch_pid)
+                .is_ok_and(|pids| pids == format!("{pid}\n"))
+                && launch_args.is_file()),
+            "the fake CLI did not record its launch for {address}"
+        );
+        assert!(alive(&process_identity(pid)), "{address} must be live");
+        let mut argv: Vec<String> =
+            facade_scenarios::serde_json::from_slice(&std::fs::read(&launch_args).unwrap())
+                .unwrap();
+        let mcp = argv.iter().position(|arg| arg == "--mcp-config").unwrap();
+        let run = facade_rules::run_folder(&home.path.join("core/runs"), &id).unwrap();
+        assert_eq!(
+            real_path(Path::new(&argv[mcp + 1])).unwrap(),
+            real_path(&run.join("mcp.json")).unwrap()
+        );
+        argv.drain(mcp..mcp + 2);
+        assert_eq!(argv, cli_args);
     }
 }
 
