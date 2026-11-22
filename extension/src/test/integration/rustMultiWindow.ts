@@ -11,7 +11,7 @@ import type { AgentInfo, DaemonHelloResult, InspectResult } from '../../base/cor
 import { isProcessRunning } from '../../base/system';
 import type { RustPin } from '../../core/ports';
 import { freePort, Workbench } from './cdpInput';
-import { callInCore, coreCall, detachedStartReference, endEditors, helloInCore, normalizeDriveLetter, until } from './editors';
+import { callInCore, coreCall, coreListens, detachedStartReference, endEditors, helloInCore, normalizeDriveLetter, until } from './editors';
 import type { AttachView, SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './rustMultiWindowDriver';
 import type { RunningAgent } from './rustWindowDriver';
 
@@ -131,6 +131,83 @@ async function expectAgent(window: DrivenWindow, id: string, pinned: boolean): P
 		console.error(`Last window state in ${window.ready.folder}:`, JSON.stringify(last));
 		throw error;
 	}
+}
+
+/** An expired agent with a missing session and a deliberately unpinned agent on the same real reopen. */
+export async function missingSessionUnpin(open: OpenWindow, folder: string, env: NodeJS.ProcessEnv): Promise<void> {
+	const home = env.FACADE_HOME!;
+	const first = await open(folder, 'pins');
+	assert.strictEqual(normalizeDriveLetter(first.ready.home), normalizeDriveLetter(home));
+	assert.ok(first.ready.machineId && first.ready.remote === null, 'the local window observed the real Core machine');
+	const missing = await first.act<RunningAgent>({ kind: 'start' });
+	const unpinned = await first.act<RunningAgent>({ kind: 'start' });
+	assert.notStrictEqual(missing.session, unpinned.session);
+	const transcript = (agent: RunningAgent) =>
+		path.join(env.CLAUDE_CONFIG_DIR!, 'projects', agent.cwd.replace(/[^A-Za-z0-9]/g, '-'), `${agent.session}.jsonl`);
+	const validSession = fs.readFileSync(transcript(unpinned), 'utf8');
+	assert.ok(fs.existsSync(transcript(missing)));
+	await first.act({ kind: 'pin', agent: missing.id });
+	await first.act({ kind: 'pin', agent: unpinned.id });
+	const { file, pin } = await first.act<SavedPin>({ kind: 'saved-pin', agent: missing.id });
+	assert.deepStrictEqual([pin.machine_id, pin.conversation.sessionId], [first.ready.machineId, missing.session]);
+	const pins = () => (JSON.parse(fs.readFileSync(file, 'utf8')) as { pins: RustPin[] }).pins.map(each => each.agent).sort();
+	assert.deepStrictEqual(pins(), [missing.id, unpinned.id].sort());
+	await first.act({ kind: 'stop', agent: missing.id });
+	await first.act({ kind: 'stop', agent: unpinned.id });
+	await first.act({ kind: 'unpin', agent: unpinned.id });
+	assert.deepStrictEqual(pins(), [missing.id], 'only the other Pin remains on disk before reopening');
+	await first.close();
+	await until('the isolated Core daemon to idle out before aging the fixture', () => !coreListens(home) || undefined, 45_000);
+
+	// Change only the stopped fixture's timestamp while its own daemon is down. Core writes the expiry record on startup.
+	const { DatabaseSync } = await import('node:sqlite');
+	const db = new DatabaseSync(path.join(home, 'core', 'facade.db'));
+	try {
+		const aged = db.prepare('UPDATE agents SET exit_at = ? WHERE agent_id = ? AND session = ? AND pid = ? AND exit_at IS NOT NULL')
+			.run(new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString(), missing.id, missing.session, missing.pid);
+		assert.strictEqual(aged.changes, 1);
+	} finally {
+		db.close();
+	}
+	fs.unlinkSync(transcript(missing));
+
+	const recordDir = path.dirname(env.FACADE_IT_RECORD!);
+	const prefix = path.basename(env.FACADE_IT_RECORD!) + '.starts.#';
+	const launches = () => Object.fromEntries(fs.readdirSync(recordDir).filter(name => name.startsWith(prefix)).map(name => {
+		const pidList = fs.readFileSync(path.join(recordDir, name), 'utf8').trim();
+		return [name.slice(prefix.length), pidList.split(/\r?\n/u).map(Number)];
+	}));
+	const original = { [missing.id]: [missing.pid], [unpinned.id]: [unpinned.pid] };
+	assert.deepStrictEqual(launches(), original);
+
+	const reopened = await open(folder, 'pins');
+	assert.strictEqual(reopened.ready.machineId, first.ready.machineId);
+	const removed = await callInCore(home, 'agent.inspect', { target: { machine_id: pin.machine_id, agent_id: missing.id } });
+	assert.ok('error' in removed, JSON.stringify(removed));
+	assert.deepStrictEqual([removed.error.data.reason, removed.error.data.details?.record_removal], ['not_found', 'expired']);
+	const notice = `Removed the Pin for ${pin.name} because its saved session is gone.`;
+	const workbench = await reopened.workbench();
+	try {
+		await reopened.act({ kind: 'show-notifications' });
+		const containsNotice = `Array.from(document.querySelectorAll('.notification-list-item-message'))
+			.some(node => node.textContent?.trim() === ${JSON.stringify(notice)})`;
+		await until('the missing-session notice in the real workbench', async () =>
+			await workbench.cdp.evaluate<boolean>(containsNotice) || undefined);
+	} finally {
+		workbench.cdp.close();
+	}
+	assert.deepStrictEqual(pins(), [], 'the confirmed-missing session clears its Pin');
+	const view = await reopened.act<WindowView>({ kind: 'snapshot' });
+	assert.deepStrictEqual(view.cards.map(card => [card.id, card.running, card.pinned]), [[unpinned.id, false, false]]);
+	assert.strictEqual(view.terminals, 0);
+	const { agent } = await reopened.act<InspectResult>({ kind: 'inspect', agent: unpinned.id });
+	assert.deepStrictEqual([agent.process, agent.session], ['ended', unpinned.session]);
+	assert.strictEqual(fs.readFileSync(transcript(unpinned), 'utf8'), validSession, 'the intentionally unpinned session remains available');
+	assert.deepStrictEqual((await coreCall(home, 'agent.list', {})).agents, []);
+	await reopened.close();
+	assert.deepStrictEqual(launches(), original, 'neither the missing nor the deliberately unpinned session launched');
+	console.log('  ✔ Missing session removed its Pin and showed the workbench notice. Unpin prevented a second launch. ' +
+		JSON.stringify({ home, expired: missing.id, unpinned: unpinned.id, notice, launches: original }));
 }
 
 /** Go to Agent attaches to a Shell run that survives closing the VS Code window. */

@@ -30,6 +30,39 @@ fn assert_detach_receipt(term: &TestTerminal, name: &str, address: &str) {
 }
 
 #[test]
+fn foreground_attach_returns_the_selected_process_exit_status() {
+    let home = TestHome::new("attachexit");
+    let other = home.start_fake("other");
+    let mut wire = connect(&home);
+    let agent = start_script(
+        &mut wire,
+        &home,
+        "selected",
+        "printf 'ATTACH-READY\\n'; IFS= read -r input; \
+         test \"$input\" = finish || exit 91; printf 'ATTACH-FINISHED\\n'; exit 23",
+    );
+    let selected = address(&home, &agent);
+    let mut terminal = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["attach", &selected]),
+        100,
+        30,
+    );
+    assert!(terminal.wait_for_output(LOADED_TIMEOUT, "ATTACH-READY"));
+    terminal.send(b"finish\r");
+    let exit = terminal
+        .wait_exit(LOADED_TIMEOUT)
+        .expect("the foreground Attach exited");
+    assert_eq!(exit.code(), Some(23), "{}", terminal.text());
+    assert!(terminal.wait_for_output(secs(5), "ATTACH-FINISHED"));
+    assert!(terminal.wait_for_output(
+        secs(5),
+        &format!("selected ({selected}) exited with code 23.")
+    ));
+    assert_eq!(home.agent_record(&other.id).unwrap()["process"], "running");
+}
+
+#[test]
 fn attach_reports_native_progress_during_work_and_clears_it_on_idle_and_detach() {
     let home = TestHome::new("attachprogress");
     let agent = home.start_named_fake(

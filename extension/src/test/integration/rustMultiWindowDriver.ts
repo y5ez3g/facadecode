@@ -19,14 +19,14 @@ import { agentTab, facade, hasAgentTab, inspect, keepConversation, newCard, pin,
 import type { WindowTerminalIdentity } from '../../base/windowIdentity';
 
 type Action =
-	| { readonly kind: 'snapshot' | 'filter' | 'window-component' | 'terminal-owner' }
+	| { readonly kind: 'snapshot' | 'filter' | 'window-component' | 'terminal-owner' | 'show-notifications' }
 	| { readonly kind: 'open-shell-agent'; readonly name: string; readonly address: string; readonly text: string }
 	| { readonly kind: 'shell-attach-view'; readonly grid?: vscode.TerminalDimensions; readonly text?: string; readonly resize?: boolean }
 	| { readonly kind: 'settings-path'; readonly file: string }
 	| { readonly kind: 'shell-pin'; readonly name: string; readonly set?: boolean }
 	| { readonly kind: 'hide-shell-agent'; readonly name: string }
 	| { readonly kind: 'start'; readonly screen?: string; readonly secondGroup?: boolean }
-	| { readonly kind: 'adopt' | 'resume' | 'pin' | 'stop' | 'remove' | 'inspect' | 'saved-pin'; readonly agent: string }
+	| { readonly kind: 'adopt' | 'resume' | 'pin' | 'unpin' | 'stop' | 'remove' | 'inspect' | 'saved-pin'; readonly agent: string }
 	| { readonly kind: 'remote-card'; readonly agent: string; readonly machine: string }
 	| { readonly kind: 'running'; readonly agent: string; readonly screen?: string }
 	| { readonly kind: 'send'; readonly to: string; readonly text: string }
@@ -157,6 +157,9 @@ async function perform(action: Action): Promise<unknown> {
 	switch (action.kind) {
 		case 'snapshot':
 			return view();
+		case 'show-notifications':
+			await vscode.commands.executeCommand('notifications.showList');
+			return true;
 		case 'window-component':
 			return vscode.extensions.getExtension('facade.facadecode-window') !== undefined;
 		case 'terminal-owner': {
@@ -288,11 +291,18 @@ async function perform(action: Action): Promise<unknown> {
 			return agent.address;
 		}
 		case 'pin':
+		case 'unpin':
 		case 'stop':
 		case 'remove': {
 			const card = (await state()).cards.find(each => each.alias === action.agent);
 			assert.ok(card, `#${action.agent} has a visible card`);
 			if (action.kind === 'pin') { await pin(card); }
+			else if (action.kind === 'unpin') {
+				assert.ok(card.pinned);
+				await vscode.commands.executeCommand('facade.unpinAgent', { run_id: card.runId });
+				await until('the same card without its Pin', async () =>
+					(await state()).cards.find(each => each.runId === card.runId && !each.pinned));
+			}
 			else if (action.kind === 'stop') { await stop(card); }
 			else { await vscode.commands.executeCommand('facade.deleteAgent', { run_id: card.runId }); }
 			return true;

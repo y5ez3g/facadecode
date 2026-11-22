@@ -20,7 +20,7 @@ import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { assertTemporaryState, probeEnvironment } from './probeState';
 import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
-import { coldCutoverJourney, multiWindowDriverFiles, rustMultiWindow, sharedAttachJourney, shellHandoff, withRustWindows } from './rustMultiWindow';
+import { coldCutoverJourney, missingSessionUnpin, multiWindowDriverFiles, rustMultiWindow, sharedAttachJourney, shellHandoff, withRustWindows } from './rustMultiWindow';
 
 /** An entry of Facade's settings file, by its fields (CONFIGURATION-2.2). */
 type Entry = { readonly [field: string]: unknown };
@@ -42,6 +42,7 @@ const ACCEPTANCE_DRIVERS = new Map([
 	['conversion', { engine: 'old', cli: 'claude' }],
 	['expiry', { engine: 'old', cli: 'claude' }],
 	['lifetime', { engine: 'rust', cli: 'claude' }],
+	['missing-session-unpin', { engine: 'rust', cli: 'claude' }],
 	['multi-window', { engine: 'rust', cli: 'claude' }],
 	['shell-handoff', { engine: 'rust', cli: 'codex' }],
 	['switch', { engine: 'rust', cli: 'claude' }]
@@ -807,7 +808,7 @@ async function main(): Promise<void> {
 			await endRust(facade);
 		}
 	};
-	const rustWindows = async (runName: 'multi' | 'handoff' | 'attach' | 'cutover') => {
+	const rustWindows = async (runName: 'multi' | 'handoff' | 'attach' | 'cutover' | 'missing-session-unpin') => {
 		const driver = path.join(root, `driver-${runName}`);
 		const facade = path.join(home, runName);
 		const peer = path.join(root, `${runName}-peer`);
@@ -886,6 +887,7 @@ async function main(): Promise<void> {
 				if (runName === 'multi') {
 					return rustMultiWindow(open, { folder: repo, peer, shared, home: facade, remote: null, files });
 				}
+				if (runName === 'missing-session-unpin') { return missingSessionUnpin(open, repo, env); }
 				const shellEnv = {
 					...env, ...isolatedStorage, HOME: agentsHome, USERPROFILE: agentsHome,
 					APPDATA: path.join(agentsHome, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(agentsHome, 'AppData', 'Local')
@@ -900,6 +902,7 @@ async function main(): Promise<void> {
 			// Both journeys observe the live Core daemon and an editor view of the same machine-qualified agent.
 			if (runName === 'multi') { driverPassed('multi-window', 'rust'); }
 			if (runName === 'handoff') { driverPassed('shell-handoff', 'rust'); }
+			if (runName === 'missing-session-unpin') { driverPassed('missing-session-unpin', 'rust'); }
 		} finally {
 			if (prior) {
 				endMatching(facade);
@@ -1038,7 +1041,7 @@ async function main(): Promise<void> {
 			await conversion(BUILT_INS[0], true, true);
 		}
 		// The Rust engine's acceptance on the extension's side: with the engine on, a run of the whole suite has it, and each is asked for alone
-		if (['engine', 'switch', 'lifetime', 'multi-window', 'shell-handoff', 'shared-attach', 'cold-cutover'].includes(only ?? '') && engine !== 'rust') {
+		if (['engine', 'switch', 'lifetime', 'multi-window', 'missing-session-unpin', 'shell-handoff', 'shared-attach', 'cold-cutover'].includes(only ?? '') && engine !== 'rust') {
 			throw new Error(`FACADE_IT_ONLY=${only} runs on the Rust engine: set FACADE_IT_ENGINE=rust.`);
 		}
 		if (only === 'engine' || (!only && engine === 'rust')) {
@@ -1049,6 +1052,9 @@ async function main(): Promise<void> {
 		}
 		if (engine === 'rust' && (!only || only === 'multi-window')) {
 			await rustWindows('multi');
+		}
+		if (only === 'missing-session-unpin') {
+			await rustWindows('missing-session-unpin');
 		}
 		if (engine === 'rust' && (!only || only === 'shell-handoff')) {
 			await rustWindows('handoff');

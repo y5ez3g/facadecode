@@ -17,6 +17,7 @@ EDITOR_DRIVERS = {
     'conversion': ('old', 'claude'),
     'expiry': ('old', 'claude'),
     'lifetime': ('rust', 'claude'),
+    'missing-session-unpin': ('rust', 'claude'),
     'multi-window': ('rust', 'claude'),
     'shell-handoff': ('rust', 'codex'),
     'switch': ('rust', 'claude'),

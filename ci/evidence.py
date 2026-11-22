@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import time
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from catalog import AcceptanceError, MOCHA_JOURNEYS, json_object, read_json, require_same_ids
@@ -308,8 +309,8 @@ def run_pilots(root, plan, product, output_dir, vscode=None):
         vscode = download_editor(root, env, output_dir)
         editor = editor_identity(vscode)
     preparation_ms = round((time.monotonic() - started) * 1000)
-    results = []
-    for group_cases, bindings in execution_groups(selected):
+    def run_group(group):
+        group_cases, bindings = group
         names = ', '.join(binding['name'] for binding in bindings)
         print(f'Running {bindings[0]["runner"]} {names}', flush=True)
         started = time.monotonic()
@@ -321,8 +322,21 @@ def run_pilots(root, plan, product, output_dir, vscode=None):
         else:
             status, log = f'build-{prepared}', 'editor-build.log'
         elapsed_ms = round((time.monotonic() - started) * 1000)
-        for case_id, binding in group_cases.items():
-            results.append({'id': case_id, 'status': status, 'binding': binding, 'log': log, 'elapsed_ms': elapsed_ms})
+        return [
+            {'id': case_id, 'status': status, 'binding': binding, 'log': log, 'elapsed_ms': elapsed_ms}
+            for case_id, binding in group_cases.items()
+        ]
+
+    results = []
+    groups = execution_groups(selected)
+    if product == 'extension' and prepared == 'pass':
+        # Test contexts and displays are isolated. The staged binaries are shared and read-only here.
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            for observed in workers.map(run_group, groups):
+                results.extend(observed)
+    else:
+        for group in groups:
+            results.extend(run_group(group))
     if make_plan(root, plan['cases'], plan['run']) != plan:
         raise AcceptanceError('acceptance inputs changed during the run')
     receipt = {

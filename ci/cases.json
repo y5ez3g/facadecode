@@ -6,10 +6,12 @@
     "core/p0/start-stop/start-and-resolve",
     "core/p0/start-stop/targeted-stop",
     "core/p0/message-receipt/delivery",
+    "core/p0/message-receipt/raw-disconnect",
     "core/p0/message-receipt/lost-reply",
     "core/p0/service-recovery/daemon-restart",
     "core/p0/service-recovery/pending-effect",
     "core/p0/attach/detach-reconnect",
+    "core/p0/attach/foreground-exit",
     "core/p0/attach/stream",
     "core/p0/input-draft/draft-protection",
     "core/p0/input-draft/invalid-batch",
@@ -18,11 +20,13 @@
     "extension/p0/activation-shell/rust-handoff",
     "extension/p0/pin-reload/close-one-window",
     "extension/p0/pin-reload/pinned-reload",
+    "extension/p0/pin-reload/missing-session-unpin",
     "extension/p0/pin-reload/resume-old",
     "extension/p0/pin-reload/resume-rust",
     "core/p0/guest-reply/correlated-reply",
     "core/p0/guest-reply/wrong-caller",
     "core/p0/authority/authorized",
+    "core/p0/authority/wrong-peer",
     "core/p0/authority/permission-denied",
     "extension/p0/window-replacement/window-activation-old",
     "extension/p0/window-replacement/window-activation-rust",
@@ -294,7 +298,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/input.rs:476",
-        "core/tests/tests/attach.rs:450"
+        "core/tests/tests/attach.rs"
       ]
     },
     {
@@ -547,7 +551,7 @@
       "assertion": "Correlate the delivery receipt and verify a single delivery at the intended target after reconnect and replay with the original request ID.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:1951",
+        "core/tests/tests/machines.rs:2071",
         "core/tests/tests/reliability.rs"
       ],
       "test": {
@@ -607,7 +611,7 @@
       "assertion": "Resize an owned watch and observe the shared screen adopt the expected dimensions, with a different connection's attempt rejected.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/attach.rs:450",
+        "core/tests/tests/attach.rs:483",
         "core/tests/tests/watches.rs"
       ],
       "test": {
@@ -621,7 +625,7 @@
       "assertion": "Discover the configured test CLI and verify its advertised capability on the requested machine.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:795",
+        "core/tests/tests/machines.rs:915",
         "core/tests/tests/configuration.rs:243"
       ],
       "test": {
@@ -676,7 +680,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs",
-        "core/tests/tests/attach.rs:450"
+        "core/tests/tests/attach.rs"
       ]
     },
     {
@@ -716,7 +720,7 @@
       "assertion": "Return the expected local or remote workspace locations and their kinds.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:795",
+        "core/tests/tests/machines.rs:915",
         "core/tests/tests/windows.rs:176"
       ],
       "test": {
@@ -730,7 +734,7 @@
       "assertion": "Authorize one foreground handoff to a known isolated peer and verify the resulting machine ID and roster state for the connection lifecycle.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:649"
+        "core/tests/tests/machines.rs:769"
       ],
       "test": {
         "runner": "core-scenario",
@@ -761,7 +765,7 @@
       "assertion": "Rename a remote peer through the allowed session and read its new name under the same machine ID.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2356"
+        "core/tests/tests/machines.rs:2540"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1130,8 +1134,7 @@
       "assertion": "Detach restores the caller terminal and a second Attach reaches the same live run.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/attach.rs:128",
-        "core/tests/tests/attach.rs"
+        "core/tests/tests/attach.rs:161"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1144,16 +1147,21 @@
       "assertion": "A foreground Attach returns the selected child exit status.",
       "stage": "pr",
       "existing_tests": [
+        "core/tests/tests/attach.rs:33",
         "core/tests/tests/commands.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "attach",
+        "name": "foreground_attach_returns_the_selected_process_exit_status"
+      }
     },
     {
       "id": "core/p0/attach/stream",
       "assertion": "Attach to one agent and read live terminal output for that process.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/attach.rs:410",
-        "core/tests/tests/attach.rs"
+        "core/tests/tests/attach.rs:443"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1192,8 +1200,13 @@
       "assertion": "Reject a mismatched machine identity and disambiguate equal agent names on different machines.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs"
-      ]
+        "core/tests/tests/machines.rs:451"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "a_saved_destination_refuses_a_different_peer_and_keeps_exact_agent_refs"
+      }
     },
     {
       "id": "core/p0/guest-reply/correlated-reply",
@@ -1308,7 +1321,7 @@
       "assertion": "Drop the reply after delivery and retry the original request ID. The result settles once with one delivery.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:1951",
+        "core/tests/tests/machines.rs:2071",
         "core/tests/tests/reliability.rs"
       ],
       "test": {
@@ -1322,8 +1335,14 @@
       "assertion": "Disconnect during raw input and verify the returned partial or unknown outcome matches the effect observed at the target.",
       "stage": "pr",
       "existing_tests": [
+        "core/tests/tests/machines.rs:2151",
         "core/tests/tests/messages.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "raw_input_on_a_cut_peer_link_reports_unknown_and_arrives_once"
+      }
     },
     {
       "id": "core/p0/prior-build/cold-migration",
@@ -1372,7 +1391,7 @@
       "assertion": "Lose the cross-machine reply after delivery. A retry with the original ID observes the same settlement and one delivery.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:1951",
+        "core/tests/tests/machines.rs:2071",
         "core/tests/tests/reliability.rs"
       ],
       "test": {
@@ -1386,7 +1405,7 @@
       "assertion": "Route loss is visible and the route can recover to the original agent identity.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2030"
+        "core/tests/tests/machines.rs:2214"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1562,8 +1581,7 @@
       "assertion": "Attach to the intended process, observe its output and detach with that process still alive.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/attach.rs:410",
-        "core/tests/tests/attach.rs:41",
+        "core/tests/tests/attach.rs:443",
         "core/tests/tests/cli.rs",
         "core/tests/tests/help.rs:15",
         "core/tests/tests/input.rs:72"
@@ -1596,7 +1614,7 @@
       "assertion": "Register the authenticated peer and read back the persisted machine identity and route.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:795",
+        "core/tests/tests/machines.rs:915",
         "core/tests/tests/cli.rs",
         "core/tests/tests/help.rs:23"
       ],
@@ -1611,7 +1629,7 @@
       "assertion": "Connect to a controlled peer in the foreground, verify its identity and keep both daemons alive until the connection closes.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:649"
+        "core/tests/tests/machines.rs:769"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1643,7 +1661,7 @@
       "assertion": "Read the changed peer name from the roster under the original machine ID.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2356"
+        "core/tests/tests/machines.rs:2540"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1916,7 +1934,7 @@
       "assertion": "Start through the installed launcher and prove the Keeper owns the test CLI terminal.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/attach.rs:660",
+        "core/tests/tests/attach.rs",
         "core/tests/tests/cli.rs",
         "core/tests/tests/commands.rs:518",
         "core/tests/tests/keeper.rs:119"
@@ -2900,8 +2918,16 @@
       "assertion": "A missing saved session produces the prescribed outcome, and an Unpin prevents resurrection.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/rustMultiWindow.ts"
-      ]
+        "extension/src/test/integration/rustMultiWindow.ts",
+        "extension/src/test/integration/rustMultiWindowDriver.ts"
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "rust",
+        "journey": "missing-session-unpin",
+        "built_in": "claude",
+        "name": "missing-session-unpin"
+      }
     },
     {
       "id": "extension/p0/pin-reload/old-last-window-grace",

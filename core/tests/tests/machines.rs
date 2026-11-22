@@ -446,6 +446,126 @@ fn a_guarded_removal_matches_the_exact_saved_id_even_when_a_name_matches() {
     assert_eq!(ssh_attempts(&remote), attempts);
 }
 
+/// A saved destination must introduce its original machine before it can serve any agent.
+#[test]
+fn a_saved_destination_refuses_a_different_peer_and_keeps_exact_agent_refs() {
+    let local = TestHome::new("wrong-peer-origin");
+    let peer = TestHome::new("wrong-peer-expected");
+    let other = TestHome::new("wrong-peer-unexpected");
+    let facade = &test_binaries().facade;
+    install_machine_ssh(
+        &[("origin", &local), ("devbox", &peer), ("other", &other)],
+        facade,
+    );
+    let local_id = name_machine(&local, "origin");
+    let peer_id = name_machine(&peer, "devbox");
+    let other_id = name_machine(&other, "other");
+    assert_ne!(peer_id, other_id);
+    let local_run = local.start_fake_with("worker", &[("FAKECLI_NAME", "local marker")]);
+    let peer_run = peer.start_fake_with("worker", &[("FAKECLI_NAME", "peer marker")]);
+    assert_eq!(local_run.id, peer_run.id);
+    assert!(add_saved(&local, "devbox", &peer).contains("Saved the connection to devbox."));
+    wait_for_route(&local, &peer_id, &[&peer_id]);
+    let saved = || {
+        saved_ssh(
+            &machine_json(&local, &local_id).unwrap(),
+            &local_id,
+            &peer_id,
+        )
+    };
+    let before = saved();
+    assert_eq!(before["transport"]["ssh_destination"], "devbox");
+    assert_eq!(before["state"], "connected");
+
+    // Relay a new connection for the saved destination to the other real daemon.
+    let other_run = other.start_fake("other worker");
+    let mut opening = ManualReadClient::open(&local);
+    opening.send(
+        1,
+        "call",
+        json!({ "op": "machine.connect", "args": { "kind": "saved", "transport": before["transport"] } }),
+    );
+    let authorized = opening
+        .read_message()
+        .expect("machine connection authorization");
+    assert_eq!(authorized["id"], 1, "{authorized}");
+    assert_eq!(
+        authorized["result"]["expected_machine_id"], peer_id,
+        "{authorized}"
+    );
+    let hello = opening
+        .read_message()
+        .expect("the origin daemon's machine hello");
+    assert_eq!(hello["method"], "hello", "{hello}");
+    assert_eq!(
+        hello["params"]["machine"]["machine_id"], local_id,
+        "{hello}"
+    );
+    let mut remote = other
+        .command(facade)
+        .args(["machine", "serve", "--no-start"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(remote.stdin.take().unwrap(), "{hello}").unwrap();
+    let served = remote.wait_with_output().unwrap();
+    let output = stdout(&served);
+    let reply: Value = serde_json::from_str(
+        output
+            .lines()
+            .next()
+            .expect("the other daemon's hello reply"),
+    )
+    .unwrap();
+    assert_eq!(reply["id"], hello["id"], "{reply}");
+    assert_eq!(reply["result"]["api_version"], 1, "{reply}");
+    assert_eq!(reply["result"]["machine_id"], other_id, "{reply}");
+    writeln!(opening.writer, "{reply}").unwrap();
+    let refused = opening.read_message().expect("the mismatch notification");
+    assert_eq!(refused["method"], "connect_failed", "{refused}");
+    let error = &refused["params"]["error"]["data"];
+    assert_eq!(error["reason"], "machine_id_mismatch", "{refused}");
+    assert_eq!(
+        error["details"]["expected_machine_id"], peer_id,
+        "{refused}"
+    );
+    assert_eq!(error["details"]["machine_id"], other_id, "{refused}");
+    assert!(alive(&other_run.process));
+    assert!(machine_json(&local, &other_id).is_none());
+    assert_eq!(saved(), before);
+    wait_for_route(&local, &peer_id, &[&peer_id]);
+
+    let mut wire = connect(&local);
+    let ambiguous = wire.call("agent.inspect", json!({ "target": "worker" }));
+    assert_eq!(
+        error_reason(&ambiguous),
+        "ambiguous_reference",
+        "{ambiguous}"
+    );
+    let candidates = ambiguous["error"]["data"]["details"]["candidates"]
+        .as_array()
+        .unwrap();
+    assert_eq!(candidates.len(), 2, "{ambiguous}");
+    for (machine, worker, marker) in [
+        (&local_id, &local_run, "local marker"),
+        (&peer_id, &peer_run, "peer marker"),
+    ] {
+        assert!(candidates.contains(&json!(worker.address)), "{ambiguous}");
+        let reference = json!({ "machine_id": machine, "agent_id": worker.id });
+        let found = wire.call_ok("agent.inspect", json!({ "target": reference }));
+        assert_eq!(found["agent"]["reference"], reference, "{found}");
+        assert_eq!(found["agent"]["pid"], worker.pid, "{found}");
+        assert_eq!(process_identity(worker.pid), worker.process);
+        let screen = wire.call_ok("agent.screen", json!({ "target": reference }));
+        assert!(
+            screen["text"].as_str().unwrap().contains(marker),
+            "{screen}"
+        );
+    }
+}
+
 #[test]
 fn cold_roster_and_local_lists_never_use_a_saved_ssh_route() {
     let local = TestHome::new("cold-local");
@@ -2022,6 +2142,70 @@ fn a_cross_machine_send_replays_its_original_settlement_after_reconnect() {
             .filter(|message| message.contains(text))
             .count(),
         1
+    );
+}
+
+/// Once the peer accepts raw input, a cut link can hide the result while the bytes still arrive.
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the test gate of debug builds")]
+fn raw_input_on_a_cut_peer_link_reports_unknown_and_arrives_once() {
+    let local = TestHome::new("raw-cut-origin");
+    let peer = TestHome::new("raw-cut-peer");
+    install_machine_ssh(
+        &[("origin", &local), ("peer", &peer)],
+        &test_binaries().facade,
+    );
+    let gate = "before-type-input";
+    peer.start_facade_with(&[("FACADE_TEST_GATES", gate)]);
+    name_machine(&local, "origin");
+    let peer_id = name_machine(&peer, "peer");
+    let keys = peer.project.join("raw-keys");
+    let worker = peer.start_fake_with("worker", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
+    let reference = peer.inspect_agent(&worker.address)["agent"]["reference"].clone();
+    assert!(wait_until(LOADED_TIMEOUT, || keys.is_file()));
+    let link = MachineLink::open(&local, "peer", &peer);
+    wait_for_route(&local, &peer_id, &[&peer_id]);
+
+    let text = "raw input 界";
+    let bytes = format!("{text}\r");
+    let mut origin = connect(&local);
+    let input = origin.send(
+        "call",
+        json!({
+            "op": "agent.type",
+            "args": { "target": reference,
+                "input": { "kind": "raw", "raw": facade_base::base64::encode(bytes.as_bytes()) } },
+        }),
+    );
+    peer.wait_for_gate(gate);
+    // The forwarded request is executing on the peer, with no terminal bytes written yet.
+    assert!(std::fs::read(&keys).unwrap().is_empty());
+    drop(link);
+    let lost = origin
+        .wait_for_response(input, LOADED_TIMEOUT)
+        .expect("the origin reports the cut peer link");
+    assert_eq!(lost["id"], input, "{lost}");
+    assert_eq!(error_reason(&lost), "unavailable", "{lost}");
+    let details = &lost["error"]["data"]["details"];
+    assert_eq!(details["execution"], "outcome_unknown", "{lost}");
+    assert_eq!(details["machine"]["machine_id"], peer_id, "{lost}");
+    assert!(std::fs::read(&keys).unwrap().is_empty());
+
+    peer.release_gate(gate);
+    assert!(wait_until(LOADED_TIMEOUT, || peer.submitted_messages() == [text]));
+    assert_eq!(std::fs::read(&keys).unwrap(), bytes.as_bytes());
+    assert_eq!(process_identity(worker.pid), worker.process);
+
+    let _link = MachineLink::open(&local, "peer", &peer);
+    wait_for_route(&local, &peer_id, &[&peer_id]);
+    let screen = origin.call_ok("agent.screen", json!({ "target": reference }));
+    assert!(screen["text"].as_str().unwrap().contains(text), "{screen}");
+    let next = "new input after reconnect";
+    type_raw(&mut origin, &worker.address, &format!("{next}\r"));
+    assert!(wait_until(LOADED_TIMEOUT, || peer.submitted_messages() == [text, next]));
+    assert_eq!(
+        std::fs::read(&keys).unwrap(),
+        format!("{bytes}{next}\r").as_bytes()
     );
 }
 
