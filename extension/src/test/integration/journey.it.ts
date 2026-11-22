@@ -427,6 +427,8 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			assert.ok(BUILT_IN_NAMES.includes(card.name), `Resume assigns a short name, not the history title: ${card.name}`);
 			const alias = fixtureAlias(card);
 			assert.ok(alias);
+			// The card comes from the live host, where the two engines expose different short ID forms.
+			this.acceptanceEngine = card.alias.startsWith('#') ? 'old' : 'rust';
 			const launch = await until('the resumed process', async () => fs.existsSync(`${RECORD}.args.${alias}`) ? JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] } : undefined);
 			assert.ok(sameFolder(launch.cwd, cwd));
 			const resumeAt = launch.args.indexOf(fixture.args[0]);

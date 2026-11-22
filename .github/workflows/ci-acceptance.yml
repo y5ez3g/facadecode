@@ -1,0 +1,111 @@
+name: CI acceptance shadow
+
+on:
+  pull_request:
+    paths:
+      - 'ci/**'
+      - 'core/**'
+      - 'extension/**'
+      - 'docs/CI.md'
+      - 'docs/CI-ACCEPTANCE.md'
+      - 'docs/core/**'
+      - 'docs/extension/**'
+      - '.github/workflows/core-check.yml'
+      - '.github/workflows/extension-check.yml'
+      - '.github/workflows/ci-acceptance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: acceptance-shadow-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  catalog:
+    name: Shadow catalog and policy tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      pilots: ${{ steps.scope.outputs.pilots }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Select runtime pilots
+        id: scope
+        run: |
+          pilots=true
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]] &&
+            git diff --quiet HEAD^1 HEAD -- ci docs/CI.md \
+              .github/workflows/{ci-acceptance,core-check,extension-check}.yml
+          then
+            pilots=false
+          fi
+          echo "pilots=$pilots" >> "$GITHUB_OUTPUT"
+      - run: python3 -B -m unittest discover -s ci
+      - run: python3 -B ci/acceptance.py catalog
+      - name: Check the generated acceptance table
+        run: |
+          python3 -B ci/acceptance.py table > "$RUNNER_TEMP/CI-ACCEPTANCE.md"
+          diff -u docs/CI-ACCEPTANCE.md "$RUNNER_TEMP/CI-ACCEPTANCE.md"
+
+  pilot:
+    name: Shadow pilot (${{ matrix.product }})
+    if: needs.catalog.outputs.pilots == 'true'
+    needs: catalog
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        product: [core, extension]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        working-directory: core
+        run: rustup toolchain install
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: matrix.product == 'extension'
+        with:
+          node-version-file: extension/.nvmrc
+      - name: Install Linux editor and Core build prerequisites
+        if: matrix.product == 'extension'
+        working-directory: core
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools xvfb xauth libgtk-3-0t64 libnss3 libasound2t64
+          rustup target add x86_64-unknown-linux-musl
+      - name: Run and verify selected cases
+        env:
+          PRODUCT: ${{ matrix.product }}
+        run: python3 -B ci/acceptance.py run --product "$PRODUCT" --output "$RUNNER_TEMP/pilot"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: shadow-pilot-${{ matrix.product }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pilot/
+          if-no-files-found: ignore
+
+  report:
+    name: Shadow pilot evidence
+    if: always() && needs.catalog.result == 'success' && needs.catalog.outputs.pilots == 'true'
+    needs: [catalog, pilot]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: shadow-pilot-*-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/receipts
+      - name: Reconcile the complete pilot
+        run: |
+          mapfile -t receipts < <(find "$RUNNER_TEMP/receipts" -name receipt.json | sort)
+          python3 -B ci/acceptance.py verify "${receipts[@]}"

@@ -15,7 +15,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { parse as parseJsonc, ParseError } from 'jsonc-parser';
 import { isDeepStrictEqual } from 'util';
-import { coreCall, coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
+import { coreCall, coreListens, coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
 import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { assertTemporaryState, probeEnvironment } from './probeState';
@@ -79,6 +79,7 @@ function untrust(file: string, root: string): void {
 async function main(): Promise<void> {
 	const executable = officialEditor();
 	const grep = process.env.FACADE_IT_GREP;
+	const expectedTest = process.env.FACADE_IT_EXPECT_TEST;
 	// For a look at what a run left: its folder kept, and one part of it alone (`journeys`, `cross` or `conversion`)
 	const keep = !!process.env.FACADE_IT_KEEP;
 	const only = process.env.FACADE_IT_ONLY;
@@ -125,6 +126,9 @@ async function main(): Promise<void> {
 	const current = process.env.FACADE_IT_CURRENT;
 	// One built-in's journeys and conversion alone, FACADE_IT_BUILT_IN, for a quick look at a change
 	const builtIn = process.env.FACADE_IT_BUILT_IN;
+	if (expectedTest && (only !== 'journeys' || !grep || !BUILT_INS.some(cli => cli.id === builtIn))) {
+		throw new Error('An exact acceptance test requires journeys, a built-in and a test filter.');
+	}
 	const passed = Object.fromEntries((process.env.FACADE_IT_REAL_PASS ?? '').split(',').filter(name => name && process.env[name] !== undefined).map(name => [name, process.env[name]!]));
 	// A prepared temporary home may be used directly, or copied from an isolated state template.
 	const prepared = only === 'real' || nativeLifecycle ? process.env.FACADE_IT_REAL_AGENTS_HOME : undefined;
@@ -208,7 +212,10 @@ async function main(): Promise<void> {
 	const corePrograms = coreProgram(path.join(extension, 'bin'));
 	const endRust = async (facade: string) => {
 		if (engine === 'rust') {
-			await endCore(facade);
+			await endCore(facade, expectedTest ? 45_000 : undefined);
+			if (expectedTest && coreListens(facade)) {
+				throw new Error('The isolated acceptance test daemon did not exit.');
+			}
 		}
 	};
 	/**
@@ -243,6 +250,7 @@ async function main(): Promise<void> {
 					FACADE_IT_ENGINE: engine,
 					CLAUDE_CONFIG_DIR: claude,
 					...(grep ? { FACADE_IT_GREP: grep } : {}),
+					...(expectedTest ? { FACADE_IT_EXPECT_TEST: expectedTest } : {}),
 					...env,
 					...profile.env
 				}
