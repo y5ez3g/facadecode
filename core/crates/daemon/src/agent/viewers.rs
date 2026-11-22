@@ -12,6 +12,7 @@ use facade_base::api_v1::{
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_screen::{ParsedOutput, Screen};
 use tokio::sync::{mpsc, oneshot, watch};
+use tokio::time::Instant;
 
 /// Incremental output allowed in each queue; a complete redraw may be larger.
 const MAX_VIEWER_OUTPUT_BYTES: usize = 1024 * 1024;
@@ -241,7 +242,7 @@ impl Viewers {
     /// Captures an initial frame and keeps the watch for the life of the run.
     pub(crate) fn admit(
         &mut self,
-        request: ViewerRequest,
+        mut request: ViewerRequest,
         screen: &Screen,
         exit: Option<&ProcessExit>,
         process: ProcessState,
@@ -261,7 +262,15 @@ impl Viewers {
             process,
             working: request.kind.reports_activity().then_some(self.working),
         };
-        if request.reply.send(snapshot).is_err() || request.tx.queue.is_closed() {
+        let replied = request.reply.send(snapshot).is_ok();
+        // A final snapshot can release the output queue as soon as its reply arrives.
+        if replied
+            && (process == ProcessState::Ended || exit.is_some())
+            && let Some(signal) = request.tx.exit_signal.take()
+        {
+            let _ = signal.send(Instant::now());
+        }
+        if !replied || request.tx.queue.is_closed() {
             self.removed = true;
             return;
         }
@@ -289,16 +298,22 @@ impl Viewers {
         });
     }
 
-    /// Sends parsed output, or marks watches for the redraw the parser requires.
+    /// Sends parsed output and preserves native activity while a redraw is pending.
     pub(crate) fn show(&mut self, fed: &ParsedOutput) {
-        if fed.redraw_viewers {
-            self.redraw_all();
-        } else if !fed.viewer_output.is_empty() {
-            let bytes: Arc<[u8]> = fed.viewer_output.as_slice().into();
+        let output: Option<Arc<[u8]>> = (!fed.redraw_viewers && !fed.viewer_output.is_empty())
+            .then(|| fed.viewer_output.as_slice().into());
+        let activity: Option<Arc<[u8]>> =
+            (!fed.native_activity.is_empty()).then(|| fed.native_activity.as_slice().into());
+        if output.is_some() || activity.is_some() {
             self.retain_active(|v| {
-                if v.drawing != Drawing::Current {
+                let bytes = match v.drawing {
+                    Drawing::Current if !fed.redraw_viewers => output.as_ref(),
+                    Drawing::Current | Drawing::Redraw => activity.as_ref(),
+                    Drawing::RedrawThenExit => None,
+                };
+                let Some(bytes) = bytes else {
                     return true;
-                }
+                };
                 if v.tx.queue.is_closed() {
                     return false;
                 }
@@ -306,8 +321,11 @@ impl Viewers {
                     v.drawing = Drawing::Redraw;
                     return true;
                 }
-                v.tx.send(ViewerChange::Output(bytes.clone()))
+                v.tx.send(ViewerChange::Output(Arc::clone(bytes)))
             });
+        }
+        if fed.redraw_viewers {
+            self.redraw_all();
         }
     }
 
@@ -332,6 +350,15 @@ impl Viewers {
             });
         }
         self.is_behind()
+    }
+
+    /// Signals the run's exit to dedicated viewers independently of the output queue.
+    pub(crate) fn note_exit(&mut self, at: Instant) {
+        for viewer in &mut self.active {
+            if let Some(signal) = viewer.tx.exit_signal.take() {
+                let _ = signal.send(at);
+            }
+        }
     }
 
     /// Queues the run's exit immediately for current watches, after redraw for others.
@@ -422,6 +449,7 @@ pub(crate) struct ViewerSender {
     queue: mpsc::UnboundedSender<ViewerChange>,
     queued_bytes: Arc<AtomicUsize>,
     stalled: watch::Sender<bool>,
+    exit_signal: Option<oneshot::Sender<Instant>>,
 }
 
 /// The receiving side of a viewer queue.
@@ -486,6 +514,7 @@ pub(crate) fn viewer_channel() -> (ViewerSender, ViewerReceiver) {
         queue,
         stalled,
         queued_bytes: Arc::clone(&queued_bytes),
+        exit_signal: None,
     };
     let rx = ViewerReceiver {
         queue: receiver,
@@ -493,4 +522,13 @@ pub(crate) fn viewer_channel() -> (ViewerSender, ViewerReceiver) {
         queued_bytes,
     };
     (tx, rx)
+}
+
+/// Creates a viewer queue with an independent signal for the watched run's exit.
+pub(crate) fn viewer_channel_with_exit()
+-> (ViewerSender, ViewerReceiver, oneshot::Receiver<Instant>) {
+    let (mut tx, rx) = viewer_channel();
+    let (signal, exit) = oneshot::channel();
+    tx.exit_signal = Some(signal);
+    (tx, rx, exit)
 }

@@ -1,7 +1,7 @@
 //! Blocking client for the authenticated daemon API v1 connection.
 
 use std::collections::VecDeque;
-use std::io::{self, BufReader, ErrorKind, Write};
+use std::io::{self, BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::paths::{ClientSocket, is_connection_lost};
+use crate::paths::{ClientSocket, connect_client_until, is_connection_lost};
 
 use super::daemon::{
     self, AgentSend, AgentStart, ChangedParams, ClientKind, ClosingParams, HANDOVER_TIME,
@@ -65,18 +65,22 @@ impl DaemonClient {
         until: Instant,
         opening: &mut dyn FnMut(&ClientSocket) -> bool,
     ) -> anyhow::Result<Option<Self>> {
-        let Some(writer) = connect_transport(socket, opening)? else {
+        let Some(writer) = connect_transport(socket, until, opening)? else {
             return Ok(None);
         };
-        let wait = until
-            .saturating_duration_since(Instant::now())
-            .max(Duration::from_millis(1));
-        // A peer that closed already may no longer allow a timeout to be set.
-        if writer.set_read_timeout(Some(wait)).is_err() {
+        let Ok(time) = remaining(until) else {
+            return Ok(None);
+        };
+        // A peer that closed during opening can refuse the initial timeout setup.
+        if writer.set_read_timeout(Some(time)).is_err() {
             return Ok(None);
         }
-        match Self::hello(writer) {
-            Ok(mut client) if client.writer.set_read_timeout(None).is_ok() => {
+        match Self::hello_as(writer, ClientKind::Terminal, Some(until)) {
+            Ok(mut client)
+                if client.writer.set_read_timeout(None).is_ok()
+                    && client.writer.set_write_timeout(None).is_ok()
+                    && remaining(until).is_ok() =>
+            {
                 client.origin = Some(socket.to_owned());
                 Ok(Some(client))
             }
@@ -93,17 +97,16 @@ impl DaemonClient {
         }
     }
 
-    /// Completes the terminal hello on an already connected socket.
-    fn hello(writer: ClientSocket) -> anyhow::Result<Self> {
-        Self::hello_as(writer, ClientKind::Terminal)
-    }
-
     /// Completes hello on an internal socket whose MCP actor the daemon already proved.
     pub fn hello_actor(writer: ClientSocket) -> anyhow::Result<Self> {
-        Self::hello_as(writer, ClientKind::Mcp)
+        Self::hello_as(writer, ClientKind::Mcp, None)
     }
 
-    fn hello_as(mut writer: ClientSocket, kind: ClientKind) -> anyhow::Result<Self> {
+    fn hello_as(
+        mut writer: ClientSocket,
+        kind: ClientKind,
+        until: Option<Instant>,
+    ) -> anyhow::Result<Self> {
         let mut reader = BufReader::new(writer.try_clone()?);
         let mut line = Vec::new();
         let offered = ApiVersions::new(daemon::SUPPORTED_API_VERSIONS.to_vec())
@@ -119,9 +122,9 @@ impl DaemonClient {
                 foreground: false,
             },
         );
-        writer.write_all(&encode_line(&request))?;
+        write_frame(&mut writer, &encode_line(&request), until)?;
 
-        let response = match read_server_message(&mut reader, &mut line)? {
+        let response = match read_frame(&mut reader, &mut line, until)? {
             Some(ServerMessage::Response(response)) if answers(&response, HELLO_ID) => response,
             Some(_) => anyhow::bail!("the Orchestrator did not respond to hello"),
             None => {
@@ -150,6 +153,26 @@ impl DaemonClient {
     /// Calls an operation and returns its typed result.
     pub fn call<O: Operation>(&mut self, args: O::Args) -> anyhow::Result<O::Result> {
         self.exchange(methods::CALL, &call_params::<O>(args)?)
+    }
+
+    /// Calls once on this connection within an absolute deadline, including partial socket
+    /// transfers and closing acknowledgments. Discard the connection after a timeout because a
+    /// request or response frame may be incomplete.
+    pub fn call_until<O: Operation>(
+        &mut self,
+        args: O::Args,
+        until: Instant,
+    ) -> anyhow::Result<O::Result> {
+        let params = call_params::<O>(args)?;
+        let result = self
+            .ask(methods::CALL, &params, Some(until))
+            .and_then(|id| self.answer_to(id, Some(until)));
+        let reset_read = self.reader.get_ref().set_read_timeout(None);
+        let reset_write = self.writer.set_write_timeout(None);
+        let result = result?;
+        reset_read?;
+        reset_write?;
+        Ok(result)
     }
 
     /// Repeats an interrupted start or send with its original business request ID.
@@ -185,11 +208,11 @@ impl DaemonClient {
 
     /// Starts a call without waiting, returning its connection-local request ID.
     pub fn begin_call<O: Operation>(&mut self, args: O::Args) -> anyhow::Result<u64> {
-        self.ask(methods::CALL, &call_params::<O>(args)?)
+        self.ask(methods::CALL, &call_params::<O>(args)?, None)
     }
 
     pub fn result<O: Operation>(&mut self, id: u64) -> anyhow::Result<O::Result> {
-        self.answer_to(id)
+        self.answer_to(id, None)
     }
 
     pub fn watch<T: Topic>(&mut self, args: T::Args) -> anyhow::Result<(u64, T::Snapshot)> {
@@ -203,8 +226,8 @@ impl DaemonClient {
 
     /// Ends this connection's watch and waits for its acknowledgment.
     pub fn unwatch(&mut self, watch: u64) -> anyhow::Result<()> {
-        let id = self.ask(methods::UNWATCH, &UnwatchParams { watch })?;
-        let _: EmptyResult = self.answer_to(id)?;
+        let id = self.ask(methods::UNWATCH, &UnwatchParams { watch }, None)?;
+        let _: EmptyResult = self.answer_to(id, None)?;
         self.unread.retain(|notification| {
             !matches!(
                 notification.method.as_str(),
@@ -248,33 +271,47 @@ impl DaemonClient {
         self.origin = None;
     }
 
-    fn connect_again(&mut self) -> anyhow::Result<()> {
+    /// Replaces this Terminal connection once hello succeeds at its saved endpoint.
+    pub fn reconnect_until(&mut self, until: Instant) -> anyhow::Result<()> {
         let socket = self
             .origin
-            .clone()
+            .as_deref()
             .ok_or_else(|| anyhow::anyhow!("this connection cannot connect again"))?;
-        let timeout = takeover_timeout();
-        let until = Instant::now() + timeout;
-        *self = loop {
-            if let Some(client) = Self::connect(&socket, until, &mut |_| true)? {
-                break client;
+        loop {
+            remaining(until)?;
+            if let Some(client) = Self::connect(socket, until, &mut |_| true)? {
+                *self = client;
+                return Ok(());
             }
-            anyhow::ensure!(
-                Instant::now() < until,
-                "the Orchestrator did not respond within {} seconds of a newer build taking over",
-                timeout.as_secs()
-            );
-            std::thread::sleep(TAKEOVER_POLL);
-        };
-        Ok(())
+            std::thread::sleep(TAKEOVER_POLL.min(remaining(until)?));
+        }
+    }
+
+    fn connect_again(&mut self) -> anyhow::Result<()> {
+        let timeout = takeover_timeout();
+        match self.reconnect_until(Instant::now() + timeout) {
+            Err(error)
+                if error
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(|error| error.kind() == ErrorKind::TimedOut) =>
+            {
+                anyhow::bail!(
+                    "the Orchestrator did not respond within {} seconds of a newer build taking over",
+                    timeout.as_secs()
+                );
+            }
+            result => result,
+        }
     }
 
     /// Acknowledges closing after the caller has stopped any concurrent writer.
     pub fn respond_to_closing(&mut self) {
-        let _ = self.writer.write_all(&encode_line(&Notification::new(
-            methods::CLOSING,
-            NoArgs {},
-        )));
+        let _ = self.acknowledge_closing(None);
+    }
+
+    fn acknowledge_closing(&mut self, until: Option<Instant>) -> io::Result<()> {
+        let frame = encode_line(&Notification::new(methods::CLOSING, NoArgs {}));
+        write_frame(&mut self.writer, &frame, until)
     }
 
     fn record_closing(&mut self, notification: Notification) -> anyhow::Result<()> {
@@ -289,8 +326,8 @@ impl DaemonClient {
         params: &impl Serialize,
     ) -> anyhow::Result<T> {
         loop {
-            let id = self.ask(method, params)?;
-            let answer = self.answer_to(id);
+            let id = self.ask(method, params, None)?;
+            let answer = self.answer_to(id, None);
             if !matches!(&answer, Err(error) if upgrading(error)) || self.origin.is_none() {
                 return answer;
             }
@@ -298,19 +335,28 @@ impl DaemonClient {
         }
     }
 
-    fn ask(&mut self, method: &str, params: &impl Serialize) -> anyhow::Result<u64> {
+    fn ask(
+        &mut self,
+        method: &str,
+        params: &impl Serialize,
+        until: Option<Instant>,
+    ) -> anyhow::Result<u64> {
         let id = self.next_id;
         self.next_id = id
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("request IDs exhausted"))?;
-        self.writer
-            .write_all(&encode_line(&Request::new(Some(id), method, params)))?;
+        let frame = encode_line(&Request::new(Some(id), method, params));
+        write_frame(&mut self.writer, &frame, until)?;
         Ok(id)
     }
 
-    fn answer_to<T: DeserializeOwned>(&mut self, id: u64) -> anyhow::Result<T> {
+    fn answer_to<T: DeserializeOwned>(
+        &mut self,
+        id: u64,
+        until: Option<Instant>,
+    ) -> anyhow::Result<T> {
         loop {
-            match read_server_message(&mut self.reader, &mut self.line) {
+            match read_frame(&mut self.reader, &mut self.line, until) {
                 Ok(Some(ServerMessage::Response(response))) if answers(&response, id) => {
                     return response_result(response);
                 }
@@ -318,12 +364,20 @@ impl DaemonClient {
                 Ok(Some(ServerMessage::Notification(notification))) => {
                     if notification.method == methods::CLOSING {
                         self.record_closing(notification)?;
-                        self.respond_to_closing();
+                        if let Err(error) = self.acknowledge_closing(until)
+                            && until.is_some()
+                            && error.kind() == ErrorKind::TimedOut
+                        {
+                            return Err(error.into());
+                        }
                     } else {
                         self.unread.push_back(notification);
                     }
                 }
                 Err(error) if error.kind() == ErrorKind::InvalidData => return Err(error.into()),
+                Err(error) if until.is_some() && error.kind() == ErrorKind::TimedOut => {
+                    return Err(error.into());
+                }
                 Ok(None) | Err(_) => return Err(Cut.into()),
             }
         }
@@ -340,6 +394,84 @@ impl DaemonClient {
         }
         Ok(None)
     }
+}
+
+// Adjust the transport timeout at each refill without replacing the client's buffer.
+struct DeadlineReader<'a> {
+    reader: &'a mut BufReader<ClientSocket>,
+    until: Instant,
+}
+
+impl Read for DeadlineReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let count = self.fill_buf()?.read(buffer)?;
+        self.consume(count);
+        Ok(count)
+    }
+}
+
+impl BufRead for DeadlineReader<'_> {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        let time = remaining(self.until)?;
+        if self.reader.buffer().is_empty() {
+            self.reader.get_ref().set_read_timeout(Some(time))?;
+        }
+        self.reader.fill_buf().map_err(transfer_error)
+    }
+
+    fn consume(&mut self, amount: usize) {
+        self.reader.consume(amount);
+    }
+}
+
+struct DeadlineWriter<'a> {
+    writer: &'a mut ClientSocket,
+    until: Instant,
+}
+
+impl Write for DeadlineWriter<'_> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.writer
+            .set_write_timeout(Some(remaining(self.until)?))?;
+        self.writer.write(buffer).map_err(transfer_error)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+fn write_frame(writer: &mut ClientSocket, frame: &[u8], until: Option<Instant>) -> io::Result<()> {
+    match until {
+        Some(until) => DeadlineWriter { writer, until }.write_all(frame),
+        None => writer.write_all(frame),
+    }
+}
+
+fn read_frame(
+    reader: &mut BufReader<ClientSocket>,
+    line: &mut Vec<u8>,
+    until: Option<Instant>,
+) -> io::Result<Option<ServerMessage>> {
+    match until {
+        Some(until) => read_server_message(&mut DeadlineReader { reader, until }, line),
+        None => read_server_message(reader, line),
+    }
+}
+
+fn remaining(until: Instant) -> io::Result<Duration> {
+    let time = until.saturating_duration_since(Instant::now());
+    if time.is_zero() {
+        return Err(io::Error::from(ErrorKind::TimedOut));
+    }
+    Ok(time)
+}
+
+fn transfer_error(error: io::Error) -> io::Error {
+    if error.kind() == ErrorKind::WouldBlock {
+        return io::Error::new(ErrorKind::TimedOut, error);
+    }
+    error
 }
 
 fn call_params<O: Operation>(args: O::Args) -> anyhow::Result<CallParams> {
@@ -389,9 +521,10 @@ pub fn transient_transport(err: &io::Error) -> bool {
 /// Opens a local transport and lets its caller inspect it before hello.
 fn connect_transport(
     socket: &Path,
+    until: Instant,
     opening: &mut dyn FnMut(&ClientSocket) -> bool,
 ) -> anyhow::Result<Option<ClientSocket>> {
-    let stream = match ClientSocket::connect(socket) {
+    let stream = match connect_client_until(socket, until) {
         Err(error) if transient_transport(&error) => return Ok(None),
         Err(error) => anyhow::bail!("cannot connect to {}: {error}", socket.display()),
         Ok(stream) => stream,

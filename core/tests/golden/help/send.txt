@@ -1,18 +1,24 @@
 Send a message to an active agent or guest.
 
-Waits up to 30 seconds for delivery: types and submits the message in a
-managed agent's terminal once its input box is free, or waits for a guest to
-read it over MCP. Messages can be up to 8,000 characters and 540 lines.
+By default, the command ends when Facade saves the message in the
+recipient's inbox. Use '-w' to wait until Facade submits the message
+in a managed agent's terminal or a guest reads it. Use '-r' to wait
+for a reply. Set the timeout in seconds with '-t'.
+Messages can be up to 8,000 characters and 540 lines.
 
-Usage: facade send <RECIPIENT> <TEXT>
+Usage: facade send <RECIPIENT> <TEXT> [OPTIONS]
 
 Examples
   facade send Nova "Check the build"
-  facade send a5@laptop "Please review the diff in src/parser.rs"
+  facade send Nova "Check the build" -w
+  facade send a5@laptop "Run the tests and reply" -r -t 120
 
 Arguments
   <RECIPIENT>  Active agent or guest reference, agent ID, or unique name
   <TEXT>       Message text
 
 Options
-  -h, --help  Show help
+  -w, --wait-delivery      Wait for delivery
+  -r, --wait-reply         Wait for a reply and print its text
+  -t, --timeout <SECONDS>  Total time to wait, from 1 to 300 seconds (default: 30)
+  -h, --help               Show help

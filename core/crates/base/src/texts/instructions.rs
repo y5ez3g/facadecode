@@ -8,14 +8,26 @@ const TOOLS: &str = "The Orchestrator's MCP tools start, list and stop agents, e
                      Without a machine, a number or name resolves only on machines that are awake \
                      and reachable.";
 
-const RESULT: &str = "A 🔔 message reports an Orchestrator result.";
+const RESULT: &str = "A 🔔 message reports an Orchestrator result; it is not the recipient's \
+                      answer or proof of task completion.";
 
 /// The instructions for MCP initialization before the connection has a known agent.
 pub fn for_connection() -> String {
     format!(
-        "{TOOLS} Messages to a Guest are delivered when it takes them with read_messages within \
-         30 seconds. After sending as a Guest, use the returned data.next call to wait for the \
-         reply. Messages to a managed agent are typed into its terminal. {RESULT}"
+        "{TOOLS} The server verifies whether this connection acts for a managed agent or a Guest. \
+         Managed agents normally receive messages through their terminals. Guests receive messages \
+         through read_messages and should keep their connection open and take messages promptly. \
+         timeout_seconds defaults to 0 for both send_message and read_messages: sending confirms \
+         inbox acceptance only, and reading returns a snapshot. To wait, set a positive \
+         timeout_seconds up to 30. A send also requires wait_for: \"delivery\" or \"result\"; setting \
+         wait_for alone does not enable waiting. Managed agents usually use wait_for: \"delivery\" \
+         with timeout_seconds: 30. Guests needing an answer should use wait_for: \"result\" with \
+         timeout_seconds: 30. A positive timeout is one total call budget. After reply_timeout, \
+         continue with read_messages using the original full message ID as reply_to and a positive \
+         timeout_seconds; do not resend the task. A replyable command-line request appears as the \
+         command line with a sender address such as #c42@devbox, also returned as from in its inbox \
+         row. Reply to that sender address with the received message number as reply_to. The c \
+         address accepts the first reply while the original command is waiting. {RESULT}"
     )
 }
 
@@ -60,7 +72,17 @@ pub fn for_managed(address: &str, run: &ManagedRun<'_>) -> String {
     format!(
         "You are managed agent {address}, working in {} on machine {}.{creator} {TOOLS} {reach} \
          Messages are typed into your terminal. You can use read_messages to take messages before \
-         typing begins. {RESULT}",
+         typing begins. Usually send with wait_for: \"delivery\" and timeout_seconds: 30, then \
+         receive replies through normal terminal delivery. timeout_seconds defaults to 0 for both \
+         send_message and read_messages: sending confirms inbox acceptance only, and reading returns \
+         a snapshot. Setting wait_for alone does not enable waiting. Use wait_for: \"result\" with a \
+         positive timeout_seconds when this call needs a linked reply. A positive timeout is one \
+         total call budget of at most 30 seconds; a send also requires wait_for. After reply_timeout, \
+         continue with read_messages using the original full message ID as reply_to and a positive \
+         timeout_seconds; do not resend the task. A replyable command-line request appears as the \
+         command line (#c42@devbox) within its single header line. Copy that sender address into to \
+         and the received message number into reply_to. The c address accepts the first reply while \
+         the original command is waiting. {RESULT}",
         run.folder, run.machine
     )
 }
@@ -311,8 +333,8 @@ mod tests {
             "a guest's start owes it one too"
         );
         assert!(for_connection().ends_with(
-            "Messages to a managed agent are typed into its terminal. \
-             A 🔔 message reports an Orchestrator result."
+            "A 🔔 message reports an Orchestrator result; it is not the recipient's answer or \
+             proof of task completion."
         ));
     }
 }

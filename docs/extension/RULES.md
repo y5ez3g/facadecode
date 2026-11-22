@@ -555,7 +555,9 @@ location, model, effort and CLI arguments, and uses the machine's current settin
 YOLO defaults to on. A managed agent reads it at start or resume. A Guest reads it when it joins. With YOLO off,
 a caller's MCP reach is its creation tree and the CLI keeps its native sandbox and permissions. Both settings bypass
 the Facade tool confirmation. With YOLO on, the Orchestrator also handles CLI permission and folder trust
-questions and disables the CLI sandbox where available. CLI questions for the person still appear in the terminal.
+questions and disables the CLI sandbox where available. People who start Claude Code answer its native folder
+trust question. For agent-initiated starts, the Orchestrator can confirm the expected trust option under the
+target home's YOLO setting. CLI questions for the person appear in the terminal.
 The [product's CLI table](../PRODUCT.md#cli-differences) owns the summary of differences.
 
 ### 6.7 Messages, machines and tools

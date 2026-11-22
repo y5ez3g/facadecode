@@ -17,6 +17,7 @@
 //! - A start's prompt from an agent owes that agent a result. The settlement that ends the prompt
 //!   writes the result in the same transaction, and the result is delivered like any message.
 //! - A send with a request ID finds, within the hour, the message it kept first, and keeps no other.
+//!   A confirmed command reply keeps a private receipt for its sender's retries.
 //! - A message to the person counts as delivered once a window subscription takes it. The table
 //!   keeps the window outcomes before answering, and each window's snapshot uses those receipts.
 
@@ -38,7 +39,7 @@ use facade_base::{
 };
 use facade_base::{
     model::agent::ManagedAgent,
-    model::message::{Delivery, DeliveryStatus, Message, SendOutcome, TextWritten},
+    model::message::{DeliveredVia, Delivery, DeliveryStatus, Message, SendOutcome, TextWritten},
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::time::Instant;
@@ -48,7 +49,7 @@ use crate::{Cancel, HUMAN, REQUEST_HOUR, blocking_in_place};
 
 pub(crate) use handle::DeliveryHandle;
 pub(crate) use human::human_result;
-pub(crate) use inbox::InboxRead;
+pub(crate) use inbox::{InboxRead, ReplyRead};
 pub(crate) use outcome::{Due, Outcome};
 pub(crate) use restart::{Recipient, TakeUp, decide};
 
@@ -237,9 +238,10 @@ impl Deliveries {
         }
     }
 
-    /// Supplies the full reference for a window notification or a cross-machine send response.
+    /// Supplies the full reference for a window notification, a cross-machine send, or a command reply.
     fn identify(&self, message: &mut Message) {
         if message.to == HUMAN
+            || message.delivery.delivered_via == Some(DeliveredVia::ReturnedToRequest)
             || message
                 .from_machine_id
                 .as_ref()
@@ -437,7 +439,27 @@ impl Messages {
         Ok(found.map(|kept| self.deliveries.earlier(&open, kept)))
     }
 
-    /// Commits the local number a start result will use when it reaches its creator.
+    /// Keeps the confirmed command reply as a private receipt under its reserved number.
+    pub(crate) fn keep_command_reply(
+        &self,
+        message: &Message,
+        request_id: Option<&str>,
+    ) -> Result<Message, ErrorBody> {
+        let _open = self.deliveries.lock();
+        let since = hour_ago();
+        let request = request_id.map(|id| RequestId {
+            id,
+            since: &since,
+            caller_window_id: None,
+        });
+        let mut kept =
+            blocking_in_place(|| self.deliveries.table.keep_command_reply(message, request))
+                .map_err(ErrorBody::internal)?;
+        self.deliveries.identify(&mut kept);
+        Ok(kept)
+    }
+
+    /// Commits a local number for a start result or command reply before handoff.
     pub(crate) fn reserve_result(&self) -> Result<MessageRef, ErrorBody> {
         let _open = self.deliveries.lock();
         let number = blocking_in_place(|| self.deliveries.table.reserve_result_number())

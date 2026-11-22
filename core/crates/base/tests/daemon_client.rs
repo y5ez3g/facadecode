@@ -178,6 +178,11 @@ fn a_caller_that_manages_reconnection_receives_the_upgrading_refusal() {
 // The v1 hello, authorization and first bytes of the admitted machine stream share one socket.
 #[test]
 fn api_v1_machine_handoff_preserves_the_buffered_peer_line() {
+    check_machine_handoff(false);
+    check_machine_handoff(true);
+}
+
+fn check_machine_handoff(bounded_call: bool) {
     use facade_base::api_v1::daemon::{
         ConnectionKind, MachineConnect, MachineConnectArgs, MachineTransport, MachineTransportInput,
     };
@@ -232,13 +237,17 @@ fn api_v1_machine_handoff_preserves_the_buffered_peer_line() {
     let mut client = ApiClient::connect(&socket.0, until, &mut |_| true)
         .unwrap()
         .expect("v1 daemon hello");
-    let authorized = client
-        .call::<MachineConnect>(MachineConnectArgs {
-            transport: MachineTransportInput::Bridge,
-            kind: ConnectionKind::Temporary,
-            expected_machine_id: None,
-        })
-        .unwrap();
+    let args = MachineConnectArgs {
+        transport: MachineTransportInput::Bridge,
+        kind: ConnectionKind::Temporary,
+        expected_machine_id: None,
+    };
+    let authorized = if bounded_call {
+        client.call_until::<MachineConnect>(args, until)
+    } else {
+        client.call::<MachineConnect>(args)
+    }
+    .unwrap();
     assert!(matches!(authorized.transport, MachineTransport::Bridge));
     let (mut reader, writer) = client.into_stream();
     let mut line = String::new();

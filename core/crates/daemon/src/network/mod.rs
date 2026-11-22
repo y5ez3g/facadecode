@@ -28,8 +28,11 @@ use facade_base::model::machine::{ExecutionOutcome, MachineIdentity, MachineResp
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot, watch};
+use tokio::time::Instant;
 
-use self::session::{Deadline, Delivery, Output, Peer, Pending, Reply, SessionHandler, remaining};
+use self::session::{
+    Deadline, Delivery, Output, Peer, Pending, Reply, SessionHandler, WatchObserver, remaining,
+};
 use self::topology::{Link, Origin, Topology};
 use self::wire::Reader;
 use crate::{SavedConnection, SavedSsh};
@@ -306,7 +309,7 @@ impl Network {
             ));
         }
         match self
-            .request(target, forward, deadline)
+            .request(target, forward, deadline, None)
             .map_err(RequestFailure::Unreachable)?
             .answer(deadline)
             .await?
@@ -330,6 +333,30 @@ impl Network {
         forward: ForwardParams,
         deadline: Deadline,
     ) -> Result<Subscription, RequestFailure> {
+        self.watch_with_observer(target, forward, deadline, None)
+            .await
+    }
+
+    /// Observes changes for an admitted subscription before they enter its receive queue.
+    /// The callback runs under the peer state lock and must only send a notification.
+    pub(crate) async fn watch_observed(
+        &self,
+        target: &str,
+        forward: ForwardParams,
+        deadline: Option<Instant>,
+        observe: impl FnMut(Instant, &Value) + Send + 'static,
+    ) -> Result<Subscription, RequestFailure> {
+        self.watch_with_observer(target, forward, deadline, Some(Box::new(observe)))
+            .await
+    }
+
+    async fn watch_with_observer(
+        &self,
+        target: &str,
+        forward: ForwardParams,
+        deadline: Deadline,
+        observer: Option<WatchObserver>,
+    ) -> Result<Subscription, RequestFailure> {
         if !matches!(&forward.request, ForwardRequest::Watch(_)) {
             return Err(RequestFailure::Failed(
                 ErrorBody::invalid_argument("Expected a forwarded watch."),
@@ -337,7 +364,7 @@ impl Network {
             ));
         }
         let mut pending = self
-            .request(target, forward, deadline)
+            .request(target, forward, deadline, observer)
             .map_err(RequestFailure::Unreachable)?;
         match pending.answer(deadline).await? {
             Reply::Watch {
@@ -362,6 +389,7 @@ impl Network {
         target: &str,
         mut forward: ForwardParams,
         deadline: Deadline,
+        observer: Option<WatchObserver>,
     ) -> Result<Pending, ErrorBody> {
         let (peer, identity) = {
             let state = self.0.state.lock().unwrap();
@@ -376,7 +404,7 @@ impl Network {
             forward.route = machine.route.clone().expect("selected route");
             (peer.clone(), identity)
         };
-        peer.request(forward, deadline, identity)
+        peer.request_with_observer(forward, deadline, identity, observer)
     }
 
     /// Checks the admitted source and remaining path before forwarding or dispatching.

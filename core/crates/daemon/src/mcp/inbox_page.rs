@@ -1,5 +1,6 @@
 //! The inline part of an inbox snapshot, selected before Post settles its delivery.
 
+use facade_base::address::selector;
 use facade_base::model::error::ErrorBody;
 use facade_base::model::machine::MachineIdentity;
 use facade_base::model::message::{FACADE, Message, MessagesSnapshot};
@@ -7,7 +8,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::{
-    addresses::{inbox_role, qualified},
+    addresses::{inbox_role, machine_selector, qualified},
     envelope,
 };
 use crate::HUMAN;
@@ -69,6 +70,10 @@ fn view(
         .map_or(local, |reference| reference.machine_id.as_str());
     let from = match message.from.as_str() {
         FACADE => FACADE.to_string(),
+        HUMAN | "command_line" if message.command_line_reply => {
+            let machine = machine_selector(mailbox, machines)?;
+            selector::format_command_reply_address(&message.message_id, &machine)
+        }
         HUMAN | "command_line" => "command_line".to_string(),
         id => qualified(
             id,

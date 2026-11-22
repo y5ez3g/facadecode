@@ -36,11 +36,29 @@ waits for the named machine and can wake it. `resume` shows stopped agents with 
 independent CLI sessions from the current folder. A named `resume --machine` lists managed agents on that
 machine and provides references that include its selector. `list --local` and `resume --local` stay on this
 machine and open zero SSH connections even if they start the local daemon.
+Both tables show the latest native session name or the existing conversation preview in `SESSION`. A missing
+label displays as `-`. The tables use the daemon's session lookup on the agent's machine. `facade status <AGENT>`
+shows the full session ID. A saved session uses its displayed `REF` for resume.
 
 `stop <AGENT>...` accepts one or more references. `stop --local`, `stop --machine <MACHINE>` and `stop --all`
 are exclusive alternatives. Scope stops skip connected Guests. A remote scope stop leaves sleeping machines
 idle. Shell prints confirmed stops before reporting failed items and machines. A partial failure returns 1.
-After a send, Shell prints a receipt once a managed agent receives it or a Guest takes it from its inbox.
+
+`send` confirms that Facade saved the message in the recipient's inbox. With `-w` or `--wait-delivery`, it
+confirms delivery to the managed terminal or a Guest's inbox read. With `-r` or `--wait-reply`, it writes
+the first linked reply from the original recipient, preserving the reply's text and line endings.
+`-t` or `--timeout` sets the total wait from 1 to 300 seconds, with a default of 30. The budget starts
+after argument validation and applies to connection startup, target resolution, delivery, reply, and receipt
+as applicable to the selected wait.
+
+During a planned takeover, `send` retries a pre-admission refusal with the same request ID and the remaining
+time. After the retiring daemon announces closing, an unanswered inbox or delivery call can replay once by
+request ID. An admitted reply wait belongs to its original connection.
+
+`type` validates the full input before it connects. Text operands are pasted as separate segments and
+`-k` or `--key` inserts a key press at its position in the command. Shell sends the ordered input in one
+call and prints a receipt after the terminal receives it. The single-text `--enter` form still submits
+that paste with Enter.
 
 ## Connections and installation
 
@@ -86,16 +104,19 @@ receipts. `status <AGENT>` uses `agent.inspect` for launch details and authentic
 
 Start passes the current folder and environment as local defaults. The remote Orchestrator uses the
 target machine's login environment and uses its login home when the command omits a folder. A resumed stored
-agent keeps its original folder. Start and send keep their business request ID and arguments when the caller
-reissues an eligible call across a disconnect.
+agent keeps its original folder. The start command keeps its business request ID and arguments across an
+eligible reconnect. The command-line reply uses the lifetime of the original bounded call. Shell reports
+the facts the daemon supplies when the result cannot be confirmed.
 
 ### attach
 
 `attach.rs` owns the console until the attachment ends. It reports itself as a Shell client on its machine.
-The console sends capacity with `watch attach` and sends `attach.resize` on the connection that owns the
-active watch. The Orchestrator authorizes the managed agent and supplies its name, public reference and
-stable identity. Foreground start
-and resume, or a reconnect, can read the final snapshot of the exact run. Each reconnect watches that same
+On every connection, the console chooses `watch attach.shell` if the Terminal hello advertises it, and
+`watch attach` otherwise. A foreground start or resume opens a fresh Terminal connection for the
+dedicated watch and keeps the launch connection when using ordinary Attach. The console sends capacity
+with the watch and sends `attach.resize` on the connection that owns it. The Orchestrator authorizes
+the managed agent and supplies its name, public reference and stable identity. Foreground start and
+resume, or a reconnect, can read the final snapshot of the exact run. Each reconnect watches that same
 stable identity and begins with a fresh redraw. Only the first watch asks for scrollback.
 
 The console sends key and resize notifications through the current connection. It drops queued input when a
@@ -104,19 +125,24 @@ During a planned takeover, any write already in progress completes before Attach
 reconnect shows the current screen before it resumes sending input. It shows a bottom-line notice on stderr when
 any bytes could not be sent. The same policy applies to a local or remote terminal. The Orchestrator chooses the
 smallest active viewer size in each dimension. Shell keeps a `Screen` at the confirmed shared size and updates it
-from snapshots, redraws and output. An equally sized console accepts the terminal stream directly. A larger
-console draws the shared grid at the top left and clears the margins through `Screen::redraw_in_viewport`.
-An undersized console reports the current layout size. Changing the console size triggers a local redraw even
-if the shared size stays the same.
+from snapshots, redraws and output. An empty initial main frame leaves the host page visible until the CLI
+draws. The first main-screen draw makes room from the current shell position by ordinary terminal scrolling.
+An alternate-screen draw switches buffers before it paints. Full frames use
+`Screen::redraw_for_attach` and carry the known native title. During ordinary output, an equally sized console
+accepts native bytes and a larger console rewrites the shared rows in place with `Screen::redraw_in_viewport_update`.
+A new connection, geometry change or screen switch takes the full draw path. An undersized console reports the
+current layout size. Screen carries the CLI's native activity bytes through derived draws. While the shell
+page is held, Attach can still display the native title and activity from the CLI.
 
-The terminal is restored before the final diagnostic. A detach, an agent exit, a removal, and a permanent connection
-failure use their corresponding status and message. Detach closes an alternate-screen view or moves the main-screen
-view into scrollback. At normal exit it does the same when the daemon supplies the CLI's resume instructions, which
-can be empty. The instructions are shown with the exit receipt.
-Windows uses deferred wrapping during Attach so relative cursor moves after a full row use the same geometry as
-the agent's screen.
-Attach requests the agent's activity with its attach watch and sends terminal progress while the agent is starting
-or working. It clears progress when it reconnects or hands the terminal back.
+The CLI's mouse mode controls when the console captures wheel input. Base converts Windows console records
+into viewport coordinates, and Screen encodes them as terminal input in the shared grid. Host scrolling applies
+when the CLI leaves mouse reporting off. Windows uses deferred wrapping during Attach so cursor moves after
+a full row follow the same geometry as the agent's screen.
+
+Attach restores the buffer, cursor and input modes before printing a normal detach or exit receipt. A normal
+exit returns the status in the daemon's final event or exact ended snapshot. The daemon lets an active
+dedicated watcher receive the final output and exit in order, then closes that connection within its post-exit
+grace period. A removal or lost connection uses the corresponding Shell diagnostic.
 
 ### hooks
 

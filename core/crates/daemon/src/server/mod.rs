@@ -14,14 +14,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use facade_base::api_v1::daemon::{
-    AgentRef, ClientKind, DaemonCall, DaemonWatch, HelloParams, HelloResult, MachineConnectArgs,
-    MachineConnectResult, TerminalColors, methods,
+    AgentRef, AttachArgs, ClientKind, DaemonCall, DaemonWatch, HelloParams, HelloResult,
+    MachineConnectArgs, MachineConnectResult, TerminalColors, methods,
 };
 use facade_base::api_v1::{ApiVersion, ErrorBody, ErrorData, Size};
 use facade_base::sockets::{DaemonListener, ServerReader, ServerSocket, ServerWriter};
 use serde_json::Value;
 use tokio::io::BufReader;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::Cancel;
 
@@ -44,6 +44,12 @@ pub(crate) fn next_viewer() -> u64 {
 pub(crate) struct Watch {
     pub(crate) snapshot: Value,
     pub(crate) changes: mpsc::Receiver<WatchChange>,
+}
+
+/// A Shell Attach watch and the exit time supplied independently of its screen feed.
+pub(crate) struct ShellWatch {
+    pub(crate) watch: Watch,
+    pub(crate) exit: oneshot::Receiver<tokio::time::Instant>,
 }
 
 /// What a watch sends after its snapshot.
@@ -124,6 +130,21 @@ pub(crate) trait Service: Send + Sync + 'static {
         viewer: u64,
     ) -> impl Future<Output = Result<Watch, ErrorBody>> + Send;
 
+    /// Starts the sole watch of a dedicated Terminal connection.
+    fn watch_shell(
+        self: &Arc<Self>,
+        _client: &Client,
+        _args: AttachArgs,
+        _viewer: u64,
+    ) -> impl Future<Output = Result<ShellWatch, ErrorBody>> + Send {
+        async {
+            Err(operation_error(
+                "unsupported",
+                "this daemon does not support dedicated Shell Attach",
+            ))
+        }
+    }
+
     /// Applies the capacity reported by an active Attach watch on this connection.
     fn resize_viewer(
         self: &Arc<Self>,
@@ -133,7 +154,7 @@ pub(crate) trait Service: Send + Sync + 'static {
         colors: Option<TerminalColors>,
     ) -> impl Future<Output = Result<(), ErrorBody>> + Send;
 
-    /// Ends a watch that [`Service::watch`] started, when its client unwatches it or closes.
+    /// Ends a watch when its client unwatches it or closes.
     fn unwatch(
         self: &Arc<Self>,
         client: &Client,

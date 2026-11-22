@@ -96,7 +96,17 @@ fn project_name(path: &Path) -> String {
     format!("--{}--", path.replace(['/', '\\', ':'], "-"))
 }
 
-fn conversation(path: &Path, scope: &Folder<'_>) -> Result<Option<SavedSession>, ErrorBody> {
+pub(super) fn conversation(
+    path: &Path,
+    scope: &Folder<'_>,
+) -> Result<Option<SavedSession>, ErrorBody> {
+    if !path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".jsonl"))
+    {
+        return Ok(None);
+    }
     let Some(log) = read(path, true)? else {
         return Ok(None);
     };
@@ -107,11 +117,19 @@ fn conversation(path: &Path, scope: &Folder<'_>) -> Result<Option<SavedSession>,
     else {
         return Ok(None);
     };
-    if !scope.matches(Path::new(cwd)) {
+    if !scope.includes_id(&id) || !scope.matches(Path::new(cwd)) {
         return Ok(None);
     }
-    let name = latest(log.tail(), "session_info", "name")
-        .or_else(|| latest(&log.head, "session_info", "name"));
+    let middle;
+    let name = match latest(log.tail(), "session_info", "name") {
+        Some(name) => Some(name),
+        None => {
+            middle = log.latest_middle(path, "session_info", "name")?;
+            middle
+                .as_deref()
+                .or_else(|| latest(&log.head, "session_info", "name"))
+        }
+    };
     let prompt = log
         .head
         .iter()

@@ -82,7 +82,12 @@ fn hello_selects_api_version_and_advertises_the_session_catalog() {
             .map(|topic| topic.as_str().unwrap())
             .collect();
         topics.sort_unstable();
-        assert_eq!(topics, ["agents", "attach", "machines"], "{welcome}");
+        let expected_topics: &[&str] = if kind == "terminal" {
+            &["agents", "attach", "attach.shell", "machines"]
+        } else {
+            &["agents", "attach", "machines"]
+        };
+        assert_eq!(topics.as_slice(), expected_topics, "{welcome}");
 
         let duplicate = wire.request("hello", hello);
         assert_eq!(error_reason(&duplicate), "invalid_argument", "{duplicate}");
@@ -348,7 +353,7 @@ fn unread_responses_backpressure_the_connection() {
 fn the_person_s_client_reads_the_daemon_s_log_and_an_agent_s_tool_is_refused() {
     let home = TestHome::new("daemonlog");
     let ada = home.start_named_fake("ada", &[]);
-    home.run_facade_ok(&["send", "ada", "hello ada"]);
+    home.run_facade_ok(&["send", "ada", "hello ada", "-w"]);
     let mut wire = DaemonTestClient::open(&home);
     hello_v1(&mut wire);
     let read = wire.call("daemon.log", json!({}));

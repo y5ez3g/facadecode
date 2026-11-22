@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use facade_base::api_v1::daemon::{
-    AgentRef, AgentTypeArgs, AgentsTopic, AttachResizeArgs, AttachTopic, CancelParams, ClientKind,
-    ClosingParams, DaemonCall, DaemonWatch, HelloParams, MachinesTopic, TerminalInput,
-    UnwatchParams, WatchEndedParams, WatchParams, WatchResult, decode_call, decode_hello,
-    decode_watch, methods, select_version,
+    AgentRef, AgentTarget, AgentTypeArgs, AgentsTopic, AttachResizeArgs, AttachShellTopic,
+    AttachTopic, CancelParams, ClientKind, ClosingParams, DaemonCall, DaemonWatch, HelloParams,
+    MachinesTopic, SendWait, TerminalInput, UnwatchParams, WatchEndedParams, WatchParams,
+    WatchResult, decode_call, decode_hello, decode_watch, methods, select_version,
 };
 use facade_base::api_v1::{
     ApiVersion, CallParams, EmptyResult, ErrorBody, MAX_LINE_BYTES, Notification, Response, Topic,
@@ -21,12 +21,13 @@ use facade_base::sockets::{ServerPeer, ServerReader, ServerSocket};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{Notify, Semaphore, mpsc, watch};
-use tokio::task::JoinHandle;
+use tokio::sync::{Notify, Semaphore, mpsc, oneshot, watch};
+use tokio::task::{AbortHandle, JoinHandle};
+use tokio::time::Instant;
 
 use super::lanes::{LaneContext, Lanes};
 use super::outbox::Outbox;
-use super::{Client, Service, WatchChange, WhenFull, operation_error};
+use super::{Client, Service, ShellWatch, WatchChange, WhenFull, operation_error};
 use crate::Cancel;
 
 /// The most calls one connection runs at once. Further calls wait for one to be answered.
@@ -35,6 +36,8 @@ const MAX_CALLS_IN_FLIGHT: usize = 16;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a client has to answer `closing`; one that does not, such as an older one, is cut off.
 const CLOSING_ANSWERED_WITHIN: Duration = Duration::from_millis(200);
+/// How long a dedicated Shell connection can drain the final screen after the terminal exits.
+const SHELL_EXIT_GRACE: Duration = Duration::from_secs(1);
 
 pub(super) type Reader = BufReader<ServerReader>;
 
@@ -86,7 +89,7 @@ impl Peer {
 
 /// A watch this connection started.
 struct Watching {
-    forwarder: JoinHandle<()>,
+    forwarder: Option<JoinHandle<()>>,
     /// Cleared before reporting the watch's end to the client.
     live: Arc<AtomicBool>,
     topic: &'static str,
@@ -101,6 +104,17 @@ impl Watching {
     }
 }
 
+struct ShellAttach {
+    number: u64,
+    exited: Cancel,
+    supervisor: JoinHandle<()>,
+}
+
+struct SendCall {
+    signal: watch::Sender<bool>,
+    cancel_on_disconnect: bool,
+}
+
 pub(super) struct Connection<S: Service> {
     pub(super) service: Arc<S>,
     pub(super) peer: Arc<Peer>,
@@ -112,10 +126,13 @@ pub(super) struct Connection<S: Service> {
     hold: Option<S::Hold>,
     lanes: Lanes,
     call_slots: Arc<Semaphore>,
-    /// Sends with a request ID under way, each with what tells it that `cancel` named it.
-    calls: Arc<Mutex<HashMap<u64, watch::Sender<bool>>>>,
+    /// Sends with a request ID under way, which `cancel` can name on this connection.
+    calls: Arc<Mutex<HashMap<u64, SendCall>>>,
     watches: HashMap<u64, Watching>,
     last_watch: u64,
+    operation_seen: bool,
+    shell_attach: Option<ShellAttach>,
+    writer: AbortHandle,
     /// Told when the client answers `closing`.
     pub(super) answered: Arc<Notify>,
     /// Tells the client `closing` once a newer Facade takes over.
@@ -167,13 +184,21 @@ pub(super) async fn serve<S: Service>(
         calls: Arc::default(),
         watches: HashMap::new(),
         last_watch: 0,
+        operation_seen: false,
+        shell_attach: None,
+        writer: writer.abort_handle(),
         answered: Arc::new(Notify::new()),
         teller: None,
     };
     let mut reader = BufReader::new(read);
     let served = connection.read_requests(&mut reader).await;
-    connection.clean_up().await;
+    // A reader can finish while the writer still needs the Shell cutoff.
+    let shell_attach = connection.shell_attach.take();
+    connection.clean_up(!matches!(&served, Ok(Some(_)))).await;
     let writer = writer.await;
+    if let Some(shell) = shell_attach {
+        shell.supervisor.abort();
+    }
     if let Some(MachineHandoff { response, machine }) = served? {
         let mut write = writer??;
         write.write_all(&encode_line(&response)).await?;
@@ -220,7 +245,10 @@ impl<S: Service> Connection<S> {
                 self.peer.closed.send_replace(true);
                 return Ok(None);
             }
-            match self.request(&line).await {
+            // An earlier request occupies this connection even if dispatch refuses it.
+            let first_operation =
+                self.client.is_some() && !std::mem::replace(&mut self.operation_seen, true);
+            match self.request(&line, first_operation).await {
                 Next::Read => {}
                 Next::End => return Ok(None),
                 Next::Machine(handoff) => return Ok(Some(handoff)),
@@ -232,7 +260,7 @@ impl<S: Service> Connection<S> {
         }
     }
 
-    async fn request(&mut self, line: &[u8]) -> Next<S::Machine> {
+    async fn request(&mut self, line: &[u8], first_operation: bool) -> Next<S::Machine> {
         let request = match parse_request(line) {
             Ok(request) => request,
             Err(malformed) => {
@@ -276,7 +304,7 @@ impl<S: Service> Connection<S> {
             }
             methods::WATCH => {
                 let Some(id) = id else { return Next::Read };
-                if let Err(error) = self.watch(client, id, params).await {
+                if let Err(error) = self.watch(client, id, params, first_operation).await {
                     self.outbox.answer(Some(id), Err(error)).await;
                 }
             }
@@ -409,6 +437,12 @@ impl<S: Service> Connection<S> {
             self.outbox.answer(id, Err(refused)).await;
             return Next::Read;
         }
+        if let Some(shell) = &self.shell_attach
+            && let Err(refused) = self.check_shell_call(shell, &call)
+        {
+            self.outbox.answer(id, Err(refused)).await;
+            return Next::Read;
+        }
         match call {
             DaemonCall::MachineConnect(args) => {
                 let Some(id) = id else { return Next::Read };
@@ -426,6 +460,7 @@ impl<S: Service> Connection<S> {
                     client,
                     outbox: self.outbox.clone(),
                     peer: self.peer.clone(),
+                    shell_exited: self.shell_exit(),
                 };
                 self.lanes.queue(&context, id, args, size).await;
             }
@@ -438,17 +473,57 @@ impl<S: Service> Connection<S> {
         Next::Read
     }
 
+    fn check_shell_call(&self, shell: &ShellAttach, call: &DaemonCall) -> Result<(), ErrorBody> {
+        match call {
+            DaemonCall::AttachResize(_) => Ok(()),
+            DaemonCall::AgentType(AgentTypeArgs {
+                target: AgentTarget::Reference(reference),
+                input: TerminalInput::Raw { .. },
+            }) if self
+                .watches
+                .get(&shell.number)
+                .and_then(|watch| watch.reference.as_ref())
+                == Some(reference) =>
+            {
+                if shell.exited.is_requested() {
+                    return Err(shell_ended());
+                }
+                Ok(())
+            }
+            _ => Err(operation_error(
+                "refused",
+                "a dedicated Shell Attach connection accepts only raw input to its exact target and resize of its own watch",
+            )),
+        }
+    }
+
+    fn shell_exit(&self) -> Cancel {
+        self.shell_attach
+            .as_ref()
+            .map(|shell| shell.exited.clone())
+            .unwrap_or_default()
+    }
+
     async fn start_call(&mut self, client: Arc<Client>, id: u64, call: DaemonCall) {
         let Ok(slot) = self.call_slots.clone().acquire_owned().await else {
             return;
         };
         let cancellable = matches!(call, DaemonCall::AgentSend(_));
-        let cancel = if cancellable {
+        let (cancel, disconnect) = if let DaemonCall::AgentSend(args) = &call {
+            let cancel_on_disconnect =
+                client.kind == ClientKind::Terminal && args.wait_for == Some(SendWait::Result);
             let (named, cancel) = watch::channel(false);
-            self.calls.lock().unwrap().insert(id, named);
-            Cancel::of(cancel)
+            let disconnect = cancel_on_disconnect.then(|| (self.peer.clone(), named.clone()));
+            self.calls.lock().unwrap().insert(
+                id,
+                SendCall {
+                    signal: named,
+                    cancel_on_disconnect,
+                },
+            );
+            (Cancel::of(cancel), disconnect)
         } else {
-            Cancel::default()
+            (Cancel::default(), None)
         };
         let (service, outbox, calls) = (
             self.service.clone(),
@@ -456,7 +531,19 @@ impl<S: Service> Connection<S> {
             self.calls.clone(),
         );
         tokio::spawn(async move {
-            let result = service.call(&client, call, WhenFull::Refuse, cancel).await;
+            let calling = service.call(&client, call, WhenFull::Refuse, cancel);
+            let result = if let Some((peer, signal)) = disconnect {
+                tokio::pin!(calling);
+                tokio::select! {
+                    result = &mut calling => result,
+                    () = peer.socket.closed() => {
+                        signal.send_replace(true);
+                        calling.await
+                    }
+                }
+            } else {
+                calling.await
+            };
             if cancellable {
                 calls.lock().unwrap().remove(&id);
             }
@@ -488,7 +575,7 @@ impl<S: Service> Connection<S> {
     fn cancel(&self, params: Value) -> Result<Value, ErrorBody> {
         let CancelParams { id } = decode_arguments(params)?;
         if let Some(call) = self.calls.lock().unwrap().get(&id) {
-            call.send_replace(true);
+            call.signal.send_replace(true);
         }
         Ok(value_of(EmptyResult {}))
     }
@@ -500,48 +587,87 @@ impl<S: Service> Connection<S> {
         client: Arc<Client>,
         id: u64,
         params: Value,
+        first_operation: bool,
     ) -> Result<(), ErrorBody> {
+        if self.shell_attach.is_some() {
+            return Err(operation_error(
+                "refused",
+                "a dedicated Shell Attach connection accepts only one watch",
+            ));
+        }
         let watch = decode_watch(decode_arguments::<WatchParams>(params)?, client.kind)?;
         let topic = match &watch {
             DaemonWatch::Agents(_) => AgentsTopic::NAME,
             DaemonWatch::Machines(_) => MachinesTopic::NAME,
             DaemonWatch::Attach(_) => AttachTopic::NAME,
+            DaemonWatch::AttachShell(_) => AttachShellTopic::NAME,
         };
+        if topic == AttachShellTopic::NAME && !first_operation {
+            return Err(operation_error(
+                "refused",
+                "open a fresh Terminal connection and request attach.shell first after hello",
+            ));
+        }
         if let Some(refused) = self.service.draining() {
             return Err(refused);
         }
         let viewer = super::next_viewer();
-        let started = self.service.watch(&client, watch, viewer).await?;
-        let reference = if topic == AttachTopic::NAME {
+        let (started, exit) = match watch {
+            DaemonWatch::AttachShell(args) => {
+                let ShellWatch { watch, exit } =
+                    self.service.watch_shell(&client, args, viewer).await?;
+                (watch, Some(exit))
+            }
+            watch => (self.service.watch(&client, watch, viewer).await?, None),
+        };
+        let reference = if is_attach(topic) {
             serde_json::from_value(started.snapshot["reference"].clone()).ok()
         } else {
             None
         };
+        if exit.is_some() && reference.is_none() {
+            self.service.unwatch(&client, topic, viewer).await;
+            return Err(operation_error(
+                "unavailable",
+                "Shell Attach returned no exact target",
+            ));
+        }
         self.last_watch += 1;
         let number = self.last_watch;
+        let live = Arc::new(AtomicBool::new(false));
+        let watching = self.watches.entry(number).or_insert(Watching {
+            forwarder: None,
+            live: live.clone(),
+            topic,
+            viewer,
+            reference,
+        });
+        if let Some(exit) = exit {
+            let (exited, supervisor) = supervise_shell_exit(
+                exit,
+                self.peer.clone(),
+                self.outbox.close_handle(),
+                self.writer.clone(),
+            );
+            self.shell_attach = Some(ShellAttach {
+                number,
+                exited,
+                supervisor,
+            });
+        }
         let answer = WatchResult {
             watch: number,
             snapshot: started.snapshot,
         };
         self.outbox.answer(Some(id), Ok(value_of(answer))).await;
-        let live = Arc::new(AtomicBool::new(!started.changes.is_closed()));
-        let forwarder = tokio::spawn(forward(
+        live.store(!started.changes.is_closed(), Ordering::Relaxed);
+        watching.forwarder = Some(tokio::spawn(forward(
             self.outbox.clone(),
             self.peer.clone(),
             number,
             started.changes,
-            live.clone(),
-        ));
-        self.watches.insert(
-            number,
-            Watching {
-                forwarder,
-                live,
-                topic,
-                viewer,
-                reference,
-            },
-        );
+            live,
+        )));
         Ok(())
     }
 
@@ -563,18 +689,26 @@ impl<S: Service> Connection<S> {
         let watching = self
             .watches
             .get(&watch)
-            .filter(|watching| watching.topic == AttachTopic::NAME && watching.is_live())
+            .filter(|watching| is_attach(watching.topic) && watching.is_live())
             .ok_or_else(not_found)?;
-        if let Some(reference) = &watching.reference {
-            self.lanes.wait_for_input(reference, &self.peer).await;
+        let mut exited = self.shell_exit();
+        let resize = async {
+            if let Some(reference) = &watching.reference {
+                self.lanes.wait_for_input(reference, &self.peer).await;
+            }
+            if self.peer.hung_up() || !watching.is_live() {
+                return Err(not_found());
+            }
+            self.service
+                .resize_viewer(client, watching.viewer, size, colors)
+                .await?;
+            Ok(value_of(EmptyResult {}))
+        };
+        tokio::select! {
+            biased;
+            () = exited.requested() => Err(not_found()),
+            result = resize => result,
         }
-        if self.peer.hung_up() || !watching.is_live() {
-            return Err(not_found());
-        }
-        self.service
-            .resize_viewer(client, watching.viewer, size, colors)
-            .await?;
-        Ok(value_of(EmptyResult {}))
     }
 
     async fn unwatch(&mut self, client: &Client, params: Value) -> Result<Value, ErrorBody> {
@@ -588,7 +722,9 @@ impl<S: Service> Connection<S> {
     }
 
     async fn end(service: &Arc<S>, client: &Client, watching: Watching) {
-        watching.forwarder.abort();
+        if let Some(forwarder) = watching.forwarder {
+            forwarder.abort();
+        }
         service
             .unwatch(client, watching.topic, watching.viewer)
             .await;
@@ -620,7 +756,14 @@ impl<S: Service> Connection<S> {
 
     /// Ends what the connection started: its `closing` teller and its watches. Its hold goes with
     /// it.
-    async fn clean_up(mut self) {
+    async fn clean_up(mut self, disconnected: bool) {
+        if disconnected {
+            for call in self.calls.lock().unwrap().values() {
+                if call.cancel_on_disconnect {
+                    call.signal.send_replace(true);
+                }
+            }
+        }
         if let Some(teller) = self.teller.take() {
             teller.abort();
             let _ = teller.await;
@@ -632,6 +775,45 @@ impl<S: Service> Connection<S> {
             }
         }
     }
+}
+
+fn is_attach(topic: &str) -> bool {
+    matches!(topic, AttachTopic::NAME | AttachShellTopic::NAME)
+}
+
+pub(super) fn shell_ended() -> ErrorBody {
+    operation_error(
+        "ended",
+        "the terminal of this Shell Attach watch has exited",
+    )
+}
+
+/// Keeps the cutoff independent of snapshot enqueue, change forwarding and the writer join.
+fn supervise_shell_exit(
+    mut exit: oneshot::Receiver<Instant>,
+    peer: Arc<Peer>,
+    close_outbox: impl FnOnce() + Send + 'static,
+    writer: AbortHandle,
+) -> (Cancel, JoinHandle<()>) {
+    // A final snapshot can arrive with the signal already set.
+    let initial = exit.try_recv();
+    let (signal, exited) = watch::channel(initial.is_ok());
+    let supervisor = tokio::spawn(async move {
+        let at = match initial {
+            Err(oneshot::error::TryRecvError::Empty) => exit.await.ok(),
+            initial => initial.ok(),
+        };
+        let Some(at) = at else { return };
+        signal.send_replace(true);
+        tokio::time::sleep_until(at + SHELL_EXIT_GRACE).await;
+        peer.closed.send_replace(true);
+        peer.give_up();
+        peer.shut(Shutdown::Read);
+        peer.shut(Shutdown::Both);
+        close_outbox();
+        writer.abort();
+    });
+    (Cancel::of(exited), supervisor)
 }
 
 fn foreground_requires_machine() -> ErrorBody {

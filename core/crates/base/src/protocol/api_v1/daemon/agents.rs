@@ -14,6 +14,7 @@ use super::{
     InputInfo, MachineQuery, ProcessState, PromptOutcome, Said, StateDetail, ToolsReason,
     ToolsState,
 };
+use crate::key_input::{Key, paste_bytes};
 use crate::process::ProcessExit;
 
 pub type Environment = BTreeMap<String, String>;
@@ -175,6 +176,75 @@ pub enum TerminalInput {
     Raw {
         raw: String,
     },
+    #[serde(deserialize_with = "input_sequence")]
+    Sequence {
+        steps: Vec<InputStep>,
+    },
+}
+
+impl TerminalInput {
+    /// Counts the queued paste and key bytes. Raw input has its own byte check.
+    pub fn typing_bytes(&self) -> Option<usize> {
+        match self {
+            Self::Text { text, enter } => {
+                let enter_bytes = if *enter { Key::Enter.most_bytes() } else { 0 };
+                Some(text_typing_bytes(text) + enter_bytes)
+            }
+            Self::Keys { keys } => keys
+                .iter()
+                .try_fold(0, |total, key| Some(total + Key::named(key)?.most_bytes())),
+            Self::Sequence { steps } => steps.iter().try_fold(0, |total, step| {
+                let bytes = match step {
+                    InputStep::Text { text } => text_typing_bytes(text),
+                    InputStep::Key { key } => Key::named(key)?.most_bytes(),
+                };
+                Some(total + bytes)
+            }),
+            Self::Raw { .. } => None,
+        }
+    }
+}
+
+fn text_typing_bytes(text: &str) -> usize {
+    if text.is_empty() {
+        0
+    } else {
+        paste_bytes(text)
+    }
+}
+
+fn input_sequence<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<InputStep>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Fields {
+        steps: Vec<InputStep>,
+    }
+
+    let Fields { steps } = object_only(deserializer)?;
+    Ok(steps)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InputStep {
+    Text { text: String },
+    Key { key: String },
+}
+
+impl<'de> Deserialize<'de> for InputStep {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+        enum Step {
+            Text { text: String },
+            Key { key: String },
+        }
+
+        Ok(match object_only(deserializer)? {
+            Step::Text { text } => Self::Text { text },
+            Step::Key { key } => Self::Key { key },
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema)]
@@ -528,6 +598,27 @@ pub struct SendArgs {
     pub time_left_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_unsupported_receipt: bool,
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "SendWait")]
+    pub wait_for: Option<SendWait>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SendWait {
+    Inbox,
+    Delivery,
+    Result,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CommandReply {
+    pub reference: MessageRef,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -542,6 +633,8 @@ pub struct SendResult {
     pub withdrawn: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_reply_to: Option<MessageRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply: Option<CommandReply>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -587,6 +680,8 @@ pub struct AgentListEntry {
     pub started_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -652,6 +747,8 @@ pub struct AgentLabel {
 pub struct AgentLookupCandidate {
     pub agent: AgentInfo,
     pub has_rule: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -673,6 +770,8 @@ pub struct ResumeCandidate {
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]

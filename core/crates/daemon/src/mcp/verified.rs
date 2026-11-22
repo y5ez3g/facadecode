@@ -1,7 +1,10 @@
 //! The actor-bound connection used by the normal MCP endpoint.
 
+use std::collections::BTreeMap;
 use std::sync::{Mutex, PoisonError};
+use std::time::Instant;
 
+use facade_base::api_v1::daemon as wire;
 use facade_base::api_v1::daemon::AgentKind;
 use facade_base::api_v1::daemon_client::DaemonClient;
 use facade_base::model::agent::AgentRef;
@@ -9,7 +12,10 @@ use facade_base::model::error::ErrorBody;
 use serde_json::Value;
 
 use super::{ManagedInstructions, Relay};
-use crate::{Cancel, messages::InboxRead};
+use crate::{
+    Cancel,
+    messages::{InboxRead, ReplyRead},
+};
 
 #[derive(Clone)]
 pub(crate) struct ActorIdentity {
@@ -29,6 +35,19 @@ pub(crate) type ActorConnect =
 pub(crate) type ReadInbox =
     Box<dyn Fn(&AgentRef, InboxRead, Cancel) -> Result<Value, ErrorBody> + Send + Sync>;
 
+pub(crate) type ReadReply =
+    Box<dyn Fn(&AgentRef, ReplyRead, Cancel) -> Result<Option<Value>, ErrorBody> + Send + Sync>;
+
+pub(crate) type DiscoverClis = Box<
+    dyn Fn(
+            &AgentRef,
+            &[wire::MachineQuery],
+            Instant,
+        ) -> BTreeMap<String, Result<Vec<String>, String>>
+        + Send
+        + Sync,
+>;
+
 /// Holds a tools-ready connection only for a run the daemon can verify without joining a Guest.
 pub(crate) type Ready =
     Box<dyn Fn(Option<&str>) -> anyhow::Result<Option<DaemonClient>> + Send + Sync>;
@@ -43,6 +62,8 @@ pub(crate) struct ActorServices {
 
 pub(super) struct Verified {
     pub(super) services: ActorServices,
+    pub(super) read_reply: Option<ReadReply>,
+    pub(super) discover_clis: Option<DiscoverClis>,
     connection: Mutex<Connection>,
 }
 
@@ -56,6 +77,8 @@ impl Verified {
     pub(super) fn new(services: ActorServices) -> Self {
         Self {
             services,
+            read_reply: None,
+            discover_clis: None,
             connection: Mutex::default(),
         }
     }

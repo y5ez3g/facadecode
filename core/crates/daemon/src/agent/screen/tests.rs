@@ -181,6 +181,15 @@ mod tests {
     fn a_crash_inside_the_last_record_drops_only_that_record() {
         let (_folder, dir) = temp_dir("truncated");
         let mut recorder = Recorder::new(&dir, 40, 6);
+        // Older checkpoints kept the title in metadata alone.
+        let checkpoint = Checkpoint::capture_with_title(&recorder.screen, Some("checkpoint title"));
+        write_checkpoint(&dir, 1, &checkpoint).unwrap();
+        let (screen, title) = load(&dir, "a1").unwrap();
+        assert_eq!(title.as_deref(), Some("checkpoint title"));
+        let mut viewer = Screen::new(40, 6, SCROLLBACK_ROWS);
+        let drawn = viewer.feed(&screen.redraw(false, false));
+        assert_eq!(drawn.title_change.as_deref(), Some("checkpoint title"));
+
         recorder.output(b"first line\r\n\x1b]0;a title\x07");
         recorder.resize(30, 6);
         recorder.output(b"second line\r\n");
@@ -211,8 +220,11 @@ mod tests {
             recovered.log.unwrap().recovered_title.as_deref(),
             Some("a title")
         );
-        let (_, title) = load(&copy, "a1").unwrap();
+        let (screen, title) = load(&copy, "a1").unwrap();
         assert_eq!(title.as_deref(), Some("a title"));
+        let mut viewer = Screen::new(30, 6, SCROLLBACK_ROWS);
+        let drawn = viewer.feed(&screen.redraw(false, false));
+        assert_eq!(drawn.title_change.as_deref(), Some("a title"));
     }
 
     /// The log of agent a1 in `dir`'s generation `generation`, and its length.

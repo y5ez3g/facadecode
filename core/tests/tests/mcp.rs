@@ -19,6 +19,295 @@ fn type_draft(home: &TestHome, agent: &str, draft: &str) {
     );
 }
 
+#[test]
+fn mcp_zero_wait_sends_are_kept_and_invalid_waits_send_nothing() {
+    let home = TestHome::new("mcpwait");
+    let sender = home.start_named_fake("sender", &[]);
+    let recipient = home.start_named_fake("recipient", &[]);
+    type_draft(&home, &recipient.id, "hold delivery");
+    let mut sender_mcp = McpTestClient::open_configured(&home, &sender.id);
+    let mut recipient_mcp = McpTestClient::open_configured(&home, &recipient.id);
+
+    for arguments in [
+        json!({ "timeout_seconds": 1 }),
+        json!({ "wait_for": "none" }),
+    ] {
+        let mut send = json!({ "to": recipient.address, "text": "refuse this send" });
+        send.as_object_mut()
+            .unwrap()
+            .extend(arguments.as_object().unwrap().clone());
+        let refused = sender_mcp.call("send_message", send);
+        assert_eq!(refused["status"], "failure", "{refused}");
+        assert_eq!(refused["reason"], "invalid_argument", "{refused}");
+        assert!(refused["data"].get("id").is_none(), "{refused}");
+        assert!(refused["data"].get("next").is_none(), "{refused}");
+    }
+    let removed = recipient_mcp.call("read_messages", json!({ "wait": true }));
+    assert_eq!(removed["status"], "failure", "{removed}");
+    assert_eq!(removed["reason"], "invalid_argument", "{removed}");
+    assert!(removed["data"].get("next").is_none(), "{removed}");
+
+    for timeout in [json!({}), json!({ "timeout_seconds": 0 })] {
+        let empty = recipient_mcp.call("read_messages", timeout);
+        assert_eq!(empty["status"], "success", "{empty}");
+        assert_eq!(empty["data"]["messages"], json!([]), "{empty}");
+        assert!(empty["data"].get("next").is_none(), "{empty}");
+    }
+    let expired = recipient_mcp.call("read_messages", json!({ "timeout_seconds": 1 }));
+    assert_eq!(expired["status"], "failure", "{expired}");
+    assert_eq!(expired["reason"], "timeout", "{expired}");
+    assert!(expired["data"].get("next").is_none(), "{expired}");
+
+    let expected: Vec<_> = [
+        ("omitted", json!({})),
+        ("zero", json!({ "timeout_seconds": 0 })),
+        ("delivery alone", json!({ "wait_for": "delivery" })),
+        ("result alone", json!({ "wait_for": "result" })),
+    ]
+    .into_iter()
+    .map(|(text, options)| {
+        let mut send = json!({ "to": recipient.address, "text": text });
+        send.as_object_mut()
+            .unwrap()
+            .extend(options.as_object().unwrap().clone());
+        let receipt = sender_mcp.call("send_message", send);
+        assert_eq!(receipt["status"], "success", "{receipt}");
+        assert_eq!(receipt["data"]["delivery"], "waiting_in_inbox", "{receipt}");
+        assert!(receipt["data"].get("next").is_none(), "{receipt}");
+        let id = receipt["data"]["id"].as_str().unwrap();
+        let (inbox_number, _) = id.split_once('@').expect("full send ID");
+        (inbox_number.to_owned(), text)
+    })
+    .collect();
+    let read = recipient_mcp.call("read_messages", json!({ "timeout_seconds": 0 }));
+    assert_eq!(read["status"], "success", "{read}");
+    assert!(read["data"].get("next").is_none(), "{read}");
+    let messages = read["data"]["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), expected.len(), "{read}");
+    for (message, (id, text)) in messages.iter().zip(expected) {
+        assert_eq!(message["id"], id, "{message}");
+        assert_eq!(message["text"], text, "{message}");
+        assert_eq!(message["from"], sender.address, "{message}");
+    }
+    let history = recipient_mcp.call("read_messages", json!({ "last": 10 }));
+    assert_eq!(history["data"]["messages"], json!(messages), "{history}");
+}
+
+#[test]
+fn a_matching_read_finds_a_reply_already_typed_into_a_managed_terminal() {
+    let home = TestHome::new("mcptypedreply");
+    let ada = home.start_named_fake("ada", &[]);
+    let bob = home.start_named_fake("bob", &[]);
+    let mut ada_mcp = McpTestClient::open_configured(&home, &ada.id);
+    let mut bob_mcp = McpTestClient::open_configured(&home, &bob.id);
+    let sent = ada_mcp.call(
+        "send_message",
+        json!({
+            "to": bob.address, "text": "Please answer in a linked reply",
+            "wait_for": "delivery", "timeout_seconds": 30,
+        }),
+    );
+    assert_eq!(sent["status"], "success", "{sent}");
+    assert_eq!(sent["data"]["delivery"], "typed_into_input", "{sent}");
+    let original = sent["data"]["id"].as_str().expect("full send ID");
+    let (inbox_id, _) = original.split_once('@').unwrap();
+    let text = "The linked reply is ready";
+    let replied = bob_mcp.call(
+        "send_message",
+        json!({
+            "to": ada.address, "text": text, "reply_to": inbox_id,
+            "wait_for": "delivery", "timeout_seconds": 30,
+        }),
+    );
+    assert_eq!(replied["status"], "success", "{replied}");
+    assert_eq!(replied["data"]["delivery"], "typed_into_input", "{replied}");
+    assert!(
+        wait_until(secs(10), || home
+            .submitted_messages()
+            .iter()
+            .any(|message| { message.lines().skip(1).eq([text]) })),
+        "the reply did not reach the fake terminal: {}",
+        home.screen(&ada.address)
+    );
+    let empty = ada_mcp.call("read_messages", json!({}));
+    assert_eq!(empty["status"], "success", "{empty}");
+    assert_eq!(empty["data"]["messages"], json!([]), "{empty}");
+    let read = ada_mcp.call("read_messages", json!({ "reply_to": original }));
+    assert_eq!(read["status"], "success", "{read}");
+    assert!(read["data"].get("next").is_none(), "{read}");
+    let messages = read["data"]["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 1, "{read}");
+    let reply_id = replied["data"]["id"]
+        .as_str()
+        .unwrap()
+        .split_once('@')
+        .unwrap()
+        .0;
+    assert_eq!(messages[0]["id"], reply_id, "{read}");
+    assert_eq!(messages[0]["from"], bob.address, "{read}");
+    assert_eq!(messages[0]["text"], text, "{read}");
+    assert_eq!(messages[0]["reply_to"], inbox_id, "{read}");
+}
+
+fn available_cli_names(list: &Value) -> Value {
+    assert!(list.get("settings_problem").is_none(), "{list}");
+    json!(
+        list["clis"]
+            .as_array()
+            .expect("cli.list rows")
+            .iter()
+            .filter(|row| row["available"] == true)
+            .map(|row| row["cli"].as_str().expect("a CLI name"))
+            .collect::<Vec<_>>()
+    )
+}
+
+fn mcp_machine<'a>(roster: &'a Value, machine_id: &str) -> &'a Value {
+    assert_eq!(roster["status"], "success", "{roster}");
+    roster["data"]["machines"]
+        .as_array()
+        .expect("MCP machine rows")
+        .iter()
+        .find(|row| row["machine_id"] == machine_id)
+        .unwrap_or_else(|| panic!("missing machine {machine_id}: {roster}"))
+}
+
+#[test]
+fn mcp_cli_names_match_the_managed_and_guest_default_start_contexts() {
+    let home = TestHome::new("mcpclis");
+    let fake = &test_binaries().fakecli;
+    install_program(&home.project, "project-only", fake);
+    let command = format!("./project-only{}", std::env::consts::EXE_SUFFIX);
+    std::fs::write(
+        home.path.join("facade.json"),
+        json!({
+            "yolo": true,
+            "clis": { "project-only": { "type": "fake", "command": command } },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let agent = home.start_named_fake("observer", &[]);
+    let mut wire = connect(&home);
+    let hello = home.hello_result().unwrap();
+    let machine_id = hello["machine_id"].as_str().unwrap();
+    let env = home
+        .isolating_env()
+        .into_iter()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let managed_names = available_cli_names(
+        &wire.call_ok("cli.list", json!({ "folder": home.project, "env": env })),
+    );
+    let guest_names = available_cli_names(&wire.call_ok("cli.list", json!({})));
+    assert!(
+        managed_names
+            .as_array()
+            .unwrap()
+            .contains(&json!("project-only"))
+    );
+    assert!(
+        !guest_names
+            .as_array()
+            .unwrap()
+            .contains(&json!("project-only"))
+    );
+
+    let mut managed = McpTestClient::open_configured(&home, &agent.id);
+    let mut guest = McpTestClient::spawn(&home, home.command(&test_binaries().mcp));
+    for (mcp, expected) in [(&mut managed, managed_names), (&mut guest, guest_names)] {
+        let roster = mcp.call("list_agents", json!({}));
+        let row = mcp_machine(&roster, machine_id);
+        assert_eq!(row["status"], "answered", "{roster}");
+        assert_eq!(row["clis"], expected, "{roster}");
+        assert!(row.get("cli_error").is_none(), "{roster}");
+    }
+}
+
+#[test]
+fn mcp_remote_cli_lookup_preserves_the_roster_when_settings_fail() {
+    let local = TestHome::new("mcpclis-local");
+    let remote = TestHome::new("mcpclis-remote");
+    let programs = test_binaries();
+    install_machine_ssh(
+        &[("mcp-local", &local), ("mcp-peer", &remote)],
+        &programs.facade,
+    );
+    std::fs::write(local.path.join("facade.json"), r#"{"yolo":true}"#).unwrap();
+    let settings = remote.path.join("facade.json");
+    std::fs::write(
+        &settings,
+        json!({
+            "yolo": true,
+            "clis": {
+                "peer-only": { "type": "fake", "command": programs.fakecli },
+                "peer-missing": { "type": "fake", "command": remote.folder().join("no-program") },
+            },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut local_wire = connect(&local);
+    let _remote_wire = connect(&remote);
+    let local_hello = local.hello_result().unwrap();
+    let remote_hello = remote.hello_result().unwrap();
+    let local_id = local_hello["machine_id"].as_str().unwrap();
+    let remote_id = remote_hello["machine_id"].as_str().unwrap();
+    for (home, id, name) in [
+        (&local, local_id, "mcp-local"),
+        (&remote, remote_id, "mcp-peer"),
+    ] {
+        home.run_facade_ok(&["machine", "rename", &id.replace('-', ""), name]);
+    }
+    local.run_facade_ok(&[
+        "machine",
+        "add",
+        "--home",
+        remote.path.to_str().unwrap(),
+        "mcp-peer",
+    ]);
+    let witness = remote.start_named_fake("peer-witness", &[]);
+    let observer = local.start_named_fake("observer", &[]);
+    let mut mcp = McpTestClient::open_configured(&local, &observer.id);
+    let scope = json!({ "scope": { "kind": "machine", "machine": "mcp-peer" } });
+    let expected = available_cli_names(&local_wire.call_ok("cli.list", scope.clone()));
+    assert!(expected.as_array().unwrap().contains(&json!("peer-only")));
+    assert!(
+        !expected
+            .as_array()
+            .unwrap()
+            .contains(&json!("peer-missing"))
+    );
+    let roster = mcp.call("list_agents", json!({}));
+    let peer = mcp_machine(&roster, remote_id);
+    assert_eq!(peer["selector"], "mcp-peer", "{roster}");
+    assert_eq!(peer["status"], "answered", "{roster}");
+    assert_eq!(peer["clis"], expected, "{roster}");
+    assert!(peer.get("cli_error").is_none(), "{roster}");
+
+    std::fs::write(settings, "{").unwrap();
+    let failed = local_wire.call_ok("cli.list", scope);
+    let error = failed["settings_problem"]
+        .as_str()
+        .expect("a CLI settings error");
+    let roster = mcp.call("list_agents", json!({}));
+    let peer = mcp_machine(&roster, remote_id);
+    assert_eq!(peer["status"], "answered", "{roster}");
+    assert!(peer.get("clis").is_none(), "{roster}");
+    assert_eq!(peer["cli_error"], error, "{roster}");
+    assert!(
+        mcp_machine(&roster, local_id)["clis"].is_array(),
+        "{roster}"
+    );
+    assert!(
+        roster["data"]["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|agent| agent["id"] == witness.address),
+        "{roster}"
+    );
+}
+
 /// Both accepted argument shorthands use the public limit and reject invalid batches before typing.
 #[test]
 fn press_keys_checks_normalized_batches_before_typing() {
@@ -88,7 +377,10 @@ fn a_managed_read_delivers_only_whole_inline_messages() {
     let sends = long.each_ref().map(|text| {
         sender.send(
             "tools/call",
-            json!({ "name": "send_message", "arguments": { "to": "ada", "text": text } }),
+            json!({
+                "name": "send_message",
+                "arguments": { "to": "ada", "text": text, "wait_for": "delivery", "timeout_seconds": 30 },
+            }),
         )
     });
     let store = rusqlite::Connection::open_with_flags(
@@ -116,11 +408,13 @@ fn a_managed_read_delivers_only_whole_inline_messages() {
     assert_eq!(first["status"], "success", "{first}");
     assert_eq!(first_page.len(), 1, "{first}");
     assert!(first["data"].get("file").is_none(), "{first}");
+    assert!(first["data"].get("next").is_none(), "{first}");
     assert_eq!(pending(), 1, "only the returned message was delivered");
     let cursor = first["data"]["next_cursor"]
         .as_str()
         .expect("the second pending message needs another page");
     let second = receiver.call("read_messages", json!({ "after": cursor }));
+    assert!(second["data"].get("next").is_none(), "{second}");
     let second_page = second["data"]["messages"].as_array().expect("inline page");
     assert_eq!(second["status"], "success", "{second}");
     assert_eq!(second_page.len(), 1, "{second}");
@@ -1851,7 +2145,10 @@ fn a_send_cancelled_over_a_relay_connection_is_withdrawn_and_answered() {
     let mut boss = McpTestClient::relay_configured(&home, &boss.id);
     let held = boss.send(
         "tools/call",
-        json!({ "name": "send_message", "arguments": { "to": worker.address, "text": "held" } }),
+        json!({
+            "name": "send_message",
+            "arguments": { "to": worker.address, "text": "held", "wait_for": "delivery", "timeout_seconds": 30 },
+        }),
     );
     let store = rusqlite::Connection::open_with_flags(
         home.path.join("core/facade.db"),
@@ -2064,10 +2361,11 @@ fn each_tool_responds_as_recorded(through: Through) {
         &mut ada,
         "send_message",
         "send_message",
-        json!({ "to": "a2@golden-host", "text": "hello bob" }),
+        json!({ "to": "a2@golden-host", "text": "hello bob", "wait_for": "delivery", "timeout_seconds": 30 }),
     );
     assert_eq!(sent["status"], "success", "{sent}");
     assert_eq!(sent["data"]["id"], "m1@golden-host", "{sent}");
+    assert_eq!(sent["data"]["delivery"], "typed_into_input", "{sent}");
     assert!(sent["data"].get("next").is_none(), "{sent}");
     golden.call(
         &mut ada,
@@ -2097,12 +2395,15 @@ fn each_tool_responds_as_recorded(through: Through) {
     type_draft(&home, "ada", "my draft");
     let waiting = json!({
         "name": "read_messages",
-        "arguments": { "wait": true, "reply_to": sent["data"]["id"] },
+        "arguments": { "timeout_seconds": 30, "reply_to": sent["data"]["id"] },
     });
     let awaiting = ada.send("tools/call", waiting.clone());
     let reply = json!({
         "name": "send_message",
-        "arguments": { "to": "ada", "text": "hi ada", "reply_to": "m1" },
+        "arguments": {
+            "to": "ada", "text": "hi ada", "reply_to": "m1",
+            "wait_for": "delivery", "timeout_seconds": 30,
+        },
     });
     let replying = bob.send("tools/call", reply.clone());
     let read = ada
@@ -2120,6 +2421,10 @@ fn each_tool_responds_as_recorded(through: Through) {
     let replied = bob
         .answer(replying, secs(40))
         .expect("bob's send is answered");
+    assert_eq!(
+        replied["result"]["structuredContent"]["data"]["delivery"], "read_by_recipient",
+        "{replied}"
+    );
     golden.record(
         "send_message replying to a local inbox number",
         json!({ "method": "tools/call", "params": reply }),
@@ -2401,7 +2706,9 @@ fn record_guest_exchange(
     guest: &mut McpTestClient,
     meta: &Value,
 ) {
-    let message = json!({ "to": "a2@golden-host", "text": "hello guest" });
+    let message = json!({
+        "to": "a2@golden-host", "text": "hello guest", "wait_for": "delivery", "timeout_seconds": 30,
+    });
     let sent = host.send(
         "tools/call",
         json!({ "name": "send_message", "arguments": message }),
@@ -2410,7 +2717,7 @@ fn record_guest_exchange(
         guest,
         "read_messages waiting as a guest",
         "read_messages",
-        json!({ "wait": true }),
+        json!({ "timeout_seconds": 30 }),
         meta.clone(),
     );
     assert_eq!(read["data"]["messages"][0]["text"], "hello guest", "{read}");
@@ -2432,14 +2739,14 @@ fn record_guest_exchange(
             "to": "a1@golden-host",
             "text": "hello host",
             "reply_to": read["data"]["messages"][0]["id"],
+            "wait_for": "delivery",
+            "timeout_seconds": 30,
         }),
         meta.clone(),
     );
     assert_eq!(reply["status"], "success", "{reply}");
-    assert_eq!(
-        reply["data"]["next"],
-        json!({ "tool": "read_messages", "arguments": { "wait": true, "reply_to": reply["data"]["id"] } }),
-    );
+    assert_eq!(reply["data"]["delivery"], "typed_into_input", "{reply}");
+    assert!(reply["data"].get("next").is_none(), "{reply}");
 }
 
 /// A line of 1 MiB goes through the relay each way, and the connection goes on: a request whose

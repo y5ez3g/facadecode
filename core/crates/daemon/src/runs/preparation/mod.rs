@@ -372,6 +372,12 @@ impl Preparation {
         self.sessions.end_following(id).await;
     }
 
+    /// Returns the current run's session report path even if the report is absent.
+    pub(super) fn session_report_path(&self, id: &str) -> Option<PathBuf> {
+        let folder = folder::find(&self.folders, id)?;
+        Some(folder::session_file(&folder))
+    }
+
     /// Reads the current run's reported session once, logging an unreadable file once per read.
     pub(crate) async fn read_session(&self, id: &str) -> Option<Option<String>> {
         let folder = folder::find(&self.folders, id)?;

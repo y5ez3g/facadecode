@@ -58,6 +58,13 @@ pub(super) fn qualified(
     machine_id: &str,
     machines: &[MachineIdentity],
 ) -> Result<String, ErrorBody> {
+    Ok(format!("{id}@{}", machine_selector(machine_id, machines)?))
+}
+
+pub(super) fn machine_selector(
+    machine_id: &str,
+    machines: &[MachineIdentity],
+) -> Result<String, ErrorBody> {
     let unnamed = MachineIdentity {
         machine_id: machine_id.to_string(),
         name: String::new(),
@@ -66,11 +73,10 @@ pub(super) fn qualified(
         .iter()
         .find(|machine| machine.machine_id == machine_id)
         .unwrap_or(&unnamed);
-    let selector = selector::display_machine_selector(machine, machines).map_err(|error| {
+    selector::display_machine_selector(machine, machines).map_err(|error| {
         ErrorBody::new(
             Reason::AmbiguousReference,
             format!("{error}; use machine rename to give it a unique name"),
         )
-    })?;
-    Ok(format!("{id}@{selector}"))
+    })
 }

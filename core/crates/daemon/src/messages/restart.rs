@@ -6,9 +6,8 @@ use facade_base::model::message::{DeliveryFailure, Message, TextWritten};
 use tokio::sync::watch;
 
 use super::{Deliveries, Messages, Outcome, OwedResult, Settled};
-use crate::delivery_limit;
 use crate::store::KeptMessage;
-use crate::{HUMAN, blocking_in_place};
+use crate::{HUMAN, blocking_in_place, delivery_ceiling, delivery_limit};
 
 impl Messages {
     /// The agent messages the daemon before this one left pending, oldest first, each with the
@@ -95,7 +94,7 @@ pub(crate) fn decide(
     }
 }
 
-/// What is left at `now` of `message`'s deadline, at most [`delivery_limit`]: a restart never
+/// What is left at `now` of `message`'s deadline, at most [`delivery_ceiling`]: a restart never
 /// lengthens it. A start's prompt kept while its CLI's tools connected has no deadline yet and gets
 /// a whole delivery's time; a deadline that cannot be read has passed.
 fn time_left(message: &Message, now: SystemTime) -> Duration {
@@ -105,5 +104,5 @@ fn time_left(message: &Message, now: SystemTime) -> Duration {
     facade_base::time::parse_iso_time(deadline)
         .and_then(|deadline| deadline.duration_since(now).ok())
         .unwrap_or_default()
-        .min(delivery_limit())
+        .min(delivery_ceiling())
 }

@@ -34,7 +34,8 @@
 //! Status: `FAKECLI_STATUS=1` makes it report what it is doing over OSC 7501, as a CLI does. It
 //! first asks whether its terminal takes reports and shows `status reports taken` once answered,
 //! then reports idle once it is ready, after `FAKECLI_STATUS_DELAY_MS`. Each message it takes is a
-//! turn of `FAKECLI_TURN_MS` (400 by default), working, then idle. A message starting with `/fake`
+//! turn of `FAKECLI_TURN_MS` (400 by default), working, then idle. `FAKECLI_PROGRESS=1` also emits
+//! native progress for each turn. A message starting with `/fake`
 //! drives the rest: `/fake block <kind> <words>` waits for the person (`permission`, `question`, or
 //! `auth`) and `/fake error <words>` reports an error, each until the next message; `/fake clear`
 //! takes its report back; `/fake exit <code>` ends it with that code. `/fake menu <question>` asks
@@ -177,6 +178,8 @@ struct Status {
     turn: Duration,
     /// When the turn running now ends.
     turn_ends: Option<Instant>,
+    /// Whether to emit the CLI's own OSC 9;4 progress with each turn.
+    progress: bool,
     /// Reports to write before the next frame.
     reports: Vec<String>,
 }
@@ -439,6 +442,9 @@ impl FakeCli {
             }
             _ => {
                 status.reports.push(report("working", None, None));
+                if status.progress {
+                    status.reports.push("\x1b]9;4;1;37\x07".into());
+                }
                 status.turn_ends = Some(Instant::now() + status.turn);
             }
         }
@@ -551,6 +557,9 @@ impl FakeCli {
         }
         if turn_ended {
             status.turn_ends = None;
+            if status.progress {
+                status.reports.push("\x1b]9;4;0;37\x07".into());
+            }
         }
         // A turn that began before it was ready reports for itself.
         if (ready && status.turn_ends.is_none()) || turn_ended {
@@ -1152,6 +1161,7 @@ fn run() -> anyhow::Result<()> {
             ),
             turn: milliseconds("FAKECLI_TURN_MS").unwrap_or(Duration::from_millis(400)),
             turn_ends: None,
+            progress: std::env::var("FAKECLI_PROGRESS").is_ok_and(|v| v == "1"),
             reports: vec!["\x1b]7501;?\x1b\\".into()],
         });
     let server_answered = Arc::new(AtomicBool::new(false));

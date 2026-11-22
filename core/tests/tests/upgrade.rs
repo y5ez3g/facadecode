@@ -1094,7 +1094,7 @@ fn a_call_made_while_the_daemon_before_drains_is_refused_and_repeated_at_the_nex
     // Both say hello before the drain: a client of the test's, and a send held once it has.
     let mut wire = connect(&home);
     let mut send = home.command(&test_binaries().facade);
-    send.args(["send", "w1", "during the drain"])
+    send.args(["send", "w1", "during the drain", "-w"])
         .env("FACADE_TEST_GATES", "command-connected");
     let sending = send
         .stdin(Stdio::null())
@@ -1156,7 +1156,7 @@ fn a_message_entered_as_a_newer_facade_takes_over_is_settled_by_the_daemon_befor
     home.start_named_fake("w1", &[]);
     let mut send = home.command(&test_binaries().facade);
     let sending = send
-        .args(["send", "w1", "entered as it takes over"])
+        .args(["send", "w1", "entered as it takes over", "-w"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1236,7 +1236,7 @@ fn a_message_waiting_as_the_daemon_before_drains_is_typed_by_the_next_daemon_alo
     );
     let mut send = home.command(&test_binaries().facade);
     let sending = send
-        .args(["send", "w1", "waits through the drain"])
+        .args(["send", "w1", "waits through the drain", "-w"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1576,11 +1576,16 @@ fn sends_waiting_through_a_takeover_are_typed_once_and_answered() {
     let mut boss = McpTestClient::open_configured(&home, &boss.id);
     let tool = boss.send(
         "tools/call",
-        json!({ "name": "send_message", "arguments": { "to": worker.address, "text": "from the tool" } }),
+        json!({
+            "name": "send_message",
+            "arguments": {
+                "to": worker.address, "text": "from the tool", "wait_for": "delivery", "timeout_seconds": 30,
+            },
+        }),
     );
     let command = home
         .command(&test_binaries().facade)
-        .args(["send", "worker", "from the command"])
+        .args(["send", "worker", "from the command", "-w"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1909,6 +1914,239 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
     );
 }
 
+/// Opens a real v4 home with the current build and exercises the daemon's published v1 contract.
+#[test]
+#[ignore = "requires the exact v4 CLI binary in FACADE_TEST_STORE_V4"]
+fn a_v4_home_keeps_its_routes_sessions_and_receipts_at_cold_upgrade() {
+    use rusqlite::{Connection, OpenFlags};
+
+    fn preserve_files(from: &Path, to: &Path) {
+        std::fs::create_dir(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let destination = to.join(entry.file_name());
+            let kind = entry.file_type().unwrap();
+            if kind.is_dir() {
+                preserve_files(&entry.path(), &destination);
+            } else if kind.is_file() {
+                std::fs::copy(entry.path(), destination).unwrap();
+            }
+        }
+    }
+
+    let old = PathBuf::from(std::env::var_os("FACADE_TEST_STORE_V4").expect("the v4 CLI binary"));
+    assert!(old.is_absolute() && old.is_file(), "{}", old.display());
+    let current = &test_binaries().facade;
+    let local = TestHome::new("v4-local");
+    let peer = TestHome::new("v4-peer");
+    let machines = [("v4-local", &local), ("v4-peer", &peer)];
+    install_machine_ssh(&machines, &old);
+    let session = "065e033f-12fe-4bac-9870-dc4e3d4971af";
+    let run = |home: &TestHome, program: &Path, args: &[&str]| {
+        let output = home
+            .command(program)
+            .env_remove("FACADE_TEST_LINK_PROGRAMS")
+            .env("FAKECLI_SESSION", session)
+            .env("FAKECLI_STATUS", "1")
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{args:?}: {}", stderr(&output));
+        stdout(&output)
+    };
+    let read_db = |home: &Path| {
+        Connection::open_with_flags(
+            home.join("core/facade.db"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap()
+    };
+
+    let name_old_machine = |home: &TestHome, name: &str| {
+        run(home, &old, &["daemon", "--detach"]);
+        let id = home.hello_result().unwrap()["machine_id"].clone();
+        let selector = id.as_str().unwrap().replace('-', "");
+        run(home, &old, &["machine", "rename", &selector, name]);
+        id
+    };
+    let peer_id = name_old_machine(&peer, "v4-peer");
+    let machine = name_old_machine(&local, "v4-local");
+    let started = run(
+        &local,
+        &old,
+        &["start", "-d", "--name", "historical", "fake"],
+    );
+    let address = started_ref(&started);
+    let old_lock = local.lock_record("daemon").unwrap();
+    let mut old_wire = DaemonTestClient::open(&local);
+    let old_hello = old_wire.hello("terminal", &[1], json!({}));
+    assert_eq!(old_hello["result"]["api_version"], 1, "{old_hello}");
+    assert_eq!(old_hello["result"]["machine_id"], machine, "{old_hello}");
+    assert!(
+        !old_hello["result"]["topics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|topic| topic == "attach.shell"),
+        "{old_hello}"
+    );
+    let target = json!({ "target": address });
+    assert!(wait_until(LOADED_TIMEOUT, || old_wire
+        .call_ok("agent.inspect", target.clone())["agent"]["session"]
+        == session));
+    let reference = old_wire.call_ok("agent.inspect", target.clone())["agent"]["reference"].clone();
+    let send = json!({
+        "to": reference, "text": "A delivered v4 message", "request_id": "qa-v4-receipt"
+    });
+    let receipt = old_wire.call_ok("agent.send", send.clone());
+    assert_eq!(
+        receipt["message"]["delivery"]["status"], "success",
+        "{receipt}"
+    );
+    let mut sent = local.submitted_messages();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(sent[0].ends_with("A delivered v4 message"), "{sent:?}");
+
+    run(
+        &local,
+        &old,
+        &[
+            "machine",
+            "add",
+            "--home",
+            peer.path.to_str().unwrap(),
+            "-p",
+            "2222",
+            "v4-peer",
+        ],
+    );
+    let saved_route = |wire: &mut DaemonTestClient| {
+        let roster = wire.call_ok("machine.list", json!({}));
+        roster["machines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["machine_id"] == machine)
+            .and_then(|row| row["connections"].as_array())
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|row| row["kind"] == "saved" && row["machine_id"] == peer_id)
+            })
+            .unwrap_or_else(|| panic!("missing v4-peer route: {roster}"))["transport"]
+            .clone()
+    };
+    let route = saved_route(&mut old_wire);
+    assert_eq!(route["remote_home"], json!(peer.path), "{route}");
+    assert!(
+        route["ssh_args"]
+            .as_array()
+            .is_some_and(|args| !args.is_empty()),
+        "{route}"
+    );
+
+    let mut old_attach =
+        TestTerminal::spawn(local.command(current).args(["attach", address]), 100, 30);
+    assert!(
+        old_attach.wait_for(secs(10), |screen| screen.contains("A delivered v4 message")),
+        "{}",
+        old_attach.text()
+    );
+    old_attach.send(b"/fake exit 3\r");
+    assert_eq!(
+        old_attach
+            .wait_exit(secs(10))
+            .and_then(|status| status.code()),
+        Some(3)
+    );
+    sent.push("/fake exit 3".into());
+    assert_eq!(local.lock_record("daemon").unwrap(), old_lock);
+    let historical = old_wire.call_ok("agent.inspect", target)["agent"].clone();
+    assert_eq!(historical["process"], "ended", "{historical}");
+    assert_eq!(historical["session"], session, "{historical}");
+    drop(old_wire);
+    local.kill_home_processes();
+    peer.kill_home_processes();
+    let previous_home = local.folder().join("v4-home");
+    preserve_files(&local.path, &previous_home);
+    preserve_files(&peer.path, &peer.folder().join("v4-home"));
+    let old_db = read_db(&previous_home);
+    let schema = |db: &Connection| -> i64 {
+        db.pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap()
+    };
+    let marker_columns = |db: &Connection| -> i64 {
+        db.query_row(
+            "SELECT count(*) FROM pragma_table_info('messages') WHERE name = 'command_line_reply'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(schema(&old_db), 4);
+    assert_eq!(marker_columns(&old_db), 0);
+    drop(old_db);
+
+    install_machine_ssh(&machines, current);
+    run(&local, current, &["daemon", "--detach"]);
+    let new_lock = local.lock_record("daemon").unwrap();
+    assert_ne!(new_lock, old_lock);
+    let mut wire = connect(&local);
+    assert_eq!(local.hello_result().unwrap()["machine_id"], machine);
+    let migrated = wire.call_ok("agent.inspect", json!({ "target": reference }))["agent"].clone();
+    for field in [
+        "reference",
+        "name",
+        "cli",
+        "cwd",
+        "process",
+        "session",
+        "exit",
+    ] {
+        assert_eq!(migrated[field], historical[field], "{field}: {migrated}");
+    }
+    assert_eq!(saved_route(&mut wire), route);
+    let repeated = wire.call_ok("agent.send", send);
+    assert_eq!(repeated["id"], receipt["id"], "{repeated}");
+    assert_eq!(repeated["message"], receipt["message"], "{repeated}");
+    assert_eq!(repeated["repeated"], true, "{repeated}");
+    assert_eq!(local.submitted_messages(), sent);
+
+    let db = read_db(&local.path);
+    assert_eq!(schema(&db), 5);
+    assert_eq!(marker_columns(&db), 1);
+    let saved: (i64, String) = db
+        .query_row(
+            "SELECT command_line_reply, status FROM messages WHERE request_id = 'qa-v4-receipt'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(saved, (0, "success".to_string()));
+    drop(db);
+
+    let active = local.start_fake("v1-client");
+    let listed = run(&local, &old, &["list"]);
+    assert!(listed.contains("v1-client"), "{listed}");
+    let delivered = run(
+        &local,
+        &old,
+        &["send", &active.address, "From an unchanged v1 CLI"],
+    );
+    assert!(delivered.starts_with("Delivered "), "{delivered}");
+    assert!(wait_until(secs(10), || local
+        .submitted_messages()
+        .iter()
+        .filter(|text| text.ends_with("From an unchanged v1 CLI"))
+        .count()
+        == 1));
+    assert_eq!(local.lock_record("daemon").unwrap(), new_lock);
+    println!(
+        "store 4 -> 5, v4 marker false, machine {machine}, Agent {reference}, session {session}, receipt {}, route {route}; old and new daemon PIDs {} -> {}; old CLI {delivered}",
+        receipt["id"], old_lock.0, new_lock.0
+    );
+}
+
 /// An attached terminal reconnects through a takeover. Each connected input reaches the agent once.
 #[test]
 fn an_attached_terminal_reconnects_through_a_takeover_and_its_keys_arrive_once() {
@@ -2085,12 +2323,15 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
         "tools/call",
         json!({
             "name": "send_message",
-            "arguments": { "to": agents[AGENTS - 1].address, "text": "waiting by the tool" },
+            "arguments": {
+                "to": agents[AGENTS - 1].address, "text": "waiting by the tool",
+                "wait_for": "delivery", "timeout_seconds": 30,
+            },
         }),
     );
     let waiting_command = home
         .command(&test_binaries().facade)
-        .args(["send", &held, "waiting by the command"])
+        .args(["send", &held, "waiting by the command", "-w"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2119,7 +2360,10 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
                 let text = format!("tool {}", sent.len());
                 let answer = client.call(
                     "send_message",
-                    json!({ "to": agents[1 + sent.len() % (AGENTS - 2)].address, "text": text }),
+                    json!({
+                        "to": agents[1 + sent.len() % (AGENTS - 2)].address, "text": text,
+                        "wait_for": "delivery", "timeout_seconds": 30,
+                    }),
                 );
                 sent.push((text, answer));
             }
@@ -2133,6 +2377,7 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
                     "send",
                     &format!("w{}", 1 + sent.len() % (AGENTS - 2)),
                     &text,
+                    "-w",
                 ]);
                 sent.push((text, output.status.success(), stderr(&output)));
             }

@@ -70,15 +70,18 @@ gets a name and inbox when it first calls a tool. From that point it can receive
   reference, and the new worktree's path when requested.
 - `facade list` shows running managed agents and connected Guests, newest start or resume first. It probes saved
   connections on demand without starting a sleeping daemon. `--local` queries this machine with zero SSH, and
-  `--machine <MACHINE>` queries the named machine and wakes it if needed. Use `facade status <AGENT>` for details
-  such as the full title, working directory and attached viewers.
+  `--machine <MACHINE>` queries the named machine and wakes it if needed. The `SESSION` column shows the latest
+  saved native session name, the conversation preview when unnamed, or `-` when neither is available.
+  Use `facade status <AGENT>` for the full session ID, working directory and attached viewers.
 - `facade stop <AGENT>...` ends one or more managed agents and keeps their records, screens and inboxes for 30 days.
   Their helpers keep running. Use `--local`, `--machine <MACHINE>` or `--all` to stop running managed agents in one
   scope. Scope stops skip Guests and probe remote machines without waking them. A partial failure returns 1 after
   stopping the other targets.
 - `facade resume` lists resumable agents on reachable machines and CLI sessions in the current directory. `--local`
   lists this machine's candidates with zero SSH. `--machine <MACHINE>` lists the named machine's resumable managed
-  agents. Copy a reference from the `REF` column to `facade resume <REFERENCE>`.
+  agents. The `SESSION` column uses the same native name or preview as `list`. The state is `Stopped` after a Facade
+  stop, `Exited` when the CLI ended, or `Saved` for a session from the CLI's history. Copy a reference from the
+  `REF` column to `facade resume <REFERENCE>`.
 - Resuming a managed agent keeps its reference, directory and session. Resuming a saved session creates an agent.
   A session already in use produces the reference of the agent using it. Use `-d` to resume in the background.
 - `facade rename <AGENT> <NAME>` changes the name of a running or stopped agent or connected Guest. The reference
@@ -92,33 +95,42 @@ wake it when needed.
 ## Terminals
 
 - `facade attach a3@devbox` opens a running managed agent's terminal. Ctrl+] detaches with exit code 0 and leaves
-  the agent running. While attached, a CLI exit returns that CLI's actual exit status.
+  the agent running. A CLI exit returns its actual exit status. Both paths return to the same shell with its
+  scrollback and print one receipt. While attached, the CLI's native buffer, title and mouse mode control the view.
 - `facade screen [-n <lines>] <agent>` reads the last lines of the screen and scrollback as text. It also reads the
   last screen of a stopped agent.
-- `facade type <agent> "<text>" [--enter]` types text. Use `--key Esc --key Enter` to press keys in order.
+- `facade type <agent> "hello" -k Enter "again" -k Enter` pastes text and presses keys in the given order.
+  Quote each text argument that contains spaces. Facade queues the sequence as one input operation.
   `facade type --help` lists the key names.
 - Attach viewers share the smallest open terminal width and height. A larger Shell displays the shared grid in its
-  top-left corner. The shared grid changes as viewers resize or leave. VS Code can provide terminal colors.
+  top-left corner and updates rows in place. The shared grid changes as viewers resize or leave. VS Code can provide
+  terminal colors.
 - After reconnecting, Attach redraws the current screen. It reports discarded input in bytes when any was lost.
 
 ## Messages and tools
 
-`facade send <to> "<text>"` sends as the command line. Managed agents and Guests use `send_message` with their own
-identity. The recipient's machine assigns each message a number such as `m17`. Across machines, use its complete
-address, such as `m17@devbox`. Use `reply_to` when replying to the sender of an inbox message.
+`facade send <RECIPIENT> <TEXT>` sends as the command line and prints a receipt when Facade saves the message in the
+recipient's inbox. Add `-w` to wait for delivery or `-r` to print the first linked reply from the recipient. `-t` sets
+the total command budget from 1 to 300 seconds, with a default of 30. Each invocation takes a recipient and text.
+When a reply wait expires, the command reports the outcome and exits with status 1.
+
+Managed agents and Guests use `send_message` with their own identity. The recipient's machine assigns each message
+an address such as `m17@devbox`. To answer a message, copy the sender address into `to` and the inbox message number
+into `reply_to`. A Shell request waiting for a reply has a sender address such as `#c17@devbox`. The original recipient
+can send one linked reply while that invocation waits.
 
 For a managed agent, the Orchestrator waits for an empty input box, pastes the message and presses Enter. A Guest
-takes messages with `read_messages`. Both kinds of delivery have a 30-second deadline. An undelivered message is
-withdrawn and the sender gets the reason. The Orchestrator applies the same rule to a first prompt and to its results
-(🔔). It retains message history for 30 days.
+takes messages with `read_messages`. Background delivery has a 30-second deadline. When Shell explicitly waits,
+delivery uses the remaining command budget. Facade withdraws undelivered messages at their deadline and retains
+message history for 30 days.
 
 | MCP tool | What it does |
 | --- | --- |
-| `list_agents` | Lists the same running agents and connected Guests as Shell, within the caller's reach |
+| `list_agents` | Lists running agents, connected Guests and available CLI names for machines within reach |
 | `start_agent` | Starts a CLI with machine, folder, worktree, model, effort and first prompt options |
 | `stop_agent` | Stops one managed agent while its helpers keep running |
-| `send_message` | Sends one text message and reports its delivery with the complete message address |
-| `read_messages` | Reads the caller's inbox and can wait for a specific reply |
+| `send_message` | Saves one message, with optional waiting for delivery or a linked reply |
+| `read_messages` | Reads the caller's inbox, with optional waiting for new messages or a linked reply |
 | `read_screen` | Reads the text on a managed agent's terminal |
 | `type_text` | Types text into a running managed agent's terminal |
 | `press_keys` | Presses keys in a running managed agent's terminal |
@@ -131,10 +143,11 @@ this is the configuration when using `facade-mcp` on PATH.
 {"mcpServers": {"facade": {"command": "facade-mcp"}}}
 ```
 
-Pass `FACADE_HOME` in that server's environment to use a different home. A Guest sends first, then uses the
-`next` call returned by `send_message` to read the reply. That call sets `wait` and the complete message address
-in `reply_to`. A read with `wait` can wait up to 30 seconds. Use `after` and `last` for pages of inbox messages.
-Tool results include the requested content directly. See the [MCP contract](../extension/engineering/MCP.md).
+Pass `FACADE_HOME` in that server's environment to use a different home. For both message tools, `timeout_seconds`
+defaults to 0 and accepts up to 30 seconds. A send with a positive timeout requires `wait_for` set to `delivery`
+or `result`. After `reply_timeout`, an agent can call `read_messages` with the original full message address in
+`reply_to` and a positive timeout. Read pages with `after` or `last`. Tool results carry complete message text inline.
+See the [MCP contract](../extension/engineering/MCP.md#7-mcp-through-the-orchestrator).
 
 ## Access and settings
 

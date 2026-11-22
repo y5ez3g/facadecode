@@ -49,7 +49,7 @@ pub(crate) struct StartStep {
     pub(crate) tools_not_started: bool,
 }
 
-/// What a run's start does first: readying its CLI's tools, and with YOLO on answering its trust question.
+/// What a run's start does first: readying its CLI's tools and answering its trust question when allowed.
 pub(crate) struct Readiness {
     agent_id: String,
     ready_tools: Option<&'static ReadyTools>,
@@ -70,13 +70,13 @@ impl Readiness {
         }
     }
 
-    /// Begins a run's start: readies its tools where its CLI was given them and its rule says how, and with `yolo`
-    /// answers its trust question where its rule names one. `started` is when its process started. Returns when to look.
+    /// Readies tools where the CLI was given them and its rule says how. Answers the rule's trust question
+    /// only if `allow_auto_trust` is true. `started` is when its process started. Returns when to look.
     pub(crate) fn begin(
         &mut self,
         started: Instant,
         tools: ToolsGiven,
-        yolo: bool,
+        allow_auto_trust: bool,
     ) -> Option<Instant> {
         self.end();
         let deadline = started + START_TIMEOUT;
@@ -87,7 +87,7 @@ impl Readiness {
                 deadline,
             });
         }
-        if yolo {
+        if allow_auto_trust {
             self.trust = self.question.map(|rule| TrustStart {
                 rule,
                 phase: TrustPhase::Question,

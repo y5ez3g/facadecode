@@ -1,8 +1,10 @@
 //! When the daemon and keeper start and exit: races between clients and starts, the startup check
 //! of the keeper lock, idle exit, and a start that meets an idle offer.
 
+use std::io::{ErrorKind, Write};
 use std::time::{Duration, Instant};
 
+use facade_scenarios::serde_json::json;
 use facade_scenarios::*;
 
 /// `facade daemon --detach` follows a daemon that holds the daemon lock and ends without serving,
@@ -187,6 +189,177 @@ fn the_services_exit_when_idle_and_the_records_survive() {
         "a2",
         "numbering continues"
     );
+}
+
+/// An unread dedicated Shell connection must release its transport and its connection work on
+/// target exit, even while ordinary Attach watches and the unread client handles stay open.
+#[test]
+fn unread_dedicated_shell_attach_closes_and_allows_natural_idle_exit() {
+    let home = TestHome::new("shell-drain");
+    home.start_facade_with(&[]);
+    let mut terminal = DaemonTestClient::open(&home);
+    let hello = terminal.hello("terminal", DAEMON_API_VERSIONS, json!({}));
+    assert_eq!(hello["result"]["api_version"], 1, "{hello}");
+    assert!(
+        hello["result"]["topics"]
+            .as_array()
+            .is_some_and(|topics| topics.iter().any(|topic| topic == "attach.shell")),
+        "{hello}"
+    );
+    let agent = start_script(
+        &mut terminal,
+        &home,
+        "drain",
+        "printf 'READY\\n'; read go; head -c 4000000 /dev/zero | tr '\\0' X; \
+         printf '\\nFLOOD-DONE\\n'; read finish; printf 'FINAL-FRAME\\n'; exit 3",
+    );
+    assert!(wait_for_screen_text(&home, &agent, "READY"));
+
+    let mut editor = DaemonTestClient::open(&home);
+    let hello = editor.hello("ide", DAEMON_API_VERSIONS, json!({}));
+    assert_eq!(hello["result"]["api_version"], 1, "{hello}");
+
+    let target =
+        terminal.call_ok("agent.inspect", json!({ "target": agent }))["agent"]["reference"].clone();
+    let dedicated = json!({ "topic": "attach.shell", "args": { "target": target } });
+    let refused = terminal.request("watch", dedicated.clone());
+    assert_eq!(error_reason(&refused), "refused", "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("fresh Terminal connection")),
+        "{refused}"
+    );
+
+    let ordinary = json!({ "topic": "attach", "args": { "target": target } });
+    let [terminal_watch, editor_watch] = [&mut terminal, &mut editor].map(|client| {
+        let reply = client.request("watch", ordinary.clone());
+        assert_eq!(reply["result"]["snapshot"]["reference"], target, "{reply}");
+        reply["result"]["watch"]
+            .as_u64()
+            .expect("an ordinary Attach watch")
+    });
+    let mut stalled = ManualReadClient::open(&home);
+    stalled.send(1, "watch", dedicated);
+    let reply = stalled
+        .read_message()
+        .expect("the dedicated watch response");
+    assert_eq!(reply["id"], 1, "{reply}");
+    assert!(reply["result"]["watch"].is_u64(), "{reply}");
+    assert_eq!(reply["result"]["snapshot"]["reference"], target, "{reply}");
+    assert_eq!(reply["result"]["snapshot"]["process"], "running", "{reply}");
+    // Leave this client unread for the rest of the test. The write probe below does not drain it.
+    stalled
+        .writer
+        .set_write_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let control = b"{\"jsonrpc\":\"2.0\",\"method\":\"cancel\",\"params\":{\"id\":0}}\n";
+    let [daemon, keeper] = ["daemon", "keeper"].map(|service| {
+        let (pid, birth) = home.lock_record(service).expect("a service lock record");
+        let identity = process_identity(pid);
+        assert!(!birth.is_empty());
+        assert_eq!(identity.birth, birth);
+        assert!(alive(&identity), "{service} {pid} was already gone");
+        identity
+    });
+
+    type_raw(&mut terminal, &agent, "go\r");
+    assert!(
+        wait_until(LOADED_TIMEOUT, || home
+            .screen(&agent)
+            .contains("FLOOD-DONE")),
+        "the fixture did not finish producing output"
+    );
+    // Observe the same live output on a reading watch. Require enough payload to exceed the
+    // socket buffer even if the actor coalesces some of the fixture's output into redraws.
+    let mut payload = 0;
+    assert!(
+        wait_until(secs(5), || {
+            payload = editor
+                .changes(editor_watch)
+                .iter()
+                .filter(|notice| notice["change"]["kind"] == "output")
+                .filter_map(|notice| notice["change"]["data"].as_str())
+                .map(str::len)
+                .sum::<usize>();
+            payload >= 2_000_000
+        }),
+        "the reading Attach watch received only {payload} encoded output bytes"
+    );
+    stalled
+        .writer
+        .write_all(control)
+        .expect("the unread transport must still be open before the target ends");
+
+    let ending = Instant::now();
+    type_raw(&mut terminal, &agent, "finish\r");
+    let mut closed = None;
+    assert!(
+        wait_until(secs(4).saturating_sub(ending.elapsed()), || {
+            match stalled.writer.write_all(control) {
+                Ok(()) => false,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::BrokenPipe | ErrorKind::ConnectionReset
+                    ) || facade_base::paths::is_connection_lost(&error) =>
+                {
+                    closed = Some(error);
+                    true
+                }
+                Err(error) => panic!("the write probe must see a closed transport: {error}"),
+            }
+        }),
+        "the unread transport still accepts writes after {:?}: {}",
+        ending.elapsed(),
+        home.daemon_log()
+    );
+    assert!(ending.elapsed() <= secs(4), "{:?}", ending.elapsed());
+    eprintln!(
+        "ordinary Attach saw {payload} encoded output bytes. Unread transport closed {:?} after triggering exit: {}",
+        ending.elapsed(),
+        closed.unwrap()
+    );
+
+    for (client, watch) in [(&mut terminal, terminal_watch), (&mut editor, editor_watch)] {
+        assert!(
+            wait_until(secs(5), || client.changes(watch).iter().any(|notice| {
+                notice["change"]["kind"] == "exit" && notice["change"]["exit_status"] == 3
+            })),
+            "ordinary Attach watch did not receive exit code 3"
+        );
+        let ended = client.call_ok("agent.inspect", json!({ "target": target }));
+        assert_eq!(ended["agent"]["exit"]["code"], 3, "{ended}");
+    }
+    assert!(
+        alive(&daemon) && alive(&keeper),
+        "a service ended during cutoff"
+    );
+    drop(terminal);
+    drop(editor);
+
+    let idle = Instant::now();
+    assert!(
+        wait_until(LOADED_TIMEOUT, || !alive(&daemon)),
+        "original daemon did not exit naturally with the stalled client held: {}",
+        home.daemon_log()
+    );
+    let daemon_idle = idle.elapsed();
+    assert!(
+        daemon_idle >= Duration::from_millis(29_500),
+        "{daemon_idle:?}"
+    );
+    assert!(
+        wait_until(secs(5), || !alive(&keeper)),
+        "original Keeper did not exit naturally with the stalled client held: {}",
+        home.keeper_log()
+    );
+    assert!(!socket_exists(&home.daemon_socket()) && !socket_exists(&home.keeper_socket()));
+    eprintln!(
+        "original daemon {daemon:?} exited after {daemon_idle:?} idle. Original Keeper {keeper:?} was gone at {:?}",
+        idle.elapsed()
+    );
+    drop(stalled);
 }
 
 /// A client connects just after the daemon decided to exit. The exiting daemon closes the
