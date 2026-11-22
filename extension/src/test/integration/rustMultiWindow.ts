@@ -5,6 +5,7 @@
 import * as assert from 'assert';
 import { execFile, execFileSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { isDeepStrictEqual } from 'util';
 import type { AgentInfo, DaemonHelloResult, InspectResult } from '../../base/coreProtocol';
@@ -208,6 +209,50 @@ export async function missingSessionUnpin(open: OpenWindow, folder: string, env:
 	assert.deepStrictEqual(launches(), original, 'neither the missing nor the deliberately unpinned session launched');
 	console.log('  ✔ Missing session removed its Pin and showed the workbench notice. Unpin prevented a second launch. ' +
 		JSON.stringify({ home, expired: missing.id, unpinned: unpinned.id, notice, launches: original }));
+}
+
+/** A present but unlaunchable staged Core falls back to one usable old-engine panel. */
+export async function activationFailure(open: OpenWindow, folder: string, env: NodeJS.ProcessEnv, faultProgram: string): Promise<void> {
+	const home = env.FACADE_HOME!;
+	const record = env.FACADE_IT_RECORD!;
+	const launches = () => fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`));
+	const window = await open(folder, 'fault');
+	assert.strictEqual(normalizeDriveLetter(window.ready.home), normalizeDriveLetter(home));
+	assert.deepStrictEqual([window.ready.remote, window.ready.machineId], [null, null]);
+	assert.ok(!coreListens(home), 'there is no Core daemon for this fixture');
+	assert.deepStrictEqual(await window.act<WindowView>({ kind: 'snapshot' }), { cards: [], terminals: 0 });
+	assert.deepStrictEqual(launches(), [], 'activation did not launch an agent');
+	const warningStart = `The old engine is active on ${os.hostname()}. Could not connect to the Orchestrator. Could not run ${faultProgram}: `;
+	const warningEnd = 'Fix the problem, set facade.rustEngine to `auto`, and reload the window to try the Rust engine again.';
+	const workbench = await window.workbench();
+	let warning: string;
+	try {
+		await window.act({ kind: 'show-notifications' });
+		const warningText = `Array.from(document.querySelectorAll('.notification-list-item-message'))
+			.map(node => node.textContent?.trim()).find(text => text?.startsWith(${JSON.stringify(warningStart)})
+				&& text.endsWith(${JSON.stringify(warningEnd)}))`;
+		warning = await until('the startup warning naming the failed Core executable and recovery', async () =>
+			await workbench.cdp.evaluate<string | undefined>(warningText));
+	} finally {
+		workbench.cdp.close();
+	}
+	const agent = await window.act<{ runId: string; alias: string; name: string }>({ kind: 'start-fallback' });
+	const launchFile = `${record}.starts.${agent.alias}`;
+	const pids = () => fs.readFileSync(launchFile, 'utf8').trim().split(/\r?\n/u).map(Number);
+	const pid = await until('the old-engine fake CLI PID', () => fs.existsSync(launchFile) ? pids()[0] || undefined : undefined);
+	assert.ok(isProcessRunning(pid), 'the fake CLI is alive');
+	const view = await window.act<WindowView>({ kind: 'snapshot' });
+	assert.deepStrictEqual(view.cards.map(card => [card.id, card.name]), [[agent.alias, agent.name]]);
+	assert.strictEqual(view.terminals, 1);
+	assert.ok(!coreListens(home));
+	await window.act({ kind: 'stop-fallback', runId: agent.runId });
+	await until('the one old-engine fake CLI to stop', () => !isProcessRunning(pid) || undefined);
+	await window.close();
+	assert.deepStrictEqual(launches(), [path.basename(launchFile)]);
+	assert.deepStrictEqual(pids(), [pid], 'the one requested legacy run launched exactly one process');
+	assert.ok(!coreListens(home));
+	console.log('  ✔ Rust startup failed visibly. The old panel served one requested agent and its process stopped. ' +
+		JSON.stringify({ home, warning, before: 0, after: { alias: agent.alias, pids: pids() }, cliStopped: true }));
 }
 
 /** Go to Agent attaches to a Shell run that survives closing the VS Code window. */

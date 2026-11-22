@@ -20,6 +20,8 @@ import type { WindowTerminalIdentity } from '../../base/windowIdentity';
 
 type Action =
 	| { readonly kind: 'snapshot' | 'filter' | 'window-component' | 'terminal-owner' | 'show-notifications' }
+	| { readonly kind: 'start-fallback' }
+	| { readonly kind: 'stop-fallback'; readonly runId: string }
 	| { readonly kind: 'open-shell-agent'; readonly name: string; readonly address: string; readonly text: string }
 	| { readonly kind: 'shell-attach-view'; readonly grid?: vscode.TerminalDimensions; readonly text?: string; readonly resize?: boolean }
 	| { readonly kind: 'settings-path'; readonly file: string }
@@ -159,6 +161,24 @@ async function perform(action: Action): Promise<unknown> {
 			return view();
 		case 'show-notifications':
 			await vscode.commands.executeCommand('notifications.showList');
+			return true;
+		case 'start-fallback': {
+			const picker = vscode.commands.executeCommand('facade.newAgent');
+			void picker.then(undefined, () => undefined);
+			const card = await until('the old-engine card and terminal', async () => {
+				const panel = await state();
+				const first = panel.cards[0];
+				if (first && agentTab(first)) { return first; }
+				await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+				return undefined;
+			});
+			await picker;
+			assert.equal(card.orchestrator, undefined);
+			assert.match(card.alias, /^#a\d+$/u);
+			return { runId: card.runId, alias: card.alias, name: card.name };
+		}
+		case 'stop-fallback':
+			await vscode.commands.executeCommand('facade.stopAgent', { run_id: action.runId });
 			return true;
 		case 'window-component':
 			return vscode.extensions.getExtension('facade.facadecode-window') !== undefined;
@@ -402,9 +422,11 @@ export async function activate(): Promise<void> {
 			assert.strictEqual(vscode.extensions.getExtension('facade.facadecode-window'), undefined);
 		}
 		const oldEngine = vscode.workspace.getConfiguration('facade').get('rustEngine') === 'off';
+		const fallback = process.env.FACADE_IT_WINDOW_FALLBACK === '1';
 		let machineId: string | null = null;
-		if (oldEngine) {
+		if (oldEngine || fallback) {
 			assert.ok(vscode.extensions.getExtension('facade.facadecode-window'));
+			if (fallback) { assert.strictEqual(vscode.workspace.getConfiguration('facade').get('rustEngine'), 'auto'); }
 		} else {
 			const hello = await helloInCore(home);
 			assert.ok('result' in hello, JSON.stringify(hello));

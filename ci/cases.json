@@ -17,6 +17,7 @@
     "core/p0/input-draft/invalid-batch",
     "core/p0/input-draft/type",
     "extension/p0/activation-shell/old-supervisor",
+    "extension/p0/activation-shell/startup-fallback",
     "extension/p0/activation-shell/rust-handoff",
     "extension/p0/pin-reload/close-one-window",
     "extension/p0/pin-reload/pinned-reload",
@@ -2896,6 +2897,23 @@
         "journey": "shell-handoff",
         "built_in": "codex",
         "name": "shell-handoff"
+      }
+    },
+    {
+      "id": "extension/p0/activation-shell/startup-fallback",
+      "assertion": "With auto selecting Rust and the staged Orchestrator unable to start, verify the visible fallback warning names the machine, the failed startup step and recovery. The ready old-engine panel starts nothing on activation and serves one deliberate New Agent with exactly one CLI process.",
+      "stage": "pr",
+      "existing_tests": [
+        "extension/src/test/integration/run.ts",
+        "extension/src/test/integration/rustMultiWindow.ts",
+        "extension/src/test/integration/rustMultiWindowDriver.ts"
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "activation-failure",
+        "built_in": "claude",
+        "name": "activation-failure"
       }
     },
     {

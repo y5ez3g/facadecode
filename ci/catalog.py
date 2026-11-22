@@ -14,6 +14,7 @@ NAME = re.compile(r'[a-z][a-z0-9_]*', re.ASCII)
 FIELDS = {'id', 'assertion', 'stage', 'existing_tests'}
 MOCHA_JOURNEYS = ('journeys', 'cross')
 EDITOR_DRIVERS = {
+    'activation-failure': ('old', 'claude'),
     'conversion': ('old', 'claude'),
     'expiry': ('old', 'claude'),
     'lifetime': ('rust', 'claude'),

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from catalog import AcceptanceError, load, read_cases, read_json, reconcile, validate_binding
 from evidence import (
-    EDITOR, EDITOR_PASS, binding_paths, completion_record, execute, execution_groups,
+    EDITOR, EDITOR_PASS, binding_paths, command_for, completion_record, execute, execution_groups,
     observed_pass, run_identity, verify_receipts,
 )
 
@@ -81,6 +81,19 @@ class CatalogTests(unittest.TestCase):
         for field, value in {'built_in': 'claude', 'name': 'another-driver'}.items():
             with self.subTest(field=field), self.assertRaisesRegex(AcceptanceError, 'invalid Extension editor binding'):
                 validate_binding({**driver, field: value}, case_id)
+
+    def test_fallback_binding_names_the_observed_old_engine(self):
+        binding = {
+            'runner': 'extension-editor', 'journey': 'activation-failure', 'name': 'activation-failure',
+            'engine': 'old', 'built_in': 'claude',
+        }
+        case_id = 'extension/p0/activation-shell/startup-fallback'
+        self.assertEqual(validate_binding(binding, case_id), binding)
+        _, _, env = command_for(ROOT, [binding], None, Path('/tmp/code'), {})
+        self.assertEqual(env['FACADE_IT_ENGINE'], 'rust')
+        marker = EDITOR_PASS + '{"name":"activation-failure","engine":"old"}'
+        self.assertTrue(observed_pass([binding], marker))
+        self.assertFalse(observed_pass([binding], marker.replace('"old"', '"rust"')))
 
 
 class EvidenceTests(unittest.TestCase):

@@ -3,7 +3,7 @@
 Generated from [ci/cases.json](../ci/cases.json) by `python3 -B ci/acceptance.py table`.
 See the [CI design](CI.md) for the acceptance policy.
 
-347 API obligations and 54 P0 cases. 115 have exact bindings and 286 are pending.
+347 API obligations and 55 P0 cases. 116 have exact bindings and 286 are pending.
 
 A bound row requires passing evidence for the current run. Candidate test references are for review.
 
@@ -263,6 +263,7 @@ A bound row requires passing evidence for the current run. Candidate test refere
 | `extension/p0/activation-shell/activation-failure` | pr | Pending | When the serving engine is unavailable, the panel exposes the observed activation failure without creating a second agent. | [run.ts](../extension/src/test/integration/run.ts) |
 | `extension/p0/activation-shell/old-supervisor` | pr | `old` · `Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) the old supervisor serves editor terminal input and starts an MCP child in a linked worktree` | With old serving the panel, perform start, MCP, terminal and worktree actions and verify effects in the old supervisor. | [mcp.it.ts](../extension/src/test/integration/mcp.it.ts), [journey.it.ts](../extension/src/test/integration/journey.it.ts) |
 | `extension/p0/activation-shell/rust-handoff` | pr | `rust` · `shell-handoff` | With Rust serving the panel, Shell and the editor observe the same process and worktree and can operate on that run. | [rustMultiWindow.ts](../extension/src/test/integration/rustMultiWindow.ts) |
+| `extension/p0/activation-shell/startup-fallback` | pr | `old` · `activation-failure` | With auto selecting Rust and the staged Orchestrator unable to start, verify the visible fallback warning names the machine, the failed startup step and recovery. The ready old-engine panel starts nothing on activation and serves one deliberate New Agent with exactly one CLI process. | [run.ts](../extension/src/test/integration/run.ts), [rustMultiWindow.ts](../extension/src/test/integration/rustMultiWindow.ts), [rustMultiWindowDriver.ts](../extension/src/test/integration/rustMultiWindowDriver.ts) |
 | `extension/p0/pin-reload/close-one-window` | pr | `rust` · `multi-window` | Close one member window and verify that the second window retains the same run and its usable terminal. | [rustMultiWindow.ts](../extension/src/test/integration/rustMultiWindow.ts) |
 | `extension/p0/pin-reload/missing-session-unpin` | pr | `rust` · `missing-session-unpin` | A missing saved session produces the prescribed outcome, and an Unpin prevents resurrection. | [rustMultiWindow.ts](../extension/src/test/integration/rustMultiWindow.ts), [rustMultiWindowDriver.ts](../extension/src/test/integration/rustMultiWindowDriver.ts) |
 | `extension/p0/pin-reload/old-last-window-grace` | scheduled | `old` · `expiry` | With the natural old-engine grace, resume before expiry and verify cleanup after the last window stays closed. | [run.ts](../extension/src/test/integration/run.ts) |

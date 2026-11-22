@@ -150,6 +150,9 @@ def command_for(root, bindings, log_path, vscode, env):
         editor_env['FACADE_IT_EXPECT_TESTS'] = json.dumps(names)
     else:
         editor_env['FACADE_IT_EXPECT_DRIVER'] = binding['name']
+        if binding['journey'] == 'activation-failure':
+            # Request Rust startup and verify the old engine that actually serves the window.
+            editor_env['FACADE_IT_ENGINE'] = 'rust'
     return root / 'extension', ['xvfb-run', '-a', 'node', 'build/out/test/integration/run.js'], editor_env
 
 
