@@ -12,13 +12,10 @@ use crate::kept_modes::{ActiveCharset, ModifyOtherKeys};
 use crate::read::{AllRows, cell_text, is_blank, is_spacer};
 use crate::{REDRAW_SCROLLBACK_ROWS, Screen};
 
-/// Brings any terminal to a known start: no synchronized update, main screen, plain pen without a
-/// link, ASCII in G0 and G1 with G0 in use, whole-screen scrolling region, origin mode off,
-/// wrapping on, insert and newline modes off, modifyOtherKeys as the terminal started. Then it
-/// erases from the top left down, which no terminal moves into its scrollback (some do with ED 2),
-/// and clears every tab stop.
-const START: &[u8] = b"\x1b[?2026l\x1b[?1049l\x1b[0m\x1b]8;;\x1b\\\x1b(B\x1b)B\x0f\x1b[r\
-    \x1b[?6l\x1b[?7h\x1b[4l\x1b[20l\x1b[>4m\x1b[H\x1b[J\x1b[3g";
+/// Plain pen, ASCII in G0 and G1 with G0 in use, whole-screen scrolling region, origin mode off,
+/// wrap on, insert and newline modes off, and the initial modifyOtherKeys setting.
+const DRAW_SETTINGS: &[u8] = b"\x1b[0m\x1b]8;;\x1b\\\x1b(B\x1b)B\x0f\x1b[r\
+    \x1b[?6l\x1b[?7h\x1b[4l\x1b[20l\x1b[>4m";
 
 /// DEC private modes a redraw sets as the CLI left them, on or off.
 const DEC_MODES: [(u16, TermMode); 10] = [
@@ -60,11 +57,53 @@ impl Screen {
         )
     }
 
+    /// Draws a full frame in the buffer already selected by Attach, preserving host scrollback.
+    /// A viewport draw places the grid at the top left of a larger terminal.
+    pub fn redraw_for_attach(&self, viewport: bool, include_scrollback: bool) -> Vec<u8> {
+        let layout = if viewport {
+            Layout::Viewport
+        } else {
+            Layout::SameSize
+        };
+        let mut redraw = Redraw::new(self);
+        redraw.put(b"\x1b[?2026l");
+        redraw.start(true);
+        redraw.draw(replayed_scrollback(include_scrollback), layout)
+    }
+
+    /// Overwrites the visible rows in the active buffer of a terminal at least as large as the
+    /// grid. Clears stale row tails and restores the grid's cursor and interactive modes.
+    pub fn redraw_in_viewport_update(&self) -> Vec<u8> {
+        let mut redraw = Redraw::new(self);
+        redraw.put(DRAW_SETTINGS);
+        let mut rows = self.all_rows();
+        rows.keep_newest_scrollback(0);
+        write_viewport_rows(&mut redraw.out, &rows, true);
+        redraw.cursor(Layout::Viewport);
+        redraw.modes();
+        self.write_title(&mut redraw.out);
+        redraw.out
+    }
+
     /// A redraw with the whole scrollback, for a checkpoint. Taken at a clean point
-    /// ([`Screen::at_clean_point`]), it rebuilds the rows, cursor, pen, charsets and modes on an
-    /// empty screen of the same size and scrollback.
+    /// ([`Screen::at_clean_point`]), it rebuilds the rows, cursor, pen, title, charsets and modes
+    /// on an empty screen of the same size and scrollback.
     pub fn redraw_with_all_scrollback(&self) -> Vec<u8> {
         Redraw::build(self, false, usize::MAX, Layout::SameSize)
+    }
+
+    /// The current known title as a sanitized OSC sequence, or empty bytes before a title is known.
+    pub fn title_output(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        self.write_title(&mut out);
+        out
+    }
+
+    fn write_title(&self, out: &mut Vec<u8>) {
+        if let Some(title) = &self.terminal.title {
+            let title = title.replace(char::is_control, "");
+            write!(out, "\x1b]2;{title}\x1b\\").unwrap();
+        }
     }
 }
 
@@ -89,43 +128,54 @@ struct Redraw<'a> {
 }
 
 impl Redraw<'_> {
-    fn build(screen: &Screen, keep_scrollback: bool, replayed: usize, layout: Layout) -> Vec<u8> {
+    fn new(screen: &Screen) -> Redraw<'_> {
         let grid = screen.terminal.grid();
         let capacity = 2 * grid.columns() * grid.screen_lines();
-        let mut redraw = Redraw {
+        Redraw {
             screen,
             out: Vec::with_capacity(capacity),
-        };
+        }
+    }
+
+    fn build(screen: &Screen, keep_scrollback: bool, replayed: usize, layout: Layout) -> Vec<u8> {
+        let mut redraw = Redraw::new(screen);
+        redraw.put(b"\x1b[?2026l\x1b[?1049l");
         redraw.start(keep_scrollback);
-        let mut rows = screen.all_rows();
+        if screen.on_alternate_screen() {
+            redraw.put(b"\x1b[?1049h\x1b[H\x1b[J");
+        }
+        redraw.draw(replayed, layout)
+    }
+
+    fn draw(mut self, replayed: usize, layout: Layout) -> Vec<u8> {
+        let mut rows = self.screen.all_rows();
         rows.keep_newest_scrollback(replayed);
         match layout {
-            Layout::SameSize => write_rows(&mut redraw.out, &rows),
-            Layout::Viewport => write_viewport_rows(&mut redraw.out, &rows),
+            Layout::SameSize => write_rows(&mut self.out, &rows),
+            Layout::Viewport => write_viewport_rows(&mut self.out, &rows, false),
         }
-        drop(rows);
-        redraw.saved_cursor();
-        redraw.cursor(layout);
-        redraw.modes();
-        redraw.out
+        self.saved_cursor();
+        self.cursor(layout);
+        self.modes();
+        self.screen.write_title(&mut self.out);
+        self.out
     }
 
     fn put(&mut self, bytes: &[u8]) {
         self.out.extend_from_slice(bytes);
     }
 
-    /// The known start, the tab stops, and the alternate screen if it shows.
+    /// Erase from the top left down so the visible rows stay out of scrollback. Restore tab stops
+    /// and optionally clear the viewer's existing scrollback.
     fn start(&mut self, keep_scrollback: bool) {
-        self.put(START);
+        self.put(DRAW_SETTINGS);
+        self.put(b"\x1b[H\x1b[J\x1b[3g");
         for column in self.screen.tab_stops.columns() {
             write!(self.out, "\x1b[1;{}H\x1bH", column + 1).unwrap();
         }
         self.put(b"\x1b[H");
         if !keep_scrollback {
             self.put(b"\x1b[3J");
-        }
-        if self.screen.on_alternate_screen() {
-            self.put(b"\x1b[?1049h\x1b[H\x1b[J");
         }
     }
 
@@ -178,7 +228,7 @@ impl Redraw<'_> {
     }
 
     /// Drawing, key and paste modes; the keyboard flags of the screen in use; modifyOtherKeys
-    /// (START put it at the initial setting); the cursor's charsets; the pen.
+    /// (DRAW_SETTINGS put it at the initial setting); the cursor's charsets; the pen.
     fn modes(&mut self) {
         let screen = self.screen;
         let terminal = &screen.terminal;
@@ -229,7 +279,9 @@ fn write_rows(out: &mut Vec<u8>, rows: &AllRows<'_>) {
         let wraps = rows.wraps(y);
         // A row the one above wrapped into starts with a character, even a space, to make the wrap.
         let to_margin = wraps || wrapped_into;
-        rows.with_row(y, |row| write_row(out, row, cols, to_margin));
+        rows.with_row(y, |row| {
+            write_row(out, row, cols, to_margin, Layout::SameSize)
+        });
         if !wraps && y + 1 < rows.len() {
             out.extend_from_slice(b"\x1b[0m\x1b]8;;\x1b\\\r\n");
         }
@@ -240,25 +292,35 @@ fn write_rows(out: &mut Vec<u8>, rows: &AllRows<'_>) {
 
 /// Place each visible row explicitly so the larger terminal's line endings never decide where
 /// the grid wraps. Write scrollback rows at the top and scroll them out from the physical bottom.
-fn write_viewport_rows(out: &mut Vec<u8>, rows: &AllRows<'_>) {
+fn write_viewport_rows(out: &mut Vec<u8>, rows: &AllRows<'_>, erase_tail: bool) {
     let cols = rows.grid.columns();
     let scrollback = rows.scrollback();
     for y in 0..scrollback {
         out.extend_from_slice(b"\x1b[H");
-        rows.with_row(y, |row| write_row(out, row, cols, false));
+        rows.with_row(y, |row| write_row(out, row, cols, false, Layout::Viewport));
         // CUP clamps the row to the physical bottom, where Index scrolls the full screen.
         out.extend_from_slice(b"\x1b[0m\x1b[65535;1H\x1bD");
     }
     for y in scrollback..rows.len() {
         write!(out, "\x1b[{};1H", y - scrollback + 1).unwrap();
-        rows.with_row(y, |row| write_row(out, row, cols, false));
+        let end = rows.with_row(y, |row| write_row(out, row, cols, false, Layout::Viewport));
+        // A full row on an equally wide terminal leaves the cursor on its last cell.
+        if erase_tail && end < cols {
+            out.extend_from_slice(b"\x1b[0m\x1b[K");
+        }
     }
     out.extend_from_slice(b"\x1b[0m\x1b]8;;\x1b\\");
 }
 
 /// One row, with pen and link changes only where they change: to the margin, or to its last
 /// cell that draws something.
-fn write_row(out: &mut Vec<u8>, row: &Row<Cell>, cols: usize, to_margin: bool) {
+fn write_row(
+    out: &mut Vec<u8>,
+    row: &Row<Cell>,
+    cols: usize,
+    to_margin: bool,
+    layout: Layout,
+) -> usize {
     let end = match to_margin {
         true => cols,
         false => (0..cols)
@@ -267,6 +329,7 @@ fn write_row(out: &mut Vec<u8>, row: &Row<Cell>, cols: usize, to_margin: bool) {
     };
     let mut pen = String::new();
     let mut link: Option<Hyperlink> = None;
+    let mut written = 0;
     for x in 0..end {
         let cell = &row[Column(x)];
         if is_spacer(cell) {
@@ -282,16 +345,22 @@ fn write_row(out: &mut Vec<u8>, row: &Row<Cell>, cols: usize, to_margin: bool) {
             write_link(out, cell_link.as_ref());
             link = cell_link;
         }
-        out.extend_from_slice(cell_text(cell).as_bytes());
         // A tab holds the cell it started at; the viewer's tab stops may be elsewhere, so the next
-        // cell is placed by column.
-        if cell.c == '\t' {
-            write!(out, "\x1b[{}G", x + 2).unwrap();
+        // cell is placed by column. A viewport draws a space to overwrite the old cell.
+        if layout == Layout::Viewport && cell.c == '\t' {
+            out.push(b' ');
+        } else {
+            out.extend_from_slice(cell_text(cell).as_bytes());
+            if cell.c == '\t' {
+                write!(out, "\x1b[{}G", x + 2).unwrap();
+            }
         }
+        written = x + 1 + usize::from(cell.flags.contains(Flags::WIDE_CHAR));
     }
     if link.is_some() {
         write_link(out, None);
     }
+    written
 }
 
 /// The ID the CLI gave a link: the IDs alacritty makes up itself mean nothing to a viewer.

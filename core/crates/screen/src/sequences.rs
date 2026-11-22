@@ -30,6 +30,8 @@ pub(crate) enum Mark {
 pub(crate) struct Filtered {
     /// Whole pieces for viewers, without queries.
     pub(crate) viewer_output: Vec<u8>,
+    /// Complete OSC 9;4 activity sequences kept in the viewer output.
+    pub(crate) native_activity: Vec<u8>,
     /// Each mark, with the offset in the output just after it.
     pub(crate) marks: Vec<(usize, Mark)>,
 }
@@ -44,11 +46,14 @@ pub(crate) fn filter(
 ) -> Filtered {
     let mut filtered = Filtered {
         viewer_output: Vec::with_capacity(bytes.len()),
-        marks: Vec::new(),
+        ..Filtered::default()
     };
     splitter.split(bytes, |offset, piece| {
         let (bytes, mark) = read_piece(&piece, modes, rows);
         filtered.viewer_output.extend_from_slice(bytes);
+        if matches!(piece, Piece::String(_)) && bytes.starts_with(b"\x1b]9;4;") {
+            filtered.native_activity.extend_from_slice(bytes);
+        }
         if let Some(mark) = mark {
             filtered.marks.push((offset, mark));
         }
@@ -320,17 +325,27 @@ mod tests {
 
     #[test]
     fn an_unfinished_unit_waits_for_its_end_wherever_the_stream_is_split() {
-        let stream: &[u8] = "x\x1b[31m你\x1b]0;t\x07\x1b[6ny".as_bytes();
+        let stream = "x\x1b]9;4;1;25\x1b[31m你\x1b]0;t\x07\x1b]9;40;x\x07\x1b]9;4;1;50\x07\x1b[6n\x1b]9;4;0;0\x1b\\y"
+            .as_bytes();
         let whole = filtered(&[stream]);
         for split in 0..=stream.len() {
             let (mut splitter, mut modes) = (Splitter::default(), KeptModes::default());
-            let first = filter(&mut splitter, &mut modes, &stream[..split], 24).viewer_output;
-            let complete = whole.starts_with(&first)
-                && std::str::from_utf8(&first).is_ok()
-                && !first.ends_with(b"\x1b");
+            let first = filter(&mut splitter, &mut modes, &stream[..split], 24);
+            let complete = whole.starts_with(&first.viewer_output)
+                && std::str::from_utf8(&first.viewer_output).is_ok()
+                && !first.viewer_output.ends_with(b"\x1b");
             assert!(complete, "split at {split}: {first:?}");
-            let rest = filter(&mut splitter, &mut modes, &stream[split..], 24).viewer_output;
-            assert_eq!([first, rest].concat(), whole, "split at {split}");
+            let rest = filter(&mut splitter, &mut modes, &stream[split..], 24);
+            assert_eq!(
+                [first.viewer_output, rest.viewer_output].concat(),
+                whole,
+                "split at {split}"
+            );
+            assert_eq!(
+                [first.native_activity, rest.native_activity].concat(),
+                b"\x1b]9;4;1;50\x07\x1b]9;4;0;0\x1b\\",
+                "split at {split}"
+            );
         }
     }
 

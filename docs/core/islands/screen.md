@@ -16,6 +16,8 @@ All of it in memory, one set per `Screen`:
   has started and not finished.
 - **Supplied terminal colors**: optional foreground, background and cursor RGB values, used for
   replies to OSC 10, 11 and 12 queries.
+- **The native title**: the last title change reported by the terminal parser. Full redraws and
+  checkpoint redraws carry it once it is known.
 - **The modes alacritty keeps private**: scrolling region, active charset (G0 or G1),
   modifyOtherKeys, the kitty keyboard flags (a stack per screen, at most 8 entries), and the tab
   stops.
@@ -32,11 +34,11 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 - Viewers get whole characters, sequences and strings only, and never a terminal query or an
   OSC 7501 sequence.
 - A viewer that takes `redraw` and then every later `viewer_output` (or a new redraw when
-  `redraw_viewers` is set) ends in the screen's state: cells, cursor, modes, tab stops,
-  modifyOtherKeys and keyboard flags.
+  `redraw_viewers` is set) ends in the screen's state: cells, cursor, title when known, modes, tab
+  stops, modifyOtherKeys and keyboard flags.
 - At a clean point (`at_clean_point`: main screen, no unit half-written, no open synchronized
   update), `redraw_with_all_scrollback` fed to an empty screen of the same size and scrollback
-  rebuilds the rows, cursor, pen, charsets and modes.
+  rebuilds the rows, cursor, pen, title when known, charsets and modes.
 - Query replies and status events come in the order the CLI wrote what caused them. The reply to
   `OSC 7501 ; ?` and replies to supplied terminal color queries stay among alacritty's own replies.
   Each query of a supplied color gets one reply; an omitted color gets none.
@@ -69,12 +71,16 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
   channel written twice, and the query's BEL or ST ending. No supplied colors means no color replies.
 - `at_clean_point()`, then `redraw_with_all_scrollback() -> Vec<u8>` for a checkpoint;
   `on_alternate_screen()` and `has_unfinished_unit()` to say what a forced checkpoint loses.
+- `restore_title(&mut self, title: &str)` seeds the title saved alongside a restored redraw before
+  replaying later output. The call produces no title change for viewers.
 - `synchronized_update_deadline() -> Option<Instant>`, `end_synchronized_update() -> ParsedOutput`.
 
 **Daemon, agent actor** (`daemon/src/agent/actor.rs`):
 
-- `ParsedOutput { query_replies, title_change, viewer_output, redraw_viewers, status }`: replies
-  are written to the run's terminal, viewer output goes to viewers, status goes to the state.
+- `ParsedOutput { query_replies, title_change, viewer_output, native_activity, redraw_viewers,
+  status }`: replies are written to the run's terminal, viewer output goes to viewers, and
+  status goes to the state. `native_activity` carries the batch's complete OSC 9;4 sequences
+  in order, so a viewer replacing the batch with a redraw can still receive them.
 - A timer on `synchronized_update_deadline()` ends an update the CLI never closed.
 - `read(lines) -> Reading { text, lines, alternate, older, trimmed }` is what `ReadScreen` gets.
 - `bracketed_paste()` and `application_cursor_keys()` decide how typed input is encoded.
@@ -85,10 +91,21 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 which replays at most `REDRAW_SCROLLBACK_ROWS` (1,000) scrollback rows. A redraw waits while
 `synchronized_update_deadline()` is set.
 
-**Shell, Attach** (`facade/src/attach.rs`): `redraw_in_viewport(keep_scrollback, include_scrollback)`
-places the grid at the top left of a console with at least as many rows and columns. It shares
-`redraw`'s scrollback options. Shell feeds subsequent output to its screen of the shared size and
-draws the new frame from that screen while the console is larger.
+**Shell, Attach** (`facade/src/attach.rs`):
+
+- `redraw_for_attach(viewport, include_scrollback)` is a full redraw in the buffer Shell has
+  selected. It keeps host scrollback. `redraw_in_viewport(keep_scrollback, include_scrollback)`
+  uses the ordinary redraw's buffer handling and scrollback options. Viewport draws place the
+  grid at the top left of a terminal with at least as many rows and columns.
+- `redraw_in_viewport_update()` overwrites visible rows in the selected buffer of a larger
+  console, erases stale row tails, and restores the cursor, title and modes. Shell feeds later
+  output to its screen of the shared size before drawing.
+- `title_output()` gives the sanitized title sequence used in full and steady redraws. It is
+  empty until a title is known.
+- `reports_mouse()` follows the CLI's active tracking mode. `encode_wheel(col, row, delta, modifiers)`
+  uses the current SGR, UTF-8 or legacy encoding. It takes one-based grid coordinates, 120 delta
+  units per tick, positive for up, and Shift, Alt and Ctrl bits 4, 8 and 16. It returns `None`
+  without tracking or when the input cannot produce a report.
 
 **Daemon, state and readiness** (`daemon/src/agent/state.rs`, `readiness.rs`):
 
@@ -131,7 +148,7 @@ The files:
 
 - `lib.rs`: `Screen`, `ParsedOutput`, `feed` and the small queries.
 - `terminal.rs`: `Terminal`, alacritty's `Term` and parser, and the queue of what alacritty asks
-  to send (replies, title changes).
+  to send (replies, title changes), with the current known title.
 - `units.rs`: `Splitter`, which cuts output into `Piece`s and holds an unfinished one.
 - `sequences.rs`: what each piece means: whether viewers get it, which mode it changes, and
   whether it is a `Mark` the screen must look at.
@@ -142,6 +159,7 @@ The files:
 - `store.rs`: `Store`, the older rows, and `reflow`. `compact.rs`: `Block`, the compact rows.
 - `read.rs`, `view.rs`, `redraw.rs`, `restart.rs`, `resize.rs`: the public reads, redraws, restart
   output and resizes.
+- `mouse.rs`: mouse tracking and wheel input reports.
 
 ### feed
 
@@ -156,8 +174,8 @@ The files:
    opened again after, so the cursor is right and a redraw still waits for the whole frame.
 3. `OSC 7501 ; ?` queues its reply among alacritty's. Then the screen takes alacritty's replies,
    color queries and title changes in order. Supplied colors go through alacritty's formatter into
-   the same replies; other color queries get no reply. The screen returns the replies and title
-   changes with the viewer output and status events.
+   the same replies; other color queries get no reply. The screen remembers the latest title and
+   returns the replies and title changes with the viewer output and status events.
 
 ### resize
 
@@ -189,11 +207,13 @@ line; blank cells at a line's end and empty lines at the end are left out.
 no terminal moves into its scrollback, and clears tab stops), the tab stops, the rows with their
 styles and links (a wrapped row is written to the margin so the viewer wraps too), the saved
 cursor, the scrolling region and cursor (writing the margin cell again to restore a pending wrap),
-then modes, keyboard flags, modifyOtherKeys, charsets and pen.
+then modes, keyboard flags, modifyOtherKeys, charsets, pen, and the known title.
 
 For a viewport redraw, each row starts at an explicit position and the cleared space to the right
 and below stays blank. Scrollback replays one canonical row per console row. The redraw puts the
 cursor at its grid position and applies the screen's scrolling region within the shared height.
+Steady viewport updates use that same explicit row placement. They write each row's content and
+erase its remaining tail with the default pen. They finish with the cursor, modes and known title.
 
 ### The store
 

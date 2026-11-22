@@ -210,6 +210,8 @@ mod tests {
             assert_ne!(modes(&screen), fresh, "{mode}");
             restart(&mut screen);
             assert_eq!(modes(&screen), fresh, "{mode}");
+            assert!(!screen.reports_mouse(), "{mode}");
+            assert_eq!(screen.encode_wheel(1, 1, 120, 0), None, "{mode}");
         }
     }
 
