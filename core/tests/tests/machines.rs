@@ -2029,6 +2029,67 @@ fn a_cross_machine_send_replays_its_original_settlement_after_reconnect() {
     );
 }
 
+#[test]
+fn shell_receives_a_linked_reply_from_a_managed_agent_across_machines() {
+    let origin = TestHome::new("shell-send-origin");
+    let peer = TestHome::new("shell-send-peer");
+    let programs = test_binaries();
+    install_machine_ssh(&[("origin", &origin), ("peer", &peer)], &programs.facade);
+    let origin_id = name_machine(&origin, "origin");
+    let peer_id = name_machine(&peer, "peer");
+    let worker = peer.start_named_fake("worker", &[]);
+    let _link = MachineLink::open(&origin, "peer", &peer);
+    wait_for_route(&origin, &peer_id, &[&peer_id]);
+    wait_for_route(&peer, &origin_id, &[&origin_id]);
+    let mut receiver = McpTestClient::open_configured(&peer, &worker.id);
+
+    let request = "Inspect the build\n  on the peer.";
+    let target = format!("{}@peer", worker.id);
+    let mut shell = origin
+        .command(&programs.facade)
+        .args(["send", &target, request, "-r"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    assert!(
+        wait_until(secs(10), || !peer.submitted_messages().is_empty()),
+        "{}",
+        peer.daemon_log()
+    );
+    assert_eq!(
+        peer.submitted_messages(),
+        [format!(
+            "📨 Message from the command line (#c1@peer) · m1\n{request}"
+        )]
+    );
+    let inbox = receiver.call("read_messages", json!({"last": 1}));
+    assert_eq!(inbox["status"], "success", "{inbox}");
+    let original = &inbox["data"]["messages"][0];
+    assert_eq!(original["from"], "#c1@peer", "{inbox}");
+    assert_eq!(original["id"], "m1", "{inbox}");
+    assert_eq!(original["text"], request, "{inbox}");
+
+    let reply = "Vérifié ✓\nBuild passed";
+    let sent = receiver.call(
+        "send_message",
+        json!({
+            "to": original["from"], "reply_to": original["id"], "text": reply,
+        }),
+    );
+    assert_eq!(sent["status"], "success", "{sent}");
+    assert_eq!(sent["data"]["delivery"], "returned_to_request", "{sent}");
+    if !wait_until(secs(10), || shell.try_wait().unwrap().is_some()) {
+        let _ = shell.kill();
+    }
+    let output = shell.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(output.stderr.is_empty(), "{}", stderr(&output));
+    assert_eq!(output.stdout, reply.as_bytes());
+    assert!(origin.submitted_messages().is_empty());
+}
+
 /// The editor selects the remote run by its roster reference, even when both runs have one number.
 #[test]
 fn the_editor_selects_the_remote_agent_by_its_roster_reference() {

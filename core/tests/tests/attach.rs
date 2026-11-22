@@ -30,6 +30,278 @@ fn assert_detach_receipt(term: &TestTerminal, name: &str, address: &str) {
     assert_eq!(term.output_count("Reattach with 'facade attach"), 0);
 }
 
+fn wait_for_title(term: &TestTerminal, from: usize, title: &str) {
+    // ConPTY can serialize the title as OSC 0 with BEL. A Unix PTY preserves OSC 2 with ST.
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            let bytes = term.output_since(from);
+            let output = String::from_utf8_lossy(&bytes);
+            [0, 2].into_iter().any(|osc| {
+                ["\x07", "\x1b\\"]
+                    .into_iter()
+                    .any(|end| output.contains(&format!("\x1b]{osc};{title}{end}")))
+            })
+        }),
+        "missing title {title:?}: {:?}",
+        String::from_utf8_lossy(&term.output_since(from))
+    );
+}
+
+#[test]
+fn foreground_alternate_first_start_hands_the_same_shell_page_back() {
+    let home = TestHome::new("alternate-first");
+    let _wire = connect(&home);
+    let mut term = TestTerminal::spawn(
+        home.command(shell()).args([
+            "-c",
+            "printf 'HOST-HISTORY\\n'; \
+             i=0; while [ \"$i\" -lt 24 ]; do printf 'shell line %s\\n' \"$i\"; i=$((i + 1)); done; \
+             printf 'HOST-PAGE\\nHOST-PROMPT\\n'; \
+             facade start --name Alternate-first \"$@\"; result=$?; \
+             printf 'HOST-RETURN\\n'; exit \"$result\"",
+            "host",
+            home.shell_cli(),
+            "-c",
+            "while [ ! -f title ]; do sleep 0.05; done; \
+             printf '\\033]2;Before alternate\\007'; \
+             while [ ! -f alternate ]; do sleep 0.05; done; \
+             printf '\\033[?1049h\\033[3;1HALT-FIRST\\033]2;Alternate first\\007'; \
+             while [ ! -f next ]; do sleep 0.05; done; \
+             printf '\\033[3;1HALT-NEXT \\033]2;Alternate latest\\007'; \
+             sleep 60",
+        ]),
+        100,
+        24,
+    );
+    // The opening is printed only after the snapshot is received. Until then the fixture has
+    // emitted no CLI output, so the snapshot is an empty primary buffer.
+    assert!(
+        term.wait_for_output(LOADED_TIMEOUT, "Started Alternate-first ("),
+        "{}",
+        term.text_with_scrollback()
+    );
+    std::fs::write(home.project.join("title"), b"").unwrap();
+    wait_for_title(&term, 0, "Before alternate");
+    assert!(!term.on_alternate_screen());
+    assert!(
+        term.text().contains("HOST-PAGE\nHOST-PROMPT"),
+        "{}",
+        term.text_with_scrollback()
+    );
+
+    for (gate, text, title) in [
+        ("alternate", "ALT-FIRST", "Alternate first"),
+        ("next", "ALT-NEXT", "Alternate latest"),
+    ] {
+        let from = term.output_len();
+        std::fs::write(home.project.join(gate), b"").unwrap();
+        wait_for_title(&term, from, title);
+        assert!(
+            term.wait_for(LOADED_TIMEOUT, |view| view.contains(text)) && term.on_alternate_screen(),
+            "{}",
+            term.text()
+        );
+    }
+
+    let agent = home.inspect_agent("Alternate-first");
+    let address = agent["agent"]["address"].as_str().expect("an address");
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert_detach_receipt(&term, "Alternate-first", address);
+    assert!(term.wait_for(LOADED_TIMEOUT, |view| view.contains("HOST-RETURN")));
+    assert!(!term.on_alternate_screen());
+    let page = term.text();
+    assert!(page.contains("HOST-PAGE\nHOST-PROMPT"), "{page}");
+    assert!(!page.contains("ALT-NEXT"), "{page}");
+    assert_eq!(
+        term.text_with_scrollback().matches("HOST-HISTORY").count(),
+        1
+    );
+    assert_eq!(home.inspect_agent(address)["agent"]["process"], "running");
+    #[cfg(unix)]
+    assert!(term.canonical_input_and_echo_enabled());
+}
+
+fn wait_for_viewport(term: &TestTerminal, rows: [&str; 3], alternate: bool) {
+    // ConPTY can place the logical grid below the opening line.
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            term.rows().windows(rows.len()).any(|shown| shown == rows)
+                && term.on_alternate_screen() == alternate
+        }),
+        "expected {rows:?} in alternate={alternate}, got {:?}",
+        term.rows()
+    );
+}
+
+#[test]
+fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
+    let home = TestHome::new("attach-viewport-output");
+    let mut wire = connect(&home);
+    let agent = start_script(
+        &mut wire,
+        &home,
+        "Viewports",
+        "printf '\\033[1;1HPRIMARY-TOP\\033[2;1Hprimary-stale-tail\\033[3;1HPRIMARY-BOTTOM\\033]2;Native snapshot\\007'; \
+         while [ ! -f shorten ]; do sleep 0.05; done; \
+         printf '\\033]9;4;1;21\\007\\033[2;1Hshort\\033[K\\033]2;Native steady\\007'; \
+         while [ ! -f alternate ]; do sleep 0.05; done; \
+         printf '\\033[?1049h\\033]9;4;1;42\\007\\033[1;1HALT-TOP\\033[2;1Halternate-stale-tail\\033[3;1HALT-BOTTOM\\033]2;Native alternate\\007'; \
+         while [ ! -f update ]; do sleep 0.05; done; \
+         printf '\\033]9;4;1;63\\007\\033[2;1Hsmall\\033[K\\033]2;Native alternate update\\007'; \
+         while [ ! -f primary ]; do sleep 0.05; done; \
+         printf '\\033[?1049l\\033]9;4;0;0\\007\\033[2;1Hback\\033[K\\033]2;Native primary return\\007'; \
+         sleep 60",
+    );
+    assert!(wait_for_screen_text(&home, &agent, "primary-stale-tail"));
+    let address = address(&home, &agent);
+    let mut small = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["attach", &address]),
+        80,
+        24,
+    );
+    let initial_rows = ["PRIMARY-TOP", "primary-stale-tail", "PRIMARY-BOTTOM"];
+    wait_for_title(&small, 0, "Native snapshot");
+    wait_for_viewport(&small, initial_rows, false);
+    let mut large = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["attach", &address]),
+        120,
+        35,
+    );
+    wait_for_title(&large, 0, "Native snapshot");
+    wait_for_viewport(&large, initial_rows, false);
+    let agent_info = home.inspect_agent(&address);
+    let size = json!({ "cols": 80, "rows": 24 });
+    assert_eq!(agent_info["agent"]["size"], size);
+    // Observe the daemon's output and redraw order without changing the shared grid.
+    let watch = {
+        let opened = wire.request(
+            "watch",
+            json!({ "topic": "attach", "args": { "target": agent_info["agent"]["reference"], "size": size } }),
+        );
+        opened["result"]["watch"].as_u64().expect("an Attach watch")
+    };
+
+    let batches = [
+        (
+            "shorten",
+            "\x1b]9;4;1;21\x07",
+            "Native steady",
+            ["PRIMARY-TOP", "short", "PRIMARY-BOTTOM"],
+            false,
+            false,
+        ),
+        (
+            "alternate",
+            "\x1b]9;4;1;42\x07",
+            "Native alternate",
+            ["ALT-TOP", "alternate-stale-tail", "ALT-BOTTOM"],
+            true,
+            true,
+        ),
+        (
+            "update",
+            "\x1b]9;4;1;63\x07",
+            "Native alternate update",
+            ["ALT-TOP", "small", "ALT-BOTTOM"],
+            true,
+            false,
+        ),
+        (
+            "primary",
+            "\x1b]9;4;0;0\x07",
+            "Native primary return",
+            ["PRIMARY-TOP", "back", "PRIMARY-BOTTOM"],
+            false,
+            true,
+        ),
+    ];
+    let mut activity_counts = Vec::new();
+    for (gate, activity, title, rows, alternate, full_draw) in batches {
+        let starts = [small.output_len(), large.output_len()];
+        std::fs::write(home.project.join(gate), b"").unwrap();
+        let mut counts = [0; 2];
+        for (index, (term, from)) in [&small, &large].into_iter().zip(starts).enumerate() {
+            wait_for_title(term, from, title);
+            wait_for_viewport(term, rows, alternate);
+            counts[index] = String::from_utf8_lossy(&term.output_since(from))
+                .matches(activity)
+                .count();
+        }
+        activity_counts.push((gate, counts));
+        let bytes = large.output_since(starts[1]);
+        let frame = String::from_utf8_lossy(&bytes);
+        let cleared = ["\x1b[J", "\x1b[0J", "\x1b[1J", "\x1b[2J", "\x1b[3J"]
+            .iter()
+            .any(|clear| frame.contains(clear));
+        assert_eq!(cleared, full_draw, "{gate}: {frame:?}");
+        if !full_draw {
+            assert!(!frame.contains("\x1b[?1049"), "{gate}: {frame:?}");
+        }
+    }
+
+    // Make the larger terminal larger still. The shared grid stays at 80×24, but the host
+    // receives another frame in its new geometry with the last native title.
+    let from = large.output_len();
+    large.resize(130, 40);
+    wait_for_title(&large, from, "Native primary return");
+    assert!(String::from_utf8_lossy(&large.output_since(from)).contains("\x1b[J"));
+    wait_for_viewport(&large, ["PRIMARY-TOP", "back", "PRIMARY-BOTTOM"], false);
+    assert_eq!(home.inspect_agent(&address)["agent"]["size"], size);
+
+    for term in [&mut large, &mut small] {
+        term.send(b"\x1d");
+        assert!(
+            term.wait_exit(LOADED_TIMEOUT)
+                .is_some_and(|status| status.success())
+        );
+        assert_detach_receipt(term, "Viewports", &address);
+    }
+    let returned = batches[3].1;
+    let changes = wire.changes(watch);
+    let return_output = changes
+        .iter()
+        .filter(|event| event["change"]["kind"] == "output")
+        .filter_map(|event| event["change"]["data"].as_str())
+        .filter_map(|data| facade_base::base64::decode(data).ok())
+        .filter(|bytes| {
+            bytes
+                .windows(returned.len())
+                .any(|part| part == returned.as_bytes())
+        })
+        .count();
+    assert_eq!(
+        activity_counts,
+        [
+            ("shorten", [1, 1]),
+            ("alternate", [1, 1]),
+            ("update", [1, 1]),
+            ("primary", [1, 1]),
+        ],
+        "complete activity per batch in small and large Shell viewers, with {return_output} on the public watch at primary return"
+    );
+    assert_eq!(return_output, 1);
+    for term in [&small, &large] {
+        assert_eq!(term.output_count("\x1b]9;4;"), batches.len());
+    }
+    #[cfg(unix)]
+    assert!(
+        changes.windows(2).any(|events| {
+            events[0]["change"]
+                == json!({
+                    "kind": "output", "data": facade_base::base64::encode(returned.as_bytes())
+                })
+                && events[1]["change"]["kind"] == "redraw"
+        }),
+        "expected the replacement redraw after the primary return's activity"
+    );
+}
+
 #[test]
 fn attach_preserves_native_progress_without_injecting_its_own() {
     let home = TestHome::new("attachprogress");

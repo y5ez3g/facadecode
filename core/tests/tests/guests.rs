@@ -170,6 +170,116 @@ fn a_guest_waits_for_the_reply_to_its_message() {
     );
 }
 
+#[test]
+fn a_guest_result_wait_returns_the_linked_reply_or_continues_by_the_same_id() {
+    let home = TestHome::new("guest-result");
+    std::fs::write(home.path.join("facade.json"), r#"{"yolo":true}"#).unwrap();
+    let (ada_address, mut ada) = managed_relay(&home, "ada");
+    let (mut guest, row) = member(&home);
+    let guest_address = row["address"].as_str().unwrap();
+
+    for (request, response, timeout, continue_wait) in [
+        ("Answer while I wait", "Here is the result", 30, false),
+        (
+            "Answer after my send returns",
+            "Here is the late result",
+            5,
+            true,
+        ),
+    ] {
+        let sending = guest.send(
+            "tools/call",
+            json!({
+                "name": "send_message",
+                "arguments": {
+                    "to": ada_address, "text": request,
+                    "wait_for": "result", "timeout_seconds": timeout,
+                },
+            }),
+        );
+        assert!(
+            wait_until(secs(10), || home
+                .submitted_messages()
+                .iter()
+                .any(|message| { message.lines().skip(1).eq([request]) })),
+            "the request did not reach the fake terminal: {}",
+            home.screen(&ada_address)
+        );
+        let inbox = ada.call("read_messages", json!({ "last": 1 }));
+        assert_eq!(inbox["status"], "success", "{inbox}");
+        let original = &inbox["data"]["messages"][0];
+        assert_eq!(original["text"], request, "{inbox}");
+        assert_eq!(original["from"], guest_address, "{inbox}");
+        let inbox_id = original["id"].as_str().unwrap();
+
+        let expired_id = continue_wait.then(|| {
+            let expired = guest.tool_answer(sending);
+            assert_eq!(expired["status"], "failure", "{expired}");
+            assert_eq!(expired["reason"], "reply_timeout", "{expired}");
+            assert_eq!(expired["data"]["delivery"], "typed_into_input", "{expired}");
+            assert!(expired["data"].get("next").is_none(), "{expired}");
+            let id = expired["data"]["id"]
+                .as_str()
+                .expect("original full send ID");
+            assert_eq!(id.split_once('@').unwrap().0, inbox_id, "{expired}");
+            id.to_owned()
+        });
+        let reading = expired_id.as_ref().map_or(sending, |id| {
+            guest.send(
+                "tools/call",
+                json!({
+                    "name": "read_messages",
+                    "arguments": { "reply_to": id, "timeout_seconds": 30 },
+                }),
+            )
+        });
+        let replied = ada.call(
+            "send_message",
+            json!({
+                "to": guest_address, "text": response, "reply_to": inbox_id,
+                "wait_for": "delivery", "timeout_seconds": 30,
+            }),
+        );
+        assert_eq!(replied["status"], "success", "{replied}");
+        assert_eq!(
+            replied["data"]["delivery"], "read_by_recipient",
+            "{replied}"
+        );
+        let read = guest.tool_answer(reading);
+        assert_eq!(read["status"], "success", "{read}");
+        assert!(read["data"].get("next").is_none(), "{read}");
+        if !continue_wait {
+            let id = read["data"]["id"].as_str().expect("original full send ID");
+            assert_eq!(id.split_once('@').unwrap().0, inbox_id, "{read}");
+            assert_eq!(read["data"]["delivery"], "typed_into_input", "{read}");
+        }
+        let messages = read["data"]["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1, "{read}");
+        let reply_id = replied["data"]["id"]
+            .as_str()
+            .unwrap()
+            .split_once('@')
+            .unwrap()
+            .0;
+        assert_eq!(messages[0]["id"], reply_id, "{read}");
+        assert_eq!(messages[0]["from"], ada_address, "{read}");
+        assert_eq!(messages[0]["text"], response, "{read}");
+        assert_eq!(messages[0]["reply_to"], inbox_id, "{read}");
+    }
+    let inbox = ada.call("read_messages", json!({ "last": 10 }));
+    assert_eq!(inbox["status"], "success", "{inbox}");
+    let requests: Vec<_> = inbox["data"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|message| message["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        requests,
+        ["Answer while I wait", "Answer after my send returns"]
+    );
+}
+
 /// With YOLO off, a Guest starts and can reach a child but cannot reach a separate creation tree.
 #[test]
 fn a_guest_with_yolo_off_sees_the_agent_it_started() {
@@ -588,6 +698,67 @@ fn an_mcp_client_joins_as_a_member_reads_its_messages_and_leaves_with_its_relay(
     );
 }
 
+/// A recipient leaving before it reads ends the delivery wait with the number Facade assigned.
+#[test]
+fn a_guest_leaving_before_read_keeps_the_admitted_message_id() {
+    use rusqlite::{Connection, OpenFlags, OptionalExtension};
+
+    let home = TestHome::new("guest-leaves");
+    std::fs::write(home.path.join("facade.json"), r#"{"yolo":true}"#).unwrap();
+    let (mut sender, sender_row) = member(&home);
+    let mut recipient = McpTestClient::spawn(&home, home.command(&test_binaries().mcp));
+    let listed = recipient.call("list_agents", json!({}));
+    assert_eq!(listed["status"], "success", "{listed}");
+    let guests = guest_rows(&home);
+    assert_eq!(guests.len(), 2, "{guests:?}");
+    let recipient_row = guests
+        .iter()
+        .find(|row| row["reference"] != sender_row["reference"])
+        .expect("the other Guest");
+    let address = recipient_row["address"].as_str().unwrap();
+    let recipient_id = recipient_row["reference"]["agent_id"].as_str().unwrap();
+    let machine = recipient_row["reference"]["machine_id"].as_str().unwrap();
+
+    let text = "Waiting for the Guest to read";
+    let send = sender.send(
+        "tools/call",
+        json!({
+            "name": "send_message",
+            "arguments": { "to": address, "text": text, "wait_for": "delivery", "timeout_seconds": 30 },
+        }),
+    );
+    let db = Connection::open_with_flags(
+        home.path.join("core/facade.db"),
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let mut number = None;
+    assert!(wait_until(secs(10), || {
+        number = db
+            .query_row(
+                "SELECT number FROM messages WHERE \"to\" = ?1 AND text = ?2 AND status = 'pending'",
+                [recipient_id, text],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .unwrap();
+        number.is_some()
+    }));
+    let expected = facade_base::address::selector::format_message_address(
+        &format!("m{}", number.unwrap()),
+        machine,
+    );
+    drop(db);
+    let (_, closed) = recipient.close(secs(10));
+    assert!(closed.success(), "{closed:?}");
+
+    let ended = sender.tool_answer(send);
+    assert_eq!(ended["status"], "failure", "{ended}");
+    assert_eq!(ended["reason"], "ended", "{ended}");
+    assert_eq!(ended["data"]["id"], expected, "{ended}");
+    assert!(ended["data"].get("delivery").is_none(), "{ended}");
+}
+
 /// A Guest outlasts the daemon: its relay reconnects to the next daemon, which knows it by the same
 /// address, and a message sent to it across the restart reaches it once it reads.
 #[test]
@@ -672,6 +843,7 @@ fn a_read_delivers_only_what_it_returns_and_last_is_the_newest() {
     let mut read = |arguments: Value| {
         let read = member.call("read_messages", arguments);
         assert_eq!(read["status"], "success", "{read}");
+        assert!(read["data"].get("next").is_none(), "{read}");
         let texts: Vec<String> = read["data"]["messages"]
             .as_array()
             .expect("inline messages")

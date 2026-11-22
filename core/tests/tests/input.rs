@@ -505,6 +505,85 @@ fn raw_keys_sent_after_text_follow_its_enter() {
     assert_eq!(home.submitted_messages(), ["first", "second"]);
 }
 
+#[test]
+fn mixed_typing_keeps_all_five_steps_ahead_of_following_input() {
+    let home = TestHome::new("typesequence");
+    let keys = home.folder().join("keys");
+    let worker = home.start_fake_with("worker", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
+    let five_steps = b"\x1b[200~hello\x1b[201~\r\x1b[200~hello\x1b[201~\r\r";
+    let read_keys = || std::fs::read(&keys).unwrap_or_default();
+    let receipt = home.run_facade_ok(&[
+        "type", "worker", "hello", "--key", "Enter", "hello", "-k", "Enter", "--key", "Enter",
+    ]);
+    assert_eq!(
+        receipt,
+        format!(
+            "Typed text and pressed keys in worker ({})'s terminal.\n",
+            worker.address
+        )
+    );
+    assert!(wait_until(LOADED_TIMEOUT, || read_keys().len() >= five_steps.len()));
+    assert_eq!(read_keys(), five_steps);
+
+    let mut wire = connect(&home);
+    let target = home.inspect_agent(&worker.id)["agent"]["reference"].clone();
+    let watched = wire.request(
+        "watch",
+        json!({ "topic": "attach", "args": { "target": target } }),
+    );
+    assert!(watched["result"].is_object(), "{watched}");
+    let sequence = wire.send(
+        "call",
+        json!({
+            "op": "agent.type", "args": { "target": target, "input": { "kind": "sequence", "steps": [
+                { "kind": "text", "text": "hello" }, { "kind": "key", "key": "Enter" },
+                { "kind": "text", "text": "hello" }, { "kind": "key", "key": "Enter" },
+                { "kind": "key", "key": "Enter" }
+            ] } }
+        }),
+    );
+    // Send raw input from the viewer before reading the ordered call's reply.
+    wire.write(&json!({
+        "jsonrpc": "2.0", "method": "call",
+        "params": { "op": "agent.type", "args": { "target": target, "input": {
+            "kind": "raw", "raw": facade_base::base64::encode(b"later\r")
+        } } },
+    }));
+    let receipt = wire.wait_for_response(sequence, LOADED_TIMEOUT).unwrap();
+    assert!(receipt["result"].is_object(), "{receipt}");
+    assert!(
+        wait_until(LOADED_TIMEOUT, || home.submitted_messages().len() >= 5),
+        "{:?}",
+        home.submitted_messages()
+    );
+    assert_eq!(
+        read_keys(),
+        [five_steps.as_slice(), five_steps, b"later\r"].concat()
+    );
+
+    for spelling in ["-key", "--Key"] {
+        let refused = home.run_facade(&["type", "worker", "ignored", spelling, "Enter"]);
+        assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains(&format!(
+                "Unknown option '{spelling}'. Use '-k' or '--key'."
+            )),
+            "{}",
+            stderr(&refused)
+        );
+    }
+    let quoted = r#"say "hello world" “again”"#;
+    home.run_facade_ok(&["type", "worker", quoted, "--enter"]);
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .submitted_messages()
+        .len()
+        >= 6));
+    assert_eq!(
+        home.submitted_messages(),
+        ["hello", "hello", "hello", "hello", "later", quoted]
+    );
+}
+
 /// One `agent.type` call carries at most 1 MiB as written, a paste counted with its brackets: a
 /// larger one is refused before anything is typed, and one at the limit is typed whole.
 // Its stand-in is a sh script that reads keys, which MSYS sh under a pseudo console does not get.

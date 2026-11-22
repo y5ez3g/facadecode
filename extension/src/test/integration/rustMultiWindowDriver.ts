@@ -292,7 +292,7 @@ async function perform(action: Action): Promise<unknown> {
 		}
 		case 'send': {
 			const { agent } = await inspect(action.to);
-			const sent = facade('send', action.to, action.text).trimEnd();
+			const sent = facade('send', '-w', action.to, action.text).trimEnd();
 			const message = /^Delivered (m\d+@[^\s]+) to /u.exec(sent)?.[1];
 			assert.ok(message, sent);
 			assert.strictEqual(sent, `Delivered ${message} to ${agent.name} (${agent.address}).`);

@@ -1520,3 +1520,194 @@ fn resuming_a_saved_session_after_removal_creates_a_new_agent() {
         inspected_agent(&home, address)
     );
 }
+
+#[test]
+fn claude_and_pi_show_current_native_names_through_resume() {
+    for (cli, resume_flag, ended_state, status_state) in [
+        ("claude", "--resume", "Stopped", "Stopped"),
+        ("pi", "--session", "Exited", "Exited (code 0)"),
+    ] {
+        let home = TestHome::new("native-session-name");
+        std::fs::write(
+            home.path.join("facade.json"),
+            json!({ "clis": { (cli): { "type": cli, "program": test_binaries().fakecli } } })
+                .to_string(),
+        )
+        .unwrap();
+        let project = facade_base::files::real_path(&home.project).unwrap();
+        let user = home.user_home();
+        let history = if cli == "claude" {
+            let folder: String = project
+                .to_string_lossy()
+                .chars()
+                .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+                .collect();
+            user.join(".claude/projects").join(folder)
+        } else {
+            let folder = project.to_string_lossy();
+            let folder = folder.strip_prefix(['/', '\\']).unwrap_or(&folder);
+            user.join(".pi/agent/sessions")
+                .join(format!("--{}--", folder.replace(['/', '\\', ':'], "-")))
+        };
+        std::fs::create_dir_all(&history).unwrap();
+        let timestamp = "2026-11-21T00:00:00.000Z";
+        let prompt_record = |session, id, parent: Option<&str>, prompt| {
+            if cli == "claude" {
+                json!({
+                    "type": "user", "sessionId": session, "cwd": project,
+                    "message": { "role": "user", "content": prompt },
+                })
+            } else {
+                json!({
+                    "type": "message", "id": id, "parentId": parent, "timestamp": timestamp,
+                    "message": { "role": "user", "content": [{ "type": "text", "text": prompt }] },
+                })
+            }
+        };
+        let transcript = |id, prompt| {
+            let mut file = if cli == "claude" {
+                std::fs::File::create(history.join(format!("{id}.jsonl"))).unwrap()
+            } else {
+                let path = history.join(format!("{timestamp}_{id}.jsonl").replace(':', "-"));
+                let mut file = std::fs::File::create(path).unwrap();
+                let header = json!({
+                    "type": "session", "version": 3, "id": id, "timestamp": timestamp, "cwd": project,
+                });
+                writeln!(file, "{header}").unwrap();
+                file
+            };
+            let record = prompt_record(id, "00000001", None, prompt);
+            writeln!(file, "{record}").unwrap();
+            file
+        };
+        let mut history = transcript(FIRST, "what is 2+2");
+        let mut unnamed_history = transcript(SECOND, "");
+        let _connection = connect(&home);
+        let (first_ref, empty_ref) = (&FIRST[..8], &SECOND[..8]);
+        let resume_cell = |reference, state, label| {
+            let text = home.run_facade_ok(&["resume", "--local"]);
+            let table = Table::parse(&text);
+            let row = table
+                .row("REF", reference)
+                .unwrap_or_else(|| panic!("{cli}: {text}"));
+            assert_eq!(table.cell(row, "STATE"), state, "{cli}: {text}");
+            assert_eq!(table.cell(row, "SESSION"), label, "{cli}: {text}");
+        };
+        resume_cell(first_ref, "Saved", "what is 2+2");
+        resume_cell(empty_ref, "Saved", "-");
+
+        let text = "x".repeat(32 * 1024);
+        let grow = |file: &mut std::fs::File, indices: std::ops::Range<u32>| {
+            for index in indices {
+                let record = if cli == "claude" {
+                    json!({ "type": "assistant", "sessionId": FIRST,
+                            "message": { "role": "assistant", "content": text } })
+                } else {
+                    json!({ "type": "message", "id": format!("{index:08x}"),
+                            "parentId": format!("{:08x}", index - 1), "timestamp": timestamp,
+                            "message": { "role": "assistant",
+                                "content": [{ "type": "text", "text": text }] } })
+                };
+                writeln!(file, "{record}").unwrap();
+            }
+        };
+        let rename = |file: &mut std::fs::File, index: u32, name| {
+            let record = if cli == "claude" {
+                json!({ "type": "custom-title", "sessionId": FIRST, "customTitle": name })
+            } else {
+                json!({ "type": "session_info", "id": format!("{index:08x}"),
+                        "parentId": format!("{:08x}", index - 1), "timestamp": timestamp, "name": name })
+            };
+            writeln!(file, "{record}").unwrap();
+        };
+        // Both rename records end up after the former 1 MiB head and before its 64 KiB tail.
+        grow(&mut history, 2..35);
+        rename(&mut history, 35, "First native name");
+        grow(&mut history, 36..39);
+        resume_cell(first_ref, "Saved", "First native name");
+
+        let start_session = |reference, session, args: &str| {
+            let args = home.folder().join(args);
+            let outcome = home
+                .command(&test_binaries().facade)
+                .env("FAKECLI_ARGS", &args)
+                .args(["resume", "-d", reference])
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            assert!(outcome.status.success(), "{cli}: {}", stderr(&outcome));
+            let words = recorded_cli_args(&args);
+            assert!(
+                words.windows(2).any(|pair| pair == [resume_flag, session]),
+                "{words:?}"
+            );
+        };
+        start_session(first_ref, FIRST, "saved-args");
+        let active = home.list_table();
+        let row = active
+            .row("CLI", cli)
+            .unwrap_or_else(|| panic!("{active:?}"));
+        let reference = active.cell(row, "REF").to_string();
+        let list_cell = |reference, label| {
+            let table = home.list_table();
+            let row = table
+                .row("REF", reference)
+                .unwrap_or_else(|| panic!("{cli}: {table:?}"));
+            assert_eq!(table.cell(row, "SESSION"), label, "{cli}: {table:?}");
+        };
+        let status = |reference, label, value| {
+            let text = home.run_facade_ok(&["status", reference]);
+            assert_eq!(status_field(&text, label), Some(value), "{cli}: {text}");
+        };
+        list_cell(&reference, "First native name");
+        assert!(
+            wait_for_screen_text(&home, &reference, "❯"),
+            "{cli}: {}",
+            home.screen(&reference)
+        );
+        assert_eq!(inspected_agent(&home, &reference)["process"], "running");
+        status(&reference, "Session", FIRST);
+        assert!(
+            Table::parse(&home.run_facade_ok(&["resume", "--local"]))
+                .row("REF", first_ref)
+                .is_none()
+        );
+
+        rename(&mut history, 39, "Latest native name");
+        list_cell(&reference, "Latest native name");
+        grow(&mut history, 40..43);
+        list_cell(&reference, "Latest native name");
+
+        if cli == "claude" {
+            home.run_facade_ok(&["stop", &reference]);
+        } else {
+            home.run_facade_ok(&["type", &reference, "--key", "Ctrl+D"]);
+        }
+        assert!(wait_until(LOADED_TIMEOUT, || inspected_agent(
+            &home, &reference
+        )["process"]
+            == "ended"));
+        assert!(home.list_table().row("REF", &reference).is_none());
+        resume_cell(&reference, ended_state, "Latest native name");
+        status(&reference, "State", status_state);
+        status(&reference, "Session", FIRST);
+
+        start_session(&reference, FIRST, "ended-args");
+        list_cell(&reference, "Latest native name");
+        status(&reference, "Session", FIRST);
+
+        start_session(empty_ref, SECOND, "unnamed-args");
+        let active = home.list_table();
+        let unnamed = active
+            .column("REF")
+            .into_iter()
+            .find(|other| *other != reference)
+            .unwrap_or_else(|| panic!("{cli}: {active:?}"));
+        list_cell(unnamed, "-");
+        status(unnamed, "Session", SECOND);
+        let preview = "First unnamed prompt";
+        let record = prompt_record(SECOND, "00000002", Some("00000001"), preview);
+        writeln!(unnamed_history, "{record}").unwrap();
+        list_cell(unnamed, preview);
+    }
+}

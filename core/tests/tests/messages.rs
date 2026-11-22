@@ -572,6 +572,268 @@ fn output_within(mut child: Child, timeout: std::time::Duration) -> Option<Outpu
     child.wait_with_output().ok()
 }
 
+#[test]
+fn shell_send_saves_behind_a_draft_and_waits_for_delivery_when_requested() {
+    let home = TestHome::new("shell-send-modes");
+    let worker = home.start_named_fake("worker", &[]);
+    type_draft(&home, "worker", "my draft");
+
+    let saved = home.run_facade(&["send", "worker", "saved behind the draft"]);
+    assert_eq!(saved.status.code(), Some(0), "{}", stderr(&saved));
+    assert!(saved.stderr.is_empty(), "{}", stderr(&saved));
+    let id = receipt_id(&home, &worker.id, "m1");
+    let recipient = address(&home, &worker.id);
+    assert_eq!(
+        stdout(&saved),
+        format!("Saved {id} in worker ({recipient})'s inbox.\n")
+    );
+    assert!(home.submitted_messages().is_empty());
+    assert!(home.screen("worker").contains("my draft"));
+
+    home.run_facade_ok(&["type", "worker", "-k", "Ctrl+C"]);
+    let waited = home.run_facade(&["send", "worker", "waited for delivery", "-w"]);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr(&waited));
+    assert!(waited.stderr.is_empty(), "{}", stderr(&waited));
+    assert_eq!(
+        stdout(&waited),
+        format!("{}\n", delivered(&home, &worker.id, "m2"))
+    );
+    assert!(wait_for_screen_text(&home, "worker", "waited for delivery"));
+    assert_eq!(
+        home.submitted_messages(),
+        [
+            "📨 Message from the command line · m1\nsaved behind the draft",
+            "📨 Message from the command line · m2\nwaited for delivery",
+        ]
+    );
+}
+
+#[test]
+fn shell_receives_only_the_first_linked_reply_from_the_managed_recipient() {
+    let home = TestHome::new("shell-send-managed-reply");
+    let worker = home.start_named_fake("worker", &[]);
+    let other = home.start_named_fake("other", &[]);
+    let machine = home.hello_result().unwrap()["machine_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    home.run_facade_ok(&["machine", "rename", &machine, "desk"]);
+    let mut worker_tools = tools_of(&home, &worker.id);
+    let mut other_tools = tools_of(&home, &other.id);
+
+    let request = "请检查构建\n\n  Keep the indentation.";
+    let shell = send_in_background(&home, &["worker", request, "-r"]);
+    assert!(
+        wait_until(secs(10), || !home.submitted_messages().is_empty()),
+        "{}",
+        home.daemon_log()
+    );
+    let inbox = read_messages(&mut worker_tools, json!({"last": 1}));
+    assert_eq!(inbox.len(), 1, "{inbox:?}");
+    let original = &inbox[0];
+    assert_eq!(original["id"], "m1", "{original}");
+    assert_eq!(original["from"], "#c1@desk", "{original}");
+    assert_eq!(original["text"], request, "{original}");
+    assert_eq!(
+        home.submitted_messages(),
+        [format!(
+            "📨 Message from the command line (#c1@desk) · m1\n{request}"
+        )]
+    );
+
+    let reply = "完成 ✓\n\n  Second line";
+    let linked = json!({"to": original["from"], "reply_to": original["id"], "text": reply});
+    let wrong_actor = other_tools.call("send_message", linked.clone());
+    assert_eq!(wrong_actor["status"], "failure", "{wrong_actor}");
+    let mismatched = worker_tools.call(
+        "send_message",
+        json!({
+            "to": "#c2@desk", "reply_to": original["id"], "text": "wrong link",
+        }),
+    );
+    assert_eq!(mismatched["reason"], "invalid_argument", "{mismatched}");
+
+    let sent = worker_tools.call("send_message", linked.clone());
+    assert_eq!(sent["status"], "success", "{sent}");
+    assert_eq!(sent["data"]["delivery"], "returned_to_request", "{sent}");
+    let output = output_within(shell, secs(10)).expect("the linked reply ends the command");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(output.stderr.is_empty(), "{}", stderr(&output));
+    assert_eq!(output.stdout, reply.as_bytes());
+
+    let duplicate = worker_tools.call("send_message", linked);
+    assert_eq!(duplicate["status"], "failure", "{duplicate}");
+    assert_eq!(duplicate["reason"], "ended", "{duplicate}");
+}
+
+#[test]
+fn a_guest_can_answer_shell_and_a_late_reply_exceeds_the_same_delivery_and_reply_budget() {
+    use std::time::Instant;
+
+    let home = TestHome::new("shell-send-guest");
+    let mut guest = McpTestClient::spawn(&home, home.command(&test_binaries().mcp));
+    let roster = guest.call("list_agents", json!({}));
+    assert_eq!(roster["status"], "success", "{roster}");
+    let guest_address = roster["data"]["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["type"] == "guest")
+        .expect("the isolated Guest")["id"]
+        .as_str()
+        .unwrap();
+    let machine = home.hello_result().unwrap()["machine_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    home.run_facade_ok(&["machine", "rename", &machine, "desk"]);
+    let (guest_id, _) = guest_address.split_once('@').unwrap();
+    let target = format!("{guest_id}@desk");
+
+    let mut shell = send_in_background(&home, &[&target, "answer in UTF-8", "-r"]);
+    let inbox = read_messages(&mut guest, json!({"timeout_seconds": 10}));
+    assert_eq!(inbox.len(), 1, "{inbox:?}");
+    assert_eq!(inbox[0]["id"], "m1");
+    assert_eq!(inbox[0]["from"], "#c1@desk");
+    assert_eq!(inbox[0]["text"], "answer in UTF-8");
+    assert!(
+        shell.try_wait().unwrap().is_none(),
+        "reading only completes delivery"
+    );
+    let reply = "café ☕\n下一行\n";
+    let sent = guest.call(
+        "send_message",
+        json!({
+            "to": inbox[0]["from"], "reply_to": inbox[0]["id"], "text": reply,
+        }),
+    );
+    assert_eq!(sent["status"], "success", "{sent}");
+    assert_eq!(sent["data"]["delivery"], "returned_to_request", "{sent}");
+    let output = output_within(shell, secs(10)).expect("the Guest reply ends the command");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(output.stderr.is_empty(), "{}", stderr(&output));
+    assert_eq!(output.stdout, reply.as_bytes());
+
+    let began = Instant::now();
+    let shell = send_in_background(
+        &home,
+        &[&target, "read late in the budget", "-r", "-t", "6"],
+    );
+    // Leave half of the six seconds for delivery, then read without answering.
+    std::thread::sleep(secs(3));
+    let inbox = read_messages(&mut guest, json!({"timeout_seconds": 2}));
+    assert_eq!(inbox.len(), 1, "{inbox:?}");
+    assert_eq!(inbox[0]["from"], "#c3@desk");
+    assert_eq!(inbox[0]["id"], "m3");
+    assert_eq!(inbox[0]["text"], "read late in the budget");
+    let remaining = secs(8).saturating_sub(began.elapsed());
+    let output =
+        output_within(shell, remaining).expect("delivery and reply share the six-second budget");
+    assert!(
+        began.elapsed() >= secs(5),
+        "the reply wait ended before its deadline"
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(output.stdout.is_empty(), "{}", stdout(&output));
+    assert_eq!(
+        stderr(&output),
+        format!("error: No reply to m3@{machine} within 6 seconds. The message was delivered.\n")
+    );
+    let late = guest.call(
+        "send_message",
+        json!({
+            "to": inbox[0]["from"], "reply_to": inbox[0]["id"], "text": "too late",
+        }),
+    );
+    assert_eq!(late["status"], "failure", "{late}");
+    assert_eq!(late["reason"], "ended", "{late}");
+}
+
+fn cancel_send_at(home: &TestHome, gate: &str, wait_for: Option<&str>) -> Value {
+    home.start_facade_with(&[("FACADE_TEST_GATES", gate)]);
+    home.start_named_fake("worker", &[]);
+    let mut args = json!({
+        "to": "worker", "text": "cancel the send", "request_id": "cancel-send", "time_left_ms": 15_000,
+    });
+    if let Some(wait_for) = wait_for {
+        args["wait_for"] = json!(wait_for);
+    }
+    let mut shell = connect(home);
+    let send = shell.send("call", json!({"op": "agent.send", "args": args}));
+    home.wait_for_gate(gate);
+    let cancelled = shell.request("cancel", json!({"id": send}));
+    home.release_gate(gate);
+    assert_eq!(cancelled["result"], json!({}), "{cancelled}");
+    let reply = shell
+        .wait_for_response(send, secs(10))
+        .expect("the interrupted send answers");
+    assert_eq!(error_reason(&reply), "cancelled", "{reply}");
+    reply
+}
+
+#[test]
+fn an_explicit_send_cancelled_before_paste_keeps_its_assigned_reference() {
+    let home = TestHome::new("shell-send-early-cancel");
+    let reply = cancel_send_at(&home, "before-paste-begins", Some("delivery"));
+    let machine = &home.hello_result().unwrap()["machine_id"];
+    let details = &reply["error"]["data"]["details"];
+    assert!(home.submitted_messages().is_empty());
+    assert!(details.get("delivered_via").is_none(), "{reply}");
+    assert_eq!(
+        details["message_ref"],
+        json!({"message_id": "m1", "machine_id": machine}),
+        "{reply}"
+    );
+}
+
+#[test]
+fn a_legacy_send_cancelled_before_paste_omits_delivery_facts() {
+    let home = TestHome::new("legacy-send-early-cancel");
+    let reply = cancel_send_at(&home, "before-paste-begins", None);
+    let details = &reply["error"]["data"]["details"];
+    assert!(home.submitted_messages().is_empty());
+    assert!(details.get("message_ref").is_none(), "{reply}");
+    assert!(details.get("delivered_via").is_none(), "{reply}");
+}
+
+#[test]
+fn a_result_wait_interrupted_after_delivery_reports_both_facts() {
+    let home = TestHome::new("shell-send-late-cancel");
+    let reply = cancel_send_at(&home, "before-send-answer", Some("result"));
+    let machine = &home.hello_result().unwrap()["machine_id"];
+    let details = &reply["error"]["data"]["details"];
+    assert_eq!(
+        details["message_ref"],
+        json!({"message_id": "m1", "machine_id": machine}),
+        "{reply}"
+    );
+    assert_eq!(details["delivered_via"], "terminal", "{reply}");
+    assert_eq!(home.submitted_messages().len(), 1);
+}
+
+#[test]
+fn a_result_wait_that_times_out_after_delivery_reports_both_facts() {
+    let home = TestHome::new("shell-send-wire-timeout");
+    home.start_named_fake("worker", &[]);
+    let machine = &home.hello_result().unwrap()["machine_id"];
+    let answer = connect(&home).call(
+        "agent.send",
+        json!({
+            "to": "worker", "text": "deliver without an answer", "wait_for": "result",
+            "request_id": "no-reply", "time_left_ms": 3_000,
+        }),
+    );
+    assert_eq!(error_reason(&answer), "reply_timeout", "{answer}");
+    let details = &answer["error"]["data"]["details"];
+    assert_eq!(
+        details["message_ref"],
+        json!({"message_id": "m1", "machine_id": machine}),
+        "{answer}"
+    );
+    assert_eq!(details["delivered_via"], "terminal", "{answer}");
+    assert_eq!(home.submitted_messages().len(), 1);
+}
+
 /// A paste into a CLI that never reads its input fails by its deadline without Enter. Input
 /// already waiting for the terminal keeps the first paste queued on Unix. The second message
 /// waits behind the first and withdraws without typing. If the CLI starts reading again, the
