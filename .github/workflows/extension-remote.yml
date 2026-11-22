@@ -1,0 +1,107 @@
+name: Extension Remote SSH
+
+on:
+  pull_request:
+    paths:
+      - 'extension/src/**'
+      - 'extension/window/**'
+      - 'extension/media/**'
+      - 'extension/l10n/**'
+      - 'extension/scripts/**'
+      - 'extension/package*.json'
+      - 'extension/tsconfig.json'
+      - 'extension/.nvmrc'
+      - 'core/crates/**'
+      - 'core/protocol/**'
+      - 'core/rules/**'
+      - 'core/vendor/**'
+      - 'core/Cargo.*'
+      - 'core/rust-toolchain.toml'
+      - 'core/scripts/leftovers.sh'
+      - 'ci/check_remote_editor.sh'
+      - 'ci/catalog.py'
+      - 'ci/remote_editor_evidence.py'
+      - 'ci/evidence.py'
+      - 'ci/native_core.py'
+      - 'ci/fixtures/remote-ssh/**'
+      - '.github/workflows/extension-remote.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extension-remote-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  connect:
+    name: Extension Remote SSH connect (linux-x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CC_x86_64_unknown_linux_musl: musl-gcc
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: extension/.nvmrc
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - name: Install the Linux editor prerequisites
+        working-directory: core
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools xvfb xauth libgtk-3-0t64 libnss3 libasound2t64
+          rustup toolchain install
+          rustup target add x86_64-unknown-linux-musl
+          docker -H unix:///var/run/docker.sock version --format '{{.Server.Version}}'
+      - name: Build the candidate editor and Core fixtures
+        working-directory: extension
+        run: |
+          npm ci
+          npm run compile
+          npm run bundle
+          node scripts/build-it.mjs
+      - name: Download the pinned desktop editor and Remote SSH inputs
+        run: |
+          assets="$RUNNER_TEMP/facade-remote-assets"
+          mkdir "$assets"
+          server=ci/fixtures/remote-ssh/official-server-linux-x64.json
+          version=$(jq -er .name "$server")
+          fetch() {
+            curl --disable --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+              --connect-timeout 10 --max-time 180 --output "$assets/$1" "$2"
+          }
+          fetch "vscode-server-linux-x64-$version.tar.gz" "$(jq -er .url "$server")"
+          jq -er '.[] | [.id, .version, .url] | @tsv' ci/fixtures/remote-ssh/pinned-marketplace.json > "$assets/providers.tsv"
+          while IFS=$'\t' read -r id release url; do
+            fetch "$id-$release.vsix" "$url"
+          done < "$assets/providers.tsv"
+          cd extension
+          node - "$version" "$RUNNER_TEMP/facade-remote-editor.txt" <<'JS'
+          const fs = require('node:fs');
+          require('@vscode/test-electron').downloadAndUnzipVSCode(process.argv[2]).then(executable => {
+            fs.writeFileSync(process.argv[3], executable);
+          }).catch(error => { console.error(error); process.exitCode = 1; });
+          JS
+      - name: Observe ownership in the actual Remote SSH workspace
+        run: |
+          ci/check_remote_editor.sh "$RUNNER_TEMP/facade-remote-assets" \
+            "$(cat "$RUNNER_TEMP/facade-remote-editor.txt")" "$RUNNER_TEMP/facade-remote-result" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          test -s "$RUNNER_TEMP/facade-remote-result/receipt.json"
+      - name: Keep Remote SSH runtime and cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: extension-remote-ssh-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/facade-remote-result/
+          if-no-files-found: ignore

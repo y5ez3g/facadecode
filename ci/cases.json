@@ -4059,8 +4059,14 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/catalog.test.ts:35",
-        "extension/src/test/panel.view.test.ts:61"
-      ]
+        "extension/src/test/panel.view.test.ts:61",
+        "extension/src/test/commands.test.ts"
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "commands.test",
+        "name": "Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1) PANEL-2.2, 4.2: a card's menu names its exact run, including same-numbered agents on two machines"
+      }
     },
     {
       "id": "extension/vscode-rust/command/facade.deleteAgent",
@@ -4168,8 +4174,14 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/configuration.test.ts:985",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:271"
-      ]
+        "extension/src/test/integration/rustMultiWindowDriver.ts:271",
+        "extension/src/test/coreConnection.test.ts"
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "coreConnection.test",
+        "name": "Core connection (ARCHITECTURE-1.4) Open Settings File uses the live absolute status path and preserves an exclusive creator"
+      }
     },
     {
       "id": "extension/vscode-rust/command/facade.openTerminal",
@@ -4539,8 +4551,14 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/panel.view.test.ts:220",
-        "extension/src/test/webview.test.ts:1436"
-      ]
+        "extension/src/test/webview.test.ts:1436",
+        "extension/src/test/webview.test.ts"
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "webview.test",
+        "name": "The agent panel in Chromium the Rust cards, revision and pending open belong to the current page and exact action ID (PANEL-3.1, 3.2)"
+      }
     },
     {
       "id": "extension/webview-rust/host-to-page/scrolling",
@@ -4557,8 +4575,14 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/panel.view.test.ts:45",
-        "extension/src/test/webview.test.ts:166"
-      ]
+        "extension/src/test/webview.test.ts:166",
+        "extension/src/test/webview.test.ts"
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "webview.test",
+        "name": "The agent panel in Chromium the Rust cards, revision and pending open belong to the current page and exact action ID (PANEL-3.1, 3.2)"
+      }
     },
     {
       "id": "extension/webview-rust/page-to-host/act",
@@ -4566,16 +4590,28 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/panel.view.test.ts:188",
-        "extension/src/test/webview.test.ts:179"
-      ]
+        "extension/src/test/webview.test.ts:179",
+        "extension/src/test/panel.view.test.ts"
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "panel.view.test",
+        "name": "The panel's view: what it takes from its webview, and which page it answers (PANEL-1.1, 3.1, 3.2) the Rust host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)"
+      }
     },
     {
       "id": "extension/webview-rust/page-to-host/error",
       "assertion": "Record the diagnostic without applying a card operation.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/webview.test.ts:68"
-      ]
+        "extension/src/test/webview.test.ts:68",
+        "extension/src/test/panel.view.test.ts"
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "panel.view.test",
+        "name": "The panel's view: what it takes from its webview, and which page it answers (PANEL-1.1, 3.1, 3.2) the Rust host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)"
+      }
     },
     {
       "id": "extension/webview-rust/page-to-host/motion",
@@ -4590,8 +4626,14 @@
       "assertion": "Verify the host starts sending state for the new ready page.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/panel.view.test.ts:125"
-      ]
+        "extension/src/test/panel.view.test.ts:125",
+        "extension/src/test/panel.view.test.ts"
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "panel.view.test",
+        "name": "The panel's view: what it takes from its webview, and which page it answers (PANEL-1.1, 3.1, 3.2) the Rust host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)"
+      }
     },
     {
       "id": "extension/window-component-old/command/facade.agents.route",

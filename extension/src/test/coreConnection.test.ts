@@ -3,15 +3,18 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { once } from 'events';
 import type { ScreenChange, ScreenSnapshot, WatchParams } from '../base/coreProtocol';
+import { connectWithin } from '../base/connect';
 import { lineReader } from '../base/lines';
 import type { ResizeAttach } from '../host/orchestrator/types';
 import { daemonSocketPath } from '../host/rust/rpc';
 import { FACADE_PROGRAM } from '../host/rust/types';
+import { ptydPlace } from './ptydPlace';
 import { tempDir, waitFor } from './util';
 import { withModules } from './withModules';
 
@@ -23,9 +26,12 @@ type TestRequest = { readonly id?: number; readonly method: string; readonly par
 /** Drive the actual editor connection over private sockets, numbering each connection in arrival order. */
 async function withDaemon(
 	receive: (request: TestRequest, send: (...messages: object[]) => void, connection: number) => void,
-	check: (connect: () => ReturnType<Connect>) => Promise<void>
+	check: (connect: () => ReturnType<Connect>, home: string) => Promise<void>,
+	localSocket = false
 ): Promise<void> {
 	const home = tempDir('facade-daemon-fixture-');
+	const place = localSocket ? ptydPlace('fd-core-') : undefined;
+	const endpoint = place?.pipe('daemon');
 	const sockets = new Set<net.Socket>();
 	let next = 0;
 	const server = net.createServer(socket => {
@@ -39,16 +45,17 @@ async function withDaemon(
 			}, connection);
 		}, assert.fail));
 	});
-	server.listen(0, '127.0.0.1');
-	await once(server, 'listening');
 	try {
+		if (endpoint) { server.listen(endpoint); } else { server.listen(0, '127.0.0.1'); }
+		await once(server, 'listening');
 		const port = (server.address() as net.AddressInfo).port;
 		const modules: Record<string, unknown> = {};
 		const load = withModules(modules);
 		const rpc = load<typeof import('../host/rust/rpc')>(require.resolve('../host/rust/rpc'));
 		modules['../rust/rpc'] = {
 			...rpc,
-			connectDaemonSocket: async () => {
+			connectDaemonSocket: async (_home: string, waitMs: number) => {
+				if (endpoint) { return connectWithin(endpoint, waitMs); }
 				const socket = net.connect(port, '127.0.0.1');
 				await once(socket, 'connect');
 				return { socket };
@@ -56,10 +63,11 @@ async function withDaemon(
 			startDaemon: () => assert.fail('The isolated hello fixture already answers.'),
 		};
 		const { connectOrchestrator } = load<typeof import('../host/orchestrator/connection')>(require.resolve('../host/orchestrator/connection'));
-		await check(() => connectOrchestrator({ home: home.dir, program: path.join(home.dir, FACADE_PROGRAM), build, log: () => {} }));
+		await check(() => connectOrchestrator({ home: home.dir, program: path.join(home.dir, FACADE_PROGRAM), build, log: () => {} }), home.dir);
 	} finally {
 		for (const socket of sockets) { socket.destroy(); }
 		await new Promise<void>(resolve => server.close(() => resolve()));
+		if (place) { fs.rmSync(place.dir, { recursive: true, force: true }); }
 		home.remove();
 	}
 }
@@ -119,6 +127,87 @@ suite('Core connection (ARCHITECTURE-1.4)', () => {
 				return true;
 			});
 		});
+	});
+
+	test('Open Settings File uses the live absolute status path and preserves an exclusive creator', async () => {
+		const requests: TestRequest[] = [];
+		const opened: { file: string; preview: boolean; text: string }[] = [];
+		const errors: string[] = [];
+		const created: string[] = [];
+		const competing = '{ "yolo": false }\n';
+		let home: string;
+		let file: string;
+		let race: string;
+		let settingsPath: string;
+		let exclusiveLinks = 0;
+		await withDaemon((request, send) => {
+			requests.push(request);
+			if (request.method === 'hello') {
+				send({ id: request.id, result: { ...welcome, ops: ['daemon.status'] } });
+			} else {
+				send({ id: request.id, result: {
+					home, settings_file: settingsPath, build: welcome.build, daemon_pid: welcome.pid, agent_count: 0, machines: [],
+				} });
+			}
+		}, async (connect, root) => {
+			home = root;
+			file = path.join(home, 'status', 'facade.json');
+			race = path.join(home, 'other-status', 'facade.json');
+			settingsPath = file;
+			const handlers = new Map<string, () => Promise<void>>();
+			const vscode = {
+				Uri: { file: (fsPath: string) => ({ fsPath }) },
+				l10n: { t: (text: string, ..._args: unknown[]) => text },
+				commands: {
+					registerCommand: (id: string, run: () => Promise<void>) => {
+						handlers.set(id, run);
+						return { dispose: () => handlers.delete(id) };
+					}
+				},
+				window: {
+					showTextDocument: async (uri: { fsPath: string }, options: { preview: boolean }) => {
+						opened.push({ file: uri.fsPath, preview: options.preview, text: fs.readFileSync(uri.fsPath, 'utf8') });
+					},
+					showErrorMessage: async (message: string) => { errors.push(message); }
+				}
+			};
+			const hostFs = new Proxy(fs, { get: (target, key) => key === 'linkSync' ? (source: string, dest: string) => {
+				exclusiveLinks++;
+				// A second writer wins after the command found no file and prepared its temporary file.
+				if (dest === race) { fs.writeFileSync(dest, competing, { flag: 'wx' }); }
+				fs.linkSync(source, dest);
+			} : Reflect.get(target, key) });
+			const { rustSettings } = withModules({ vscode, fs: hostFs })<typeof import('../host/rust/settings')>(require.resolve('../host/rust/settings'));
+			const link = await connect();
+			const registration = rustSettings({ status: () => link.call('daemon.status', {}), log: { event: line => created.push(line) } }).register();
+			try {
+				const edit = handlers.get('facade.openSettingsFile') ?? assert.fail('Missing Open Settings File registration.');
+				await edit();
+				assert.strictEqual(fs.readFileSync(file, 'utf8'), '{}\n');
+				settingsPath = race;
+				await edit();
+				assert.strictEqual(fs.readFileSync(race, 'utf8'), competing);
+				assert.deepStrictEqual(opened, [
+					{ file, preview: false, text: '{}\n' },
+					{ file: race, preview: false, text: competing },
+				]);
+				assert.deepStrictEqual(fs.readdirSync(path.dirname(file)), ['facade.json']);
+				assert.deepStrictEqual(fs.readdirSync(path.dirname(race)), ['facade.json']);
+				assert.deepStrictEqual([exclusiveLinks, created.length, errors], [2, 1, []]);
+				assert.strictEqual(fs.existsSync(path.join(home, 'facade.json')), false, 'The command follows the status path.');
+				settingsPath = 'relative/facade.json';
+				await edit();
+				assert.strictEqual(opened.length, 2);
+				assert.deepStrictEqual(errors, ['The Orchestrator did not return an absolute path to facade.json.']);
+			} finally {
+				registration.dispose();
+				link.dispose();
+			}
+		}, true);
+		assert.deepStrictEqual(requests.map(({ method, params }) => [method, params]), [
+			['hello', { api_versions: [1], build, kind: 'ide' }],
+			...Array.from({ length: 3 }, () => ['call', { op: 'daemon.status', args: {} }]),
+		]);
 	});
 
 	test('reconnects Attach when the new daemon reuses a watch ID', async function () {

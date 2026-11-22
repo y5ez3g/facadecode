@@ -15,7 +15,7 @@ from pathlib import Path
 from threading import Event
 from unittest.mock import patch
 
-from catalog import AcceptanceError, load, read_cases, read_json, reconcile, validate_binding
+from catalog import AcceptanceError, NATIVE_BINDINGS, load, read_cases, read_json, reconcile, validate_binding
 from evidence import (
     EDITOR, EDITOR_PASS, binding_paths, binding_product, clean_scope, command_for, completion_record, execute, execution_groups,
     download_prior_vsix, observed_mocha_tests, observed_pass, reclaim_scope_processes, run_identity, verify_receipts,
@@ -77,6 +77,17 @@ class CatalogTests(unittest.TestCase):
             (root / 'ci/cases.json').write_text(json.dumps({'version': 2, 'cases': [row]}))
             with self.assertRaisesRegex(AcceptanceError, r'missing executable VSIX release rehearsals: .*upgrade-pair'):
                 read_cases(root)
+
+    def test_reserved_native_cases_cannot_lose_their_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'ci').mkdir()
+            for case_id in NATIVE_BINDINGS:
+                case = self.cases[case_id]
+                row = {'id': case_id, 'assertion': case.assertion, 'stage': case.stage, 'existing_tests': []}
+                (root / 'ci/cases.json').write_text(json.dumps({'version': 2, 'cases': [row]}))
+                with self.subTest(case=case_id), self.assertRaisesRegex(AcceptanceError, f'{case_id}: missing executable native binding'):
+                    read_cases(root)
 
     def test_duplicate_json_keys_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

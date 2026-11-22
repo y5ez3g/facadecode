@@ -28,6 +28,7 @@ class PilotScopeTests(unittest.TestCase):
             'policy': (('ci/evidence.py',), both),
             'workflow': (('.github/workflows/extension-check.yml',), both),
             'native compatibility workflow': (('.github/workflows/core-compatibility.yml',), both),
+            'remote editor workflow': (('.github/workflows/extension-remote.yml',), both),
             'release workflow': (('.github/workflows/extension-release.yml',), both),
             'release mirror': (('.github/release-mirror/worker.mjs',), both),
             'design': (('docs/CI.md',), both),

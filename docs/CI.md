@@ -571,8 +571,9 @@ The native test reads the actual remote Extension Host executable and the origin
 identity from the guest. The exact workspace owns one pinned viewer, and the fake CLI
 records one startup. The receipt includes the staged program and editor digests, the
 authenticated SSH observation and the verified removal of the exact guest and scratch
-scope. The connect case is opt-in. The reconnect case stays pending because the official
-workbench failed to reconnect after a real carrier drop even when SSH transport recovered.
+scope. Pull requests that change these inputs select a separate Linux x64 connect job.
+The reconnect case stays pending because the official workbench failed to reconnect after
+a real carrier drop even when SSH transport recovered. [Remote SSH workflow](../.github/workflows/extension-remote.yml)
 
 Each successful native PR package job records the VSIX pair, Core archive and checksum file
 digests with the checked-out revision, tree and GitHub attempt. Run

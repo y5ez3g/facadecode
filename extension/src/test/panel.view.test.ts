@@ -3,6 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import type { RunFacts } from '../core/ports';
+import { runFacts } from './contractFakes';
 import type { PanelActions, PanelView } from '../ui/panel';
 import type { SelectedAgent } from '../ui/model';
 import type { PanelState } from '../webview/protocol';
@@ -51,7 +53,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	};
 
 	/** The panel's view as the extension makes it, its build's test mode as `testMode` says, its webview resolved. */
-	const make = (testMode = false) => {
+	const make = (testMode = false, select?: (run: string) => RunFacts | undefined) => {
 		const api = {
 			Uri: { joinPath: (base: { path: string }, ...parts: string[]) => ({ path: [base.path, ...parts].join('/') }) },
 			l10n: { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, n) => String(args[Number(n)])) },
@@ -70,7 +72,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		(globalThis as { FACADE_TEST_MODE?: boolean }).FACADE_TEST_MODE = testMode;
 		const { PanelView: View } = withModules({ vscode: api })<typeof import('../ui/panel')>(require.resolve('../ui/panel'));
 		const model = { onDidChange: changed.event, state: () => state, selectedAgent: () => front,
-			placesShown: () => placesShown, usesOrchestrator: () => orchestrator,
+			placesShown: () => placesShown, usesOrchestrator: () => orchestrator, select,
 			runFacts: (id: string) => id === 'devbox/a1' ? { id, address: 'a1@devbox' } : undefined };
 		const actions: PanelActions = async (what, target) => {
 			acts.push([what, target]);
@@ -238,6 +240,47 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		assert.deepStrictEqual(copied, [{ run_id: 'devbox/a1' }]);
 		assert.deepStrictEqual(posted.filter(message => message.type === 'outcome').slice(-2).map(({ ok, reason }) => [ok, reason]),
 			[[true, undefined], [false, 'gone']]);
+	});
+
+	test('the Rust host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)', async () => {
+		panel.dispose();
+		orchestrator = true;
+		const local = runFacts(1, { id: 'workstation/a1', alias: 'a1', name: 'Gauge' });
+		const peer = runFacts(1, { id: 'devbox/a1', alias: 'a1', name: 'Gauge' });
+		const runs = new Map([[local.id, local], [peer.id, peer]]);
+		const selected: string[] = [];
+		make(false, target => {
+			const facts = runs.get(target);
+			if (facts) { selected.push(facts.id); }
+			return facts;
+		});
+		const prior = page(1), current = page(2);
+		assert.deepStrictEqual(states(), []);
+		await say({ type: 'ready', page: prior });
+		view.visible = false;
+		visibility.fire();
+		view.visible = true;
+		await update(stateOf(7));
+		assert.deepStrictEqual(states().map(({ page, state }) => [page, state.revision]), [[prior, 1]]);
+		await say({ type: 'ready', page: current });
+		assert.deepStrictEqual(states().map(({ page, state }) => [page, state.revision]), [[prior, 1], [current, 7]]);
+
+		await say({ type: 'act', page: prior, action: `${prior}-stale`, what: 'open', target: peer.id });
+		await say({ type: 'act', page: current, action: `${current}-misleading`, what: 'open', target: 'Gauge' });
+		await say({ type: 'act', page: current, action: `${current}-extra`, what: 'open', target: peer.id, args: { agent: local.id } });
+		assert.deepStrictEqual([selected, acts], [[], []]);
+		await say({ type: 'act', page: current, action: `${current}-exact`, what: 'open', target: peer.id });
+		assert.deepStrictEqual([selected, acts], [[peer.id], [['open', peer.id]]]);
+		const outcomes = posted.filter(message => message.type === 'outcome');
+		assert.deepStrictEqual(outcomes, [
+			{ type: 'outcome', page: current, action: `${current}-misleading`, ok: false, reason: 'gone' },
+			{ type: 'outcome', page: current, action: `${current}-exact`, ok: true }
+		]);
+		assert.strictEqual(logged.length, 1, 'only the malformed action is reported');
+
+		await say({ type: 'error', page: current, message: 'Fixture page could not render a card' });
+		assert.strictEqual(logged.at(-1), "The panel's webview failed: Fixture page could not render a card");
+		assert.deepStrictEqual([selected, acts, posted.filter(message => message.type === 'outcome')], [[peer.id], [['open', peer.id]], outcomes]);
 	});
 
 	test('U02: the outcome goes to the page that asked alone - not to the page made in its place since', async () => {

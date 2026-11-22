@@ -18,6 +18,7 @@ POLICY_PATHS = {
     '.github/workflows/core-check.yml',
     '.github/workflows/core-compatibility.yml',
     '.github/workflows/extension-check.yml',
+    '.github/workflows/extension-remote.yml',
     '.github/workflows/extension-release.yml',
 }
 PRODUCT_GUIDES = {'core/README.md', 'core/AGENTS.md', 'extension/README.md', 'extension/AGENTS.md'}
