@@ -205,8 +205,8 @@ The dependency column lists direct Facade crate dependencies. Run the acceptance
   [Location request](../../core/crates/daemon/src/service.rs#L1251) ·
   [Start preflight](../../core/crates/daemon/src/operations.rs#L448).
 - **MCP catalog and relay.** The daemon binds each shipped tool definition to a typed action. The live catalog feeds
-  listing, validation, dispatch and send/read cancellation. The daemon supplies the verified actor services and the
-  relay carries MCP lines. [Catalog](../../core/crates/daemon/src/mcp/mod.rs#L150) ·
+  listing, validation, dispatch and send/read cancellation. The daemon supplies verified actor services and shares
+  one deadline across a call that requests waiting. The relay carries MCP lines. [Catalog](../../core/crates/daemon/src/mcp/mod.rs#L161) ·
   [Relay ingress](../../core/crates/daemon/src/mcp/lines.rs#L52) ·
   [Actor services](../../core/crates/daemon/src/relays.rs#L127) ·
   [Relay golden case](../../core/tests/tests/mcp.rs#L2009).
@@ -272,11 +272,14 @@ The daemon's layer calls its islands in a fixed order so state can be recovered 
 1. **Start.** Records assigns an agent number and runs asks the Keeper to start the CLI. The daemon commits the
    launch and any first prompt together, creates the actor and establishes any prompt hold, publishes the run, then
    starts prompt delivery.
-2. **Delivery.** For managed terminals, Messages persists paste start before the typist writes terminal bytes.
-   A cancellation can withdraw a message before paste start. A started paste continues. Settlement normally writes
-   the outcome before notification. An ordinary settlement write error still reports the observed outcome.
-   A Guest read settles only the messages returned with their content.
-3. **Session.** The daemon commits a session report before it sends the session to the agent's actor.
+2. **Delivery.** The destination commits the inbox message before acknowledging acceptance. For managed terminals,
+   Messages persists paste start before the typist writes terminal bytes. A cancellation can withdraw a message
+   before paste start. A started paste continues. Settlement normally writes the outcome before notification.
+   An ordinary settlement write error still reports the observed outcome. A Guest read settles only the messages
+   returned with their content. A command-line result wait belongs to the originating connection. The assigning
+   machine checks the replying actor against the saved recipient before handing the first linked reply to that wait.
+3. **Session.** The daemon commits a session report before it sends the session to the agent's actor. A Shell list
+   or resume query reads the current native name or preview for that session on the machine that holds it.
 4. **Screen.** The actor records output and resize in its screen log before it applies them to the terminal engine.
 5. **Removal.** The daemon confirms the running CLI exited before it deletes the record and inbox in one transaction.
    It then publishes the removal and disposes of the actor, run, screen and run folders.
@@ -285,3 +288,6 @@ The daemon's layer calls its islands in a fixed order so state can be recovered 
 7. **Starting a helper across machines.** The starter's machine reserves a message number for the first prompt's result.
    The running machine commits the agent, prompt and reserved number in one transaction so a retry finds the same
    result. A start from Shell or VS Code creates no result message.
+8. **Finishing a dedicated Shell Attach.** The server learns that the watched run has exited independently of the
+   dedicated Shell connection's outgoing buffer. It allows a short drain for the final screen bytes and exit
+   status, then closes the connection and releases its watch. Shared connections keep their independent watches.
