@@ -405,19 +405,33 @@ checker discovers Core's CLI, daemon, Keeper, relay, MCP and configuration
 interfaces from their registries and schemas. It discovers Extension commands, the Window Component,
 local window transport, supervisor, Webview, MCP and settings from declarations and serving code.
 Extension API IDs identify the old or Rust engine when the implementations differ. The P0 table above
-declares each required journey case by name. Discovery and the P0 table are independent of the test
-bindings. A coordinated reduction of a source registry and its catalog rows requires base-to-candidate
-review before protected enforcement.
+declares each required journey case by name. Every bound PR row enters the plan automatically.
+The catalog rejects any PR P0 row without a binding. Discovery and the P0 table are independent of
+the test bindings. A coordinated reduction of a source registry and its catalog rows requires
+base-to-candidate review before protected enforcement.
 
 The [shadow workflow](../.github/workflows/ci-acceptance.yml) checks catalog drift and policy
-regressions on relevant PRs. CI policy changes select the Linux x64 Core and Extension pilots in
-parallel in the same PR. Manual runs select both pilots. The Extension job builds its test stage
+regressions on relevant PRs. Core source or CI policy changes select both Linux x64 pilots,
+because the editor also runs Core. Extension source changes select the editor pilot. Changes to
+the shared built-in names select both. Documentation updates run the catalog check. Selection
+compares the first parent of the PR merge tree to that tree and includes both paths of a rename.
+Manual runs select both pilots. The Extension job builds its test stage
 once and uses official VS Code `1.105.1` with isolated profiles and fake CLIs. Core shares one run
 per scenario target and compares its exact test names. Extension shares a fixture for compatible
 Mocha selections with the same engine and route. Multi-window and lifetime drivers use separate
-fixtures. The editor job runs the remote worktree case with two live Core Shell Attach clients
+fixtures. The native Extension matrix pins VS Code `1.147.0` and logs the build commit. Its
+fixture build, editor download and test runtime are separate timed steps. The Intel Rust PR
+job can restore Cargo dependencies for an eligible build. It still builds from source and runs
+every case. The editor pilot runs the remote worktree case with two live Core Shell Attach clients
 and a real editor attached to the same process through a fixture SSH route. An incompatible
 Core hello must show its error inside the actual panel, with no serving engine or CLI launch.
+The window update installs the digest-pinned Extension 0.1.5 release into two isolated profiles,
+then installs packages built for the current candidate while the same routed message is pending.
+The run retains both VSIX pairs and verifies their digests with the completion record. It proves
+the component replacement and one terminal submission within the original deadline.
+A separate two-window run checks that an old claim and an old Webview generation
+leave the current owner, both running agents and their terminals intact. The current page then
+changes only its selected agent.
 After one shared build, the runner executes at most two isolated editor groups at a time.
 An interrupt stops active owned sessions, cancels waiting groups and runs scoped cleanup.
 Verify requires results, original logs and a post-cleanup record for every
@@ -432,7 +446,8 @@ pilot exercises the old supervisor using a real linked checkout created by the f
 Run from the repository root on Linux x64. Install the pinned Rust toolchain and musl target, the
 Node version from `extension/.nvmrc`, `musl-gcc`, `xvfb-run` and VS Code's runtime libraries.
 The Extension runner uses the repository's lockfile and downloads the pinned editor. Supply
-`--vscode /absolute/path/to/code` to reuse that exact editor build.
+`--vscode /absolute/path/to/code` to reuse that exact editor build. On shared machines with
+a low per-user inotify limit, use `--editor-workers 1` to run the same groups in sequence.
 
 ```sh
 python3 -B -m unittest discover -s ci

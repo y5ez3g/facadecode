@@ -1,118 +1,5 @@
 {
-  "version": 1,
-  "pilot_cases": [
-    "core/p0/start-stop/failed-start",
-    "core/p0/start-stop/retry",
-    "core/p0/start-stop/start-and-resolve",
-    "core/p0/start-stop/targeted-stop",
-    "core/p0/message-receipt/delivery",
-    "core/p0/message-receipt/raw-disconnect",
-    "core/p0/message-receipt/lost-reply",
-    "core/p0/service-recovery/daemon-restart",
-    "core/p0/service-recovery/pending-effect",
-    "core/p0/attach/detach-reconnect",
-    "core/p0/attach/foreground-exit",
-    "core/p0/attach/stream",
-    "core/p0/input-draft/draft-protection",
-    "core/p0/input-draft/invalid-batch",
-    "core/p0/input-draft/type",
-    "extension/p0/activation-shell/old-supervisor",
-    "extension/p0/activation-shell/activation-failure",
-    "extension/p0/activation-shell/startup-fallback",
-    "extension/p0/activation-shell/rust-handoff",
-    "extension/p0/pin-reload/close-one-window",
-    "extension/p0/pin-reload/pinned-reload",
-    "extension/p0/pin-reload/missing-session-unpin",
-    "extension/p0/pin-reload/resume-old",
-    "extension/p0/pin-reload/resume-rust",
-    "core/p0/guest-reply/correlated-reply",
-    "core/p0/guest-reply/wrong-caller",
-    "core/p0/authority/authorized",
-    "core/p0/authority/wrong-peer",
-    "core/p0/authority/permission-denied",
-    "extension/p0/window-replacement/window-activation-old",
-    "extension/p0/window-replacement/window-activation-rust",
-    "core/p0/remote-execution/retry-lost-reply",
-    "core/p0/remote-execution/remote-worktree",
-    "core/p0/remote-execution/route-recovery",
-    "core/p0/watch/reconnect",
-    "core/p0/watch/snapshot-update",
-    "core/p0/watch/unwatch",
-    "core/daemon/local-client-request/call",
-    "core/daemon/local-client-request/cancel",
-    "core/daemon/local-client-request/hello",
-    "core/daemon/local-client-request/unwatch",
-    "core/daemon/local-client-request/watch",
-    "core/daemon/operation/agent.remove",
-    "core/daemon/operation/agent.resume",
-    "core/daemon/operation/agent.send",
-    "core/daemon/operation/agent.start",
-    "core/daemon/operation/agent.stop",
-    "core/daemon/operation/agent.type",
-    "core/daemon/operation/attach.resize",
-    "core/daemon/operation/cli.list",
-    "core/daemon/operation/daemon.status",
-    "core/daemon/operation/location.list",
-    "core/daemon/operation/machine.connect",
-    "core/daemon/operation/machine.rename",
-    "core/daemon/topic/agents",
-    "core/mcp/request/initialize",
-    "core/mcp/request/ping",
-    "core/mcp/request/tools.call",
-    "core/mcp/request/tools.list",
-    "core/mcp/tool/press_keys",
-    "core/mcp/tool/send_message",
-    "core/shell/command/attach",
-    "core/shell/command/machine.add",
-    "core/shell/command/machine.connect",
-    "core/shell/command/machine.rename",
-    "core/shell/command/resume",
-    "core/shell/command/send",
-    "core/shell/command/start",
-    "core/shell/command/stop",
-    "core/shell/mode/resume.detached",
-    "core/shell/mode/resume.foreground",
-    "core/shell/mode/start.foreground",
-    "core/shell/option/help",
-    "core/shell/option/version",
-    "core/shell/process/facade-mcp",
-    "core/shell/process/hook.approve",
-    "core/shell/process/hook.instructions",
-    "core/shell/process/hook.title",
-    "extension/configuration-old/built-in/claude",
-    "extension/configuration-rust/built-in/claude",
-    "extension/configuration/vscode/facade.rustEngine",
-    "extension/mcp-old/tool/list_agents",
-    "extension/mcp-old/tool/read_messages",
-    "extension/mcp-old/tool/read_screen",
-    "extension/mcp-old/tool/send_message",
-    "extension/mcp-old/tool/start_agent",
-    "extension/mcp-old/tool/type_text",
-    "extension/mcp-rust/tool/read_screen",
-    "extension/mcp-rust/tool/send_message",
-    "extension/mcp-rust/tool/start_agent",
-    "extension/mcp-rust/tool/type_text",
-    "extension/ptyd-old/request/input",
-    "extension/vscode-old/command/facade.continueSession",
-    "extension/vscode-old/command/facade.filter",
-    "extension/vscode-old/command/facade.newAgent",
-    "extension/vscode-old/command/facade.pinAgent",
-    "extension/vscode-old/command/facade.showAgentLaunch",
-    "extension/vscode-old/command/facade.showAgentsLog",
-    "extension/vscode-old/command/facade.stopAgent",
-    "extension/vscode-old/command/facade.unpinAgent",
-    "extension/vscode-rust/command/facade.filter",
-    "extension/vscode-rust/command/facade.goToAgent",
-    "extension/vscode-rust/command/facade.hideAgent",
-    "extension/vscode-rust/command/facade.newAgent",
-    "extension/vscode-rust/command/facade.pinAgent",
-    "extension/vscode-rust/command/facade.resumeAgent",
-    "extension/vscode-rust/command/facade.showAgentsLog",
-    "extension/vscode-rust/command/facade.stopAgent",
-    "extension/vscode-rust/command/facade.unpinAgent",
-    "extension/window-component-rust/command/facade.window.terminalOwner",
-    "extension/window-socket-old/operation/agents"
-  ],
+  "version": 2,
   "cases": [
     {
       "id": "core/configuration/cli-field/args",
@@ -260,7 +147,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/watches.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "watches",
+        "name": "screen_watch_delivers_snapshot_then_output"
+      }
     },
     {
       "id": "core/daemon/daemon-notification/closing",
@@ -277,7 +169,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "a_saved_destination_refuses_a_different_peer_and_keeps_exact_agent_refs"
+      }
     },
     {
       "id": "core/daemon/daemon-notification/connected",
@@ -285,7 +182,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "a_forwarded_attach_maps_live_peer_changes_and_watch_end"
+      }
     },
     {
       "id": "core/daemon/daemon-notification/watch_ended",
@@ -293,7 +195,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "a_forwarded_attach_maps_live_peer_changes_and_watch_end"
+      }
     },
     {
       "id": "core/daemon/local-client-notification/call",
@@ -301,8 +208,14 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/input.rs:476",
-        "core/tests/tests/attach.rs"
-      ]
+        "core/tests/tests/attach.rs",
+        "core/tests/tests/watches.rs"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "watches",
+        "name": "screen_watch_delivers_snapshot_then_output"
+      }
     },
     {
       "id": "core/daemon/local-client-notification/cancel",
@@ -310,7 +223,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/reliability.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "reliability",
+        "name": "an_idless_cancel_withdraws_the_pending_send_without_replying_to_the_notification"
+      }
     },
     {
       "id": "core/daemon/local-client-notification/closing",
@@ -411,7 +329,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "a_forwarded_attach_maps_live_peer_changes_and_watch_end"
+      }
     },
     {
       "id": "core/daemon/machine-notification/machine.sleeping",
@@ -427,7 +350,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "a_forwarded_attach_maps_live_peer_changes_and_watch_end"
+      }
     },
     {
       "id": "core/daemon/machine-request/advertise",
@@ -554,7 +482,7 @@
       "assertion": "Correlate the delivery receipt and verify a single delivery at the intended target after reconnect and replay with the original request ID.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2229",
+        "core/tests/tests/machines.rs:2330",
         "core/tests/tests/reliability.rs"
       ],
       "test": {
@@ -628,7 +556,7 @@
       "assertion": "Discover the configured test CLI and verify its advertised capability on the requested machine.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:915",
+        "core/tests/tests/machines.rs:1016",
         "core/tests/tests/configuration.rs:243"
       ],
       "test": {
@@ -723,7 +651,7 @@
       "assertion": "Return the expected local or remote workspace locations and their kinds.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:915",
+        "core/tests/tests/machines.rs:1016",
         "core/tests/tests/windows.rs:176"
       ],
       "test": {
@@ -737,7 +665,7 @@
       "assertion": "Authorize one foreground handoff to a known isolated peer and verify the resulting machine ID and roster state for the connection lifecycle.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:769"
+        "core/tests/tests/machines.rs:781"
       ],
       "test": {
         "runner": "core-scenario",
@@ -768,7 +696,7 @@
       "assertion": "Rename a remote peer through the allowed session and read its new name under the same machine ID.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2698"
+        "core/tests/tests/machines.rs:3026"
       ],
       "test": {
         "runner": "core-scenario",
@@ -815,7 +743,12 @@
       "existing_tests": [
         "core/tests/tests/keeper.rs:422",
         "core/tests/tests/watches.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "watches",
+        "name": "screen_watch_delivers_snapshot_then_output"
+      }
     },
     {
       "id": "core/daemon/topic/machines",
@@ -823,7 +756,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "a_forwarded_attach_maps_live_peer_changes_and_watch_end"
+      }
     },
     {
       "id": "core/keeper/keeper-notification/changed",
@@ -970,8 +908,14 @@
       "assertion": "Cancel a pending send over the relay using its requestId; verify the cancelled response and confirm nothing was typed or retained for later delivery.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/mcp.rs:1846"
-      ]
+        "core/tests/tests/mcp.rs:1846",
+        "core/tests/tests/mcp.rs"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "mcp",
+        "name": "a_send_cancelled_over_a_relay_connection_is_withdrawn_and_answered"
+      }
     },
     {
       "id": "core/mcp/notification/notifications.initialized",
@@ -987,9 +931,9 @@
       "assertion": "Send initialize through the real relay and verify correlated protocol version, server identity, capabilities and instructions.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/mcp.rs:2003",
+        "core/tests/tests/mcp.rs:2029",
         "core/tests/tests/mcp.rs:167",
-        "core/tests/tests/mcp.rs:2009"
+        "core/tests/tests/mcp.rs:2035"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1015,10 +959,10 @@
       "assertion": "Make a real stdio call and verify JSON-RPC ID, the MCP structured content and the targeted Core effect, including a reasoned tool refusal.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/mcp.rs:2003",
+        "core/tests/tests/mcp.rs:2029",
         "core/tests/tests/mcp.rs:24",
         "core/tests/tests/mcp.rs:167",
-        "core/tests/tests/mcp.rs:2009"
+        "core/tests/tests/mcp.rs:2035"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1031,10 +975,10 @@
       "assertion": "Read the real relay's tool list and compare tool names and input schemas with the active Core registry for the managed or Guest connection.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/mcp.rs:2003",
+        "core/tests/tests/mcp.rs:2029",
         "core/tests/tests/mcp.rs:167",
-        "core/tests/tests/mcp.rs:2009",
-        "core/tests/tests/mcp.rs:2320"
+        "core/tests/tests/mcp.rs:2035",
+        "core/tests/tests/mcp.rs:2346"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1047,8 +991,8 @@
       "assertion": "Read the expected agent addresses and related state under a managed actor and a Guest; verify a YOLO-off caller cannot see agents outside its creation tree.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/mcp.rs:2009",
-        "core/tests/tests/mcp.rs:2320",
+        "core/tests/tests/mcp.rs:2035",
+        "core/tests/tests/mcp.rs:2346",
         "core/tests/tests/guests.rs",
         "core/tests/tests/yolo.rs"
       ]
@@ -1072,8 +1016,8 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/mcp.rs:80",
-        "core/tests/tests/mcp.rs:2009",
-        "core/tests/tests/mcp.rs:2320"
+        "core/tests/tests/mcp.rs:2035",
+        "core/tests/tests/mcp.rs:2346"
       ]
     },
     {
@@ -1082,8 +1026,8 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/mcp.rs:254",
-        "core/tests/tests/mcp.rs:2009",
-        "core/tests/tests/mcp.rs:2320"
+        "core/tests/tests/mcp.rs:2035",
+        "core/tests/tests/mcp.rs:2346"
       ]
     },
     {
@@ -1093,8 +1037,8 @@
       "existing_tests": [
         "core/tests/tests/guests.rs:20",
         "core/tests/tests/mcp.rs:80",
-        "core/tests/tests/mcp.rs:2009",
-        "core/tests/tests/mcp.rs:2320"
+        "core/tests/tests/mcp.rs:2035",
+        "core/tests/tests/mcp.rs:2346"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1108,7 +1052,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/mcp.rs:1585",
-        "core/tests/tests/mcp.rs:2009",
+        "core/tests/tests/mcp.rs:2035",
         "core/tests/tests/guests.rs"
       ]
     },
@@ -1118,7 +1062,7 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/mcp.rs:324",
-        "core/tests/tests/mcp.rs:2009",
+        "core/tests/tests/mcp.rs:2035",
         "core/tests/tests/yolo.rs"
       ]
     },
@@ -1127,8 +1071,8 @@
       "assertion": "Observe the exact text and optional Enter in the target's fake terminal; verify the tool reports what it typed and cannot type to a Guest target.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/mcp.rs:2009",
-        "core/tests/tests/mcp.rs:2320",
+        "core/tests/tests/mcp.rs:2035",
+        "core/tests/tests/mcp.rs:2346",
         "core/tests/tests/yolo.rs"
       ]
     },
@@ -1324,7 +1268,7 @@
       "assertion": "Drop the reply after delivery and retry the original request ID. The result settles once with one delivery.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2229",
+        "core/tests/tests/machines.rs:2330",
         "core/tests/tests/reliability.rs"
       ],
       "test": {
@@ -1338,7 +1282,7 @@
       "assertion": "Disconnect during raw input and verify the returned partial or unknown outcome matches the effect observed at the target.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2309",
+        "core/tests/tests/machines.rs:2410",
         "core/tests/tests/messages.rs"
       ],
       "test": {
@@ -1385,7 +1329,7 @@
       "assertion": "Discover the selected remote machine, create the worktree from its HEAD and observe the same CLI from Shell and Extension. The local repository stays intact.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:1240",
+        "core/tests/tests/machines.rs:1341",
         "extension/src/test/integration/remoteWorktree.ts"
       ],
       "test": {
@@ -1401,7 +1345,7 @@
       "assertion": "Lose the cross-machine reply after delivery. A retry with the original ID observes the same settlement and one delivery.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2229",
+        "core/tests/tests/machines.rs:2330",
         "core/tests/tests/reliability.rs"
       ],
       "test": {
@@ -1415,7 +1359,7 @@
       "assertion": "Route loss is visible and the route can recover to the original agent identity.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2372"
+        "core/tests/tests/machines.rs:2700"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1624,7 +1568,7 @@
       "assertion": "Register the authenticated peer and read back the persisted machine identity and route.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:915",
+        "core/tests/tests/machines.rs:1016",
         "core/tests/tests/cli.rs",
         "core/tests/tests/help.rs:23"
       ],
@@ -1639,7 +1583,7 @@
       "assertion": "Connect to a controlled peer in the foreground, verify its identity and keep both daemons alive until the connection closes.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:769"
+        "core/tests/tests/machines.rs:781"
       ],
       "test": {
         "runner": "core-scenario",
@@ -1671,7 +1615,7 @@
       "assertion": "Read the changed peer name from the roster under the original machine ID.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/machines.rs:2698"
+        "core/tests/tests/machines.rs:3026"
       ],
       "test": {
         "runner": "core-scenario",
@@ -2519,7 +2463,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/engineDriver.ts",
-        "extension/src/test/integration/run.ts:948"
+        "extension/src/test/integration/run.ts:958"
       ],
       "test": {
         "runner": "extension-editor",
@@ -2750,7 +2694,7 @@
       "assertion": "Invoke a registered tool through real relay stdio and verify its correlated MCP text and structured result reflect one observed effect on the target. A missing name yields invalid params and no action.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/mcp.rs:2009",
+        "core/tests/tests/mcp.rs:2035",
         "extension/src/test/integration/mcp.it.ts:463",
         "core/crates/daemon/src/mcp/lines.rs"
       ]
@@ -2760,7 +2704,7 @@
       "assertion": "Compare all advertised tools and argument schemas returned by the editor-launched managed relay with the registered Core catalog. Verify the expected catalog and allowed operations for a Guest.",
       "stage": "pr",
       "existing_tests": [
-        "core/tests/tests/mcp.rs:2009",
+        "core/tests/tests/mcp.rs:2035",
         "extension/src/test/integration/mcp.it.ts:463",
         "core/crates/daemon/src/mcp/lines.rs"
       ]
@@ -2875,7 +2819,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/run.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:261",
+        "extension/src/test/integration/rustMultiWindow.ts:325",
         "extension/src/test/integration/rustMultiWindowDriver.ts"
       ],
       "test": {
@@ -3088,16 +3032,34 @@
       "assertion": "Replace the window with a message in flight and check the documented settlement and one observed effect.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/run.ts"
-      ]
+        "extension/src/test/integration/run.ts",
+        "extension/src/test/integration/updateDriver.ts",
+        "extension/src/test/integration/replacementInFlight.ts"
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "replacement-in-flight",
+        "built_in": "claude",
+        "name": "replacement-in-flight"
+      }
     },
     {
       "id": "extension/p0/window-replacement/stale-owner",
       "assertion": "A stale claim or Webview generation cannot affect the current window owner or a different agent.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/commands.test.ts"
-      ]
+        "extension/src/test/commands.test.ts",
+        "extension/src/test/integration/rustMultiWindow.ts",
+        "extension/src/test/integration/rustMultiWindowDriver.ts"
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "engine": "old",
+        "journey": "stale-owner",
+        "built_in": "claude",
+        "name": "stale-owner"
+      }
     },
     {
       "id": "extension/p0/window-replacement/window-activation-old",
@@ -3442,7 +3404,7 @@
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/journey.it.ts:530",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:138",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:142",
         "extension/src/test/catalog.test.ts:38"
       ],
       "test": {
@@ -3467,8 +3429,8 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/conversionDriver.ts:224",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:99",
-        "extension/src/test/integration/updateDriver.ts:88",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:103",
+        "extension/src/test/integration/updateDriver.ts:116",
         "extension/src/test/catalog.test.ts:29"
       ]
     },
@@ -3533,7 +3495,7 @@
       "assertion": "Open the current execution host facade.json document. Generate the old-engine settings once when missing and preserve existing content on later opens.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/rustMultiWindowDriver.ts:207",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:271",
         "extension/src/test/catalog.test.ts:50",
         "extension/src/test/configuration.test.ts:964",
         "extension/src/test/host.activation.test.ts:290"
@@ -3672,7 +3634,7 @@
       "existing_tests": [
         "extension/src/test/integration/engine.it.ts:94",
         "extension/src/test/integration/mcp.it.ts:887",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:335",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:399",
         "extension/src/test/catalog.test.ts:34"
       ]
     },
@@ -3683,7 +3645,7 @@
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/journey.it.ts:530",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:138",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:142",
         "extension/src/test/catalog.test.ts:38"
       ],
       "test": {
@@ -3709,8 +3671,8 @@
       "existing_tests": [
         "extension/src/test/integration/rustMultiWindow.ts",
         "extension/src/test/integration/conversionDriver.ts:224",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:99",
-        "extension/src/test/integration/updateDriver.ts:88",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:103",
+        "extension/src/test/integration/updateDriver.ts:116",
         "extension/src/test/catalog.test.ts:29"
       ],
       "test": {
@@ -3728,7 +3690,7 @@
       "existing_tests": [
         "extension/src/test/integration/rustMultiWindow.ts",
         "extension/src/test/integration/journey.it.ts:141",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:279",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:343",
         "extension/src/test/catalog.test.ts:31"
       ],
       "test": {
@@ -3762,7 +3724,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/configuration.test.ts:985",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:207"
+        "extension/src/test/integration/rustMultiWindowDriver.ts:271"
       ]
     },
     {
@@ -3771,7 +3733,7 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/configuration.test.ts:985",
-        "extension/src/test/integration/rustMultiWindowDriver.ts:207"
+        "extension/src/test/integration/rustMultiWindowDriver.ts:271"
       ]
     },
     {
@@ -3779,7 +3741,7 @@
       "assertion": "Open a tab for the exact existing agent and verify the underlying process stays the same.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/rustMultiWindowDriver.ts:260",
+        "extension/src/test/integration/rustMultiWindowDriver.ts:324",
         "extension/src/test/catalog.test.ts:30"
       ]
     },
@@ -3790,7 +3752,7 @@
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts:426",
         "extension/src/test/integration/engine.it.ts:99",
-        "extension/src/test/integration/rustMultiWindow.ts:763"
+        "extension/src/test/integration/rustMultiWindow.ts:827"
       ],
       "test": {
         "runner": "extension-editor",
@@ -4341,7 +4303,7 @@
         "extension/src/test/windowTerminals.test.ts:57",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:763"
+        "extension/src/test/integration/rustMultiWindow.ts:827"
       ]
     },
     {
@@ -4352,7 +4314,7 @@
         "extension/src/test/windowTerminals.test.ts:44",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:763"
+        "extension/src/test/integration/rustMultiWindow.ts:827"
       ]
     },
     {
@@ -4363,7 +4325,7 @@
         "extension/src/test/windowTerminals.test.ts:162",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:763"
+        "extension/src/test/integration/rustMultiWindow.ts:827"
       ]
     },
     {
@@ -4374,7 +4336,7 @@
         "extension/src/test/windowTerminals.test.ts:48",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:763"
+        "extension/src/test/integration/rustMultiWindow.ts:827"
       ]
     },
     {
@@ -4385,7 +4347,7 @@
         "extension/src/test/windowTerminals.test.ts:190",
         "extension/src/test/windowTerminals.test.ts",
         "extension/src/test/orchestratorTerminals.test.ts",
-        "extension/src/test/integration/rustMultiWindow.ts:763"
+        "extension/src/test/integration/rustMultiWindow.ts:827"
       ]
     },
     {

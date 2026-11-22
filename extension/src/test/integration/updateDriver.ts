@@ -11,6 +11,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import type { WindowIdentity } from '../../base/windowIdentity';
+import type { Directory } from '../../base/windowNetwork';
 
 const OUT = process.env.FACADE_IT_UPDATE!;
 const RECORD = process.env.FACADE_IT_RECORD!;
@@ -65,8 +67,34 @@ async function pick<T>(what: string, command: string, done: () => T | undefined)
 	}, 60_000);
 }
 
+/** An installed window's actual component and the exact running agent it publishes. */
+async function replacement(): Promise<void> {
+	const first = said().find(line => line.phase === 'started') as { phase: string; alias: string } | undefined;
+	await until('the installed workspace extension', async () => version() && (await vscode.commands.getCommands(true)).includes('facade.newAgent') ? true : undefined, 90_000);
+	const existing = new Set(started());
+	const alias = first?.alias ?? await pick('a new agent in this profile', 'facade.newAgent', () => started().find(item => !existing.has(item)));
+	const identity = await until('the installed Window Component to publish the exact live agent', async () => {
+		const component = vscode.extensions.getExtension('facade.facadecode-window');
+		if (!component?.isActive) { return undefined; }
+		const token = vscode.env.sessionId;
+		const answer = await vscode.commands.executeCommand<WindowIdentity>('facade.window.identity', token);
+		if (!answer || answer.session !== token) { return undefined; }
+		const directory = await vscode.commands.executeCommand<Directory>('facade.window.directory', token);
+		const agent = directory?.windows.find(window => window.window === directory.self)?.agents.find(agent => agent.alias === alias && agent.lifecycle === 'running');
+		return agent && { version: version(), component: answer.component, componentPath: component.extensionPath,
+			window: directory.self, token: answer.token, hostPid: process.pid, run: agent.run, alias };
+	}, 30_000);
+	write({ phase: first ? 'updated' : 'started', ...identity });
+	if (!first && process.env.FACADE_IT_UPDATE_ROLE === 'receiver') {
+		await until('the replacement install', async () => fs.existsSync(`${OUT}.reload`) ? true : undefined, 120_000);
+		write({ phase: 'reloading', at: Date.now() });
+		void vscode.commands.executeCommand('workbench.action.reloadWindow').then(undefined, () => undefined);
+	}
+}
+
 export async function activate(): Promise<void> {
 	try {
+		if (process.env.FACADE_IT_UPDATE_ROLE) { return await replacement(); }
 		if (!said().some(line => line.phase === 'reloading')) {
 			// The released build: one agent, started as a person starts one, its tab open
 			await until('the released build', async () => version() && (await vscode.commands.getCommands(true)).includes('facade.newAgent') ? true : undefined, 90_000);

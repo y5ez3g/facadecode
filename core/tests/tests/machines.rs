@@ -479,6 +479,7 @@ fn a_saved_destination_refuses_a_different_peer_and_keeps_exact_agent_refs() {
 
     // Relay a new connection for the saved destination to the other real daemon.
     let other_run = other.start_fake("other worker");
+    let connections_before = machine_json(&local, &local_id).unwrap()["connections"].clone();
     let mut opening = ManualReadClient::open(&local);
     opening.send(
         1,
@@ -525,6 +526,12 @@ fn a_saved_destination_refuses_a_different_peer_and_keeps_exact_agent_refs() {
     writeln!(opening.writer, "{reply}").unwrap();
     let refused = opening.read_message().expect("the mismatch notification");
     assert_eq!(refused["method"], "connect_failed", "{refused}");
+    assert_eq!(refused["jsonrpc"], "2.0", "{refused}");
+    assert!(refused.get("id").is_none(), "{refused}");
+    let after = opening
+        .read_frame()
+        .expect("the refused handoff ends cleanly");
+    assert!(after.is_none(), "unexpected frame after refusal: {after:?}");
     let error = &refused["params"]["error"]["data"];
     assert_eq!(error["reason"], "machine_id_mismatch", "{refused}");
     assert_eq!(
@@ -534,6 +541,11 @@ fn a_saved_destination_refuses_a_different_peer_and_keeps_exact_agent_refs() {
     assert_eq!(error["details"]["machine_id"], other_id, "{refused}");
     assert!(alive(&other_run.process));
     assert!(machine_json(&local, &other_id).is_none());
+    assert_eq!(
+        machine_json(&local, &local_id).unwrap()["connections"],
+        connections_before,
+        "the failed handoff records no successful connection",
+    );
     assert_eq!(saved(), before);
     wait_for_route(&local, &peer_id, &[&peer_id]);
 
@@ -895,6 +907,95 @@ impl Drop for MachineLink {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
+    }
+}
+
+/// Relays the real handoff between two daemons and records each side of the machine protocol.
+struct ObservedMachineLink {
+    front_socket: facade_base::paths::ClientSocket,
+    peer_socket: facade_base::paths::ClientSocket,
+    pumps: Option<[std::thread::JoinHandle<()>; 2]>,
+    from_front: std::sync::mpsc::Receiver<Value>,
+    from_peer: std::sync::mpsc::Receiver<Value>,
+}
+
+impl ObservedMachineLink {
+    fn open(front: &TestHome, peer: &TestHome) -> Self {
+        let mut outgoing = ManualReadClient::open(front);
+        outgoing.send(
+            1,
+            "call",
+            json!({ "op": "machine.connect", "args": {
+            "kind": "temporary", "transport": { "kind": "bridge" }
+        } }),
+        );
+        let authorization = outgoing
+            .read_frame()
+            .unwrap()
+            .expect("authorize the handoff");
+        assert_eq!(authorization["id"], 1, "{authorization}");
+        assert_eq!(
+            authorization["result"]["transport"]["kind"], "bridge",
+            "{authorization}"
+        );
+        let incoming = ManualReadClient::before_hello(peer);
+        let front_socket = outgoing.writer.try_clone().unwrap();
+        let peer_socket = incoming.writer.try_clone().unwrap();
+        let relay = |mut source: ManualReadClient,
+                     mut target: facade_base::paths::ClientSocket,
+                     front: bool| {
+            let (observed, frames) = std::sync::mpsc::channel();
+            let pump = std::thread::spawn(move || {
+                while let Ok(Some(frame)) = source.read_frame() {
+                    // The foreground Shell consumes this local handoff result before forwarding.
+                    let endpoint_notice = front
+                        && matches!(
+                            frame["method"].as_str(),
+                            Some("connected" | "connect_failed")
+                        );
+                    let _ = observed.send(frame.clone());
+                    if !endpoint_notice && writeln!(target, "{frame}").is_err() {
+                        break;
+                    }
+                }
+            });
+            (pump, frames)
+        };
+        let (forward, from_front) = relay(outgoing, peer_socket.try_clone().unwrap(), true);
+        let (returning, from_peer) = relay(incoming, front_socket.try_clone().unwrap(), false);
+        Self {
+            front_socket,
+            peer_socket,
+            pumps: Some([forward, returning]),
+            from_front,
+            from_peer,
+        }
+    }
+}
+
+impl Drop for ObservedMachineLink {
+    fn drop(&mut self) {
+        let _ = self.front_socket.shutdown(std::net::Shutdown::Both);
+        let _ = self.peer_socket.shutdown(std::net::Shutdown::Both);
+        for pump in self.pumps.take().unwrap() {
+            let _ = pump.join();
+        }
+    }
+}
+
+fn observed_frame(
+    frames: &std::sync::mpsc::Receiver<Value>,
+    expected: &str,
+    mut matches: impl FnMut(&Value) -> bool,
+) -> Value {
+    let deadline = std::time::Instant::now() + LOADED_TIMEOUT;
+    loop {
+        let frame = frames
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap_or_else(|error| panic!("expected {expected}: {error}"));
+        if matches(&frame) {
+            return frame;
+        }
     }
 }
 
@@ -2365,6 +2466,233 @@ fn raw_input_on_a_cut_peer_link_reports_unknown_and_arrives_once() {
         std::fs::read(&keys).unwrap(),
         format!("{bytes}{next}\r").as_bytes()
     );
+}
+
+/// The first hop stays authenticated while a live subscription loses and regains its provider.
+#[test]
+fn a_forwarded_attach_maps_live_peer_changes_and_watch_end() {
+    let origin = TestHome::new("watch-front");
+    let middle = TestHome::new("watch-middle");
+    let provider = TestHome::new("watch-provider");
+    install_machine_ssh(
+        &[("middle", &middle), ("provider", &provider)],
+        &test_binaries().facade,
+    );
+    let origin_id = name_machine(&origin, "origin");
+    let middle_id = name_machine(&middle, "middle");
+    let provider_id = name_machine(&provider, "provider");
+    let worker = provider.start_fake("worker");
+    let exact = provider.inspect_agent(&worker.address)["agent"]["reference"].clone();
+    assert_eq!(exact["machine_id"], provider_id);
+    assert!(wait_for_screen_text(&provider, &worker.address, "❯"));
+    let downstream = MachineLink::open(&middle, "provider", &provider);
+    wait_for_route(&middle, &provider_id, &[&provider_id]);
+
+    let mut roster = ManualReadClient::open(&origin);
+    roster.send(1, "watch", json!({ "topic": "machines", "args": {} }));
+    let initial = roster.read_frame().unwrap().expect("the machine snapshot");
+    assert_eq!(initial["id"], 1);
+    let roster_watch = initial["result"]["watch"].as_u64().unwrap();
+    let machines = initial["result"]["snapshot"]
+        .as_array()
+        .expect("the machine roster array");
+    assert_eq!(machines.len(), 1, "{initial}");
+    assert_eq!(machines[0]["machine_id"], origin_id, "{initial}");
+    assert_eq!(machines[0]["connections"], json!([]), "{initial}");
+
+    let bridge = ObservedMachineLink::open(&origin, &middle);
+    let connected = observed_frame(&bridge.from_front, "the handoff notification", |frame| {
+        frame["method"] == "connected"
+    });
+    assert!(connected.get("id").is_none(), "{connected}");
+    assert_eq!(connected["jsonrpc"], "2.0", "{connected}");
+    assert_eq!(
+        connected["params"]["machine"]["machine_id"], middle_id,
+        "{connected}"
+    );
+    assert_eq!(
+        connected["params"]["machine"]["name"], "middle",
+        "{connected}"
+    );
+    let greeting = observed_frame(&bridge.from_peer, "the peer's machine hello", |frame| {
+        frame["id"] == 0
+    });
+    assert_eq!(greeting["result"]["machine_id"], middle_id, "{greeting}");
+    assert!(
+        greeting["result"]["machine"]["boot_id"].is_string(),
+        "{greeting}"
+    );
+    assert_eq!(
+        connected["params"]["machine"]["boot_id"], greeting["result"]["machine"]["boot_id"],
+        "{connected}"
+    );
+    let mut peer_update = false;
+    let mut connection_update = false;
+    while !peer_update || !connection_update {
+        let frame = roster
+            .read_frame()
+            .unwrap()
+            .expect("a machine roster update");
+        assert_eq!(frame["method"], "changed", "{frame}");
+        assert_eq!(frame["params"]["watch"], roster_watch, "{frame}");
+        assert!(frame.get("id").is_none(), "{frame}");
+        let change = &frame["params"]["change"];
+        if change["kind"] != "updated" {
+            continue;
+        }
+        let machine = &change["machine"];
+        peer_update |= machine["machine_id"] == middle_id
+            && machine["state"] == "online"
+            && machine["route"] == json!([middle_id]);
+        connection_update |= machine["machine_id"] == origin_id
+            && machine["connections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|connection| {
+                    connection["machine_id"] == middle_id
+                        && connection["initiator_machine_id"] == origin_id
+                        && connection["kind"] == "temporary"
+                        && connection["state"] == "connected"
+                });
+    }
+    drop(roster);
+    wait_for_route(&origin, &provider_id, &[&middle_id, &provider_id]);
+
+    let mut user = ManualReadClient::open(&origin);
+    let args = json!({ "topic": "attach", "args": { "target": exact } });
+    user.send(1, "watch", args.clone());
+    let local = user
+        .read_frame()
+        .unwrap()
+        .expect("the local watch snapshot");
+    assert_eq!(local["id"], 1, "{local}");
+    let local_watch = local["result"]["watch"].as_u64().unwrap();
+    assert_eq!(local["result"]["snapshot"]["reference"], exact, "{local}");
+    let forward = observed_frame(&bridge.from_front, "the forwarded watch", |frame| {
+        frame["method"] == "forward"
+            && frame["params"]["method"] == "watch"
+            && frame["params"]["params"]["topic"] == "attach"
+    });
+    assert_eq!(
+        forward["params"]["caller"]["machine_id"], origin_id,
+        "{forward}"
+    );
+    assert_eq!(
+        forward["params"]["params"]["args"]["target"], exact,
+        "{forward}"
+    );
+    let accepted = observed_frame(&bridge.from_peer, "the peer watch snapshot", |frame| {
+        frame["id"] == forward["id"]
+    });
+    let peer_watch = accepted["result"]["watch"]
+        .as_u64()
+        .expect("the peer watch ID");
+    assert_ne!(local_watch, peer_watch);
+    assert_eq!(
+        accepted["result"]["snapshot"]["reference"], exact,
+        "{accepted}"
+    );
+
+    let marker = "output from the exact remote worker";
+    provider.run_facade_ok(&["type", &worker.address, marker]);
+    let output = |frame: &Value| {
+        frame["params"]["change"]["data"]
+            .as_str()
+            .map(|data| facade_base::base64::decode(data).unwrap())
+    };
+    let mut peer_bytes = Vec::new();
+    let peer_change = observed_frame(
+        &bridge.from_peer,
+        "the remote worker's id-less output",
+        |frame| {
+            if frame["method"] != "changed"
+                || frame["params"]["watch"] != peer_watch
+                || frame["params"]["change"]["kind"] != "output"
+            {
+                return false;
+            }
+            assert!(frame.get("id").is_none(), "{frame}");
+            peer_bytes.extend(output(frame).unwrap());
+            peer_bytes
+                .windows(marker.len())
+                .any(|bytes| bytes == marker.as_bytes())
+        },
+    );
+    let mut local_bytes = Vec::new();
+    loop {
+        let frame = user
+            .read_frame()
+            .unwrap()
+            .expect("the local watch receives the peer output");
+        assert_eq!(frame["method"], "changed", "{frame}");
+        assert!(frame.get("id").is_none(), "{frame}");
+        assert_eq!(frame["params"]["watch"], local_watch, "{frame}");
+        if frame["params"]["change"]["kind"] != "output" {
+            continue;
+        }
+        local_bytes.extend(output(&frame).unwrap());
+        if local_bytes
+            .windows(marker.len())
+            .any(|bytes| bytes == marker.as_bytes())
+        {
+            assert_eq!(frame["params"]["change"], peer_change["params"]["change"]);
+            break;
+        }
+    }
+
+    drop(downstream);
+    let ended = observed_frame(
+        &bridge.from_peer,
+        "the peer ends its forwarded watch",
+        |frame| frame["method"] == "watch_ended" && frame["params"]["watch"] == peer_watch,
+    );
+    assert!(ended.get("id").is_none(), "{ended}");
+    assert_eq!(ended["params"]["watch"], peer_watch, "{ended}");
+    assert_eq!(
+        ended["params"]["error"]["data"]["reason"], "unavailable",
+        "{ended}"
+    );
+    loop {
+        let frame = user
+            .read_frame()
+            .unwrap()
+            .expect("the owning local watch ends");
+        assert!(frame.get("id").is_none(), "{frame}");
+        assert_eq!(frame["params"]["watch"], local_watch, "{frame}");
+        if frame["method"] == "watch_ended" {
+            assert_eq!(
+                frame["params"]["error"]["data"]["reason"],
+                ended["params"]["error"]["data"]["reason"],
+                "{frame}"
+            );
+            break;
+        }
+        assert_eq!(frame["method"], "changed", "{frame}");
+    }
+    wait_for_route(&origin, &middle_id, &[&middle_id]);
+    let _downstream = MachineLink::open(&middle, "provider", &provider);
+    wait_for_route(&origin, &provider_id, &[&middle_id, &provider_id]);
+    user.send(2, "watch", args);
+    let fresh = user
+        .read_frame()
+        .unwrap()
+        .expect("a new watch after the provider returns");
+    assert_eq!(fresh["id"], 2, "{fresh}");
+    let fresh_watch = fresh["result"]["watch"]
+        .as_u64()
+        .expect("the fresh watch ID");
+    assert_ne!(fresh_watch, local_watch);
+    let snapshot = &fresh["result"]["snapshot"];
+    assert_eq!(snapshot["reference"], exact, "{fresh}");
+    let redraw = facade_base::base64::decode(snapshot["redraw"].as_str().unwrap()).unwrap();
+    assert!(
+        redraw
+            .windows(marker.len())
+            .any(|bytes| bytes == marker.as_bytes()),
+        "{fresh}"
+    );
+    assert_eq!(process_identity(worker.pid), worker.process);
 }
 
 /// Losing the link does not replace its remote CLI or retarget calls to a same-named local run.

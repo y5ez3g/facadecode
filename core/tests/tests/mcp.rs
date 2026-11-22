@@ -1845,13 +1845,16 @@ impl Golden {
 #[test]
 fn a_send_cancelled_over_a_relay_connection_is_withdrawn_and_answered() {
     let home = TestHome::new("relaycancel");
-    let worker = home.start_named_fake("worker", &[]);
+    let keys = home.project.join("worker-keys");
+    let worker = home.start_named_fake("worker", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
     let boss = home.start_named_fake("boss", &[]);
     type_draft(&home, "worker", "my draft");
+    let before = std::fs::read(&keys).unwrap();
+    let text = "never paste this relay cancellation";
     let mut boss = McpTestClient::relay_configured(&home, &boss.id);
     let held = boss.send(
         "tools/call",
-        json!({ "name": "send_message", "arguments": { "to": worker.address, "text": "held" } }),
+        json!({ "name": "send_message", "arguments": { "to": worker.address, "text": text } }),
     );
     let store = rusqlite::Connection::open_with_flags(
         home.path.join("core/facade.db"),
@@ -1862,8 +1865,8 @@ fn a_send_cancelled_over_a_relay_connection_is_withdrawn_and_answered() {
     assert!(
         wait_until(secs(10), || store
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM messages WHERE status = 'pending' AND text = 'held')",
-                [],
+                "SELECT EXISTS(SELECT 1 FROM messages WHERE status = 'pending' AND text = ?1)",
+                [text],
                 |row| row.get::<_, bool>(0)
             )
             .unwrap()),
@@ -1894,6 +1897,29 @@ fn a_send_cancelled_over_a_relay_connection_is_withdrawn_and_answered() {
     assert_eq!(inbox["status"], "success", "{inbox}");
     assert_eq!(inbox["data"]["messages"], json!([]), "{inbox}");
     assert!(home.screen(&worker.address).contains("❯ my draft"));
+    assert_eq!(std::fs::read(&keys).unwrap(), before);
+    home.run_facade_ok(&["type", &worker.address, "--key", "Ctrl+C"]);
+    let after = "delivery after the relay cancellation";
+    let sent = boss.call(
+        "send_message",
+        json!({ "to": worker.address, "text": after }),
+    );
+    assert_eq!(sent["status"], "success", "{sent}");
+    assert!(
+        home.submitted_messages()
+            .iter()
+            .any(|message| message.contains(after))
+    );
+    assert!(!String::from_utf8_lossy(&std::fs::read(keys).unwrap()).contains(text));
+    assert!(
+        !store
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM messages WHERE text = ?1)",
+                [text],
+                |row| row.get::<_, bool>(0)
+            )
+            .unwrap()
+    );
 }
 
 /// The way a golden test reaches the MCP server: through the `facade-mcp` program, or straight to

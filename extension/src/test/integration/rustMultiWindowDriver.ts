@@ -17,10 +17,14 @@ import { coreCall, helloInCore, normalizeDriveLetter, until } from './editors';
 import { RESUME_PICKER_STATE, type ResumePickerState } from './resumePickerFixture';
 import { agentTab, facade, hasAgentTab, inspect, keepConversation, newCard, pin, resumeCard, running, state, stop } from './rustWindowDriver';
 import type { WindowTerminalIdentity } from '../../base/windowIdentity';
+import type { OwnerClaim } from '../../base/ownership';
 
 type Action =
 	| { readonly kind: 'snapshot' | 'filter' | 'window-component' | 'terminal-owner' | 'show-notifications' | 'show-failure-panel' | 'request-refused-agent' }
 	| { readonly kind: 'start-fallback' }
+	| { readonly kind: 'pin-owned'; readonly run: string }
+	| { readonly kind: 'panel-generation' }
+	| { readonly kind: 'stale-owner'; readonly previous: OwnerClaim; readonly current: OwnerClaim; readonly page: string; readonly runs: readonly [string, string] }
 	| { readonly kind: 'stop-fallback'; readonly runId: string }
 	| { readonly kind: 'open-shell-agent'; readonly name: string; readonly address: string; readonly text: string }
 	| { readonly kind: 'shell-attach-view'; readonly grid?: vscode.TerminalDimensions; readonly text?: string; readonly resize?: boolean }
@@ -155,6 +159,20 @@ function savedPin(id: string): SavedPin {
 	return found[0];
 }
 
+interface GenerationAction {
+	readonly page: string;
+	readonly action: string;
+	readonly what: 'unpin';
+	readonly target: string;
+}
+
+async function panelGeneration(actions: readonly GenerationAction[] = []): Promise<{ page: string; outcomes: readonly { action: string; page: string; ok: boolean }[] }> {
+	const found = await vscode.commands.executeCommand<{ page: string; outcomes: readonly { action: string; page: string; ok: boolean }[] }>(
+		'facade.probe', { op: 'generation-fixture', selector: JSON.stringify(actions) });
+	assert.match(found.page, /^[0-9a-f]{32}$/u);
+	return found;
+}
+
 async function perform(action: Action): Promise<unknown> {
 	switch (action.kind) {
 		case 'snapshot':
@@ -171,11 +189,12 @@ async function perform(action: Action): Promise<unknown> {
 			assert.strictEqual(vscode.window.terminals.length, 0);
 			return true;
 		case 'start-fallback': {
+			const before = new Set((await state()).cards.map(card => card.runId));
 			const picker = vscode.commands.executeCommand('facade.newAgent');
 			void picker.then(undefined, () => undefined);
 			const card = await until('the old-engine card and terminal', async () => {
 				const panel = await state();
-				const first = panel.cards[0];
+				const first = panel.cards.find(card => !before.has(card.runId));
 				if (first && agentTab(first)) { return first; }
 				await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 				return undefined;
@@ -184,6 +203,51 @@ async function perform(action: Action): Promise<unknown> {
 			assert.equal(card.orchestrator, undefined);
 			assert.match(card.alias, /^#a\d+$/u);
 			return { runId: card.runId, alias: card.alias, name: card.name };
+		}
+		case 'pin-owned': {
+			const card = (await state()).cards.find(each => each.runId === action.run);
+			assert.ok(card);
+			await pin(card);
+			return true;
+		}
+		case 'panel-generation':
+			return (await panelGeneration()).page;
+		case 'stale-owner': {
+			const { previous, current, runs } = action;
+			const cards = () => state().then(panel => panel.cards.filter(each => runs.includes(each.runId)));
+			await until('both old-engine Pins and their tabs to return', async () => {
+				const live = await cards();
+				return live.length === 2 && live.every(card => card.pinned && !card.orchestrator && hasAgentTab(card))
+					&& vscode.window.terminals.length === 2 || undefined;
+			});
+			const { page } = await panelGeneration();
+			assert.notStrictEqual(page, action.page);
+			const terminals = [...vscode.window.terminals];
+			const request = (claim: OwnerClaim, value: object) => vscode.commands.executeCommand(
+				'facade.window.terminals', { session: vscode.env.sessionId, claim, ...value });
+			assert.strictEqual(await request(previous, { kind: 'activate' }), false);
+			assert.strictEqual(await request(previous, { kind: 'retire', runs: [], hidden: [...runs] }), false);
+			for (const run of runs) { assert.strictEqual(await request(previous, { kind: 'begin', run }), false); }
+			assert.strictEqual(await request(current, { kind: 'activate' }), true);
+			assert.ok(terminals.every(terminal => vscode.window.terminals.includes(terminal)));
+
+			const replay = runs.map((target, index) => ({ page: action.page, action: `${action.page}-${index + 1}`, what: 'unpin' as const, target }));
+			await panelGeneration(replay);
+			assert.deepStrictEqual((await cards()).map(card => [card.runId, card.pinned]).sort(), runs.map(run => [run, true]).sort());
+			const fresh = { page, action: `${page}-1`, what: 'unpin' as const, target: runs[0] };
+			await panelGeneration([fresh]);
+			await until('only the current generation’s exact target to unpin', async () => {
+				const now = new Map((await cards()).map(card => [card.runId, card.pinned === true]));
+				return now.get(runs[0]) === false && now.get(runs[1]) === true || undefined;
+			});
+			const observed = await until('the current generation’s action outcome', async () => {
+				const seen = await panelGeneration();
+				return seen.outcomes.some(outcome => outcome.action === fresh.action) ? seen.outcomes : undefined;
+			});
+			assert.deepStrictEqual(observed, [{ type: 'outcome', page, action: fresh.action, ok: true }]);
+			assert.strictEqual(vscode.window.terminals.length, 2);
+			assert.ok(terminals.every(terminal => vscode.window.terminals.includes(terminal)));
+			return { page, refusedActions: replay.length };
 		}
 		case 'stop-fallback':
 			await vscode.commands.executeCommand('facade.stopAgent', { run_id: action.runId });

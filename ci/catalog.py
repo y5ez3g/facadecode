@@ -16,6 +16,8 @@ MOCHA_JOURNEYS = ('journeys', 'cross')
 REQUIRED_EDITOR_ROUTES = {
     'core/p0/remote-execution/remote-worktree': 'remote-worktree',
     'extension/p0/activation-shell/activation-failure': 'incompatible-activation',
+    'extension/p0/window-replacement/replacement-in-flight': 'replacement-in-flight',
+    'extension/p0/window-replacement/stale-owner': 'stale-owner',
 }
 EDITOR_DRIVERS = {
     'activation-failure': ('old', 'claude'),
@@ -26,7 +28,9 @@ EDITOR_DRIVERS = {
     'missing-session-unpin': ('rust', 'claude'),
     'multi-window': ('rust', 'claude'),
     'remote-worktree': ('rust', 'fake'),
+    'replacement-in-flight': ('old', 'claude'),
     'shell-handoff': ('rust', 'codex'),
+    'stale-owner': ('old', 'claude'),
     'switch': ('rust', 'claude'),
 }
 
@@ -129,13 +133,12 @@ def read_cases(root):
     document = read_json(root / 'ci/cases.json')
     if (
         not isinstance(document, dict)
-        or document.keys() != {'version', 'pilot_cases', 'cases'}
+        or document.keys() != {'version', 'cases'}
         or type(document['version']) is not int
-        or document['version'] != 1
-        or not isinstance(document['pilot_cases'], list)
+        or document['version'] != 2
         or not isinstance(document['cases'], list)
     ):
-        raise AcceptanceError('ci/cases.json: expected version 1, pilot_cases and cases')
+        raise AcceptanceError('ci/cases.json: expected version 2 and cases')
     cases = {}
     for row in document['cases']:
         if not isinstance(row, dict) or row.keys() - {'test'} != FIELDS:
@@ -151,14 +154,15 @@ def read_cases(root):
             raise AcceptanceError(f'{case_id}: invalid existing test reference')
         test = validate_binding(row['test'], case_id) if 'test' in row else None
         cases[case_id] = Case(case_id, row['stage'], assertion, tuple(refs), test)
-    pilots = {}
-    for case_id in document['pilot_cases']:
-        if not isinstance(case_id, str) or case_id in pilots:
-            raise AcceptanceError(f'invalid or duplicate pilot case ID {case_id!r}')
-        case = cases.get(case_id)
-        if not case or case.stage != 'pr' or not case.test:
-            raise AcceptanceError(f'{case_id}: pilot requires a PR case with an executable binding')
-        pilots[case_id] = case.test
+    missing = sorted(case.id for case in cases.values()
+                     if case.stage == 'pr' and case.journey and case.test is None)
+    if missing:
+        raise AcceptanceError('missing executable PR P0 bindings:\n  ' + '\n  '.join(missing))
+    pilots = {
+        case.id: case.test
+        for case in sorted(cases.values(), key=lambda case: case.journey is None)
+        if case.stage == 'pr' and case.test is not None
+    }
     require_same_ids(set(PRODUCTS), {cases[key].product for key in pilots}, 'pilot products')
     return cases, pilots
 

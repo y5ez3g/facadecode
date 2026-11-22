@@ -12,6 +12,10 @@ import { createInterface } from 'readline';
 import { isDeepStrictEqual } from 'util';
 import type { AgentInfo, DaemonHelloResult, HelloParams, HelloResult, InspectResult } from '../../base/coreProtocol';
 import { isProcessRunning } from '../../base/system';
+import type { OwnerClaim } from '../../base/ownership';
+import { ptydRecords, recordedPtyds } from '../../base/ptydRegistry';
+import { PtydClient } from '../../host/execution/ptydClient';
+import { isCurrentOwner, writeAsOwner } from '../../record/ownership';
 import type { RustPin } from '../../core/ports';
 import { freePort, Workbench } from './cdpInput';
 import { callInCore, coreCall, coreListens, coreSocket, detachedStartReference, endEditors, helloInCore, normalizeDriveLetter, until } from './editors';
@@ -119,6 +123,66 @@ export async function withRustWindows(files: WindowFiles, start: StartEditor, jo
 	} finally {
 		await endEditors(editors);
 	}
+}
+
+/** Two actual old-engine windows replace the active claim for one workspace and keep both original agents. */
+export async function staleOwner(open: OpenWindow, folder: string, env: NodeJS.ProcessEnv): Promise<void> {
+	const home = path.join(env.FACADE_HOME!, 'extension');
+	const claim = () => {
+		const directory = path.join(home, 'claims');
+		const files = fs.readdirSync(directory).filter(file => file.endsWith('.json'));
+		assert.strictEqual(files.length, 1, 'exactly this fixture workspace has a claim');
+		return JSON.parse(fs.readFileSync(path.join(directory, files[0]), 'utf8')) as OwnerClaim;
+	};
+	const first = await open(folder, 'old');
+	assert.strictEqual(first.ready.machineId, null, 'the old engine owns the agents');
+	const start = () => first.act<{ runId: string; alias: string }>({ kind: 'start-fallback' });
+	const agents = [await start(), await start()] as const;
+	const runs = [agents[0].runId, agents[1].runId] as const;
+	assert.notStrictEqual(runs[0], runs[1]);
+	for (const run of runs) { await first.act({ kind: 'pin-owned', run }); }
+	const oldPage = await first.act<string>({ kind: 'panel-generation' });
+	const previous = claim();
+	const services = recordedPtyds(ptydRecords(path.join(home, 'ptyd')));
+	assert.strictEqual(services.length, 1, 'the two actual fake CLIs use one old supervisor');
+	const service = services[0];
+	const ptyd = await PtydClient.connect(service.socket, '', path.join(home, 'ptyd', 'unused.log'), { start: false, protocol: service.protocol });
+	const snapshot = async () => (await ptyd.request('list', { owner: previous.owner })).map(row => ({
+		run: row.run, pid: row.pid, cwd: row.cwd, startedAt: row.startedAt, exited: row.exited, name: row.meta.name
+	})).sort((a, b) => a.run.localeCompare(b.run));
+	try {
+		const original = await snapshot();
+		assert.deepStrictEqual(original.map(row => row.run), [...runs].sort((a, b) => a.localeCompare(b)));
+		for (const agent of agents) {
+			const recorded = Number(fs.readFileSync(`${env.FACADE_IT_RECORD}.${agent.alias}`, 'utf8').trim());
+			assert.ok(recorded > 0 && isProcessRunning(recorded));
+			assert.strictEqual(original.find(row => row.run === agent.runId)?.pid, recorded);
+		}
+		await first.close();
+		const successor = await open(folder, 'new');
+		assert.strictEqual(successor.ready.machineId, null);
+		assert.notStrictEqual(successor.ready.hostPid, first.ready.hostPid);
+		const current = claim();
+		assert.strictEqual(current.owner, previous.owner);
+		assert.strictEqual(current.generation, previous.generation + 1);
+		assert.notStrictEqual(current.token, previous.token);
+		assert.strictEqual(isCurrentOwner(current, home), true);
+		const stateFile = path.join(home, 'workspaces', current.owner, 'workspace-state.json');
+		const before = fs.readFileSync(stateFile);
+		assert.strictEqual(writeAsOwner(previous, home, () => assert.fail('a stale writer reached the current workspace record')), false);
+		assert.deepStrictEqual(fs.readFileSync(stateFile), before);
+		await assert.rejects(ptyd.request('claim', previous), /ownership was transferred or expired/i);
+		for (const run of runs) {
+			await assert.rejects(ptyd.request('input', { run, data: 'unexpected stale input' }), /ownership was transferred or expired/i);
+			await assert.rejects(ptyd.request('terminate', { run, graceMs: 0 }), /ownership was transferred or expired/i);
+		}
+		const replay = await successor.act<{ page: string; refusedActions: number }>({ kind: 'stale-owner', previous, current, page: oldPage, runs });
+		assert.deepStrictEqual(await snapshot(), original, 'both exact fake CLI processes survived stale effects');
+		assert.strictEqual(replay.refusedActions, 2);
+		console.log(`  ✔ Stale claim ${previous.generation} lost to ${current.generation}; stale page ${oldPage} changed neither run; current page ${replay.page} unpinned only ${runs[0]}; original fake PIDs ${original.map(row => row.pid).join(', ')}`);
+		for (const runId of runs) { await successor.act({ kind: 'stop-fallback', runId }); }
+		await successor.close();
+	} finally { ptyd.dispose(); }
 }
 
 async function expectAgent(window: DrivenWindow, id: string, pinned: boolean): Promise<void> {

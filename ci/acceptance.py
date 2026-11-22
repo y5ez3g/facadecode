@@ -5,13 +5,39 @@ import json
 import subprocess
 import sys
 from collections import Counter
-from os import environ
+from os import environ, fsdecode
 from pathlib import Path
 
 from catalog import AcceptanceError, PRODUCTS, discover_apis, load
-from evidence import make_plan, run_identity, run_pilots, verify_receipts
+from evidence import git, make_plan, run_identity, run_pilots, verify_receipts
 
 ROOT = Path(__file__).resolve().parent.parent
+POLICY_PATHS = {
+    'docs/CI.md',
+    '.github/workflows/ci-acceptance.yml',
+    '.github/workflows/core-check.yml',
+    '.github/workflows/extension-check.yml',
+}
+PRODUCT_GUIDES = {'core/README.md', 'core/AGENTS.md', 'extension/README.md', 'extension/AGENTS.md'}
+
+
+def affected_products(paths):
+    changes = set(paths) - PRODUCT_GUIDES
+    if changes & POLICY_PATHS or 'extension/src/base/names.ts' in changes:
+        return PRODUCTS
+    if any(path.startswith(('core/', 'ci/')) for path in changes):
+        return PRODUCTS
+    if any(path.startswith('extension/') for path in changes):
+        return ('extension',)
+    return ()
+
+
+def changed_paths(root, base):
+    tree = git(root, 'rev-parse', '--verify', '--end-of-options', f'{base}^{{commit}}')
+    names = subprocess.check_output([
+        'git', '-C', str(root), 'diff', '--name-only', '--no-renames', '-z', tree, 'HEAD', '--',
+    ])
+    return tuple(fsdecode(path) for path in names.split(b'\0') if path)
 
 
 def argument_parser():
@@ -23,11 +49,15 @@ def argument_parser():
     catalog.add_argument('--require-bindings', action='store_true')
     table = commands.add_parser('table', help='render the reviewed case catalog as Markdown')
     table.add_argument('--product', choices=PRODUCTS)
+    scope = commands.add_parser('scope', help='select runtime pilots for changes since the base commit')
+    scope.add_argument('--base', required=True)
     commands.add_parser('plan', help='emit the bound PR pilot plan for this source tree')
     run = commands.add_parser('run', help='run a product pilot and verify its receipt')
     run.add_argument('--product', required=True, choices=PRODUCTS)
     run.add_argument('--output', required=True, type=Path)
     run.add_argument('--vscode', type=Path, help='use an existing executable of the pinned official editor')
+    run.add_argument('--editor-workers', type=int, choices=(1, 2),
+                     help='editor groups to run concurrently (default: 2)')
     verify = commands.add_parser('verify', help='verify case receipts against the current pilot plan')
     verify.add_argument('--product', choices=PRODUCTS)
     verify.add_argument('receipts', nargs='+', type=Path)
@@ -92,6 +122,9 @@ def main():
         if args.command == 'inventory':
             print(json.dumps(discover_apis(ROOT), indent=2, sort_keys=True))
             return 0
+        if args.command == 'scope':
+            print(json.dumps(affected_products(changed_paths(ROOT, args.base)), separators=(',', ':')))
+            return 0
         cases, inventory, required_p0, pilots = load(ROOT)
         if args.command == 'catalog':
             pending = report(cases, inventory, required_p0, pilots)
@@ -108,7 +141,10 @@ def main():
         if args.command == 'run':
             if args.vscode and args.product != 'extension':
                 raise AcceptanceError('--vscode applies to the Extension pilot')
-            receipts = [run_pilots(ROOT, plan, args.product, args.output.resolve(), args.vscode)]
+            if args.editor_workers is not None and args.product != 'extension':
+                raise AcceptanceError('--editor-workers applies to the Extension pilot')
+            receipts = [run_pilots(ROOT, plan, args.product, args.output.resolve(), args.vscode,
+                                   editor_workers=args.editor_workers or 2)]
         else:
             receipts = args.receipts
         passed = verify_receipts(plan, receipts, args.product)

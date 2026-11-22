@@ -1,4 +1,6 @@
 import copy
+import hashlib
+from io import BytesIO
 import json
 import os
 import shutil
@@ -16,7 +18,7 @@ from unittest.mock import patch
 from catalog import AcceptanceError, load, read_cases, read_json, reconcile, validate_binding
 from evidence import (
     EDITOR, EDITOR_PASS, binding_paths, binding_product, clean_scope, command_for, completion_record, execute, execution_groups,
-    observed_pass, reclaim_interrupted_scope, run_identity, verify_receipts,
+    download_prior_vsix, observed_pass, reclaim_interrupted_scope, run_identity, verify_receipts,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -46,15 +48,20 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaisesRegex(AcceptanceError, f'missing P0 cases: {EDITOR_CASE}'):
             reconcile(cases, self.inventory, self.required_p0)
 
-    def test_removing_a_pilot_binding_fails(self):
-        case = self.cases[CORE]
-        row = {'id': CORE, 'assertion': case.assertion, 'stage': case.stage, 'existing_tests': []}
+    def test_removing_a_pr_p0_binding_fails(self):
+        case = self.cases[EDITOR_CASE]
+        row = {'id': case.id, 'assertion': case.assertion, 'stage': case.stage, 'existing_tests': []}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'ci').mkdir()
-            (root / 'ci/cases.json').write_text(json.dumps({'version': 1, 'pilot_cases': [CORE], 'cases': [row]}))
-            with self.assertRaisesRegex(AcceptanceError, f'{CORE}: pilot requires'):
+            (root / 'ci/cases.json').write_text(json.dumps({'version': 2, 'cases': [row]}))
+            with self.assertRaisesRegex(AcceptanceError, f'missing executable PR P0 bindings:\\s+{case.id}'):
                 read_cases(root)
+
+    def test_every_bound_pr_case_is_in_the_plan(self):
+        cases, pilots = read_cases(ROOT)
+        self.assertEqual(pilots, {case.id: case.test for case in cases.values()
+                                  if case.stage == 'pr' and case.test is not None})
 
     def test_duplicate_json_keys_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -130,6 +137,34 @@ class CatalogTests(unittest.TestCase):
             validate_binding(portable, REMOTE_WORKTREE)
 
 
+    def test_window_replacement_cases_require_their_exact_editor_routes(self):
+        names = ('replacement-in-flight', 'stale-owner')
+        for name in names:
+            with self.subTest(name=name):
+                case_id = f'extension/p0/window-replacement/{name}'
+                binding = self.cases[case_id].test
+                self.assertEqual(validate_binding(binding, case_id), binding)
+                with self.assertRaisesRegex(AcceptanceError, 'requires the .* editor route'):
+                    validate_binding(self.cases[EDITOR_CASE].test, case_id)
+                with self.assertRaisesRegex(AcceptanceError, 'invalid Extension editor binding'):
+                    validate_binding(binding, EDITOR_CASE)
+
+
+class PriorPackageTests(unittest.TestCase):
+    def test_release_download_is_written_only_if_it_matches_the_pin(self):
+        original = b'verified release'
+        packages = {'fixture.vsix': (len(original), hashlib.sha256(original).hexdigest())}
+        with tempfile.TemporaryDirectory() as directory, patch('evidence.PRIOR_VSIX', packages):
+            root = Path(directory)
+            with patch('evidence.urlopen', return_value=BytesIO(original)):
+                download_prior_vsix(root / 'valid')
+            self.assertEqual((root / 'valid/fixture.vsix').read_bytes(), original)
+            corrupt = bytes([original[0] + 1]) + original[1:]
+            with patch('evidence.urlopen', return_value=BytesIO(corrupt)):
+                with self.assertRaisesRegex(AcceptanceError, 'pinned digest'):
+                    download_prior_vsix(root / 'corrupt')
+            self.assertEqual(list((root / 'corrupt').iterdir()), [])
+
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
         self.tmp = self.enterContext(tempfile.TemporaryDirectory())
@@ -196,6 +231,42 @@ class EvidenceTests(unittest.TestCase):
                 self.assertFalse(observed_pass([binding], invalid))
         with self.assertRaisesRegex(AcceptanceError, 'wrong receipt product'):
             verify_receipts(self.plan, [self.receipt(REMOTE_WORKTREE, product='core', editor=None)])
+
+    def test_replacement_receipt_rechecks_all_four_packages(self):
+        case_id = 'extension/p0/window-replacement/replacement-in-flight'
+        catalog, _ = read_cases(ROOT)
+        binding = self.bindings[case_id] = catalog[case_id].test
+        self.plan['cases'] = {case_id: binding}
+        self.editor_log = EDITOR_PASS + json.dumps({'name': binding['name'], 'engine': binding['engine']}) + '\n'
+        files = []
+        for stage in ('prior', 'candidate'):
+            folder = self.directory / (stage + '-vsix')
+            folder.mkdir()
+            names = ['workspace.vsix', 'window.vsix']
+            for name in names:
+                path = folder / name
+                path.write_bytes(f'{stage} {name}'.encode())
+                files.append(path)
+            if stage == 'prior':
+                self.plan['prior_vsix'] = {name: hashlib.sha256((folder / name).read_bytes()).hexdigest() for name in names}
+            else:
+                self.plan['candidate_vsix'] = names
+        receipt = self.receipt(case_id)
+        self.assertEqual(verify_receipts(self.plan, [receipt], 'extension'), 1)
+        for stage, file in (('prior', files[0]), ('candidate', files[-1])):
+            with self.subTest(stage=stage, issue='unexpected package'):
+                unexpected = file.with_name('00-alternate-' + file.name)
+                unexpected.write_bytes(b'an unverified package of the same version')
+                with self.assertRaisesRegex(AcceptanceError, f'unexpected {stage} update packages'):
+                    verify_receipts(self.plan, [receipt], 'extension')
+                unexpected.unlink()
+        for file in files:
+            with self.subTest(package=str(file.relative_to(self.directory))):
+                original = file.read_bytes()
+                file.write_bytes(original + b'changed')
+                with self.assertRaisesRegex(AcceptanceError, 'pinned digests|does not match'):
+                    verify_receipts(self.plan, [receipt], 'extension')
+                file.write_bytes(original)
 
     def test_missing_and_duplicate_results(self):
         path = self.receipt(CORE)

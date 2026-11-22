@@ -94,6 +94,13 @@ jobs:
           sudo apt-get install -y musl-tools
           rustup target add "$(uname -m)-unknown-linux-musl"
           echo "CC_$(uname -m)_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+      - name: Cache Intel macOS editor build dependencies
+        if: github.event_name == 'pull_request' && matrix.target == 'darwin-x64' && matrix.engine == 'rust'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: core
+          key: native-editor-release-darwin-x64-rust
+          cache-bin: false
       - run: npm ci
       - run: npm run compile
         if: "!inputs.package_only"
@@ -171,12 +178,27 @@ jobs:
       # The Rust engine's journeys need the built extension and core's programs (scripts/build-it.mjs), not the packages
       - run: npm run bundle
         if: matrix.engine == 'rust'
+      - name: Build the isolated editor fixtures
+        if: "!inputs.package_only"
+        run: node scripts/build-it.mjs
       - name: Download official VS Code for isolated tests
         if: "!inputs.package_only"
+        env:
+          EDITOR_VERSION: '1.147.0'
         run: |
           node <<'JS'
-          const fs = require('fs');
-          require('@vscode/test-electron').downloadAndUnzipVSCode('stable').then(executable => {
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const version = process.env.EDITOR_VERSION;
+          require('@vscode/test-electron').downloadAndUnzipVSCode(version).then(executable => {
+            const app = path.resolve(path.dirname(executable),
+              process.platform === 'darwin' ? '../Resources/app' : 'resources/app');
+            const editor = JSON.parse(fs.readFileSync(path.join(app, 'package.json'), 'utf8'));
+            const product = JSON.parse(fs.readFileSync(path.join(app, 'product.json'), 'utf8'));
+            if (editor.version !== version || !/^[a-f0-9]{40}$/.test(product.commit)) {
+              throw new Error(`Expected official VS Code ${version}, got ${editor.version} (${product.commit})`);
+            }
+            console.log(`Official VS Code ${editor.version} (${product.commit})`);
             fs.appendFileSync(process.env.GITHUB_ENV, `VSCODE_EXECUTABLE=${executable}\n`);
           }).catch(error => { console.error(error); process.exitCode = 1; });
           JS
@@ -184,7 +206,7 @@ jobs:
         if: "!inputs.package_only && runner.os == 'Linux'"
         env:
           FACADE_IT_ENGINE: ${{ matrix.engine }}
-        run: xvfb-run -a npm run test:integration 2>&1 | tee build/integration.log
+        run: xvfb-run -a node build/out/test/integration/run.js 2>&1 | tee build/integration.log
       - name: Isolated editor journeys on Windows
         if: "!inputs.package_only && runner.os == 'Windows'"
         env:
@@ -192,14 +214,14 @@ jobs:
         run: |
           # A detached Windows helper can keep a logging pipe open after the test runner exits.
           status=0
-          npm run test:integration > build/integration.log 2>&1 || status=$?
+          node build/out/test/integration/run.js > build/integration.log 2>&1 || status=$?
           cat build/integration.log
           exit "$status"
       - name: Isolated editor journeys on macOS
         if: "!inputs.package_only && runner.os == 'macOS'"
         env:
           FACADE_IT_ENGINE: ${{ matrix.engine }}
-        run: npm run test:integration 2>&1 | tee build/integration.log
+        run: node build/out/test/integration/run.js 2>&1 | tee build/integration.log
       - name: Keep editor test output
         if: always() && !inputs.package_only
         uses: actions/upload-artifact@v4

@@ -20,8 +20,9 @@ import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { runRemoteWorktree } from './remoteWorktree';
 import { assertTemporaryState, probeEnvironment } from './probeState';
+import { replacementInFlight } from './replacementInFlight';
 import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
-import { activationFailure, coldCutoverJourney, incompatibleActivation, missingSessionUnpin, multiWindowDriverFiles, rustMultiWindow, sharedAttachJourney, shellHandoff, withRustWindows } from './rustMultiWindow';
+import { activationFailure, coldCutoverJourney, incompatibleActivation, missingSessionUnpin, multiWindowDriverFiles, rustMultiWindow, sharedAttachJourney, shellHandoff, staleOwner, withRustWindows } from './rustMultiWindow';
 
 /** An entry of Facade's settings file, by its fields (CONFIGURATION-2.2). */
 type Entry = { readonly [field: string]: unknown };
@@ -48,7 +49,9 @@ const ACCEPTANCE_DRIVERS = new Map([
 	['missing-session-unpin', { engine: 'rust', cli: 'claude' }],
 	['multi-window', { engine: 'rust', cli: 'claude' }],
 	['remote-worktree', { engine: 'rust', cli: 'fake' }],
+	['replacement-in-flight', { engine: 'old', cli: 'claude' }],
 	['shell-handoff', { engine: 'rust', cli: 'codex' }],
+	['stale-owner', { engine: 'old', cli: 'claude' }],
 	['switch', { engine: 'rust', cli: 'claude' }]
 ] as const);
 type AcceptanceDriver = typeof ACCEPTANCE_DRIVERS extends ReadonlyMap<infer Name, unknown> ? Name : never;
@@ -582,18 +585,22 @@ async function main(): Promise<void> {
 	 * once: with its tab open by the editor, the window passing the answer on; hidden, by the window's headless terminal; open again,
 	 * by the editor once more (ARCHITECTURE-2.3, LIFECYCLE-3.5). It needs the released packages and runs only when asked.
 	 */
-	const update = async () => {
+	const update = async (replacement = false) => {
 		if (!released) {
 			throw new Error('FACADE_IT_ONLY=update installs a released build: set FACADE_IT_RELEASED to a folder holding its facadecode and window VSIX files.');
 		}
 		const packages = (dir: string) => {
-			const files = fs.readdirSync(dir).filter(name => name.endsWith('.vsix'));
-			const component = files.find(name => name.includes('-window-')), main = files.find(name => !name.includes('-window-'));
+			const files = fs.readdirSync(dir, { withFileTypes: true }).filter(file => file.name.endsWith('.vsix'));
+			if (replacement && (files.length !== 2 || files.some(file => !file.isFile()))) {
+				throw new Error(`${dir} must contain exactly two regular VSIX files for replacement testing.`);
+			}
+			const component = files.find(file => file.name.includes('-window-'));
+			const main = files.find(file => !file.name.includes('-window-'));
 			if (!component || !main) {
 				throw new Error(`${dir} must hold a facadecode and a window VSIX file.`);
 			}
 			// The window component first: the other's extension pack names it
-			return [path.join(dir, component), path.join(dir, main)];
+			return [path.join(dir, component.name), path.join(dir, main.name)];
 		};
 		const from = packages(released), to = packages(current ?? path.resolve(__dirname, '..', '..', '..', 'vsix'));
 		const folder = path.join(root, 'update');
@@ -615,6 +622,11 @@ async function main(): Promise<void> {
 			fs.rmSync(path.join(root, file));
 		}
 		const env = { ...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_UPDATE: out, CLAUDE_CONFIG_DIR: claudeConfig };
+		if (replacement) {
+			await replacementInFlight({ root, facade, folder, record, executable, cli: editorCli(executable), driver, from, to, receiver: profile, env, endMatching });
+			driverPassed('replacement-in-flight', 'old');
+			return;
+		}
 		const install = (files: readonly string[]) => {
 			for (const file of files) {
 				execFileSync(editorCli(executable), [...profile.args, '--install-extension', file, '--force'], { env, stdio: 'pipe', shell: process.platform === 'win32' });
@@ -814,7 +826,7 @@ async function main(): Promise<void> {
 			await endRust(facade);
 		}
 	};
-	const rustWindows = async (runName: 'multi' | 'handoff' | 'attach' | 'cutover' | 'missing-session-unpin' | 'activation-failure' | 'incompatible-activation') => {
+	const rustWindows = async (runName: 'multi' | 'handoff' | 'attach' | 'cutover' | 'missing-session-unpin' | 'activation-failure' | 'incompatible-activation' | 'stale-owner') => {
 		const driver = path.join(root, `driver-${runName}`);
 		const facade = path.join(home, runName);
 		const peer = path.join(root, `${runName}-peer`);
@@ -877,13 +889,13 @@ async function main(): Promise<void> {
 		const faultProgram = coreProgram(path.join(faultStage, 'bin'));
 		if (fallback) {
 			assert.ok(fs.statSync(corePrograms).isFile(), 'the original stage has the bundled native program');
-			fs.cpSync(extension, faultStage, { recursive: true });
+			fs.cpSync(extension, faultStage, { recursive: true, dereference: true });
 			// The native program path still exists, so auto selects Rust and actually attempts the spawn.
 			fs.unlinkSync(faultProgram);
 			fs.mkdirSync(faultProgram);
 		}
 		const start = (folder: string, name: string, control: string, port: number) => {
-			const oldEngine = runName === 'attach' && name === 'old-engine';
+			const oldEngine = runName === 'stale-owner' || runName === 'attach' && name === 'old-engine';
 			const withComponent = runName === 'multi' || oldEngine || fallback || incompatible;
 			const profile = editorProfile(root, `${runName[0]}-${name}`);
 			const userSettings = path.join(profile.user, 'User', 'settings.json');
@@ -908,6 +920,7 @@ async function main(): Promise<void> {
 					return rustMultiWindow(open, { folder: repo, peer, shared, home: facade, remote: null, files });
 				}
 				if (runName === 'missing-session-unpin') { return missingSessionUnpin(open, repo, env); }
+				if (runName === 'stale-owner') { return staleOwner(open, repo, env); }
 				if (fallback) { return activationFailure(open, repo, env, faultProgram); }
 				if (incompatible) { return incompatibleActivation(open, repo, env); }
 				const shellEnv = {
@@ -927,6 +940,7 @@ async function main(): Promise<void> {
 			if (runName === 'missing-session-unpin') { driverPassed('missing-session-unpin', 'rust'); }
 			if (fallback) { driverPassed('activation-failure', 'old'); }
 			if (incompatible) { driverPassed('incompatible-activation', 'none'); }
+			if (runName === 'stale-owner') { driverPassed('stale-owner', 'old'); }
 		} finally {
 			if (prior) {
 				endMatching(facade);
@@ -937,7 +951,7 @@ async function main(): Promise<void> {
 				endMatching(facade);
 				endMatching(path.join(root, 'a-old-engine'));
 			}
-			if (fallback || incompatible) { endMatching(path.join(facade, 'extension', 'ptyd')); }
+			if (fallback || incompatible || runName === 'stale-owner') { endMatching(path.join(facade, 'extension', 'ptyd')); }
 		}
 	};
 	/**
@@ -1087,6 +1101,10 @@ async function main(): Promise<void> {
 		if (only === 'incompatible-activation') {
 			await rustWindows('incompatible-activation');
 		}
+		if (only === 'stale-owner') {
+			assert.strictEqual(engine, 'old', 'stale-owner uses the old window owner');
+			await rustWindows('stale-owner');
+		}
 		if (only === 'remote-worktree') {
 			driverPassed('remote-worktree', runRemoteWorktree(home, executable));
 		}
@@ -1114,6 +1132,10 @@ async function main(): Promise<void> {
 		// Never unasked: it installs a released build's packages
 		if (only === 'update') {
 			await update();
+		}
+		if (only === 'replacement-in-flight') {
+			assert.strictEqual(engine, 'old');
+			await update(true);
 		}
 		// Never unasked: it signs in and uses an account's usage
 		if (only === 'real') {

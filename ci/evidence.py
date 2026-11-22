@@ -16,6 +16,7 @@ from concurrent.futures import CancelledError, ThreadPoolExecutor
 from contextlib import suppress
 from pathlib import Path
 from threading import Event
+from urllib.request import urlopen
 
 from catalog import AcceptanceError, MOCHA_JOURNEYS, json_object, read_json, require_same_ids
 
@@ -33,6 +34,12 @@ INPUT_FILES = (*HARNESS_FILES, '.github/workflows/ci-acceptance.yml', 'docs/CI.m
 EDITOR_PASS = 'Facade acceptance test '
 REMOTE_EDITOR_EVIDENCE = 'remote editor evidence '
 REMOTE_WORKTREE_SCENARIO = 'a_remote_worktree_is_shared_by_the_shell_and_editor'
+REPLACEMENT_JOURNEY = 'replacement-in-flight'
+PRIOR_VSIX_URL = 'https://github.com/y5ez3g/facadecode/releases/download/extension/0.1.5/'
+PRIOR_VSIX = {
+    'facadecode-linux-x64-0.1.5.vsix': (829818, '9c5e719ff7101a45dded2fae0a2923f521a1c2aceb179b5d6859acf11c0dc523'),
+    'facadecode-window-0.1.5.vsix': (191918, '6c43c4ef644ff956a19904a8dffdd439da14a5f1ae50b7d78b4c6e7376ac9712'),
+}
 SCOPE_PATHS = {b'CI_ACCEPTANCE_ROOT', b'FACADE_HOME', b'HOME', b'TMPDIR', b'VSCODE_PORTABLE', b'XDG_RUNTIME_DIR'}
 
 
@@ -80,6 +87,14 @@ def make_plan(root, pilots, run_id):
         'implementation': digest(implementation),
         'cases': pilots,
     }
+    if any(binding.get('journey') == REPLACEMENT_JOURNEY for binding in pilots.values()):
+        plan['prior_vsix'] = {name: sha for name, (_, sha) in PRIOR_VSIX.items()}
+        extension = read_json(root / 'extension/package.json')
+        window = read_json(root / 'extension/window/package.json')
+        plan['candidate_vsix'] = [
+            f'{extension["name"]}-{PLATFORM}-{extension["version"]}.vsix',
+            f'{window["name"]}-{window["version"]}.vsix',
+        ]
     plan['id'] = digest(plan)
     return plan
 
@@ -238,11 +253,27 @@ def execute(args, cwd, env, log, *, timeout=900, cancelled=None):
         return 'infra-error'
 
 
-def build_extension(root, env, output_dir):
+def download_prior_vsix(directory):
+    directory.mkdir()
+    for name, (size, sha) in PRIOR_VSIX.items():
+        url = PRIOR_VSIX_URL + name
+        print(f'Downloading pinned prior VSIX {name}', flush=True)
+        try:
+            with urlopen(url, timeout=45) as reply:
+                contents = reply.read(size + 1)
+        except OSError as error:
+            raise AcceptanceError(f'could not download {name}: {error}') from error
+        if len(contents) != size or hashlib.sha256(contents).hexdigest() != sha:
+            raise AcceptanceError(f'{name}: downloaded prior VSIX does not match the pinned digest')
+        (directory / name).write_bytes(contents)
+
+
+def build_extension(root, env, output_dir, package_update=False):
+    build = (['npm', 'run', 'package', '--', '--target', PLATFORM] if package_update
+             else ['npm', 'run', 'bundle'])
     with (output_dir / 'editor-build.log').open('w') as log:
         for args in (
-            ['npm', 'ci'], ['npm', 'run', 'compile'], ['npm', 'run', 'bundle'],
-            ['node', 'scripts/build-it.mjs'],
+            ['npm', 'ci'], ['npm', 'run', 'compile'], build, ['node', 'scripts/build-it.mjs'],
         ):
             print(f'Preparing editor: {" ".join(args)}', flush=True)
             print('$ ' + ' '.join(args), file=log, flush=True)
@@ -286,8 +317,26 @@ def binding_paths(directory, bindings):
     return observation, console, base.with_suffix('.complete.json')
 
 
+def update_package_digests(plan, output_dir):
+    packages = {}
+    for stage, names in (('prior', plan['prior_vsix']), ('candidate', plan['candidate_vsix'])):
+        folder = output_dir / f'{stage}-vsix'
+        if folder.is_symlink() or not folder.is_dir():
+            raise AcceptanceError(f'missing or invalid {stage} update package directory')
+        require_same_ids(set(names), {file.name for file in folder.iterdir()}, f'{stage} update packages')
+        packages[stage] = {}
+        for name in names:
+            file = folder / name
+            if name != Path(name).name or not file.is_file() or file.is_symlink():
+                raise AcceptanceError(f'missing or invalid {stage} update package {name}')
+            packages[stage][name] = hashlib.sha256(file.read_bytes()).hexdigest()
+    if packages['prior'] != plan['prior_vsix']:
+        raise AcceptanceError('the prior update packages do not match the pinned digests')
+    return packages
+
+
 def completion_record(plan, bindings, observation, console):
-    return {
+    record = {
         'plan': plan['id'],
         'run': plan['run'],
         'bindings': bindings,
@@ -295,6 +344,9 @@ def completion_record(plan, bindings, observation, console):
         'observation': {'name': observation.name, 'sha256': hashlib.sha256(observation.read_bytes()).hexdigest()},
         'cleanup': {'name': console.name, 'sha256': hashlib.sha256(console.read_bytes()).hexdigest()},
     }
+    if bindings[0].get('journey') == REPLACEMENT_JOURNEY:
+        record['vsix'] = update_package_digests(plan, observation.parent)
+    return record
 
 
 def verify_completion(plan, bindings, directory):
@@ -359,7 +411,7 @@ def clean_scope(root, isolated, env, stream, interrupted):
                 reclaim_interrupted_scope(isolated, stream)
             except OSError as error:
                 print(f'Interrupted fixture cleanup: {error}', file=stream, flush=True)
-        cleanup = execute(command, root, env, stream, timeout=10)
+        cleanup = execute(command, root, env, stream, timeout=30)
         if cleanup == 'pass':
             break
     return cleanup
@@ -402,7 +454,7 @@ def binding_product(binding):
     return 'extension' if binding['runner'] == 'extension-editor' else 'core'
 
 
-def run_pilots(root, plan, product, output_dir, vscode=None):
+def run_pilots(root, plan, product, output_dir, vscode=None, *, editor_workers=2):
     host = runtime()
     selected = {key: binding for key, binding in plan['cases'].items() if binding_product(binding) == product}
     if not selected:
@@ -428,7 +480,20 @@ def run_pilots(root, plan, product, output_dir, vscode=None):
             raise AcceptanceError(f'expected Node {plan["node_major"]}, observed {node}')
         (output_dir / 'node-version.txt').write_text(node + '\n')
     started = time.monotonic()
-    prepared = build_extension(root, env, output_dir) if product == 'extension' else 'pass'
+    needs_update = any(binding.get('journey') == REPLACEMENT_JOURNEY for binding in selected.values())
+    released = output_dir / 'prior-vsix'
+    if needs_update:
+        download_prior_vsix(released)
+    prepared = build_extension(root, env, output_dir, package_update=needs_update) if product == 'extension' else 'pass'
+    candidate_packages = output_dir / 'candidate-vsix'
+    staged_digests = None
+    if needs_update and prepared == 'pass':
+        candidate_packages.mkdir()
+        for name in plan['candidate_vsix']:
+            if name != Path(name).name:
+                raise AcceptanceError(f'invalid candidate update package name {name}')
+            shutil.copyfile(root / 'extension' / 'build' / 'vsix' / name, candidate_packages / name)
+        staged_digests = update_package_digests(plan, output_dir)
     if product == 'extension' and prepared == 'pass' and vscode is None:
         print(f'Downloading official VS Code {EDITOR["version"]}', flush=True)
         vscode = download_editor(root, env, output_dir)
@@ -442,10 +507,18 @@ def run_pilots(root, plan, product, output_dir, vscode=None):
         print(f'Running {bindings[0]["runner"]} {names}', flush=True)
         started = time.monotonic()
         if prepared == 'pass':
-            status, log = run_binding(root, bindings, output_dir, vscode, env, cancelled)
+            group_env = env
+            if bindings[0].get('journey') == REPLACEMENT_JOURNEY:
+                group_env = {**env, 'FACADE_IT_RELEASED': str(released),
+                             'FACADE_IT_CURRENT': str(candidate_packages)}
+            status, log = run_binding(root, bindings, output_dir, vscode, group_env, cancelled)
             if status == 'pass':
                 observation, console, completion = binding_paths(output_dir, bindings)
-                completion.write_text(json.dumps(completion_record(plan, bindings, observation, console), indent=2) + '\n')
+                record = completion_record(plan, bindings, observation, console)
+                if 'vsix' in record and record['vsix'] != staged_digests:
+                    status = 'update-packages-changed'
+                else:
+                    completion.write_text(json.dumps(record, indent=2) + '\n')
         else:
             status, log = f'build-{prepared}', 'editor-build.log'
         elapsed_ms = round((time.monotonic() - started) * 1000)
@@ -458,7 +531,7 @@ def run_pilots(root, plan, product, output_dir, vscode=None):
     groups = execution_groups(selected)
     if cancelled is not None:
         # Test contexts and displays are isolated. The staged binaries are shared and read-only here.
-        with ThreadPoolExecutor(max_workers=2) as workers:
+        with ThreadPoolExecutor(max_workers=editor_workers) as workers:
             pending = []
             try:
                 for group in groups:

@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      pilots: ${{ steps.scope.outputs.pilots }}
+      products: ${{ steps.scope.outputs.products }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -37,14 +37,12 @@ jobs:
       - name: Select runtime pilots
         id: scope
         run: |
-          pilots=true
-          if [[ "$GITHUB_EVENT_NAME" == pull_request ]] &&
-            git diff --quiet HEAD^1 HEAD -- ci docs/CI.md \
-              .github/workflows/{ci-acceptance,core-check,extension-check}.yml
-          then
-            pilots=false
+          products='["core","extension"]'
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            products=$(python3 -B ci/acceptance.py scope --base 'HEAD^1')
           fi
-          echo "pilots=$pilots" >> "$GITHUB_OUTPUT"
+          echo "products=$products" >> "$GITHUB_OUTPUT"
+          echo "Selected runtime pilots: $products" >> "$GITHUB_STEP_SUMMARY"
       - run: python3 -B -m unittest discover -s ci
       - name: Report catalog coverage
         shell: bash
@@ -56,14 +54,14 @@ jobs:
 
   pilot:
     name: Shadow pilot (${{ matrix.product }})
-    if: needs.catalog.outputs.pilots == 'true'
+    if: needs.catalog.outputs.products != '[]'
     needs: catalog
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        product: [core, extension]
+        product: ${{ fromJSON(needs.catalog.outputs.products) }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -95,7 +93,7 @@ jobs:
 
   report:
     name: Shadow pilot evidence
-    if: always() && needs.catalog.result == 'success' && needs.catalog.outputs.pilots == 'true'
+    if: always() && needs.catalog.result == 'success' && needs.catalog.outputs.products != '[]'
     needs: [catalog, pilot]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -107,8 +105,16 @@ jobs:
         with:
           pattern: shadow-pilot-*-${{ github.run_attempt }}
           path: ${{ runner.temp }}/receipts
-      - name: Reconcile the complete pilot
+      - name: Reconcile the selected pilots
         shell: bash
+        env:
+          PRODUCTS: ${{ needs.catalog.outputs.products }}
         run: |
+          scope=()
+          case "$PRODUCTS" in
+            '["core","extension"]') ;;
+            '["extension"]') scope=(--product extension) ;;
+            *) echo "Unrecognized runtime pilot selection $PRODUCTS" >&2; exit 1 ;;
+          esac
           mapfile -t receipts < <(find "$RUNNER_TEMP/receipts" -name receipt.json | sort)
-          python3 -B ci/acceptance.py verify "${receipts[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 -B ci/acceptance.py verify "${scope[@]}" "${receipts[@]}" | tee -a "$GITHUB_STEP_SUMMARY"

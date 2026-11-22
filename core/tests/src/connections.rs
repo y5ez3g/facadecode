@@ -317,14 +317,7 @@ pub struct ManualReadClient {
 
 impl ManualReadClient {
     pub fn open(home: &TestHome) -> ManualReadClient {
-        let stream = ClientSocket::connect(home.daemon_socket())
-            .expect("could not connect to the test daemon");
-        stream.set_read_timeout(Some(LOADED_TIMEOUT)).unwrap();
-        let mut raw = ManualReadClient {
-            writer: stream.try_clone().unwrap(),
-            reader: BufReader::new(stream),
-            isolation: home.isolation(),
-        };
+        let mut raw = Self::before_hello(home);
         raw.send(
             0,
             "hello",
@@ -335,6 +328,18 @@ impl ManualReadClient {
                 .is_some_and(|response| response["result"]["api_version"] == 1)
         );
         raw
+    }
+
+    /// Connects before hello so a fixture can relay a real machine introduction.
+    pub fn before_hello(home: &TestHome) -> ManualReadClient {
+        let stream = ClientSocket::connect(home.daemon_socket())
+            .expect("could not connect to the test daemon");
+        stream.set_read_timeout(Some(LOADED_TIMEOUT)).unwrap();
+        ManualReadClient {
+            writer: stream.try_clone().unwrap(),
+            reader: BufReader::new(stream),
+            isolation: home.isolation(),
+        }
     }
 
     pub fn send(&mut self, id: u64, method: &str, params: Value) {
@@ -354,10 +359,17 @@ impl ManualReadClient {
 
     /// Returns the next line, or None on disconnect or read timeout.
     pub fn read_message(&mut self) -> Option<Value> {
+        self.read_frame().ok().flatten()
+    }
+
+    /// Reads one JSON frame, distinguishing a clean EOF from a read or parse error.
+    pub fn read_frame(&mut self) -> std::io::Result<Option<Value>> {
         let mut line = String::new();
-        match self.reader.read_line(&mut line) {
-            Ok(0) | Err(_) => None,
-            Ok(_) => serde_json::from_str(&line).ok(),
+        if self.reader.read_line(&mut line)? == 0 {
+            return Ok(None);
         }
+        serde_json::from_str(&line)
+            .map(Some)
+            .map_err(std::io::Error::other)
     }
 }

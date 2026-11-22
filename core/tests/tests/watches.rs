@@ -161,51 +161,132 @@ fn agents_watch_observes_immediate_start_then_remove() {
 #[test]
 fn screen_watch_delivers_snapshot_then_output() {
     let home = TestHome::new("watchscreen");
-    let worker = home.start_fake("w1");
-    let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", DAEMON_API_VERSIONS, json!({}));
-    let watching = wire.request(
-        "watch",
-        json!({ "topic": "attach", "args": { "target": "w1" } }),
+    let keys = home.project.join("watcher-keys");
+    let worker = home.start_fake_with(
+        "w1",
+        &[
+            ("FAKECLI_KEYS", keys.to_str().unwrap()),
+            ("FAKECLI_STATUS", "1"),
+        ],
     );
+    assert!(wait_for_screen_text(&home, &worker.address, "❯"));
+    let reference = home.inspect_agent(&worker.address)["agent"]["reference"].clone();
+    let mut raw = ManualReadClient::open(&home);
+    raw.send(1, "watch", json!({ "topic": "attach", "args": { "target": reference, "size": { "cols": 80, "rows": 24 } } }));
+    let watching = raw.read_frame().unwrap().expect("the attach snapshot");
+    assert_eq!(watching["id"], 1, "{watching}");
     let watch = watching["result"]["watch"]
         .as_u64()
-        .expect("expected a watch ID");
+        .expect("an Attach watch ID");
+    let snapshot = &watching["result"]["snapshot"];
+    let decoded = |field: &Value| {
+        facade_base::base64::decode(field.as_str().expect("terminal bytes")).unwrap()
+    };
+    let initial = decoded(&snapshot["redraw"]);
     assert!(
-        watching["result"]["snapshot"]["redraw"].is_string(),
-        "{watching}"
+        String::from_utf8_lossy(&initial).contains("fakecli"),
+        "{snapshot}"
     );
-    assert!(
-        watching["result"]["snapshot"]["size"]["cols"].is_number(),
-        "{watching}"
-    );
+    assert_eq!(snapshot["reference"], reference, "{snapshot}");
+    assert_eq!(snapshot["address"], worker.address, "{snapshot}");
     assert_eq!(
-        watching["result"]["snapshot"]["reference"]["agent_id"],
-        worker.id.as_str(),
-        "{watching}"
+        snapshot["size"],
+        json!({ "cols": 80, "rows": 24 }),
+        "{snapshot}"
     );
-    let reference = &watching["result"]["snapshot"]["reference"];
-    let data = facade_base::base64::encode(b"seen by a viewer");
-    wire.write(&json!({
-        "jsonrpc": "2.0", "method": "call",
-        "params": { "op": "agent.type", "args": { "target": reference, "input": { "kind": "raw", "raw": data } } },
-    }));
-    assert!(
-        wait_until(secs(5), || wire
-            .changes(watch)
-            .iter()
-            .any(
-                |c| c["change"]["kind"] == "output" && c["change"]["data"].is_string()
-            )),
-        "{:?}",
-        wire.changes(watch)
+    assert_eq!(snapshot["process"], "running", "{snapshot}");
+
+    let change = |frame: Value| {
+        assert_eq!(frame["jsonrpc"], "2.0", "{frame}");
+        assert_eq!(frame["method"], "changed", "{frame}");
+        assert!(frame.get("id").is_none(), "{frame}");
+        assert_eq!(frame["params"]["watch"], watch, "{frame}");
+        frame["params"]["change"].clone()
+    };
+    let notify = |raw: &mut ManualReadClient, op: &str, args: Value| {
+        let frame =
+            json!({ "jsonrpc": "2.0", "method": "call", "params": { "op": op, "args": args } });
+        std::io::Write::write_all(&mut raw.writer, format!("{frame}\n").as_bytes()).unwrap();
+    };
+    let size = json!({ "cols": 77, "rows": 22 });
+    notify(
+        &mut raw,
+        "attach.resize",
+        json!({ "watch": watch, "size": size }),
     );
+    loop {
+        let redraw = change(raw.read_frame().unwrap().expect("a resize redraw"));
+        if redraw["kind"] == "redraw" && redraw["size"] == size {
+            assert!(!decoded(&redraw["data"]).is_empty());
+            break;
+        }
+    }
+
+    // The fake terminal reports and receives the status negotiation before the raw input.
+    let capability = b"states=idle,working,done";
+    assert!(wait_until(LOADED_TIMEOUT, || std::fs::read(&keys)
+        .is_ok_and(|bytes| bytes
+            .windows(capability.len())
+            .any(|window| window == capability))));
+    let input_before = std::fs::read(&keys).unwrap();
+    let marker = "seen by a viewer";
+    let data = facade_base::base64::encode(marker.as_bytes());
+    notify(
+        &mut raw,
+        "agent.type",
+        json!({ "target": reference, "input": { "kind": "raw", "raw": data } }),
+    );
+    let mut output = Vec::new();
+    while !output
+        .windows(marker.len())
+        .any(|bytes| bytes == marker.as_bytes())
+    {
+        let update = change(raw.read_frame().unwrap().expect("terminal output"));
+        if update["kind"] == "output" {
+            output.extend(decoded(&update["data"]));
+        }
+    }
     assert_eq!(
-        error_reason(&wire.request(
+        std::fs::read(&keys).unwrap(),
+        [input_before.as_slice(), marker.as_bytes()].concat()
+    );
+
+    // Only this explicit request gets a response. Intervening frames belong to the Attach watch.
+    raw.send(2, "call", json!({ "op": "daemon.status", "args": {} }));
+    loop {
+        let frame = raw.read_frame().unwrap().expect("the status response");
+        if frame["id"] == 2 {
+            assert_eq!(frame["result"]["home"], json!(home.path));
+            break;
+        }
+        change(frame);
+    }
+    home.run_facade_ok(&["type", &worker.address, "--key", "Ctrl+C"]);
+    home.run_facade_ok(&["type", &worker.address, "/fake exit 23", "--enter"]);
+    let exit = loop {
+        let update = change(
+            raw.read_frame()
+                .unwrap()
+                .expect("the same watch reports exit"),
+        );
+        if update["kind"] == "exit" {
+            break update;
+        }
+    };
+    assert_eq!(exit["exit"]["code"], 23, "{exit}");
+    assert_eq!(exit["exit_status"], 23, "{exit}");
+    let record = home.inspect_agent(&worker.address);
+    assert_eq!(record["agent"]["reference"], reference);
+    assert_eq!(record["agent"]["process"], "ended");
+    assert_eq!(record["agent"]["exit"], exit["exit"]);
+    assert!(!alive(&worker.process));
+
+    assert_eq!(
+        error_reason(&connect(&home).request(
             "watch",
             json!({ "topic": "attach", "args": { "target": "nobody" } })
         )),
-        "not_found"
+        "not_found",
     );
 }
 
