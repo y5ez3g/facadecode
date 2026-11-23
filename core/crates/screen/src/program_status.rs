@@ -8,6 +8,9 @@
 //! program (those with `id=`) and report titles. A program's earlier reports stop counting after a
 //! full reset or when a shell draws its next prompt.
 
+/// The question written into a checkpoint when the CLI has already asked it.
+pub(crate) const STATUS_QUERY: &[u8] = b"\x1b]7501;?\x1b\\";
+
 /// Sent back for `OSC 7501 ; ?`.
 pub(crate) const STATUS_REPLY: &str =
     "\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth\x1b\\";

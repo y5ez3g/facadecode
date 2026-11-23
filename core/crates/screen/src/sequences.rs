@@ -9,6 +9,19 @@ use crate::program_status::{self, StatusEvent};
 use crate::units::{Piece, Splitter};
 use crate::{title_has_text, write_title_body};
 
+/// A restart clears title negotiation through the same output stream that set it.
+pub(crate) const TITLE_NEGOTIATION_RESET: &[u8] = b"\x1b]7501;facade-title-reset\x1b\\";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TitleNegotiation {
+    #[default]
+    Unasked,
+    /// Any current title predates the question.
+    Asked,
+    /// The current nonblank title followed the question.
+    Eligible,
+}
+
 /// A place in the output where the screen must look at its state, just after the piece.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Mark {
@@ -38,7 +51,7 @@ pub(crate) struct Filtered {
 }
 
 /// Splits `bytes` into what viewers get and where the screen must look, and follows the modes in
-/// `modes`. Adds the status glyph to viewer titles and omits a blank title over no title.
+/// `modes`. Adds the glyph to eligible titles and omits a blank title over no title.
 /// `rows` bounds the scrolling region.
 pub(crate) fn filter(
     splitter: &mut Splitter,
@@ -46,6 +59,7 @@ pub(crate) fn filter(
     bytes: &[u8],
     rows: u16,
     mut cli_has_title: bool,
+    title_negotiation: &mut TitleNegotiation,
     status_glyph: Option<&str>,
 ) -> Filtered {
     let mut filtered = Filtered {
@@ -53,7 +67,16 @@ pub(crate) fn filter(
         ..Filtered::default()
     };
     splitter.split(bytes, |offset, piece| {
+        if matches!(piece, Piece::String(bytes) if bytes == TITLE_NEGOTIATION_RESET) {
+            *title_negotiation = TitleNegotiation::Unasked;
+            return;
+        }
         let (mut bytes, mark) = read_piece(&piece, modes, rows);
+        if mark == Some(Mark::Status(StatusEvent::Asked))
+            && *title_negotiation == TitleNegotiation::Unasked
+        {
+            *title_negotiation = TitleNegotiation::Asked;
+        }
         if matches!(piece, Piece::String(_)) {
             if bytes.starts_with(b"\x1b]9;4;") {
                 filtered.native_activity.extend_from_slice(bytes);
@@ -64,11 +87,20 @@ pub(crate) fn filter(
                     .or_else(|| body.strip_suffix(b"\x1b\\"))
             {
                 let has_text = title_has_text(&String::from_utf8_lossy(title));
+                if *title_negotiation != TitleNegotiation::Unasked {
+                    *title_negotiation = if has_text {
+                        TitleNegotiation::Eligible
+                    } else {
+                        TitleNegotiation::Asked
+                    };
+                }
                 if !has_text && !cli_has_title {
                     return;
                 }
                 cli_has_title = has_text;
-                if has_text && let Some(glyph) = status_glyph {
+                if *title_negotiation == TitleNegotiation::Eligible
+                    && let Some(glyph) = status_glyph
+                {
                     filtered.viewer_output.extend_from_slice(&bytes[..4]);
                     write_title_body(&mut filtered.viewer_output, title, Some(glyph));
                     bytes = &body[title.len()..];
@@ -322,13 +354,14 @@ fn read_string(string: &[u8]) -> (&[u8], Option<Mark>) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::Screen;
+    use crate::kept_modes::ActiveCharset;
 
     fn filtered(chunks: &[&[u8]]) -> Vec<u8> {
-        let (mut splitter, mut modes) = (Splitter::default(), KeptModes::default());
+        let mut screen = Screen::new(80, 24, 0);
         let mut out = Vec::new();
         for chunk in chunks {
-            out.extend(filter(&mut splitter, &mut modes, chunk, 24, false, None).viewer_output);
+            out.extend(screen.feed(chunk).viewer_output);
         }
         out
     }
@@ -351,13 +384,13 @@ mod tests {
             .as_bytes();
         let whole = filtered(&[stream]);
         for split in 0..=stream.len() {
-            let (mut splitter, mut modes) = (Splitter::default(), KeptModes::default());
-            let first = filter(&mut splitter, &mut modes, &stream[..split], 24, false, None);
+            let mut screen = Screen::new(80, 24, 0);
+            let first = screen.feed(&stream[..split]);
             let complete = whole.starts_with(&first.viewer_output)
                 && std::str::from_utf8(&first.viewer_output).is_ok()
                 && !first.viewer_output.ends_with(b"\x1b");
             assert!(complete, "split at {split}: {first:?}");
-            let rest = filter(&mut splitter, &mut modes, &stream[split..], 24, false, None);
+            let rest = screen.feed(&stream[split..]);
             assert_eq!(
                 [first.viewer_output, rest.viewer_output].concat(),
                 whole,
@@ -373,27 +406,20 @@ mod tests {
 
     #[test]
     fn the_scrolling_region_and_the_character_set_are_noted() {
-        let (mut splitter, mut modes) = (Splitter::default(), KeptModes::default());
-        filter(
-            &mut splitter,
-            &mut modes,
-            b"\x1b[2;10r\x0e",
-            24,
-            false,
-            None,
-        );
+        let mut screen = Screen::new(80, 24, 0);
+        screen.feed(b"\x1b[2;10r\x0e");
         assert_eq!(
-            (modes.scroll_region, modes.active_charset),
+            (screen.modes.scroll_region, screen.modes.active_charset),
             (Some((2, 10)), ActiveCharset::G1)
         );
-        filter(&mut splitter, &mut modes, b"\x1b[r\x0f", 24, false, None);
+        screen.feed(b"\x1b[r\x0f");
         assert_eq!(
-            (modes.scroll_region, modes.active_charset),
+            (screen.modes.scroll_region, screen.modes.active_charset),
             (None, ActiveCharset::G0)
         );
-        filter(&mut splitter, &mut modes, b"\x1b[5;3r", 24, false, None);
+        screen.feed(b"\x1b[5;3r");
         assert_eq!(
-            modes.scroll_region, None,
+            screen.modes.scroll_region, None,
             "an invalid scrolling region leaves the region as it is"
         );
     }

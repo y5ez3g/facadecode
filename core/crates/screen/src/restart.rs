@@ -7,6 +7,7 @@
 use std::io::Write;
 
 use crate::Screen;
+use crate::sequences::TITLE_NEGOTIATION_RESET;
 
 /// Each mode as a fresh terminal has it, in the order sent.
 const FRESH_MODES: [&[u8]; 30] = [
@@ -72,8 +73,8 @@ impl Screen {
             .collect()
     }
 
-    /// Output that gives a fresh terminal's modes and tab stops, and puts the cursor back where it
-    /// is.
+    /// Output that gives a fresh terminal's modes and tab stops, puts the cursor back where it
+    /// is, and keeps the native title with fresh status negotiation.
     pub fn reset_for_restart(&self) -> Vec<u8> {
         let mut out = FRESH_MODES.concat();
         let cols = usize::from(self.cols());
@@ -82,6 +83,7 @@ impl Screen {
         }
         let (column, row) = self.cursor();
         write!(out, "\x1b[{};{}H", row + 1, column + 1).unwrap();
+        out.extend_from_slice(TITLE_NEGOTIATION_RESET);
         out
     }
 }

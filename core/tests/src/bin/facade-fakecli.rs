@@ -50,10 +50,9 @@
 //! does, and a message `/fake title <text>` sets another; `/fake title` alone sets an empty title.
 //! On Windows `FAKECLI_TITLE_FROM_CONSOLE=1` makes it set back its console's title, read with
 //! `GetConsoleTitleW`, at start and with each message, as Antigravity does.
-//! With `FAKECLI_OWN_GLYPH=<glyph>` it starts as Claude Code does run alone: its first title is
-//! `<glyph> <text>`; it sends its first idle report with a query and, once the terminal answers it,
-//! sets `<text>` and shows `title without its glyph`, so the report and the title reach the
-//! terminal in separate reads.
+//! With status reporting enabled, it sends its first idle report with a query and, once the
+//! terminal answers it, sets `<text>` and shows `negotiated title`. `FAKECLI_OWN_GLYPH=<glyph>`
+//! makes its initial title `<glyph> <text>`, as Claude Code does run alone.
 //!
 //! `FAKECLI_LOOK=muse` shows a long paste as Muse 1.4.20 does, `[Pasted Content <n> chars]`.
 //!
@@ -1321,7 +1320,7 @@ fn run() -> anyhow::Result<()> {
             .collect(),
         title_after_answer: std::env::var("FAKECLI_TITLE")
             .ok()
-            .filter(|_| std::env::var_os("FAKECLI_OWN_GLYPH").is_some())
+            .filter(|_| std::env::var("FAKECLI_STATUS").as_deref() == Ok("1"))
             .map(|title| (title, false)),
         hint: std::env::var("FAKECLI_HINT").ok(),
         after_cursor: std::env::var("FAKECLI_DRAFT_AT_START").unwrap_or_default(),
@@ -1497,7 +1496,7 @@ fn run() -> anyhow::Result<()> {
                             app.title_after_answer.take_if(|(_, asked)| *asked)
                         {
                             app.queries.push(format!("\x1b]2;{title}\x07"));
-                            app.transcript.push("title without its glyph".into());
+                            app.transcript.push("negotiated title".into());
                             dirty = true;
                         }
                     }

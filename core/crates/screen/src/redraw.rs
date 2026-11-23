@@ -9,7 +9,9 @@ use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
 use alacritty_terminal::vte::ansi::{CharsetIndex, Color, NamedColor, StandardCharset};
 
 use crate::kept_modes::{ActiveCharset, ModifyOtherKeys};
+use crate::program_status::STATUS_QUERY;
 use crate::read::{AllRows, cell_text, is_blank, is_spacer};
+use crate::sequences::TitleNegotiation;
 use crate::{REDRAW_SCROLLBACK_ROWS, Screen, title_has_text, write_title_body};
 
 /// Plain pen, ASCII in G0 and G1 with G0 in use, whole-screen scrolling region, origin mode off,
@@ -41,8 +43,8 @@ impl Screen {
             keep_scrollback,
             replayed_scrollback(include_scrollback),
             Layout::SameSize,
-            self.status_glyph.as_deref(),
         )
+        .with_viewer_title()
     }
 
     /// Draws the grid in the top left of a terminal with at least as many rows and columns.
@@ -55,8 +57,8 @@ impl Screen {
             keep_scrollback,
             replayed_scrollback(include_scrollback),
             Layout::Viewport,
-            self.status_glyph.as_deref(),
         )
+        .with_viewer_title()
     }
 
     /// Draws a full frame in the buffer already selected by Attach, preserving host scrollback.
@@ -70,11 +72,9 @@ impl Screen {
         let mut redraw = Redraw::new(self);
         redraw.put(b"\x1b[?2026l");
         redraw.start(true);
-        redraw.draw(
-            replayed_scrollback(include_scrollback),
-            layout,
-            self.status_glyph.as_deref(),
-        )
+        redraw
+            .draw(replayed_scrollback(include_scrollback), layout)
+            .with_viewer_title()
     }
 
     /// Overwrites the visible rows in the active buffer of a terminal at least as large as the
@@ -87,22 +87,39 @@ impl Screen {
         write_viewport_rows(&mut redraw.out, &rows, true);
         redraw.cursor(Layout::Viewport);
         redraw.modes();
-        self.write_title(&mut redraw.out, self.status_glyph.as_deref());
-        redraw.out
+        redraw.with_viewer_title()
     }
 
     /// A redraw with the whole scrollback, for a checkpoint. Taken at a clean point
-    /// ([`Screen::at_clean_point`]), it rebuilds the rows, cursor, pen, CLI title, charsets and modes
-    /// on an empty screen of the same size and scrollback.
+    /// ([`Screen::at_clean_point`]), it rebuilds the rows, cursor, pen, CLI title, title negotiation,
+    /// charsets and modes on an empty screen of the same size and scrollback.
     pub fn redraw_with_all_scrollback(&self) -> Vec<u8> {
-        Redraw::build(self, false, usize::MAX, Layout::SameSize, None)
+        let mut out = Redraw::build(self, false, usize::MAX, Layout::SameSize).out;
+        // Their order restores whether the current title was set before or after the question.
+        if self.title_negotiation == TitleNegotiation::Eligible {
+            out.extend_from_slice(STATUS_QUERY);
+        }
+        self.write_title(&mut out, None);
+        if self.title_negotiation == TitleNegotiation::Asked {
+            out.extend_from_slice(STATUS_QUERY);
+        }
+        out
     }
 
     /// The viewer's title as a sanitized OSC sequence, or empty bytes without a nonblank title.
     pub fn title_output(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        self.write_title(&mut out, self.status_glyph.as_deref());
+        self.write_viewer_title(&mut out);
         out
+    }
+
+    fn write_viewer_title(&self, out: &mut Vec<u8>) {
+        let glyph = if self.title_negotiation == TitleNegotiation::Eligible {
+            self.status_glyph.as_deref()
+        } else {
+            None
+        };
+        self.write_title(out, glyph);
     }
 
     fn write_title(&self, out: &mut Vec<u8>, status_glyph: Option<&str>) {
@@ -137,8 +154,8 @@ struct Redraw<'a> {
     out: Vec<u8>,
 }
 
-impl Redraw<'_> {
-    fn new(screen: &Screen) -> Redraw<'_> {
+impl<'a> Redraw<'a> {
+    fn new(screen: &'a Screen) -> Self {
         let grid = screen.terminal.grid();
         let capacity = 2 * grid.columns() * grid.screen_lines();
         Redraw {
@@ -147,23 +164,17 @@ impl Redraw<'_> {
         }
     }
 
-    fn build(
-        screen: &Screen,
-        keep_scrollback: bool,
-        replayed: usize,
-        layout: Layout,
-        status_glyph: Option<&str>,
-    ) -> Vec<u8> {
+    fn build(screen: &'a Screen, keep_scrollback: bool, replayed: usize, layout: Layout) -> Self {
         let mut redraw = Redraw::new(screen);
         redraw.put(b"\x1b[?2026l\x1b[?1049l");
         redraw.start(keep_scrollback);
         if screen.on_alternate_screen() {
             redraw.put(b"\x1b[?1049h\x1b[H\x1b[J");
         }
-        redraw.draw(replayed, layout, status_glyph)
+        redraw.draw(replayed, layout)
     }
 
-    fn draw(mut self, replayed: usize, layout: Layout, status_glyph: Option<&str>) -> Vec<u8> {
+    fn draw(mut self, replayed: usize, layout: Layout) -> Self {
         let mut rows = self.screen.all_rows();
         rows.keep_newest_scrollback(replayed);
         match layout {
@@ -173,7 +184,11 @@ impl Redraw<'_> {
         self.saved_cursor();
         self.cursor(layout);
         self.modes();
-        self.screen.write_title(&mut self.out, status_glyph);
+        self
+    }
+
+    fn with_viewer_title(mut self) -> Vec<u8> {
+        self.screen.write_viewer_title(&mut self.out);
         self.out
     }
 

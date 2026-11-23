@@ -958,7 +958,7 @@ async fn the_glyph_timer_runs_only_while_working_and_watched_even_during_output(
     );
     harness
         .cli
-        .write_all(b"\x1b]2;Title\x07\x1b]7501;state=working\x07Working")
+        .write_all(b"\x1b]7501;?\x07\x1b]2;Title\x07\x1b]7501;state=working\x07Working")
         .unwrap();
     assert!(harness.shows("Working", Duration::from_secs(5)).await);
     assert_eq!(harness.handle.info().state, ManagedAgentState::Working);
@@ -1019,7 +1019,7 @@ async fn a_resumed_run_starts_without_a_status_glyph() {
     let (_, mut changes) = harness.watch_screen(1).await;
     harness
         .cli
-        .write_all(b"\x1b]2;First\x07\x1b]7501;state=working\x07")
+        .write_all(b"\x1b]7501;?\x07\x1b]2;First\x07\x1b]7501;state=working\x07")
         .unwrap();
     next_title(&mut changes, "◐ First").await;
 
@@ -1028,7 +1028,8 @@ async fn a_resumed_run_starts_without_a_status_glyph() {
     let (master, mut cli) = raw_terminal(80, 24);
     let resumed = harness.install(2, master).await;
     assert_eq!(resumed.state, ManagedAgentState::Starting);
-    cli.write_all(b"\x1b]2;Resumed\x1b\\").unwrap();
+    cli.write_all(b"\x1b]7501;?\x07\x1b]2;Resumed\x1b\\")
+        .unwrap();
     next_title(&mut changes, "Resumed").await;
 
     cli.write_all(b"\x1b]7501;state=working\x07").unwrap();
@@ -1052,7 +1053,7 @@ async fn a_synchronized_update_timing_out_sends_its_glyph_with_the_new_title() {
 
     harness
         .cli
-        .write_all(b"\x1b[?2026h\x1b]2;New\x1b\\\x1b]7501;state=idle\x07")
+        .write_all(b"\x1b]7501;?\x07\x1b[?2026h\x1b]2;New\x1b\\\x1b]7501;state=idle\x07")
         .unwrap();
     next_title(&mut changes, "✳ New").await;
     harness.stop().await;

@@ -1375,15 +1375,14 @@ fn shows(term: &TestTerminal, title: &str, case: &str) {
     );
 }
 
-/// Asserts that the host showed the plain title before the first glyph: no glyph before the CLI's
-/// first report.
+/// Asserts that the host showed the plain startup title before the first glyph.
 fn plain_before_the_first_glyph(term: &TestTerminal, case: &str) {
     let titles = titles_set(&term.output_since(0));
     let plain = titles.iter().position(|title| title == TITLE);
     let glyph = titles.iter().position(|title| has_glyph(title));
     assert!(
         plain.is_some() && plain < glyph,
-        "{case}: no plain title before the first report: {titles:?}"
+        "{case}: no plain startup title before the first glyph: {titles:?}"
     );
 }
 
@@ -1441,7 +1440,7 @@ fn ends_with_the_host_s_title(term: &mut TestTerminal, key: &[u8], case: &str) {
 }
 
 /// Attached to Claude Code, which reports its state through the Program Status Protocol, the host
-/// shows its title with the status glyph of its Agent State: none before the first report, `✳`
+/// shows its negotiated title with the glyph of its Agent State: `✳`
 /// while idle or done, `◐` and `◑` in turn while working, `✳` for a turn whose background work
 /// still runs (which `list` and `status` give as Idle), none while the title is empty or once the
 /// report is taken back. The glyph stops at the end and the host's own title comes back, whether
@@ -1546,8 +1545,8 @@ fn the_host_shows_no_glyph_without_the_rule_a_report_or_a_title() {
     }
 }
 
-/// A resumed Claude Code shows no glyph until its new run reports, then the glyph of what it
-/// reports.
+/// A resumed Claude Code starts with a plain title, then shows the new run's negotiated title
+/// with the glyph of what it reports.
 #[test]
 fn a_resumed_claude_code_shows_no_glyph_until_it_reports_again() {
     const SESSION: &str = "3333cccc-2bae-4a45-b193-a5664c198263";
@@ -1579,7 +1578,7 @@ fn a_resumed_claude_code_shows_no_glyph_until_it_reports_again() {
     ends_with_the_host_s_title(&mut term, b"\x04", "resume");
 }
 
-/// Claude Code that already reported shows its glyph to each viewer from the start: `facade attach`
+/// Claude Code that already set its negotiated title shows its glyph to each viewer: `facade attach`
 /// and an editor watching the `attach` topic get it in the snapshot's title, and both see the
 /// working frames and the resting glyph that follow.
 #[test]
@@ -1596,6 +1595,7 @@ fn every_viewer_of_claude_code_that_already_reported_gets_its_glyph() {
         "{}",
         home.run_facade_ok(&["status", "early"])
     );
+    assert!(wait_for_screen_text(&home, "early", "negotiated title"));
     let mut editor = DaemonTestClient::open(&home);
     editor.hello("ide", DAEMON_API_VERSIONS, json!({}));
     let watching = editor.request(
@@ -1779,8 +1779,7 @@ fn claude_code_s_own_glyph_at_start_gives_way_to_facade_s_without_a_flicker() {
     env.extend([("FAKECLI_OWN_GLYPH", "✳"), ("FAKECLI_MCP_DELAY_MS", "3000")]);
     let mut term = host_running(&home, &["start", "--name", "starting", "claude"], &env);
     assert!(
-        term.wait_for(LOADED_TIMEOUT, |view| view
-            .contains("title without its glyph")),
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("negotiated title")),
         "{}",
         term.text()
     );

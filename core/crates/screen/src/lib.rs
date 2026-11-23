@@ -48,7 +48,7 @@ use alacritty_terminal::term::TermMode;
 
 use kept_modes::{KeptModes, TabStops};
 use scrollback::Scrollback;
-use sequences::Mark;
+use sequences::{Mark, TitleNegotiation};
 use terminal::{Size, Terminal};
 use units::Splitter;
 
@@ -90,6 +90,7 @@ pub struct ParsedOutput {
 pub struct Screen {
     terminal: Terminal,
     status_glyph: Option<String>,
+    title_negotiation: TitleNegotiation,
     deferred_status_title: bool,
     splitter: Splitter,
     modes: KeptModes,
@@ -108,6 +109,7 @@ impl Screen {
         Screen {
             terminal: Terminal::new(size, scrollback.in_alacritty, scrollback.feed()),
             status_glyph: None,
+            title_negotiation: TitleNegotiation::default(),
             deferred_status_title: false,
             splitter: Splitter::default(),
             modes: KeptModes::default(),
@@ -121,7 +123,7 @@ impl Screen {
         self.terminal.colors = colors;
     }
 
-    /// Sets or clears the status glyph. When the glyph changes and the CLI has a nonblank title,
+    /// Sets or clears the status glyph. When the glyph changes and the title is eligible,
     /// returns the title sequence viewers need now. This may repeat the title viewers already see.
     /// During a synchronized update the title sequence follows the output that closes it.
     pub fn set_status_glyph(&mut self, glyph: Option<String>) -> Vec<u8> {
@@ -137,7 +139,7 @@ impl Screen {
             self.deferred_status_title = true;
             return Vec::new();
         }
-        self.title_output()
+        self.status_title_output()
     }
 
     fn take_deferred_status_title(&mut self) -> Vec<u8> {
@@ -145,10 +147,19 @@ impl Screen {
             return Vec::new();
         }
         self.deferred_status_title = false;
-        self.title_output()
+        self.status_title_output()
     }
 
-    /// Seeds the native title saved alongside a checkpoint's redraw.
+    fn status_title_output(&self) -> Vec<u8> {
+        if self.title_negotiation == TitleNegotiation::Eligible {
+            self.title_output()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Seeds the native title saved alongside a checkpoint's redraw, keeping the eligibility
+    /// recovered from that redraw.
     pub fn restore_title(&mut self, title: &str) {
         self.terminal.restore_title(title);
     }
@@ -190,6 +201,7 @@ impl Screen {
             bytes,
             rows,
             self.terminal.title.as_deref().is_some_and(title_has_text),
+            &mut self.title_negotiation,
             self.status_glyph.as_deref(),
         );
         let mut status = Vec::new();

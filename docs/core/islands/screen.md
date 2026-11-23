@@ -19,7 +19,9 @@ All of it in memory, one set per `Screen`:
 - **The native title**. The last title change reported by the terminal parser, used for
   `title_change` and checkpoint redraws.
 - **The status glyph**. The value supplied by the agent actor. Viewer output and viewer redraws
-  put it before a nonblank native title unless the title already begins with that glyph and a space.
+  put it before a nonblank native title set after the CLI asked about OSC 7501. Screen remembers
+  the question and whether it preceded the current title. A later question leaves the current
+  title's eligibility as it was.
 - **The modes alacritty keeps private**: scrolling region, active charset (G0 or G1),
   modifyOtherKeys, the kitty keyboard flags (a stack per screen, at most 8 entries), and the tab
   stops.
@@ -34,11 +36,11 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 - Reads, views, redraws and resizes give exactly what a terminal keeping every scrollback row in
   alacritty would give. Where a row lives (alacritty or the store) never shows.
 - Viewers get whole characters, sequences and strings only, and never a terminal query or an
-  OSC 7501 sequence. With a glyph set, OSC 0 and OSC 2 add the glyph and a space to the front of
-  a title unless it is blank or already begins with them. A blank title has only whitespace or
-  control characters. A blank OSC 0 or OSC 2 reaches live viewers as a reset only if the CLI
+  OSC 7501 sequence. Eligible OSC 0 and OSC 2 titles get the current glyph and a space unless
+  they already begin with them. A blank title has only whitespace or control characters.
+  A blank OSC 0 or OSC 2 reaches live viewers as a reset only if the CLI
   currently has a nonblank title. The filter starts with the screen's title before `feed` and
-  follows OSC titles in that call in order.
+  follows OSC titles and the OSC 7501 question in stream order.
 - A viewer that takes `redraw` and then every later `viewer_output` and glyph update (or a new
   redraw when `redraw_viewers` is set) gets the screen's cells, cursor, title when known, modes,
   tab stops, modifyOtherKeys and keyboard flags. After a title reset, a viewer that gets its title
@@ -47,7 +49,7 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
   viewers that fell behind.
 - At a clean point (`at_clean_point`: main screen, no unit half-written, no open synchronized
   update), `redraw_with_all_scrollback` fed to an empty screen of the same size and scrollback
-  rebuilds the rows, cursor, pen, nonblank native title, charsets and modes.
+  rebuilds the rows, cursor, pen, nonblank native title, title negotiation, charsets and modes.
 - Query replies and status events come in the order the CLI wrote what caused them. The reply to
   `OSC 7501 ; ?` and replies to supplied terminal color queries stay among alacritty's own replies.
   Each query of a supplied color gets one reply; an omitted color gets none.
@@ -81,7 +83,8 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 - `at_clean_point()`, then `redraw_with_all_scrollback() -> Vec<u8>` for a checkpoint;
   `on_alternate_screen()` and `has_unfinished_unit()` to say what a forced checkpoint loses.
 - `restore_title(&mut self, title: &str)` seeds the title saved alongside a restored redraw before
-  replaying later output. The call produces no title change for viewers.
+  replaying later output. It preserves title eligibility from the redraw and produces no title
+  change for viewers.
 - `synchronized_update_deadline() -> Option<Instant>`, `end_synchronized_update() -> ParsedOutput`.
 
 **Daemon, agent actor** (`daemon/src/agent/actor.rs`):
@@ -92,16 +95,18 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
   carries the batch's complete OSC 9;4 sequences in order, so a viewer replacing the batch with a
   redraw can still receive them.
 - `set_status_glyph(&mut self, glyph: Option<String>) -> Vec<u8>` sets or clears the glyph.
-  When the glyph changes and the CLI has a nonblank title, it returns a title sequence. It may
+  When the glyph changes and the title is eligible, it returns a title sequence. It may
   repeat the title viewers already see if the CLI's title begins with the glyph and a space.
   During an open synchronized update, later title sequences use the new glyph immediately and
   the setter returns empty bytes. When `feed` or `end_synchronized_update` closes the update,
-  its `viewer_output` ends with the title and the current glyph.
+  its `viewer_output` ends with the eligible title and the current glyph, if set.
 - A timer on `synchronized_update_deadline()` ends an update the CLI never closed.
 - `read(lines) -> Reading { text, lines, alternate, older, trimmed }` is what `ReadScreen` gets.
 - `bracketed_paste()` and `application_cursor_keys()` decide how typed input is encoded.
 - `leave_for_restart()` then `reset_for_restart()`: output the actor feeds through the screen, like
-  CLI output, when a new run starts in the same terminal.
+  CLI output, when a new run starts in the same terminal. A private
+  `OSC 7501 ; facade-title-reset ST` in the reset clears title negotiation and preserves the
+  native title. Screen consumes the marker without a status event, query reply or viewer output.
 
 **Daemon, viewers** (`daemon/src/agent/viewers.rs`): `redraw(keep_scrollback, include_scrollback)`,
 which replays at most `REDRAW_SCROLLBACK_ROWS` (1,000) scrollback rows. A redraw waits while
@@ -181,8 +186,8 @@ The files:
 
 1. `sequences::filter` runs the splitter over the bytes. Each complete piece goes to viewers unless
    it is a query, a status sequence or a blank OSC title over no title. It adds the current glyph
-   to viewer titles and records mode changes in `KeptModes` at once. Screen switches, full resets,
-   tab-stop changes and status events become marks at the offset just after them. A C0 control
+   to eligible viewer titles and records mode changes in `KeptModes` at once. Screen switches,
+   full resets, tab-stop changes and status events become marks at the offset just after them. A C0 control
    inside a sequence goes to viewers at once, because held back it would act again after a redraw
    that already shows it.
 2. alacritty parses up to each mark, then the screen looks at its state there: whether the CLI
@@ -225,8 +230,13 @@ no terminal moves into its scrollback, and clears tab stops), the tab stops, the
 styles and links (a wrapped row is written to the margin so the viewer wraps too), the saved
 cursor, the scrolling region and cursor (writing the margin cell again to restore a pending wrap),
 then modes, keyboard flags, modifyOtherKeys, charsets, pen, and the title if it has text. Viewer
-redraws add the status glyph and a space unless the title already begins with them. A checkpoint
-redraw writes a nonblank title as the CLI set it so a restored screen can apply the current glyph.
+redraws use the same glyph rule as live output.
+
+A checkpoint redraw writes a nonblank native title and the OSC 7501 question if the CLI asked it.
+The question goes before an eligible title and after an earlier title. Each is written alone
+when it is the only one present. The checkpoint reader discards the synthetic reply and status
+event. Restoring a legacy redraw starts with the native title plain and learns from later
+output in the log.
 
 For a viewport redraw, each row starts at an explicit position and the cleared space to the right
 and below stays blank. Scrollback replays one canonical row per console row. The redraw puts the
