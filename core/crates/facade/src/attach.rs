@@ -42,6 +42,10 @@ const RECONNECT_TIMED_OUT: &str = "the terminal did not reconnect in time";
 /// The most typed bytes that wait while a connected writer is busy.
 const MAX_QUEUED_KEY_BYTES: usize = 1024 * 1024;
 
+const SAVE_HOST_TITLE: &[u8] = b"\x1b[22;0t";
+const RESTORE_HOST_TITLE: &[u8] = b"\x1b[23;0t";
+const CLEAR_TITLE: &[u8] = b"\x1b]2;\x1b\\";
+
 /// Whether raw mode is on and the person's terminal still has to be restored.
 static RAW_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// The console modes entered after raw mode, which the restoration puts back.
@@ -132,8 +136,8 @@ fn spawn_with(input: &Arc<AgentInput>, work: fn(&AgentInput)) {
     std::thread::spawn(move || work(&input));
 }
 
-/// Turns raw mode on, then the console modes that make keys travel as bytes; from here on every end
-/// of the attachment restores the terminal.
+/// Turns on raw mode and byte input and saves the host title. Every end of the attachment restores
+/// the terminal from here.
 fn enter_raw_mode() -> std::io::Result<()> {
     RAW_MODE_ACTIVE.store(true, SeqCst);
     crossterm::terminal::enable_raw_mode().inspect_err(|_| RAW_MODE_ACTIVE.store(false, SeqCst))?;
@@ -142,6 +146,8 @@ fn enter_raw_mode() -> std::io::Result<()> {
         let _ = crossterm::terminal::disable_raw_mode();
     })?;
     *lock_vt_modes() = Some(modes);
+    let _terminal = lock_terminal();
+    write_terminal(SAVE_HOST_TITLE);
     Ok(())
 }
 
@@ -1085,6 +1091,10 @@ impl Display {
         };
         let output = frame.screen.feed(&bytes);
         capture_mouse(frame.screen.reports_mouse());
+        // A snapshot omits the OSC title when the agent has never set one.
+        if output.title_change.is_none() {
+            write_terminal(CLEAR_TITLE);
+        }
         self.shared = Some(frame);
         self.draw(Some(&output));
     }
@@ -1106,6 +1116,7 @@ impl Display {
             self.draw(Some(&output));
         } else if !fits(shared.grid(), shared.capacity) {
             write_activity(&output);
+            shared.write_title_change(&output);
         } else if shared.uses_viewport() {
             write_activity(&output);
             write_terminal(&shared.screen.redraw_in_viewport_update());
@@ -1122,9 +1133,10 @@ impl Display {
         let waiting_for_view = !self.host_alternate
             && !shared.screen.on_alternate_screen()
             && shared.screen.text(1).is_empty();
+        let grid_fits = fits(shared.grid(), shared.capacity);
         if let Some(output) = output {
-            if waiting_for_view && output.title_change.is_some() {
-                write_terminal(&shared.screen.title_output());
+            if waiting_for_view || !grid_fits {
+                shared.write_title_change(output);
             }
             write_activity(output);
         }
@@ -1135,7 +1147,7 @@ impl Display {
             write_terminal(b"\x1b[?1049h");
             self.host_alternate = true;
         }
-        if !fits(shared.grid(), shared.capacity) {
+        if !grid_fits {
             show_too_small(shared.grid());
             return;
         }
@@ -1174,6 +1186,13 @@ impl SharedScreen {
 
     fn uses_viewport(&self) -> bool {
         self.capacity.is_some_and(|size| size != self.grid())
+    }
+
+    /// Forwards a title change while the agent's screen is hidden.
+    fn write_title_change(&self, output: &ParsedOutput) {
+        if output.title_change.is_some() {
+            write_terminal(&self.screen.title_output());
+        }
     }
 }
 
@@ -1304,7 +1323,7 @@ fn finish_attachment(input: &AgentInput, end: anyhow::Result<AttachEnd>) {
     }
 }
 
-/// Restores the terminal's display modes and returns from the alternate screen when active.
+/// Restores the terminal's display modes and title and returns from the alternate screen when active.
 fn restoration(alternate: bool) -> Vec<u8> {
     // CAN ends any escape sequence the agent's output left open.
     let mut restoration = b"\x18".to_vec();
@@ -1312,6 +1331,9 @@ fn restoration(alternate: bool) -> Vec<u8> {
         restoration.extend_from_slice(b"\x1b[?6l\x1b[?1049l");
     }
     restoration.extend_from_slice(RESTORE_TERMINAL_SEQUENCE);
+    // Terminals without a title stack can fall back to the host's default label.
+    restoration.extend_from_slice(CLEAR_TITLE);
+    restoration.extend_from_slice(RESTORE_HOST_TITLE);
     restoration
 }
 
@@ -1482,6 +1504,24 @@ mod tests {
             .expect("typing, counting, and detaching did not finish while the write was blocked");
         work.join().unwrap();
         assert!(unsent > 0 && unsent <= maximum_unsent, "{unsent}");
+    }
+
+    #[test]
+    fn restores_the_host_title_with_or_without_an_alternate_screen() {
+        for alternate in [false, true] {
+            let mut host = Screen::new(80, 24, 0);
+            host.feed(b"\x1b]2;host\x1b\\");
+            host.feed(SAVE_HOST_TITLE);
+            if alternate {
+                host.feed(b"\x1b[?1049h");
+            }
+            host.feed(CLEAR_TITLE);
+            host.feed(b"\x1b]2;agent\x1b\\");
+
+            let output = host.feed(&restoration(alternate));
+            assert_eq!(output.title_change.as_deref(), Some("host"));
+            assert!(!host.on_alternate_screen());
+        }
     }
 
     #[test]

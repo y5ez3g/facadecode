@@ -1200,3 +1200,148 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
     );
     resume_process(keeper);
 }
+
+/// The title a terminal shows after `output`: the last one set with OSC 0 or 2, where a title
+/// saved with `CSI 22 t` comes back with `CSI 23 t`.
+fn shown_title(output: &[u8]) -> String {
+    let text = String::from_utf8_lossy(output);
+    let (mut title, mut saved) = (String::new(), Vec::new());
+    let mut rest = &*text;
+    while let Some(at) = rest.find('\x1b') {
+        rest = &rest[at + 1..];
+        if let Some(osc) = rest.strip_prefix(']') {
+            let end = osc.find(['\x07', '\x1b']).unwrap_or(osc.len());
+            if let Some(set) = osc[..end]
+                .strip_prefix("0;")
+                .or_else(|| osc[..end].strip_prefix("2;"))
+            {
+                title = set.to_string();
+            }
+            rest = &osc[end..];
+        } else if let Some(csi) = rest.strip_prefix('[') {
+            let end = csi
+                .find(|ch: char| ('@'..='~').contains(&ch))
+                .unwrap_or(csi.len());
+            if csi[end..].starts_with('t') {
+                let mut params = csi[..end].split(';');
+                let (operation, which) = (params.next(), params.next().unwrap_or("0"));
+                match (operation, which) {
+                    (Some("22"), "0" | "2") => saved.push(title.clone()),
+                    (Some("23"), "0" | "2") => title = saved.pop().unwrap_or(title),
+                    _ => {}
+                }
+            }
+            rest = &csi[end..];
+        }
+    }
+    title
+}
+
+/// While attached, the host terminal shows the CLI's own title: the one it has when the
+/// attachment begins, then each one it sets. With an untitled CLI the host shows no title, or its
+/// own, and labels the terminal by its own rule. When the agent exits or the person detaches, the
+/// host's own title comes back, or none. The same for a foreground start, a foreground resume and
+/// an attach.
+#[test]
+fn the_host_shows_the_attached_cli_s_title_and_gets_its_own_back() {
+    const TITLED: &str = "1111aaaa-2bae-4a45-b193-a5664c198261";
+    const UNTITLED: &str = "2222bbbb-2bae-4a45-b193-a5664c198262";
+    let home = TestHome::new("attach-title");
+    std::fs::write(
+        home.path.join("facade.json"),
+        json!({ "clis": { "claude": { "type": "claude", "program": test_binaries().fakecli } } })
+            .to_string(),
+    )
+    .unwrap();
+    home.save_claude_session(TITLED, "a titled conversation");
+    home.save_claude_session(UNTITLED, "an untitled conversation");
+    let _wire = connect(&home);
+    let host_s_own = |title: &str| title == "HOST-TITLE" || title.is_empty();
+    for (entry, title, detach) in [
+        ("start", Some("OC | Greeting"), false),
+        ("start", None, true),
+        ("resume", Some("OC | Greeting"), true),
+        ("resume", None, false),
+        ("attach", Some("OC | Greeting"), false),
+        ("attach", None, true),
+    ] {
+        let case = format!("{entry}, title {title:?}, detach {detach}");
+        let kind = if title.is_some() {
+            "titled"
+        } else {
+            "untitled"
+        };
+        let name = format!("{entry}-{kind}");
+        let args: Vec<String> = match entry {
+            "start" => vec!["start".into(), "--name".into(), name, "claude".into()],
+            "resume" => {
+                let session = if title.is_some() { TITLED } else { UNTITLED };
+                vec!["resume".into(), session[..8].into()]
+            }
+            _ => {
+                let mut start = home.command(&test_binaries().facade);
+                start.args(["start", "-d", "--name", &name, "claude"]);
+                if let Some(title) = title {
+                    start.env("FAKECLI_TITLE", title);
+                }
+                let started = start.stdin(std::process::Stdio::null()).output().unwrap();
+                assert!(started.status.success(), "{case}: {}", stderr(&started));
+                assert!(wait_for_screen_text(&home, &name, "❯"), "{case}");
+                vec!["attach".into(), name]
+            }
+        };
+        let mut host = home.command(shell());
+        host.args([
+            "-c",
+            "printf '\\033]2;HOST-TITLE\\007HOST-PROMPT\\n'; facade \"$@\"; printf 'HOST-RETURN\\n'",
+            "host",
+        ])
+        .args(&args);
+        if let Some(title) = title {
+            host.env("FAKECLI_TITLE", title);
+        }
+        let mut term = TestTerminal::spawn(&mut host, 100, 24);
+        let shown = |term: &TestTerminal| shown_title(&term.output_since(0));
+        assert!(
+            term.wait_for(LOADED_TIMEOUT, |view| view.contains("❯")) && term.on_alternate_screen(),
+            "{case}: {}",
+            term.text_with_scrollback()
+        );
+        if let Some(title) = title {
+            assert!(
+                wait_until(LOADED_TIMEOUT, || shown(&term) == title),
+                "{case}: {:?}",
+                shown(&term)
+            );
+        } else {
+            assert!(host_s_own(&shown(&term)), "{case}: {:?}", shown(&term));
+        }
+
+        term.send(b"/fake title OC | Changed");
+        assert!(
+            term.wait_for(LOADED_TIMEOUT, |view| view
+                .contains("/fake title OC | Changed")),
+            "{case}: {}",
+            term.text()
+        );
+        term.send(b"\r");
+        assert!(
+            wait_until(LOADED_TIMEOUT, || shown(&term) == "OC | Changed"),
+            "{case}: {:?}",
+            shown(&term)
+        );
+
+        term.send(if detach { b"\x1d" } else { b"\x04" });
+        assert!(
+            term.wait_exit(LOADED_TIMEOUT).is_some(),
+            "{case}: {}",
+            term.text_with_scrollback()
+        );
+        assert!(
+            term.wait_for(LOADED_TIMEOUT, |view| view.contains("HOST-RETURN")),
+            "{case}: {}",
+            term.text_with_scrollback()
+        );
+        assert!(host_s_own(&shown(&term)), "{case}: {:?}", shown(&term));
+    }
+}

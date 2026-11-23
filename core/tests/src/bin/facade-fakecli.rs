@@ -44,6 +44,9 @@
 //! from its screen, as a CLI's permission question does: the question and a menu in place of its
 //! input, the cursor hidden, until Enter or Escape.
 //!
+//! Title: `FAKECLI_TITLE=<text>` sets its terminal's title before its first frame, as OpenCode
+//! does, and a message `/fake title <text>` sets another.
+//!
 //! `FAKECLI_LOOK=muse` shows a long paste as Muse 1.4.20 does, `[Pasted Content <n> chars]`.
 //!
 //! Hints: `FAKECLI_HINT=<text>` draws `<text>` in color where an empty input starts, the cursor
@@ -408,6 +411,10 @@ impl FakeCli {
                 self.log_line("turn without Facade's server");
             }
             self.run_plugin_hook();
+        }
+        if let Some(title) = first.trim().strip_prefix("/fake title ") {
+            self.queries.push(format!("\x1b]2;{title}\x07"));
+            return;
         }
         if first.trim() == "/fake colors" {
             self.queries
@@ -1252,7 +1259,9 @@ fn run() -> anyhow::Result<()> {
         server_answered,
         panel_drawn_ready: false,
         drawn: false,
-        queries: Vec::new(),
+        queries: std::env::var("FAKECLI_TITLE")
+            .map(|title| vec![format!("\x1b]2;{title}\x07")])
+            .unwrap_or_default(),
         hint: std::env::var("FAKECLI_HINT").ok(),
         after_cursor: std::env::var("FAKECLI_DRAFT_AT_START").unwrap_or_default(),
         no_leading_space: std::env::var("FAKECLI_NO_LEADING_SPACE").is_ok_and(|v| v == "1"),
