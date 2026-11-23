@@ -10,7 +10,7 @@ import sys
 from tempfile import TemporaryDirectory
 from zipfile import BadZipFile
 
-from acceptance import affected_products, baseline_cases, changed_paths
+from acceptance import affected_products, baseline_cases, changed_paths, require_new_bindings
 from catalog import AcceptanceError, load
 from evidence import git
 from github_evidence import SHA, check_pull_run, run_artifacts, verify_hosted
@@ -57,14 +57,16 @@ REQUIRED = {
     },
     COLD: {'Core cold migration (linux-x64)': ('Reopen the pinned v3 state in the candidate',
                                                'Keep the prior and candidate evidence')},
-    REMOTE: {'Extension Remote SSH connect (linux-x64)': ('Observe ownership in the actual Remote SSH workspace',
+    REMOTE: {'Extension Remote SSH connect (linux-x64)': ('Stage the verified official desktop editor',
+                                                        'Observe ownership in the actual Remote SSH workspace',
                                                         'Keep Remote SSH runtime and cleanup evidence')},
 }
 REQUIRED[CORE]['Core on linux-x64'] += ('Format', 'Agents outlive an SSH login', 'Route a Core agent over real SSH',
                                        'Keep the real SSH route evidence')
 REQUIRED[EXTENSION]['Extension on linux-x64, old engine'] += (
     'Verify the installed Linux x64 candidate', 'Keep the Linux x64 candidate install evidence',
-    'Keep the checked-out source tree',
+    'Keep the checked-out source tree', 'Release script tests', 'Record the release fixture results',
+    'Keep the release fixture output',
 )
 RUNNERS = {
     **dict.fromkeys(REQUIRED[SHADOW] | REQUIRED[COLD] | REQUIRED[REMOTE], 'ubuntu-24.04'),
@@ -106,6 +108,7 @@ def current_candidate(repo, pull, head, base):
 def require_catalog_minimum(cases, baseline):
     if not baseline:
         raise AcceptanceError('the reviewed main commit has no acceptance catalog')
+    require_new_bindings(cases, baseline)
     differences = []
     for previous in baseline:
         current = cases.get(previous['id'])
@@ -199,7 +202,7 @@ def required_artifacts(repo, workflow, run):
         COLD: {f'core-cold-migration-{attempt}'},
         REMOTE: {f'extension-remote-ssh-{attempt}'},
         EXTENSION: {
-            'tested-extension-tree', f'native-install-linux-x64-{attempt}',
+            'tested-extension-tree', f'native-install-linux-x64-{attempt}', f'release-fixture-linux-x64-{attempt}',
             *(f'extension-{target}' for target in TARGETS),
             *(f'editor-tests-{target}-{engine}' for target in TARGETS for engine in ('old', 'rust')),
         },

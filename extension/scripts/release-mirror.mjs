@@ -24,7 +24,7 @@ function r2Request({
 	});
 }
 
-/** Copy the verified Release assets, optionally promoting the website's stable version. */
+/** Stage verified Release assets or verify the website as it switches or resumes stable. */
 export async function publishMirror(version, assets, latest, options) {
 	const request = options?.request ?? fetch;
 	const r2 = r2Request(options);
@@ -53,6 +53,7 @@ export async function publishMirror(version, assets, latest, options) {
 	for (const asset of assets) {
 		const key = `releases/${version}/${asset.file}`;
 		if (await check(key, asset.sha256)) continue;
+		assert.ok(!latest, `${key} is missing from the staged mirror`);
 		const bytes = readFileSync(asset.path);
 		assert.equal(sha256(bytes), asset.sha256, `${asset.file} changed after GitHub verification`);
 		await put(key, bytes);
@@ -60,11 +61,21 @@ export async function publishMirror(version, assets, latest, options) {
 	}
 
 	if (latest) {
+		const resume = options?.resume;
 		const bytes = readFileSync(assets.find(asset => asset.file === coreVersionFile).path);
 		assert.equal(bytes.toString(), version + '\n', 'The Release version marker names another version');
-		await put(coreVersionFile, bytes);
-		for (const file of stableFiles) {
-			assert.ok(await check(file, expected.get(file)), `${file} is missing from the stable mirror`);
+		const markerDigest = expected.get(coreVersionFile);
+		assert.equal(sha256(bytes), markerDigest, 'The stable marker differs from the GitHub Release');
+		if (!resume) await put(coreVersionFile, bytes);
+		try {
+			assert.ok(await check(coreVersionFile, markerDigest), 'The website has no stable marker for this candidate');
+			for (const file of coreInstallers) {
+				assert.ok(await check(file, expected.get(file)), `${file} is missing from the stable mirror`);
+			}
+			assert.ok(await check(coreVersionFile, markerDigest), 'The stable marker disappeared during read-back');
+		} catch (error) {
+			if (resume) throw error;
+			throw new Error(`The website accepted the stable marker write for Facade ${version}. Stable read-back failed. ${error.message}`, { cause: error });
 		}
 	}
 	console.log(`Verified ${assets.length} files for Facade ${version} at ${website}`);

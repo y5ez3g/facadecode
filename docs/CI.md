@@ -429,8 +429,10 @@ per scenario target and compares its exact test names. Extension shares a fixtur
 Mocha selections with the same engine and route. Multi-window and lifetime drivers use separate
 fixtures. Shared Window Component and stdio contracts also use exact compiled Mocha selectors.
 The verifier requires their complete JSON report with the selected titles and zero failures or
-skips. The native Extension matrix pins VS Code `1.147.0` and logs the build commit. Its
-fixture build, editor download and test runtime are separate timed steps. The Intel Rust PR
+skips. The native Extension matrix pins the official VS Code `1.147.0` archive for each host.
+Each job checks the archive size, digest, version and build commit before building editor
+fixtures. The Remote SSH lane stages the same verified Linux x64 desktop archive. Build,
+download and test execution remain separate timed steps. The Intel Rust PR
 job can restore Cargo dependencies for an eligible build. It still builds from source and runs
 every case. The editor pilot runs the remote worktree case with two live Core Shell Attach clients
 and a real editor attached to the same process through a fixture SSH route. An incompatible
@@ -520,10 +522,11 @@ python3 -B ci/merge_review.py --repo OWNER/REPO --pr NUMBER --head "$head" --bas
 Review requires the current `main` base and GitHub test merge, the five first-attempt
 workflows, all 25 jobs on their expected runner labels, and successful execution and
 evidence steps. It checks the registered workflow and matching GitHub Actions check for
-each job. It preserves each base catalog obligation and exact existing binding. Intentional
+each job. It preserves each base catalog obligation and exact existing binding. The catalog check
+also requires an executable binding for every new obligation against the base. Intentional
 catalog changes need separate review. It rehashes the original shadow and native archives,
-reconciles exact shadow case proofs and five typed native case records, and verifies all
-six unsigned native package sets and their paired VSIX bytes. Each of the 12 native editor
+reconciles exact shadow case proofs, five typed native case records and two release fixture
+case records, and verifies all six unsigned native package sets and their paired VSIX bytes. Each of the 12 native editor
 logs must meet the reviewed 61-pass baseline and record completed profile cleanup. These
 native suite counts supplement the exact shadow case list. The verifier checks the current
 PR, base, workflows and local checkout again before reporting success. Drafts can be reviewed.
@@ -531,6 +534,23 @@ PR, base, workflows and local checkout again before reporting success. Drafts ca
 This command is an operator review of already reviewed sources. Required status and App
 credentials belong to the protected coordinator and isolated execution described above.
 A later attempt requires separate incident and recovery review.
+
+The read-only current main observer identifies missing, running and failed shadow evidence
+on the exact checked branch position.
+
+```sh
+python3 -B ci/github_main_health.py --repo OWNER/REPO --head "$main" --checkout "$main_checkout"
+```
+
+It retains the first failed attempt and its failing step links even after a rerun. A verified
+result replays both main shadow artifacts. The protected health lock and merge authority
+remain separate deployment steps.
+
+The Linux x64 old-engine PR job archives the complete release-script suite with its exact
+test names and the producing source and attempt. Its disposable GitHub and website
+transports prove corrupt and stale candidates cannot switch stable, and an interrupted
+promotion can finish with the same verified pointer and manifest. The independent signed
+candidate lane supplies production signing evidence.
 
 ### Native Core hot takeover QA
 

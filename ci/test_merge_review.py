@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from catalog import AcceptanceError, Case
+from github_main_health import first_attempt_state
 from merge_review import (
     ACTIONS_APP, REMOTE, REQUIRED, RUNNERS, current_candidate, current_runs, listed, require_catalog_minimum, require_jobs,
 )
@@ -40,6 +41,18 @@ class ExpandedReview(unittest.TestCase):
                         {case_id: Case(case_id, 'pr', case.assertion, (), {'name': 'other'})}):
             with self.subTest(changed=changed), self.assertRaisesRegex(AcceptanceError, case_id):
                 require_catalog_minimum(changed, [old])
+
+    def test_a_new_api_needs_a_binding_while_visible_backlog_is_preserved(self):
+        old_id = 'core/shell/command/list'
+        new_id = 'core/shell/command/screen'
+        old = Case(old_id, 'pr', 'List visible agents.', (), None)
+        new = Case(new_id, 'pr', 'Read the chosen screen.', (), None)
+        baseline = [{'id': old.id, 'assertion': old.assertion, 'stage': old.stage}]
+        require_catalog_minimum({old_id: old}, baseline)
+        with self.assertRaisesRegex(AcceptanceError, new_id):
+            require_catalog_minimum({old_id: old, new_id: new}, baseline)
+        bound = Case(new_id, new.stage, new.assertion, (), {'name': 'reads_the_exact_screen'})
+        require_catalog_minimum({old_id: old, new_id: bound}, baseline)
 
     def test_current_base_head_and_merge_parents_are_exact(self):
         origin = {'id': 42, 'full_name': REPO}
@@ -109,6 +122,18 @@ class ExpandedReview(unittest.TestCase):
         for changed in ({**second, 'total_count': 1}, {**second, 'runs': [{'id': 1}]}):
             with self.subTest(changed=changed), self.assertRaises(AcceptanceError):
                 listed('runs', [first, changed], 'runs')
+
+    def test_a_clean_later_attempt_cannot_hide_the_original_main_failure(self):
+        current = {'run_attempt': 2, 'status': 'completed', 'conclusion': 'success'}
+        first_failure = {'name': 'Shadow pilot (extension)', 'conclusion': 'failure',
+                         'html_url': 'https://example.test/job', 'steps': [
+                             {'name': 'Run and verify selected cases', 'conclusion': 'failure'},
+                         ]}
+        status, _, failures = first_attempt_state(current, [first_failure])
+        self.assertEqual(status, 'hold')
+        self.assertEqual(failures[0]['steps'], ['Run and verify selected cases'])
+        self.assertEqual(first_attempt_state(current, [])[0], 'hold')
+        self.assertEqual(first_attempt_state({**current, 'run_attempt': 1, 'status': 'in_progress'}, [])[0], 'pending')
 
     def test_native_editor_needs_executed_tests_and_completed_cleanup(self):
         with TemporaryDirectory() as directory:

@@ -33,6 +33,10 @@ on:
         description: Build and verify the packages after full checks have passed for this source tree
         type: boolean
         default: false
+    outputs:
+      package_attempt:
+        description: The workflow attempt that recorded the Linux x64 native package
+        value: ${{ jobs.verify.outputs.package_attempt }}
 
 permissions:
   contents: read
@@ -46,6 +50,8 @@ concurrency:
 jobs:
   verify:
     name: Extension on ${{ matrix.target }}, ${{ matrix.engine }} engine
+    outputs:
+      package_attempt: ${{ steps.native-package-evidence.outputs.attempt }}
     # Every target runs the editor journeys on the old engine (`facade.rustEngine` off) and runs them
     # again on the Rust engine in a job of its own, which builds and tests nothing else.
     # A signing run's Windows packages are signed (ARCHITECTURE-4.3) in the environment Azure trusts with the signing identity.
@@ -111,14 +117,40 @@ jobs:
           workspaces: core
           key: native-editor-release-darwin-x64-rust
           cache-bin: false
+      - name: Download official VS Code for isolated tests
+        if: "!inputs.package_only"
+        timeout-minutes: 9
+        run: |
+          python -B ../ci/editor_archive.py "$FACADE_PACKAGE_TARGET" \
+            --cache "$RUNNER_TEMP/facade-desktop-cache" --stage "$RUNNER_TEMP/facade-desktop" \
+            --log "$RUNNER_TEMP/facade-desktop.log" --github-env "$GITHUB_ENV"
       - run: npm ci
       - run: npm run compile
         if: "!inputs.package_only"
       - run: npm test
         if: "!inputs.package_only && matrix.engine == 'old'"
       - name: Release script tests
+        id: release-tests
         if: "!inputs.package_only && runner.os == 'Linux' && matrix.engine == 'old'"
-        run: node --test scripts/release.test.mjs
+        run: |
+          if [[ "$FACADE_PACKAGE_TARGET" == linux-x64 && "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            mkdir -p "$RUNNER_TEMP/release-fixture"
+            node --test --test-reporter=tap scripts/release.test.mjs | tee "$RUNNER_TEMP/release-fixture/release.tap"
+          else
+            node --test scripts/release.test.mjs
+          fi
+      - name: Record the release fixture results
+        if: github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.engine == 'old' && steps.release-tests.outcome == 'success'
+        run: node scripts/release-fixture-evidence.mjs stamp "$RUNNER_TEMP/release-fixture"
+      - name: Keep the release fixture output
+        if: >-
+          always() && github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.engine == 'old' &&
+          (steps.release-tests.outcome == 'success' || steps.release-tests.outcome == 'failure')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-fixture-linux-x64-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-fixture/
+          if-no-files-found: error
       - run: node scripts/l10n.mjs check
         if: "!inputs.package_only && matrix.engine == 'old'"
       - run: python ../docs/extension/audit/check_spec.py
@@ -213,35 +245,6 @@ jobs:
       - name: Build the isolated editor fixtures
         if: "!inputs.package_only"
         run: node scripts/build-it.mjs
-      - name: Download official VS Code for isolated tests
-        if: "!inputs.package_only"
-        timeout-minutes: 6
-        env:
-          EDITOR_VERSION: '1.147.0'
-        run: |
-          node <<'JS'
-          const fs = require('node:fs');
-          const { downloadAndUnzipVSCode } = require('@vscode/test-electron');
-          const { editorBuildCommit } = require('./build/out/test/integration/editors.js');
-          const version = process.env.EDITOR_VERSION;
-          async function downloadEditor() {
-            const options = { version, timeout: 45_000 };
-            try {
-              return await downloadAndUnzipVSCode(options);
-            } catch (error) {
-              if (error?.constructor?.name !== 'TimeoutError' &&
-                  !['ECONNRESET', 'EAI_AGAIN', 'ETIMEDOUT'].includes(error?.code)) {
-                throw error;
-              }
-              console.warn('Transient error fetching the pinned VS Code. Retrying once.', error);
-              return downloadAndUnzipVSCode(options);
-            }
-          }
-          downloadEditor().then(executable => {
-            console.log(`Official VS Code ${version} (${editorBuildCommit(executable, version)})`);
-            fs.appendFileSync(process.env.GITHUB_ENV, `VSCODE_EXECUTABLE=${executable}\n`);
-          }).catch(error => { console.error(error); process.exitCode = 1; });
-          JS
       - name: Isolated editor journeys on Linux
         if: "!inputs.package_only && runner.os == 'Linux'"
         env:
@@ -275,8 +278,13 @@ jobs:
           path: extension/build/integration.log
           if-no-files-found: ignore
       - name: Record the tested native package digests
-        if: github.event_name == 'pull_request' && matrix.engine == 'old'
-        run: node scripts/native-package-evidence.mjs stamp build --target "$FACADE_PACKAGE_TARGET"
+        id: native-package-evidence
+        if: matrix.engine == 'old'
+        run: |
+          node scripts/native-package-evidence.mjs stamp build --target "$FACADE_PACKAGE_TARGET" $FACADE_SIGN
+          if [[ "$FACADE_PACKAGE_TARGET" == linux-x64 ]]; then
+            echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          fi
       - name: Keep tested packages
         if: matrix.engine == 'old'
         uses: actions/upload-artifact@v4

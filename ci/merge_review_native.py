@@ -1,14 +1,15 @@
 """Replay the native evidence exported by the expanded PR workflows."""
 
 from concurrent.futures import ThreadPoolExecutor
+import json
 from pathlib import Path
 import re
 import shutil
 import subprocess
-import sys
 
 from catalog import (
-    AcceptanceError, NATIVE_INSTALL_CASES, NATIVE_PRIOR_CASE, NATIVE_REMOTE_EDITOR_CASE, NATIVE_SSH_CASE, read_json,
+    AcceptanceError, NATIVE_INSTALL_CASES, NATIVE_PRIOR_CASE, NATIVE_REMOTE_EDITOR_CASE, NATIVE_SSH_CASE,
+    RELEASE_FIXTURE_CASES, read_json,
 )
 from check_native_install import verified_install
 import check_prior_build as cold
@@ -82,16 +83,17 @@ def editor_passes(path):
     return sum(counts)
 
 
-def verify_packages(root, output, source):
-    version = read_json(root / 'extension/package.json')['version']
+def verify_node_evidence(root, script, folder, source, *arguments):
     node = shutil.which('node')
     if node is None:
-        raise AcceptanceError('Node is needed to verify the reviewed package bytes')
-    subprocess.run([
-        node, str(root / 'extension/scripts/native-package-evidence.mjs'), 'verify', str(output),
-        '--version', version, '--revision', source['revision'], '--tree', source['tree'],
-        '--run', source['run'].split('/')[1], '--attempt', '1',
-    ], cwd=root, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}, check=True, stdout=sys.stderr, timeout=180)
+        raise AcceptanceError('Node is needed to verify the reviewed release and package evidence')
+    result = subprocess.run([
+        node, str(root / 'extension/scripts' / script), 'verify', str(folder),
+        '--revision', source['revision'], '--tree', source['tree'],
+        '--run', source['run'].split('/')[1], '--attempt', '1', *arguments,
+    ], cwd=root, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}, check=True,
+       stdout=subprocess.PIPE, text=True, timeout=180)
+    return result.stdout
 
 
 def replay_native(root, repo, candidate, records, output):
@@ -121,7 +123,13 @@ def replay_native(root, repo, candidate, records, output):
 
     if (paths['tested-extension-tree'] / 'extension-tested-tree.txt').read_text().splitlines() != [candidate['tree']]:
         raise AcceptanceError('the native Extension jobs reported a different tested tree')
-    verify_packages(root, packages, source('tested-extension-tree'))
+    version = read_json(root / 'extension/package.json')['version']
+    verify_node_evidence(root, 'native-package-evidence.mjs', packages, source('tested-extension-tree'),
+                         '--version', version)
+    name = 'release-fixture-linux-x64-1'
+    release = json.loads(verify_node_evidence(root, 'release-fixture-evidence.mjs', paths[name], source(name)))
+    if set(release['cases']) != set(RELEASE_FIXTURE_CASES):
+        raise AcceptanceError('the release fixture does not cover the expected release contracts')
     name = 'native-install-linux-x64-1'
     install, package = paths[name], packages / 'extension-linux-x64/core'
     sidecar = install / 'SHA256SUMS'
@@ -136,6 +144,7 @@ def replay_native(root, repo, candidate, records, output):
 
     return {
         'typed_cases': sorted(observed),
+        'release_fixture_cases': sorted(release['cases']),
         'package_targets': sum(path.is_dir() for path in packages.iterdir()),
         'editor_passes': {name: editor_passes(path / 'integration.log') for name, path in sorted(paths.items())
                           if name.startswith('editor-tests-')},

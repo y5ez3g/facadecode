@@ -59,7 +59,17 @@ def baseline_cases(root, base):
     return document['cases']
 
 
+def require_new_bindings(cases, baseline):
+    if not baseline:
+        return
+    previous = {row['id'] for row in baseline}
+    unbound = sorted(case.id for case in cases.values() if case.id not in previous and not case.test)
+    if unbound:
+        raise AcceptanceError('new acceptance obligations need an executable binding:\n  ' + '\n  '.join(unbound))
+
+
 def review_bound_cases(cases, baseline):
+    require_new_bindings(cases, baseline)
     lost = []
     changed = []
     for old in baseline:
