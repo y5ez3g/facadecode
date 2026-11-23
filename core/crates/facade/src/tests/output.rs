@@ -175,18 +175,21 @@ fn every_state_has_its_words() {
             json!({ "state": "error", "state_detail": { "text": "Out of credits" } }),
             "Error (Out of credits)",
         ),
-        (ended(json!({ "code": 0, "at": at }), "stopped"), "Stopped"),
+        (
+            ended(json!({ "code": 0, "at": at }), "stopped"),
+            "Ended (stopped by Facade)",
+        ),
         (
             ended(json!({ "code": 0, "at": at }), "normal"),
-            "Exited (code 0)",
+            "Ended (code 0)",
         ),
         (
             ended(json!({ "code": 3, "at": at }), "crashed"),
-            "Exited (code 3)",
+            "Ended (code 3)",
         ),
         (
             ended(json!({ "signal": "SIGKILL", "at": at }), "crashed"),
-            "Ended by signal SIGKILL",
+            "Ended (signal SIGKILL)",
         ),
         (
             ended(json!({ "reason": "terminal_closed", "at": at }), "unknown"),
@@ -364,7 +367,7 @@ fn inspect_describes_custom_programs_guests_and_ended_agents() {
         Some("claude"),
         None,
     );
-    assert_eq!(field(&ended, "State").as_deref(), Some("Exited (code 0)"));
+    assert_eq!(field(&ended, "State").as_deref(), Some("Ended (code 0)"));
     assert_eq!(field(&ended, "PID").as_deref(), Some("-"));
 }
 

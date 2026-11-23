@@ -636,7 +636,7 @@ fn resume_lists_a_stopped_agent_and_reuses_its_launch_choices() {
     let row = table
         .row("REF", address)
         .expect("the stopped agent is listed");
-    assert_eq!(table.cell(row, "STATE"), "Stopped", "{choices}");
+    assert_eq!(table.cell(row, "STATE"), "Ended", "{choices}");
     assert_eq!(table.cell(row, "SESSION"), "-", "{choices}");
     assert_eq!(
         status_field(&home.run_facade_ok(&["status", address]), "Session"),
@@ -1524,8 +1524,8 @@ fn resuming_a_saved_session_after_removal_creates_a_new_agent() {
 #[test]
 fn claude_and_pi_show_current_native_names_through_resume() {
     for (cli, resume_flag, ended_state, status_state) in [
-        ("claude", "--resume", "Stopped", "Stopped"),
-        ("pi", "--session", "Exited", "Exited (code 0)"),
+        ("claude", "--resume", "Ended", "Ended (stopped by Facade)"),
+        ("pi", "--session", "Ended", "Ended (code 0)"),
     ] {
         let home = TestHome::new("native-session-name");
         std::fs::write(

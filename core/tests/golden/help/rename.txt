@@ -1,4 +1,4 @@
-Rename an active agent, guest, or stopped agent.
+Rename an active agent, guest, or ended agent.
 
 Changes only the display name; the agent reference stays the same.
 

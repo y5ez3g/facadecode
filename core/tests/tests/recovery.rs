@@ -612,7 +612,7 @@ fn an_ended_run_whose_terminal_a_descendant_holds_does_not_hold_up_recovery() {
     assert!(
         inspected
             .lines()
-            .any(|line| line.starts_with("State ") && line[5..].trim() == "Exited (code 3)"),
+            .any(|line| line.starts_with("State ") && line[5..].trim() == "Ended (code 3)"),
         "{inspected}"
     );
     assert!(

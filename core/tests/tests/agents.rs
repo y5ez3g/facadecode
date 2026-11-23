@@ -278,7 +278,7 @@ fn immediate_exit_is_recorded_with_exit_code() {
     assert!(
         inspected
             .lines()
-            .any(|line| line.starts_with("State ") && line[5..].trim() == "Exited (code 3)"),
+            .any(|line| line.starts_with("State ") && line[5..].trim() == "Ended (code 3)"),
         "{inspected}"
     );
 }

@@ -738,11 +738,11 @@ pub(crate) fn state_words(agent: &AgentInfo) -> String {
     let detail = agent.state_detail.as_ref();
     if agent.process == ProcessState::Ended {
         if detail.and_then(|detail| detail.how) == Some(HowEnded::Stopped) {
-            return "Stopped".into();
+            return "Ended (stopped by Facade)".into();
         }
         return match &agent.exit {
-            Some(exit) if exit.code.is_some() => format!("Exited ({})", ExitText(exit)),
-            Some(exit) if exit.signal.is_some() => format!("Ended by signal {}", ExitText(exit)),
+            Some(exit) if exit.code.is_some() => format!("Ended ({})", ExitText(exit)),
+            Some(exit) if exit.signal.is_some() => format!("Ended (signal {})", ExitText(exit)),
             _ => "Ended".into(),
         };
     }
@@ -821,12 +821,11 @@ pub(crate) fn resume_list_text(
         .iter()
         .map(|item| {
             let (reference, state, kind) = if let ResumeTarget::Agent { reference } = &item.target {
-                let state = if item.stopped { "Stopped" } else { "Exited" };
                 let machine = machines
                     .iter()
                     .find(|machine| machine.machine_id == reference.machine_id)
                     .map(|machine| machine.selector.as_str());
-                (agent_address(reference, machine), state, "Managed")
+                (agent_address(reference, machine), "Ended", "Managed")
             } else {
                 let prefix = session_prefix(&item.session);
                 let id = if prefixes[prefix] > 1 {

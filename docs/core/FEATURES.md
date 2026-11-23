@@ -80,12 +80,15 @@ gets a name and inbox when it first calls a tool. From that point it can receive
   stopping the other targets.
 - `facade resume` lists resumable agents on reachable machines and CLI sessions in the current directory. `--local`
   lists this machine's candidates with zero SSH. `--machine <MACHINE>` lists the named machine's resumable managed
-  agents. The `SESSION` column uses the same native name or preview as `list`. The state is `Stopped` after a Facade
-  stop, `Exited` when the CLI ended, or `Saved` for a session from the CLI's history. Copy a reference from the
-  `REF` column to `facade resume <REFERENCE>`.
-- Resuming a managed agent keeps its reference, directory and session. Resuming a saved session creates an agent.
+  agents. The `SESSION` column uses the same native name or preview as `list`. The state is `Ended` for a managed
+  agent whose run ended, however it ended, or `Saved` for a session from the CLI's history. Copy a reference from
+  the `REF` column to `facade resume <REFERENCE>`.
+- `facade status <AGENT>` shows the same Agent State as `list` while the agent runs, with the reason for
+  `Waiting for you` and `Error`. For an ended agent it shows `Ended (stopped by Facade)`, `Ended (code N)`,
+  `Ended (signal <SIGNAL>)`, or `Ended` when the way it ended is unknown.
+- Resuming an `Ended` agent keeps its reference, directory and session. Resuming a `Saved` session creates an agent.
   A session already in use produces the reference of the agent using it. Use `-d` to resume in the background.
-- `facade rename <AGENT> <NAME>` changes the name of a running or stopped agent or connected Guest. The reference
+- `facade rename <AGENT> <NAME>` changes the name of a running or ended agent or connected Guest. The reference
   stays the same.
 
 Agent numbers are local to a Facade home. Commands accept a reference such as `a3@devbox`, an ID such as `a3`, or a
@@ -102,7 +105,7 @@ wake it when needed.
   the CLI's own screens, title and mouse mode control the view, and the terminal app keeps no history of the agent's
   output: `facade screen -n <lines> <agent>` reads it.
 - `facade screen [-n <lines>] <agent>` reads the last lines of the screen and scrollback as text. It also reads the
-  last screen of a stopped agent.
+  last screen of an ended agent.
 - `facade type <agent> "hello" -k Enter "again" -k Enter` pastes text and presses keys in the given order.
   Quote each text argument that contains spaces. Facade queues the sequence as one input operation.
   `facade type --help` lists the key names.

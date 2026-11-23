@@ -32,7 +32,7 @@ platform's SIGPIPE behavior or handles a failed write.
 
 The Orchestrator supplies copyable agent references such as `a5@laptop` and message IDs such as `m42@laptop`.
 An unqualified `list` queries reachable machines on demand and leaves sleeping machines idle. `list --machine`
-waits for the named machine and can wake it. `resume` shows stopped agents with resumable sessions and lists
+waits for the named machine and can wake it. `resume` shows ended agents with resumable sessions and lists
 independent CLI sessions from the current folder. A named `resume --machine` lists managed agents on that
 machine and provides references that include its selector. `list --local` and `resume --local` stay on this
 machine and open zero SSH connections even if they start the local daemon.

@@ -1,6 +1,6 @@
-List or resume stopped agents and saved CLI sessions.
+List or resume ended agents and saved CLI sessions.
 
-Without arguments, lists resumable stopped agents across reachable machines
+Without arguments, lists resumable ended agents across reachable machines
 and saved sessions in the current directory. Pass a reference from the list
 to open it in this terminal, or pass '-d' to resume in the background. Press
 Ctrl+] to detach and leave it running.
@@ -18,7 +18,7 @@ Examples
   facade resume -d a5@laptop
 
 Arguments
-  <REFERENCE>  Stopped agent reference, agent ID, unique name, or session ID
+  <REFERENCE>  Ended agent reference, agent ID, unique name, or session ID
 
 Options
       --local              List resumable agents and sessions on this machine only

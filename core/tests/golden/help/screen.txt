@@ -1,7 +1,7 @@
 Read an agent's recent terminal output.
 
 Prints the last lines of the terminal screen and scrollback as plain text.
-Works for both running and stopped agents.
+Works for both running and ended agents.
 
 Usage: facade screen [-n|--lines <N>] <AGENT>
 
