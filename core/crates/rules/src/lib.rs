@@ -290,9 +290,9 @@ pub enum Capture {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "mechanism", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InputRule {
-    /// A prompt row in a frame of two rules, with the cursor in it.
+    /// Input in a frame of two rules, with a prompt row unless it scrolled out.
     Frame(Frame),
-    /// A prompt row above a model line at the bottom, with the cursor in it.
+    /// A prompt row above a model line, or with scroll marks when the model line is absent.
     Prompt(Prompt),
     /// An editor between two rules, with a cursor the CLI draws itself.
     Editor(Editor),
@@ -326,9 +326,20 @@ pub struct Frame {
 pub struct Prompt {
     /// The prompt in the prompt row's first column.
     pub prompt: String,
+    /// Another glyph the input may show in that same column.
+    #[serde(default)]
+    pub alternate_prompt: Option<String>,
     pub model_line: Pattern,
-    pub scrolled: Scrolled,
+    pub scroll_marks: ScrollMarks,
     pub menus: Vec<Menu>,
+}
+
+/// The dim marks in the last column of the first and last input rows. They have no counts.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScrollMarks {
+    pub above: String,
+    pub below: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -355,6 +366,8 @@ pub struct BoxInput {
     pub corner: String,
     /// The half block after the corner.
     pub edge: String,
+    /// Below this screen width, the interior gap is one space. Otherwise it is two.
+    pub narrow_below: usize,
     /// The text of an empty box.
     pub placeholder: Pattern,
     pub menus: Vec<Menu>,
@@ -456,6 +469,9 @@ pub struct StatusGlyph {
 pub struct Scrolled {
     pub above: Pattern,
     pub below: Pattern,
+    /// The patterns match the frame's rules when marked.
+    #[serde(default)]
+    pub on_rules: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -650,7 +666,11 @@ impl InputRule {
             InputRule::Frame(frame) => frame.check()?,
             InputRule::Prompt(prompt) => {
                 one_cell("prompt", &prompt.prompt)?;
-                prompt.scrolled.check()?;
+                if let Some(alternate) = &prompt.alternate_prompt {
+                    one_cell("alternate_prompt", alternate)?;
+                }
+                one_cell("scroll_marks.above", &prompt.scroll_marks.above)?;
+                one_cell("scroll_marks.below", &prompt.scroll_marks.below)?;
             }
             InputRule::Editor(editor) => editor.check()?,
             InputRule::Box(input) => {
@@ -1191,7 +1211,7 @@ mod tests {
         assert!(
             refusal(
                 "claude",
-                &claude().replacen("^↑ (\\\\d+) more lines?$", "^↑ \\\\d+ more lines?$", 1)
+                &claude().replacen("↑ (\\\\d+) more", "↑ \\\\d+ more", 1)
             )
             .contains("one capture")
         );

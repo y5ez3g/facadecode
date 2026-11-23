@@ -967,8 +967,8 @@ Rows of a draft scrolled out of the CLI's input, as the CLI marks them.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `above` | `number` | yes | Rows hidden above the visible input. |
-| `below` | `number` | yes | Rows hidden below the visible input. |
+| `above` | `number` | yes | Rows hidden above the visible input, or 1 where the CLI marks hidden rows without counting them. |
+| `below` | `number` | yes | Rows hidden below the visible input, or 1 where the CLI marks hidden rows without counting them. |
 
 ### HowEnded
 

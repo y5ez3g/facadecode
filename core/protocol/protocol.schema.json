@@ -2119,13 +2119,13 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0,
-          "description": "Rows hidden above the visible input."
+          "description": "Rows hidden above the visible input, or 1 where the CLI marks hidden rows without counting them."
         },
         "below": {
           "type": "integer",
           "format": "uint32",
           "minimum": 0,
-          "description": "Rows hidden below the visible input."
+          "description": "Rows hidden below the visible input, or 1 where the CLI marks hidden rows without counting them."
         }
       },
       "required": [

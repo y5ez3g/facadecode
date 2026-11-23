@@ -203,6 +203,16 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     and an open synchronized update. For automatic delivery the daemon also supplies whether the
     input is untouched.
   - Each mechanism (`frame`, `prompt`, `editor`, `box`, `prompt_row`) knows only the layout its CLI was recorded drawing. Any other screen reads `unknown`, or `interaction` when one of the rule's menus or questions shows.
+  - Codex's `prompt` input accepts `›` and its `alternate_prompt`, `»` at Ultra effort.
+    When the model line is absent, a dim `scroll_marks.above` glyph (`↑`) in the last column of
+    the first input row or a dim `scroll_marks.below` glyph (`↓`) in the last column of the last
+    input row anchors the scrolled composer. The draft omits the glyphs and the reading reports
+    1 hidden row for each marked side.
+  - A frame's `scrolled` patterns capture hidden row counts from marker rows inside the frame, as
+    Antigravity draws them. With `on_rules`, the patterns match the frame's upper and lower rules,
+    as Claude Code draws them. A marked upper rule also allows the input to start on a continuation row.
+  - OpenCode's box has one space between the bar and the text below `narrow_below` (44 columns),
+    and two spaces from that width.
   - A screen in the middle of a synchronized update, a cursor off the screen, or a hidden terminal cursor with no inverse cell of the CLI's own at that position never reads `usable` or `draft`.
   - Colored text alone where the input starts could be a hint or a draft. Claude can also draw hints without styling. For automatic delivery to a fresh input that has received no external edits, the reader marks a single unstyled row at the input start as `unknown` and unsure. Ordinary input reads identify that writing as a draft. A dim hint, or a mode placeholder shown above its footer, counts as empty only while the cursor is where the input starts.
   - A probe is judged from two readings, before its key and after, never from the time between them: whether its space went in by the cursor and the text, what the row was by the text alone, and whether Backspace put the box back by every cell and the cursor.

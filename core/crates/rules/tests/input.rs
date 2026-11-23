@@ -124,9 +124,29 @@ fn a_scrolled_draft_counts_the_rows_its_cli_marks_hidden() {
             }
         }
     }
+    // Claude Code counts its hidden rows in its frame's rules; Codex marks them without a count,
+    // which reads as 1 for a marked side.
+    let marked = |label: &str, above, below| (label.to_string(), HiddenRows { above, below });
     assert_eq!(
         scrolled,
         [
+            marked("claude-2.1.330/draft-40-lines", 30, 0),
+            marked("claude-2.1.330/draft-40-lines-cursor-middle", 14, 16),
+            marked("claude-2.1.330/draft-40-lines-cursor-top", 0, 30),
+            marked("codex-0.170.0/draft-24-lines-default-effort", 1, 0),
+            marked(
+                "codex-0.170.0/draft-24-lines-cursor-top-default-effort",
+                0,
+                1
+            ),
+            marked("codex-0.170.0-20rows/draft-24-lines-default-effort", 1, 0),
+            marked(
+                "codex-0.170.0-20rows/draft-24-lines-cursor-top-default-effort",
+                0,
+                1
+            ),
+            marked("codex-0.170.0/draft-24-lines-ultra-effort", 1, 0),
+            marked("codex-0.170.0/draft-24-lines-cursor-top-ultra-effort", 0, 1),
             (
                 "agy-1.4.12-24rows/wide-pasted".to_string(),
                 HiddenRows { above: 1, below: 0 }
@@ -455,6 +475,23 @@ fn a_draft_reads_as_its_rows_draw_it_and_a_long_paste_as_its_placeholder() {
         let scrolled = draft(cli, label);
         assert!(
             !scrolled.contains('↑') && !scrolled.contains("more line"),
+            "{label}: {scrolled}"
+        );
+    }
+    // Codex's marks in the last column and Claude Code's in its frame's rules are no draft text.
+    for (cli, label) in [
+        ("claude", "claude-2.1.330/draft-40-lines-cursor-middle"),
+        ("codex", "codex-0.170.0/draft-24-lines-default-effort"),
+        (
+            "codex",
+            "codex-0.170.0/draft-24-lines-cursor-top-ultra-effort",
+        ),
+    ] {
+        let scrolled = draft(cli, label);
+        assert!(
+            scrolled.starts_with("draft line")
+                && !scrolled.contains(['↑', '↓'])
+                && !scrolled.contains(" more"),
             "{label}: {scrolled}"
         );
     }

@@ -9,6 +9,7 @@
 		"bar": "┃",
 		"corner": "╹",
 		"edge": "▀",
+		"narrow_below": 44,
 		"placeholder": "^(?:Ask anything|Run a command)… \"",
 		"menus": [{ "selected": "^ *┃ {2}△ Permission required *$" }, { "selected": "^ +\\S.*? {2,}esc *$" }]
 	},

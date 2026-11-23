@@ -8,8 +8,9 @@
 	"input": {
 		"mechanism": "prompt",
 		"prompt": "›",
+		"alternate_prompt": "»",
 		"model_line": "^ {2}\\S.*? · (?:[~/]|[A-Za-z]:\\\\)",
-		"scrolled": { "above": "^↑ (\\d+) more lines?$", "below": "^↓ (\\d+) more lines?$" },
+		"scroll_marks": { "above": "↑", "below": "↓" },
 		"menus": [{ "selected": "^› \\d+\\. \\S", "next": "^ {2}\\d+\\. \\S", "hint": { "pattern": "^ {2}(?:Press )?[Ee]nter\\b", "within": 10 } }]
 	},
 	"paste": {
