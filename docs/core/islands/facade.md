@@ -135,9 +135,9 @@ an equally sized console accepts native bytes and a larger console rewrites the 
 terminal reset takes the full draw path. An undersized console reports the current layout size in the alternate
 screen. Screen carries the CLI's native activity bytes through derived draws.
 
-Attach shows the CLI's current native title in the host terminal and clears it when the CLI has no title.
-When the attachment ends, Attach clears the title and uses the terminal's title stack, where supported,
-to restore the host's previous title.
+Attach keeps the host terminal's title until the CLI sets its own. When the attachment ends, Attach clears
+the title only if it showed a CLI title. It always uses the terminal's title stack, where supported, to
+restore the host's previous title.
 
 The CLI's mouse mode controls when the console captures wheel input. Base converts Windows console records
 into viewport coordinates, and Screen encodes them as terminal input in the shared grid. With mouse reporting

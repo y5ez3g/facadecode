@@ -1270,9 +1270,10 @@ fn glyphed(glyph: &str) -> String {
     format!("{glyph}{TITLE}")
 }
 
-/// Whether `title` is the host's own title, or none.
+/// Whether `title` is the host's own title. An empty title is not: a console that gets one shows
+/// a label of its own, such as a path.
 fn host_s_own(title: &str) -> bool {
-    title == "HOST-TITLE" || title.is_empty()
+    title == "HOST-TITLE"
 }
 
 /// The environment of a test CLI titled `TITLE` that reports its state, first after `delay_ms`;
@@ -1650,6 +1651,59 @@ fn every_viewer_of_claude_code_that_already_reported_gets_its_glyph() {
     ends_with_the_host_s_title(&mut term, b"\x1d", "attach");
 }
 
+/// The console keeps its own title until the attached CLI sets one, as when the CLI runs alone: a
+/// CLI that never sets a title leaves it alone through the attachment and after, and so does
+/// Claude Code that reports before it has a title. Once Claude Code sets one, the console shows it
+/// with its glyph, and its own title comes back at the end.
+#[test]
+fn the_console_keeps_its_own_title_until_the_attached_cli_sets_one() {
+    let home = TestHome::new("attach-hosttitle");
+    let _wire = claude_is_the_test_cli(&home);
+    let silent = [("FAKECLI_TURN_MS", "600000")];
+    let untitled: Vec<_> = reporting("0")
+        .into_iter()
+        .filter(|(variable, _)| *variable != "FAKECLI_TITLE")
+        .collect();
+    for (name, env, reports) in [
+        ("never-titled", &silent[..], false),
+        ("titled-later", &untitled[..], true),
+    ] {
+        let mut term = host_running(&home, &["start", "--name", name, "claude"], env);
+        submit(&term, "work");
+        assert!(
+            term.wait_for(LOADED_TIMEOUT, |view| view.contains("> work")),
+            "{name}: {}",
+            term.text()
+        );
+        if reports {
+            assert!(
+                wait_until(LOADED_TIMEOUT, || state_of(&home, name) == "Working"),
+                "{name} reports: {}",
+                home.run_facade_ok(&["status", name])
+            );
+        }
+        std::thread::sleep(secs(3));
+        let titles = titles_set(&term.output_since(0));
+        assert!(
+            titles.iter().all(|set| host_s_own(set)),
+            "{name}: the console's title while attached: {titles:?}"
+        );
+        if reports {
+            submit(&term, "/fake status idle");
+            submit(&term, &format!("/fake title {TITLE}"));
+            shows(&term, &glyphed(RESTING), name);
+        }
+        ends_with_the_host_s_title(&mut term, b"\x04", name);
+        if !reports {
+            let titles = titles_set(&term.output_since(0));
+            assert!(
+                titles.iter().all(|set| host_s_own(set)),
+                "{name}: the console's title through the end: {titles:?}"
+            );
+        }
+    }
+}
+
 /// Claude Code starts with its own `✳` before its title, reports idle while Facade's tools still
 /// connect, then sets its title without the glyph, in a later read. The console goes from its own
 /// title to `✳ <title>` and stays there: never the title alone after the report, never two glyphs.
@@ -1679,21 +1733,19 @@ fn claude_code_s_own_glyph_at_start_gives_way_to_facade_s_without_a_flicker() {
     shows(&term, &glyphed(RESTING), "start");
     std::thread::sleep(secs(1));
     let titles = titles_set(&term.output_since(0));
-    let from_the_cli: Vec<_> = titles.iter().filter(|set| !set.is_empty()).collect();
     assert!(
-        from_the_cli
+        titles
             .iter()
-            .all(|set| host_s_own(set) || **set == glyphed(RESTING)),
+            .all(|set| host_s_own(set) || *set == glyphed(RESTING)),
         "the console's titles at start: {titles:?}"
     );
     ends_with_the_host_s_title(&mut term, b"\x04", "start");
 }
 
 /// While attached, the host terminal shows the CLI's own title: the one it has when the
-/// attachment begins, then each one it sets. With an untitled CLI the host shows no title, or its
-/// own, and labels the terminal by its own rule. When the agent exits or the person detaches, the
-/// host's own title comes back, or none. The same for a foreground start, a foreground resume and
-/// an attach.
+/// attachment begins, then each one it sets. Until the CLI has a title the host keeps its own, never
+/// an empty one. When the agent exits or the person detaches, the host's own title comes back. The
+/// same for a foreground start, a foreground resume and an attach.
 #[test]
 fn the_host_shows_the_attached_cli_s_title_and_gets_its_own_back() {
     const TITLED: &str = "1111aaaa-2bae-4a45-b193-a5664c198261";
@@ -1708,7 +1760,6 @@ fn the_host_shows_the_attached_cli_s_title_and_gets_its_own_back() {
     home.save_claude_session(TITLED, "a titled conversation");
     home.save_claude_session(UNTITLED, "an untitled conversation");
     let _wire = connect(&home);
-    let host_s_own = |title: &str| title == "HOST-TITLE" || title.is_empty();
     for (entry, title, detach) in [
         ("start", Some("OC | Greeting"), false),
         ("start", None, true),
@@ -1765,9 +1816,16 @@ fn the_host_shows_the_attached_cli_s_title_and_gets_its_own_back() {
                 "{case}: {:?}",
                 shown(&term)
             );
-        } else {
-            assert!(host_s_own(&shown(&term)), "{case}: {:?}", shown(&term));
         }
+        let titles = titles_set(&term.output_since(0));
+        let before_the_cli_s: Vec<_> = titles
+            .iter()
+            .take_while(|set| Some(set.as_str()) != title)
+            .collect();
+        assert!(
+            before_the_cli_s.iter().all(|set| host_s_own(set)),
+            "{case}: the host's title until the CLI's: {titles:?}"
+        );
 
         term.send(b"/fake title OC | Changed");
         assert!(

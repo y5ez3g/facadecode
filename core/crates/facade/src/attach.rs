@@ -55,6 +55,7 @@ static VT_MODES: Mutex<Option<VtModes>> = Mutex::new(None);
 static TERMINAL: Mutex<Display> = Mutex::new(Display {
     shared: None,
     host_alternate: false,
+    cli_title_shown: false,
 });
 
 /// The person's terminal size, when both dimensions are nonzero.
@@ -1078,6 +1079,8 @@ struct Display {
     shared: Option<SharedScreen>,
     /// Whether Attach has entered the host's alternate screen for this attachment.
     host_alternate: bool,
+    /// Whether the attachment has written a CLI title, including an explicit empty title.
+    cli_title_shown: bool,
 }
 
 impl Display {
@@ -1091,10 +1094,7 @@ impl Display {
         };
         let output = frame.screen.feed(&bytes);
         capture_mouse(frame.screen.reports_mouse());
-        // A snapshot omits the OSC title when the agent has never set one.
-        if output.title_change.is_none() {
-            write_terminal(CLEAR_TITLE);
-        }
+        self.cli_title_shown |= output.title_change.is_some();
         self.shared = Some(frame);
         self.draw(Some(&output));
     }
@@ -1108,6 +1108,7 @@ impl Display {
         };
         let mouse = shared.screen.reports_mouse();
         let output = shared.screen.feed(&bytes);
+        self.cli_title_shown |= output.title_change.is_some();
         let reports_mouse = shared.screen.reports_mouse();
         if reports_mouse != mouse {
             capture_mouse(reports_mouse);
@@ -1303,7 +1304,9 @@ fn finish_attachment(input: &AgentInput, end: anyhow::Result<AttachEnd>) {
     if !RAW_MODE_ACTIVE.swap(false, SeqCst) {
         return;
     }
-    write_terminal(&restoration(std::mem::take(&mut terminal.host_alternate)));
+    let alternate = std::mem::take(&mut terminal.host_alternate);
+    let cli_title_shown = std::mem::take(&mut terminal.cli_title_shown);
+    write_terminal(&restoration(alternate, cli_title_shown));
     terminal.shared = None;
     drop(lock_vt_modes().take());
     let _ = crossterm::terminal::disable_raw_mode();
@@ -1324,15 +1327,17 @@ fn finish_attachment(input: &AgentInput, end: anyhow::Result<AttachEnd>) {
 }
 
 /// Restores the terminal's display modes and title and returns from the alternate screen when active.
-fn restoration(alternate: bool) -> Vec<u8> {
+fn restoration(alternate: bool, cli_title_shown: bool) -> Vec<u8> {
     // CAN ends any escape sequence the agent's output left open.
     let mut restoration = b"\x18".to_vec();
     if alternate {
         restoration.extend_from_slice(b"\x1b[?6l\x1b[?1049l");
     }
     restoration.extend_from_slice(RESTORE_TERMINAL_SEQUENCE);
-    // Terminals without a title stack can fall back to the host's default label.
-    restoration.extend_from_slice(CLEAR_TITLE);
+    if cli_title_shown {
+        // Terminals without a title stack can fall back to the host's default label.
+        restoration.extend_from_slice(CLEAR_TITLE);
+    }
     restoration.extend_from_slice(RESTORE_HOST_TITLE);
     restoration
 }
@@ -1509,18 +1514,24 @@ mod tests {
     #[test]
     fn restores_the_host_title_with_or_without_an_alternate_screen() {
         for alternate in [false, true] {
-            let mut host = Screen::new(80, 24, 0);
-            host.feed(b"\x1b]2;host\x1b\\");
-            host.feed(SAVE_HOST_TITLE);
-            if alternate {
-                host.feed(b"\x1b[?1049h");
-            }
-            host.feed(CLEAR_TITLE);
-            host.feed(b"\x1b]2;agent\x1b\\");
+            for cli_title_shown in [false, true] {
+                let mut host = Screen::new(80, 24, 0);
+                host.feed(b"\x1b]2;host\x1b\\");
+                host.feed(SAVE_HOST_TITLE);
+                if alternate {
+                    host.feed(b"\x1b[?1049h");
+                }
+                if cli_title_shown {
+                    host.feed(b"\x1b]2;agent\x1b\\");
+                }
 
-            let output = host.feed(&restoration(alternate));
-            assert_eq!(output.title_change.as_deref(), Some("host"));
-            assert!(!host.on_alternate_screen());
+                let bytes = restoration(alternate, cli_title_shown);
+                let before_pop = bytes.strip_suffix(RESTORE_HOST_TITLE).unwrap();
+                assert_eq!(before_pop.ends_with(CLEAR_TITLE), cli_title_shown);
+                let output = host.feed(&bytes);
+                assert_eq!(output.title_change.as_deref(), Some("host"));
+                assert!(!host.on_alternate_screen());
+            }
         }
     }
 
