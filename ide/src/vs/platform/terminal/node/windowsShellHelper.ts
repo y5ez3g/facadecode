@@ -194,6 +194,8 @@ export class WindowsShellHelper extends Disposable implements IWindowsShellHelpe
 				return GeneralShellType.CommandCode;
 			case 'copilot.exe':
 				return GeneralShellType.Copilot;
+			case 'facade.exe':
+				return GeneralShellType.Facade;
 			case 'gemini.exe':
 				return GeneralShellType.Gemini;
 			case 'wsl.exe':

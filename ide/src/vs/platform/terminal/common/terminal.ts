@@ -158,6 +158,7 @@ export const enum GeneralShellType {
 	Codex = 'codex',
 	CommandCode = 'commandcode',
 	Copilot = 'copilot',
+	Facade = 'facade',
 	Gemini = 'gemini',
 	PowerShell = 'pwsh',
 	Python = 'python',
