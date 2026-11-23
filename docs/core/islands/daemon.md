@@ -44,13 +44,15 @@ public `run()` entry point.
 - The launch transaction and a resumed run's commit save the displayed executable and arguments
   formatted by the running machine. Runs redacts the injected credential before the display
   text goes to the store or actor. Inspection reads this value from the same run as its screen
-  facts. A recovered keeper run with no committed launch has no displayed command.
+  facts. For a Terminal caller, inspection also reads the native session name or preview within the roster deadline.
+  A recovered keeper run with no committed launch has no displayed command.
 - On Windows a stop releases the actor's copy of the pseudo console's signal pipe, then the
   keeper link's copy, before it asks the keeper to stop. Batch stop uses that same path and reports
   each selected Agent's outcome. Scope stops report connected Guests as skipped.
 - The service opens after recovery has listed the readable agents. Thirty consecutive idle seconds
   allow it to exit. A running Agent, a connected Guest, an ordinary client or current work keeps
-  it active. Foreground SSH, in-flight calls and live terminal watches count as machine work.
+  it active. Foreground SSH, in-flight calls, live terminal watches and machine table sync count
+  as machine work.
 
 ## Interface
 
@@ -192,7 +194,7 @@ Changes to the stored contract follow the [compatibility review](../ENGINEERING.
 | `lib.rs` | Starts and serves this home, schedules the hourly sweep and owns shared saved-connection, numbering and receipt policy. |
 | `store/` | Owns SQLite schema, migrations, table handles and transactions. The daemon publishes saved connections after the store commits. |
 | `operations.rs` | Starts, stops, resumes, renames and removes runs and records their exits. |
-| `resume.rs` | Finds stopped Agents and saved sessions and routes a chosen resume target. A local listing reads this machine and the supplied folder. A named Shell listing reads managed Agents on the selected machine. The holder reads native names or previews using the recorded session ID and launch choices. |
+| `resume.rs` | Finds stopped Agents and saved sessions and routes a chosen resume target. A local listing reads this machine and the supplied folder. A saved candidate carries an eight-character selector if it uniquely matches across the folder's saved sessions, including hidden ones, or the full ID. A named Shell listing reads managed Agents on the selected machine. The holder reads native names or previews using the recorded session ID and launch choices. |
 | `delivery.rs`, `command_replies.rs` | Deliver typed input, messages, initial prompts and results. A send keeps its typed target and reply reference through routing and replays receipts by request ID. The daemon serving a command-line request owns its in-memory reply waiter. |
 | `presence.rs` | Recovers Guests, retires their inboxes and validates editor terminal colors. |
 | `topics.rs`, `remote_agents.rs` | Maintain subscriptions, terminal viewers and each reachable peer's roster contribution. |
@@ -252,7 +254,14 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
   - `Screens`: `new(folder)`, `folder(id)`, `remove(id)`, `delete_without_records(kept)`.
   - For recovery: `recover`, `recover_after_clean_end`, `saved_size`, `screen_writes`, `state_file`, `read_kept`, `instant_of`.
 
-The agent layer is `agent/mod.rs` (the interface above), `agent/actor.rs` (the task's loop) and `agent/person.rs` (the person's keys). The six child islands are plain values the actor owns: no task, no lock, and none calls another. The actor's loop waits on its commands, the terminal, the tools connections and its timers, and passes what one child learns to the next: output goes from the terminal into the screen, then to the viewers, the state, readiness and the typist; what the typist and readiness write goes back into the terminal's queue. Readiness hands the keys it wants pressed to a closure the actor gives it, which turns them into typist calls. Only the actor publishes the record.
+The agent layer is `agent/mod.rs` (the interface above), `agent/actor.rs` (the task's loop) and
+`agent/person.rs` (the person's keys). The seven child islands are plain values the actor owns.
+They have no task or lock. The actor passes what each child learns to the next. Its loop waits on
+commands, the terminal, tools connections and timers. Output goes from the terminal into the screen, then to
+viewers, state, readiness and the typist. Readiness hands the keys it wants pressed to a closure
+that turns them into typist calls. The typist's output goes into the terminal's input queue.
+The actor feeds each state reading to the status glyph and sends any title update through viewers.
+Only the actor publishes the record.
 
 #### terminal
 
@@ -271,6 +280,8 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 - **Keeps:** Every change is logged before the screen takes it. After 4 MiB of output a checkpoint is taken at a clean point; at the log's 64 MiB cap one is forced, and the log says what a recovery from it loses. A full log reads no output until its checkpoint is written; a failed checkpoint is tried again later. A checkpoint is synced before `current` names it, and the folder is synced before older generations are deleted. Recovery starts from the published checkpoint or a valid older one. Folders and files are private through base (0700 and 0600 on Unix); a folder is synced through base, which needs nothing on Windows.
 - **Never does:** touch the terminal; read CLI rules; know viewers; delete the agent's folder.
 - **Interface:** `create(folder, id, cols, rows)` (async), `recovered(folder, id, screen, log)`, `released(folder, id)`; changes: `feed(bytes) -> ParsedOutput`, `resize(cols, rows)`, `end_synchronized_update()`, `set_colors(TerminalColors)` (for the screen it holds and every screen it holds later); reads: `screen() -> &Screen`, `is_held()`; checkpoints: `checkpoint_if_due()`, `is_full()`, `checkpoint_running()`, `checkpoint_written()` (async), `finish_checkpoint(written)`; memory: `let_go()`, `hold()`, `hold_with_log()`, `finish()` (async). Recovery uses `recover`, `recover_after_clean_end` and `saved_size`; the daemon's lifecycle waits for `screen_writes()` to reach 0 before it exits or a newer build takes over.
+- `set_status_glyph(Option<String>) -> Vec<u8>` forwards to the held screen and returns the title
+  bytes for viewers. The screen log and checkpoints keep the CLI's own title.
 
 #### state
 
@@ -280,10 +291,30 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 - **Keeps:**
   - One state, by a fixed order: `Ended`; the CLI's own `WaitingForYou` or `Error`; a question in place of the input box (`WaitingForYou`); tools unavailable (`Error`); `JustDone`; `Working`; `Starting`; `Idle`; a failed start (`Error`); else `Unknown`.
   - Work that stops reads `Working` for 1 more second; a turn someone asked for that ends unwatched reads `JustDone` until a terminal shows the agent.
+  - Under `background_report`, a `working` report with matching words becomes idle evidence.
+  - Under `background_correction`, a `working` report is narrowed to idle evidence while the screen
+    matches the rule's idle anchors. The rule applies regardless of the CLI's installed version.
   - A start and the tools' connection get 60 seconds each; time the CLI spends asking a question does not count.
   - Only `keep` writes the state file, through a private temporary file and a rename. What the screen shows is read again, never kept.
 - **Never does:** touch the terminal; change the agent's record; publish.
-- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `observe(&Screen)`, `asks(asking, now)`; run: `ended(exit, stopped)`, `restarted(started, version, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connection(open)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
+- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(asking, now)`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connection(open)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
+
+#### glyph
+
+`Glyph` selects the status glyph from the run's rule and reported state. Each run starts with no
+glyph. `Working` starts with the last working glyph frame shown, or the first frame when work
+begins for the first time. Only the glyph timer advances the frame. With report evidence,
+`Starting`, `Idle`, `JustDone`, `WaitingForYou` and `Error` share the resting glyph. Other states,
+reports taken back, and screen evidence leave the glyph hidden.
+
+The actor arms the glyph timer `frame_ms` ahead while the glyph is working and a viewer is watching
+or waiting for a redraw. Output leaves the armed deadline in place. The timer disarms when it fires
+or either condition stops holding. The actor sends title changes through `Viewers::show` and the
+current glyph also appears in the next viewer redraw. When the actor ends a synchronized update
+at its deadline, it sends any title bytes returned by the screen.
+
+The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_interval()` and
+`advance()`. The screen composes the viewer's title.
 
 #### typist
 
@@ -387,7 +418,8 @@ runs, each run's terminal and exit, its files and plugin, and the session its CL
     then `serve_keeper()`.
   - Start and resume, in this order: `reserve_start() -> StartReservation`,
     `reservation.wait_for_keeper()` and `prepare_managed(RunRequest, address, context)`.
-    `RunRequest` carries the launch options and any CLI session. A resume uses
+    `RunRequest` carries the launch options and any CLI session. The address and context supply the
+    managed instructions for both start and resume. A resume uses
     `previous_run_ended(id, timeout)` and `replace_folders(id, &prepared)`, then
     `start(reservation, id, number, &prepared, cols, rows, ExitSink)`. `StartedRun` returns the
     process identity, terminal and optional relay verifier for the daemon to commit.
@@ -450,10 +482,11 @@ The keeper connection, the run registry, and starts not yet registered.
 A run's command line, environment, folder, plugin and session following.
 `runs/preparation/` (`mod.rs`, `environment.rs`, `folder.rs`, `plugin.rs`, `session.rs`).
 
-- **Owns:** composing a run's command line from its rule (`facade_rules::start_command_line`,
-  `resume_command_line`) with Facade's tools and the CLI's installed version, its program started
-  directly where the program found on the run's `PATH` is a wrapper (`facade_rules::direct_command`); the run's
-  environment, made from the client's by the rule of `env` in
+- **Owns:** composing a run's command line from its rule (`facade_rules::start_managed_launch_command`,
+  `resume_managed_launch_command`) with a fresh credential for the private relay and the managed
+  instructions. It starts the program directly where the program found on the run's `PATH` is a
+  wrapper (`facade_rules::direct_command`). It builds the run's environment from the client's by the
+  rule of `env` in
   [`StartArgs`](../../../core/protocol/DAEMON.md#startargs) and `FACADE_HOME`. It owns private
   run folders `core/runs/<agent>/<random>/`, with the session
   file, the tool files and a `plugin-folder` note naming the project whose plugin a start placed;
@@ -462,8 +495,9 @@ A run's command line, environment, folder, plugin and session following.
 - **Keeps:** an agent has at most one run folder, and a folder name is never used again; a resume
   removes the earlier folders before it creates its own. A plugin is written only where it is
   missing, this version's, or an earlier version's or changed one no run uses; a plugin that is not
-  Facade core's, or a later version's, is never changed. It goes when the last start holding it
-  and the last run using it have ended, and only if it is still this version's or an earlier one's.
+  Facade core's, or a later version's, is never changed. Once the last start holding it and the last
+  run using it have ended, preparation removes a plugin that matches the current template or has an
+  earlier version. A plugin with the current version and different contents is logged and left in place.
   Only CLIs for which `facade_rules::uses_folder_plugin` holds use it. The session file is checked
   by its modified time and size a second after the run's terminal gives output, as a CLI saves its
   session while it works: at most once a second while output goes on, once more a quiet second
@@ -471,7 +505,8 @@ A run's command line, environment, folder, plugin and session following.
   its CLI has not saved yet, and once more after the run ends; a session that failed to commit is
   sent again a second later.
 - **Never does:** touch the registry or the keeper; commit a session itself.
-- **Interface** (runs only): `Preparation::new(folders, Arc<Held>, events)`, `prepare`,
+- **Interface** (runs only): `Preparation::new(folders, Arc<Held>, events)`,
+  `prepare(RunRequest, managed_instructions: String) -> Result<PreparedRun, ErrorBody>`,
   `replace_folders`, `plugin_used`, `plugin_released`, `remove_folders`,
   `delete_folders_without_records`, `let_go_of_unused_plugins`, `follow_session`, `run_ended`,
   `session_followed(id, deadline)`, `end_session_following`, `read_session`, `has_unsaved_session`, `captures`; the types
@@ -519,9 +554,11 @@ transport failures have distinct states. Queries report their own outcomes, incl
 failed. An idle session can close while its saved connection remains available for a later call.
 
 Explicit temporary SSH connect keeps work on both daemons. Calls and live terminal watches hold each
-participating session, including the forwarding hops. Advertisements, keepalives and roster sync
-are passive. The network releases a saved session after 30 idle seconds. The daemon has its own
-30-second idle timer.
+participating session, including the forwarding hops. Machine table sync over an open session
+counts as work on each end. The sender holds the session while queuing the sync, and the receiver
+holds it while processing the table. At each end, the session and daemon restart their own
+30-second idle timers when their last work ends. SSH keepalives, roster sync and local `daemon.ping`
+let the timers keep running.
 
 ### guests
 
@@ -625,8 +662,10 @@ trait and writes responses and watch changes back, without knowing what any oper
 
 ### mcp
 
-The MCP server speaks over the existing version 1 relay handshake. Initialization and tool discovery
-are available before a Guest is listed. The first tool call locks the identity of its connection.
+The relay and the daemon's MCP server form Facade API v1's MCP entry point. The local relay opens
+its daemon connection with the `relay:1` handshake. MCP negotiates its own date-format
+`protocolVersion` during `initialize`. Initialization and tool discovery are available before a
+Guest is listed. The first tool call locks the identity of its connection.
 Runs generate a private, unpredictable credential for each new run and Rules put it in that launch's
 MCP arguments. The verifier waits for that run's installation and uses its keeper PID, birth and run
 generation. A verified CLI-native session can also identify a matching live run. A run recovered
@@ -643,8 +682,9 @@ can bring a run's tools online. The connection rechecks the run when it sends a 
 waiting inbox read also ends with its bound run, and Post checks the bound actor while it settles
 the available page.
 
-There are eight tools. They use the same targets, machine routing and operation requirements as other daemon
-clients. `list_agents` adds available CLI names on answered, reachable machines within the roster deadline.
+One table defines the eight tools served by `tools/list` and dispatched by `tools/call`. They use
+the same targets, machine routing and operation requirements as other daemon clients. `list_agents`
+adds available CLI names on answered, reachable machines within the roster deadline.
 Local Managed discovery uses the verified run environment and working directory. Guest discovery and remote
 discovery use the target login context. Local Guest start still validates its authenticated relay environment.
 

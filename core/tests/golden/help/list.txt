@@ -2,7 +2,7 @@ List active agents and connected guests.
 
 Shows currently running managed agents and connected MCP guests across
 reachable machines, newest first. Connects to reachable machines on
-demand without waking sleeping ones. Stopped agents move to 'facade resume'.
+demand without waking sleeping ones. Ended agents move to 'facade resume'.
 
 Usage: facade list [--local | --machine <MACHINE>]
 

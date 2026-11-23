@@ -268,6 +268,9 @@ impl Console<'_> {
         // SAFETY: STARTUPINFOEXW is plain data, for which all zeros is valid.
         let mut startup: STARTUPINFOEXW = unsafe { mem::zeroed() };
         startup.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
+        // A null title would make Windows use the CLI's executable path.
+        let mut title = [0u16];
+        startup.StartupInfo.lpTitle = title.as_mut_ptr();
         // No standard handles: the CLI's are its console's, not the keeper's log.
         startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
         startup.lpAttributeList = attributes.0;

@@ -7,8 +7,10 @@ use std::path::Path;
 use std::process::{Child, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use facade_base::files::real_path;
+use facade_base::process::ProcessIdentity;
 use facade_base::ssh::{SshMode, decode_home_hex, machine_ssh_args};
 use facade_scenarios::serde_json::{self, Value, json};
 use facade_scenarios::*;
@@ -1210,6 +1212,186 @@ fn observed_frame(
             return frame;
         }
     }
+}
+
+/// Machine B (`laptop`) and machine A (`devbox`), each with its own daemon, after B saved A and so
+/// opened an on-demand session to it, and nothing else happened.
+struct OnDemand {
+    b: TestHome,
+    a: TestHome,
+    b_id: String,
+    a_id: String,
+    b_daemon: ProcessIdentity,
+    a_daemon: ProcessIdentity,
+    /// The processes on A serving B's sessions; the session is open while one runs.
+    serving: Vec<ProcessIdentity>,
+    /// When the last request of the setup returned.
+    quiet: Instant,
+}
+
+impl OnDemand {
+    fn open(name: &str) -> Self {
+        let b = TestHome::new(&format!("{name}-laptop"));
+        let a = TestHome::new(&format!("{name}-devbox"));
+        install_machine_ssh(&[("laptop", &b), ("devbox", &a)], &test_binaries().facade);
+        let b_id = name_machine(&b, "laptop");
+        let a_id = name_machine(&a, "devbox");
+        add_saved(&b, "devbox", &a);
+        let quiet = Instant::now();
+        let mut serving = Vec::new();
+        assert!(
+            wait_until(secs(5), || {
+                serving = a
+                    .processes()
+                    .into_iter()
+                    .filter(|&pid| command_line_of(pid).contains("machine serve"))
+                    .map(process_identity)
+                    .collect();
+                !serving.is_empty()
+            }),
+            "no session serves devbox: {}",
+            b.daemon_log()
+        );
+        let daemon = |home: &TestHome| process_identity(home.lock_record("daemon").unwrap().0);
+        Self {
+            b_daemon: daemon(&b),
+            a_daemon: daemon(&a),
+            b,
+            a,
+            b_id,
+            a_id,
+            serving,
+            quiet,
+        }
+    }
+
+    fn session_open(&self) -> bool {
+        self.serving.iter().any(alive)
+    }
+}
+
+/// When each of `running` stopped running after `from`, polled until all did or `limit` passed.
+fn ended_after(
+    from: Instant,
+    limit: Duration,
+    running: &[&dyn Fn() -> bool],
+) -> Vec<Option<Duration>> {
+    let mut ended = vec![None; running.len()];
+    while from.elapsed() < limit && ended.iter().any(Option::is_none) {
+        for (end, running) in ended.iter_mut().zip(running) {
+            if end.is_none() && !running() {
+                *end = Some(from.elapsed());
+            }
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    ended
+}
+
+/// A and both ends of their on-demand session have been idle about 29 seconds when B's `act`
+/// reaches A over it. A's daemon and the session then each run a full 30 seconds again, and end on
+/// their own.
+fn an_idle_machine_runs_30_seconds_again_after(name: &str, act: impl FnOnce(&OnDemand)) {
+    let machines = OnDemand::open(name);
+    std::thread::sleep(secs(27).saturating_sub(machines.quiet.elapsed()));
+    assert!(
+        alive(&machines.a_daemon) && machines.session_open(),
+        "devbox or its session ended within 27 seconds: {}",
+        machines.a.daemon_log()
+    );
+    act(&machines);
+    let acted = Instant::now();
+    let ended = ended_after(
+        acted,
+        secs(60),
+        &[&|| alive(&machines.a_daemon), &|| machines.session_open()],
+    );
+    for (what, end) in ["devbox's daemon", "the session"].into_iter().zip(ended) {
+        assert!(
+            end.is_some_and(|end| end >= Duration::from_millis(29_500) && end <= secs(45)),
+            "{what} ended {end:?} after laptop's request, not 30 seconds later: {}",
+            machines.a.daemon_log()
+        );
+    }
+}
+
+/// An agent list query from B renews A's idle time and the session's.
+#[test]
+fn an_agent_list_query_gives_an_idle_machine_and_its_session_30_seconds_again() {
+    an_idle_machine_runs_30_seconds_again_after("renew-list", |machines| {
+        machines.b.run_facade_ok(&["list", "--machine", "devbox"]);
+    });
+}
+
+/// A machine table sync B sends after a change of its own, here its new name, renews A's idle time
+/// and both ends of the session as a query does. No call crosses the session, so B's end restarts
+/// its timer because it sent the sync.
+#[test]
+fn a_machine_table_sync_gives_an_idle_machine_and_its_session_30_seconds_again() {
+    an_idle_machine_runs_30_seconds_again_after("renew-sync", |machines| {
+        let selector = machines.b_id.replace('-', "");
+        machines
+            .b
+            .run_facade_ok(&["machine", "rename", &selector, "laptop-renamed"]);
+    });
+}
+
+/// With no traffic but its transport's own keepalives, an on-demand session and daemons with no
+/// other work end on time.
+#[test]
+fn an_idle_on_demand_session_and_idle_daemons_end_on_time() {
+    let machines = OnDemand::open("idle-session");
+    let ended = ended_after(
+        machines.quiet,
+        secs(60),
+        &[
+            &|| alive(&machines.a_daemon),
+            &|| alive(&machines.b_daemon),
+            &|| machines.session_open(),
+        ],
+    );
+    for (what, end) in ["devbox's daemon", "laptop's daemon", "the session"]
+        .into_iter()
+        .zip(ended)
+    {
+        assert!(
+            end.is_some_and(|end| end >= secs(20) && end <= secs(45)),
+            "{what} ended {end:?} after the last request: {}\n{}",
+            machines.b.daemon_log(),
+            machines.a.daemon_log()
+        );
+    }
+}
+
+/// A connected editor keeps its daemon running with no agent, while the idle on-demand session
+/// that daemon opened still closes on its own and the other daemon, with no work, ends.
+#[test]
+fn an_editor_keeps_its_daemon_while_an_idle_on_demand_session_closes() {
+    let machines = OnDemand::open("editor-session");
+    let mut editor = DaemonTestClient::open(&machines.b);
+    let hello = editor.hello("ide", DAEMON_API_VERSIONS, json!({}));
+    assert_eq!(hello["result"]["api_version"], 1, "{hello}");
+    let ended = ended_after(
+        machines.quiet,
+        secs(60),
+        &[&|| alive(&machines.a_daemon), &|| machines.session_open()],
+    );
+    for (what, end) in ["devbox's daemon", "the session"].into_iter().zip(ended) {
+        assert!(
+            end.is_some_and(|end| end >= secs(20) && end <= secs(45)),
+            "{what} ended {end:?} after the last request: {}",
+            machines.b.daemon_log()
+        );
+    }
+    std::thread::sleep(secs(45).saturating_sub(machines.quiet.elapsed()));
+    assert!(alive(&machines.b_daemon), "{}", machines.b.daemon_log());
+    let listed = editor.call_ok("machine.list", json!({}));
+    assert!(
+        machine_in(&listed, &machines.a_id).is_some_and(|row| row.get("route").is_none()),
+        "{listed}"
+    );
+    drop(editor);
+    machines.b.wait_for_idle_exit();
 }
 
 fn wait_for_route(home: &TestHome, target: &str, hops: &[&str]) {

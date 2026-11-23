@@ -3,6 +3,7 @@ use facade_base::api_v1::daemon::{AdvertiseParams, MachineInfo, MachineState, Wa
 use facade_base::model::machine::MachineResponseState;
 use serde_json::json;
 use tokio::io::{BufReader, duplex, split};
+use tokio::sync::Semaphore;
 
 use super::*;
 
@@ -10,6 +11,7 @@ use super::*;
 struct Handler {
     tables: mpsc::UnboundedSender<AdvertiseParams>,
     forwarded: mpsc::UnboundedSender<Forwarded>,
+    work: Arc<Semaphore>,
 }
 
 struct Forwarded {
@@ -21,6 +23,7 @@ struct Forwarded {
 
 impl SessionHandler for Handler {
     fn replace_table(&self, table: Value) -> Result<(), ErrorBody> {
+        assert_eq!(self.work.available_permits(), 0);
         assert!(self.tables.send(decode_arguments(table)?).is_ok());
         Ok(())
     }
@@ -73,7 +76,15 @@ async fn watch_snapshot(from_peer: &mut Reader<impl AsyncBufRead + Unpin>, id: u
 
 #[tokio::test(start_paused = true)]
 async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
-    let (peer, output) = Peer::new(None);
+    let work = Arc::new(Semaphore::new(1));
+    let begin_work: Arc<BeginSessionWork> = {
+        let work = work.clone();
+        Arc::new(move |kind| {
+            assert!(matches!(kind, SessionWork::Call));
+            Some(Box::new(work.clone().try_acquire_owned().unwrap()))
+        })
+    };
+    let (peer, output) = Peer::new(Some(begin_work));
     let (peer_stream, client_stream) = duplex(4096);
     let (read, write) = split(peer_stream);
     let (client_read, mut to_peer) = split(client_stream);
@@ -81,8 +92,12 @@ async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
     let (tables, mut advertised) = mpsc::unbounded_channel();
     let (forwarded, mut requests) = mpsc::unbounded_channel();
     let session = peer.clone();
+    let handler = Handler {
+        tables,
+        forwarded,
+        work: work.clone(),
+    };
     let running = tokio::spawn(async move {
-        let handler = Handler { tables, forwarded };
         let result = session
             .run(handler, Reader::new(BufReader::new(read)), write, output)
             .await;
@@ -110,6 +125,7 @@ async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
             .await
             .unwrap();
         assert_eq!(json!(advertised.recv().await.unwrap()), json!(table));
+        assert_eq!(work.available_permits(), 1);
 
         let params = json!({
             "route": ["receiver", "destination"], "time_left_ms": 1_000,

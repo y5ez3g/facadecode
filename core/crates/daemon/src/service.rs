@@ -819,7 +819,10 @@ impl Daemon {
         let address = self.agent_address(&reference)?;
         let result: Result<Value, ErrorBody> = async {
             let result = match action {
-                AgentAction::Inspect => value_of(self.inspect(&agent).await?),
+                AgentAction::Inspect => value_of(
+                    self.inspect(&agent, matches!(caller, Caller::Terminal { .. }))
+                        .await?,
+                ),
                 AgentAction::Remove => {
                     self.remove(&agent).await?;
                     value_of(wire::RemoveResult {
@@ -1161,7 +1164,11 @@ impl Daemon {
         })
     }
 
-    async fn inspect(&self, agent: &AgentHandle) -> Result<wire::InspectResult, ErrorBody> {
+    async fn inspect(
+        self: &Arc<Self>,
+        agent: &AgentHandle,
+        include_session_name: bool,
+    ) -> Result<wire::InspectResult, ErrorBody> {
         if agent.is_guest() {
             return Ok(wire::InspectResult {
                 agent: self.public_agent(agent.info())?,
@@ -1177,6 +1184,7 @@ impl Daemon {
                 viewers: Vec::new(),
                 attachments: Vec::new(),
                 launch_command: None,
+                session_name: None,
             });
         }
         let (reply, inspected) = oneshot::channel();
@@ -1189,6 +1197,14 @@ impl Daemon {
                 ErrorBody::new(Reason::Unavailable, "the agent did not answer inspection")
             })?
             .map_err(|_| actor_stopped(agent))?;
+        let session_name = if include_session_name {
+            tokio::time::timeout(LIST_DEADLINE, self.native_session_name(agent, &facts.agent))
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
         let mut info = self.public_agent(facts.agent)?;
         info.title = facts.title;
         Ok(wire::InspectResult {
@@ -1200,6 +1216,7 @@ impl Daemon {
             viewers: facts.viewers,
             attachments: facts.attachments,
             launch_command: facts.launch_command,
+            session_name,
         })
     }
 

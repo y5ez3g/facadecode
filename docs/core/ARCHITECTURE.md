@@ -1,6 +1,6 @@
 # Architecture
 
-Facade core implements the Orchestrator, the Shell entry point and the MCP entry point in the
+Facade core implements the Orchestrator, the Shell entry point and Facade API v1's MCP entry point in the
 [product description](../PRODUCT.md). [Islands](islands/) describes the parts of the Rust workspace, and the
 [glossary](GLOSSARY.md) defines their terms.
 
@@ -94,8 +94,8 @@ An idle saved session closes after 30 seconds. The machine table keeps the saved
 | --- | --- | --- |
 | A client and the daemon | Daemon API v1 uses one JSON-RPC 2.0 object per line on `/tmp/facade-core-<uid>/daemon-<key>.sock` or Windows `\\.\pipe\facade-core-daemon-<key>`. Clients negotiate `api_versions` in `hello`, then use `call`, `watch`, `unwatch` and `cancel`. The daemon sends `changed` and `closing`. | [Daemon API](../../core/protocol/DAEMON.md) |
 | The daemon and the keeper | Keeper API v1 negotiates its own version on the keeper socket. The daemon calls `agent.start`, `agent.stop`, `agent.sync` and `daemon.ping`, and the keeper reports exits with `changed`. The associated terminal is a PTY master or, on Windows, handles duplicated into the receiving process and carried in the same line. | [KEEPER](../../core/protocol/KEEPER.md) |
-| A relay and the daemon | The external connection starts with `hello` using `relay:1`, then exchanges MCP lines. The daemon opens a separate authenticated API v1 session for its internal actor. `closing` lets the relay reconnect to the new daemon with its outstanding calls. | [The relay](../../core/protocol/DAEMON.md#the-relay) |
-| A CLI and its relay | MCP over standard input and output: Facade's eight tools | [MCP](../extension/engineering/MCP.md) |
+| A relay and the daemon | The external connection starts with `hello` using `relay:1`, the relay's own handshake, then exchanges MCP lines. The daemon opens a separate authenticated API v1 session for its internal actor. `closing` lets the relay reconnect to the new daemon with its outstanding calls. | [The relay](../../core/protocol/DAEMON.md#the-relay) |
+| A CLI and its relay | MCP over standard input and output, negotiated by its date-format `protocolVersion`: Facade API v1's MCP entry point, with one table of eight tools and one skill | [MCP](../extension/engineering/MCP.md) |
 | A CLI and its hooks | The CLI runs `facade hook <event> …` with its hook input. The hook saves the session the input reports in the run's session file, which the daemon follows, and prints, in the CLI's own format, the instructions the run's start wrote | [facade](islands/facade.md), [rules](islands/rules.md) |
 | Two daemons | Daemon API v1 with an authenticated `machine` hello, followed by calls, watches and changes in both directions. A machine session runs over SSH to the installed `facade machine serve` and can forward traffic along a route. The API version determines compatibility. | [Machine sessions](../../core/protocol/DAEMON.md#machine-sessions) |
 | A CLI and the daemon | What the CLI draws in its terminal, and its own reports of what it does, the Program Status Protocol (OSC 7501) | [States](../../core/protocol/DAEMON.md#states) |

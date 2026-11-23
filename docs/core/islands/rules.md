@@ -1,8 +1,8 @@
 # Rules
 
 What Facade knows about each CLI it starts by name: the program and its arguments, how the CLI
-keeps, reports and resumes sessions, how its screen draws its input and state, and how Facade's
-tools and hooks enter it. The daemon and `facade` ask Rules for CLI-specific details. Crate
+keeps, reports and resumes sessions, how it draws its input, how it shows or reports its state,
+and how Facade's tools and hooks enter it. The daemon and `facade` ask Rules for CLI-specific details. Crate
 `facade-rules`, folder `core/crates/rules/`, rule
 files in `core/rules/`. It is a library; it starts no program.
 
@@ -48,9 +48,7 @@ files in `core/rules/`. It is a library; it starts no program.
   names the session to resume and returns `None` for a CLI without session resume. `Tools` records
   whether the CLI has Facade's tools or why they could not be given. `uses_run_credential` lets
   the daemon save the credential's digest when the resulting configuration carries it.
-  `start_command_line` and `resume_command_line` take the older `Server` configuration.
-- `installed_version(rule, program)`: the version the installation names beside its program,
-  read without running it.
+  Both use `wire_managed` to configure the CLI's connection to Facade API v1's MCP entry point.
 - The `entries` module reads `clis` in `facade.json`. `entries::select` checks one configured entry.
   `Entry::resolve_program` uses its effective environment and working folder. `Entry::launch_options`
   returns the literal arguments to save and replay, with their model and effort when known. Those
@@ -77,8 +75,7 @@ files in `core/rules/`. It is a library; it starts no program.
 
 - `facade-base` provides `settings` for reading `facade.json`. The `daemon` module provides
   `InputMechanism`, `InputInfo`, `InputState`, `HiddenRows` and `is_session_id`. The runtime files
-  and plugin use `skill::text_v3`, `skill::text` and
-  `version()`. Rules uses `system` (`SYSTEM`, `env_var`, `home_folder_in`),
+  and plugin use `skill::text` and `version()`. Rules uses `system` (`SYSTEM`, `env_var`, `home_folder_in`),
   `programs` (`direct_command`, `on_path`) and `files` (`private_options`, `is_private`,
   `sync_folder`), and `base64` for encoded PowerShell hooks.
 - `facade-screen`: `ScreenView` and its cells, which the input and state readers read.
@@ -91,9 +88,9 @@ command line together. The children never use each other. They may use the layer
 `args`, `formats`, `find`, `rules` and `FILES`, read only.
 
 - `lib.rs`: `Rule` and the type of each section, `parse` and the checks. Each section checks
-  itself (`InputRule`, `PasteRule`, `Frame`, `Editor`, the three state mechanisms); `Rule` returns
-  the first problem, naming the file. Also `find`, `rules`, `installed_version`, the MCP keys and
-  `console_typing`. Every child's public items are re-exported at the crate root.
+  itself (`InputRule`, `PasteRule`, `Frame`, `Editor`, `StatusGlyph`, and the state mechanisms
+  that read the screen). `Rule` returns the first problem and names the file. Also `find`, `rules`,
+  the MCP keys and `console_typing`. Every child's public items are re-exported at the crate root.
 - `wrappers.rs`: `direct_command`, and the two wrappers it reads: Pi's `pi.cmd`, whole as Pi's
   installer writes it, starts its `pi-launcher.js` with the installer's own Node or a Node program
   on `PATH`; Muse Code's wrapper starts `muse-bin-<version>.exe` beside it, for the version and
@@ -114,7 +111,7 @@ command line together. The children never use each other. They may use the layer
   through the CLI's shell intact. The scripts quote each argument as a literal and preserve
   Facade's exit code. Codex's session hook carries `--skill` inside the script where it needs it.
 - `compose.rs` builds the command line for a start or resume in this order.
-  1. wiring gives the tools (`wire`), and YOLO's run settings are merged into the wiring's;
+  1. wiring gives the tools (`wire_managed`), and YOLO's run settings are merged into the wiring's;
   2. wiring has the CLI report its session, through its settings (`report_session`) or a hook,
      plugin or extension (`install_hook`);
   3. the command: the program, the resume arguments, the rule's `launch.args`, YOLO's arguments;
@@ -135,8 +132,8 @@ Rust regular expressions.
 | `input` | the layout of the input box: `frame`, `prompt`, `editor`, `box` or `prompt_row` |
 | `paste` | how long a paste shows before Enter, and the placeholders the CLI draws for it |
 | `session` | `capture` (`session_start` or `none`) and the `resume` arguments with `${session_id}` |
-| `status` | screen evidence of the state, for a CLI whose own reports fall short |
-| `version_file` | the file beside the program that names its version |
+| `status` | how Facade reads the CLI's state from its screen or a report's words |
+| `status_glyph` | the CLI's glyph for viewer titles once the CLI has reported its state. The `working` list holds one or more glyph frames, each shown for `frame_ms` milliseconds. The `resting` glyph is for Starting after a report, Idle, Just done, Waiting for you and Error. Every glyph must be nonempty, and `frame_ms` must be positive |
 | `ready_tools` | what to type so the CLI starts Facade's tools before its first turn |
 | `mcp` | the session `_meta` or environment key and the CLI's always-load key |
 | `yolo` | YOLO's arguments, run settings, and the trust question to answer |
@@ -206,11 +203,26 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     and an open synchronized update. For automatic delivery the daemon also supplies whether the
     input is untouched.
   - Each mechanism (`frame`, `prompt`, `editor`, `box`, `prompt_row`) knows only the layout its CLI was recorded drawing. Any other screen reads `unknown`, or `interaction` when one of the rule's menus or questions shows.
+  - Codex's `prompt` input accepts `›` and its `alternate_prompt`, `»` at Ultra effort.
+    When the model line is absent, a dim `scroll_marks.above` glyph (`↑`) in the last column of
+    the first input row or a dim `scroll_marks.below` glyph (`↓`) in the last column of the last
+    input row anchors the scrolled composer. The draft omits the glyphs and the reading reports
+    1 hidden row for each marked side.
+  - A frame's `scrolled` patterns capture hidden row counts from marker rows inside the frame, as
+    Antigravity draws them. With `on_rules`, the patterns match the frame's upper and lower rules,
+    as Claude Code draws them. A marked upper rule also allows the input to start on a continuation row.
+  - OpenCode's box has one space between the bar and the text below `narrow_below` (44 columns),
+    and two spaces from that width.
   - A screen in the middle of a synchronized update, a cursor off the screen, or a hidden terminal cursor with no inverse cell of the CLI's own at that position never reads `usable` or `draft`.
   - Colored text alone where the input starts could be a hint or a draft. Claude can also draw hints without styling. For automatic delivery to a fresh input that has received no external edits, the reader marks a single unstyled row at the input start as `unknown` and unsure. Ordinary input reads identify that writing as a draft. A dim hint, or a mode placeholder shown above its footer, counts as empty only while the cursor is where the input starts.
   - A probe is judged from two readings, before its key and after, never from the time between them: whether its space went in by the cursor and the text, what the row was by the text alone, and whether Backspace put the box back by every cell and the cursor.
   - The evidence names the rows, never the draft's text. The draft's text leaves `read_draft` only as its second value and is never saved.
   - A message's own draft is its text alone, after the message's lead when one was typed. Whitespace is ignored, because wrapping and indentation draw it differently. The draft may also be the CLI's placeholder for a paste of that size, counted the way that CLI counts. A draft scrolled out above only has to show the text's end.
+  - OpenCode's `[Pasted ~N lines]` counts the lines after trimming whitespace from both ends of the paste.
+    Claude Code's `[Pasted text #N]` matches a paste with no line break.
+    Antigravity's `[Pasted text #N M chars]` counts Unicode scalar values, including line breaks.
+  - Antigravity's mode placeholders include
+    `Auto mode: edits & safe commands auto-approved (shift+tab to cycle)`.
 - **Never does:** decide whether input may be typed; press Enter; read CLI reports, hooks or session files; keep state between readings.
 - **Interface** (re-exported from `facade_rules`):
   - `read_box(&InputRule, &ScreenView) -> BoxReading` gives the reading, the draft's text,
@@ -235,16 +247,17 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
 
 ### state
 
-Reads what a CLI's screen shows of its state, for the CLIs whose own reports leave it out (`state.rs`).
+Reads a CLI's screen for evidence of its state (`state.rs`). A rule can also have the daemon read a report's words.
 
-- **Owns:** no state. It reads two sections of a `Rule`: `status` (a `StateRule`, which names the mechanism and its patterns) and `input` (where the input is drawn). It also owns the screens recorded from each CLI that the readers are tested against, in `tests/state/<cli>.json`.
+- **Owns:** no state. For screen readings it uses `status` (a `StateRule`, which names the mechanism and its patterns) and `input` (where the input is drawn). It also owns the screens recorded from each CLI that the readers are tested against, in `tests/state/<cli>.json`.
 - **Keeps:** a reader recognizes only the layout its CLI was recorded drawing. Any other screen reads as None, so a CLI that draws differently keeps its own reports. A rule reads its screen only around the input kind its mechanism names; any other pairing reads nothing. Readers work on logical lines: rows joined by a soft wrap count as one line, and rows separated by a line break never do. A line that began above the screen is never evidence, and neither is text in the input.
-- **Never does:** keep anything between readings; read the CLI's own reports or decide which version a correction holds for (the daemon does both); type into the CLI or press Enter.
+- **Never does:** keep anything between readings, read the CLI's own reports, type into the CLI, or press Enter.
 - **Interface:**
   - `read_state(rule, view) -> Option<ScreenState>`, where `ScreenState` is `Working`, `Idle`, `Blocked(BlockKind)` or `Error(words)`. The daemon's agent state calls it on each complete frame, but only while the selected evidence calls for a screen reading and never while the CLI is drawing a synchronized update. It is None when the rule has no `status` section, or when the screen shows nothing that section recognizes.
-  - The three mechanisms:
+  - The `status` mechanisms:
     - `turn_error` (OpenCode, over its input box): when a turn's model call failed, the error stands just over that turn's summary. It reads as `Error` with the CLI's words. A turn that produced words shows a rate in its summary, so it never reads as an error.
-    - `background_correction` (Codex, around its input prompt): reads `Idle` when, over the prompt, a dim footer counts the commands still running in the background, drawn exactly as the CLI draws it or cut off at the screen's right edge, and over that stands the dim summary of a finished turn. The daemon uses this to correct Codex's `working` report.
+    - `background_correction` (Codex, around its input prompt): reads `Idle` when, over the prompt, a dim footer counts the commands still running in the background, drawn exactly as the CLI draws it or cut off at the screen's right edge, and over that stands the dim summary of a finished turn. The daemon uses this to correct Codex's `working` report regardless of the installed version.
+    - `background_report` (Claude Code, in a report's words) gives the daemon a `background` pattern. A `working` report whose words match the pattern reads as `idle`.
     - `frame_transcript` (Muse Code, around its input frame): `Working` while the working line stands over the frame, with at most a usage warning or queued input between them. `Idle` under the CLI's header, a question it answered, or the last line of an earlier conversation. Where no frame is drawn, `Blocked(Auth)` while all of its sign-in choices show, and `Blocked(Permission)` while its question about trusting the workspace shows. Part of a frame on the screen reads as None.
   - To check rule files, the layer reads `COUNT` (`${count}`) and `PLURAL` (`${s}`): a footer must contain `COUNT` exactly once, and no placeholder other than these two.
 
@@ -343,6 +356,8 @@ session. It also defines the formats of Facade's hooks.
   - Each hook command is written in a form its CLI hands intact to the program that runs it
     (`formats::facade_hook`). The supported forms include encoded PowerShell for Codex and
     Muse Code, POSIX and cmd.exe, with either `facade` or `facade.exe` as the program.
+  - Muse Code runs hooks without the run's environment. Facade includes the run's
+    `FACADE_AGENT` and `FACADE_HOME` in its `instructions`, `session-start` and `approve` hooks.
   - On Windows, the person's own Antigravity title command, when enabled, goes into Facade's
     encoded title command as one literal argument. A command with a double quote, CR or LF
     stays as it is. As with settings Facade cannot read, Facade adds nothing to the run's settings
@@ -355,10 +370,9 @@ session. It also defines the formats of Facade's hooks.
 - Rules builds configuration in memory and locates the files it reads from the environment and
   folders the caller supplies.
 - **Interface:**
-  - `wire_managed(cli, &ManagedServer, env)` builds the wiring,
-    tools disposition and credential flag. `wire(cli, &Server, env)` serves the earlier launch
-    entry points. The rest of composition uses
-    `report_session(cli, &mut Wiring, &SessionReport) -> bool`,
+  - `wire_managed(cli, &ManagedServer, env)` builds the wiring, tools disposition and
+    credential flag for both start and resume. The rest of composition uses
+    `report_session(cli, &mut Wiring, &SessionReport, server) -> bool`,
     `install_hook(rule, words, &SessionReport, &Wiring, env) -> Option<Hooked>`,
     `merged_settings(rule, &Wiring, words, cwd, env) -> MergedSettings`, and the `Wiring`, `Hooked` and
     `MergedSettings` values they pass. For `lib.rs`: `reports_sessions(cli)`, which checks a rule's session capture,
@@ -366,8 +380,7 @@ session. It also defines the formats of Facade's hooks.
   - Daemon run preparation supplies `ManagedServer` (the `Server` configuration and this run's
     MCP arguments) and `SessionReport` (`facade`, session file, cwd). It writes and cleans up
     Antigravity's folder plugin using `uses_folder_plugin(cli)`, `plugin_files(program, facade)`,
-    `plugin_files_v3(program, facade)`, `plugin_version(manifest)`, `PLUGIN_FOLDER`,
-    `PLUGIN_MEMBERS` and `SKILL_FILE`.
+    `plugin_version(manifest)`, `PLUGIN_FOLDER`, `PLUGIN_MEMBERS` and `SKILL_FILE`.
   - `runs_start_guest_entry`, `guest_entry_serves_run` and `session_ends_with_process` support
     the older running-session paths.
   - For `facade hook` (the facade crate's hooks): `hook`, pure functions of a hook's input and output:

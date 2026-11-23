@@ -288,6 +288,24 @@ impl TestHome {
         user
     }
 
+    /// Saves Claude Code session `id` of this test's project, as Claude Code saves a session whose
+    /// first prompt is `prompt`, so that `facade resume` lists it.
+    pub fn save_claude_session(&self, id: &str, prompt: &str) {
+        let project = facade_base::files::real_path(&self.project).unwrap();
+        let folder: String = project
+            .to_string_lossy()
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+            .collect();
+        let history = self.user_home().join(".claude/projects").join(folder);
+        std::fs::create_dir_all(&history).unwrap();
+        let record = json!({
+            "type": "user", "sessionId": id, "cwd": project,
+            "message": { "role": "user", "content": prompt },
+        });
+        std::fs::write(history.join(format!("{id}.jsonl")), format!("{record}\n")).unwrap();
+    }
+
     pub(crate) fn fixture_bin(&self) -> PathBuf {
         self.folder().join("fixture-bin")
     }

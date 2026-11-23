@@ -134,6 +134,10 @@ title does not change the agent's identity.
 A built-in agent uses its CLI's logo; every custom agent uses the standard robot icon,
 whatever program it runs.
 
+With `terminal.integrated.tabs.allowAgentCliTitle` enabled, a terminal whose foreground process is `facade`
+(`facade.exe` on Windows), as during a Facade Shell attachment, shows the title sequence, falls back to the host's
+label when no title is set, and gives a user rename priority.
+
 The button counts all starting, running and stopping agents in the window.
 Workspace rows display their agents' logos using the existing workspace bar
 conventions, including a marker on collapsed rows. **Show Active Agents...** is a

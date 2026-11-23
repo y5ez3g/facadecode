@@ -389,6 +389,13 @@ impl Peer {
             .ok_or("The machine session closed.")
     }
 
+    pub(super) fn hold_table_sync(&self) -> Option<SessionActivity> {
+        if *self.stopped.borrow() {
+            return None;
+        }
+        self.hold(SessionWork::Call).ok()
+    }
+
     pub(super) fn begin_foreground(&self) -> Result<(), ErrorBody> {
         let activity = self
             .hold(SessionWork::Foreground)
@@ -769,6 +776,7 @@ impl Peer {
                         }
                     }
                     (methods::ADVERTISE, None) => {
+                        let _activity = self.hold_table_sync();
                         if let Err(error) = handler.replace_table(request.params) {
                             return Ok(ReadEnd::Rejected(MalformedRequest { id: None, error }));
                         }

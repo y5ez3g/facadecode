@@ -43,9 +43,6 @@ pub(crate) struct Kept {
     pub(crate) stopped: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     said: Option<Said>,
-    /// Installation version used to select screen evidence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) version: Option<String>,
     #[serde(default)]
     tools: ToolsGiven,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -54,10 +51,9 @@ pub(crate) struct Kept {
 
 impl Kept {
     /// Initial facts for a run, before its CLI has drawn or reported anything.
-    pub(crate) fn new_run(version: Option<String>, tools: ToolsGiven) -> Kept {
+    pub(crate) fn new_run(tools: ToolsGiven) -> Kept {
         Self {
             tools,
-            version,
             ..Default::default()
         }
     }
@@ -201,13 +197,8 @@ impl StateTracker {
     }
 
     /// Begins another run while retaining the last line submitted to this agent.
-    pub(crate) fn restarted(
-        &mut self,
-        started: Instant,
-        version: Option<String>,
-        tools: ToolsGiven,
-    ) {
-        let mut facts = Kept::new_run(version, tools);
+    pub(crate) fn restarted(&mut self, started: Instant, tools: ToolsGiven) {
+        let mut facts = Kept::new_run(tools);
         facts.said = self.saved.said.take();
         *self = Self::new(self.rule, started, facts, None, None);
     }
@@ -248,6 +239,17 @@ impl StateTracker {
     /// Whether the selected evidence calls for a screen reading now.
     pub(crate) fn reads_screen(&self) -> bool {
         self.evidence.reads_screen()
+    }
+
+    /// Whether the current evidence comes from a report that is still in effect.
+    pub(crate) fn has_report_evidence(&self) -> bool {
+        matches!(self.evidence.source, Source::Reports)
+            && self.evidence.correction.is_none()
+            && self
+                .evidence
+                .base
+                .as_ref()
+                .is_some_and(EvidenceState::active)
     }
 
     /// Reads a completed frame using the CLI's rule; synchronized drawing is left alone.
@@ -523,9 +525,7 @@ struct Evidence {
 impl Evidence {
     fn new(rule: Option<&'static Rule>, facts: &Kept) -> Self {
         Self {
-            rule: rule
-                .and_then(|r| r.status.as_ref())
-                .filter(|r| r.applies_to(facts.version.as_deref())),
+            rule: rule.and_then(|r| r.status.as_ref()),
             source: if facts.reports {
                 Source::Reports
             } else {
@@ -568,7 +568,7 @@ impl Evidence {
             Some(StateRule::TurnError(_)) => {
                 matches!(self.base, Some(EvidenceState::Idle | EvidenceState::Done))
             }
-            None => false,
+            Some(StateRule::BackgroundReport(_)) | None => false,
         }
     }
 
@@ -608,8 +608,17 @@ impl Evidence {
 
     fn event(&mut self, event: StatusEvent) {
         match event {
-            StatusEvent::Report(report) => {
+            StatusEvent::Report(mut report) => {
                 self.source = Source::Reports;
+                if report.state == Some(ReportedState::Working)
+                    && let Some(StateRule::BackgroundReport(rule)) = self.rule
+                    && report
+                        .text
+                        .as_deref()
+                        .is_some_and(|words| rule.background.is_match(words))
+                {
+                    report.state = Some(ReportedState::Idle);
+                }
                 match reported(report) {
                     Some(next) => self.replace(next),
                     None => self.revoke(),
@@ -749,15 +758,9 @@ mod tests {
         events.remove(0)
     }
 
-    /// A run of `rule`'s CLI that started at `started`. A tracker of `rule`'s CLI at the version
-    /// its screen evidence was verified on, past its start-up: its working is a turn.
+    /// A run of `rule`'s CLI past its start-up: its working is a turn.
     fn tracker(rule: Option<&str>, started: Instant) -> StateTracker {
-        tracker_at(rule, started, Some("0.166.0"))
-    }
-
-    fn tracker_at(rule: Option<&str>, started: Instant, version: Option<&str>) -> StateTracker {
         let kept = Kept {
-            version: version.map(str::to_string),
             counts_turns: true,
             ..Kept::default()
         };
@@ -787,6 +790,28 @@ mod tests {
             how,
             reason,
         })
+    }
+
+    #[test]
+    fn background_words_make_a_working_report_read_as_idle() {
+        let now = Instant::now();
+        let mut agent = tracker(Some("claude"), now);
+        assert!(!agent.has_report_evidence());
+        agent.take(vec![StatusEvent::Asked]);
+        assert!(!agent.has_report_evidence());
+
+        // "2 tasks still running" and "Finishing a turn", respectively.
+        agent.take(vec![report(
+            "state=working:msg=MiB0YXNrcyBzdGlsbCBydW5uaW5n",
+        )]);
+        assert_eq!(state(&mut agent, now), (ManagedAgentState::Idle, None));
+        assert!(agent.has_report_evidence());
+        assert!(!agent.reads_screen());
+        agent.take(vec![report("state=working:msg=RmluaXNoaW5nIGEgdHVybg==")]);
+        assert_eq!(state(&mut agent, now), (ManagedAgentState::Working, None));
+
+        agent.take(vec![report("state=clear")]);
+        assert!(!agent.has_report_evidence());
     }
 
     #[test]
@@ -1004,7 +1029,7 @@ mod tests {
             StateTracker::new(
                 Some(facade_rules::find("fake").unwrap().unwrap()),
                 now,
-                Kept::new_run(None, tools),
+                Kept::new_run(tools),
                 None,
                 None,
             )
@@ -1118,7 +1143,7 @@ mod tests {
             )
         );
         let mut restarted = given(ToolsGiven::NotGiven);
-        restarted.restarted(later, None, ToolsGiven::Injected);
+        restarted.restarted(later, ToolsGiven::Injected);
         assert_eq!(
             tools(&mut restarted, later).1,
             ToolsState::Connecting,
@@ -1174,6 +1199,7 @@ mod tests {
         assert!(muse.reads_screen());
         muse.evidence
             .observe(Some(ScreenState::Blocked(BlockKind::Auth)));
+        assert!(!muse.has_report_evidence());
         assert_eq!(
             state(&mut muse, now),
             (
@@ -1196,29 +1222,6 @@ mod tests {
         );
     }
 
-    /// Codex at a version its correction was not verified on keeps its own working report, and a
-    /// resume decides again by the version then.
-    #[test]
-    fn codex_at_a_version_its_correction_was_not_verified_on_keeps_its_working_report() {
-        let now = Instant::now();
-        for version in [Some("0.168.0"), None] {
-            let mut codex = tracker_at(Some("codex"), now, version);
-            codex.take(vec![report("state=working")]);
-            assert!(!codex.reads_screen(), "{version:?}");
-            codex.evidence.observe(Some(ScreenState::Idle));
-            assert_eq!(
-                state(&mut codex, now + WORK_HOLD).0,
-                ManagedAgentState::Working,
-                "{version:?}"
-            );
-        }
-        let mut codex = tracker(Some("codex"), now);
-        codex.restarted(now, Some("0.168.0".into()), ToolsGiven::NotInjected);
-        codex.take(vec![report("state=working")]);
-        assert!(!codex.reads_screen(), "a resume at another version");
-        assert_eq!(codex.kept().version.as_deref(), Some("0.168.0"));
-    }
-
     /// A menu or question on the CLI's screen in place of its input waits for the person, ahead of
     /// the bound on its tools, which does not run while it waits: the bounds on its start and its
     /// tools run again from the answer.
@@ -1228,7 +1231,7 @@ mod tests {
         let mut agent = StateTracker::new(
             Some(facade_rules::find("fake").unwrap().unwrap()),
             now,
-            Kept::new_run(None, ToolsGiven::Injected),
+            Kept::new_run(ToolsGiven::Injected),
             None,
             None,
         );
@@ -1283,7 +1286,7 @@ mod tests {
         let mut agent = StateTracker::new(
             Some(facade_rules::find("agy").unwrap().unwrap()),
             now,
-            Kept::new_run(None, ToolsGiven::Injected),
+            Kept::new_run(ToolsGiven::Injected),
             None,
             None,
         );
@@ -1315,7 +1318,7 @@ mod tests {
             StateTracker::new(
                 Some(facade_rules::find("fake").unwrap().unwrap()),
                 now,
-                Kept::new_run(None, ToolsGiven::NotInjected),
+                Kept::new_run(ToolsGiven::NotInjected),
                 None,
                 None,
             )
@@ -1389,7 +1392,7 @@ mod tests {
             "input with Enter while it started"
         );
         let mut resumed = tracker(Some("fake"), now);
-        resumed.restarted(now, None, ToolsGiven::NotInjected);
+        resumed.restarted(now, ToolsGiven::NotInjected);
         assert_eq!(
             turn(&mut resumed, now),
             ManagedAgentState::Idle,
@@ -1516,7 +1519,7 @@ mod tests {
             sender: Sender::person(),
         });
         agent.take(vec![report("state=idle")]);
-        agent.restarted(now, None, ToolsGiven::NotInjected);
+        agent.restarted(now, ToolsGiven::NotInjected);
         assert_eq!(state(&mut agent, now).0, ManagedAgentState::Starting);
         let said = agent.said_line().unwrap();
         assert_eq!(
@@ -1599,7 +1602,7 @@ mod tests {
         assert!(facade_base::files::is_private(&file).unwrap());
         std::fs::write(&file, "{").unwrap();
         assert_eq!(read_kept(&file), Kept::default());
-        let (kept, changes) = watch::channel(Kept::new_run(None, ToolsGiven::Injected));
+        let (kept, changes) = watch::channel(Kept::new_run(ToolsGiven::Injected));
         let keeping = tokio::spawn(keep(file.clone(), changes));
         drop(kept);
         keeping.await.unwrap();

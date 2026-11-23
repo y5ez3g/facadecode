@@ -92,18 +92,21 @@ fn line_count(text: &str) -> usize {
     1 + text.replace("\r\n", "\n").matches(['\n', '\r']).count()
 }
 
-/// The numbers a placeholder that shows `count` may show for a paste of `text`.
-fn shown_numbers(count: PasteCount, text: &str) -> Vec<usize> {
+/// Whether the placeholder's size count, if present, matches the paste.
+fn matches_count(count: PasteCount, number: Option<usize>, text: &str) -> bool {
     let one_ending = || text.replace("\r\n", "\n");
-    match count {
-        PasteCount::Lines => vec![line_count(text)],
-        PasteCount::LinesAfterFirst => vec![line_count(text) - 1],
+    match (count, number) {
+        (PasteCount::Lines, Some(n)) => n == line_count(text),
+        (PasteCount::TrimmedLines, Some(n)) => n == line_count(text.trim()),
+        (PasteCount::LinesAfterFirst, Some(n)) => n == line_count(text) - 1,
+        (PasteCount::SingleLine, None) => !text.contains(['\n', '\r']),
         // CLIs count either code points or UTF-16 units.
-        PasteCount::Chars => {
+        (PasteCount::Chars, Some(n)) => {
             let text = one_ending();
-            vec![text.chars().count(), text.encode_utf16().count()]
+            n == text.chars().count() || n == text.encode_utf16().count()
         }
-        PasteCount::VisibleUtf16 => {
+        (PasteCount::UnicodeScalars, Some(n)) => n == one_ending().chars().count(),
+        (PasteCount::VisibleUtf16, Some(n)) => {
             let units = one_ending()
                 .chars()
                 .map(|c| match c {
@@ -112,9 +115,10 @@ fn shown_numbers(count: PasteCount, text: &str) -> Vec<usize> {
                     c if c < ' ' => 0,
                     c => c.len_utf16(),
                 })
-                .sum();
-            vec![units]
+                .sum::<usize>();
+            n == units
         }
+        _ => false,
     }
 }
 
@@ -162,13 +166,12 @@ fn draws_placeholder(
     lead: Option<&str>,
     text: &str,
 ) -> bool {
-    let numbers_text = |shown: &str, pasted: &str| {
+    let matches = |shown: &str, pasted: &str| {
         let Some(found) = placeholder.pattern.captures(shown) else {
             return false;
         };
-        found[1]
-            .parse::<usize>()
-            .is_ok_and(|number| shown_numbers(placeholder.count, pasted).contains(&number))
+        let number = found.get(1).and_then(|size| size.as_str().parse().ok());
+        matches_count(placeholder.count, number, pasted)
     };
     if placeholder.after_first_character {
         // The CLI types a first character that is not ASCII itself, then a placeholder for the
@@ -181,7 +184,7 @@ fn draws_placeholder(
         return readings(draft, lead, without_space)
             .iter()
             .filter_map(|shown| shown.strip_prefix(first))
-            .any(|shown| numbers_text(shown, rest));
+            .any(|shown| matches(shown, rest));
     }
     let spacing = match placeholder.spaced {
         true => single_spaced,
@@ -189,7 +192,7 @@ fn draws_placeholder(
     };
     readings(draft, lead, spacing)
         .iter()
-        .any(|shown| numbers_text(shown, text))
+        .any(|shown| matches(shown, text))
 }
 
 #[cfg(test)]
@@ -294,6 +297,30 @@ mod tests {
             is_own_draft(agy, "[Pasted text #1 +3 lines]", "a\nb\nc", None, None),
             "every line, the first included"
         );
+        let marker = "[Pasted text #12 4 chars]";
+        assert!(is_own_draft(agy, marker, "a\r\n📨b", None, None));
+        assert!(!is_own_draft(agy, marker, "a📨b", None, None));
+        let claude = rule("claude");
+        let marker = "[Pasted text #1]";
+        let text = "x".repeat(1222);
+        assert!(is_own_draft(claude, marker, &text, None, None));
+        assert!(!is_own_draft(claude, marker, &(text + "\n"), None, None));
+        let opencode = rule("opencode");
+        let text = " \r\nfirst\r\nsecond\nthird\r\n ";
+        assert!(is_own_draft(
+            opencode,
+            "[Pasted ~3 lines]",
+            text,
+            None,
+            None
+        ));
+        assert!(!is_own_draft(
+            opencode,
+            "[Pasted ~5 lines]",
+            text,
+            None,
+            None
+        ));
         assert_eq!(
             settle_time(agy, "a\nb\nc"),
             Duration::from_millis(80 + 3 * 45)

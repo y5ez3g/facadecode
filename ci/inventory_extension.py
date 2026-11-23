@@ -24,7 +24,7 @@ CORE_CLI_ENTRIES = "core/crates/rules/src/command_line/entries.rs"
 OLD_MCP = "extension/src/transport/mcpServer.ts"
 OLD_TOOLS = "extension/src/schema/tools.ts"
 RUST_MCP = "core/crates/daemon/src/mcp/lines.rs"
-RUST_TOOLS = "core/crates/base/src/texts/tools.v3.json"
+RUST_TOOLS = "core/crates/base/src/texts/tools.json"
 
 SEGMENT = re.compile(r"[A-Za-z0-9._-]+")
 

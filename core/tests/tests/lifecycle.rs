@@ -176,7 +176,7 @@ fn the_services_exit_when_idle_and_the_records_survive() {
     assert!(
         inspected
             .lines()
-            .any(|line| line.starts_with("State ") && line[5..].trim() == "Exited (code 4)"),
+            .any(|line| line.starts_with("State ") && line[5..].trim() == "Ended (code 4)"),
         "{inspected}"
     );
     assert_eq!(home.hello_result().unwrap()["agent_count"], 0);

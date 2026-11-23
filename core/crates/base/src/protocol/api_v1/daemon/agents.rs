@@ -772,6 +772,8 @@ pub struct ResumeCandidate {
     pub at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_selector: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -821,6 +823,8 @@ pub struct InspectResult {
     pub attachments: Vec<AttachmentInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub launch_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

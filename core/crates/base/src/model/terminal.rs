@@ -176,9 +176,9 @@ impl InputMechanism {
 /// Rows of a draft scrolled out of the CLI's input, as the CLI marks them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct HiddenRows {
-    /// Rows hidden above the visible input.
+    /// Rows hidden above the visible input, or 1 where the CLI marks hidden rows without counting them.
     pub above: u32,
-    /// Rows hidden below the visible input.
+    /// Rows hidden below the visible input, or 1 where the CLI marks hidden rows without counting them.
     pub below: u32,
 }
 

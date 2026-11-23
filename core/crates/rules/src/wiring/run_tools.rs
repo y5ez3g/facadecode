@@ -6,10 +6,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
-use super::conflicts::muse_config;
-use super::plugin::{
-    AGY_RUN_TOKEN, ALLOW_TOOLS, plugin_description, plugin_files, plugin_files_v3,
-};
+use super::plugin::{AGY_RUN_TOKEN, ALLOW_TOOLS, plugin_description, plugin_files};
 use super::servers::{
     Entry, SERVER, claude_entry, codex_entry, opencode_allow, opencode_entry,
     opencode_native_entry, pi_entry, runs_facade_mcp,
@@ -28,15 +25,6 @@ const CLAUDE_PLUGIN: &str = "plugin";
 /// The extension, in the run's folder, that gives Pi the tools.
 const PI_TOOLS: &str = "facade-pi.mjs";
 
-/// The run's server as an entry with the run's variables.
-fn run_entry<'a>(server: &Server<'a>) -> Entry<'a> {
-    Entry {
-        program: server.program,
-        args: Vec::new(),
-        env: server.env,
-    }
-}
-
 /// `path` as one argument.
 fn argument(path: &Path) -> String {
     path.to_string_lossy().into_owned()
@@ -46,10 +34,6 @@ fn argument(path: &Path) -> String {
 /// tools allowed without asking; the skill in a plugin of the run's, which `--plugin-dir` loads for
 /// the run alone; and run settings that turn off a project's own `facade` server, which would
 /// otherwise ask about itself at the start.
-pub(super) fn claude(server: &Server) -> Wiring {
-    claude_run(server, &run_entry(server), facade_base::skill::text())
-}
-
 pub(super) fn claude_run(server: &Server, entry: &Entry, skill: String) -> Wiring {
     let config = mcp_config(claude_entry(entry));
     let manifest =
@@ -80,10 +64,6 @@ pub(super) fn claude_run(server: &Server, entry: &Entry, skill: String) -> Wirin
 /// Codex: `-c` overrides, its tools approved in advance, and the skill, which its session-start
 /// hook gives as context. Its first model request waits up to 10 seconds for a server that starts
 /// slowly, not its own 1 second.
-pub(super) fn codex(server: &Server) -> Result<Wiring, String> {
-    codex_run(&run_entry(server), facade_base::skill::text())
-}
-
 pub(super) fn codex_run(entry: &Entry, skill: String) -> Result<Wiring, String> {
     let keys = codex_entry(entry)?;
     let overrides = keys
@@ -104,25 +84,11 @@ pub(super) fn codex_run(entry: &Entry, skill: String) -> Result<Wiring, String> 
 /// after the person's own rules, and the skill, a file of the run's, last in its `instructions`.
 /// The person's is read as OpenCode reads it: comments and trailing commas allowed, and a blank one
 /// as none. One that cannot be read stays as it is, without the tools.
-pub(super) fn opencode(
-    server: &Server,
-    environment: &BTreeMap<String, String>,
-) -> Result<Wiring, String> {
-    opencode_run(
-        server,
-        &run_entry(server),
-        environment,
-        facade_base::skill::text(),
-        false,
-    )
-}
-
 pub(super) fn opencode_run(
     server: &Server,
     entry: &Entry,
     environment: &BTreeMap<String, String>,
     skill: String,
-    managed: bool,
 ) -> Result<Wiring, String> {
     let theirs = environment
         .get(OPENCODE_CONFIG)
@@ -142,11 +108,10 @@ pub(super) fn opencode_run(
         .or_insert_with(|| json!({}))
         .as_object_mut();
     let servers = servers.ok_or_else(|| not("mcp") + " is not an object")?;
-    if managed
-        && let Some(native) = servers
-            .get_mut("servers")
-            .and_then(Value::as_object_mut)
-            .and_then(|servers| servers.get_mut(SERVER))
+    if let Some(native) = servers
+        .get_mut("servers")
+        .and_then(Value::as_object_mut)
+        .and_then(|servers| servers.get_mut(SERVER))
     {
         *native = opencode_native_entry(entry);
     } else {
@@ -174,15 +139,6 @@ pub(super) fn opencode_run(
 /// its tools given to the model directly; puts the instructions in Pi's own section of its system
 /// prompt; and gives Pi the skill, a file of the run's, unless a `facade` skill Pi loaded already
 /// is the same text.
-pub(super) fn pi(server: &Server) -> Wiring {
-    pi_run(
-        server,
-        &run_entry(server),
-        SERVER,
-        facade_base::skill::text(),
-    )
-}
-
 pub(super) fn pi_run(server: &Server, entry: &Entry, name: &str, skill: String) -> Wiring {
     let mut instructions = server.instructions.to_owned();
     if name != SERVER {
@@ -224,23 +180,6 @@ export default function (pi) {{
     }
 }
 
-/// Muse Code: `-c mcpServers.facade=<entry>` for the run alone, and two hooks: `SessionStart`,
-/// which gives the model the instructions, as Muse Code shows it no server's instructions, and
-/// `PermissionRequest`, which approves Facade's own tools, as Muse Code has no rule for one
-/// server's tools. The entry references the CLI's environment and is optional, as Muse Code fails
-/// a whole run over a required server that does not start. The instructions hook receives the
-/// run's variables in its command. Where the person's settings hold Facade's legacy guest entry,
-/// the run uses that entry with these hooks.
-pub(super) fn muse(
-    server: &Server,
-    environment: &BTreeMap<String, String>,
-) -> Result<Wiring, String> {
-    let configured = muse_config(server.cwd, environment, false)?;
-    let entry = run_entry(server);
-    let entry = (!configured).then_some(&entry);
-    Ok(muse_run(server, entry, facade_base::skill::text()))
-}
-
 fn muse_entry(entry: &Entry) -> Value {
     let env = entry
         .env
@@ -250,36 +189,32 @@ fn muse_entry(entry: &Entry) -> Value {
     json!({ "command": entry.program, "args": entry.args, "env": env, "mode": "optional" })
 }
 
+/// Muse Code: `-c mcpServers.facade=<entry>` for the run alone, and two hooks: `SessionStart`,
+/// which gives the model the instructions, as Muse Code shows it no server's instructions, and
+/// `PermissionRequest`, which approves Facade's own tools, as Muse Code has no rule for one
+/// server's tools. The entry references the CLI's environment and is optional, as Muse Code fails
+/// a whole run over a required server that does not start. Each hook receives the run's
+/// variables in its command. Where the person's settings hold a Facade server, the run
+/// uses that entry with these hooks.
 pub(super) fn muse_run(server: &Server, entry: Option<&Entry>, skill: String) -> Wiring {
     let args = entry
         .map(muse_entry)
         .map(|entry| vec!["-c".into(), format!("mcpServers.{SERVER}={entry}")])
         .unwrap_or_default();
-    let variables = server
-        .env
-        .iter()
-        .map(|(name, value)| (name.as_str(), value.as_str()));
-    let instructions = facade_hook(
-        "muse",
-        server.facade,
-        "instructions",
-        &[HookArg::Word("muse")],
-        variables,
-    );
+    let hook = |event| {
+        facade_hook(
+            "muse",
+            server.facade,
+            event,
+            &[HookArg::Word("muse")],
+            server.hook_variables(),
+        )
+    };
     Wiring {
         args,
         hooks: vec![
-            ("SessionStart".into(), instructions),
-            (
-                "PermissionRequest".into(),
-                facade_hook(
-                    "muse",
-                    server.facade,
-                    "approve",
-                    &[HookArg::Word("muse")],
-                    [],
-                ),
-            ),
+            ("SessionStart".into(), hook("instructions")),
+            ("PermissionRequest".into(), hook("approve")),
         ],
         files: vec![
             (INSTRUCTIONS_FILE.into(), server.instructions.into()),
@@ -293,31 +228,14 @@ pub(super) fn muse_run(server: &Server, entry: Option<&Entry>, skill: String) ->
 /// the runs there, which holds no run's identity: the run's variables reach its server and hook
 /// through the CLI's environment. Its tools are allowed for the run by `--settings`, beside the
 /// person's own rules.
-pub(super) fn agy(server: &Server) -> Wiring {
-    agy_with_plugin(server, plugin_files(server.program, server.facade))
-}
-
 pub(super) fn agy_managed(server: &Server, credential: Option<&str>) -> Wiring {
-    let mut wiring = agy_with_plugin(server, plugin_files_v3(server.program, server.facade));
-    if let Some(credential) = credential {
-        wiring.env.push((AGY_RUN_TOKEN.into(), credential.into()));
-    }
-    wiring
-}
-
-fn agy_with_plugin(server: &Server, plugin: Vec<(String, String)>) -> Wiring {
     Wiring {
         settings: Some(json!({ "permissions": { "allow": [ALLOW_TOOLS] } })),
-        plugin,
+        plugin: plugin_files(server.program, server.facade),
+        env: credential
+            .map(|value| vec![(AGY_RUN_TOKEN.into(), value.into())])
+            .unwrap_or_default(),
         files: vec![(INSTRUCTIONS_FILE.into(), server.instructions.into())],
-        ..Wiring::default()
-    }
-}
-
-/// The test CLI runs the server itself, with the variables its own environment has.
-pub(super) fn fake(server: &Server) -> Wiring {
-    Wiring {
-        env: vec![(FAKE_SERVER.into(), server.program.into())],
         ..Wiring::default()
     }
 }

@@ -351,6 +351,7 @@ export interface InspectResult {
 	readonly started_by?: AgentCreator;
 	readonly attachments?: AttachmentInfo[];
 	readonly launch_command?: string;
+	readonly session_name?: string;
 }
 
 export interface InternalAgentRecordsArgs {
@@ -617,6 +618,7 @@ export interface ResumeCandidate {
 	readonly title?: string;
 	readonly at?: string;
 	readonly session_name?: string;
+	readonly session_selector?: string;
 }
 
 export type ResumeCandidateTarget = { readonly kind: 'agent'; readonly reference: AgentRef } | { readonly kind: 'session'; readonly machine_id: string; readonly cli: string; readonly session: string; readonly folder: string };

@@ -73,6 +73,7 @@ const generalShellTypeMap = new Map<string, GeneralShellType>([
 	['codex', GeneralShellType.Codex],
 	['commandcode', GeneralShellType.CommandCode],
 	['copilot', GeneralShellType.Copilot],
+	['facade', GeneralShellType.Facade],
 	['gemini', GeneralShellType.Gemini],
 	['pwsh', GeneralShellType.PowerShell],
 	['powershell', GeneralShellType.PowerShell],

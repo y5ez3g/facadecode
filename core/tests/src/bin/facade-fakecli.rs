@@ -28,7 +28,8 @@
 //! On Windows, a copy named `codex.exe` reads its SessionStart hooks from `-c hooks=...`, checks
 //! their layer keys and trusted hashes, and runs trusted hooks through PowerShell, as Codex does
 //! with its default session shell. A copy named `muse.exe` reads its SessionStart hooks from
-//! Muse Code's `-c hooks=...` and runs them with the session in `MUSE_SESSION_ID`, and one named
+//! Muse Code's `-c hooks=...` and runs them with the session in `MUSE_SESSION_ID` and without the
+//! run's variables (`FACADE_HOME`, `FACADE_AGENT`), and resumes with `resume <id>`; one named
 //! `agy.exe` runs the title command of its `--settings` with the conversation, as Antigravity's
 //! status line does; both run each command as Muse Code 1.4.14 and Antigravity 1.5.10 do, as one
 //! argument of `cmd.exe /C` quoted the standard way (`stand_in_shell`).
@@ -40,9 +41,19 @@
 //! native progress for each turn. A message starting with `/fake`
 //! drives the rest: `/fake block <kind> <words>` waits for the person (`permission`, `question`, or
 //! `auth`) and `/fake error <words>` reports an error, each until the next message; `/fake clear`
-//! takes its report back; `/fake exit <code>` ends it with that code. `/fake menu <question>` asks
+//! takes its report back; `/fake status <state> [<words>]` reports `<state>`, such as `done`, with
+//! those words, and ends the turn; `/fake exit <code>` ends it with that code. `/fake menu <question>` asks
 //! from its screen, as a CLI's permission question does: the question and a menu in place of its
 //! input, the cursor hidden, until Enter or Escape.
+//!
+//! Title: `FAKECLI_TITLE=<text>` sets its terminal's title before its first frame, as OpenCode
+//! does, and a message `/fake title <text>` sets another; `/fake title` alone sets an empty title.
+//! On Windows `FAKECLI_TITLE_FROM_CONSOLE=1` makes it set back its console's title, read with
+//! `GetConsoleTitleW`, at start and with each message, as Antigravity does.
+//! With `FAKECLI_OWN_GLYPH=<glyph>` it starts as Claude Code does run alone: its first title is
+//! `<glyph> <text>`; it sends its first idle report with a query and, once the terminal answers it,
+//! sets `<text>` and shows `title without its glyph`, so the report and the title reach the
+//! terminal in separate reads.
 //!
 //! `FAKECLI_LOOK=muse` shows a long paste as Muse 1.4.20 does, `[Pasted Content <n> chars]`.
 //!
@@ -151,6 +162,9 @@ impl SessionHook {
                 }
                 StandIn::Muse => {
                     let mut shell = stand_in_shell(command);
+                    // Muse Code runs its hooks without the run's variables: those reach a hook
+                    // only through its command.
+                    shell.env_remove("FACADE_HOME").env_remove("FACADE_AGENT");
                     if let Some(id) = id {
                         shell.env("MUSE_SESSION_ID", id);
                     }
@@ -258,6 +272,9 @@ struct FakeCli {
     drawn: bool,
     /// Terminal queries the next frame sends, before it draws.
     queries: Vec<String>,
+    /// `FAKECLI_OWN_GLYPH`: the title without its glyph, written once the terminal answers the query
+    /// sent with the first idle report; and whether that query went out.
+    title_after_answer: Option<(String, bool)>,
     /// `FAKECLI_HINT`: drawn in color where an empty input starts.
     hint: Option<String>,
     /// `FAKECLI_DRAFT_AT_START`: the draft after the cursor, drawn in color.
@@ -378,6 +395,7 @@ impl FakeCli {
         if text.trim().is_empty() {
             return;
         }
+        self.queries.extend(console_title_back());
         let mut lines = text.lines();
         let first = lines.next().unwrap_or_default();
         self.transcript.push(format!("> {first}"));
@@ -408,6 +426,15 @@ impl FakeCli {
                 self.log_line("turn without Facade's server");
             }
             self.run_plugin_hook();
+        }
+        if let Some(title) = first
+            .trim()
+            .strip_prefix("/fake title")
+            .filter(|rest| rest.is_empty() || rest.starts_with(' '))
+        {
+            self.queries
+                .push(format!("\x1b]2;{}\x07", title.trim_start()));
+            return;
         }
         if first.trim() == "/fake colors" {
             self.queries
@@ -441,6 +468,10 @@ impl FakeCli {
             }
             (Some("/fake"), Some("clear"), _, _) => {
                 status.reports.push(report("clear", None, None))
+            }
+            (Some("/fake"), Some("status"), Some(state), words) => {
+                status.turn_ends = None;
+                status.reports.push(report(state, None, words))
             }
             (Some("/fake"), Some("exit"), code, _) => {
                 self.exit = Some(code.and_then(|code| code.parse().ok()).unwrap_or(0))
@@ -569,6 +600,10 @@ impl FakeCli {
         // A turn that began before it was ready reports for itself.
         if (ready && status.turn_ends.is_none()) || turn_ended {
             status.reports.push(report("idle", None, None));
+            if let Some((_, asked @ false)) = self.title_after_answer.as_mut() {
+                status.reports.push("\x1b]7501;?\x1b\\".into());
+                *asked = true;
+            }
             return true;
         }
         false
@@ -780,6 +815,25 @@ impl StandIn {
             StandIn::None => None,
         }
     }
+}
+
+/// With `FAKECLI_TITLE_FROM_CONSOLE=1` on Windows, the title sequence that sets back the title its
+/// console has, as Antigravity does: `OSC 0` with what `GetConsoleTitleW` reads, empty or not.
+fn console_title_back() -> Option<String> {
+    if std::env::var("FAKECLI_TITLE_FROM_CONSOLE").as_deref() != Ok("1") {
+        return None;
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Console::GetConsoleTitleW;
+        let mut title = vec![0u16; 4096];
+        // SAFETY: the buffer holds as many UTF-16 units as the length given.
+        let length = unsafe { GetConsoleTitleW(title.as_mut_ptr(), title.len() as u32) };
+        let title = String::from_utf16_lossy(&title[..length as usize]);
+        Some(format!("\x1b]0;{title}\x07"))
+    }
+    #[cfg(not(windows))]
+    None
 }
 
 /// Runs `command` as Muse Code 1.4.14 runs a hook and Antigravity 1.5.10 its title command on
@@ -1252,7 +1306,19 @@ fn run() -> anyhow::Result<()> {
         server_answered,
         panel_drawn_ready: false,
         drawn: false,
-        queries: Vec::new(),
+        queries: std::env::var("FAKECLI_TITLE")
+            .map(|title| match std::env::var("FAKECLI_OWN_GLYPH") {
+                Ok(glyph) => vec![format!("\x1b]2;{glyph} {title}\x07")],
+                Err(_) => vec![format!("\x1b]2;{title}\x07")],
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .chain(console_title_back())
+            .collect(),
+        title_after_answer: std::env::var("FAKECLI_TITLE")
+            .ok()
+            .filter(|_| std::env::var_os("FAKECLI_OWN_GLYPH").is_some())
+            .map(|title| (title, false)),
         hint: std::env::var("FAKECLI_HINT").ok(),
         after_cursor: std::env::var("FAKECLI_DRAFT_AT_START").unwrap_or_default(),
         no_leading_space: std::env::var("FAKECLI_NO_LEADING_SPACE").is_ok_and(|v| v == "1"),
@@ -1266,7 +1332,7 @@ fn run() -> anyhow::Result<()> {
         .cloned();
     #[cfg(windows)]
     let resumed = resumed.or_else(|| {
-        (stand_in == StandIn::Codex)
+        matches!(stand_in, StandIn::Codex | StandIn::Muse)
             .then(|| {
                 arguments
                     .windows(2)
@@ -1423,6 +1489,13 @@ fn run() -> anyhow::Result<()> {
                     }
                     if rest.starts_with(b"7501;?") {
                         app.transcript.push("status reports taken".into());
+                        if let Some((title, true)) =
+                            app.title_after_answer.take_if(|(_, asked)| *asked)
+                        {
+                            app.queries.push(format!("\x1b]2;{title}\x07"));
+                            app.transcript.push("title without its glyph".into());
+                            dirty = true;
+                        }
                     }
                     if [&b"10;"[..], b"11;", b"12;"]
                         .iter()

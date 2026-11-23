@@ -25,7 +25,7 @@ pub fn read_input(rule: &InputRule, view: &ScreenView) -> InputInfo {
 
 /// Reads the input box as [`read_input`] does, with a draft's text as its rows draw it: each row
 /// after the input's margin, without trailing spaces, one line per row; for a CLI that shows a
-/// long paste as a placeholder, that placeholder. The rows that mark a draft scrolled are left out.
+/// long paste as a placeholder, that placeholder. Scroll marks are left out.
 /// A draft whose rows the reader cannot tell apart has no text. The text stays inside Facade:
 /// inspect never shows it and nothing saves it.
 pub fn read_draft(rule: &InputRule, view: &ScreenView) -> (InputInfo, Option<String>) {
@@ -248,6 +248,7 @@ fn counted(pattern: &Regex, line: &str) -> Option<u32> {
 /// The screen as the readers look at it.
 struct Screen<'a> {
     cells: &'a [Vec<VisibleCell>],
+    cols: usize,
     /// Each row's text.
     lines: Vec<String>,
     /// Column and row.
@@ -259,6 +260,7 @@ impl<'a> Screen<'a> {
     fn new(view: &'a ScreenView, menus: &'a [Menu]) -> Screen<'a> {
         Screen {
             cells: &view.rows,
+            cols: view.cols,
             lines: view.rows.iter().map(|row| joined(row)).collect(),
             cursor: view.cursor,
             menus,
@@ -281,7 +283,7 @@ impl<'a> Screen<'a> {
         }
         match rule {
             InputRule::Frame(frame) => self.in_frame(frame, untouched_input),
-            InputRule::Prompt(prompt) => self.over_model_line(prompt),
+            InputRule::Prompt(prompt) => self.in_prompt(prompt),
             InputRule::Editor(editor) => self.in_editor(editor),
             InputRule::Box(input) => self.in_box(input),
             InputRule::PromptRow { prompt } => self.on_prompt_row(prompt),
@@ -388,7 +390,7 @@ impl<'a> Screen<'a> {
         prompt: usize,
         end: usize,
         what: &str,
-        scrolled: &Scrolled,
+        scrolled: Option<&Scrolled>,
         probe_unstyled_hint: bool,
     ) -> Reading {
         let rest_blank = (prompt + 1..end).all(|y| self.blank(y));
@@ -402,7 +404,7 @@ impl<'a> Screen<'a> {
         prompt: usize,
         end: usize,
         what: &str,
-        scrolled: &Scrolled,
+        scrolled: Option<&Scrolled>,
         probe_unstyled_hint: bool,
     ) -> Reading {
         let place = format!("{what} at {}", row_span(prompt + 1, end));
@@ -424,12 +426,13 @@ impl<'a> Screen<'a> {
             };
         }
         if first_holds_writing || (prompt + 1..end).any(|y| holds_writing(&[self.row(y)])) {
-            let mark = |line: &Cells, pattern: &Regex| match lines.len() {
-                1 => None,
-                _ => counted(pattern, joined(line).trim()),
+            let (above, below) = match scrolled {
+                Some(scrolled) if lines.len() > 1 => (
+                    counted(&scrolled.above, joined(lines[0]).trim()),
+                    counted(&scrolled.below, joined(lines[lines.len() - 1]).trim()),
+                ),
+                _ => (None, None),
             };
-            let above = mark(lines[0], &scrolled.above);
-            let below = mark(lines[lines.len() - 1], &scrolled.below);
             let from = usize::from(above.is_some());
             let to = lines.len() - usize::from(below.is_some());
             return drafted(&place, (above, below), &lines[from..to]);
@@ -450,7 +453,20 @@ impl<'a> Screen<'a> {
         }
     }
 
-    /// `frame`: a prompt row between two rules.
+    /// A draft whose scroll marks are outside the given input cells.
+    fn scrolled_draft(
+        &self,
+        first: usize,
+        what: &str,
+        marks: (Option<u32>, Option<u32>),
+        lines: &[&Cells],
+    ) -> Reading {
+        let place = format!("{what} at {}", row_span(first + 1, first + lines.len()));
+        let rest = lines[1..].iter().any(|line| !all_space(line));
+        drafted(&place, marks, lines).with_line(line_of(lines[0], first, 2, rest, self.cursor))
+    }
+
+    /// `frame`: input between two rules, with a prompt row unless it scrolled out.
     fn in_frame(&self, frame: &Frame, untouched_input: bool) -> Reading {
         let cursor_row = self.cursor.1;
         let missing = || {
@@ -463,33 +479,60 @@ impl<'a> Screen<'a> {
             self.char(y, 0) == frame.prompt
                 && (self.char(y, 1) == frame.gap || all_space(self.from(y, 1)))
         };
-        // Up from the cursor over wrapped rows to the prompt row, with the upper rule above it.
-        let prompt = (0..=cursor_row)
+        let mark_at = |y: usize, pattern: &Regex| {
+            if frame.scrolled.on_rules {
+                counted(pattern, &self.lines[y])
+            } else {
+                None
+            }
+        };
+        // Up from the cursor over wrapped rows to the prompt or a marked upper rule.
+        let upper = (0..=cursor_row)
             .rev()
             .find(|&y| prompt_at(y) || !self.wrapped(y))
-            .filter(|&y| prompt_at(y) && y > 0 && frame.upper.is_match(&self.lines[y - 1]));
-        let Some(prompt) = prompt else {
+            .and_then(|y| {
+                if prompt_at(y) {
+                    y.checked_sub(1)
+                } else {
+                    Some(y)
+                }
+            });
+        let Some(upper) = upper else {
             return missing();
         };
+        let first = upper + 1;
+        let above = mark_at(upper, &frame.scrolled.above);
+        if first > cursor_row
+            || !(above.is_some() || prompt_at(first) && frame.upper.is_match(&self.lines[upper]))
+        {
+            return missing();
+        }
         // Down over wrapped rows to the lower rule.
-        let lower_at = |y: usize| frame.lower.is_match(&self.lines[y]);
-        let lower = (prompt + 1..self.height())
+        let lower_at = |y: usize| {
+            frame.lower.is_match(&self.lines[y]) || mark_at(y, &frame.scrolled.below).is_some()
+        };
+        let lower = (first + 1..self.height())
             .find(|&y| lower_at(y) || !self.wrapped(y))
             .filter(|&y| lower_at(y));
         let Some(lower) = lower else {
             return missing();
         };
+        let below = mark_at(lower, &frame.scrolled.below);
+        if above.is_some() || below.is_some() {
+            let lines: Vec<&Cells> = (first..lower).map(|y| self.from(y, 2)).collect();
+            return self.scrolled_draft(first, "the input frame", (above, below), &lines);
+        }
         if let Some(mode) = &frame.placeholder {
-            let one_row = lower == prompt + 1;
+            let one_row = lower == first + 1;
             let footer = self
                 .lines
                 .get(lower + 1)
                 .is_some_and(|line| mode.footer.is_match(line));
-            let shown = joined(self.from(prompt, 2));
+            let shown = joined(self.from(first, 2));
             let shown = shown.trim_end();
             if one_row && footer && mode.texts.iter().any(|text| names_mode(shown, text)) {
-                let place = format!("the input frame at row {}", prompt + 1);
-                return match self.cursor_at(2, prompt) {
+                let place = format!("the input frame at row {}", first + 1);
+                return match self.cursor_at(2, first) {
                     true => usable(format!(
                         "{place} shows its mode placeholder above its empty-input footer"
                     )),
@@ -501,44 +544,65 @@ impl<'a> Screen<'a> {
             }
         }
         self.after_prompt(
-            prompt,
+            first,
             lower,
             "the input frame",
-            &frame.scrolled,
+            (!frame.scrolled.on_rules).then_some(&frame.scrolled),
             untouched_input && frame.probe_unstyled_hint,
         )
     }
 
-    /// `prompt`: a prompt row above a model line at the bottom.
-    fn over_model_line(&self, rule: &Prompt) -> Reading {
+    /// `prompt`: a prompt row above a model line, or a scrolled input without the model line.
+    fn in_prompt(&self, rule: &Prompt) -> Reading {
         let cursor_row = self.cursor.1;
+        let missing_model =
+            || self.elsewhere("no model line with a blank row above it at the bottom");
         let Some(bottom) = (0..self.height()).rev().find(|&y| !self.blank(y)) else {
-            return self.elsewhere("no model line with a blank row above it at the bottom");
+            return missing_model();
         };
         let model = [Some(bottom), bottom.checked_sub(1)]
             .into_iter()
             .flatten()
             .find(|&y| y >= 2 && rule.model_line.is_match(&self.lines[y]))
             .filter(|&y| self.blank(y - 1));
-        let Some(model) = model else {
-            return self.elsewhere("no model line with a blank row above it at the bottom");
+        // The input ends before the blank row above the model line, or after the last row with text.
+        let last = model.map_or(bottom, |model| model - 2);
+        let end = last + 1;
+        let prompt_at = |y: usize| {
+            let glyph = self.char(y, 0);
+            (glyph == rule.prompt || rule.alternate_prompt.as_deref() == Some(glyph))
+                && self.char(y, 1) == " "
         };
-        // The input ends at the blank row above the model line.
-        let end = model - 1;
-        let prompt_at = |y: usize| self.char(y, 0) == rule.prompt && self.char(y, 1) == " ";
-        let start = cursor_row.min(end.saturating_sub(1));
+        let start = cursor_row.min(last);
         let prompt = (0..=start)
             .rev()
             .find(|&y| prompt_at(y) || !(self.wrapped(y) || self.blank(y)))
             .filter(|&y| prompt_at(y));
         let Some(prompt) = prompt else {
+            if model.is_none() {
+                return missing_model();
+            }
             return self.elsewhere("no prompt row above the cursor in the input");
         };
+        let marked = |y: usize, mark: &str| {
+            self.row(y)
+                .last()
+                .is_some_and(|cell| cell.column + 1 == self.cols && cell.dim && cell.text == mark)
+        };
+        let above = model.is_none() && marked(prompt, &rule.scroll_marks.above);
+        let below = model.is_none() && marked(last, &rule.scroll_marks.below);
+        if model.is_none() && !above && !below {
+            return missing_model();
+        }
         if !(prompt..end).contains(&cursor_row) {
-            return self.elsewhere(format!(
-                "the cursor at row {} is not in the input above the model line",
-                cursor_row + 1
-            ));
+            return if model.is_some() {
+                self.elsewhere(format!(
+                    "the cursor at row {} is not in the input above the model line",
+                    cursor_row + 1
+                ))
+            } else {
+                missing_model()
+            };
         }
         let stranger = (cursor_row + 1..end).find(|&y| !self.wrapped(y) && !self.blank(y));
         if let Some(y) = stranger {
@@ -547,7 +611,23 @@ impl<'a> Screen<'a> {
                 y + 1
             ));
         }
-        self.after_prompt(prompt, end, "the input", &rule.scrolled, false)
+        if model.is_some() {
+            return self.after_prompt(prompt, end, "the input", None, false);
+        }
+        let lines: Vec<&Cells> = (prompt..end)
+            .map(|y| {
+                let row = self.row(y);
+                let marked = (y == prompt && above) || (y == last && below);
+                row.get(2..row.len() - usize::from(marked))
+                    .unwrap_or_default()
+            })
+            .collect();
+        self.scrolled_draft(
+            prompt,
+            "the input",
+            (above.then_some(1), below.then_some(1)),
+            &lines,
+        )
     }
 
     /// `editor`: rows between two rules, with a cursor the CLI draws itself.
@@ -632,12 +712,13 @@ impl<'a> Screen<'a> {
         let Some(bar) = self.row(cursor_row).iter().position(draws) else {
             return missing();
         };
-        let text_from = bar + 3;
+        let gap_width = if self.cols < rule.narrow_below { 1 } else { 2 };
+        let text_from = bar + 1 + gap_width;
         // A row that starts with the bar.
         let barred = |y: usize| self.char(y, bar) == rule.bar && all_space(&self.row(y)[..bar]);
-        // A row of the box: the bar, then two blank columns.
+        // A row of the box: the bar, then its interior gap.
         let inside =
-            |y: usize| barred(y) && self.char(y, bar + 1) == " " && self.char(y, bar + 2) == " ";
+            |y: usize| barred(y) && (bar + 1..text_from).all(|column| self.char(y, column) == " ");
         // A row of the box with nothing after its bar.
         let gap = |y: usize| barred(y) && all_space(self.from(y, bar + 1));
         if !inside(cursor_row) || column < text_from {

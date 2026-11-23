@@ -11,11 +11,20 @@
 		"gap": "\u00a0",
 		"upper": "^(?:─+|─{3} [^─]+ ─+)$",
 		"lower": "^─+$",
-		"scrolled": { "above": "^↑ (\\d+) more lines?$", "below": "^↓ (\\d+) more lines?$" },
+		"scrolled": { "above": "^─{3} ↑ (\\d+) more ─+$", "below": "^─{3} ↓ (\\d+) more ─+$", "on_rules": true },
 		"menus": [{ "selected": "^ ❯ \\S", "next": "^ {3}\\S" }]
 	},
-	"paste": { "lead": true, "enter_ms": 80, "placeholders": [{ "pattern": "^\\[Pastedtext#\\d+\\+(\\d+)lines?\\]$", "count": "lines_after_first" }] },
+	"paste": {
+		"lead": true,
+		"enter_ms": 80,
+		"placeholders": [
+			{ "pattern": "^\\[Pastedtext#\\d+\\+(\\d+)lines?\\]$", "count": "lines_after_first" },
+			{ "pattern": "^\\[Pastedtext#\\d+\\]$", "count": "single_line" }
+		]
+	},
 	"session": { "capture": "session_start", "resume": ["--resume", "${session_id}"] },
+	"status": { "mechanism": "background_report", "background": " still running$" },
+	"status_glyph": { "working": ["◐", "◑"], "resting": "✳", "frame_ms": 960 },
 	"mcp": { "always_load_key": "anthropic/alwaysLoad" },
 	"yolo": {
 		"args": ["--dangerously-skip-permissions"],

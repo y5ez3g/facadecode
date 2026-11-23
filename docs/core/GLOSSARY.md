@@ -17,9 +17,10 @@ Other programs and protocols keep their own words: the standard library's `spawn
 | Use | Means | Not these |
 |---|---|---|
 | Orchestrator | The service that manages agents in one Facade home, with a keeper and a daemon | Facade core, Rust engine, Rust agent, Facade (for the service) |
-| Facade | The three entry points to the Orchestrator on the local machine: Shell, MCP and VS Code | Orchestrator (for the entry points) |
+| Facade | The three entry points to the Orchestrator on the local machine: Shell, the MCP entry point and VS Code | Orchestrator (for the entry points) |
+| Facade API v1 | The Orchestrator's operations for its clients at API version 1, such as `agent.start`. Shell and VS Code call them through the Daemon API, and agents and external apps through the MCP entry point. The Keeper API's operations are not part of it | v3 (for these operations, their tools or their skill) |
 | Shell | The `facade` commands for people and scripts | command line (for the entry point) |
-| MCP | The entry point for agents and external apps, through `facade-mcp` | — |
+| MCP entry point | Facade API v1's entry point for agents and external apps: the relay and the daemon's MCP server, with one tool table and one skill. Its tools call API v1 operations, as `start_agent` calls `agent.start` | MCP (alone, for the entry point), MCP entry, MCP server (for the whole entry point) |
 | VS Code | The editor extension entry point for people | Orchestrator (for the extension) |
 
 ## Agents and runs
@@ -31,8 +32,8 @@ Other programs and protocols keep their own words: the standard library's `spawn
 | run | One execution of a managed agent's CLI, from a start or a resume until it ends | process, child, session (for this) |
 | process | An operating system's process: its ID, its group (on Windows, its job), its exit | run (for this) |
 | session | A CLI's own session, the one it can resume | conversation |
-| session name | A name the CLI saved for its session. Shell shows it in the `SESSION` column | terminal title |
-| session preview | Text from the native session history that identifies an unnamed session in `SESSION` | session ID (for this) |
+| session name | A name the CLI saved for its session. Shell shows it in the `SESSION` column and on the `Session` line of `facade status` | terminal title |
+| session preview | Text from the native session history that Shell shows for an unnamed session where it shows a session name | session ID (for this), conversation preview |
 | Guest | An agent created for a single `facade-mcp` connection with its own identity. It has a name and inbox for the life of that connection | MCP member, hook-based guest |
 | CLI | A coding program the Orchestrator runs, such as Claude Code or Codex | tool, client (for this) |
 | rule | A CLI's built-in knowledge file, `core/rules/<cli>.json` | — |
@@ -106,6 +107,8 @@ the identity of that run or matches the agent's own CLI session. Each other conn
 | output | The bytes a terminal writes | — |
 | scrollback | The lines that scrolled off the top of a screen | history |
 | terminal title | A title the CLI sets through its terminal output and the terminal app displays | session name (for this) |
+| Program Status Protocol | OSC 7501, an outside protocol: a CLI whose `OSC 7501 ; ?` the terminal answers reports its state, such as `working` or `idle`, through its terminal output | status protocol, PSP |
+| status glyph | The mark a CLI puts before its terminal title to show its state, such as Claude Code's ✳ or ◐. A CLI that leaves it out because the terminal takes its Program Status Protocol reports gets it from Facade, by its rule | spinner, status icon, title prefix |
 | redraw | Draw the shared grid again for a viewer. A full redraw restores the frame. A viewport update writes rows in place | repaint, refresh |
 | screen log | An agent's screen changes, logged on disk before the screen takes them | — |
 | checkpoint | A saved screen in the screen log, which a recovery replays from | snapshot (for this) |
@@ -233,6 +236,7 @@ actions they offer.
 | temporary connection | A connection held by a foreground `facade machine connect` command until that command exits | saved connection (for this) |
 | remote probe | What Facade runs first over a new SSH login: it learns the login shell and the version of Facade installed there, `RemoteProbe` | probe (for this) |
 | machine session | The two-way JSON-RPC exchange on a live connection. The daemons introduce themselves with `hello` before exchanging requests, responses, notifications and cancellations | CLI session, SSH login (for this) |
+| machine table sync | A daemon sending its machine table over a machine session, as an id-less `advertise`, after the table changes or a machine joins | advertisement (for this) |
 | route | The ordered machine IDs a call passes through. The forwarded `route` gives the remaining machines and ends with the destination | connection, link (for this) |
 | forward, forwarding | Carry a call or subscription through an intermediate machine. The original caller and payload travel intact, and responses follow the request's path back | relay (for this) |
 | sleeping, sleep | A machine whose Orchestrator exited because it had no running agents, local entry points using it, or work in progress | asleep, offline, unreachable (for this) |
@@ -252,7 +256,8 @@ actions they offer.
 | address | A number qualified by a machine, such as `a3@devbox`, `a3@9a0d44b2` or `m17@devbox`. Facade gives a machine-qualified agent address, including for agents on the local machine. MCP lists an agent's address in `id` | `#a3`, `@name`, `id:` prefix |
 | command-line reply address | An address such as `#c42@devbox`, derived from the original message `m42@devbox`. The waiting Shell command receives the first linked reply from the original recipient | agent reference (for this) |
 | agent reference | The Shell term in prose for a copyable agent address such as `a3@devbox`. Tables use the heading `REF`, and output templates use `{ref}` | — |
-| saved session ID | The CLI's identifier for a session it saved. For a saved session, the `facade resume` table shows an eight-character ID prefix in `REF` when the prefix is unique, or the full ID when prefixes collide | — |
+| session ID | The CLI's full identifier for a session, such as a lowercase UUID or OpenCode's `ses_…`. `facade status` shows an agent's on its `Session ID` line | saved session ID |
+| session selector | The text that selects one saved session for `facade resume` in a folder: the first eight characters of its session ID when they select no other saved session that `agent.resume` searches in that folder, including those of managed agents, which have no `Saved` row; otherwise the full session ID. `agent.resume_list` gives it as `session_selector`, and a `Saved` row's `REF` shows it | short ID, prefix (for this) |
 
 Use a machine name when it resolves to one machine, then its short ID, then its full ID. A bare agent number or name
 searches awake, reachable machines for agents the caller can use for the operation. Send results give a qualified message
@@ -339,7 +344,8 @@ code that mirrors them keeps it too.
 |---|---|
 | `address` in an agent record | The copyable address that Shell calls an agent reference |
 | `reference` of type `AgentRef` | The agent's structured identity, with its full `machine_id` and `agent_id` |
-| `session_name` | The session name or preview for the Shell tables' `SESSION` column |
+| `session_name` | The session name or preview, for the Shell tables' `SESSION` column and the `Session` line of `facade status` |
+| `advertise` | A machine table sync. The first one, which has an ID, is part of the machine introduction |
 | `attach.shell` | A dedicated Shell Attach watch. On the target run's exit, the daemon gives the client time to read the final output and exit result before closing the connection |
 | `clis` and `cli_error` in MCP | The available CLI names in a machine's discovery context, or the reason the lookup failed |
 | `timeout_seconds` in MCP | The total budget when a send or inbox read waits. A value of zero skips the wait |
@@ -378,7 +384,7 @@ stay.
 
 | Rule | Names in the code |
 |---|---|
-| launch command | `CommandLine`, `CommandLineRule`, `start_command_line`, `resume_command_line` |
+| launch command | `CommandLine`, `CommandLineRule` |
 | start, not launch | `service::launch`, `Supervisor::launch`, `launch_with_settings` |
 | send, not post | `Messages::post`, `Posted` |
 | folder, not dir | `paths::core_dir`, `socket_dir` |
@@ -393,7 +399,7 @@ stay.
 | a name that reads alone | `programs::Held` (the programs a daemon holds open); the daemon's `Sender` (who said something), which shares its name with channel senders |
 | `_TIMEOUT`, not `_TIME`, `_WAIT` or `_WITHIN` | `QUIET_TIME`, `DRAIN_TIME`, `CLOSING_TIME`, `HANDOVER_TIME`, `COMMAND_TIME`, `DELIVERY_TIME`, `READY_WAIT`, `RESPONSE_WAIT`, `SAID_WAIT`, `CLOSING_ANSWERED_WITHIN` |
 | `MAX_`, not `_LIMIT` or `MOST_` | `READ_LIMIT`, `ADD_LIMIT`, `TURN_LIMIT`, `OUTBOX_LIMIT`, `SESSION_FILE_LIMIT`, `OPENCODE_ID_LIMIT`, `MAX_MESSAGES_LIMIT`, `MOST_SAID`, `MOST_PARTS`, `MOST_RETRY_DELAY` |
-| `_DELAY` or a threshold, not `_AFTER` or `AFTER_` | `ENTER_DRAWN_AFTER`, `HEALTHY_AFTER`, `AFTER_REPEATS`, `CHECKPOINT_AFTER_BYTES` |
+| `_DELAY` or a threshold, not `_AFTER` or `AFTER_` | `ENTER_DRAWN_AFTER`, `HEALTHY_AFTER`, `CHECKPOINT_AFTER_BYTES` |
 | `_INTERVAL`, not `_EVERY` | `FOLLOW_EVERY` |
 | process, not one system's name, for code on every system | `unix_process` |
 | console, not terminal, for the person's | facade's `terminal_size`, `RESTORE_TERMINAL_SEQUENCE` |

@@ -2763,6 +2763,7 @@ export class TerminalLabelComputer extends Disposable {
 		GeneralShellType.Codex,
 		GeneralShellType.CommandCode,
 		GeneralShellType.Copilot,
+		GeneralShellType.Facade,
 		GeneralShellType.Gemini,
 	]);
 

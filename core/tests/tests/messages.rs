@@ -1552,3 +1552,32 @@ fn a_message_whose_recipient_is_not_listed_after_a_restart_fails_at_its_deadline
     );
     assert!(home.submitted_messages().is_empty());
 }
+
+/// `facade send` takes its options before the text or after it, and a usage error shows them
+/// first, as its help does.
+#[test]
+fn send_takes_its_options_before_or_after_the_text() {
+    let home = TestHome::new("send-options");
+    let refused = home.run_facade(&["send", "--bogus", "ada", "hi"]);
+    assert_eq!(
+        (refused.status.code(), stderr(&refused)),
+        (
+            Some(2),
+            "error: Unknown option '--bogus'.\n\
+             Usage: facade send [OPTIONS] <RECIPIENT> <TEXT>\n\
+             Run 'facade send --help' for all options.\n"
+                .into()
+        )
+    );
+    let ada = home.start_named_fake("ada", &[]);
+    for (args, number) in [
+        (&["send", "-w", "ada", "options first"][..], "m1"),
+        (&["send", "ada", "options last", "-w"], "m2"),
+    ] {
+        assert_eq!(
+            home.run_facade_ok(args).trim(),
+            delivered(&home, &ada.id, number),
+            "facade {args:?}"
+        );
+    }
+}

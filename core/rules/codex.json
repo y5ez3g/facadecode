@@ -8,8 +8,9 @@
 	"input": {
 		"mechanism": "prompt",
 		"prompt": "›",
+		"alternate_prompt": "»",
 		"model_line": "^ {2}\\S.*? · (?:[~/]|[A-Za-z]:\\\\)",
-		"scrolled": { "above": "^↑ (\\d+) more lines?$", "below": "^↓ (\\d+) more lines?$" },
+		"scroll_marks": { "above": "↑", "below": "↓" },
 		"menus": [{ "selected": "^› \\d+\\. \\S", "next": "^ {2}\\d+\\. \\S", "hint": { "pattern": "^ {2}(?:Press )?[Ee]nter\\b", "within": 10 } }]
 	},
 	"paste": {
@@ -21,10 +22,8 @@
 	},
 	"session": { "capture": "session_start", "resume": ["resume", "${session_id}"] },
 	"mcp": { "session_meta_key": "sessionId" },
-	"version_file": "codex-package.json",
 	"status": {
 		"mechanism": "background_correction",
-		"verified": ["0.166.0", "0.167.0"],
 		"hints": "^(?: {2}(?:← for agents · )?\\? for shortcuts(?: {2,}\\S.*)?| {20,}\\S.*)$",
 		"background": "^ {2}([1-9]\\d*) background terminals? running",
 		"footer": "  ${count} background terminal${s} running · /ps to view · /stop to close",

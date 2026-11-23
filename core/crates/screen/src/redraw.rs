@@ -10,7 +10,7 @@ use alacritty_terminal::vte::ansi::{CharsetIndex, Color, NamedColor, StandardCha
 
 use crate::kept_modes::{ActiveCharset, ModifyOtherKeys};
 use crate::read::{AllRows, cell_text, is_blank, is_spacer};
-use crate::{REDRAW_SCROLLBACK_ROWS, Screen};
+use crate::{REDRAW_SCROLLBACK_ROWS, Screen, title_has_text, write_title_body};
 
 /// Plain pen, ASCII in G0 and G1 with G0 in use, whole-screen scrolling region, origin mode off,
 /// wrap on, insert and newline modes off, and the initial modifyOtherKeys setting.
@@ -41,6 +41,7 @@ impl Screen {
             keep_scrollback,
             replayed_scrollback(include_scrollback),
             Layout::SameSize,
+            self.status_glyph.as_deref(),
         )
     }
 
@@ -54,6 +55,7 @@ impl Screen {
             keep_scrollback,
             replayed_scrollback(include_scrollback),
             Layout::Viewport,
+            self.status_glyph.as_deref(),
         )
     }
 
@@ -68,7 +70,11 @@ impl Screen {
         let mut redraw = Redraw::new(self);
         redraw.put(b"\x1b[?2026l");
         redraw.start(true);
-        redraw.draw(replayed_scrollback(include_scrollback), layout)
+        redraw.draw(
+            replayed_scrollback(include_scrollback),
+            layout,
+            self.status_glyph.as_deref(),
+        )
     }
 
     /// Overwrites the visible rows in the active buffer of a terminal at least as large as the
@@ -81,28 +87,32 @@ impl Screen {
         write_viewport_rows(&mut redraw.out, &rows, true);
         redraw.cursor(Layout::Viewport);
         redraw.modes();
-        self.write_title(&mut redraw.out);
+        self.write_title(&mut redraw.out, self.status_glyph.as_deref());
         redraw.out
     }
 
     /// A redraw with the whole scrollback, for a checkpoint. Taken at a clean point
-    /// ([`Screen::at_clean_point`]), it rebuilds the rows, cursor, pen, title, charsets and modes
+    /// ([`Screen::at_clean_point`]), it rebuilds the rows, cursor, pen, CLI title, charsets and modes
     /// on an empty screen of the same size and scrollback.
     pub fn redraw_with_all_scrollback(&self) -> Vec<u8> {
-        Redraw::build(self, false, usize::MAX, Layout::SameSize)
+        Redraw::build(self, false, usize::MAX, Layout::SameSize, None)
     }
 
-    /// The current known title as a sanitized OSC sequence, or empty bytes before a title is known.
+    /// The viewer's title as a sanitized OSC sequence, or empty bytes without a nonblank title.
     pub fn title_output(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        self.write_title(&mut out);
+        self.write_title(&mut out, self.status_glyph.as_deref());
         out
     }
 
-    fn write_title(&self, out: &mut Vec<u8>) {
-        if let Some(title) = &self.terminal.title {
+    fn write_title(&self, out: &mut Vec<u8>, status_glyph: Option<&str>) {
+        if let Some(title) = &self.terminal.title
+            && title_has_text(title)
+        {
             let title = title.replace(char::is_control, "");
-            write!(out, "\x1b]2;{title}\x1b\\").unwrap();
+            out.extend_from_slice(b"\x1b]2;");
+            write_title_body(out, title.as_bytes(), status_glyph);
+            out.extend_from_slice(b"\x1b\\");
         }
     }
 }
@@ -137,17 +147,23 @@ impl Redraw<'_> {
         }
     }
 
-    fn build(screen: &Screen, keep_scrollback: bool, replayed: usize, layout: Layout) -> Vec<u8> {
+    fn build(
+        screen: &Screen,
+        keep_scrollback: bool,
+        replayed: usize,
+        layout: Layout,
+        status_glyph: Option<&str>,
+    ) -> Vec<u8> {
         let mut redraw = Redraw::new(screen);
         redraw.put(b"\x1b[?2026l\x1b[?1049l");
         redraw.start(keep_scrollback);
         if screen.on_alternate_screen() {
             redraw.put(b"\x1b[?1049h\x1b[H\x1b[J");
         }
-        redraw.draw(replayed, layout)
+        redraw.draw(replayed, layout, status_glyph)
     }
 
-    fn draw(mut self, replayed: usize, layout: Layout) -> Vec<u8> {
+    fn draw(mut self, replayed: usize, layout: Layout, status_glyph: Option<&str>) -> Vec<u8> {
         let mut rows = self.screen.all_rows();
         rows.keep_newest_scrollback(replayed);
         match layout {
@@ -157,7 +173,7 @@ impl Redraw<'_> {
         self.saved_cursor();
         self.cursor(layout);
         self.modes();
-        self.screen.write_title(&mut self.out);
+        self.screen.write_title(&mut self.out, status_glyph);
         self.out
     }
 

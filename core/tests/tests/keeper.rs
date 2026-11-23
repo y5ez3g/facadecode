@@ -555,7 +555,8 @@ fn a_dead_keeper_is_replaced_and_the_daemon_keeps_every_terminal() {
     assert!(
         inspected
             .lines()
-            .any(|line| line.starts_with("State ") && line[5..].trim() == "Stopped"),
+            .any(|line| line.starts_with("State ")
+                && line[5..].trim() == "Ended (stopped by Facade)"),
         "the record retains the stop: {inspected}"
     );
 }

@@ -122,6 +122,56 @@ fn muse_code_s_session_start_hook_reports_the_session_through_cmd_s_standard_quo
     reports_session_through_cmd_quoted("muse");
 }
 
+/// Muse Code runs its hooks without the run's variables, so a run in a Facade home other than the
+/// default one, as every test's is, finds its home only through its hooks' commands. The run
+/// records its session, and once it ends, `facade resume` lists it and resumes that session.
+#[cfg(windows)]
+#[test]
+fn a_muse_code_run_outside_the_default_facade_home_records_its_session_and_resumes() {
+    let home = TestHome::new("musehome");
+    let programs = home.folder().join("programs");
+    install_program(&programs, "muse", &test_binaries().fakecli);
+    let path = format!("{}{PATH_SEPARATOR}{}", programs.display(), home.test_path());
+    let facade = |args: &[&str], session: Option<&str>| {
+        let mut command = home.command(&test_binaries().facade);
+        command.env("PATH", &path).args(args).stdin(Stdio::null());
+        if let Some(session) = session {
+            command.env("FAKECLI_SESSION", session);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{args:?}: {}", stderr(&output));
+        stdout(&output)
+    };
+    let agent = home.started_agent(&facade(
+        &["start", "-d", "--name", "muse", "muse"],
+        Some(FIRST),
+    ));
+    assert!(
+        records_session(&home, "muse", Some(FIRST)),
+        "Muse Code's session-start hook did not report its session: {}",
+        home.daemon_log()
+    );
+    facade(&["stop", &agent.address], None);
+    assert!(wait_until(LOADED_TIMEOUT, || {
+        inspected_agent(&home, &agent.address)["process"] == "ended"
+    }));
+    let choices = facade(&["resume"], None);
+    let table = Table::parse(&choices);
+    let row = table
+        .row("REF", &agent.address)
+        .unwrap_or_else(|| panic!("the ended Muse Code agent is not listed: {choices}"));
+    assert_eq!(table.cell(row, "STATE"), "Ended", "{choices}");
+    let status = facade(&["status", &agent.address], None);
+    assert_eq!(status_field(&status, "Session ID"), Some(FIRST), "{status}");
+    let resumed = home.started_agent(&facade(&["resume", "-d", &agent.address], None));
+    assert_eq!(resumed.id, agent.id);
+    assert!(
+        wait_for_screen_text(&home, "muse", &format!("session {FIRST}")),
+        "the resumed Muse Code did not select its session: {}",
+        home.screen("muse")
+    );
+}
+
 /// Antigravity runs its title command on Windows as one argument of `cmd.exe /C`, quoted the
 /// standard way: Facade's title command must still report the run's conversation.
 #[cfg(windows)]
@@ -636,11 +686,13 @@ fn resume_lists_a_stopped_agent_and_reuses_its_launch_choices() {
     let row = table
         .row("REF", address)
         .expect("the stopped agent is listed");
-    assert_eq!(table.cell(row, "STATE"), "Stopped", "{choices}");
+    assert_eq!(table.cell(row, "STATE"), "Ended", "{choices}");
     assert_eq!(table.cell(row, "SESSION"), "-", "{choices}");
+    let status = home.run_facade_ok(&["status", address]);
     assert_eq!(
-        status_field(&home.run_facade_ok(&["status", address]), "Session"),
-        Some(FIRST)
+        ["Session", "Session ID"].map(|label| status_field(&status, label)),
+        [Some("-"), Some(FIRST)],
+        "{status}"
     );
     std::fs::write(
         home.path.join("facade.json"),
@@ -1308,78 +1360,6 @@ fn a_resume_waits_for_the_ended_run_s_exit_to_be_saved_before_saving_its_own_run
     );
 }
 
-/// A Codex run keeps the version its installation names beside the program its rule starts, which
-/// decides its rule's screen evidence, and a resume reads the version again.
-#[test]
-fn a_codex_run_keeps_the_version_its_installation_names_and_a_resume_reads_it_again() {
-    let home = TestHome::new("codexversion");
-    let release = home.project.parent().unwrap().join("codex-release");
-    std::fs::create_dir_all(release.join("bin")).unwrap();
-    let install = |version: &str| {
-        std::fs::write(
-            release.join("codex-package.json"),
-            format!(r#"{{"name":"codex","version":"{version}"}}"#),
-        )
-        .unwrap()
-    };
-    install("0.166.0");
-    #[cfg(unix)]
-    install_script(
-        &release.join("bin"),
-        "codex",
-        "#!/bin/sh\nprintf '\\033]7501;state=idle\\007› '\nexec sleep 600\n",
-    );
-    // A program of its own on Windows: a stand-in .cmd would go through cmd.exe, which Codex's
-    // arguments cannot (npm's own shims are read through to the program behind them).
-    #[cfg(windows)]
-    install_program(&release.join("bin"), "codex", &test_binaries().fakecli);
-    let path = std::iter::once(release.join("bin").display().to_string())
-        .chain(system_folders())
-        .collect::<Vec<_>>()
-        .join(PATH_SEPARATOR);
-    let mut wire = connect(&home);
-    let args = json!({
-        "cli": "codex", "name": "codex", "folder": home.project,
-        "env": { "PATH": path, "FACADE_HOME": home.path }, "size": { "cols": 80, "rows": 24 },
-    });
-    let started = wire.call("agent.start", args);
-    let id = started["result"]["agent"]["reference"]["agent_id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("{started}"))
-        .to_string();
-    let facts = home.path.join("core/screens").join(&id).join("state");
-    let kept = |version: &str| {
-        wait_until(secs(10), || {
-            std::fs::read_to_string(&facts)
-                .unwrap_or_default()
-                .contains(&format!(r#""version":"{version}""#))
-        })
-    };
-    assert!(kept("0.166.0"), "{:?}", std::fs::read_to_string(&facts));
-    let reported = run_hook(
-        &home,
-        &session_file(&home, &id),
-        format!(r#"{{"hook_event_name":"SessionStart","session_id":"{FIRST}"}}"#).as_bytes(),
-        &[],
-    );
-    assert!(reported.status.success());
-    assert!(records_session(&home, "codex", Some(FIRST)));
-    wire.call(
-        "agent.stop",
-        json!({ "selection": { "kind": "targets", "targets": [id] } }),
-    );
-    install("0.167.0");
-    let resumed = home
-        .command(&test_binaries().facade)
-        .env("PATH", &path)
-        .args(["resume", "-d", "codex"])
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert!(resumed.status.success(), "{}", stderr(&resumed));
-    assert!(kept("0.167.0"), "{:?}", std::fs::read_to_string(&facts));
-}
-
 /// Resuming a saved session whose agent was removed creates a new agent and passes the original
 /// session to the CLI.
 #[test]
@@ -1524,8 +1504,8 @@ fn resuming_a_saved_session_after_removal_creates_a_new_agent() {
 #[test]
 fn claude_and_pi_show_current_native_names_through_resume() {
     for (cli, resume_flag, ended_state, status_state) in [
-        ("claude", "--resume", "Stopped", "Stopped"),
-        ("pi", "--session", "Exited", "Exited (code 0)"),
+        ("claude", "--resume", "Ended", "Ended (stopped by Facade)"),
+        ("pi", "--session", "Ended", "Ended (code 0)"),
     ] {
         let home = TestHome::new("native-session-name");
         std::fs::write(
@@ -1659,6 +1639,15 @@ fn claude_and_pi_show_current_native_names_through_resume() {
             let text = home.run_facade_ok(&["status", reference]);
             assert_eq!(status_field(&text, label), Some(value), "{cli}: {text}");
         };
+        // `Session` names the session as `list` and `resume` do; `Session ID` is the CLI's own ID.
+        let session = |reference, name, id| {
+            let text = home.run_facade_ok(&["status", reference]);
+            assert_eq!(
+                ["Session", "Session ID", "Title"].map(|label| status_field(&text, label)),
+                [Some(name), Some(id), None],
+                "{cli}: {text}"
+            );
+        };
         list_cell(&reference, "First native name");
         assert!(
             wait_for_screen_text(&home, &reference, "❯"),
@@ -1666,7 +1655,7 @@ fn claude_and_pi_show_current_native_names_through_resume() {
             home.screen(&reference)
         );
         assert_eq!(inspected_agent(&home, &reference)["process"], "running");
-        status(&reference, "Session", FIRST);
+        session(&reference, "First native name", FIRST);
         assert!(
             Table::parse(&home.run_facade_ok(&["resume", "--local"]))
                 .row("REF", first_ref)
@@ -1690,11 +1679,11 @@ fn claude_and_pi_show_current_native_names_through_resume() {
         assert!(home.list_table().row("REF", &reference).is_none());
         resume_cell(&reference, ended_state, "Latest native name");
         status(&reference, "State", status_state);
-        status(&reference, "Session", FIRST);
+        session(&reference, "Latest native name", FIRST);
 
         start_session(&reference, FIRST, "ended-args");
         list_cell(&reference, "Latest native name");
-        status(&reference, "Session", FIRST);
+        session(&reference, "Latest native name", FIRST);
 
         start_session(empty_ref, SECOND, "unnamed-args");
         let active = home.list_table();
@@ -1704,10 +1693,108 @@ fn claude_and_pi_show_current_native_names_through_resume() {
             .find(|other| *other != reference)
             .unwrap_or_else(|| panic!("{cli}: {active:?}"));
         list_cell(unnamed, "-");
-        status(unnamed, "Session", SECOND);
+        session(unnamed, "-", SECOND);
         let preview = "First unnamed prompt";
         let record = prompt_record(SECOND, "00000002", Some("00000001"), preview);
         writeln!(unnamed_history, "{record}").unwrap();
         list_cell(unnamed, preview);
+        session(unnamed, preview, SECOND);
+    }
+}
+
+/// A `Saved` row's REF selects its session alone among every saved session of the folder,
+/// the ones managed agents use included: a prefix one of them shares gives the full ID, and an
+/// unshared one stays eight characters. Either REF, copied into `facade resume -d`, resumes that
+/// session, and no managed session is listed twice.
+#[test]
+fn a_saved_row_s_reference_resumes_its_session_where_managed_sessions_share_its_prefix() {
+    const VISIBLE: &str = "c0ffee00-2bae-4a45-b193-a5664c198261";
+    const ENDED: &str = "c0ffee00-2bae-4a45-b193-a5664c198262";
+    const RUNNING: &str = "c0ffee00-2bae-4a45-b193-a5664c198263";
+    let home = TestHome::new("saved-reference");
+    std::fs::write(
+        home.path.join("facade.json"),
+        json!({ "clis": { "claude": { "type": "claude", "program": test_binaries().fakecli } } })
+            .to_string(),
+    )
+    .unwrap();
+    for (session, prompt) in [
+        (VISIBLE, "the visible conversation"),
+        (ENDED, "the ended agent's conversation"),
+        (RUNNING, "the running agent's conversation"),
+        (FIRST, "the unique conversation"),
+    ] {
+        home.save_claude_session(session, prompt);
+    }
+    let _connection = connect(&home);
+    let resume_in_background = |reference: &str, session: &str, args: &str| {
+        let args = home.folder().join(args);
+        let outcome = home
+            .command(&test_binaries().facade)
+            .env("FAKECLI_ARGS", &args)
+            .args(["resume", "-d", reference])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            outcome.status.success(),
+            "facade resume -d {reference}: {}",
+            stderr(&outcome)
+        );
+        let words = recorded_cli_args(&args);
+        assert!(
+            words.windows(2).any(|pair| pair == ["--resume", session]),
+            "facade resume -d {reference}: {words:?}"
+        );
+    };
+    resume_in_background(ENDED, ENDED, "ended.args");
+    resume_in_background(RUNNING, RUNNING, "running.args");
+    let active = home.list_table();
+    let agent = |label| {
+        let row = active
+            .row("SESSION", label)
+            .unwrap_or_else(|| panic!("{label}: {active:?}"));
+        active.cell(row, "REF").to_string()
+    };
+    let (ended, running) = (
+        agent("the ended agent's conversation"),
+        agent("the running agent's conversation"),
+    );
+    home.run_facade_ok(&["stop", &ended]);
+    assert!(wait_until(LOADED_TIMEOUT, || inspected_agent(
+        &home, &ended
+    )["process"]
+        == "ended"));
+    assert_eq!(inspected_agent(&home, &running)["process"], "running");
+
+    let text = home.run_facade_ok(&["resume", "--local"]);
+    let table = Table::parse(&text);
+    let mut rows: Vec<_> = table
+        .rows
+        .iter()
+        .map(|row| {
+            [
+                table.cell(row, "SESSION"),
+                table.cell(row, "STATE"),
+                table.cell(row, "REF"),
+            ]
+        })
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        [
+            ["the ended agent's conversation", "Ended", ended.as_str()],
+            ["the unique conversation", "Saved", &FIRST[..8]],
+            ["the visible conversation", "Saved", VISIBLE],
+        ],
+        "{text}"
+    );
+    for (label, session, args) in [
+        ("the visible conversation", VISIBLE, "visible.args"),
+        ("the unique conversation", FIRST, "unique.args"),
+    ] {
+        let row = table.row("SESSION", label).unwrap();
+        resume_in_background(table.cell(row, "REF"), session, args);
     }
 }
