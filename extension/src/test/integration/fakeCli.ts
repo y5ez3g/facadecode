@@ -511,6 +511,7 @@ interface Step {
 	/** Also wait for this text to disappear, so an acknowledged key need not have redrawn its terminal already. */
 	readonly untilAbsent?: string;
 	readonly wait?: number;
+	readonly timed?: boolean;
 }
 
 
@@ -549,7 +550,9 @@ async function drive(server: { command: string; args: string[]; env: { [name: st
 		fs.renameSync(script, taken);
 		const steps = JSON.parse(fs.readFileSync(taken, 'utf8')) as Step[];
 		for (const step of steps) {
+			const began = step.timed ? performance.now() : undefined;
 			let answer = await request('tools/call', { name: step.tool, arguments: filled(step.arguments) });
+			const elapsedMs = began === undefined ? undefined : performance.now() - began;
 			const end = Date.now() + (step.wait ?? 10_000);
 			const waitingForScreen = () => (step.until && !JSON.stringify(answer).includes(step.until))
 				|| (step.untilAbsent && JSON.stringify(answer).includes(step.untilAbsent));
@@ -561,7 +564,7 @@ async function drive(server: { command: string; args: string[]; env: { [name: st
 			for (const [name, at] of Object.entries(step.save ?? {})) {
 				saved[name] = at.split('.').reduce<unknown>((value, key) => (value as { [key: string]: unknown } | undefined)?.[key], structured);
 			}
-			out({ step: step.tool, phase, answer });
+			out({ step: step.tool, phase, answer, elapsedMs });
 		}
 		out({ step: 'done', phase });
 	}

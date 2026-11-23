@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use facade_base::api_v1::daemon::Caller;
 use facade_base::api_v1::{self, ApiVersion, Operation, daemon as wire};
@@ -161,7 +161,11 @@ impl server::Service for Daemon {
         cancel: Cancel,
     ) -> Result<Value, api_v1::ErrorBody> {
         let caller = self.local_caller(client).map_err(api::project_error)?;
-        self.run_api_call(&caller, call, when_full, cancel, None)
+        let send_deadline = client
+            .verified_actor
+            .as_ref()
+            .and_then(|actor| actor.send_deadline);
+        self.run_api_call(&caller, call, when_full, cancel, None, send_deadline)
             .await
     }
 
@@ -240,6 +244,7 @@ impl Daemon {
         when_full: WhenFull,
         cancel: Cancel,
         incoming: Option<Forwarded>,
+        send_deadline: Option<Instant>,
     ) -> Result<Value, api_v1::ErrorBody> {
         let work = if matches!(call, wire::DaemonCall::AgentSend(_)) {
             Work::Send
@@ -262,7 +267,7 @@ impl Daemon {
                 .await
                 .map(value_of);
         }
-        self.dispatch_api_call(caller, call, when_full, cancel, incoming)
+        self.dispatch_api_call(caller, call, when_full, cancel, incoming, send_deadline)
             .await
             .map_err(api::project_error)
     }
@@ -274,6 +279,7 @@ impl Daemon {
         when_full: WhenFull,
         cancel: Cancel,
         incoming: Option<Forwarded>,
+        send_deadline: Option<Instant>,
     ) -> Result<Value, ErrorBody> {
         use wire::DaemonCall::*;
         let forwarded = incoming.is_some();
@@ -306,7 +312,7 @@ impl Daemon {
                 self.start_request(caller, args, incoming, cancel).await
             }
             AgentSend(args) => self
-                .route_send(caller, args, incoming, cancel)
+                .route_send(caller, args, incoming, cancel, send_deadline)
                 .await
                 .map(value_of),
             AgentInspect(args) => {

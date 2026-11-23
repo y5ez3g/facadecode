@@ -27,7 +27,7 @@ use tokio::time::Instant;
 
 use super::lanes::{LaneContext, Lanes};
 use super::outbox::Outbox;
-use super::{Client, Service, ShellWatch, WatchChange, WhenFull, operation_error};
+use super::{Client, Service, ShellWatch, VerifiedActor, WatchChange, WhenFull, operation_error};
 use crate::Cancel;
 
 /// The most calls one connection runs at once. Further calls wait for one to be answered.
@@ -120,7 +120,7 @@ pub(super) struct Connection<S: Service> {
     pub(super) peer: Arc<Peer>,
     pub(super) outbox: Outbox,
     pub(super) peer_pid: Option<u32>,
-    verified_actor: Option<AgentRef>,
+    verified_actor: Option<VerifiedActor>,
     client: Option<Arc<Client>>,
     /// What the service gave the hello, held until the connection is cleaned up.
     hold: Option<S::Hold>,
@@ -158,7 +158,7 @@ struct MachineHandoff<M> {
 pub(super) async fn serve<S: Service>(
     service: Arc<S>,
     socket: ServerSocket,
-    verified_actor: Option<AgentRef>,
+    verified_actor: Option<VerifiedActor>,
 ) -> anyhow::Result<()> {
     let Some(work) = service.work() else {
         return Ok(());

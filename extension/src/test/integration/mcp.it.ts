@@ -73,6 +73,7 @@ interface Line {
 	readonly step: string;
 	readonly phase?: number;
 	readonly answer?: Answer;
+	readonly elapsedMs?: number;
 }
 
 /** The fake CLI's record of its tool calls: every answer, as a JSON line. */
@@ -103,10 +104,15 @@ interface Step {
 	readonly until?: string;
 	readonly untilAbsent?: string;
 	readonly wait?: number;
+	readonly timed?: boolean;
 }
 
 /** Has the agent `alias` run `steps` through its Facade tools, and answers what each step got, by the step's tool and its order. */
-async function script(alias: string, steps: readonly Step[], ms = 90_000): Promise<{ readonly answer: (tool: string, nth?: number) => Answer['result']; readonly content: (tool: string, nth?: number) => any }> {
+async function script(alias: string, steps: readonly Step[], ms = 90_000): Promise<{
+	readonly answer: (tool: string, nth?: number) => Answer['result'];
+	readonly content: (tool: string, nth?: number) => any;
+	readonly elapsedMs: (tool: string, nth?: number) => number | undefined;
+}> {
 	const phase = phases.get(alias) ?? 0;
 	phases.set(alias, phase + 1);
 	fs.writeFileSync(`${RECORD}.mcp-script.${alias}`, JSON.stringify(steps));
@@ -120,8 +126,9 @@ async function script(alias: string, steps: readonly Step[], ms = 90_000): Promi
 			assert.deepStrictEqual(JSON.parse(result.content![0].text!), result.structuredContent, `${line.step}: both MCP representations agree`);
 		}
 	}
-	const answer = (tool: string, nth = 0) => lines.filter(line => line.step === tool)[nth]?.answer?.result;
-	return { answer, content: (tool: string, nth = 0) => answer(tool, nth)?.structuredContent };
+	const step = (tool: string, nth = 0) => lines.filter(line => line.step === tool)[nth];
+	const answer = (tool: string, nth?: number) => step(tool, nth)?.answer?.result;
+	return { answer, content: (tool, nth) => answer(tool, nth)?.structuredContent, elapsedMs: (tool, nth) => step(tool, nth)?.elapsedMs };
 }
 
 function fakeAlias(address: string): string {
@@ -693,10 +700,22 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			const submitted = received(childAlias);
 			assert.ok(submitted.every(text => !text.includes('half-written')), 'the held draft has never been submitted');
 			const sending = await script(alias, [
-				{ tool: 'send_message', arguments: { to: '$child', text: forbidden, ...DELIVERY_WAIT } },
+				{ tool: 'send_message', arguments: { to: '$child', text: forbidden, ...DELIVERY_WAIT }, timed: true },
 				askHuman
 			]);
 			const held = sending.content('send_message');
+			if (held?.status === 'failure' && held.reason === 'unavailable' && held.data?.unavailable?.execution === 'outcome_unknown') {
+				console.error(`Rust MCP blocked send ${JSON.stringify({ elapsed_ms: sending.elapsedMs('send_message'), envelope: held })}`);
+				try {
+					const after = rawBytes();
+					console.error(`Rust MCP blocked input ${JSON.stringify({
+						before: { bytes_base64: before.toString('base64'), submissions: submitted },
+						after: { bytes_base64: after.toString('base64'), submissions: received(childAlias) },
+						bytes_equal: before.equals(after)
+					})}`);
+				} catch (error) { console.error(`Rust MCP blocked input diagnostics unavailable: ${error}`); }
+				await rustAgentRecord(childAlias, started.data.id).catch(error => console.error(`Rust MCP blocked send diagnostics unavailable: ${error}`));
+			}
 			const human = sending.content('send_message', 1);
 			assert.strictEqual(held?.status, 'failure', JSON.stringify(held));
 			if (held.reason === 'timeout') {

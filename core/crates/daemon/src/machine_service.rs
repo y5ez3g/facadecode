@@ -282,7 +282,8 @@ impl Daemon {
     /// Derives the caller from the local connection's accepted identity.
     pub(crate) fn local_caller(&self, client: &Client) -> Result<wire::Caller, ErrorBody> {
         use wire::Caller;
-        if let Some(agent) = client.verified_actor.as_ref() {
+        if let Some(actor) = client.verified_actor.as_ref() {
+            let agent = &actor.reference;
             let info = self
                 .get_agent(&agent.agent_id)
                 .filter(|_| self.machine_id == agent.machine_id)

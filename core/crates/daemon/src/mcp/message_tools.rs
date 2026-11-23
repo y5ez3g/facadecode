@@ -78,6 +78,7 @@ pub(super) fn send_verified(
         SendWait::Delivery | SendWait::Result => ANSWER_GRACE + RESPONSE_GRACE,
     };
     let deadline = call.arrived + budget;
+    let send_deadline = deadline - answer_grace;
     let time_left = || deadline.saturating_duration_since(Instant::now());
     let send_args = |left: Duration| SendArgs {
         to: AgentTarget::Selector(text(arguments, "to")),
@@ -90,7 +91,7 @@ pub(super) fn send_verified(
     };
     let connect = || {
         daemon_calls::open_with(
-            || (relay.verified.services.connect)(&actor.reference),
+            || (relay.verified.services.connect)(&actor.reference, Some(send_deadline)),
             time_left().min(CONNECT_TIMEOUT),
         )
     };
@@ -101,8 +102,6 @@ pub(super) fn send_verified(
         Ok(client) => client,
         Err(failure) => return Some(failure),
     };
-    // Tests hold a send here, before its daemon call.
-    facade_base::service::gate_for_test("mcp-before-send");
     let mut outcome_unknown = false;
     let outcome = loop {
         if time_left() <= answer_grace {
@@ -118,7 +117,10 @@ pub(super) fn send_verified(
                 return Err(std::io::Error::from(std::io::ErrorKind::TimedOut).into());
             }
             client.writer.set_write_timeout(Some(left))?;
-            client.begin_call::<AgentSend>(send_args(left))
+            let args = send_args(left);
+            // Tests hold the computed budget until the frame is ready to write.
+            facade_base::service::gate_for_test("mcp-before-send");
+            client.begin_call::<AgentSend>(args)
         }) else {
             return outcome_unknown.then(send_unconfirmed);
         };

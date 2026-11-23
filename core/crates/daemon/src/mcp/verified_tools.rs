@@ -81,7 +81,7 @@ pub(super) fn dispatch(
         _ => {}
     }
     let mut client = match open_with(
-        || (relay.verified.services.connect)(&actor.reference),
+        || (relay.verified.services.connect)(&actor.reference, None),
         CONNECT_TIMEOUT,
     ) {
         Ok(client) => client,
@@ -173,7 +173,7 @@ fn start(
 
 fn list(relay: &Relay, actor: &ActorIdentity, deadline: Instant) -> Value {
     let mut client = match open_with(
-        || (relay.verified.services.connect)(&actor.reference),
+        || (relay.verified.services.connect)(&actor.reference, None),
         deadline.saturating_duration_since(Instant::now()),
     ) {
         Ok(client) => client,
@@ -349,7 +349,7 @@ fn read(
         return Some(timed_out());
     }
     let mut client = match open_with(
-        || (relay.verified.services.connect)(&actor.reference),
+        || (relay.verified.services.connect)(&actor.reference, None),
         deadline
             .saturating_duration_since(Instant::now())
             .min(CONNECT_TIMEOUT),
