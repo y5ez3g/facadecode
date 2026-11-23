@@ -48,12 +48,12 @@ impl Preparation {
         }
     }
 
-    /// Composes tools, command line and environment; writes a start's private files. Waits on
-    /// file work and installation version reads. Failure removes a start's folders.
+    /// Composes tools, command line and environment and writes a start's private files. Failure
+    /// removes a start's folders.
     pub(crate) async fn prepare(
         &self,
         request: RunRequest<'_>,
-        managed_instructions: Option<String>,
+        managed_instructions: String,
     ) -> Result<PreparedRun, ErrorBody> {
         self.sessions.starting(request.id);
         let start = request.kind == RunKind::Start;
@@ -68,7 +68,7 @@ impl Preparation {
     async fn compose(
         &self,
         request: RunRequest<'_>,
-        managed_instructions: Option<String>,
+        managed_instructions: String,
     ) -> Result<PreparedRun, ErrorBody> {
         let home = facade_base::paths::facade_home().map_err(ErrorBody::internal)?;
         let mut env = environment::build(request.inherited.clone(), request.cwd, &home, request.id);
@@ -84,7 +84,6 @@ impl Preparation {
                 launch,
                 env,
                 captures: false,
-                version: None,
                 tools: ToolsGiven::NotInjected,
                 plugin: None,
                 files: RunFiles::default(),
@@ -104,22 +103,8 @@ impl Preparation {
         let captures = request.session.is_some()
             || rule.session.capture == facade_rules::Capture::SessionStart;
         let report = captures.then_some(&report);
-        let credential_args = managed_instructions
-            .is_some()
-            .then(|| [RUN_CREDENTIAL_ARG.to_owned(), new_credential()]);
-        let instructions = managed_instructions.unwrap_or_else(|| {
-            let place = facade_base::instructions::Place {
-                window: request.window,
-                location_id: request.location_id,
-                folder: request.cwd,
-            };
-            let run = facade_base::instructions::Run {
-                place,
-                creator: request.creator,
-                yolo: request.yolo,
-            };
-            facade_base::instructions::for_agent(request.id, Some(&run))
-        });
+        let credential_args = [RUN_CREDENTIAL_ARG.to_owned(), new_credential()];
+        let [_, credential] = &credential_args;
         let mcp = self.held.facade_mcp();
         let server_env = [
             ("FACADE_AGENT".to_owned(), request.id.to_owned()),
@@ -132,40 +117,19 @@ impl Preparation {
             program: &mcp.to_string_lossy(),
             env: &server_env,
             folder: files.path(),
-            instructions: &instructions,
+            instructions: &managed_instructions,
             cwd: Path::new(request.cwd),
             facade: &facade.to_string_lossy(),
         };
-        let managed_server = credential_args
-            .as_ref()
-            .map(|args| ManagedServer { server, args });
+        let managed_server = ManagedServer {
+            server,
+            args: &credential_args,
+        };
         let compose = |give_tools: bool| {
             let trusted = request.yolo.then_some(Path::new(request.cwd));
-            if let Some(server) = managed_server.as_ref() {
-                let server = give_tools.then_some(server);
-                return match request.session {
-                    Some(session) => facade_rules::resume_managed_launch_command(
-                        rule,
-                        session,
-                        request.words,
-                        report,
-                        server,
-                        &env,
-                        trusted,
-                    ),
-                    None => Some(facade_rules::start_managed_launch_command(
-                        rule,
-                        request.words,
-                        report,
-                        server,
-                        &env,
-                        trusted,
-                    )),
-                };
-            }
-            let server = give_tools.then_some(&server);
+            let server = give_tools.then_some(&managed_server);
             match request.session {
-                Some(session) => facade_rules::resume_command_line(
+                Some(session) => facade_rules::resume_managed_launch_command(
                     rule,
                     session,
                     request.words,
@@ -174,7 +138,7 @@ impl Preparation {
                     &env,
                     trusted,
                 ),
-                None => Some(facade_rules::start_command_line(
+                None => Some(facade_rules::start_managed_launch_command(
                     rule,
                     request.words,
                     report,
@@ -218,16 +182,9 @@ impl Preparation {
                 }
             }
         };
-        let credential_digest = match (
-            credential_args.as_ref(),
-            command_line.uses_run_credential,
-            &command_line.tools,
-        ) {
-            (Some([_, credential]), true, facade_rules::Tools::Injected) => {
-                Some(credential_digest(credential))
-            }
-            _ => None,
-        };
+        let credential_digest = (command_line.uses_run_credential
+            && command_line.tools == facade_rules::Tools::Injected)
+            .then(|| credential_digest(credential));
         let CommandLine {
             command,
             env: added,
@@ -252,13 +209,8 @@ impl Preparation {
             let created = files.clone();
             file_work(move || created.create()).await?;
         }
-        let version = installed_version(rule, &launch.program, &env, request.cwd).await;
         let launch = started_directly(Some(rule), launch, &env).await;
-        let launch_command = shown_command(
-            &launch,
-            &env,
-            credential_args.as_ref().map(|[_, value]| value.as_str()),
-        );
+        let launch_command = shown_command(&launch, &env, Some(credential));
         let tools = match tools {
             facade_rules::Tools::Injected => ToolsGiven::Injected,
             facade_rules::Tools::NotInjected => ToolsGiven::NotInjected,
@@ -276,7 +228,6 @@ impl Preparation {
             launch_command,
             env,
             captures,
-            version,
             tools,
             plugin,
             files,
@@ -451,30 +402,6 @@ async fn file_work<T: Send + 'static>(
         .await
         .map_err(ErrorBody::internal)?
         .map_err(ErrorBody::internal)
-}
-
-async fn installed_version(
-    rule: &'static Rule,
-    program: &str,
-    env: &BTreeMap<String, String>,
-    cwd: &str,
-) -> Option<String> {
-    rule.version_file.as_ref()?;
-    let (program, path, cwd) = (
-        program.to_owned(),
-        env_var(env, "PATH").map(str::to_owned),
-        PathBuf::from(cwd),
-    );
-    tokio::task::spawn_blocking(move || {
-        if !cwd.is_dir() {
-            return None;
-        }
-        facade_base::programs::on_path(&program, path.as_deref(), &cwd)
-            .and_then(|path| facade_rules::installed_version(rule, &path))
-    })
-    .await
-    .ok()
-    .flatten()
 }
 
 /// Starts a wrapper's program directly where possible, such as npm's shim of a Node script

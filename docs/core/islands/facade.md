@@ -32,13 +32,14 @@ platform's SIGPIPE behavior or handles a failed write.
 
 The Orchestrator supplies copyable agent references such as `a5@laptop` and message IDs such as `m42@laptop`.
 An unqualified `list` queries reachable machines on demand and leaves sleeping machines idle. `list --machine`
-waits for the named machine and can wake it. `resume` shows stopped agents with resumable sessions and lists
+waits for the named machine and can wake it. `resume` shows ended agents with resumable sessions and lists
 independent CLI sessions from the current folder. A named `resume --machine` lists managed agents on that
 machine and provides references that include its selector. `list --local` and `resume --local` stay on this
 machine and open zero SSH connections even if they start the local daemon.
-Both tables show the latest native session name or the existing conversation preview in `SESSION`. A missing
-label displays as `-`. The tables use the daemon's session lookup on the agent's machine. `facade status <AGENT>`
-shows the full session ID. A saved session uses its displayed `REF` for resume.
+Both tables show the latest native session name or the existing session preview in `SESSION`. A missing session name
+or preview displays as `-`. `facade status <AGENT>` shows the session name or preview from the same daemon lookup in
+`Session` and the full native session ID in `Session ID`. Each field shows `-` when its value is absent. A saved session's `REF`
+shows the daemon's selector for resuming it from the current folder, or the full session ID if the reply has no selector.
 
 `stop <AGENT>...` accepts one or more references. `stop --local`, `stop --machine <MACHINE>` and `stop --all`
 are exclusive alternatives. Scope stops skip connected Guests. A remote scope stop leaves sleeping machines
@@ -117,32 +118,37 @@ dedicated watch and keeps the launch connection when using ordinary Attach. The 
 with the watch and sends `attach.resize` on the connection that owns it. The Orchestrator authorizes
 the managed agent and supplies its name, public reference and stable identity. Foreground start and
 resume, or a reconnect, can read the final snapshot of the exact run. Each reconnect watches that same
-stable identity and begins with a fresh redraw. Only the first watch asks for scrollback.
+stable identity and begins with a fresh redraw. The watches request only the visible screen.
 
 The console sends key and resize notifications through the current connection. It drops queued input when a
 connection ends and counts keys typed while disconnected. It leaves keys already handed to that connection there.
 During a planned takeover, any write already in progress completes before Attach acknowledges `closing`. The
 reconnect shows the current screen before it resumes sending input. It shows a bottom-line notice on stderr when
 any bytes could not be sent. The same policy applies to a local or remote terminal. The Orchestrator chooses the
-smallest active viewer size in each dimension. Shell keeps a `Screen` at the confirmed shared size and updates it
-from snapshots, redraws and output. An empty initial main frame leaves the host page visible until the CLI
-draws. The first main-screen draw makes room from the current shell position by ordinary terminal scrolling.
-An alternate-screen draw switches buffers before it paints. Full frames use
-`Screen::redraw_for_attach` and carry the known native title. During ordinary output, an equally sized console
-accepts native bytes and a larger console rewrites the shared rows in place with `Screen::redraw_in_viewport_update`.
-A new connection, geometry change or screen switch takes the full draw path. An undersized console reports the
-current layout size. Screen carries the CLI's native activity bytes through derived draws. While the shell
-page is held, Attach can still display the native title and activity from the CLI.
+smallest active viewer size in each dimension. Shell keeps a `Screen` at the confirmed shared size without
+scrollback and updates it from snapshots, redraws and output. An empty initial main frame leaves the shell page
+visible and forwards title changes and native activity. The first frame with main-screen content or the first
+alternate frame enters the host's alternate screen. Attach keeps that view through screen switches, resizes and
+reconnects. Full frames use `Screen::redraw_for_attach` and carry the known native title. During ordinary output,
+an equally sized console accepts native bytes and a larger console rewrites the shared rows in place with
+`Screen::redraw_in_viewport_update`. A new connection, geometry change or output containing a screen switch or
+terminal reset takes the full draw path. An undersized console reports the current layout size in the alternate
+screen. Screen carries the CLI's native activity bytes through derived draws.
+
+Attach keeps the host terminal's title until the CLI sets its own. When the attachment ends, Attach clears
+the title only if it showed a CLI title. It always uses the terminal's title stack, where supported, to
+restore the host's previous title.
 
 The CLI's mouse mode controls when the console captures wheel input. Base converts Windows console records
-into viewport coordinates, and Screen encodes them as terminal input in the shared grid. Host scrolling applies
-when the CLI leaves mouse reporting off. Windows uses deferred wrapping during Attach so cursor moves after
-a full row follow the same geometry as the agent's screen.
+into viewport coordinates, and Screen encodes them as terminal input in the shared grid. With mouse reporting
+off, Attach leaves the wheel to the terminal app, whose alternate screen keeps no scrollback. Windows uses
+deferred wrapping during Attach so cursor moves after a full row follow the same geometry as the agent's screen.
 
-Attach restores the buffer, cursor and input modes before printing a normal detach or exit receipt. A normal
-exit returns the status in the daemon's final event or exact ended snapshot. The daemon lets an active
-dedicated watcher receive the final output and exit in order, then closes that connection within its post-exit
-grace period. A removal or lost connection uses the corresponding Shell diagnostic.
+At the end of an attachment, Attach leaves the alternate screen if it entered it, returning to the shell page,
+cursor and scrollback. It restores the terminal modes and prints the receipt and any unsent-input warning after
+the opening line. A normal exit returns the status in the daemon's final event or exact ended snapshot. The daemon
+lets an active dedicated watcher receive the final output and exit in order, then closes that connection within its
+post-exit grace period. A removal or lost connection uses the corresponding Shell diagnostic.
 
 ### hooks
 

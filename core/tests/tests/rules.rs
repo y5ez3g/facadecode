@@ -198,8 +198,8 @@ fn inspect_reads_the_input_from_the_screen_without_typing() {
             "Launch command",
             "Type",
             "Machine",
-            "Title",
             "Session",
+            "Session ID",
             "Started by",
             "Attached in",
             "YOLO"
@@ -220,6 +220,7 @@ fn inspect_reads_the_input_from_the_screen_without_typing() {
         ),
         ("CLI", Some("fake")),
         ("Session", Some("-")),
+        ("Session ID", Some("-")),
         ("Started by", Some("Shell")),
         ("Attached in", Some("-")),
         ("YOLO", Some("on")),

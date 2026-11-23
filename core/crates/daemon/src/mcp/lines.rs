@@ -287,41 +287,34 @@ mod tests {
         assert_eq!(*tools, shipped);
     }
 
-    /// The skill gives cross-tool examples and reference alone (MCP-6.2): no sentence of the
-    /// initialization, a connection's, an agent's with and without its place or a guest's of either
-    /// kind, of a tool's description or of an argument's is in it.
+    /// The skill gives cross-tool examples and reference (MCP-6.2) without repeating sentences
+    /// from initialization instructions, tool descriptions or argument descriptions.
     #[test]
     fn the_skill_repeats_no_sentence_of_the_instructions_or_the_tools() {
+        use facade_base::instructions::{Creator, ManagedRun, for_connection, for_managed};
+
         let skill = facade_base::skill::text();
         let listed =
             answered(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)["result"]["tools"]
                 .clone();
-        use facade_base::instructions::{Place, Run, for_agent, for_connection, for_guest};
-        let place = || Place {
-            window: Some(("app (Workspace)", "win-2")),
-            location_id: "loc-7",
-            folder: "/work/app",
-        };
-        let (on, off) = (
-            Run {
-                place: place(),
-                creator: Some(("a2", Some("Ada"))),
-                yolo: true,
-            },
-            Run {
-                place: place(),
-                creator: None,
-                yolo: false,
-            },
-        );
-        let mut texts = vec![
-            for_connection(),
-            for_agent("a3", None),
-            for_agent("a3", Some(&on)),
-            for_agent("a3", Some(&off)),
-            for_guest(Some("a3")),
-            for_guest(None),
-        ];
+        let mut texts = vec![for_connection()];
+        for yolo in [false, true] {
+            for creator in [
+                None,
+                Some(Creator::Agent {
+                    address: "a2@devbox",
+                    name: Some("Ada"),
+                }),
+            ] {
+                let run = ManagedRun {
+                    folder: "/work/app",
+                    machine: "devbox",
+                    creator,
+                    yolo,
+                };
+                texts.push(for_managed("a3@devbox", &run));
+            }
+        }
         for tool in listed.as_array().unwrap() {
             texts.push(tool["description"].as_str().unwrap().to_string());
             let properties = tool["inputSchema"]["properties"].as_object().unwrap();

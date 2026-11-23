@@ -20,10 +20,6 @@ impl VtModes {
     pub(super) fn restore(&self) {}
 }
 
-pub(super) fn visible_content_end() -> Option<u16> {
-    None
-}
-
 pub(super) struct ConsoleReader(io::Stdin);
 
 impl ConsoleReader {

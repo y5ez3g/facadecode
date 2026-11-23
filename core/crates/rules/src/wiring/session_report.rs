@@ -38,14 +38,19 @@ pub struct SessionReport<'a> {
 impl SessionReport<'_> {
     /// The command of a CLI's session-start hook. `SessionSkill::Include` adds `--skill` so
     /// the hook also gives the model Facade's skill.
-    pub(super) fn hook(&self, cli: &str, skill: SessionSkill) -> String {
+    pub(super) fn hook<'a>(
+        &self,
+        cli: &str,
+        skill: SessionSkill,
+        variables: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> String {
         let file = self.file.to_string_lossy();
         let args = [HookArg::Literal(&file), HookArg::Word("--skill")];
         let args = match skill {
             SessionSkill::Omit => &args[..1],
             SessionSkill::Include => &args[..],
         };
-        facade_hook(cli, self.facade, "session-start", args, [])
+        facade_hook(cli, self.facade, "session-start", args, variables)
     }
 
     /// The run's folder, which the session file is in.
@@ -96,13 +101,13 @@ pub(crate) fn install_hook(
         "claude" => claude_settings(
             &rule.arguments,
             words,
-            &session.hook("claude", SessionSkill::Omit),
+            &session.hook("claude", SessionSkill::Omit, []),
             wiring.settings.as_ref(),
         ),
         "codex" => codex_hooks(
             &rule.arguments,
             words,
-            &session.hook("codex", wiring.session_skill),
+            &session.hook("codex", wiring.session_skill, []),
             SYSTEM,
         ),
         "opencode" => opencode_plugin(words, session, environment),
@@ -117,7 +122,10 @@ pub(crate) fn install_hook(
         }
         "fake" => adding(
             Vec::new(),
-            vec![(FAKE_HOOK.into(), session.hook("fake", SessionSkill::Omit))],
+            vec![(
+                FAKE_HOOK.into(),
+                session.hook("fake", SessionSkill::Omit, []),
+            )],
             Vec::new(),
         ),
         _ => None,

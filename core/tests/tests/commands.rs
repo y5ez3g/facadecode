@@ -71,6 +71,7 @@ fn interactive_start_propagates_process_exit_status() {
          printf 'To continue this session, run:\n  demo resume stored-session\n'; exit 3",
         3,
         "exited with code 3.",
+        "Ended (code 3)",
     )];
     #[cfg(unix)]
     ends.push((
@@ -78,9 +79,10 @@ fn interactive_start_propagates_process_exit_status() {
         "sleep 1; kill -TERM $$",
         128 + libc::SIGTERM,
         "exited on signal SIGTERM.",
+        "Ended (signal SIGTERM)",
     ));
     let sh = home.shell_cli();
-    for (id, script, code, ended) in ends {
+    for (id, script, code, ended, state) in ends {
         let mut term = TestTerminal::spawn(
             home.command(&test_binaries().facade)
                 .args(["start", sh, "-c", script]),
@@ -103,17 +105,29 @@ fn interactive_start_propagates_process_exit_status() {
             term.text()
         );
         assert_eq!(term.output_count(&said), 1);
-        if id == "a1" {
-            let text = term.text_with_scrollback();
-            assert!(text.contains("INTERACTIVE-FRAME"), "{text}");
-            assert_eq!(term.output_count("To continue this session, run:"), 1);
-            assert_eq!(term.output_count("demo resume stored-session"), 1);
-            assert!(
-                text.trim_end()
-                    .ends_with(&format!("  demo resume stored-session\n{said}")),
-                "{text}"
-            );
+        // The agent's text, including the hint it prints on its way out, leaves with its view:
+        // the restored text ends with the opening line and the receipt.
+        let text = term.text_with_scrollback();
+        for shown in [
+            "INTERACTIVE-FRAME",
+            "To continue this session",
+            "demo resume",
+        ] {
+            assert!(!text.contains(shown), "{script}: {text}");
         }
+        let opening = format!("Started {name} ({reference}). Press Ctrl+] to detach.");
+        assert!(
+            text.trim_end().ends_with(&format!("{opening}\n{said}")),
+            "{script}: {text}"
+        );
+        // The ended agent's status says how it ended.
+        let inspected = home.run_facade_ok(&["status", reference]);
+        assert!(
+            inspected
+                .lines()
+                .any(|line| line.starts_with("State ") && line[5..].trim() == state),
+            "{script}: {inspected}"
+        );
     }
 }
 
@@ -185,7 +199,8 @@ fn commands_start_list_read_and_stop_agents() {
     assert!(
         inspected
             .lines()
-            .any(|line| line.starts_with("State ") && line[5..].trim() == "Stopped"),
+            .any(|line| line.starts_with("State ")
+                && line[5..].trim() == "Ended (stopped by Facade)"),
         "{inspected}"
     );
     assert!(home.agent_from_watch("w2").expect("w2 is recorded")["process"] == "running");

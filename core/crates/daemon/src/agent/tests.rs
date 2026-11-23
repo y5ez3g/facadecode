@@ -887,7 +887,6 @@ impl Harness {
             pid: 4242,
             captures: false,
             launch_command: None,
-            version: None,
             tools,
             reply,
         })
@@ -911,6 +910,152 @@ impl Harness {
         self.send(AgentCommand::Inspect { reply }).await;
         answered.await.unwrap();
     }
+
+    async fn watch_screen(&self, viewer: u64) -> (ViewerSnapshot, viewers::ViewerReceiver) {
+        let (tx, changes) = viewer_channel();
+        let (reply, snapshot) = oneshot::channel();
+        self.send(AgentCommand::AddViewer {
+            viewer,
+            tx,
+            keep_scrollback: false,
+            include_scrollback: false,
+            reply,
+        })
+        .await;
+        (snapshot.await.unwrap(), changes)
+    }
+}
+
+/// Matches either kind of title output, from a redraw or a live viewer update.
+fn has_title(bytes: &[u8], title: &str) -> bool {
+    String::from_utf8_lossy(bytes).contains(&format!("\x1b]2;{title}\x1b\\"))
+}
+
+async fn next_title(changes: &mut viewers::ViewerReceiver, title: &str) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let ViewerChange::Output(bytes) = changes.recv().await.unwrap() else {
+                continue;
+            };
+            if has_title(&bytes, title) {
+                return;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("viewer did not get title {title:?}"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_glyph_timer_runs_only_while_working_and_watched_even_during_output() {
+    let home = home("glyph-timer");
+    let mut harness = Harness::start_by_rule(
+        &home,
+        record(ProcessState::Running, None, 80, 24),
+        b"",
+        Some("claude"),
+        ScreenStart::New,
+    );
+    harness
+        .cli
+        .write_all(b"\x1b]2;Title\x07\x1b]7501;state=working\x07Working")
+        .unwrap();
+    assert!(harness.shows("Working", Duration::from_secs(5)).await);
+    assert_eq!(harness.handle.info().state, ManagedAgentState::Working);
+    let one_frame = Duration::from_millis(1100);
+    tokio::time::sleep(one_frame).await;
+    let (snapshot, mut changes) = harness.watch_screen(1).await;
+    assert!(has_title(&snapshot.redraw, "◐ Title"));
+
+    let mut output = tokio::time::interval(Duration::from_millis(30));
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            tokio::select! {
+                _ = output.tick() => {
+                    harness.cli.write_all(b"\x1b]7501;state=working\x07.").unwrap();
+                }
+                change = changes.recv() => {
+                    if let ViewerChange::Output(bytes) = change.unwrap()
+                        && has_title(&bytes, "◑ Title")
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .expect("continuous output and repeated reports leave the glyph timer armed");
+
+    harness.send(AgentCommand::RemoveViewer { viewer: 1 }).await;
+    harness.round_trip().await;
+    tokio::time::sleep(one_frame).await;
+    let (snapshot, mut changes) = harness.watch_screen(2).await;
+    assert!(has_title(&snapshot.redraw, "◑ Title"));
+
+    harness
+        .cli
+        .write_all(b"\x1b]7501;state=blocked\x07")
+        .unwrap();
+    next_title(&mut changes, "✳ Title").await;
+    assert!(
+        tokio::time::timeout(one_frame, changes.recv())
+            .await
+            .is_err()
+    );
+    harness.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resumed_run_starts_without_a_status_glyph() {
+    let home = home("glyph-resume");
+    let mut harness = Harness::start_by_rule(
+        &home,
+        record(ProcessState::Running, None, 80, 24),
+        b"",
+        Some("claude"),
+        ScreenStart::New,
+    );
+    let (_, mut changes) = harness.watch_screen(1).await;
+    harness
+        .cli
+        .write_all(b"\x1b]2;First\x07\x1b]7501;state=working\x07")
+        .unwrap();
+    next_title(&mut changes, "◐ First").await;
+
+    harness.end_run(FIRST_RUN, 0).await;
+    harness.prepare_restart(2, 80, 24).await;
+    let (master, mut cli) = raw_terminal(80, 24);
+    let resumed = harness.install(2, master).await;
+    assert_eq!(resumed.state, ManagedAgentState::Starting);
+    cli.write_all(b"\x1b]2;Resumed\x1b\\").unwrap();
+    next_title(&mut changes, "Resumed").await;
+
+    cli.write_all(b"\x1b]7501;state=working\x07").unwrap();
+    next_title(&mut changes, "◐ Resumed").await;
+    harness.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_synchronized_update_timing_out_sends_its_glyph_with_the_new_title() {
+    let home = home("glyph-sync");
+    let mut harness = Harness::start_by_rule(
+        &home,
+        record(ProcessState::Running, None, 80, 24),
+        b"",
+        Some("claude"),
+        ScreenStart::New,
+    );
+    let (_, mut changes) = harness.watch_screen(1).await;
+    harness.cli.write_all(b"\x1b]2;Old\x1b\\").unwrap();
+    next_title(&mut changes, "Old").await;
+
+    harness
+        .cli
+        .write_all(b"\x1b[?2026h\x1b]2;New\x1b\\\x1b]7501;state=idle\x07")
+        .unwrap();
+    next_title(&mut changes, "✳ New").await;
+    harness.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1342,7 +1487,7 @@ async fn a_server_that_connects_before_the_actor_first_runs_makes_the_tools_avai
     let (tx, rx) = mpsc::channel(MAX_QUEUED_COMMANDS);
     let state = StateStart {
         file: super::state::state_file(&dir),
-        kept: Kept::new_run(None, ToolsGiven::Injected),
+        kept: Kept::new_run(ToolsGiven::Injected),
         started: Instant::now(),
     };
     let start = ActorStart {
@@ -1388,7 +1533,7 @@ async fn a_start_prompt_waits_for_the_tools_and_messages_sent_meanwhile_wait_beh
     let (tx, rx) = mpsc::channel(MAX_QUEUED_COMMANDS);
     let state = StateStart {
         file: super::state::state_file(&dir),
-        kept: Kept::new_run(None, ToolsGiven::Injected),
+        kept: Kept::new_run(ToolsGiven::Injected),
         started: Instant::now(),
     };
     let post = crate::messages::tests::messages().0;
@@ -1522,7 +1667,7 @@ async fn a_recovered_run_waits_for_its_server_from_the_recovery() {
         .expect("a clock that has run two minutes");
     let state = StateStart {
         file: super::state::state_file(&dir),
-        kept: Kept::new_run(None, ToolsGiven::Injected),
+        kept: Kept::new_run(ToolsGiven::Injected),
         started: long_ago,
     };
     let screen = ScreenStart::Recovered {
@@ -1564,7 +1709,7 @@ fn antigravity(home: &Path) -> Harness {
 
 /// An Antigravity run as [`antigravity`] starts one, its run started at `started`.
 fn antigravity_started(home: &Path, started: Instant) -> Harness {
-    let kept = Kept::new_run(None, ToolsGiven::Injected);
+    let kept = Kept::new_run(ToolsGiven::Injected);
     Harness::start_kept(
         home,
         record(ProcessState::Running, None, 80, 24),
@@ -2033,7 +2178,7 @@ async fn a_panel_that_shows_no_ready_tools_is_closed_at_its_wait_only_while_it_s
 #[tokio::test(flavor = "multi_thread")]
 async fn only_a_start_given_the_tools_readies_them() {
     let home = home("readyonly");
-    let kept = Kept::new_run(None, ToolsGiven::Injected);
+    let kept = Kept::new_run(ToolsGiven::Injected);
     let recovered = |dir: PathBuf| ScreenStart::Recovered {
         handed_over_cleanly: false,
         screen: Box::new(Screen::new(80, 24, SCROLLBACK_ROWS)),
@@ -2105,7 +2250,7 @@ async fn a_resumed_run_readies_its_tools_too() {
 
 /// A Claude Code run with Facade's tools and YOLO on, whose CLI has drawn nothing yet.
 fn claude(home: &Path, allow_auto_trust: bool) -> Harness {
-    let kept = Kept::new_run(None, ToolsGiven::Injected);
+    let kept = Kept::new_run(ToolsGiven::Injected);
     Harness::start_kept(
         home,
         record(ProcessState::Running, None, 80, 24),

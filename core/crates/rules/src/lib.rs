@@ -18,7 +18,6 @@ mod wiring;
 mod wrappers;
 
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -29,10 +28,7 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 
 pub use command_line::{Choices, TrustQuestion, YoloRule, entries};
-pub use compose::{
-    CommandLine, resume_command_line, resume_managed_launch_command, start_command_line,
-    start_managed_launch_command,
-};
+pub use compose::{CommandLine, resume_managed_launch_command, start_managed_launch_command};
 pub use formats::shell_word;
 pub use input::{
     BoxReading, InputLine, LineCell, ProbeVerdict, is_own_draft, is_same_draft, read_box,
@@ -48,7 +44,7 @@ pub use sessions::{
 pub use state::{ScreenState, read_state};
 pub use wiring::{
     INSTRUCTIONS_FILE, PLUGIN_FOLDER, PLUGIN_MEMBERS, SKILL_FILE, Server, SessionReport, Tools,
-    guest_entry_serves_run, hook, integration, plugin_files, plugin_files_v3, plugin_version,
+    guest_entry_serves_run, hook, integration, plugin_files, plugin_version,
     runs_start_guest_entry, session_ends_with_process, uses_folder_plugin,
 };
 pub use wrappers::direct_command;
@@ -105,14 +101,12 @@ pub struct Rule {
     #[serde(default)]
     pub paste: PasteRule,
     pub session: SessionRule,
-    /// What the screen shows of the CLI's state, for a CLI whose own reports do not say it.
+    /// How Facade reads the CLI's state from its screen or a report's words.
     #[serde(default)]
     pub status: Option<StateRule>,
-    /// The file beside the program that names the installed version, read without running the CLI
-    /// (CLIS-2.1): JSON with a `version` string, in the program's real folder or one of the two
-    /// above it.
+    /// The status glyph the CLI puts before its terminal title and leaves out when the terminal takes its reports.
     #[serde(default)]
-    pub version_file: Option<String>,
+    pub status_glyph: Option<StatusGlyph>,
     /// What a run's start types so that the CLI starts Facade's tools before its first turn, for a
     /// CLI that starts a folder's servers only with its first turn or its panel of MCP servers
     /// (COLLABORATION-2.2).
@@ -233,7 +227,7 @@ pub struct PasteRule {
 #[serde(deny_unknown_fields)]
 pub struct PastePlaceholder {
     /// The placeholder without its spaces, or with each run of them as one where `spaced` is
-    /// true. Its one capture is what `count` counts.
+    /// true. A numbered count has one capture for the size shown. A single-line form has none.
     pub pattern: Pattern,
     pub count: PasteCount,
     /// The CLI types a paste's first character itself where it is not ASCII, and shows the
@@ -245,16 +239,22 @@ pub struct PastePlaceholder {
     pub spaced: bool,
 }
 
-/// What a placeholder's number counts.
+/// How a paste's size is shown in its placeholder.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PasteCount {
     /// The paste's lines.
     Lines,
+    /// Its lines after trimming whitespace from both ends.
+    TrimmedLines,
     /// Its lines after the first.
     LinesAfterFirst,
+    /// A paste without a line break uses a placeholder with no size count.
+    SingleLine,
     /// Its characters, as code points or as UTF-16 units.
     Chars,
+    /// Its characters, as Unicode scalar values. A differing UTF-16 unit count is rejected.
+    UnicodeScalars,
     /// Its characters other than control characters, as UTF-16 units, each tab as four spaces.
     VisibleUtf16,
 }
@@ -296,9 +296,9 @@ pub enum Capture {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "mechanism", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InputRule {
-    /// A prompt row in a frame of two rules, with the cursor in it.
+    /// Input in a frame of two rules, with a prompt row unless it scrolled out.
     Frame(Frame),
-    /// A prompt row above a model line at the bottom, with the cursor in it.
+    /// A prompt row above a model line, or with scroll marks when the model line is absent.
     Prompt(Prompt),
     /// An editor between two rules, with a cursor the CLI draws itself.
     Editor(Editor),
@@ -332,9 +332,20 @@ pub struct Frame {
 pub struct Prompt {
     /// The prompt in the prompt row's first column.
     pub prompt: String,
+    /// Another glyph the input may show in that same column.
+    #[serde(default)]
+    pub alternate_prompt: Option<String>,
     pub model_line: Pattern,
-    pub scrolled: Scrolled,
+    pub scroll_marks: ScrollMarks,
     pub menus: Vec<Menu>,
+}
+
+/// The dim marks in the last column of the first and last input rows. They have no counts.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScrollMarks {
+    pub above: String,
+    pub below: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -361,13 +372,15 @@ pub struct BoxInput {
     pub corner: String,
     /// The half block after the corner.
     pub edge: String,
+    /// Below this screen width, the interior gap is one space. Otherwise it is two.
+    pub narrow_below: usize,
     /// The text of an empty box.
     pub placeholder: Pattern,
     pub menus: Vec<Menu>,
 }
 
-/// What the screen shows of the CLI's state, read around the input its `input` rule describes.
-/// Patterns match a whole logical line (the rows a soft wrap joins), without its trailing spaces.
+/// How Facade reads the CLI's state from its screen or a report's words.
+/// Screen patterns match a whole logical line (the rows a soft wrap joins), without its trailing spaces.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "mechanism", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StateRule {
@@ -378,6 +391,9 @@ pub enum StateRule {
     /// For a CLI that reports `working` while commands it left in the background outlive its turn:
     /// a finished turn above its input prompt narrows that report to idle.
     BackgroundCorrection(Box<BackgroundCorrection>),
+    /// For a CLI that reports `working` while work it left in the background outlives its turn, and names that work
+    /// in the report's words: such a report reads as `idle`.
+    BackgroundReport(Box<BackgroundReport>),
     /// For a CLI that reports a turn whose model call failed as a turn that ended: the error drawn
     /// right above the turn's summary, at the end of the conversation over the input box, turns
     /// the report into an error with the error's words. The patterns guard every version: a
@@ -430,11 +446,26 @@ pub struct BackgroundCorrection {
     /// That line in full, `${count}` for the count and `${s}` for a plural's ending. The CLI crops
     /// it at the screen's right edge.
     pub footer: String,
-    /// The CLI versions this correction was verified on; other versions keep their own reports
-    /// (CLIS-2.3).
-    pub verified: Vec<String>,
     /// The dim summary of the finished turn, above that line.
     pub worked: Pattern,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackgroundReport {
+    /// The words of a `working` report sent while only background work runs.
+    pub background: Pattern,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatusGlyph {
+    /// The glyph frames shown in turn while the CLI works.
+    pub working: Vec<String>,
+    /// The glyph shown while it is idle, just done, waits for the person or is in error.
+    pub resting: String,
+    /// How long each working glyph frame shows.
+    pub frame_ms: u64,
 }
 
 /// The rows that mark a draft scrolled out of the input; each pattern's one capture counts the
@@ -444,6 +475,9 @@ pub struct BackgroundCorrection {
 pub struct Scrolled {
     pub above: Pattern,
     pub below: Pattern,
+    /// The patterns match the frame's rules when marked.
+    #[serde(default)]
+    pub on_rules: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -518,6 +552,9 @@ impl Rule {
             self.choices.check().err(),
             self.paste.check().err(),
             self.state_problem().err(),
+            self.status_glyph
+                .as_ref()
+                .and_then(|glyph| glyph.check().err()),
             self.session_problem().err(),
         ];
         sections.into_iter().flatten().next()
@@ -550,25 +587,15 @@ impl Rule {
         }
     }
 
-    /// The `status` section, read around the input, and the version it may need.
+    /// The input layout a screen-based `status` mechanism may need.
     fn state_problem(&self) -> Result<(), String> {
         let Some(state) = &self.status else {
             return Ok(());
         };
         match state {
             StateRule::FrameTranscript(transcript) => transcript.check(&self.input),
-            StateRule::BackgroundCorrection(correction) => {
-                correction.check(&self.input)?;
-                if self.version_file.is_some() {
-                    Ok(())
-                } else {
-                    Err(
-                        "status background_correction holds for a verified version, so the rule \
-                         needs a version_file"
-                            .into(),
-                    )
-                }
-            }
+            StateRule::BackgroundCorrection(correction) => correction.check(&self.input),
+            StateRule::BackgroundReport(_) => Ok(()),
             StateRule::TurnError(error) => error.check(&self.input),
         }
     }
@@ -625,17 +652,16 @@ fn is_literal(arg: &str) -> bool {
 
 impl PasteRule {
     fn check(&self) -> Result<(), String> {
-        let uncounted = self
-            .placeholders
-            .iter()
-            .position(|each| each.pattern.captures_len() != 2);
-        match uncounted {
-            Some(index) => Err(format!(
-                "paste.placeholders[{index}].pattern must have exactly one capture, the number \
-                 the placeholder shows"
-            )),
-            None => Ok(()),
+        for (index, each) in self.placeholders.iter().enumerate() {
+            let expected = usize::from(each.count != PasteCount::SingleLine);
+            if each.pattern.captures_len() != expected + 1 {
+                return Err(format!(
+                    "paste.placeholders[{index}].pattern must have {expected} captures for {:?}",
+                    each.count
+                ));
+            }
         }
+        Ok(())
     }
 }
 
@@ -645,7 +671,11 @@ impl InputRule {
             InputRule::Frame(frame) => frame.check()?,
             InputRule::Prompt(prompt) => {
                 one_cell("prompt", &prompt.prompt)?;
-                prompt.scrolled.check()?;
+                if let Some(alternate) = &prompt.alternate_prompt {
+                    one_cell("alternate_prompt", alternate)?;
+                }
+                one_cell("scroll_marks.above", &prompt.scroll_marks.above)?;
+                one_cell("scroll_marks.below", &prompt.scroll_marks.below)?;
             }
             InputRule::Editor(editor) => editor.check()?,
             InputRule::Box(input) => {
@@ -733,17 +763,6 @@ impl Scrolled {
     }
 }
 
-impl StateRule {
-    /// Whether the screen's evidence holds for the CLI at `version`: a correction holds only for
-    /// the versions it was verified on.
-    pub fn applies_to(&self, version: Option<&str>) -> bool {
-        let StateRule::BackgroundCorrection(correction) = self else {
-            return true;
-        };
-        version.is_some_and(|version| correction.verified.iter().any(|v| v == version))
-    }
-}
-
 impl FrameTranscript {
     fn check(&self, input: &InputRule) -> Result<(), String> {
         if !matches!(input, InputRule::Frame(_)) {
@@ -791,6 +810,23 @@ impl TurnError {
             return Err(
                 "status error must have exactly one capture, the start of the error's words".into(),
             );
+        }
+        Ok(())
+    }
+}
+
+impl StatusGlyph {
+    fn check(&self) -> Result<(), String> {
+        if self.working.is_empty() || self.working.iter().any(String::is_empty) {
+            return Err(
+                "status_glyph.working must list at least one glyph frame, each nonempty".into(),
+            );
+        }
+        if self.resting.is_empty() {
+            return Err("status_glyph.resting must be a nonempty glyph".into());
+        }
+        if self.frame_ms == 0 {
+            return Err("status_glyph.frame_ms must be positive".into());
         }
         Ok(())
     }
@@ -863,20 +899,6 @@ fn find_in<'a>(rules: Result<&'a [Rule], &str>, name: &str) -> Result<Option<&'a
         Ok(rules) => Ok(rules.iter().find(|rule| rule.cli == name)),
         Err(error) => Err(format!("the CLI rules could not be read: {error}")),
     }
-}
-
-/// The version that the installation of `rule`'s CLI names beside `program`, read without running
-/// it (CLIS-2.1): the rule's `version_file`, in the program's real folder or one of the two above
-/// it, as JSON with a `version` string. None where the rule names no such file or none is found.
-pub fn installed_version(rule: &Rule, program: &Path) -> Option<String> {
-    let file = rule.version_file.as_deref()?;
-    let folder = std::fs::canonicalize(program).ok()?;
-    let version_in = |folder: &Path| -> Option<String> {
-        let text = std::fs::read_to_string(folder.join(file)).ok()?;
-        let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-        Some(json.get("version")?.as_str()?.to_string())
-    };
-    folder.ancestors().skip(1).take(3).find_map(version_in)
 }
 
 /// What the rules say about the CLIs' MCP clients, in the order `facade` lists the CLIs. A
@@ -973,53 +995,46 @@ mod tests {
         FILES[0].1.to_string()
     }
 
-    /// Codex's version is read from `codex-package.json` above its real program, and its correction
-    /// holds for the verified versions only.
-    #[test]
-    fn codex_s_correction_holds_for_the_version_its_installation_names_when_verified() {
-        let codex = find("codex").unwrap().unwrap();
-        let base = crate::test_folder::TestFolder::new("rules-version");
-        let release = base.join("lib/codex");
-        std::fs::create_dir_all(release.join("bin")).unwrap();
-        std::fs::write(release.join("bin/codex"), "").unwrap();
-        let program = release.join("bin/codex");
-        assert_eq!(
-            installed_version(codex, &program),
-            None,
-            "no file names a version"
-        );
-        let status = codex.status.as_ref().unwrap();
-        for (version, holds) in [
-            ("0.165.0", false),
-            ("0.166.0", true),
-            ("0.166.1", false),
-            ("0.167.0", true),
-            ("0.167.1", false),
-            ("0.168.0", false),
-        ] {
-            std::fs::write(
-                release.join("codex-package.json"),
-                format!(r#"{{"name":"codex","version":"{version}"}}"#),
-            )
-            .unwrap();
-            let read = installed_version(codex, &program);
-            assert_eq!(read.as_deref(), Some(version));
-            assert_eq!(status.applies_to(read.as_deref()), holds, "{version}");
-        }
-        assert!(
-            !status.applies_to(None),
-            "an unknown version keeps the CLI's own reports"
-        );
-        assert_eq!(
-            installed_version(find("claude").unwrap().unwrap(), &program),
-            None,
-            "a rule without a version file reads none"
-        );
-        std::fs::remove_dir_all(&base).unwrap();
-    }
-
     fn refusal(name: &str, text: &str) -> String {
         Rule::parse(name, text).expect_err("the rule must be refused")
+    }
+
+    #[test]
+    fn claude_s_rule_reads_background_reports_and_status_glyph() {
+        let claude = find("claude").unwrap().unwrap();
+        let status = claude.status.as_ref().unwrap();
+        let StateRule::BackgroundReport(report) = status else {
+            panic!("Claude Code's status must use background_report");
+        };
+        assert!(report.background.is_match("2 tasks still running"));
+        assert!(!report.background.is_match("Still working"));
+        assert!(
+            !report
+                .background
+                .is_match("2 tasks still running in parallel")
+        );
+
+        let glyph = claude.status_glyph.as_ref().unwrap();
+        assert_eq!(glyph.working, ["◐", "◑"]);
+        assert_eq!(glyph.resting, "✳");
+        assert_eq!(glyph.frame_ms, 960);
+    }
+
+    #[test]
+    fn a_rule_file_with_an_empty_status_glyph_or_zero_interval_is_refused() {
+        for (field, replacement, problem) in [
+            (r#"["◐", "◑"]"#, "[]", "status_glyph.working"),
+            (r#"["◐", "◑"]"#, r#"["", "◑"]"#, "status_glyph.working"),
+            (r#""✳""#, r#""""#, "status_glyph.resting"),
+            (
+                r#""frame_ms": 960"#,
+                r#""frame_ms": 0"#,
+                "status_glyph.frame_ms",
+            ),
+        ] {
+            let malformed = claude().replacen(field, replacement, 1);
+            assert!(refusal("claude", &malformed).contains(problem));
+        }
     }
 
     #[test]
@@ -1201,7 +1216,7 @@ mod tests {
         assert!(
             refusal(
                 "claude",
-                &claude().replacen("^↑ (\\\\d+) more lines?$", "^↑ \\\\d+ more lines?$", 1)
+                &claude().replacen("↑ (\\\\d+) more", "↑ \\\\d+ more", 1)
             )
             .contains("one capture")
         );

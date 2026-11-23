@@ -158,8 +158,8 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   the running machine.
 - `settings::{read, settings_file, shown, is_space, Settings, SourceLocation}`. The settings path
   is available before the file exists.
-- `instructions::{for_connection, for_managed, ManagedRun, Creator}`, `skill::text_v3()` and
-  `tools::DEFINITIONS` describe the Orchestrator and its eight MCP tools.
+- `instructions::{for_connection, for_managed, ManagedRun, Creator}`, `skill::text()` and
+  `tools::DEFINITIONS` describe Facade API v1's MCP entry point and its eight tools.
 
 **The `facade` program**
 - `api_v1::daemon_client::DaemonClient` is the blocking terminal client for authenticated local
@@ -189,12 +189,12 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   `upgrade_command(version)` builds the installer command with the current environment and optional validated
   pin. SSH pins its installer to the local release. Both prefer GitHub and fall back to the matching website script.
   Shell can opt in to a receipt carrying the exact failed file and HTTP status.
-- `console::{VtModes, ConsoleReader, ConsoleSignals, visible_content_end}`: what attach needs of
-  the person's console beside crossterm's size and raw mode. On Windows, Attach can read the
-  visible content boundary and consume an exact queued release from its detach chord. A native
-  wheel record gives one-based viewport coordinates, a signed delta and terminal modifier bits.
-  Attach sets capture according to the viewed screen's tracking mode. `VtModes` restores the
-  console's input and output modes on handback.
+- `console::{VtModes, ConsoleReader, ConsoleSignals}`: what Attach needs of the person's
+  console beside crossterm's size and raw mode. On Windows, Attach can consume an exact
+  queued release from its detach chord. A native wheel record gives one-based viewport
+  coordinates, a signed delta and terminal modifier bits. Attach sets capture according to the
+  viewed screen's tracking mode. `VtModes` restores the console's input and output modes on
+  handback.
 
 **Rules**
 - `settings::{Settings, Member, Json, is_space}`: rules reads the CLI entries of `clis`.
@@ -310,17 +310,18 @@ What Facade asks of the operating system. `core/crates/base/src/platform/`.
 
 ### texts
 
-What a model reads. `core/crates/base/src/texts/`.
-- **Owns:** the instructions Facade's MCP server responds to `initialize` with (`instructions.rs`),
-  Facade's skill (`skill.rs`), and the eight tools' definitions as `tools/list` lists them
-  (`tools.v3.json`, exposed as `tools::DEFINITIONS`).
-- **Keeps:** `for_connection` describes the tools before a new connection is associated with an
-  actor. `for_managed` adds the run's machine, folder, creator and saved YOLO. Both describe
-  inbox acceptance, optional waits and command-line replies. The skill explains how to find
-  available CLIs, continue a reply wait and use the terminal tools. It ends with the Core version.
+What a model reads at Facade API v1's MCP entry point in `core/crates/base/src/texts/`.
+- **Owns** the instructions the daemon's MCP server returns from `initialize` (`instructions.rs`),
+  the skill (`skill.rs`), and the definitions of the eight tools (`tools.json`).
+- **Keeps** one skill and one table for `tools/list` and `tools/call`. `for_connection` describes
+  the tools before a new connection is associated with an actor. `for_managed` adds the run's
+  machine, folder, creator and saved YOLO. Both describe inbox acceptance, optional waits and
+  command-line replies. The skill explains how to find available CLIs, continue a reply wait
+  and use the terminal tools. It ends with the Core version.
+- **Never keeps** a text used only by tests.
 - **Input:** the daemon's MCP server supplies `ManagedRun` from the agent's authenticated run.
 - **Interface:** `instructions::{for_connection, for_managed, Creator, ManagedRun}`,
-  `skill::{text_v3, DESCRIPTION, DESCRIPTION_PREFIX, REPEATED_MESSAGE}`, `tools::DEFINITIONS`.
+  `skill::text()`, `tools::DEFINITIONS`.
   The [Core MCP contract](../../extension/engineering/MCP.md#7-mcp-through-the-orchestrator)
   describes the tools and their results.
 

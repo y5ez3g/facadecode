@@ -148,6 +148,15 @@ fn waiting_for_you_says_what_for_an_error_says_the_cli_s_words_and_a_report_take
     submit(&home, "w1", "/fake error Out of credits");
     let error = reaches(&home, "w1", "error");
     assert_eq!(error["state_detail"], json!({ "text": "Out of credits" }));
+    // The list shows the state; the detail adds the CLI's words.
+    assert_eq!(home.list_state("w1").as_deref(), Some("Error"));
+    let inspected = home.run_facade_ok(&["status", "w1"]);
+    assert!(
+        inspected
+            .lines()
+            .any(|line| line.starts_with("State ") && line[5..].trim() == "Error (Out of credits)"),
+        "{inspected}"
+    );
     submit(&home, "w1", "/fake clear");
     let unknown = reaches(&home, "w1", "unknown");
     assert_eq!(unknown["state_detail"], json!({ "reason": "taken_back" }));
@@ -184,9 +193,9 @@ fn an_ended_agent_says_whether_it_ended_normally_was_stopped_or_crashed() {
     // The list shows running agents alone; inspect says how each ended.
     assert!(home.list_table().rows.is_empty(), "{:?}", home.list_table());
     for (name, said) in [
-        ("normal", "Exited (code 0)"),
-        ("crashed", "Exited (code 3)"),
-        ("stopped", "Stopped"),
+        ("normal", "Ended (code 0)"),
+        ("crashed", "Ended (code 3)"),
+        ("stopped", "Ended (stopped by Facade)"),
     ] {
         let inspected = home.run_facade_ok(&["status", name]);
         assert!(

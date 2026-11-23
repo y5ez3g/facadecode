@@ -864,6 +864,29 @@ suite('Workbench - TerminalInstance', () => {
 			terminalLabelComputer.refreshLabel(createInstance({ capabilities, shellType: GeneralShellType.CommandCode, sequence: 'Fix Parser Bug', processName: 'node' }));
 			strictEqual(terminalLabelComputer.title, 'Fix Parser Bug');
 		});
+
+		test('should use the title sequence for a foreground Facade process until the host shell returns', () => {
+			const terminalLabelComputer = createLabelComputer({ terminal: { integrated: { tabs: { separator: ' - ', title: '${sequence}${separator}${process}', description: '${cwd}', allowAgentCliTitle: true } } } });
+			const facade = createInstance({ capabilities, shellType: GeneralShellType.Facade, processName: 'facade' });
+			const titleOf = (partial: Partial<ITerminalInstance>) => {
+				terminalLabelComputer.refreshLabel({ ...facade, ...partial });
+				return terminalLabelComputer.title;
+			};
+
+			deepStrictEqual([
+				titleOf({ sequence: '' }),
+				titleOf({ sequence: 'OC | Greeting' }),
+				titleOf({ sequence: 'OC | Renamed Session' }),
+				titleOf({ sequence: 'OC | Renamed Session', staticTitle: 'My terminal' }),
+				titleOf({ sequence: 'Host title', shellType: PosixShellType.Zsh, processName: 'zsh' }),
+			], ['facade', 'OC | Greeting', 'OC | Renamed Session', 'My terminal', 'Host title - zsh']);
+		});
+
+		test('should use the configured title for a foreground Facade process when allowAgentCliTitle is disabled', () => {
+			const terminalLabelComputer = createLabelComputer({ terminal: { integrated: { tabs: { separator: ' - ', title: '${process}${separator}${cwd}', description: '', allowAgentCliTitle: false } } } });
+			terminalLabelComputer.refreshLabel(createInstance({ capabilities, shellType: GeneralShellType.Facade, processName: 'facade', sequence: 'OC | Greeting' }));
+			strictEqual(terminalLabelComputer.title, 'facade - cwd');
+		});
 		test('should prefer shellLaunchConfig.titleTemplate over agent CLI shell type override', () => {
 			const terminalLabelComputer = createLabelComputer({ terminal: { integrated: { tabs: { separator: ' - ', title: '${process}', description: '${cwd}', allowAgentCliTitle: true } } } });
 			terminalLabelComputer.refreshLabel(createInstance({ capabilities, shellType: GeneralShellType.Copilot, sequence: 'Copilot Agent', processName: 'copilot', shellLaunchConfig: { titleTemplate: '${process}' } }));

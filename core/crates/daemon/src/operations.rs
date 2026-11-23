@@ -520,11 +520,6 @@ impl Daemon {
             plain_program: &args.cli,
             inherited: configured.env.clone(),
             cwd: &folder,
-            location_id: &location,
-            window: None,
-            creator: creator
-                .as_ref()
-                .map(|creator| (creator.agent_id.as_str(), creator_name)),
             yolo,
             session: session.as_deref(),
             kind: RunKind::Start,
@@ -709,7 +704,7 @@ impl Daemon {
             deliveries: self.messages.delivery_handle(),
             state: StateStart {
                 file: agent::state_file(&screen),
-                kept: Kept::new_run(prepared.version.clone(), prepared.tools),
+                kept: Kept::new_run(prepared.tools),
                 started: tokio::time::Instant::now(),
             },
         };
@@ -1150,12 +1145,6 @@ impl Daemon {
             plain_program: &rule.cli,
             inherited: resumed.env.clone(),
             cwd: &info.cwd,
-            location_id: &info.location_id,
-            window: None,
-            creator: info
-                .creator
-                .as_deref()
-                .map(|creator| (creator, creator_name.as_deref())),
             yolo,
             session: Some(&session),
             kind: RunKind::Resume,
@@ -1240,7 +1229,6 @@ impl Daemon {
             pid: started.pid,
             captures: prepared.captures,
             launch_command: prepared.launch_command.take(),
-            version: prepared.version.clone(),
             tools: prepared.tools,
             reply,
         };

@@ -738,11 +738,11 @@ pub(crate) fn state_words(agent: &AgentInfo) -> String {
     let detail = agent.state_detail.as_ref();
     if agent.process == ProcessState::Ended {
         if detail.and_then(|detail| detail.how) == Some(HowEnded::Stopped) {
-            return "Stopped".into();
+            return "Ended (stopped by Facade)".into();
         }
         return match &agent.exit {
-            Some(exit) if exit.code.is_some() => format!("Exited ({})", ExitText(exit)),
-            Some(exit) if exit.signal.is_some() => format!("Ended by signal {}", ExitText(exit)),
+            Some(exit) if exit.code.is_some() => format!("Ended ({})", ExitText(exit)),
+            Some(exit) if exit.signal.is_some() => format!("Ended (signal {})", ExitText(exit)),
             _ => "Ended".into(),
         };
     }
@@ -813,28 +813,18 @@ pub(crate) fn resume_list_text(
     machines: &[MachineQuery],
     now: SystemTime,
 ) -> String {
-    let mut prefixes = HashMap::new();
-    for item in items.iter().filter(|item| item.agent.is_none()) {
-        *prefixes.entry(session_prefix(&item.session)).or_insert(0) += 1;
-    }
     let rows: Vec<_> = items
         .iter()
         .map(|item| {
             let (reference, state, kind) = if let ResumeTarget::Agent { reference } = &item.target {
-                let state = if item.stopped { "Stopped" } else { "Exited" };
                 let machine = machines
                     .iter()
                     .find(|machine| machine.machine_id == reference.machine_id)
                     .map(|machine| machine.selector.as_str());
-                (agent_address(reference, machine), state, "Managed")
+                (agent_address(reference, machine), "Ended", "Managed")
             } else {
-                let prefix = session_prefix(&item.session);
-                let id = if prefixes[prefix] > 1 {
-                    &item.session
-                } else {
-                    prefix
-                };
-                (id.to_owned(), "Saved", "Session")
+                let selector = item.session_selector.as_deref().unwrap_or(&item.session);
+                (selector.to_owned(), "Saved", "Session")
             };
             vec![
                 item.name.as_deref().unwrap_or("-").into(),
@@ -855,11 +845,6 @@ pub(crate) fn resume_list_text(
     roster_table(&columns, &rows)
 }
 
-fn session_prefix(id: &str) -> &str {
-    let end = id.char_indices().nth(8).map_or(id.len(), |(end, _)| end);
-    &id[..end]
-}
-
 pub(crate) fn inspect_text(
     inspected: &InspectResult,
     machine_names: &HashMap<String, String>,
@@ -876,7 +861,7 @@ pub(crate) fn inspect_text(
         .address
         .rsplit_once('@')
         .map_or(agent.reference.machine_id.as_str(), |(_, machine)| machine);
-    let (folder, launch_command, session) = if managed {
+    let (folder, launch_command, session_id) = if managed {
         (
             agent.cwd.as_str(),
             inspected.launch_command.as_deref().unwrap_or("-"),
@@ -927,8 +912,8 @@ pub(crate) fn inspect_text(
             &[
                 ("Type", kind_words(agent.kind)),
                 ("Machine", machine),
-                ("Title", agent.title.as_deref().unwrap_or("-")),
-                ("Session", session),
+                ("Session", inspected.session_name.as_deref().unwrap_or("-")),
+                ("Session ID", session_id),
                 ("Started by", started_by),
                 ("Attached in", &viewers),
                 ("YOLO", if agent.yolo { "on" } else { "off" }),

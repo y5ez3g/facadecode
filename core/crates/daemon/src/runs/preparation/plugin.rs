@@ -50,14 +50,11 @@ impl Plugins {
         })
     }
 
-    fn files(&self) -> [Vec<(String, String)>; 2] {
+    fn files(&self) -> Vec<(String, String)> {
         let program = self.held.facade_mcp();
         let facade = self.held.facade_launcher();
         let (program, facade) = (program.to_string_lossy(), facade.to_string_lossy());
-        [
-            facade_rules::plugin_files(&program, &facade),
-            facade_rules::plugin_files_v3(&program, &facade),
-        ]
+        facade_rules::plugin_files(&program, &facade)
     }
 
     pub(super) fn note_unrecorded(&self, projects: Vec<PathBuf>) {
@@ -110,7 +107,7 @@ impl Plugins {
         let folder = project.join(facade_rules::PLUGIN_FOLDER);
         let busy =
             usage.starts.contains_key(project) || usage.runs.values().any(|cwd| cwd == project);
-        let replace = match inspect(&folder, &[files]) {
+        let replace = match inspect(&folder, files) {
             Plugin::Foreign(why) => {
                 return Err(format!("{why}; Facade leaves the plugin as it is"));
             }
@@ -130,7 +127,7 @@ impl Plugins {
         })
     }
 
-    fn clean(&self, usage: &Usage, cwd: &Path, [legacy, current]: &[Vec<(String, String)>; 2]) {
+    fn clean(&self, usage: &Usage, cwd: &Path, files: &[(String, String)]) {
         if usage.starts.contains_key(cwd) || usage.runs.values().any(|at| at == cwd) {
             return;
         }
@@ -138,7 +135,7 @@ impl Plugins {
         if !folder.exists() {
             return;
         }
-        let left = match inspect(&folder, &[legacy, current]) {
+        let left = match inspect(&folder, files) {
             Plugin::Matching | Plugin::Earlier => None,
             Plugin::Edited => Some(format!(
                 "{} was changed since Facade wrote it; Facade leaves it as it is",
@@ -187,10 +184,10 @@ enum Plugin {
     Foreign(String),
 }
 
-fn inspect(folder: &Path, templates: &[&[(String, String)]]) -> Plugin {
+fn inspect(folder: &Path, files: &[(String, String)]) -> Plugin {
     let scan = || -> std::io::Result<Result<bool, String>> {
         let mut pending = vec![(folder.to_path_buf(), String::new())];
-        let mut matching = templates.to_vec();
+        let mut matching = true;
         while let Some((at, prefix)) = pending.pop() {
             for item in std::fs::read_dir(at)? {
                 let item = item?;
@@ -214,15 +211,13 @@ fn inspect(folder: &Path, templates: &[&[(String, String)]]) -> Plugin {
                     pending.push((item.path(), format!("{name}/")));
                 } else {
                     let contents = std::fs::read(item.path()).ok();
-                    matching.retain(|template| {
-                        template.iter().any(|(file, text)| {
-                            file == &name && contents.as_deref() == Some(text.as_bytes())
-                        })
+                    matching &= files.iter().any(|(file, text)| {
+                        file == &name && contents.as_deref() == Some(text.as_bytes())
                     });
                 }
             }
         }
-        Ok(Ok(!matching.is_empty()))
+        Ok(Ok(matching))
     };
     match scan() {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Plugin::Matching,
@@ -235,9 +230,8 @@ fn inspect(folder: &Path, templates: &[&[(String, String)]]) -> Plugin {
     }
     let manifest = std::fs::read_to_string(folder.join("plugin.json")).ok();
     let version = manifest.as_deref().and_then(facade_rules::plugin_version);
-    let own = templates
+    let own = files
         .iter()
-        .flat_map(|template| template.iter())
         .find(|(name, _)| name == "plugin.json")
         .and_then(|(_, text)| facade_rules::plugin_version(text));
     match version.zip(own).map(|(found, own)| found.cmp(&own)) {
@@ -317,7 +311,7 @@ mod tests {
     #[tokio::test]
     async fn the_plugin_is_placed_shared_and_taken_away_with_the_folders_it_leaves_empty() {
         let (preparation, _home, cwd) = preparation("shared");
-        let [files, _] = preparation.plugins.files();
+        let files = preparation.plugins.files();
         let plugin = cwd.join(facade_rules::PLUGIN_FOLDER);
         let first = preparation.plugins.hold(&cwd, &files).unwrap();
         for (name, text) in &files {
@@ -349,7 +343,7 @@ mod tests {
     #[tokio::test]
     async fn a_plugin_that_is_not_facade_core_s_is_left_as_it_is() {
         let (preparation, _home, cwd) = preparation("foreign");
-        let [files, _] = preparation.plugins.files();
+        let files = preparation.plugins.files();
         let plugin = cwd.join(facade_rules::PLUGIN_FOLDER);
         std::fs::create_dir_all(&plugin).unwrap();
         let extension = "{ \"name\": \"facade\", \"description\": \"The Facade Code tools: start \
@@ -421,7 +415,7 @@ mod tests {
     #[tokio::test]
     async fn an_earlier_version_s_plugin_is_brought_up_to_date_and_a_later_one_s_stands() {
         let (preparation, _home, cwd) = preparation("versions");
-        let [files, _] = preparation.plugins.files();
+        let files = preparation.plugins.files();
         let plugin = cwd.join(facade_rules::PLUGIN_FOLDER);
         let marked = |version: &str| {
             format!(
@@ -477,7 +471,7 @@ mod tests {
     #[tokio::test]
     async fn a_running_antigravity_agent_keeps_its_folder_s_plugin() {
         let (preparation, _home, cwd) = preparation("used");
-        let [files, _] = preparation.plugins.files();
+        let files = preparation.plugins.files();
         preparation.plugin_used("a1", Some("agy"), &cwd);
         drop(preparation.plugins.hold(&cwd, &files).unwrap());
         assert!(

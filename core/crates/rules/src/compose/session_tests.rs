@@ -65,7 +65,7 @@ fn settings(launch: &CommandLine) -> Value {
 
 #[test]
 fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_words() {
-    let launch = start_command_line(
+    let launch = start_managed_launch_command(
         rule("codex"),
         &words(&["--model", "gpt-6", "fix it"]),
         None,
@@ -83,7 +83,7 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
         uses_run_credential: false,
     };
     assert_eq!(launch, launched);
-    let launch = start_command_line(
+    let launch = start_managed_launch_command(
         rule("fake"),
         &words(&["--resume-like"]),
         Some(&report()),
@@ -105,7 +105,7 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
     );
     // Without Facade's tools, Muse Code and Antigravity still report their session, through the
     // settings the tools go in.
-    let muse = start_command_line(
+    let muse = start_managed_launch_command(
         rule("muse"),
         &words(&["x"]),
         Some(&report()),
@@ -120,7 +120,7 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
         (muse.command, muse.captures),
         (words(&["muse", "-c", &format!("hooks={hooks}"), "x"]), true)
     );
-    let agy = start_command_line(
+    let agy = start_managed_launch_command(
         rule("agy"),
         &words(&["x"]),
         Some(&report()),
@@ -148,7 +148,7 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
 #[test]
 fn a_resume_names_the_session_first_and_keeps_no_words_of_the_earlier_start() {
     let session = "86da4482-2bae-4a45-b193-a5664c19826a";
-    let launch = resume_command_line(
+    let launch = resume_managed_launch_command(
         rule("codex"),
         session,
         &[],
@@ -170,7 +170,7 @@ fn a_resume_names_the_session_first_and_keeps_no_words_of_the_earlier_start() {
         ),
         ("-c", 6, true)
     );
-    let launch = resume_command_line(
+    let launch = resume_managed_launch_command(
         rule("claude"),
         session,
         &[],
@@ -188,7 +188,7 @@ fn a_resume_names_the_session_first_and_keeps_no_words_of_the_earlier_start() {
         settings(&launch)["hooks"]["SessionStart"][0]["hooks"][0]["command"],
         HOOK
     );
-    let launch = resume_command_line(
+    let launch = resume_managed_launch_command(
         rule("pi"),
         session,
         &[],
@@ -210,7 +210,7 @@ fn a_resume_names_the_session_first_and_keeps_no_words_of_the_earlier_start() {
     );
     let opencode = "ses_2b9cfe1a7dffRm6kVzQe7xXn3d";
     let home = home_environment(Path::new(&by_system("/nowhere", r"C:\nowhere")), &[]);
-    let launch = resume_command_line(
+    let launch = resume_managed_launch_command(
         rule("opencode"),
         opencode,
         &[],
@@ -308,8 +308,9 @@ fn yolo_on_adds_each_cli_s_arguments_and_settings_and_yolo_off_adds_nothing() {
     for cli in ["claude", "codex", "agy", "muse", "opencode", "pi"] {
         let rule = rule(cli);
         let at = 1 + rule.launch.args.len();
-        let off = start_command_line(rule, &[], Some(&report()), None, &BTreeMap::new(), None);
-        let on = start_command_line(
+        let off =
+            start_managed_launch_command(rule, &[], Some(&report()), None, &BTreeMap::new(), None);
+        let on = start_managed_launch_command(
             rule,
             &[],
             Some(&report()),
@@ -319,7 +320,7 @@ fn yolo_on_adds_each_cli_s_arguments_and_settings_and_yolo_off_adds_nothing() {
         );
         assert_eq!(without_yolo(on, at, &off, yolo_of(cli)), off, "{cli}");
         let at = 1 + rule.resume_args(session).unwrap().len() + rule.launch.args.len();
-        let off = resume_command_line(
+        let off = resume_managed_launch_command(
             rule,
             session,
             &[],
@@ -329,7 +330,7 @@ fn yolo_on_adds_each_cli_s_arguments_and_settings_and_yolo_off_adds_nothing() {
             None,
         )
         .unwrap();
-        let on = resume_command_line(
+        let on = resume_managed_launch_command(
             rule,
             session,
             &[],
@@ -358,7 +359,7 @@ fn yolo_s_run_settings_join_the_person_s_own() {
         "--settings",
         r#"{"sandbox": {"enabled": true, "excludedCommands": ["git"]}, "model": "opus"}"#,
     ]);
-    let claude = start_command_line(
+    let claude = start_managed_launch_command(
         rule("claude"),
         &theirs,
         Some(&report()),
@@ -384,7 +385,7 @@ fn yolo_s_run_settings_join_the_person_s_own() {
         r#"{ "trustedWorkspaces": ["/mine"], "enableTerminalSandbox": true, "theme": "dark" }"#,
     )
     .unwrap();
-    let agy = start_command_line(
+    let agy = start_managed_launch_command(
         rule("agy"),
         &[],
         Some(&report()),
@@ -437,7 +438,7 @@ fn opencode_reports_its_session_through_a_plugin_after_the_person_s_own() {
     let disabled_tabs = json!({ "enabled": false });
     let disabled_tabs_with_mode = json!({ "enabled": false, "mode": "off" });
     let configuration = |environment: &BTreeMap<String, String>| {
-        let launch = start_command_line(
+        let launch = start_managed_launch_command(
             rule("opencode"),
             &words(&["x"]),
             Some(&report()),
@@ -509,7 +510,7 @@ fn opencode_reports_its_session_through_a_plugin_after_the_person_s_own() {
             r#"{"plugins": ["mine"], "theme": "dark", "tabs": {"enabled": true, "mode": "workspace"}}"#,
         )],
     );
-    let launch = start_command_line(
+    let launch = start_managed_launch_command(
         rule("opencode"),
         &[],
         Some(&report()),
@@ -554,7 +555,7 @@ fn opencode_reports_its_session_through_a_plugin_after_the_person_s_own() {
         ("cli.json", r#"{"plugins": "one"}"#),
     ] {
         std::fs::write(config.join(file), text).unwrap();
-        let launch = start_command_line(
+        let launch = start_managed_launch_command(
             rule("opencode"),
             &words(&["x"]),
             Some(&report()),
@@ -571,7 +572,7 @@ fn opencode_reports_its_session_through_a_plugin_after_the_person_s_own() {
 
 #[test]
 fn pi_reports_its_session_through_an_extension_of_the_run() {
-    let launch = start_command_line(
+    let launch = start_managed_launch_command(
         rule("pi"),
         &words(&["--model", "m"]),
         Some(&report()),
@@ -594,7 +595,7 @@ fn pi_reports_its_session_through_an_extension_of_the_run() {
 
 #[test]
 fn claude_gets_a_session_start_hook_beside_the_person_s_own_settings() {
-    let launch = start_command_line(
+    let launch = start_managed_launch_command(
         rule("claude"),
         &words(&["--model", "opus"]),
         Some(&report()),
@@ -622,7 +623,7 @@ fn claude_gets_a_session_start_hook_beside_the_person_s_own_settings() {
         words(&["--settings", own, "go"]),
         words(&[&format!("--settings={own}"), "go"]),
     ] {
-        let launch = start_command_line(
+        let launch = start_managed_launch_command(
             rule("claude"),
             &given,
             Some(&report()),
@@ -660,7 +661,7 @@ fn claude_settings_facade_cannot_read_start_unchanged_without_a_hook() {
         words(&["--settings", "{}", "--settings", "{}"]),
         words(&["--settings"]),
     ] {
-        let launch = start_command_line(
+        let launch = start_managed_launch_command(
             rule("claude"),
             &given,
             Some(&report()),
@@ -676,7 +677,7 @@ fn claude_settings_facade_cannot_read_start_unchanged_without_a_hook() {
         );
     }
     let after_options = words(&["--", "--settings", "{}"]);
-    let launch = start_command_line(
+    let launch = start_managed_launch_command(
         rule("claude"),
         &after_options,
         Some(&report()),
@@ -721,7 +722,7 @@ fn codex_table(launch: &CommandLine) -> toml::Table {
 
 #[test]
 fn codex_trusts_its_session_start_hook_by_the_hash_at_its_group_s_place() {
-    let launch = start_command_line(
+    let launch = start_managed_launch_command(
         rule("codex"),
         &words(&["--model", "gpt-6"]),
         Some(&report()),
@@ -772,7 +773,7 @@ fn codex_merges_the_person_s_hook_overrides_and_keeps_every_other_word_in_order(
         "-c",
         "hooks={}",
     ]);
-    let launch = start_command_line(
+    let launch = start_managed_launch_command(
         rule("codex"),
         &given,
         Some(&report()),
@@ -789,7 +790,7 @@ fn codex_merges_the_person_s_hook_overrides_and_keeps_every_other_word_in_order(
         .into_iter()
         .filter(|word| !word.contains("\"x\""))
         .collect();
-    let launch = start_command_line(
+    let launch = start_managed_launch_command(
         rule("codex"),
         &given,
         Some(&report()),
@@ -856,7 +857,7 @@ fn codex_hook_settings_facade_cannot_read_start_unchanged_without_a_hook() {
         words(&["-c", "hooks.at=1979-05-27T07:32:00Z"]),
         words(&["-c"]),
     ] {
-        let launch = start_command_line(
+        let launch = start_managed_launch_command(
             rule("codex"),
             &given,
             Some(&report()),
@@ -885,7 +886,7 @@ fn a_hook_command_s_text_stays_one_word_and_one_toml_string() {
     if SYSTEM == System::Windows {
         return;
     }
-    let hooks = codex_table(&start_command_line(
+    let hooks = codex_table(&start_managed_launch_command(
         rule("codex"),
         &[],
         Some(&report),

@@ -267,6 +267,186 @@ fn a_redraw_kept_over_the_viewer_s_scrollback_adds_no_rows_to_it() {
 }
 
 #[test]
+fn closing_a_synchronized_update_sends_the_glyph_with_the_applied_title() {
+    let mut screen = Screen::new(20, 4, 100);
+    screen.feed(b"\x1b]2;Old\x07");
+    let opening = b"\x1b[?2026h\x1b]2;New\x07";
+    let opened = screen.feed(opening);
+    assert_eq!(opened.viewer_output, opening);
+    assert!(opened.title_change.is_none());
+
+    assert!(screen.set_status_glyph(Some("*".into())).is_empty());
+    let closed = screen.feed(b"\x1b[?2026l");
+    assert_eq!(closed.viewer_output, b"\x1b[?2026l\x1b]2;* New\x1b\\");
+    assert_eq!(closed.title_change.as_deref(), Some("New"));
+    assert!(screen.feed(b"").viewer_output.is_empty());
+}
+
+#[test]
+fn ending_a_synchronized_update_at_its_deadline_sends_the_current_glyph_and_title() {
+    let mut screen = Screen::new(20, 4, 100);
+    screen.feed(b"\x1b]2;Old\x07");
+    screen.feed(b"\x1b[?2026h");
+    assert!(screen.set_status_glyph(Some("*".into())).is_empty());
+    assert_eq!(screen.feed(b"\x1bH").viewer_output, b"\x1bH");
+    assert!(screen.synchronized_update_deadline().is_some());
+    let held = screen.feed(b"\x1b]2;New\x07");
+    assert_eq!(held.viewer_output, b"\x1b]2;* New\x07");
+    assert!(held.title_change.is_none());
+
+    let ended = screen.end_synchronized_update();
+    assert_eq!(ended.viewer_output, b"\x1b]2;* New\x1b\\");
+    assert_eq!(ended.title_change.as_deref(), Some("New"));
+    assert!(screen.synchronized_update_deadline().is_none());
+    assert!(screen.end_synchronized_update().viewer_output.is_empty());
+}
+
+#[test]
+fn viewer_output_decorates_each_title_with_the_current_status_glyph() {
+    let mut screen = Screen::new(20, 4, 100);
+    let native = b"a\x1b]0;first\x07b\x1b]2;second;part\x1b\\c";
+    let fed = screen.feed(native);
+    assert_eq!(fed.viewer_output, native);
+    assert_eq!(fed.title_change.as_deref(), Some("second;part"));
+
+    assert_eq!(
+        screen.set_status_glyph(Some("◐".into())),
+        "\x1b]2;◐ second;part\x1b\\".as_bytes()
+    );
+    assert!(screen.set_status_glyph(Some("◐".into())).is_empty());
+    let fed = screen.feed(native);
+    assert_eq!(
+        fed.viewer_output,
+        "a\x1b]0;◐ first\x07b\x1b]2;◐ second;part\x1b\\c".as_bytes()
+    );
+    assert_eq!(fed.title_change.as_deref(), Some("second;part"));
+    let fed = screen.feed(b"\x1b]2;split\x1b");
+    assert!(fed.viewer_output.is_empty());
+    assert_eq!(fed.title_change.as_deref(), Some("split"));
+    let fed = screen.feed(b"\\");
+    assert_eq!(fed.viewer_output, "\x1b]2;◐ split\x1b\\".as_bytes());
+    assert!(fed.title_change.is_none());
+    assert_eq!(screen.set_status_glyph(None), b"\x1b]2;split\x1b\\");
+    assert!(screen.set_status_glyph(None).is_empty());
+    assert_eq!(screen.feed(native).viewer_output, native);
+}
+
+#[test]
+fn viewer_titles_use_one_status_glyph_when_the_cli_already_supplies_it() {
+    let mut screen = Screen::new(20, 4, 100);
+    let native = "\x1b]2;✳ Claude Code\x1b\\".as_bytes();
+    assert_eq!(screen.feed(native).viewer_output, native);
+    assert_eq!(screen.set_status_glyph(Some("✳".into())), native);
+    assert_eq!(screen.title_output(), native);
+    for redraw in [
+        screen.redraw(false, true),
+        screen.redraw_for_attach(false, true),
+        screen.redraw_in_viewport(false, true),
+        screen.redraw_in_viewport_update(),
+    ] {
+        assert!(redraw.ends_with(native));
+    }
+
+    let matching = "\x1b]0;✳ Claude Code\x07\x1b]2;✳ Claude Code\x1b\\".as_bytes();
+    assert_eq!(screen.feed(matching).viewer_output, matching);
+    assert_eq!(screen.set_status_glyph(None), native);
+    assert_eq!(screen.set_status_glyph(Some("✳".into())), native);
+
+    let titles = "\x1b]0;◐ Claude Code\x07\x1b]2;✳Claude Code\x1b\\".as_bytes();
+    assert_eq!(
+        screen.feed(titles).viewer_output,
+        "\x1b]0;✳ ◐ Claude Code\x07\x1b]2;✳ ✳Claude Code\x1b\\".as_bytes()
+    );
+    let plain = screen.feed(b"\x1b]2;Claude Code\x1b\\");
+    assert_eq!(plain.viewer_output, native);
+    assert_eq!(plain.title_change.as_deref(), Some("Claude Code"));
+}
+
+#[test]
+fn blank_titles_leave_viewers_without_a_cli_title_alone() {
+    let mut screen = Screen::new(20, 4, 100);
+    assert!(screen.set_status_glyph(Some("✳".into())).is_empty());
+    assert!(screen.title_output().is_empty());
+    let fed = screen.feed(b"\x1b[22;0t\x1b]0;\x07\x1b]2;\x1b\\");
+    assert_eq!(fed.viewer_output, b"\x1b[22;0t");
+    assert_eq!(fed.title_change.as_deref(), Some(""));
+    assert!(screen.title_output().is_empty());
+    assert!(screen.set_status_glyph(Some("◐".into())).is_empty());
+
+    let blank = b"\x1b]2;   \x1b\\";
+    assert!(screen.feed(blank).viewer_output.is_empty());
+    // Seeding a saved title keeps its spaces, which the OSC parser would trim.
+    screen.restore_title("   ");
+    assert!(screen.title_output().is_empty());
+    for redraw in [
+        screen.redraw(false, false),
+        screen.redraw_for_attach(false, false),
+        screen.redraw_in_viewport(false, false),
+        screen.redraw_in_viewport_update(),
+        screen.redraw_with_all_scrollback(),
+    ] {
+        assert!(!redraw.windows(4).any(|bytes| bytes == b"\x1b]2;"));
+    }
+    assert!(screen.set_status_glyph(Some("◑".into())).is_empty());
+
+    assert_eq!(
+        screen.feed(b"\x1b]2;topic\x07").viewer_output,
+        "\x1b]2;◑ topic\x07".as_bytes()
+    );
+    let reset = screen.feed(b"\x1b[23;0t");
+    assert_eq!(reset.viewer_output, b"\x1b[23;0t");
+    assert_eq!(reset.title_change.as_deref(), Some(""));
+    assert!(screen.title_output().is_empty());
+    assert!(screen.set_status_glyph(None).is_empty());
+}
+
+#[test]
+fn a_blank_title_resets_a_live_viewer_after_a_nonblank_title() {
+    let mut screen = Screen::new(20, 4, 100);
+    let title = screen.feed(b"\x1b]0;\x07\x1b]2;topic\x07");
+    assert_eq!(title.viewer_output, b"\x1b]2;topic\x07");
+
+    let reset = screen.feed(b"\x1b]0;\x07\x1b]2;\x1b\\");
+    assert_eq!(reset.viewer_output, b"\x1b]0;\x07");
+    assert_eq!(reset.title_change.as_deref(), Some(""));
+    assert!(screen.title_output().is_empty());
+
+    assert!(screen.set_status_glyph(Some("*".into())).is_empty());
+    let batch = screen.feed(b"\x1b]0;topic\x07\x1b]2;   \x1b\\\x1b]0;\x07");
+    assert_eq!(batch.viewer_output, b"\x1b]0;* topic\x07\x1b]2;   \x1b\\");
+    assert_eq!(batch.title_change.as_deref(), Some(""));
+}
+
+#[test]
+fn viewer_redraws_write_the_glyph_and_a_checkpoint_keeps_the_cli_title() {
+    let mut screen = Screen::new(20, 4, 100);
+    screen.feed(b"\x1b]2;topic\x07");
+    let native = b"\x1b]2;topic\x1b\\";
+    let checkpoint = screen.redraw_with_all_scrollback();
+    assert!(checkpoint.ends_with(native));
+
+    let decorated = "\x1b]2;◑ topic\x1b\\".as_bytes();
+    assert_eq!(screen.set_status_glyph(Some("◑".into())), decorated);
+    assert_eq!(screen.title_output(), decorated);
+    for redraw in [
+        screen.redraw(false, true),
+        screen.redraw_for_attach(false, true),
+        screen.redraw_for_attach(true, true),
+        screen.redraw_in_viewport(false, true),
+        screen.redraw_in_viewport_update(),
+    ] {
+        assert!(redraw.ends_with(decorated));
+    }
+    assert_eq!(screen.redraw_with_all_scrollback(), checkpoint);
+    let mut restored = Screen::new(20, 4, 100);
+    let fed = restored.feed(&checkpoint);
+    assert_eq!(fed.title_change.as_deref(), Some("topic"));
+    assert_eq!(restored.title_output(), native);
+    assert_eq!(restored.set_status_glyph(Some("◑".into())), decorated);
+    assert_eq!(restored.title_output(), decorated);
+}
+
+#[test]
 fn a_redraw_with_all_scrollback_restores_every_retained_row() {
     let mut screen = Screen::new(20, 3, 2000);
     for n in 0..1500 {

@@ -164,14 +164,196 @@ fn foreground_alternate_first_start_hands_the_same_shell_page_back() {
     assert!(term.canonical_input_and_echo_enabled());
 }
 
-fn wait_for_viewport(term: &TestTerminal, rows: [&str; 3], alternate: bool) {
-    // ConPTY can place the logical grid below the opening line.
+/// Starts `cli -c script` in the foreground as `name`, below a shell page with history above it.
+fn start_below_a_shell_page(home: &TestHome, name: &str, script: &str) -> TestTerminal {
+    let term = TestTerminal::spawn(
+        home.command(shell()).args([
+            "-c",
+            "printf 'HOST-HISTORY\\n'; \
+             i=0; while [ \"$i\" -lt 24 ]; do printf 'shell line %s\\n' \"$i\"; i=$((i + 1)); done; \
+             printf 'HOST-PAGE\\nHOST-PROMPT\\n'; \
+             name=$1; shift; facade start --name \"$name\" \"$@\"; result=$?; \
+             printf 'HOST-RETURN\\n'; exit \"$result\"",
+            "host",
+            name,
+            home.shell_cli(),
+            "-c",
+            script,
+        ]),
+        100,
+        24,
+    );
+    assert!(
+        term.wait_for_output(LOADED_TIMEOUT, &format!("Started {name} (")),
+        "{}",
+        term.text_with_scrollback()
+    );
+    term
+}
+
+/// After the attachment ends, the host is on its main screen and the shell page is as before,
+/// followed by the opening line, `receipt` and the shell's next line, with none of `agent_text`.
+fn assert_shell_page_returned(
+    term: &TestTerminal,
+    opening: &str,
+    receipt: &str,
+    agent_text: &[&str],
+) {
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("HOST-RETURN")),
+        "{}",
+        term.text_with_scrollback()
+    );
+    assert!(!term.on_alternate_screen());
+    let text = term.text_with_scrollback();
+    assert_eq!(text.matches("HOST-HISTORY").count(), 1, "{text}");
+    for shown in agent_text {
+        assert!(!text.contains(shown), "{shown}: {text}");
+    }
+    let (_, after) = text
+        .split_once("HOST-PAGE\nHOST-PROMPT\n")
+        .unwrap_or_else(|| panic!("no shell page: {text}"));
+    assert_eq!(
+        after.trim_end(),
+        format!("{opening}\n{receipt}\nHOST-RETURN"),
+        "{text}"
+    );
+}
+
+#[test]
+fn foreground_exit_hands_the_shell_page_back() {
+    let home = TestHome::new("exit-page");
+    let _wire = connect(&home);
+    // The kinds of CLI recorded: one drawing on its main screen that writes its resume hint twice,
+    // one leaving its alternate screen to print a hint, and one leaving it to reprint a transcript
+    // longer than the screen.
+    let cases = [
+        (
+            "Main-hint",
+            "quit-main",
+            "printf 'MAIN-FRAME\\n'; \
+             while [ ! -f quit-main ]; do sleep 0.05; done; \
+             printf 'Resume with -c MAIN-HINT\\nMAIN-FRAME\\nResume with -c MAIN-HINT\\n'; exit 0",
+            "MAIN-FRAME",
+            &["MAIN-FRAME", "Resume with", "MAIN-HINT"][..],
+        ),
+        (
+            "Alternate-hint",
+            "quit-hint",
+            "printf '\\033[?1049h\\033[1;1HALT-FRAME'; \
+             while [ ! -f quit-hint ]; do sleep 0.05; done; \
+             printf '\\033[?1049lTo continue this session, run:\\n  demo resume ALT-HINT\\n'; exit 0",
+            "ALT-FRAME",
+            &["ALT-FRAME", "To continue this session", "ALT-HINT"][..],
+        ),
+        (
+            "Transcript",
+            "quit-transcript",
+            "printf '\\033[?1049h\\033[1;1HTRANSCRIPT-FRAME'; \
+             while [ ! -f quit-transcript ]; do sleep 0.05; done; \
+             printf '\\033[?1049l'; \
+             i=0; while [ \"$i\" -lt 40 ]; do printf 'TRANSCRIPT-LINE %s\\n' \"$i\"; i=$((i + 1)); done; \
+             exit 0",
+            "TRANSCRIPT-FRAME",
+            &["TRANSCRIPT-FRAME", "TRANSCRIPT-LINE"][..],
+        ),
+    ];
+    for (name, gate, script, frame, agent_text) in cases {
+        let mut term = start_below_a_shell_page(&home, name, script);
+        assert!(
+            term.wait_for(LOADED_TIMEOUT, |view| view.contains(frame))
+                && term.on_alternate_screen(),
+            "{name}: {}",
+            term.text()
+        );
+        let address = home.inspect_agent(name)["agent"]["address"]
+            .as_str()
+            .expect("an address")
+            .to_string();
+        std::fs::write(home.project.join(gate), b"").unwrap();
+        let status = term.wait_exit(LOADED_TIMEOUT);
+        assert!(
+            status.is_some_and(|status| status.success()),
+            "{name}: {status:?}"
+        );
+        assert_shell_page_returned(
+            &term,
+            &format!("Started {name} ({address}). Press Ctrl+] to detach."),
+            &format!("{name} ({address}) exited with code 0."),
+            agent_text,
+        );
+    }
+}
+
+#[test]
+fn detach_from_a_main_screen_cli_hands_the_shell_page_back() {
+    let home = TestHome::new("detach-page");
+    let _wire = connect(&home);
+    let name = "Main-detach";
+    let mut term = start_below_a_shell_page(
+        &home,
+        name,
+        "printf 'MAIN-FRAME\\n'; while IFS= read -r line; do printf 'GOT-%s\\n' \"$line\"; done; sleep 60",
+    );
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("MAIN-FRAME"))
+            && term.on_alternate_screen(),
+        "{}",
+        term.text()
+    );
+    let address = home.inspect_agent(name)["agent"]["address"]
+        .as_str()
+        .expect("an address")
+        .to_string();
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert_detach_receipt(&term, name, &address);
+    assert_shell_page_returned(
+        &term,
+        &format!("Started {name} ({address}). Press Ctrl+] to detach."),
+        &format!("Detached from {name} ({address}). The agent is still running."),
+        &["MAIN-FRAME"],
+    );
+    assert_eq!(home.inspect_agent(&address)["agent"]["process"], "running");
+
+    // Attach shows the agent again and takes input.
+    let mut again = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["attach", &address]),
+        100,
+        24,
+    );
+    assert!(
+        again.wait_for(LOADED_TIMEOUT, |view| view.contains("MAIN-FRAME"))
+            && again.on_alternate_screen(),
+        "{}",
+        again.text()
+    );
+    again.send(b"hello\r");
+    assert!(
+        again.wait_for(LOADED_TIMEOUT, |view| view.contains("GOT-hello")),
+        "{}",
+        again.text()
+    );
+    again.send(b"\x1d");
+    assert!(
+        again
+            .wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+}
+
+/// Waits for `rows` at the top of the host's alternate screen, which shows the agent on either of
+/// its screens for the whole attachment.
+fn wait_for_viewport(term: &TestTerminal, rows: [&str; 3]) {
     assert!(
         wait_until(LOADED_TIMEOUT, || {
-            term.rows().windows(rows.len()).any(|shown| shown == rows)
-                && term.on_alternate_screen() == alternate
+            term.rows()[..rows.len()] == rows && term.on_alternate_screen()
         }),
-        "expected {rows:?} in alternate={alternate}, got {:?}",
+        "expected {rows:?} in the host's alternate screen, got {:?}",
         term.rows()
     );
 }
@@ -205,7 +387,7 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
     );
     let initial_rows = ["PRIMARY-TOP", "primary-stale-tail", "PRIMARY-BOTTOM"];
     wait_for_title(&small, 0, "Native snapshot");
-    wait_for_viewport(&small, initial_rows, false);
+    wait_for_viewport(&small, initial_rows);
     let mut large = TestTerminal::spawn(
         home.command(&test_binaries().facade)
             .args(["attach", &address]),
@@ -213,7 +395,7 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
         35,
     );
     wait_for_title(&large, 0, "Native snapshot");
-    wait_for_viewport(&large, initial_rows, false);
+    wait_for_viewport(&large, initial_rows);
     let agent_info = home.inspect_agent(&address);
     let size = json!({ "cols": 80, "rows": 24 });
     assert_eq!(agent_info["agent"]["size"], size);
@@ -233,7 +415,6 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
             "Native steady",
             ["PRIMARY-TOP", "short", "PRIMARY-BOTTOM"],
             false,
-            false,
         ),
         (
             "alternate",
@@ -241,14 +422,12 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
             "Native alternate",
             ["ALT-TOP", "alternate-stale-tail", "ALT-BOTTOM"],
             true,
-            true,
         ),
         (
             "update",
             "\x1b]9;4;1;63\x07",
             "Native alternate update",
             ["ALT-TOP", "small", "ALT-BOTTOM"],
-            true,
             false,
         ),
         (
@@ -256,18 +435,17 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
             "\x1b]9;4;0;0\x07",
             "Native primary return",
             ["PRIMARY-TOP", "back", "PRIMARY-BOTTOM"],
-            false,
             true,
         ),
     ];
     let mut activity_counts = Vec::new();
-    for (gate, activity, title, rows, alternate, full_draw) in batches {
+    for (gate, activity, title, rows, full_draw) in batches {
         let starts = [small.output_len(), large.output_len()];
         std::fs::write(home.project.join(gate), b"").unwrap();
         let mut counts = [0; 2];
         for (index, (term, from)) in [&small, &large].into_iter().zip(starts).enumerate() {
             wait_for_title(term, from, title);
-            wait_for_viewport(term, rows, alternate);
+            wait_for_viewport(term, rows);
             counts[index] = String::from_utf8_lossy(&term.output_since(from))
                 .matches(activity)
                 .count();
@@ -278,10 +456,9 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
         let cleared = ["\x1b[J", "\x1b[0J", "\x1b[1J", "\x1b[2J", "\x1b[3J"]
             .iter()
             .any(|clear| frame.contains(clear));
+        // Full draws stay on the agent's screen switches, and the host keeps its alternate screen.
         assert_eq!(cleared, full_draw, "{gate}: {frame:?}");
-        if !full_draw {
-            assert!(!frame.contains("\x1b[?1049"), "{gate}: {frame:?}");
-        }
+        assert!(!frame.contains("\x1b[?1049"), "{gate}: {frame:?}");
     }
 
     // Make the larger terminal larger still. The shared grid stays at 80×24, but the host
@@ -290,7 +467,7 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
     large.resize(130, 40);
     wait_for_title(&large, from, "Native primary return");
     assert!(String::from_utf8_lossy(&large.output_since(from)).contains("\x1b[J"));
-    wait_for_viewport(&large, ["PRIMARY-TOP", "back", "PRIMARY-BOTTOM"], false);
+    wait_for_viewport(&large, ["PRIMARY-TOP", "back", "PRIMARY-BOTTOM"]);
     assert_eq!(home.inspect_agent(&address)["agent"]["size"], size);
 
     for term in [&mut large, &mut small] {
@@ -627,7 +804,7 @@ fn no_reconnect_note_follows_the_note_of_a_signal() {
     );
 }
 
-/// Detach recognizes a combined alternate-screen sequence and restores the main-screen cursor.
+/// Attach follows a combined alternate-screen sequence, and detach returns the shell page.
 #[test]
 fn detach_leaves_alternate_screen_set_with_other_modes() {
     let home = TestHome::new("detachmixed");
@@ -673,13 +850,21 @@ fn detach_leaves_alternate_screen_set_with_other_modes() {
     let address = address(&home, &agent);
     assert_detach_receipt(&term, "mixed", &address);
     assert!(!term.on_alternate_screen(), "left on the alternate screen");
+    // The agent's screens leave with the view: the receipt follows the opening line.
     let rows = term.rows();
     assert!(
         rows.windows(2).any(|lines| {
-            lines[0].contains("SAVED-MAIN-CONTEXT") && lines[1].contains("Detached from mixed (")
+            lines[0].ends_with("Press Ctrl+] to detach.")
+                && lines[1].starts_with("Detached from mixed (")
         }),
-        "the receipt should follow the saved main-screen context: {rows:?}"
+        "the receipt should follow the opening line: {rows:?}"
     );
+    for shown in ["SAVED-MAIN-CONTEXT", "ALT-READY"] {
+        assert!(
+            !rows.iter().any(|row| row.contains(shown)),
+            "{shown}: {rows:?}"
+        );
+    }
 }
 
 /// Termination during the initial redraw must restore a terminal whose reader is slow.
@@ -1014,4 +1199,723 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
         "a malformed hello must end Attach without another reconnect: {extra:?}"
     );
     resume_process(keeper);
+}
+
+/// The title a terminal shows after `output`: the last one set with OSC 0 or 2, where a title
+/// saved with `CSI 22 t` comes back with `CSI 23 t`.
+fn shown_title(output: &[u8]) -> String {
+    let text = String::from_utf8_lossy(output);
+    let (mut title, mut saved) = (String::new(), Vec::new());
+    let mut rest = &*text;
+    while let Some(at) = rest.find('\x1b') {
+        rest = &rest[at + 1..];
+        if let Some(osc) = rest.strip_prefix(']') {
+            let end = osc.find(['\x07', '\x1b']).unwrap_or(osc.len());
+            if let Some(set) = osc[..end]
+                .strip_prefix("0;")
+                .or_else(|| osc[..end].strip_prefix("2;"))
+            {
+                title = set.to_string();
+            }
+            rest = &osc[end..];
+        } else if let Some(csi) = rest.strip_prefix('[') {
+            let end = csi
+                .find(|ch: char| ('@'..='~').contains(&ch))
+                .unwrap_or(csi.len());
+            if csi[end..].starts_with('t') {
+                let mut params = csi[..end].split(';');
+                let (operation, which) = (params.next(), params.next().unwrap_or("0"));
+                match (operation, which) {
+                    (Some("22"), "0" | "2") => saved.push(title.clone()),
+                    (Some("23"), "0" | "2") => title = saved.pop().unwrap_or(title),
+                    _ => {}
+                }
+            }
+            rest = &csi[end..];
+        }
+    }
+    title
+}
+
+/// Every title `output` sets with OSC 0 or 2, in order.
+fn titles_set(output: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(output);
+    text.split("\x1b]")
+        .skip(1)
+        .filter_map(|osc| {
+            let end = osc.find(['\x07', '\x1b']).unwrap_or(osc.len());
+            let osc = &osc[..end];
+            osc.strip_prefix("0;")
+                .or_else(|| osc.strip_prefix("2;"))
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// The status glyphs of Claude Code's rule: the resting one, and the working frames.
+const RESTING: &str = "✳ ";
+const WORKING: [&str; 2] = ["◐ ", "◑ "];
+/// The title the reporting test CLI sets.
+const TITLE: &str = "OC | Greeting";
+
+/// Whether `title` starts with a status glyph.
+fn has_glyph(title: &str) -> bool {
+    [RESTING, WORKING[0], WORKING[1]]
+        .iter()
+        .any(|glyph| title.starts_with(glyph))
+}
+
+/// `TITLE` with `glyph` before it.
+fn glyphed(glyph: &str) -> String {
+    format!("{glyph}{TITLE}")
+}
+
+/// Whether `title` is the host's own title. An empty title is not: a console that gets one shows
+/// a label of its own, such as a path.
+fn host_s_own(title: &str) -> bool {
+    title == "HOST-TITLE"
+}
+
+/// The environment of a test CLI titled `TITLE` that reports its state, first after `delay_ms`;
+/// each message it takes is a turn that lasts until it reports something else.
+fn reporting(delay_ms: &'static str) -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("FAKECLI_TITLE", TITLE),
+        ("FAKECLI_STATUS", "1"),
+        ("FAKECLI_STATUS_DELAY_MS", delay_ms),
+        ("FAKECLI_TURN_MS", "600000"),
+    ]
+}
+
+/// Writes the settings that run the test CLI as `claude`, under Claude Code's rule, and connects to
+/// the services.
+fn claude_is_the_test_cli(home: &TestHome) -> DaemonTestClient {
+    std::fs::write(
+        home.path.join("facade.json"),
+        json!({ "clis": { "claude": { "type": "claude", "program": test_binaries().fakecli } } })
+            .to_string(),
+    )
+    .unwrap();
+    connect(home)
+}
+
+/// Runs `facade <args>` in the background with `env`, and returns its output.
+fn facade_with(home: &TestHome, args: &[&str], env: &[(&str, &str)]) -> String {
+    let output = home
+        .command(&test_binaries().facade)
+        .args(args)
+        .envs(env.iter().copied())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{args:?}: {}", stderr(&output));
+    stdout(&output)
+}
+
+/// The Agent State `facade status` gives `agent`.
+fn state_of(home: &TestHome, agent: &str) -> String {
+    let status = home.run_facade_ok(&["status", agent]);
+    status_field(&status, "State")
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The Agent State `facade list` gives the agent named `name`.
+fn listed_state(home: &TestHome, name: &str) -> String {
+    let list = home.run_facade_ok(&["list"]);
+    let table = Table::parse(&list);
+    let row = table
+        .row("NAME", name)
+        .unwrap_or_else(|| panic!("{name} is not listed: {list}"));
+    table.cell(row, "STATE").to_string()
+}
+
+/// A host shell that sets its own title, then runs `facade <args>` in the foreground with `env`,
+/// and says HOST-RETURN when it ends. Returned once the CLI's input box shows.
+fn host_running(home: &TestHome, args: &[&str], env: &[(&str, &str)]) -> TestTerminal {
+    let mut host = home.command(shell());
+    host.args([
+        "-c",
+        "printf '\\033]2;HOST-TITLE\\007HOST-PROMPT\\n'; facade \"$@\"; printf 'HOST-RETURN\\n'",
+        "host",
+    ])
+    .args(args)
+    .envs(env.iter().copied());
+    let term = TestTerminal::spawn(&mut host, 100, 24);
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("❯")) && term.on_alternate_screen(),
+        "{args:?}: {}",
+        term.text_with_scrollback()
+    );
+    term
+}
+
+/// Types `text` into the attached CLI and submits it.
+fn submit(term: &TestTerminal, text: &str) {
+    term.send(text.as_bytes());
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains(text)),
+        "{text}: {}",
+        term.text()
+    );
+    term.send(b"\r");
+}
+
+/// The title the host shows now.
+fn shown(term: &TestTerminal) -> String {
+    shown_title(&term.output_since(0))
+}
+
+/// Waits until the host shows `title`.
+fn shows(term: &TestTerminal, title: &str, case: &str) {
+    assert!(
+        wait_until(LOADED_TIMEOUT, || shown(term) == title),
+        "{case}: {title:?} not shown; titles {:?}",
+        titles_set(&term.output_since(0))
+    );
+}
+
+/// Asserts that the host showed the plain title before the first glyph: no glyph before the CLI's
+/// first report.
+fn plain_before_the_first_glyph(term: &TestTerminal, case: &str) {
+    let titles = titles_set(&term.output_since(0));
+    let plain = titles.iter().position(|title| title == TITLE);
+    let glyph = titles.iter().position(|title| has_glyph(title));
+    assert!(
+        plain.is_some() && plain < glyph,
+        "{case}: no plain title before the first report: {titles:?}"
+    );
+}
+
+/// Whether `output` shows both working frames.
+fn animates(output: &[u8]) -> bool {
+    let titles = titles_set(output);
+    WORKING.iter().all(|glyph| titles.contains(&glyphed(glyph)))
+}
+
+/// Waits until the host has shown both working frames since `mark`.
+fn animates_since(term: &TestTerminal, mark: usize, case: &str) {
+    assert!(
+        wait_until(secs(10), || animates(&term.output_since(mark))),
+        "{case}: working shows both frames; titles {:?}",
+        titles_set(&term.output_since(mark))
+    );
+}
+
+/// Asserts that the host shows `title` and gets no working frame in the next 3 seconds.
+fn rests_on(term: &TestTerminal, title: &str, case: &str) {
+    shows(term, title, case);
+    let mark = term.output_since(0).len();
+    std::thread::sleep(secs(3));
+    let after = titles_set(&term.output_since(mark));
+    assert!(
+        !after
+            .iter()
+            .any(|title| WORKING.iter().any(|glyph| title.starts_with(glyph))),
+        "{case}: working frames after {title:?}: {after:?}"
+    );
+}
+
+/// Ends the attachment with `key`, then asserts that the host's own title is back and that no
+/// title follows in the next 3 seconds.
+fn ends_with_the_host_s_title(term: &mut TestTerminal, key: &[u8], case: &str) {
+    term.send(key);
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT).is_some(),
+        "{case}: {}",
+        term.text_with_scrollback()
+    );
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("HOST-RETURN")),
+        "{case}: {}",
+        term.text_with_scrollback()
+    );
+    assert!(host_s_own(&shown(term)), "{case}: {:?}", shown(term));
+    let end = term.output_since(0).len();
+    std::thread::sleep(secs(3));
+    let after = titles_set(&term.output_since(end));
+    assert!(
+        after.is_empty() && host_s_own(&shown(term)),
+        "{case}: titles after the end: {after:?}"
+    );
+}
+
+/// Attached to Claude Code, which reports its state through the Program Status Protocol, the host
+/// shows its title with the status glyph of its Agent State: none before the first report, `✳`
+/// while idle or done, `◐` and `◑` in turn while working, `✳` for a turn whose background work
+/// still runs (which `list` and `status` give as Idle), none while the title is empty or once the
+/// report is taken back. The glyph stops at the end and the host's own title comes back, whether
+/// the agent exits or the person detaches while it works.
+#[test]
+fn the_host_shows_the_status_glyph_of_the_attached_claude_code() {
+    let home = TestHome::new("attach-glyph");
+    let _wire = claude_is_the_test_cli(&home);
+    for detach_while_working in [false, true] {
+        let name = format!("glyph-{detach_while_working}");
+        let case = format!("detach while working: {detach_while_working}");
+        let mut term = host_running(
+            &home,
+            &["start", "--name", &name, "claude"],
+            &reporting("5000"),
+        );
+        shows(&term, &glyphed(RESTING), &case);
+        plain_before_the_first_glyph(&term, &case);
+
+        let mark = term.output_since(0).len();
+        submit(&term, "work");
+        animates_since(&term, mark, &case);
+        if detach_while_working {
+            ends_with_the_host_s_title(&mut term, b"\x1d", &case);
+            continue;
+        }
+
+        submit(&term, "/fake status done");
+        rests_on(&term, &glyphed(RESTING), &case);
+
+        submit(&term, "/fake title");
+        shows(&term, "", &case);
+        submit(&term, &format!("/fake title {TITLE}"));
+        shows(&term, &glyphed(RESTING), &case);
+
+        let mark = term.output_since(0).len();
+        submit(&term, "work");
+        animates_since(&term, mark, &case);
+        submit(&term, "/fake status working 1 shell still running");
+        rests_on(&term, &glyphed(RESTING), &case);
+        assert_eq!(
+            [listed_state(&home, &name), state_of(&home, &name)],
+            ["Idle", "Idle"],
+            "{case}: a turn whose background work still runs"
+        );
+
+        submit(&term, "/fake clear");
+        shows(&term, TITLE, &case);
+        ends_with_the_host_s_title(&mut term, b"\x04", &case);
+    }
+}
+
+/// No glyph where one of its conditions is missing: Claude Code that never reports keeps its own
+/// title, so does Claude Code without a title of its own, and a CLI that reports without a
+/// `status_glyph` in its rule (the test CLI under its own rule) keeps its titles byte for byte.
+#[test]
+fn the_host_shows_no_glyph_without_the_rule_a_report_or_a_title() {
+    let home = TestHome::new("attach-noglyph");
+    let _wire = claude_is_the_test_cli(&home);
+    let silent = [("FAKECLI_TITLE", TITLE), ("FAKECLI_TURN_MS", "600000")];
+    let reports = reporting("0");
+    let untitled: Vec<_> = reports
+        .iter()
+        .copied()
+        .filter(|(variable, _)| *variable != "FAKECLI_TITLE")
+        .collect();
+    for (name, cli, env, title, reported) in [
+        ("silent", "claude", &silent[..], Some(TITLE), false),
+        ("untitled", "claude", &untitled[..], None, true),
+        ("own-rule", "fake", &reports[..], Some(TITLE), true),
+    ] {
+        let mut term = host_running(&home, &["start", "--name", name, cli], env);
+        submit(&term, "work");
+        assert!(
+            term.wait_for(LOADED_TIMEOUT, |view| view.contains("> work")),
+            "{name}: {}",
+            term.text()
+        );
+        if reported {
+            assert!(
+                wait_until(LOADED_TIMEOUT, || listed_state(&home, name) == "Working"),
+                "{name} reports working: {}",
+                home.run_facade_ok(&["list"])
+            );
+        }
+        std::thread::sleep(secs(3));
+        let titles = titles_set(&term.output_since(0));
+        match title {
+            Some(title) => {
+                assert!(
+                    titles.iter().all(|set| host_s_own(set) || set == title),
+                    "{name}: {titles:?}"
+                );
+                assert_eq!(shown(&term), title, "{name}: {titles:?}");
+            }
+            None => assert!(
+                titles.iter().all(|set| host_s_own(set)),
+                "{name}: {titles:?}"
+            ),
+        }
+        ends_with_the_host_s_title(&mut term, b"\x04", name);
+    }
+}
+
+/// A resumed Claude Code shows no glyph until its new run reports, then the glyph of what it
+/// reports.
+#[test]
+fn a_resumed_claude_code_shows_no_glyph_until_it_reports_again() {
+    const SESSION: &str = "3333cccc-2bae-4a45-b193-a5664c198263";
+    let home = TestHome::new("attach-glyph-resume");
+    let _wire = claude_is_the_test_cli(&home);
+    home.save_claude_session(SESSION, "a reporting conversation");
+    let env = reporting("5000");
+    let receipt = facade_with(&home, &["resume", "-d", &SESSION[..8]], &env);
+    let address = receipt
+        .split_once(" (")
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(address, _)| address.to_string())
+        .unwrap_or_else(|| panic!("no address in the receipt: {receipt:?}"));
+    assert!(
+        wait_until(LOADED_TIMEOUT, || state_of(&home, &address) == "Idle"),
+        "{}",
+        home.run_facade_ok(&["status", &address])
+    );
+    home.run_facade_ok(&["stop", &address]);
+    assert!(
+        wait_until(LOADED_TIMEOUT, || state_of(&home, &address)
+            .starts_with("Ended")),
+        "{}",
+        home.run_facade_ok(&["status", &address])
+    );
+    let mut term = host_running(&home, &["resume", &address], &env);
+    shows(&term, &glyphed(RESTING), "resume");
+    plain_before_the_first_glyph(&term, "resume");
+    ends_with_the_host_s_title(&mut term, b"\x04", "resume");
+}
+
+/// Claude Code that already reported shows its glyph to each viewer from the start: `facade attach`
+/// and an editor watching the `attach` topic get it in the snapshot's title, and both see the
+/// working frames and the resting glyph that follow.
+#[test]
+fn every_viewer_of_claude_code_that_already_reported_gets_its_glyph() {
+    let home = TestHome::new("attach-glyph-viewers");
+    let _wire = claude_is_the_test_cli(&home);
+    facade_with(
+        &home,
+        &["start", "-d", "--name", "early", "claude"],
+        &reporting("0"),
+    );
+    assert!(
+        wait_until(LOADED_TIMEOUT, || state_of(&home, "early") == "Idle"),
+        "{}",
+        home.run_facade_ok(&["status", "early"])
+    );
+    let mut editor = DaemonTestClient::open(&home);
+    editor.hello("ide", DAEMON_API_VERSIONS, json!({}));
+    let watching = editor.request(
+        "watch",
+        json!({ "topic": "attach", "args": { "target": "early" } }),
+    );
+    let watch = watching["result"]["watch"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("no watch: {watching}"));
+    let snapshot = watching["result"]["snapshot"]["redraw"]
+        .as_str()
+        .and_then(|redraw| facade_base::base64::decode(redraw).ok())
+        .unwrap_or_else(|| panic!("no redraw: {watching}"));
+    assert_eq!(
+        shown_title(&snapshot),
+        glyphed(RESTING),
+        "the editor's snapshot"
+    );
+    let editor_sees = || {
+        let mut bytes = snapshot.clone();
+        for change in editor.changes(watch) {
+            if let Some(data) = change["change"]["data"].as_str() {
+                bytes.extend(facade_base::base64::decode(data).unwrap_or_default());
+            }
+        }
+        bytes
+    };
+
+    let mut term = host_running(&home, &["attach", "early"], &[]);
+    shows(&term, &glyphed(RESTING), "attach");
+    let titles = titles_set(&term.output_since(0));
+    assert!(
+        !titles.iter().any(|title| title == TITLE),
+        "attach showed the title without its glyph: {titles:?}"
+    );
+
+    let (mark, editor_mark) = (term.output_since(0).len(), editor_sees().len());
+    submit(&term, "work");
+    animates_since(&term, mark, "attach");
+    assert!(
+        wait_until(secs(10), || animates(&editor_sees()[editor_mark..])),
+        "the editor sees both frames; titles {:?}",
+        titles_set(&editor_sees()[editor_mark..])
+    );
+    submit(&term, "/fake status done");
+    shows(&term, &glyphed(RESTING), "attach");
+    assert!(
+        wait_until(LOADED_TIMEOUT, || shown_title(&editor_sees())
+            == glyphed(RESTING)),
+        "the editor: {:?}",
+        shown_title(&editor_sees())
+    );
+    ends_with_the_host_s_title(&mut term, b"\x1d", "attach");
+}
+
+/// The console keeps its own title until the attached CLI sets one, as when the CLI runs alone: a
+/// CLI that never sets a title leaves it alone through the attachment and after, and so does
+/// Claude Code that reports before it has a title. Once Claude Code sets one, the console shows it
+/// with its glyph, and its own title comes back at the end.
+#[test]
+fn the_console_keeps_its_own_title_until_the_attached_cli_sets_one() {
+    let home = TestHome::new("attach-hosttitle");
+    let _wire = claude_is_the_test_cli(&home);
+    let silent = [("FAKECLI_TURN_MS", "600000")];
+    let untitled: Vec<_> = reporting("0")
+        .into_iter()
+        .filter(|(variable, _)| *variable != "FAKECLI_TITLE")
+        .collect();
+    for (name, env, reports) in [
+        ("never-titled", &silent[..], false),
+        ("titled-later", &untitled[..], true),
+    ] {
+        let mut term = host_running(&home, &["start", "--name", name, "claude"], env);
+        submit(&term, "work");
+        assert!(
+            term.wait_for(LOADED_TIMEOUT, |view| view.contains("> work")),
+            "{name}: {}",
+            term.text()
+        );
+        if reports {
+            assert!(
+                wait_until(LOADED_TIMEOUT, || state_of(&home, name) == "Working"),
+                "{name} reports: {}",
+                home.run_facade_ok(&["status", name])
+            );
+        }
+        std::thread::sleep(secs(3));
+        let titles = titles_set(&term.output_since(0));
+        assert!(
+            titles.iter().all(|set| host_s_own(set)),
+            "{name}: the console's title while attached: {titles:?}"
+        );
+        if reports {
+            submit(&term, "/fake status idle");
+            submit(&term, &format!("/fake title {TITLE}"));
+            shows(&term, &glyphed(RESTING), name);
+        }
+        ends_with_the_host_s_title(&mut term, b"\x04", name);
+        if !reports {
+            let titles = titles_set(&term.output_since(0));
+            assert!(
+                titles.iter().all(|set| host_s_own(set)),
+                "{name}: the console's title through the end: {titles:?}"
+            );
+        }
+    }
+}
+
+/// A CLI that sets back the title its console has, as Antigravity does on Windows, sets no title of
+/// its own: its console starts with none, so the host keeps `HOST-TITLE` through the attachment and
+/// after, as when the CLI runs alone.
+#[cfg(windows)]
+#[test]
+fn a_cli_that_sets_back_its_console_s_title_leaves_the_host_s_title_alone() {
+    let home = TestHome::new("attach-consoletitle");
+    let _wire = connect(&home);
+    let env = [
+        ("FAKECLI_TITLE_FROM_CONSOLE", "1"),
+        ("FAKECLI_TURN_MS", "600000"),
+    ];
+    let mut term = host_running(&home, &["start", "--name", "console", "fake"], &env);
+    submit(&term, "work");
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("> work")),
+        "{}",
+        term.text()
+    );
+    std::thread::sleep(secs(3));
+    let titles = titles_set(&term.output_since(0));
+    assert!(
+        titles.iter().all(|set| host_s_own(set)),
+        "the console's title while attached: {titles:?}"
+    );
+    ends_with_the_host_s_title(&mut term, b"\x04", "console");
+    let titles = titles_set(&term.output_since(0));
+    assert!(
+        titles.iter().all(|set| host_s_own(set)),
+        "the console's title through the end: {titles:?}"
+    );
+}
+
+/// An empty title from a CLI that has no title is no title: the host keeps `HOST-TITLE`. Once the
+/// CLI has a title, an empty one is its reset, and the host gets it.
+#[test]
+fn an_empty_title_is_a_reset_only_after_a_title() {
+    let home = TestHome::new("attach-emptytitle");
+    let _wire = connect(&home);
+    let mut term = host_running(
+        &home,
+        &["start", "--name", "resets", "fake"],
+        &[("FAKECLI_TURN_MS", "600000")],
+    );
+    submit(&term, "/fake title");
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("> /fake title")),
+        "{}",
+        term.text()
+    );
+    std::thread::sleep(secs(2));
+    let titles = titles_set(&term.output_since(0));
+    assert!(
+        titles.iter().all(|set| host_s_own(set)),
+        "an empty first title reached the host: {titles:?}"
+    );
+
+    submit(&term, &format!("/fake title {TITLE}"));
+    shows(&term, TITLE, "titled");
+    submit(&term, "/fake title");
+    shows(&term, "", "reset");
+    ends_with_the_host_s_title(&mut term, b"\x04", "reset");
+}
+
+/// Claude Code starts with its own `✳` before its title, reports idle while Facade's tools still
+/// connect, then sets its title without the glyph, in a later read. The console goes from its own
+/// title to `✳ <title>` and stays there: never the title alone after the report, never two glyphs.
+#[test]
+fn claude_code_s_own_glyph_at_start_gives_way_to_facade_s_without_a_flicker() {
+    let home = TestHome::new("attach-glyphstart");
+    let _wire = claude_is_the_test_cli(&home);
+    let mut env = reporting("0");
+    env.extend([("FAKECLI_OWN_GLYPH", "✳"), ("FAKECLI_MCP_DELAY_MS", "3000")]);
+    let mut term = host_running(&home, &["start", "--name", "starting", "claude"], &env);
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view
+            .contains("title without its glyph")),
+        "{}",
+        term.text()
+    );
+    assert_eq!(
+        state_of(&home, "starting"),
+        "Starting",
+        "the title came while Facade's tools still connect"
+    );
+    assert!(
+        wait_until(LOADED_TIMEOUT, || state_of(&home, "starting") == "Idle"),
+        "{}",
+        home.run_facade_ok(&["status", "starting"])
+    );
+    shows(&term, &glyphed(RESTING), "start");
+    std::thread::sleep(secs(1));
+    let titles = titles_set(&term.output_since(0));
+    assert!(
+        titles
+            .iter()
+            .all(|set| host_s_own(set) || *set == glyphed(RESTING)),
+        "the console's titles at start: {titles:?}"
+    );
+    ends_with_the_host_s_title(&mut term, b"\x04", "start");
+}
+
+/// While attached, the host terminal shows the CLI's own title: the one it has when the
+/// attachment begins, then each one it sets. Until the CLI has a title the host keeps its own, never
+/// an empty one. When the agent exits or the person detaches, the host's own title comes back. The
+/// same for a foreground start, a foreground resume and an attach.
+#[test]
+fn the_host_shows_the_attached_cli_s_title_and_gets_its_own_back() {
+    const TITLED: &str = "1111aaaa-2bae-4a45-b193-a5664c198261";
+    const UNTITLED: &str = "2222bbbb-2bae-4a45-b193-a5664c198262";
+    let home = TestHome::new("attach-title");
+    std::fs::write(
+        home.path.join("facade.json"),
+        json!({ "clis": { "claude": { "type": "claude", "program": test_binaries().fakecli } } })
+            .to_string(),
+    )
+    .unwrap();
+    home.save_claude_session(TITLED, "a titled conversation");
+    home.save_claude_session(UNTITLED, "an untitled conversation");
+    let _wire = connect(&home);
+    for (entry, title, detach) in [
+        ("start", Some("OC | Greeting"), false),
+        ("start", None, true),
+        ("resume", Some("OC | Greeting"), true),
+        ("resume", None, false),
+        ("attach", Some("OC | Greeting"), false),
+        ("attach", None, true),
+    ] {
+        let case = format!("{entry}, title {title:?}, detach {detach}");
+        let kind = if title.is_some() {
+            "titled"
+        } else {
+            "untitled"
+        };
+        let name = format!("{entry}-{kind}");
+        let args: Vec<String> = match entry {
+            "start" => vec!["start".into(), "--name".into(), name, "claude".into()],
+            "resume" => {
+                let session = if title.is_some() { TITLED } else { UNTITLED };
+                vec!["resume".into(), session[..8].into()]
+            }
+            _ => {
+                let mut start = home.command(&test_binaries().facade);
+                start.args(["start", "-d", "--name", &name, "claude"]);
+                if let Some(title) = title {
+                    start.env("FAKECLI_TITLE", title);
+                }
+                let started = start.stdin(std::process::Stdio::null()).output().unwrap();
+                assert!(started.status.success(), "{case}: {}", stderr(&started));
+                assert!(wait_for_screen_text(&home, &name, "❯"), "{case}");
+                vec!["attach".into(), name]
+            }
+        };
+        let mut host = home.command(shell());
+        host.args([
+            "-c",
+            "printf '\\033]2;HOST-TITLE\\007HOST-PROMPT\\n'; facade \"$@\"; printf 'HOST-RETURN\\n'",
+            "host",
+        ])
+        .args(&args);
+        if let Some(title) = title {
+            host.env("FAKECLI_TITLE", title);
+        }
+        let mut term = TestTerminal::spawn(&mut host, 100, 24);
+        let shown = |term: &TestTerminal| shown_title(&term.output_since(0));
+        assert!(
+            term.wait_for(LOADED_TIMEOUT, |view| view.contains("❯")) && term.on_alternate_screen(),
+            "{case}: {}",
+            term.text_with_scrollback()
+        );
+        if let Some(title) = title {
+            assert!(
+                wait_until(LOADED_TIMEOUT, || shown(&term) == title),
+                "{case}: {:?}",
+                shown(&term)
+            );
+        }
+        let titles = titles_set(&term.output_since(0));
+        let before_the_cli_s: Vec<_> = titles
+            .iter()
+            .take_while(|set| Some(set.as_str()) != title)
+            .collect();
+        assert!(
+            before_the_cli_s.iter().all(|set| host_s_own(set)),
+            "{case}: the host's title until the CLI's: {titles:?}"
+        );
+
+        term.send(b"/fake title OC | Changed");
+        assert!(
+            term.wait_for(LOADED_TIMEOUT, |view| view
+                .contains("/fake title OC | Changed")),
+            "{case}: {}",
+            term.text()
+        );
+        term.send(b"\r");
+        assert!(
+            wait_until(LOADED_TIMEOUT, || shown(&term) == "OC | Changed"),
+            "{case}: {:?}",
+            shown(&term)
+        );
+
+        term.send(if detach { b"\x1d" } else { b"\x04" });
+        assert!(
+            term.wait_exit(LOADED_TIMEOUT).is_some(),
+            "{case}: {}",
+            term.text_with_scrollback()
+        );
+        assert!(
+            term.wait_for(LOADED_TIMEOUT, |view| view.contains("HOST-RETURN")),
+            "{case}: {}",
+            term.text_with_scrollback()
+        );
+        assert!(host_s_own(&shown(&term)), "{case}: {:?}", shown(&term));
+    }
 }

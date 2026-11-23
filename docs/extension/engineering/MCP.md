@@ -507,10 +507,11 @@ with incompatible arguments fails explicitly.
 
 ### 7.1 The Orchestrator serves the eight tools
 
-**Agents and external applications use the Orchestrator's MCP tools through `facade-mcp`.**
+**Agents and external applications use the Orchestrator's MCP tools through `facade-mcp`, the relay of Facade API
+v1's MCP entry point.**
 
 The [product](../../PRODUCT.md) describes machine-scoped starts, Guest identity, addressing and message delivery.
-The [generated tool descriptions](../../../core/crates/base/src/texts/tools.v3.json) define the tool arguments and
+The [generated tool descriptions](../../../core/crates/base/src/texts/tools.json) define the tool arguments and
 results. The [daemon API](../../../core/protocol/DAEMON.md) defines the wire contract. VS Code starts and attaches through
 its own Orchestrator client. Agent messages, including the result of delivering a first prompt or a long
 wait, use the Orchestrator's contract and its delivery outcomes. See RULES-6.7.

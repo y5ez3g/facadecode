@@ -12,12 +12,23 @@
 		"lower": "^─+$",
 		"scrolled": { "above": "^↑ (\\d+) more lines?$", "below": "^↓ (\\d+) more lines?$" },
 		"placeholder": {
-			"texts": ["Accept-edits mode: file edits auto-approved (shift+tab to cycle)", "Plan mode: research & plan only (shift+tab to cycle)"],
+			"texts": [
+				"Accept-edits mode: file edits auto-approved (shift+tab to cycle)",
+				"Plan mode: research & plan only (shift+tab to cycle)",
+				"Auto mode: edits & safe commands auto-approved (shift+tab to cycle)"
+			],
 			"footer": "^\\? for shortcuts(?:\\s|$)"
 		},
 		"menus": [{ "selected": "^ ?> \\S", "not_selected": "^ ?> /", "next": "^ {2,3}\\S", "hint": { "pattern": "^ {2,3}↑/↓ Navigate · ", "within": 8 } }]
 	},
-	"paste": { "enter_ms": 80, "line_ms": 45, "placeholders": [{ "pattern": "^\\[Pastedtext#\\d+\\+(\\d+)lines?\\]$", "count": "lines" }] },
+	"paste": {
+		"enter_ms": 80,
+		"line_ms": 45,
+		"placeholders": [
+			{ "pattern": "^\\[Pastedtext#\\d+\\+(\\d+)lines?\\]$", "count": "lines" },
+			{ "pattern": "^\\[Pasted text #\\d+ (\\d+) chars\\]$", "count": "unicode_scalars", "spaced": true }
+		]
+	},
 	"session": { "capture": "session_start", "resume": ["--conversation", "${session_id}"] },
 	"mcp": { "session_meta_key": "antigravity.google/root_conversation_id", "always_load_key": "antigravity/alwaysLoad" },
 	"ready_tools": { "text": "/mcp", "typed": "^> /mcp\\s*$", "ready": "✓\\s+facade_facade\\b", "opened": "^MCP Servers\\s*$|\\besc Exit\\b", "close": "Escape" },

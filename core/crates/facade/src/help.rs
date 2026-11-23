@@ -129,7 +129,7 @@ Options
 
 Shows currently running managed agents and connected MCP guests across
 reachable machines, newest first. Connects to reachable machines on
-demand without waking sleeping ones. Stopped agents move to 'facade resume'."#,
+demand without waking sleeping ones. Ended agents move to 'facade resume'."#,
         usage: r#"Usage: facade list [--local | --machine <MACHINE>]"#,
         examples: r#"  facade list
   facade list --local
@@ -141,9 +141,9 @@ demand without waking sleeping ones. Stopped agents move to 'facade resume'."#,
     },
     Page {
         path: "resume",
-        intro: r#"List or resume stopped agents and saved CLI sessions.
+        intro: r#"List or resume ended agents and saved CLI sessions.
 
-Without arguments, lists resumable stopped agents across reachable machines
+Without arguments, lists resumable ended agents across reachable machines
 and saved sessions in the current directory. Pass a reference from the list
 to open it in this terminal, or pass '-d' to resume in the background. Press
 Ctrl+] to detach and leave it running."#,
@@ -157,7 +157,7 @@ Ctrl+] to detach and leave it running."#,
   facade resume 7f3e9a1c
   facade resume -d a5@laptop"#,
         details: r#"Arguments
-  <REFERENCE>  Stopped agent reference, agent ID, unique name, or session ID
+  <REFERENCE>  Ended agent reference, agent ID, unique name, or session ID
 
 Options
       --local              List resumable agents and sessions on this machine only
@@ -167,7 +167,7 @@ Options
     },
     Page {
         path: "rename",
-        intro: r#"Rename an active agent, guest, or stopped agent.
+        intro: r#"Rename an active agent, guest, or ended agent.
 
 Changes only the display name; the agent reference stays the same."#,
         usage: r#"Usage: facade rename <AGENT> <NAME>"#,
@@ -205,10 +205,10 @@ recipient's inbox. Use '-w' to wait until Facade submits the message
 in a managed agent's terminal or a guest reads it. Use '-r' to wait
 for a reply. Set the timeout in seconds with '-t'.
 Messages can be up to 8,000 characters and 540 lines."#,
-        usage: r#"Usage: facade send <RECIPIENT> <TEXT> [OPTIONS]"#,
+        usage: r#"Usage: facade send [OPTIONS] <RECIPIENT> <TEXT>"#,
         examples: r#"  facade send Nova "Check the build"
-  facade send Nova "Check the build" -w
-  facade send a5@laptop "Run the tests and reply" -r -t 120"#,
+  facade send -w Nova "Check the build"
+  facade send -r -t 120 a5@laptop "Run the tests and reply""#,
         details: r#"Arguments
   <RECIPIENT>  Active agent or guest reference, agent ID, or unique name
   <TEXT>       Message text
@@ -224,7 +224,7 @@ Options
         intro: r#"Read an agent's recent terminal output.
 
 Prints the last lines of the terminal screen and scrollback as plain text.
-Works for both running and stopped agents."#,
+Works for both running and ended agents."#,
         usage: r#"Usage: facade screen [-n|--lines <N>] <AGENT>"#,
         examples: r#"  facade screen Nova
   facade screen -n 200 a5@laptop"#,

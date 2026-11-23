@@ -124,9 +124,29 @@ fn a_scrolled_draft_counts_the_rows_its_cli_marks_hidden() {
             }
         }
     }
+    // Claude Code counts its hidden rows in its frame's rules; Codex marks them without a count,
+    // which reads as 1 for a marked side.
+    let marked = |label: &str, above, below| (label.to_string(), HiddenRows { above, below });
     assert_eq!(
         scrolled,
         [
+            marked("claude-2.1.330/draft-40-lines", 30, 0),
+            marked("claude-2.1.330/draft-40-lines-cursor-middle", 14, 16),
+            marked("claude-2.1.330/draft-40-lines-cursor-top", 0, 30),
+            marked("codex-0.170.0/draft-24-lines-default-effort", 1, 0),
+            marked(
+                "codex-0.170.0/draft-24-lines-cursor-top-default-effort",
+                0,
+                1
+            ),
+            marked("codex-0.170.0-20rows/draft-24-lines-default-effort", 1, 0),
+            marked(
+                "codex-0.170.0-20rows/draft-24-lines-cursor-top-default-effort",
+                0,
+                1
+            ),
+            marked("codex-0.170.0/draft-24-lines-ultra-effort", 1, 0),
+            marked("codex-0.170.0/draft-24-lines-cursor-top-ultra-effort", 0, 1),
             (
                 "agy-1.4.12-24rows/wide-pasted".to_string(),
                 HiddenRows { above: 1, below: 0 }
@@ -458,6 +478,23 @@ fn a_draft_reads_as_its_rows_draw_it_and_a_long_paste_as_its_placeholder() {
             "{label}: {scrolled}"
         );
     }
+    // Codex's marks in the last column and Claude Code's in its frame's rules are no draft text.
+    for (cli, label) in [
+        ("claude", "claude-2.1.330/draft-40-lines-cursor-middle"),
+        ("codex", "codex-0.170.0/draft-24-lines-default-effort"),
+        (
+            "codex",
+            "codex-0.170.0/draft-24-lines-cursor-top-ultra-effort",
+        ),
+    ] {
+        let scrolled = draft(cli, label);
+        assert!(
+            scrolled.starts_with("draft line")
+                && !scrolled.contains(['↑', '↓'])
+                && !scrolled.contains(" more"),
+            "{label}: {scrolled}"
+        );
+    }
     let fake = &find("fake").unwrap().unwrap().input;
     assert_eq!(
         read_draft(
@@ -473,4 +510,81 @@ fn a_draft_reads_as_its_rows_draw_it_and_a_long_paste_as_its_placeholder() {
         None,
         "an empty input has no draft"
     );
+}
+
+/// The paste the screen `label` of `cli` recorded, and the draft its rule reads there, or why it
+/// reads none.
+fn recorded_paste(cli: &str, label: &str) -> (String, Result<String, String>) {
+    let rule = find(cli).unwrap().unwrap();
+    let screen = recorded(cli)
+        .into_iter()
+        .find(|screen| screen["label"] == label)
+        .unwrap_or_else(|| panic!("no screen {label}"));
+    let text = screen["paste"].as_str().unwrap().to_string();
+    let (info, draft) = read_draft(&rule.input, &view_of(&screen));
+    let draft = match draft {
+        Some(draft) if info.state == InputState::Draft => Ok(draft),
+        _ => Err(format!("{} ({})", info.state.as_str(), info.evidence)),
+    };
+    (text, draft)
+}
+
+/// The installed CLIs draw a paste as a placeholder Facade takes for the draft of that message:
+/// Claude Code's `[Pasted text #N]` for one line of over 800 characters, Antigravity's `[Pasted
+/// text #N M chars]` once a line passes about 1000 characters, and OpenCode's `[Pasted ~N lines]`,
+/// which counts the lines of the message trimmed, at 40 columns as at 120.
+#[test]
+fn the_installed_clis_placeholders_are_the_drafts_of_their_pastes() {
+    let mut wrong = Vec::new();
+    for (cli, label) in [
+        ("claude", "claude-2.1.330/one-line-paste-1222-chars"),
+        ("agy", "agy-1.5.14/one-line-paste-1100-chars"),
+        ("agy", "agy-1.5.14/one-line-paste-1222-chars"),
+        ("agy", "agy-1.5.14/one-line-paste-6110-chars"),
+        ("agy", "agy-1.5.14/paste-3-lines-one-long"),
+        ("opencode", "opencode-2.2.4/pasted-3-lines-final-break"),
+        ("opencode", "opencode-2.2.4/pasted-5-lines-final-break"),
+        ("opencode", "opencode-2.2.4-40cols/pasted-3-lines"),
+        (
+            "opencode",
+            "opencode-2.2.4-40cols/pasted-3-lines-final-break",
+        ),
+        (
+            "opencode",
+            "opencode-2.2.4-40cols/pasted-5-lines-final-break",
+        ),
+    ] {
+        let paste = &find(cli).unwrap().unwrap().paste;
+        match recorded_paste(cli, label) {
+            (text, Ok(draft)) if is_own_draft(paste, &draft, &text, None, None) => {}
+            (_, Ok(draft)) => wrong.push(format!("{label}: {draft:?} is not its paste's draft")),
+            (_, Err(read)) => wrong.push(format!("{label}: reads {read}")),
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// A placeholder stands for no other message: Claude Code's uncounted one for no message with a
+/// line break, Antigravity's for no message of another length.
+#[test]
+fn a_placeholder_is_no_other_message_s_draft() {
+    let (text, draft) = recorded_paste("claude", "claude-2.1.330/one-line-paste-1222-chars");
+    let draft = draft.unwrap();
+    let broken = format!("{}\n{}", &text[..600], &text[600..]);
+    assert!(!is_own_draft(
+        &find("claude").unwrap().unwrap().paste,
+        &draft,
+        &broken,
+        None,
+        None
+    ));
+    let (text, draft) = recorded_paste("agy", "agy-1.5.14/one-line-paste-1100-chars");
+    let draft = draft.unwrap();
+    assert!(!is_own_draft(
+        &find("agy").unwrap().unwrap().paste,
+        &draft,
+        &text[..1099],
+        None,
+        None
+    ));
 }

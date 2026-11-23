@@ -72,6 +72,8 @@ to `internal.agent_records` with `active:true`. If the label is unavailable with
 budget or the holder is older, the field may be absent. `title` still describes the terminal.
 
 `agent.inspect` returns the agent, current input observation, session tracking and viewers.
+For a managed agent and a Terminal caller, it can include `session_name`, the same native
+session name or session preview as in `agent.list`.
 For a managed run it can include the recorded launch command with Facade's run credential
 redacted. `agent.screen` returns the tail of the logical screen and scrollback. Its default
 is 50 lines, and it accepts 1–2,000. Ended records can still be inspected and their final
@@ -128,6 +130,10 @@ record folders and does not broaden the saved session directory. Pass the return
 `target` unchanged to `agent.resume` with its runtime `size` and optional environment.
 A full saved-session target includes the machine, CLI, session ID and absolute folder.
 The resume list can also include `session_name` for a managed record or saved session.
+A saved-session candidate can include `session_selector`, which gives the first eight
+characters of its session ID when they select that session alone among the saved sessions
+`agent.resume` searches in that folder, including those of managed agents, and gives the
+full ID otherwise.
 
 `location.list`, `cli.list` and `daemon.status` select one machine and default to local.
 Locations describe known work folders. CLI discovery uses the specified folder and
@@ -961,8 +967,8 @@ Rows of a draft scrolled out of the CLI's input, as the CLI marks them.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `above` | `number` | yes | Rows hidden above the visible input. |
-| `below` | `number` | yes | Rows hidden below the visible input. |
+| `above` | `number` | yes | Rows hidden above the visible input, or 1 where the CLI marks hidden rows without counting them. |
+| `below` | `number` | yes | Rows hidden below the visible input, or 1 where the CLI marks hidden rows without counting them. |
 
 ### HowEnded
 
@@ -1009,6 +1015,7 @@ How an agent's message input reads on its screen. A reading never means input ma
 | `started_by` | `AgentCreator` | no |  |
 | `attachments` | `AttachmentInfo[]` | no |  |
 | `launch_command` | `string` | no |  |
+| `session_name` | `string` | no |  |
 
 ### InternalAgentRecordsArgs
 
@@ -1374,6 +1381,7 @@ A start prompt's message ID and what became of it.
 | `title` | `string` | no |  |
 | `at` | `string` | no |  |
 | `session_name` | `string` | no |  |
+| `session_selector` | `string` | no |  |
 
 ### ResumeCandidateTarget
 

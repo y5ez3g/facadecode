@@ -21,15 +21,12 @@ mod settings;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use facade_base::skill::text_v3;
+use facade_base::skill::text;
 use serde_json::Value;
 
 use crate::{ManagedServer, RUN_CREDENTIAL_ARG, Rule};
 
-pub use plugin::{
-    PLUGIN_FOLDER, PLUGIN_MEMBERS, plugin_files, plugin_files_v3, plugin_version,
-    uses_folder_plugin,
-};
+pub use plugin::{PLUGIN_FOLDER, PLUGIN_MEMBERS, plugin_files, plugin_version, uses_folder_plugin};
 pub use session_report::SessionReport;
 pub(crate) use session_report::{Hooked, install_hook};
 
@@ -59,6 +56,14 @@ pub struct Server<'a> {
     /// `facade`, whose `hook instructions` gives the instructions to a CLI that shows its model no
     /// server's instructions and has no other place for them.
     pub facade: &'a str,
+}
+
+impl Server<'_> {
+    fn hook_variables(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.env
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+    }
 }
 
 /// How a run's CLI was given Facade's tools.
@@ -123,31 +128,9 @@ pub(crate) struct MergedSettings {
     pub(crate) rest: Vec<String>,
 }
 
-/// What gives `cli` Facade's tools for a run, as `server` says, reading what `environment`, the
-/// CLI's own environment, holds of its configuration. None for a CLI whose rule does not give them;
-/// an error says why they cannot be given. Reads files; does not wait otherwise.
-pub(crate) fn wire(
-    cli: &str,
-    server: &Server,
-    environment: &BTreeMap<String, String>,
-) -> Result<Option<Wiring>, String> {
-    if let Some(why) = conflicts::persons_server(cli, server.cwd, environment, false) {
-        return Err(why);
-    }
-    let wiring = match cli {
-        "claude" => run_tools::claude(server),
-        "codex" => run_tools::codex(server)?,
-        "opencode" => run_tools::opencode(server, environment)?,
-        "pi" => run_tools::pi(server),
-        "muse" => run_tools::muse(server, environment)?,
-        "agy" => run_tools::agy(server),
-        "fake" => run_tools::fake(server),
-        _ => return Ok(None),
-    };
-    Ok(Some(wiring))
-}
-
 /// Gives the run's CLI the managed relay entry, or keeps an existing entry where the CLI uses it.
+/// Reads the CLI's configuration using its environment. Returns None for a CLI whose rule does
+/// not give the tools, or an error explaining why the tools could not be given.
 pub(crate) fn wire_managed(
     cli: &str,
     managed: &ManagedServer<'_>,
@@ -155,9 +138,7 @@ pub(crate) fn wire_managed(
 ) -> Result<Option<ManagedWiring>, String> {
     let server = &managed.server;
     let pi_configured = cli == "pi" && conflicts::pi_has_server(server.cwd, environment)?;
-    if !pi_configured
-        && let Some(why) = conflicts::persons_server(cli, server.cwd, environment, true)
-    {
+    if !pi_configured && let Some(why) = conflicts::persons_server(cli, server.cwd, environment) {
         return Err(why);
     }
     let env: Vec<_> = server
@@ -178,12 +159,12 @@ pub(crate) fn wire_managed(
     let uses_credential = credential.is_some();
     let (wiring, uses_run_credential) = match cli {
         "claude" => (
-            run_tools::claude_run(server, &entry, text_v3()),
+            run_tools::claude_run(server, &entry, text()),
             uses_credential,
         ),
-        "codex" => (run_tools::codex_run(&entry, text_v3())?, uses_credential),
+        "codex" => (run_tools::codex_run(&entry, text())?, uses_credential),
         "opencode" => (
-            run_tools::opencode_run(server, &entry, environment, text_v3(), true)?,
+            run_tools::opencode_run(server, &entry, environment, text())?,
             uses_credential,
         ),
         "pi" => {
@@ -193,15 +174,15 @@ pub(crate) fn wire_managed(
                 servers::SERVER
             };
             (
-                run_tools::pi_run(server, &entry, name, text_v3()),
+                run_tools::pi_run(server, &entry, name, text()),
                 uses_credential,
             )
         }
         "muse" => {
-            let configured = conflicts::muse_config(server.cwd, environment, true)?;
+            let configured = conflicts::muse_config(server.cwd, environment)?;
             let entry = (!configured).then_some(&entry);
             (
-                run_tools::muse_run(server, entry, text_v3()),
+                run_tools::muse_run(server, entry, text()),
                 uses_credential && !configured,
             )
         }
@@ -221,12 +202,20 @@ pub(crate) fn wire_managed(
 /// session-start hook in Muse Code's `-c hooks=`, and the title command of Antigravity's
 /// `--settings`, which it runs with the conversation it shows. Whether `cli` reports it so;
 /// [`merged_settings`] then says whether those settings could be merged.
-pub(crate) fn report_session(cli: &str, wiring: &mut Wiring, session: &SessionReport) -> bool {
+pub(crate) fn report_session(
+    cli: &str,
+    wiring: &mut Wiring,
+    session: &SessionReport,
+    server: Option<&ManagedServer<'_>>,
+) -> bool {
     match cli {
-        "muse" => wiring.hooks.push((
-            "SessionStart".into(),
-            session.hook("muse", SessionSkill::Omit),
-        )),
+        "muse" => {
+            let variables = server
+                .into_iter()
+                .flat_map(|managed| managed.server.hook_variables());
+            let command = session.hook(cli, SessionSkill::Omit, variables);
+            wiring.hooks.push(("SessionStart".into(), command));
+        }
         "agy" => wiring.title = Some((session.facade.into(), session.file.into())),
         _ => return false,
     }

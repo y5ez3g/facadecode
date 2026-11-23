@@ -1,7 +1,8 @@
 # Features
 
-Facade core supplies the Orchestrator and its Shell and MCP entry points. The VS Code extension's Rust engine uses
-the same Orchestrator. The [product description](../PRODUCT.md) defines the user experience. The
+Facade core supplies the Orchestrator, its Shell entry point and Facade API v1's MCP entry point. The VS Code
+extension's Rust engine uses the same Orchestrator. The [product description](../PRODUCT.md) defines the user
+experience. The
 [daemon API](../../core/protocol/DAEMON.md) and [MCP contract](../extension/engineering/MCP.md) define the
 operations and their results.
 
@@ -71,7 +72,7 @@ gets a name and inbox when it first calls a tool. From that point it can receive
 - `facade list` shows running managed agents and connected Guests, newest start or resume first. It probes saved
   connections on demand without starting a sleeping daemon. `--local` queries this machine with zero SSH, and
   `--machine <MACHINE>` queries the named machine and wakes it if needed. The `SESSION` column shows the latest
-  saved native session name, the conversation preview when unnamed, or `-` when neither is available.
+  saved native session name, the session preview when unnamed, or `-` when neither is available.
   Use `facade status <AGENT>` for the full session ID, working directory and attached viewers.
 - `facade stop <AGENT>...` ends one or more managed agents and keeps their records, screens and inboxes for 30 days.
   Their helpers keep running. Use `--local`, `--machine <MACHINE>` or `--all` to stop running managed agents in one
@@ -79,12 +80,18 @@ gets a name and inbox when it first calls a tool. From that point it can receive
   stopping the other targets.
 - `facade resume` lists resumable agents on reachable machines and CLI sessions in the current directory. `--local`
   lists this machine's candidates with zero SSH. `--machine <MACHINE>` lists the named machine's resumable managed
-  agents. The `SESSION` column uses the same native name or preview as `list`. The state is `Stopped` after a Facade
-  stop, `Exited` when the CLI ended, or `Saved` for a session from the CLI's history. Copy a reference from the
-  `REF` column to `facade resume <REFERENCE>`.
-- Resuming a managed agent keeps its reference, directory and session. Resuming a saved session creates an agent.
+  agents. The `SESSION` column uses the same native name or preview as `list`. The state is `Ended` for a managed
+  agent whose run ended, however it ended, or `Saved` for a session from the CLI's history. Copy a reference from
+  the `REF` column to `facade resume <REFERENCE>` in the same directory. A `Saved` row's `REF`, its session selector,
+  is the first eight characters of its ID when they match no other session in the CLI histories `facade resume`
+  searches in that directory, including sessions that managed agents use, and its full ID otherwise.
+- `facade status <AGENT>` shows the same Agent State as `list` while the agent runs, with the reason for
+  `Waiting for you` and `Error`. For an ended agent it shows `Ended (stopped by Facade)`, `Ended (code N)`,
+  `Ended (signal <SIGNAL>)`, or `Ended` when the way it ended is unknown. Its `Session` line shows the same native
+  name or preview as `list`, and `Session ID` the CLI's full session ID.
+- Resuming an `Ended` agent keeps its reference, directory and session. Resuming a `Saved` session creates an agent.
   A session already in use produces the reference of the agent using it. Use `-d` to resume in the background.
-- `facade rename <AGENT> <NAME>` changes the name of a running or stopped agent or connected Guest. The reference
+- `facade rename <AGENT> <NAME>` changes the name of a running or ended agent or connected Guest. The reference
   stays the same.
 
 Agent numbers are local to a Facade home. Commands accept a reference such as `a3@devbox`, an ID such as `a3`, or a
@@ -95,10 +102,18 @@ wake it when needed.
 ## Terminals
 
 - `facade attach a3@devbox` opens a running managed agent's terminal. Ctrl+] detaches with exit code 0 and leaves
-  the agent running. A CLI exit returns its actual exit status. Both paths return to the same shell with its
-  scrollback and print one receipt. While attached, the CLI's native buffer, title and mouse mode control the view.
+  the agent running. A CLI exit returns its actual exit status. The attached view uses the terminal app's alternate
+  screen, as any full-screen program does. Every end returns to the shell page and scrollback from before the attach
+  and prints one receipt; nothing the agent showed stays, including what a CLI prints as it exits. While attached,
+  the CLI's own screens, title and mouse mode control the view, and the terminal app keeps no history of the agent's
+  output: `facade screen -n <lines> <agent>` reads it. The Facade Code editor labels the terminal with the CLI's title
+  while it is attached, and the terminal's own title returns when the attachment ends. Until the CLI sets a title, and
+  for a CLI that never sets one, the terminal keeps its own title, as when the CLI runs alone. Claude Code's title
+  keeps the status glyph it shows when run alone, which it leaves out once Facade takes its state reports: `◐` and `◑`
+  in turn while it works, `✳` while it is idle, done, waiting for you or in error. A Claude Code agent whose turn
+  ended while background work still runs is `Idle`, as a Codex agent is.
 - `facade screen [-n <lines>] <agent>` reads the last lines of the screen and scrollback as text. It also reads the
-  last screen of a stopped agent.
+  last screen of an ended agent.
 - `facade type <agent> "hello" -k Enter "again" -k Enter` pastes text and presses keys in the given order.
   Quote each text argument that contains spaces. Facade queues the sequence as one input operation.
   `facade type --help` lists the key names.
@@ -199,7 +214,9 @@ See [Machine sessions](../../core/protocol/DAEMON.md#machine-sessions).
 ## Restarts and diagnostics
 
 - The Orchestrator starts on demand and exits after 30 idle seconds. Saved SSH sessions also close after 30 idle
-  seconds. A foreground machine connection, an active Attach or a call in progress keeps its session active.
+  seconds, each on its own timer. A foreground machine connection, an active Attach or a call in progress keeps its
+  session active. A query or a machine table sync that finishes over a session restarts that session's 30 seconds
+  and the Orchestrator's; keepalives do not.
 - The keeper holds the CLI terminals during a daemon restart. The daemon keeps the terminals during a keeper restart.
   An API-compatible takeover replaces the daemon. The live keeper retains its CLIs and terminals while clients
   reconnect. See [Daemon takeover](../../core/protocol/DAEMON.md#daemon-takeover) for the compatibility checks.

@@ -416,6 +416,10 @@ impl LoggedScreen {
         self.colors = colors;
         self.screen.set_colors(colors);
     }
+    /// Sets the viewer title's status glyph and returns its update bytes without logging them.
+    pub(crate) fn set_status_glyph(&mut self, glyph: Option<String>) -> Vec<u8> {
+        self.screen.set_status_glyph(glyph)
+    }
     /// Borrows the held screen, or the two-column placeholder; takes no lock.
     pub(crate) fn screen(&self) -> &Screen {
         &self.screen

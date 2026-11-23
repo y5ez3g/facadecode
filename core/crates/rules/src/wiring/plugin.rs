@@ -49,19 +49,9 @@ pub(super) fn plugin_description(version: &str) -> String {
 /// `PreInvocation` hook that has `facade`, this program, give
 /// the model the instructions, as Antigravity shows it no server's; and the skill. The same for
 /// every run of this version and Facade home, so that the runs in one folder share it. The server
-/// finds the daemon's socket from its Facade home.
+/// finds the daemon's socket from its Facade home. The launcher takes the current run's relay
+/// credential from the CLI's environment, so the files are shared by runs with different credentials.
 pub fn plugin_files(program: &str, facade: &str) -> Vec<(String, String)> {
-    let entry = Entry {
-        program,
-        args: Vec::new(),
-        env: &[],
-    };
-    plugin_files_with_entry(&entry, facade, facade_base::skill::text())
-}
-
-/// The shared managed plugin. Its launcher supplies the current run's relay arguments from
-/// the CLI's environment; its files can be shared by runs with different credentials.
-pub fn plugin_files_v3(program: &str, facade: &str) -> Vec<(String, String)> {
     let (launcher, args) = match SYSTEM {
         System::Windows => windows_launcher(program),
         _ => {
@@ -82,7 +72,20 @@ exec "$1""#,
         args,
         env: &[],
     };
-    plugin_files_with_entry(&entry, facade, facade_base::skill::text_v3())
+    let instructions = facade_hook("agy", facade, "instructions", &[HookArg::Word("agy")], []);
+    let manifest =
+        json!({ "name": SERVER, "description": plugin_description(&facade_base::version()) });
+    let servers = json!({ "mcpServers": { SERVER: agy_entry(&entry) } });
+    let hooks = json!({
+        SERVER: { "PreInvocation": [{ "type": "command", "command": instructions }] },
+    });
+    let pretty = |value: Value| format!("{value:#}\n");
+    vec![
+        ("plugin.json".into(), pretty(manifest)),
+        ("mcp_config.json".into(), pretty(servers)),
+        ("hooks.json".into(), pretty(hooks)),
+        (SKILL_FILE.into(), facade_base::skill::text()),
+    ]
 }
 
 /// Start the relay with inherited handles so PowerShell never handles its MCP bytes.
@@ -108,23 +111,6 @@ exit $child.ExitCode
     let mut words = command.split_ascii_whitespace().map(str::to_owned);
     let launcher = words.next().expect("encoded PowerShell names its program");
     (launcher, words.collect())
-}
-
-fn plugin_files_with_entry(entry: &Entry, facade: &str, skill: String) -> Vec<(String, String)> {
-    let instructions = facade_hook("agy", facade, "instructions", &[HookArg::Word("agy")], []);
-    let manifest =
-        json!({ "name": SERVER, "description": plugin_description(&facade_base::version()) });
-    let servers = json!({ "mcpServers": { SERVER: agy_entry(entry) } });
-    let hooks = json!({
-        SERVER: { "PreInvocation": [{ "type": "command", "command": instructions }] },
-    });
-    let pretty = |value: Value| format!("{value:#}\n");
-    vec![
-        ("plugin.json".into(), pretty(manifest)),
-        ("mcp_config.json".into(), pretty(servers)),
-        ("hooks.json".into(), pretty(hooks)),
-        (SKILL_FILE.into(), skill),
-    ]
 }
 
 /// The version of Facade core that wrote the plugin whose manifest is `manifest`, each number of

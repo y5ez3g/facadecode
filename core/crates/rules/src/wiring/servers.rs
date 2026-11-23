@@ -128,20 +128,6 @@ pub(super) fn muse_guest_entry(entry: &Entry) -> Value {
     json!({ "command": entry.program, "args": entry.args, "env": env, "mode": "optional" })
 }
 
-/// Whether `entry`, a `facade` server of Muse Code's settings, is the guest entry
-/// [`muse_guest_entry`] writes, of any program path, socket or Facade home: it names the run's
-/// agent, and so serves a Facade run. Entries of earlier versions are Facade's too: one names the
-/// daemon's socket with `--socket <path>` first, an older one names none.
-pub(super) fn is_muse_guest_entry(entry: &Value) -> bool {
-    let args = entry["args"].as_array().map_or(&[][..], Vec::as_slice);
-    let after_socket = match args {
-        [flag, socket, rest @ ..] if flag == "--socket" && socket.is_string() => rest,
-        _ => args,
-    };
-    let guest = after_socket == [json!("--guest"), json!("muse")];
-    runs_facade_mcp(entry) && guest && entry["env"]["FACADE_AGENT"] == "${FACADE_AGENT:-}"
-}
-
 /// Antigravity's entry: a plugin's, or a guest's in its own MCP configuration.
 pub(super) fn agy_entry(entry: &Entry) -> Value {
     json!({ "command": entry.program, "args": entry.args, "env": env_object(entry) })

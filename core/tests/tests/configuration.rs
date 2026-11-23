@@ -1034,7 +1034,8 @@ fn rename_blank_through_api(home: &TestHome, agent: &str, blank: &str) {
     connect(home).call_ok("agent.rename", json!({ "target": agent, "name": blank }));
 }
 
-/// An editor-blank name, including a byte order mark, uses `names` in start and the v3 rename.
+/// An editor-blank name, including a byte order mark, uses `names` in Facade API v1's start and
+/// rename.
 #[test]
 fn a_name_of_the_editor_s_spaces_alone_is_blank() {
     let home = TestHome::new("configblankname");
