@@ -28,7 +28,8 @@
 //! On Windows, a copy named `codex.exe` reads its SessionStart hooks from `-c hooks=...`, checks
 //! their layer keys and trusted hashes, and runs trusted hooks through PowerShell, as Codex does
 //! with its default session shell. A copy named `muse.exe` reads its SessionStart hooks from
-//! Muse Code's `-c hooks=...` and runs them with the session in `MUSE_SESSION_ID`, and one named
+//! Muse Code's `-c hooks=...` and runs them with the session in `MUSE_SESSION_ID` and without the
+//! run's variables (`FACADE_HOME`, `FACADE_AGENT`), and resumes with `resume <id>`; one named
 //! `agy.exe` runs the title command of its `--settings` with the conversation, as Antigravity's
 //! status line does; both run each command as Muse Code 1.4.14 and Antigravity 1.5.10 do, as one
 //! argument of `cmd.exe /C` quoted the standard way (`stand_in_shell`).
@@ -154,6 +155,9 @@ impl SessionHook {
                 }
                 StandIn::Muse => {
                     let mut shell = stand_in_shell(command);
+                    // Muse Code runs its hooks without the run's variables: those reach a hook
+                    // only through its command.
+                    shell.env_remove("FACADE_HOME").env_remove("FACADE_AGENT");
                     if let Some(id) = id {
                         shell.env("MUSE_SESSION_ID", id);
                     }
@@ -1275,7 +1279,7 @@ fn run() -> anyhow::Result<()> {
         .cloned();
     #[cfg(windows)]
     let resumed = resumed.or_else(|| {
-        (stand_in == StandIn::Codex)
+        matches!(stand_in, StandIn::Codex | StandIn::Muse)
             .then(|| {
                 arguments
                     .windows(2)

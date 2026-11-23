@@ -9,9 +9,6 @@ use super::*;
 use crate::formats::{encoded_powershell, encoded_powershell_words, shell_words};
 use facade_base::system::{SYSTEM, System};
 
-/// The session-start hook of the runs of these tests.
-const HOOK: &str = "'/opt/facade' hook session-start '/home/.facade/core/runs/a3/1f/session'";
-
 /// Antigravity's title command for the runs of these tests, which reports their session.
 const TITLE: &str = "'/opt/facade' hook title '/home/.facade/core/runs/a3/1f/session'";
 
@@ -24,15 +21,21 @@ fn by_system(unix: &str, windows: &str) -> String {
     .to_string()
 }
 
-/// [`HOOK`] for the shell `cli` runs it with.
-fn hook_of(cli: &str) -> String {
-    if SYSTEM == System::Windows && cli != "claude" {
-        encoded_powershell(
-            "& '/opt/facade' 'hook' 'session-start' '/home/.facade/core/runs/a3/1f/session'; exit $LASTEXITCODE",
-        )
-    } else {
-        HOOK.to_string()
-    }
+/// A Muse Code hook for this run, including the variables Muse Code omits.
+fn muse_hook(unix_args: &str, windows_args: &str) -> String {
+    by_system(
+        &format!("FACADE_AGENT='a3' FACADE_HOME='/home/.facade' '/opt/facade' hook {unix_args}"),
+        &encoded_powershell(&format!(
+            "$env:FACADE_AGENT='a3'; $env:FACADE_HOME='/home/.facade'; & '/opt/facade' 'hook' {windows_args}; exit $LASTEXITCODE"
+        )),
+    )
+}
+
+fn muse_session_hook() -> String {
+    muse_hook(
+        "session-start '/home/.facade/core/runs/a3/1f/session'",
+        "'session-start' '/home/.facade/core/runs/a3/1f/session'",
+    )
 }
 
 /// [`TITLE`] for the shell Antigravity runs it with.
@@ -672,7 +675,7 @@ fn config(launch: &CommandLine, key: &str) -> Value {
 }
 
 #[test]
-fn muse_code_gets_an_optional_server_by_c_for_the_run_alone_and_a_hook_with_the_instructions() {
+fn muse_code_gets_an_optional_server_for_the_run_and_hooks_with_its_environment() {
     let muse = launch("muse", &["--model", "m"], &[("HOME", "/nowhere/home")]);
     assert_eq!(muse.tools, Tools::Injected);
     let references = json!({ "FACADE_HOME": "${FACADE_HOME}" });
@@ -690,19 +693,9 @@ fn muse_code_gets_an_optional_server_by_c_for_the_run_alone_and_a_hook_with_the_
             "hooks": [{ "type": "command", "command": command, "timeout": 5 }],
         })
     };
-    // Muse Code passes its hooks none of the run's variables: the instructions hook names them.
-    let ours = hook(&by_system(
-        "FACADE_AGENT='a3' FACADE_HOME='/home/.facade' '/opt/facade' hook instructions muse",
-        &encoded_powershell(
-            "$env:FACADE_AGENT='a3'; $env:FACADE_HOME='/home/.facade'; & '/opt/facade' 'hook' 'instructions' 'muse'; exit $LASTEXITCODE",
-        ),
-    ));
-    let approves = hook(&by_system(
-        "'/opt/facade' hook approve muse",
-        &encoded_powershell("& '/opt/facade' 'hook' 'approve' 'muse'; exit $LASTEXITCODE"),
-    ));
-    let session =
-        json!({ "hooks": [{ "type": "command", "command": hook_of("muse"), "timeout": 5 }] });
+    let ours = hook(&muse_hook("instructions muse", "'instructions' 'muse'"));
+    let approves = hook(&muse_hook("approve muse", "'approve' 'muse'"));
+    let session = hook(&muse_session_hook());
     assert_eq!(
         config(&muse, "hooks"),
         json!({ "SessionStart": [ours, session], "PermissionRequest": [approves] }),
@@ -885,7 +878,7 @@ fn muse_code_is_not_given_the_tools_beside_a_facade_server_of_its_own_or_a_proje
                     config(&launch, "hooks"),
                     json!({
                         "SessionStart": [{ "hooks": [{
-                            "type": "command", "command": hook_of("muse"), "timeout": 5
+                            "type": "command", "command": muse_session_hook(), "timeout": 5
                         }] }]
                     })
                 );

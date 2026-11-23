@@ -342,6 +342,8 @@ session. It also defines the formats of Facade's hooks.
   - Each hook command is written in a form its CLI hands intact to the program that runs it
     (`formats::facade_hook`). The supported forms include encoded PowerShell for Codex and
     Muse Code, POSIX and cmd.exe, with either `facade` or `facade.exe` as the program.
+  - Muse Code runs hooks without the run's environment. Facade includes the run's
+    `FACADE_AGENT` and `FACADE_HOME` in its `instructions`, `session-start` and `approve` hooks.
   - On Windows, the person's own Antigravity title command, when enabled, goes into Facade's
     encoded title command as one literal argument. A command with a double quote, CR or LF
     stays as it is. As with settings Facade cannot read, Facade adds nothing to the run's settings
@@ -356,7 +358,7 @@ session. It also defines the formats of Facade's hooks.
 - **Interface:**
   - `wire_managed(cli, &ManagedServer, env)` builds the wiring, tools disposition and
     credential flag for both start and resume. The rest of composition uses
-    `report_session(cli, &mut Wiring, &SessionReport) -> bool`,
+    `report_session(cli, &mut Wiring, &SessionReport, server) -> bool`,
     `install_hook(rule, words, &SessionReport, &Wiring, env) -> Option<Hooked>`,
     `merged_settings(rule, &Wiring, words, cwd, env) -> MergedSettings`, and the `Wiring`, `Hooked` and
     `MergedSettings` values they pass. For `lib.rs`: `reports_sessions(cli)`, which checks a rule's session capture,

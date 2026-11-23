@@ -58,6 +58,14 @@ pub struct Server<'a> {
     pub facade: &'a str,
 }
 
+impl Server<'_> {
+    fn hook_variables(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.env
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+    }
+}
+
 /// How a run's CLI was given Facade's tools.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Tools {
@@ -194,12 +202,20 @@ pub(crate) fn wire_managed(
 /// session-start hook in Muse Code's `-c hooks=`, and the title command of Antigravity's
 /// `--settings`, which it runs with the conversation it shows. Whether `cli` reports it so;
 /// [`merged_settings`] then says whether those settings could be merged.
-pub(crate) fn report_session(cli: &str, wiring: &mut Wiring, session: &SessionReport) -> bool {
+pub(crate) fn report_session(
+    cli: &str,
+    wiring: &mut Wiring,
+    session: &SessionReport,
+    server: Option<&ManagedServer<'_>>,
+) -> bool {
     match cli {
-        "muse" => wiring.hooks.push((
-            "SessionStart".into(),
-            session.hook("muse", SessionSkill::Omit),
-        )),
+        "muse" => {
+            let variables = server
+                .into_iter()
+                .flat_map(|managed| managed.server.hook_variables());
+            let command = session.hook(cli, SessionSkill::Omit, variables);
+            wiring.hooks.push(("SessionStart".into(), command));
+        }
         "agy" => wiring.title = Some((session.facade.into(), session.file.into())),
         _ => return false,
     }

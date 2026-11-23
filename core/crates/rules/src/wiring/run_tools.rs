@@ -193,39 +193,28 @@ fn muse_entry(entry: &Entry) -> Value {
 /// which gives the model the instructions, as Muse Code shows it no server's instructions, and
 /// `PermissionRequest`, which approves Facade's own tools, as Muse Code has no rule for one
 /// server's tools. The entry references the CLI's environment and is optional, as Muse Code fails
-/// a whole run over a required server that does not start. The instructions hook receives the
-/// run's variables in its command. Where the person's settings hold a Facade server, the run
+/// a whole run over a required server that does not start. Each hook receives the run's
+/// variables in its command. Where the person's settings hold a Facade server, the run
 /// uses that entry with these hooks.
 pub(super) fn muse_run(server: &Server, entry: Option<&Entry>, skill: String) -> Wiring {
     let args = entry
         .map(muse_entry)
         .map(|entry| vec!["-c".into(), format!("mcpServers.{SERVER}={entry}")])
         .unwrap_or_default();
-    let variables = server
-        .env
-        .iter()
-        .map(|(name, value)| (name.as_str(), value.as_str()));
-    let instructions = facade_hook(
-        "muse",
-        server.facade,
-        "instructions",
-        &[HookArg::Word("muse")],
-        variables,
-    );
+    let hook = |event| {
+        facade_hook(
+            "muse",
+            server.facade,
+            event,
+            &[HookArg::Word("muse")],
+            server.hook_variables(),
+        )
+    };
     Wiring {
         args,
         hooks: vec![
-            ("SessionStart".into(), instructions),
-            (
-                "PermissionRequest".into(),
-                facade_hook(
-                    "muse",
-                    server.facade,
-                    "approve",
-                    &[HookArg::Word("muse")],
-                    [],
-                ),
-            ),
+            ("SessionStart".into(), hook("instructions")),
+            ("PermissionRequest".into(), hook("approve")),
         ],
         files: vec![
             (INSTRUCTIONS_FILE.into(), server.instructions.into()),

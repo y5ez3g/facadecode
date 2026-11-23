@@ -122,6 +122,56 @@ fn muse_code_s_session_start_hook_reports_the_session_through_cmd_s_standard_quo
     reports_session_through_cmd_quoted("muse");
 }
 
+/// Muse Code runs its hooks without the run's variables, so a run in a Facade home other than the
+/// default one, as every test's is, finds its home only through its hooks' commands. The run
+/// records its session, and once it ends, `facade resume` lists it and resumes that session.
+#[cfg(windows)]
+#[test]
+fn a_muse_code_run_outside_the_default_facade_home_records_its_session_and_resumes() {
+    let home = TestHome::new("musehome");
+    let programs = home.folder().join("programs");
+    install_program(&programs, "muse", &test_binaries().fakecli);
+    let path = format!("{}{PATH_SEPARATOR}{}", programs.display(), home.test_path());
+    let facade = |args: &[&str], session: Option<&str>| {
+        let mut command = home.command(&test_binaries().facade);
+        command.env("PATH", &path).args(args).stdin(Stdio::null());
+        if let Some(session) = session {
+            command.env("FAKECLI_SESSION", session);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{args:?}: {}", stderr(&output));
+        stdout(&output)
+    };
+    let agent = home.started_agent(&facade(
+        &["start", "-d", "--name", "muse", "muse"],
+        Some(FIRST),
+    ));
+    assert!(
+        records_session(&home, "muse", Some(FIRST)),
+        "Muse Code's session-start hook did not report its session: {}",
+        home.daemon_log()
+    );
+    facade(&["stop", &agent.address], None);
+    assert!(wait_until(LOADED_TIMEOUT, || {
+        inspected_agent(&home, &agent.address)["process"] == "ended"
+    }));
+    let choices = facade(&["resume"], None);
+    let table = Table::parse(&choices);
+    let row = table
+        .row("REF", &agent.address)
+        .unwrap_or_else(|| panic!("the ended Muse Code agent is not listed: {choices}"));
+    assert_eq!(table.cell(row, "STATE"), "Ended", "{choices}");
+    let status = facade(&["status", &agent.address], None);
+    assert_eq!(status_field(&status, "Session ID"), Some(FIRST), "{status}");
+    let resumed = home.started_agent(&facade(&["resume", "-d", &agent.address], None));
+    assert_eq!(resumed.id, agent.id);
+    assert!(
+        wait_for_screen_text(&home, "muse", &format!("session {FIRST}")),
+        "the resumed Muse Code did not select its session: {}",
+        home.screen("muse")
+    );
+}
+
 /// Antigravity runs its title command on Windows as one argument of `cmd.exe /C`, quoted the
 /// standard way: Facade's title command must still report the run's conversation.
 #[cfg(windows)]

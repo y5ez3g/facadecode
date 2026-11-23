@@ -66,8 +66,8 @@ pub fn start_managed_launch_command(
     yolo: Option<&Path>,
 ) -> CommandLine {
     let (mut wiring, tools, uses_run_credential) = wire(rule, server, environment, yolo);
-    let reports =
-        session.is_some_and(|session| wiring::report_session(&rule.cli, &mut wiring, session));
+    let reports = session
+        .is_some_and(|session| wiring::report_session(&rule.cli, &mut wiring, session, server));
     let hooked = hook(rule, words, session, &wiring, environment);
     let mut command = rule_args(rule, yolo);
     let (hook_args, rest) = (hooked.args, hooked.rest);
@@ -117,8 +117,8 @@ pub fn resume_managed_launch_command(
 ) -> Option<CommandLine> {
     let resume = rule.resume_args(id)?;
     let (mut wiring, tools, uses_run_credential) = wire(rule, server, environment, yolo);
-    let reports =
-        session.is_some_and(|session| wiring::report_session(&rule.cli, &mut wiring, session));
+    let reports = session
+        .is_some_and(|session| wiring::report_session(&rule.cli, &mut wiring, session, server));
     let mut command = vec![rule.program.clone()];
     command.extend(resume);
     command.extend(rule_args(rule, yolo).into_iter().skip(1));
