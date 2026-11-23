@@ -218,6 +218,11 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - A probe is judged from two readings, before its key and after, never from the time between them: whether its space went in by the cursor and the text, what the row was by the text alone, and whether Backspace put the box back by every cell and the cursor.
   - The evidence names the rows, never the draft's text. The draft's text leaves `read_draft` only as its second value and is never saved.
   - A message's own draft is its text alone, after the message's lead when one was typed. Whitespace is ignored, because wrapping and indentation draw it differently. The draft may also be the CLI's placeholder for a paste of that size, counted the way that CLI counts. A draft scrolled out above only has to show the text's end.
+  - OpenCode's `[Pasted ~N lines]` counts the lines after trimming whitespace from both ends of the paste.
+    Claude Code's `[Pasted text #N]` matches a paste with no line break.
+    Antigravity's `[Pasted text #N M chars]` counts Unicode scalar values, including line breaks.
+  - Antigravity's mode placeholders include
+    `Auto mode: edits & safe commands auto-approved (shift+tab to cycle)`.
 - **Never does:** decide whether input may be typed; press Enter; read CLI reports, hooks or session files; keep state between readings.
 - **Interface** (re-exported from `facade_rules`):
   - `read_box(&InputRule, &ScreenView) -> BoxReading` gives the reading, the draft's text,

@@ -227,7 +227,7 @@ pub struct PasteRule {
 #[serde(deny_unknown_fields)]
 pub struct PastePlaceholder {
     /// The placeholder without its spaces, or with each run of them as one where `spaced` is
-    /// true. Its one capture is what `count` counts.
+    /// true. A numbered count has one capture for the size shown. A single-line form has none.
     pub pattern: Pattern,
     pub count: PasteCount,
     /// The CLI types a paste's first character itself where it is not ASCII, and shows the
@@ -239,16 +239,22 @@ pub struct PastePlaceholder {
     pub spaced: bool,
 }
 
-/// What a placeholder's number counts.
+/// How a paste's size is shown in its placeholder.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PasteCount {
     /// The paste's lines.
     Lines,
+    /// Its lines after trimming whitespace from both ends.
+    TrimmedLines,
     /// Its lines after the first.
     LinesAfterFirst,
+    /// A paste without a line break uses a placeholder with no size count.
+    SingleLine,
     /// Its characters, as code points or as UTF-16 units.
     Chars,
+    /// Its characters, as Unicode scalar values. A differing UTF-16 unit count is rejected.
+    UnicodeScalars,
     /// Its characters other than control characters, as UTF-16 units, each tab as four spaces.
     VisibleUtf16,
 }
@@ -646,17 +652,16 @@ fn is_literal(arg: &str) -> bool {
 
 impl PasteRule {
     fn check(&self) -> Result<(), String> {
-        let uncounted = self
-            .placeholders
-            .iter()
-            .position(|each| each.pattern.captures_len() != 2);
-        match uncounted {
-            Some(index) => Err(format!(
-                "paste.placeholders[{index}].pattern must have exactly one capture, the number \
-                 the placeholder shows"
-            )),
-            None => Ok(()),
+        for (index, each) in self.placeholders.iter().enumerate() {
+            let expected = usize::from(each.count != PasteCount::SingleLine);
+            if each.pattern.captures_len() != expected + 1 {
+                return Err(format!(
+                    "paste.placeholders[{index}].pattern must have {expected} captures for {:?}",
+                    each.count
+                ));
+            }
         }
+        Ok(())
     }
 }
 
