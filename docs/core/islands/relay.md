@@ -1,6 +1,7 @@
 # Relay
 
-The relay is `facade-mcp`, the program a CLI starts as its Facade MCP server. It passes each MCP line between the CLI's
+The relay is `facade-mcp`, the program a CLI starts as its Facade MCP server. With the daemon's MCP server it forms
+Facade API v1's MCP entry point. It passes each MCP line between the CLI's
 MCP client and the daemon's MCP server, and keeps the CLI's requests alive while one daemon takes over from another. It
 is its own island because it must almost never change: a CLI keeps running the same `facade-mcp` across Facade upgrades,
 so it knows only a small fixed contract and nothing of MCP or Facade's tools. Crate `facade-relay`, folder

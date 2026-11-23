@@ -520,11 +520,6 @@ impl Daemon {
             plain_program: &args.cli,
             inherited: configured.env.clone(),
             cwd: &folder,
-            location_id: &location,
-            window: None,
-            creator: creator
-                .as_ref()
-                .map(|creator| (creator.agent_id.as_str(), creator_name)),
             yolo,
             session: session.as_deref(),
             kind: RunKind::Start,
@@ -1150,12 +1145,6 @@ impl Daemon {
             plain_program: &rule.cli,
             inherited: resumed.env.clone(),
             cwd: &info.cwd,
-            location_id: &info.location_id,
-            window: None,
-            creator: info
-                .creator
-                .as_deref()
-                .map(|creator| (creator, creator_name.as_deref())),
             yolo,
             session: Some(&session),
             kind: RunKind::Resume,

@@ -88,12 +88,6 @@ pub(crate) struct RunRequest<'a> {
     /// The environment the settings give the CLI; Facade's variables go on top.
     pub(crate) inherited: BTreeMap<String, String>,
     pub(crate) cwd: &'a str,
-    /// The agent's location ID, which its instructions name.
-    pub(crate) location_id: &'a str,
-    /// The label and logical ID when the agent belongs to exactly one window.
-    pub(crate) window: Option<(&'a str, &'a str)>,
-    /// The agent that starts it, by ID and name.
-    pub(crate) creator: Option<(&'a str, Option<&'a str>)>,
     pub(crate) yolo: bool,
     /// The session the command line continues: a resume's, or a start's that continues one. None
     /// for a start of a new session.
@@ -229,7 +223,7 @@ impl Runs {
         context: &ManagedRun<'_>,
     ) -> Result<PreparedRun, ErrorBody> {
         self.preparation
-            .prepare(request, Some(instructions::for_managed(address, context)))
+            .prepare(request, instructions::for_managed(address, context))
             .await
     }
 

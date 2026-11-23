@@ -13,7 +13,7 @@ use super::config_files::{
     MCP_FILE, config_home, folder_named, home, muse_settings_file, project_files, read_config,
 };
 use super::integration::written_by_facade;
-use super::servers::{SERVER, is_muse_guest_entry, is_server_program, runs_facade_mcp};
+use super::servers::{SERVER, is_server_program, runs_facade_mcp};
 use crate::formats::parse_jsonc;
 
 /// What every refusal of a server of the person's own ends with.
@@ -28,12 +28,11 @@ pub(super) fn persons_server(
     cli: &str,
     cwd: &Path,
     environment: &BTreeMap<String, String>,
-    managed: bool,
 ) -> Option<String> {
     let found = match cli {
         "claude" => claude_servers(cwd, environment),
         "codex" => codex_servers(environment),
-        "opencode" => opencode_servers(cwd, environment, managed),
+        "opencode" => opencode_servers(cwd, environment),
         "pi" => return pi_registration(cwd, environment),
         _ => Vec::new(),
     };
@@ -98,11 +97,7 @@ const OPENCODE_CONFIG_FILE: &str = "OPENCODE_CONFIG";
 
 /// OpenCode's: `mcp.facade` in its global configuration, in `$OPENCODE_CONFIG`, in each project
 /// configuration it reads, and in the person's own inline configuration.
-fn opencode_servers(
-    cwd: &Path,
-    environment: &BTreeMap<String, String>,
-    managed: bool,
-) -> Vec<(String, Value)> {
+fn opencode_servers(cwd: &Path, environment: &BTreeMap<String, String>) -> Vec<(String, Value)> {
     let names = ["opencode.json", "opencode.jsonc"];
     let global = config_home(environment).map(|config| config.join("opencode"));
     let mut files: Vec<PathBuf> = global
@@ -115,29 +110,23 @@ fn opencode_servers(
         .iter()
         .filter_map(|file| {
             let config = read_config(file)?;
-            let entry = opencode_server(&config, managed)?;
+            let entry = opencode_server(&config)?;
             Some((file.display().to_string(), entry.clone()))
         })
         .collect();
     let inline = environment
         .get(OPENCODE_CONFIG)
         .and_then(|text| parse_jsonc(text).ok());
-    if let Some(entry) = inline
-        .as_ref()
-        .and_then(|inline| opencode_server(inline, managed))
-    {
+    if let Some(entry) = inline.as_ref().and_then(opencode_server) {
         found.push((format!("its {OPENCODE_CONFIG}"), entry.clone()));
     }
     found
 }
 
-fn opencode_server(config: &Value, managed: bool) -> Option<&Value> {
+fn opencode_server(config: &Value) -> Option<&Value> {
     let mcp = &config["mcp"];
     // In OpenCode 2, native server definitions take precedence over the legacy map.
-    if managed && let Some(entry) = mcp["servers"].get(SERVER) {
-        return Some(entry);
-    }
-    mcp.get(SERVER)
+    mcp["servers"].get(SERVER).or_else(|| mcp.get(SERVER))
 }
 
 /// An extension Pi loads that registers a `facade` server: Pi does not start at all beside a second
@@ -284,7 +273,6 @@ fn registers_facade(text: &str) -> bool {
 pub(super) fn muse_config(
     cwd: &Path,
     environment: &BTreeMap<String, String>,
-    managed: bool,
 ) -> Result<bool, String> {
     let mut has_server = false;
     let named = |file: &Path| {
@@ -298,20 +286,16 @@ pub(super) fn muse_config(
         && let Some(settings) = read_config(&file)
         && let Some(entry) = settings
             .get("mcpServers")
-            .or_else(|| managed.then(|| settings.get("mcp_servers")).flatten())
+            .or_else(|| settings.get("mcp_servers"))
             .and_then(|servers| servers.get(SERVER))
     {
-        has_server = if managed {
-            is_server_program(entry["command"].as_str())
-        } else {
-            is_muse_guest_entry(entry)
-        };
-        if !has_server {
+        if !is_server_program(entry["command"].as_str()) {
             return Err(named(&file));
         }
-        if managed && entry["enabled"] == false {
+        if entry["enabled"] == false {
             return Err(format!("{} disables the {SERVER} server", file.display()));
         }
+        has_server = true;
     }
     for file in project_files(cwd, &[MCP_FILE]) {
         let text = match std::fs::read_to_string(&file) {
@@ -329,7 +313,7 @@ pub(super) fn muse_config(
         match muse_project_config(&text) {
             Ok(config) => {
                 if let Some(entry) = config["mcpServers"].get(SERVER) {
-                    if !managed || !is_server_program(entry["command"].as_str()) {
+                    if !is_server_program(entry["command"].as_str()) {
                         return Err(named(&file));
                     }
                     if entry["enabled"] == false {

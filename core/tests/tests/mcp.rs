@@ -843,10 +843,10 @@ fn a_prompt_given_to_claude_stays_its_prompt() {
     );
 }
 
-/// A terminal client's v3 start gives the agent its first message once its CLI's tools connected,
-/// however long after the start that is, as its time to be delivered counts from then: the person's
-/// words under a header naming them, as `facade send` sends them, and what was last said to the
-/// agent.
+/// A terminal client's start through Facade API v1 gives the agent its first message once its
+/// CLI's tools connected, however long after the start that is, as its time to be delivered counts
+/// from then: the person's words under a header naming them, as `facade send` sends them, and what
+/// was last said to the agent.
 #[test]
 fn a_start_prompt_is_the_agent_s_first_message_once_its_tools_connected() {
     let home = TestHome::new("startprompt");

@@ -1,7 +1,8 @@
 # Features
 
-Facade core supplies the Orchestrator and its Shell and MCP entry points. The VS Code extension's Rust engine uses
-the same Orchestrator. The [product description](../PRODUCT.md) defines the user experience. The
+Facade core supplies the Orchestrator, its Shell entry point and Facade API v1's MCP entry point. The VS Code
+extension's Rust engine uses the same Orchestrator. The [product description](../PRODUCT.md) defines the user
+experience. The
 [daemon API](../../core/protocol/DAEMON.md) and [MCP contract](../extension/engineering/MCP.md) define the
 operations and their results.
 

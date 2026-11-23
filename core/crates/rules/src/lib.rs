@@ -29,10 +29,7 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 
 pub use command_line::{Choices, TrustQuestion, YoloRule, entries};
-pub use compose::{
-    CommandLine, resume_command_line, resume_managed_launch_command, start_command_line,
-    start_managed_launch_command,
-};
+pub use compose::{CommandLine, resume_managed_launch_command, start_managed_launch_command};
 pub use formats::shell_word;
 pub use input::{
     BoxReading, InputLine, LineCell, ProbeVerdict, is_own_draft, is_same_draft, read_box,
@@ -48,7 +45,7 @@ pub use sessions::{
 pub use state::{ScreenState, read_state};
 pub use wiring::{
     INSTRUCTIONS_FILE, PLUGIN_FOLDER, PLUGIN_MEMBERS, SKILL_FILE, Server, SessionReport, Tools,
-    guest_entry_serves_run, hook, integration, plugin_files, plugin_files_v3, plugin_version,
+    guest_entry_serves_run, hook, integration, plugin_files_v3, plugin_version,
     runs_start_guest_entry, session_ends_with_process, uses_folder_plugin,
 };
 pub use wrappers::direct_command;

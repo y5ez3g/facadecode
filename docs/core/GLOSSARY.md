@@ -17,9 +17,10 @@ Other programs and protocols keep their own words: the standard library's `spawn
 | Use | Means | Not these |
 |---|---|---|
 | Orchestrator | The service that manages agents in one Facade home, with a keeper and a daemon | Facade core, Rust engine, Rust agent, Facade (for the service) |
-| Facade | The three entry points to the Orchestrator on the local machine: Shell, MCP and VS Code | Orchestrator (for the entry points) |
+| Facade | The three entry points to the Orchestrator on the local machine: Shell, the MCP entry point and VS Code | Orchestrator (for the entry points) |
+| Facade API v1 | The Orchestrator's operations for its clients at API version 1, such as `agent.start`. Shell and VS Code call them through the Daemon API, and agents and external apps through the MCP entry point. The Keeper API's operations are not part of it | v3 (for these operations, their tools or their skill) |
 | Shell | The `facade` commands for people and scripts | command line (for the entry point) |
-| MCP | The entry point for agents and external apps, through `facade-mcp` | — |
+| MCP entry point | Facade API v1's entry point for agents and external apps: the relay and the daemon's MCP server, with one tool table and one skill. Its tools call API v1 operations, as `start_agent` calls `agent.start` | MCP (alone, for the entry point), MCP entry, MCP server (for the whole entry point) |
 | VS Code | The editor extension entry point for people | Orchestrator (for the extension) |
 
 ## Agents and runs
@@ -378,7 +379,7 @@ stay.
 
 | Rule | Names in the code |
 |---|---|
-| launch command | `CommandLine`, `CommandLineRule`, `start_command_line`, `resume_command_line` |
+| launch command | `CommandLine`, `CommandLineRule` |
 | start, not launch | `service::launch`, `Supervisor::launch`, `launch_with_settings` |
 | send, not post | `Messages::post`, `Posted` |
 | folder, not dir | `paths::core_dir`, `socket_dir` |
@@ -393,7 +394,7 @@ stay.
 | a name that reads alone | `programs::Held` (the programs a daemon holds open); the daemon's `Sender` (who said something), which shares its name with channel senders |
 | `_TIMEOUT`, not `_TIME`, `_WAIT` or `_WITHIN` | `QUIET_TIME`, `DRAIN_TIME`, `CLOSING_TIME`, `HANDOVER_TIME`, `COMMAND_TIME`, `DELIVERY_TIME`, `READY_WAIT`, `RESPONSE_WAIT`, `SAID_WAIT`, `CLOSING_ANSWERED_WITHIN` |
 | `MAX_`, not `_LIMIT` or `MOST_` | `READ_LIMIT`, `ADD_LIMIT`, `TURN_LIMIT`, `OUTBOX_LIMIT`, `SESSION_FILE_LIMIT`, `OPENCODE_ID_LIMIT`, `MAX_MESSAGES_LIMIT`, `MOST_SAID`, `MOST_PARTS`, `MOST_RETRY_DELAY` |
-| `_DELAY` or a threshold, not `_AFTER` or `AFTER_` | `ENTER_DRAWN_AFTER`, `HEALTHY_AFTER`, `AFTER_REPEATS`, `CHECKPOINT_AFTER_BYTES` |
+| `_DELAY` or a threshold, not `_AFTER` or `AFTER_` | `ENTER_DRAWN_AFTER`, `HEALTHY_AFTER`, `CHECKPOINT_AFTER_BYTES` |
 | `_INTERVAL`, not `_EVERY` | `FOLLOW_EVERY` |
 | process, not one system's name, for code on every system | `unix_process` |
 | console, not terminal, for the person's | facade's `terminal_size`, `RESTORE_TERMINAL_SEQUENCE` |

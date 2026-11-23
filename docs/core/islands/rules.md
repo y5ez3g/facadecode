@@ -48,7 +48,7 @@ files in `core/rules/`. It is a library; it starts no program.
   names the session to resume and returns `None` for a CLI without session resume. `Tools` records
   whether the CLI has Facade's tools or why they could not be given. `uses_run_credential` lets
   the daemon save the credential's digest when the resulting configuration carries it.
-  `start_command_line` and `resume_command_line` take the older `Server` configuration.
+  Both use `wire_managed` to configure the CLI's connection to Facade API v1's MCP entry point.
 - `installed_version(rule, program)`: the version the installation names beside its program,
   read without running it.
 - The `entries` module reads `clis` in `facade.json`. `entries::select` checks one configured entry.
@@ -77,8 +77,7 @@ files in `core/rules/`. It is a library; it starts no program.
 
 - `facade-base` provides `settings` for reading `facade.json`. The `daemon` module provides
   `InputMechanism`, `InputInfo`, `InputState`, `HiddenRows` and `is_session_id`. The runtime files
-  and plugin use `skill::text_v3`, `skill::text` and
-  `version()`. Rules uses `system` (`SYSTEM`, `env_var`, `home_folder_in`),
+  and plugin use `skill::text_v3` and `version()`. Rules uses `system` (`SYSTEM`, `env_var`, `home_folder_in`),
   `programs` (`direct_command`, `on_path`) and `files` (`private_options`, `is_private`,
   `sync_folder`), and `base64` for encoded PowerShell hooks.
 - `facade-screen`: `ScreenView` and its cells, which the input and state readers read.
@@ -114,7 +113,7 @@ command line together. The children never use each other. They may use the layer
   through the CLI's shell intact. The scripts quote each argument as a literal and preserve
   Facade's exit code. Codex's session hook carries `--skill` inside the script where it needs it.
 - `compose.rs` builds the command line for a start or resume in this order.
-  1. wiring gives the tools (`wire`), and YOLO's run settings are merged into the wiring's;
+  1. wiring gives the tools (`wire_managed`), and YOLO's run settings are merged into the wiring's;
   2. wiring has the CLI report its session, through its settings (`report_session`) or a hook,
      plugin or extension (`install_hook`);
   3. the command: the program, the resume arguments, the rule's `launch.args`, YOLO's arguments;
@@ -355,9 +354,8 @@ session. It also defines the formats of Facade's hooks.
 - Rules builds configuration in memory and locates the files it reads from the environment and
   folders the caller supplies.
 - **Interface:**
-  - `wire_managed(cli, &ManagedServer, env)` builds the wiring,
-    tools disposition and credential flag. `wire(cli, &Server, env)` serves the earlier launch
-    entry points. The rest of composition uses
+  - `wire_managed(cli, &ManagedServer, env)` builds the wiring, tools disposition and
+    credential flag for both start and resume. The rest of composition uses
     `report_session(cli, &mut Wiring, &SessionReport) -> bool`,
     `install_hook(rule, words, &SessionReport, &Wiring, env) -> Option<Hooked>`,
     `merged_settings(rule, &Wiring, words, cwd, env) -> MergedSettings`, and the `Wiring`, `Hooked` and
@@ -365,9 +363,8 @@ session. It also defines the formats of Facade's hooks.
     and `remove_wiring_environment(cli, env)`, behind `Rule::remove_wiring_environment`.
   - Daemon run preparation supplies `ManagedServer` (the `Server` configuration and this run's
     MCP arguments) and `SessionReport` (`facade`, session file, cwd). It writes and cleans up
-    Antigravity's folder plugin using `uses_folder_plugin(cli)`, `plugin_files(program, facade)`,
-    `plugin_files_v3(program, facade)`, `plugin_version(manifest)`, `PLUGIN_FOLDER`,
-    `PLUGIN_MEMBERS` and `SKILL_FILE`.
+    Antigravity's folder plugin using `uses_folder_plugin(cli)`, `plugin_files_v3(program, facade)`,
+    `plugin_version(manifest)`, `PLUGIN_FOLDER`, `PLUGIN_MEMBERS` and `SKILL_FILE`.
   - `runs_start_guest_entry`, `guest_entry_serves_run` and `session_ends_with_process` support
     the older running-session paths.
   - For `facade hook` (the facade crate's hooks): `hook`, pure functions of a hook's input and output:

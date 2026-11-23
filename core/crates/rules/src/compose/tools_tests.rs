@@ -54,8 +54,11 @@ fn in_run(name: &str) -> String {
 }
 use crate::find;
 use crate::{
-    INSTRUCTIONS_FILE, PLUGIN_MEMBERS, SKILL_FILE, guest_entry_serves_run, runs_start_guest_entry,
+    INSTRUCTIONS_FILE, PLUGIN_MEMBERS, RUN_CREDENTIAL_ARG, SKILL_FILE, Server,
+    guest_entry_serves_run, runs_start_guest_entry,
 };
+
+const RUN_TOKEN: &str = "3333333333333333333333333333333333333333333333333333333333333333";
 
 /// Where the runs of these tests report their session.
 fn report() -> crate::SessionReport<'static> {
@@ -92,11 +95,14 @@ fn launch_in(cwd: &Path, cli: &str, given: &[&str], environment: &[(&str, &str)]
     if let Some(home) = environment.get("HOME").cloned() {
         environment.entry("USERPROFILE".into()).or_insert(home);
     }
-    start_command_line(
+    start_managed_launch_command(
         find(cli).unwrap().unwrap(),
         &words(given),
         Some(&report()),
-        Some(&server),
+        Some(&ManagedServer {
+            server,
+            args: &words(&[RUN_CREDENTIAL_ARG, RUN_TOKEN]),
+        }),
         &environment,
         None,
     )
@@ -148,8 +154,8 @@ fn claude_gets_a_server_file_of_the_run_its_tools_allowed_and_no_project_facade_
     assert_eq!(
         config["mcpServers"]["facade"],
         json!({
-            "type": "stdio", "command": "/opt/facade-mcp", "args": [],
-            "env": { "FACADE_AGENT": "a3", "FACADE_HOME": "/home/.facade" },
+            "type": "stdio", "command": "/opt/facade-mcp", "args": [RUN_CREDENTIAL_ARG, RUN_TOKEN],
+            "env": { "FACADE_HOME": "/home/.facade" },
         })
     );
     let settings: Value = serde_json::from_str(after(&launch, "--settings")).unwrap();
@@ -233,13 +239,12 @@ fn codex_gets_overrides_with_its_tools_approved_and_a_longer_wait_for_the_server
         "{overrides:?}"
     );
     assert!(
-        overrides.contains(
-            &r#"mcp_servers.facade.env={"FACADE_AGENT"="a3","FACADE_HOME"="/home/.facade"}"#
-        ),
+        overrides.contains(&r#"mcp_servers.facade.env={"FACADE_HOME"="/home/.facade"}"#),
         "{overrides:?}"
     );
+    let relay_args = format!(r#"mcp_servers.facade.args=["{RUN_CREDENTIAL_ARG}","{RUN_TOKEN}"]"#);
     for wanted in [
-        "mcp_servers.facade.args=[]",
+        relay_args.as_str(),
         "mcp_servers.facade.tool_timeout_sec=3660",
         r#"mcp_servers.facade.default_tools_approval_mode="approve""#,
         "mcp_optional_startup_grace_ms=10000",
@@ -265,7 +270,7 @@ fn opencode_gets_the_server_in_the_person_s_own_inline_configuration_after_their
     let alone = config(&launch("opencode", &[], &[]));
     assert_eq!(
         alone["mcp"]["facade"]["command"],
-        json!(["/opt/facade-mcp"])
+        json!(["/opt/facade-mcp", RUN_CREDENTIAL_ARG, RUN_TOKEN])
     );
     assert_eq!(
         (
@@ -360,11 +365,31 @@ fn pi_gets_an_extension_of_the_run_that_registers_the_server_and_its_instruction
     assert_eq!(after(&launch, "-e"), in_run("facade-pi.mjs"));
     let (name, text) = &launch.files[0];
     assert_eq!(name, "facade-pi.mjs");
+    let entry = text
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix(r#"pi.registerMcpServer("facade", "#)?
+                .strip_suffix(");")
+        })
+        .unwrap();
+    let mut entry: Value = serde_json::from_str(entry).unwrap();
     assert!(
-        text.contains(
-            r#"pi.registerMcpServer("facade", {"command":"/opt/facade-mcp","args":[],"env":{"FACADE_AGENT":"a3","FACADE_HOME":"/home/.facade"},"exposure":"direct","timeout":3660,"#,
-        ),
-        "{text}"
+        entry
+            .as_object_mut()
+            .unwrap()
+            .remove("description")
+            .is_some_and(|description| description.is_string())
+    );
+    assert_eq!(
+        entry,
+        json!({
+            "command": "/opt/facade-mcp",
+            "args": [RUN_CREDENTIAL_ARG, RUN_TOKEN],
+            "env": { "FACADE_HOME": "/home/.facade" },
+            "exposure": "direct",
+            "timeout": 3660,
+        })
     );
     assert!(
         text.contains(
@@ -382,7 +407,7 @@ fn pi_gets_an_extension_of_the_run_that_registers_the_server_and_its_instruction
 /// not given the tools gets none.
 #[test]
 fn each_cli_given_the_tools_is_given_the_skill_in_its_place() {
-    let skill = facade_base::skill::text();
+    let skill = facade_base::skill::text_v3();
     let file = |launch: &CommandLine, name: &str| {
         launch
             .files
@@ -491,7 +516,7 @@ fn each_cli_given_the_tools_is_given_the_skill_in_its_place() {
     let muse = launch("muse", &[], &[("HOME", "/nowhere/home")]);
     assert_eq!(file(&muse, SKILL_FILE).as_ref(), Some(&skill));
     let without = |cli: &str| {
-        start_command_line(
+        start_managed_launch_command(
             find(cli).unwrap().unwrap(),
             &words(&["fix it"]),
             Some(&report()),
@@ -534,7 +559,7 @@ fn pi_s_extension_gives_the_run_s_skill_unless_the_same_one_is_loaded() {
         std::fs::write(path, text).unwrap();
     }
     let (same, other) = (folder.join("same.md"), folder.join("other.md"));
-    std::fs::write(&same, facade_base::skill::text()).unwrap();
+    std::fs::write(&same, facade_base::skill::text_v3()).unwrap();
     std::fs::write(&other, "---\nname: facade\n---\n").unwrap();
     let script = format!(
         r#"const extension = (await import({module})).default;
@@ -573,7 +598,7 @@ fn what_a_launch_added_to_the_environment_comes_out_again() {
         ("opencode", vec![("OPENCODE_CONFIG_CONTENT", mine)], true),
         ("pi", vec![("PATH", "/bin")], false),
         ("muse", vec![("PATH", "/bin")], false),
-        ("agy", vec![("PATH", "/bin")], false),
+        ("agy", vec![("PATH", "/bin")], true),
         ("fake", vec![("PATH", "/bin")], true),
     ] {
         let mut set: BTreeMap<String, String> = person
@@ -597,12 +622,21 @@ fn what_a_launch_added_to_the_environment_comes_out_again() {
 #[test]
 fn the_test_cli_runs_the_server_itself() {
     let fake = launch("fake", &[], &[]);
-    assert!(
-        fake.env
-            .contains(&("FAKECLI_MCP".to_string(), "/opt/facade-mcp".to_string()))
-            && fake.tools == Tools::Injected
+    assert_eq!(fake.tools, Tools::Injected);
+    assert!(fake.uses_run_credential);
+    assert_eq!(after(&fake, "--mcp-config"), in_run("mcp.json"));
+    let (name, text) = &fake.files[0];
+    assert_eq!(name, "mcp.json");
+    let config: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(
+        config["mcpServers"]["facade"],
+        json!({
+            "command": "/opt/facade-mcp",
+            "args": [RUN_CREDENTIAL_ARG, RUN_TOKEN],
+            "env": { "FACADE_HOME": "/home/.facade" },
+        })
     );
-    let without = start_command_line(
+    let without = start_managed_launch_command(
         find("claude").unwrap().unwrap(),
         &[],
         Some(&report()),
@@ -641,9 +675,10 @@ fn config(launch: &CommandLine, key: &str) -> Value {
 fn muse_code_gets_an_optional_server_by_c_for_the_run_alone_and_a_hook_with_the_instructions() {
     let muse = launch("muse", &["--model", "m"], &[("HOME", "/nowhere/home")]);
     assert_eq!(muse.tools, Tools::Injected);
-    let references = json!({ "FACADE_AGENT": "${FACADE_AGENT}", "FACADE_HOME": "${FACADE_HOME}" });
+    let references = json!({ "FACADE_HOME": "${FACADE_HOME}" });
     let entry = json!({
-        "command": "/opt/facade-mcp", "args": [], "env": references, "mode": "optional",
+        "command": "/opt/facade-mcp", "args": [RUN_CREDENTIAL_ARG, RUN_TOKEN],
+        "env": references, "mode": "optional",
     });
     assert_eq!(
         config(&muse, "mcpServers.facade"),
@@ -683,7 +718,7 @@ fn muse_code_gets_an_optional_server_by_c_for_the_run_alone_and_a_hook_with_the_
             INSTRUCTIONS_FILE.to_string(),
             "You are Facade agent #a3.".to_string(),
         ),
-        (SKILL_FILE.to_string(), facade_base::skill::text()),
+        (SKILL_FILE.to_string(), facade_base::skill::text_v3()),
     ];
     assert_eq!(
         muse.files, given,
@@ -765,8 +800,7 @@ fn muse_code_gets_an_optional_server_by_c_for_the_run_alone_and_a_hook_with_the_
 
 /// Where the person's settings hold Facade's guest entry, beside which Muse Code would refuse a
 /// run's own server, that entry serves the run: the run adds no server, and carries none of
-/// Facade's guest hooks, which Muse Code would run with none of the run's variables. A
-/// `facade-mcp` entry that names no run's agent cannot serve the run, and is in its way.
+/// Facade's guest hooks, which Muse Code would run with none of the run's variables.
 #[test]
 fn muse_code_s_run_is_served_by_facade_s_guest_entry_where_the_settings_hold_it() {
     assert!(guest_entry_serves_run("muse"));
@@ -797,6 +831,7 @@ fn muse_code_s_run_is_served_by_facade_s_guest_entry_where_the_settings_hold_it(
     let environment = [("HOME", home.to_str().unwrap())];
     let run = launch("muse", &["go"], &environment);
     assert_eq!(run.tools, Tools::Injected);
+    assert!(!run.uses_run_credential);
     assert!(
         !run.command
             .iter()
@@ -819,21 +854,6 @@ fn muse_code_s_run_is_served_by_facade_s_guest_entry_where_the_settings_hold_it(
         hooks.get("UserPromptSubmit").is_none() && hooks.get("SessionEnd").is_none(),
         "{hooks}"
     );
-    // An entry an earlier version wrote names no socket, and is Facade's all the same.
-    let mut earlier: Value = serde_json::from_str(&settings).unwrap();
-    earlier["mcpServers"]["facade"]["args"] = json!(["--guest", "muse"]);
-    write(
-        home.join(".config/muse/settings.json"),
-        &earlier.to_string(),
-    );
-    assert_eq!(launch("muse", &[], &environment).tools, Tools::Injected);
-    let mut stale: Value = serde_json::from_str(&settings).unwrap();
-    stale["mcpServers"]["facade"]["env"] = json!({});
-    write(home.join(".config/muse/settings.json"), &stale.to_string());
-    assert!(matches!(
-        launch("muse", &[], &environment).tools,
-        Tools::NotGiven(why) if why.contains("names a facade server")
-    ));
     std::fs::remove_dir_all(&home).unwrap();
 }
 
@@ -873,7 +893,7 @@ fn muse_code_is_not_given_the_tools_beside_a_facade_server_of_its_own_or_a_proje
             other => panic!("given the tools beside {expected}: {other:?}"),
         }
     };
-    let server = r#"{ "mcpServers": { "facade": { "command": "facade-mcp" } } }"#;
+    let server = r#"{ "mcpServers": { "facade": { "command": "other-mcp" } } }"#;
     write(
         home.join(".config/muse/settings.json"),
         &format!("// mine\n{server}"),
@@ -937,8 +957,7 @@ fn muse_code_is_not_given_the_tools_beside_a_facade_server_of_its_own_or_a_proje
 /// the run without Facade's tools, says why, and stays as it is. Antigravity names a plugin's
 /// server after the plugin, so Facade's is `facade_facade`, and its run is given the tools beside a
 /// `facade` server. A `facade` server that runs `facade-mcp`, and Pi's guest extension, are
-/// Facade's own and change nothing. Pi then starts without Facade's extension, as it would not
-/// start beside a second one.
+/// Facade's own and allow the run to receive its tools.
 #[test]
 fn a_facade_server_of_the_person_s_own_withholds_tools_only_where_it_conflicts() {
     let root = scratch("ownserver");
@@ -1168,16 +1187,12 @@ fn antigravity_gets_the_plugin_and_its_tools_allowed_beside_the_person_s_own_rul
         .filter(|(name, _)| name.ends_with(".json"))
         .map(|(name, text)| (name.as_str(), serde_json::from_str(text).unwrap()))
         .collect();
-    assert_eq!(
-        plugin["mcp_config.json"],
-        json!({
-            "mcpServers": {
-                "facade": {
-                    "command": "/opt/facade-mcp", "args": [], "env": {},
-                },
-            },
-        }),
-        "no run's identity"
+    let relay = &plugin["mcp_config.json"]["mcpServers"]["facade"];
+    assert_eq!(relay["command"], by_system("/bin/sh", "powershell.exe"));
+    assert_eq!(relay["env"], json!({}));
+    assert!(
+        agy.plugin.iter().all(|(_, text)| !text.contains(RUN_TOKEN)),
+        "the shared plugin contains no run credential"
     );
     let command = by_system(
         "'/opt/facade' hook instructions agy",
@@ -1207,7 +1222,10 @@ fn antigravity_gets_the_plugin_and_its_tools_allowed_beside_the_person_s_own_rul
         json!({ "permissions": { "allow": ["mcp(facade_facade/*)"] }, "title": title })
     );
     assert_eq!(agy.command[agy.command.len() - 2..], ["--model", "m"]);
-    assert!(agy.env.is_empty());
+    assert_eq!(
+        agy.env,
+        [("FACADE_RUN_TOKEN".to_owned(), RUN_TOKEN.to_owned())]
+    );
     assert_eq!(
         agy.files[0],
         (

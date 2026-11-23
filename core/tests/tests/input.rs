@@ -405,7 +405,7 @@ fn shell_type_writes_exact_paste_and_enter_bytes_to_its_target() {
     assert_eq!(std::fs::read(other_keys).unwrap(), other_before);
 }
 
-/// The CLI validates a whole batch and the v3 endpoint can still type its legacy frames.
+/// The CLI validates a whole batch, and Facade API v1's agent.type still types its legacy frames.
 #[test]
 fn public_keys_have_a_limit_and_v3_keeps_its_existing_keys() {
     let home = TestHome::new("publickeys");

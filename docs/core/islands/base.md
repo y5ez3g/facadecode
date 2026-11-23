@@ -159,7 +159,7 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 - `settings::{read, settings_file, shown, is_space, Settings, SourceLocation}`. The settings path
   is available before the file exists.
 - `instructions::{for_connection, for_managed, ManagedRun, Creator}`, `skill::text_v3()` and
-  `tools::DEFINITIONS` describe the Orchestrator and its eight MCP tools.
+  `tools::DEFINITIONS` describe Facade API v1's MCP entry point and its eight tools.
 
 **The `facade` program**
 - `api_v1::daemon_client::DaemonClient` is the blocking terminal client for authenticated local
@@ -198,7 +198,7 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 
 **Rules**
 - `settings::{Settings, Member, Json, is_space}`: rules reads the CLI entries of `clis`.
-- `skill::text()` and the shared input types in `model::terminal`. Rules uses
+- `skill::text_v3()` and the shared input types in `model::terminal`. Rules uses
   `model::agent::is_session_id` for session identifiers.
 
 **The relay** uses nothing of base; see [relay.md](relay.md).
@@ -310,17 +310,18 @@ What Facade asks of the operating system. `core/crates/base/src/platform/`.
 
 ### texts
 
-What a model reads. `core/crates/base/src/texts/`.
-- **Owns:** the instructions Facade's MCP server responds to `initialize` with (`instructions.rs`),
-  Facade's skill (`skill.rs`), and the eight tools' definitions as `tools/list` lists them
-  (`tools.v3.json`, exposed as `tools::DEFINITIONS`).
-- **Keeps:** `for_connection` describes the tools before a new connection is associated with an
-  actor. `for_managed` adds the run's machine, folder, creator and saved YOLO. Both describe
-  inbox acceptance, optional waits and command-line replies. The skill explains how to find
-  available CLIs, continue a reply wait and use the terminal tools. It ends with the Core version.
+What a model reads at Facade API v1's MCP entry point in `core/crates/base/src/texts/`.
+- **Owns** the instructions the daemon's MCP server returns from `initialize` (`instructions.rs`),
+  the skill (`skill.rs`), and the definitions of the eight tools (`tools.v3.json`).
+- **Keeps** one skill and one table for `tools/list` and `tools/call`. `for_connection` describes
+  the tools before a new connection is associated with an actor. `for_managed` adds the run's
+  machine, folder, creator and saved YOLO. Both describe inbox acceptance, optional waits and
+  command-line replies. The skill explains how to find available CLIs, continue a reply wait
+  and use the terminal tools. It ends with the Core version.
+- **Never keeps** a text used only by tests.
 - **Input:** the daemon's MCP server supplies `ManagedRun` from the agent's authenticated run.
 - **Interface:** `instructions::{for_connection, for_managed, Creator, ManagedRun}`,
-  `skill::{text_v3, DESCRIPTION, DESCRIPTION_PREFIX, REPEATED_MESSAGE}`, `tools::DEFINITIONS`.
+  `skill::text_v3()`, `tools::DEFINITIONS`.
   The [Core MCP contract](../../extension/engineering/MCP.md#7-mcp-through-the-orchestrator)
   describes the tools and their results.
 

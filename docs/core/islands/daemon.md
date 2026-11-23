@@ -387,7 +387,8 @@ runs, each run's terminal and exit, its files and plugin, and the session its CL
     then `serve_keeper()`.
   - Start and resume, in this order: `reserve_start() -> StartReservation`,
     `reservation.wait_for_keeper()` and `prepare_managed(RunRequest, address, context)`.
-    `RunRequest` carries the launch options and any CLI session. A resume uses
+    `RunRequest` carries the launch options and any CLI session. The address and context supply the
+    managed instructions for both start and resume. A resume uses
     `previous_run_ended(id, timeout)` and `replace_folders(id, &prepared)`, then
     `start(reservation, id, number, &prepared, cols, rows, ExitSink)`. `StartedRun` returns the
     process identity, terminal and optional relay verifier for the daemon to commit.
@@ -450,9 +451,10 @@ The keeper connection, the run registry, and starts not yet registered.
 A run's command line, environment, folder, plugin and session following.
 `runs/preparation/` (`mod.rs`, `environment.rs`, `folder.rs`, `plugin.rs`, `session.rs`).
 
-- **Owns:** composing a run's command line from its rule (`facade_rules::start_command_line`,
-  `resume_command_line`) with Facade's tools and the CLI's installed version, its program started
-  directly where the program found on the run's `PATH` is a wrapper (`facade_rules::direct_command`); the run's
+- **Owns:** composing a run's command line from its rule (`facade_rules::start_managed_launch_command`,
+  `resume_managed_launch_command`) with a fresh credential for the private relay and the managed
+  instructions. It reads the CLI's installed version and starts the program directly where the
+  program found on the run's `PATH` is a wrapper (`facade_rules::direct_command`). It builds the run's
   environment, made from the client's by the rule of `env` in
   [`StartArgs`](../../../core/protocol/DAEMON.md#startargs) and `FACADE_HOME`. It owns private
   run folders `core/runs/<agent>/<random>/`, with the session
@@ -462,8 +464,9 @@ A run's command line, environment, folder, plugin and session following.
 - **Keeps:** an agent has at most one run folder, and a folder name is never used again; a resume
   removes the earlier folders before it creates its own. A plugin is written only where it is
   missing, this version's, or an earlier version's or changed one no run uses; a plugin that is not
-  Facade core's, or a later version's, is never changed. It goes when the last start holding it
-  and the last run using it have ended, and only if it is still this version's or an earlier one's.
+  Facade core's, or a later version's, is never changed. Once the last start holding it and the last
+  run using it have ended, preparation removes a plugin that matches the current template or has an
+  earlier version. A plugin with the current version and different contents is logged and left in place.
   Only CLIs for which `facade_rules::uses_folder_plugin` holds use it. The session file is checked
   by its modified time and size a second after the run's terminal gives output, as a CLI saves its
   session while it works: at most once a second while output goes on, once more a quiet second
@@ -471,7 +474,8 @@ A run's command line, environment, folder, plugin and session following.
   its CLI has not saved yet, and once more after the run ends; a session that failed to commit is
   sent again a second later.
 - **Never does:** touch the registry or the keeper; commit a session itself.
-- **Interface** (runs only): `Preparation::new(folders, Arc<Held>, events)`, `prepare`,
+- **Interface** (runs only): `Preparation::new(folders, Arc<Held>, events)`,
+  `prepare(RunRequest, managed_instructions: String) -> Result<PreparedRun, ErrorBody>`,
   `replace_folders`, `plugin_used`, `plugin_released`, `remove_folders`,
   `delete_folders_without_records`, `let_go_of_unused_plugins`, `follow_session`, `run_ended`,
   `session_followed(id, deadline)`, `end_session_following`, `read_session`, `has_unsaved_session`, `captures`; the types
@@ -625,8 +629,10 @@ trait and writes responses and watch changes back, without knowing what any oper
 
 ### mcp
 
-The MCP server speaks over the existing version 1 relay handshake. Initialization and tool discovery
-are available before a Guest is listed. The first tool call locks the identity of its connection.
+The relay and the daemon's MCP server form Facade API v1's MCP entry point. The local relay opens
+its daemon connection with the `relay:1` handshake. MCP negotiates its own date-format
+`protocolVersion` during `initialize`. Initialization and tool discovery are available before a
+Guest is listed. The first tool call locks the identity of its connection.
 Runs generate a private, unpredictable credential for each new run and Rules put it in that launch's
 MCP arguments. The verifier waits for that run's installation and uses its keeper PID, birth and run
 generation. A verified CLI-native session can also identify a matching live run. A run recovered
@@ -643,8 +649,9 @@ can bring a run's tools online. The connection rechecks the run when it sends a 
 waiting inbox read also ends with its bound run, and Post checks the bound actor while it settles
 the available page.
 
-There are eight tools. They use the same targets, machine routing and operation requirements as other daemon
-clients. `list_agents` adds available CLI names on answered, reachable machines within the roster deadline.
+One table defines the eight tools served by `tools/list` and dispatched by `tools/call`. They use
+the same targets, machine routing and operation requirements as other daemon clients. `list_agents`
+adds available CLI names on answered, reachable machines within the roster deadline.
 Local Managed discovery uses the verified run environment and working directory. Guest discovery and remote
 discovery use the target login context. Local Guest start still validates its authenticated relay environment.
 
