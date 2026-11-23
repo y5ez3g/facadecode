@@ -104,9 +104,12 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 - `read(lines) -> Reading { text, lines, alternate, older, trimmed }` is what `ReadScreen` gets.
 - `bracketed_paste()` and `application_cursor_keys()` decide how typed input is encoded.
 - `leave_for_restart()` then `reset_for_restart()`: output the actor feeds through the screen, like
-  CLI output, when a new run starts in the same terminal. A private
-  `OSC 7501 ; facade-title-reset ST` in the reset clears title negotiation and preserves the
-  native title. Screen consumes the marker without a status event, query reply or viewer output.
+  CLI output, when a new run starts in the same terminal. It closes any open synchronized
+  update and leaves the alternate screen. After restoring the default modes and tab stops,
+  it moves the cursor home and erases the visible rows and scrollback. Log replay applies the
+  same output. The private reset marker `OSC 7501 ; facade-title-reset ST` clears title
+  negotiation and preserves the native title. Screen consumes the marker without a status
+  event, query reply or viewer output.
 
 **Daemon, viewers** (`daemon/src/agent/viewers.rs`): `redraw(keep_scrollback, include_scrollback)`,
 which replays at most `REDRAW_SCROLLBACK_ROWS` (1,000) scrollback rows. A redraw waits while

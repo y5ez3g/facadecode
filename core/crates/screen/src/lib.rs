@@ -12,7 +12,8 @@
 //!
 //! Reading: [`Screen::view`] for the visible cells and cursor, [`Screen::read`] and
 //! [`Screen::text`] for the last lines. For a CLI started again in the same terminal,
-//! [`Screen::leave_for_restart`] and [`Screen::reset_for_restart`] give a fresh terminal's modes.
+//! [`Screen::leave_for_restart`] and [`Screen::reset_for_restart`] give an empty screen and a fresh
+//! terminal's modes.
 //!
 //! The scrollback's newest [`SHORT_HISTORY`] rows live in alacritty; older ones are kept compact
 //! within [`SCROLLBACK_BUDGET`]. Nothing a reader sees depends on where a row lives.

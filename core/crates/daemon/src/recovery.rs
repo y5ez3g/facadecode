@@ -219,12 +219,15 @@ impl Daemon {
         steps: Arc<AtomicU64>,
     ) -> anyhow::Result<Recovered> {
         let id = record.agent_id.clone();
-        if let Some(run) = &run
+        let adopted_resume = if let Some(run) = &run
             && record.exit.is_some()
             && run.pid != record.pid
         {
             self.commit_uncommitted_resume(&mut record, run)?;
-        }
+            true
+        } else {
+            false
+        };
         let master = match &run {
             Some(run) => Some(self.runs.take_back(run).await.map_err(|error| {
                 anyhow::anyhow!("could not take back the terminal of {id} from the keeper: {error}")
@@ -233,7 +236,7 @@ impl Daemon {
         };
         let terminal = master.as_ref().and_then(PtyMaster::size);
         let (screen, cols, rows) = self
-            .recover_screen(&id, run.is_some(), terminal, &steps)
+            .recover_screen(&id, run.is_some(), adopted_resume, terminal, &steps)
             .await?;
         let (process, exit, then) = ended_or_running(&id, record.exit.as_ref(), run.is_some());
         let (tx, rx) = mpsc::channel(agent::MAX_QUEUED_COMMANDS);
@@ -353,11 +356,12 @@ impl Daemon {
 
     /// The agent's screen and its size. A held run's screen is replayed from its log; an ended
     /// agent's stays in its files until something reads, shows or resumes it, so only its size is
-    /// read now.
+    /// read now. An adopted resume also carries the size to use after clearing the old screen.
     async fn recover_screen(
         &self,
         id: &str,
         held: bool,
+        adopted_resume: bool,
         terminal: Option<(u16, u16)>,
         steps: &Arc<AtomicU64>,
     ) -> anyhow::Result<(ScreenStart, u16, u16)> {
@@ -382,11 +386,14 @@ impl Daemon {
         })
         .await?;
         facade_base::service::mark_for_test(&format!("screen-replayed-{id}"));
-        let (cols, rows) = (recovered.screen.cols(), recovered.screen.rows());
+        let replayed_size = (recovered.screen.cols(), recovered.screen.rows());
+        let restart_size = adopted_resume.then_some(terminal.unwrap_or(replayed_size));
+        let (cols, rows) = restart_size.unwrap_or(replayed_size);
         let screen = ScreenStart::Recovered {
             screen: Box::new(recovered.screen),
             log: recovered.log,
             handed_over_cleanly,
+            restart_size,
         };
         Ok((screen, cols, rows))
     }

@@ -1170,8 +1170,10 @@ impl Daemon {
         reservation.wait_for_keeper().await?;
         // Hooks and servers of earlier runs must not reach the new run's files.
         crate::blocking_in_place(|| self.runs.replace_folders(&id, &prepared))?;
+        // Reserve the run before Keeper starts it so an early exit reaches the actor.
+        // The ended screen is kept until the committed terminal is installed.
         let number = agent.run() + 1;
-        let (reply, prepared_screen) = oneshot::channel();
+        let (reply, restart_ready) = oneshot::channel();
         let restart = AgentCommand::PrepareRestart {
             run: number,
             cols: args.cols,
@@ -1181,7 +1183,7 @@ impl Daemon {
         if !agent.send(restart).await {
             return Err(agent_stopped(&id));
         }
-        prepared_screen.await.map_err(|_| agent_stopped(&id))?;
+        restart_ready.await.map_err(|_| agent_stopped(&id))?;
         let started = self
             .runs
             .start(

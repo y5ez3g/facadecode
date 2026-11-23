@@ -117,7 +117,11 @@ pub(super) fn spawn(
     }
     let mut tracker = {
         let replayed = match &screen {
-            ScreenStart::Recovered { screen, .. } => Some(screen.as_ref()),
+            ScreenStart::Recovered {
+                screen,
+                restart_size: None,
+                ..
+            } => Some(screen.as_ref()),
             _ => None,
         };
         StateTracker::new(
@@ -240,13 +244,13 @@ struct Actor {
     /// When to tell viewers the exit though the run's output has not all been read.
     drain_deadline: Option<Instant>,
     run: u64,
-    /// While a resume starts its CLI: its run, and its exit if it came before its terminal.
-    next_run: Option<u64>,
+    /// The pending run and requested size. Its exit may arrive before its terminal.
+    next_run: Option<(u64, Size)>,
     early_exit: Option<(ProcessExit, bool)>,
     /// A size waiting for a full log's checkpoint writer; input waits until it is applied.
     pending_size: Option<SizeRequest>,
-    /// A restart waiting for a full log's checkpoint writer.
-    pending_restart: Option<(u16, u16, oneshot::Sender<()>)>,
+    /// The preparation reply waiting for a full log's checkpoint writer.
+    pending_restart: Option<oneshot::Sender<()>>,
     /// Messages wait behind the run's start prompt until it comes.
     awaits_prompt: bool,
     prompt_ready: Option<oneshot::Sender<()>>,
@@ -446,18 +450,24 @@ impl Actor {
             )
         };
         let folder = self.facts.parent().map(PathBuf::from).unwrap_or_default();
-        let mut handed_over = false;
-        let mut screen = match self.screen_start.take().expect("the screen starts once") {
-            ScreenStart::New(folder) => LoggedScreen::create(folder, &self.id, cols, rows).await,
+        let screen_start = self.screen_start.take().expect("the screen starts once");
+        let (mut screen, handed_over, restart_size) = match screen_start {
+            ScreenStart::New(folder) => (
+                LoggedScreen::create(folder, &self.id, cols, rows).await,
+                false,
+                None,
+            ),
             ScreenStart::Recovered {
                 screen,
                 log,
                 handed_over_cleanly,
-            } => {
-                handed_over = handed_over_cleanly;
-                LoggedScreen::recovered(folder, &self.id, *screen, log)
-            }
-            ScreenStart::Released => LoggedScreen::released(folder, &self.id),
+                restart_size,
+            } => (
+                LoggedScreen::recovered(folder, &self.id, *screen, log),
+                handed_over_cleanly,
+                restart_size,
+            ),
+            ScreenStart::Released => (LoggedScreen::released(folder, &self.id), false, None),
         };
         screen.set_colors(colors);
         self.screen = Some(screen);
@@ -489,12 +499,17 @@ impl Actor {
         if !recovered || !self.terminal.is_open() {
             return;
         }
-        let (cols, rows) = self.size();
-        // The last logged size; this also undoes a redraw nudge a failed daemon left.
-        self.terminal.set_size(cols, rows);
+        if let Some((cols, rows)) = restart_size {
+            self.restart_screen(cols, rows);
+        } else {
+            let (cols, rows) = self.size();
+            // The last logged size; this also undoes a redraw nudge a failed daemon left.
+            self.terminal.set_size(cols, rows);
+        }
         if self.process != ProcessState::Running {
             return;
         }
+        let (cols, rows) = self.size();
         self.read_unread_output();
         // Its output may have changed the title since clients took their snapshots.
         self.publish();
@@ -629,7 +644,7 @@ impl Actor {
             }
             AgentCommand::ProcessExited { run, exit, stopped } => {
                 gate_for_test("before-exit-reaches-agent");
-                if self.next_run == Some(run) {
+                if self.next_run.is_some_and(|(number, _)| number == run) {
                     self.early_exit.get_or_insert((exit, stopped));
                 } else if run == self.run && self.exit.is_none() {
                     self.end_run(exit, stopped);
@@ -659,9 +674,11 @@ impl Actor {
                 tools,
                 reply,
             } => {
-                if self.next_run != Some(run) {
+                let Some((_, Size { cols, rows })) =
+                    self.next_run.filter(|(number, _)| *number == run)
+                else {
                     return true;
-                }
+                };
                 if let Err(err) = self.terminal.install(master) {
                     log(
                         "warn",
@@ -669,8 +686,10 @@ impl Actor {
                     );
                     return true;
                 }
-                let (cols, rows) = self.size();
-                self.terminal.set_size(cols, rows);
+                self.restart_screen(cols, rows);
+                // Dropping old viewers at restart leaves the new run at its requested size.
+                self.viewers.take_removed();
+                self.catch_up_at = Some(Instant::now());
                 self.next_run = None;
                 (self.exit, self.exit_sent, self.drain_deadline) = (None, false, None);
                 self.process = ProcessState::Running;
@@ -932,7 +951,7 @@ impl Actor {
         true
     }
 
-    /// The checkpoint writer finished: a size or a restart that waited for room goes now.
+    /// The checkpoint writer finished: a size can be applied and restart preparation can reply.
     fn after_checkpoint(&mut self) {
         if self.screen().is_full() {
             return;
@@ -942,9 +961,7 @@ impl Actor {
             self.links.room.notify_waiters();
         }
         self.admit_viewers();
-        if let Some((cols, rows, reply)) = self.pending_restart.take() {
-            self.restart_screen(cols, rows);
-            self.catch_up_at = Some(Instant::now());
+        if let Some(reply) = self.pending_restart.take() {
             let _ = reply.send(());
         }
     }
@@ -1250,7 +1267,7 @@ impl Actor {
         self.admit_viewers();
     }
 
-    /// Readies the screen for run `run`.
+    /// Reserves the next run and waits for room to log its eventual screen reset.
     async fn prepare_restart(
         &mut self,
         run: u64,
@@ -1267,23 +1284,21 @@ impl Actor {
         self.stop_input(&format!("#{} is resuming", self.id));
         self.pending_size = None;
         self.links.room.notify_waiters();
-        self.next_run = Some(run);
+        self.next_run = Some((run, Size { cols, rows }));
         self.early_exit = None;
         self.readiness.end();
         self.ready_at = None;
         self.nudge_until = None;
         self.terminal.detach();
         if self.screen().is_full() {
-            self.pending_restart = Some((cols, rows, reply));
+            self.pending_restart = Some(reply);
         } else {
-            self.restart_screen(cols, rows);
-            self.catch_up_at = Some(Instant::now());
             let _ = reply.send(());
         }
     }
 
-    /// Viewers get the ended run's end, then the screen a fresh terminal's modes and the new size,
-    /// all through the log.
+    /// Viewers get the ended run's end. The actor records the cleared screen, fresh terminal modes
+    /// and new size in the screen log.
     fn restart_screen(&mut self, cols: u16, rows: u16) {
         let exit = self.exit.clone();
         let screen = self

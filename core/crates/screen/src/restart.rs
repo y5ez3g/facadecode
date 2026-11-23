@@ -1,8 +1,8 @@
 //! Getting a terminal ready for a CLI that starts again in it.
 //!
-//! The new CLI sees a fresh terminal's modes, while the main screen's rows, the scrollback, the
-//! title and the cursor's place stay as they were. The bytes go through the screen like any
-//! output: into the log, through the parser, out to viewers.
+//! The new CLI sees an empty screen, an empty scrollback and a fresh terminal's modes. The
+//! native title stays. The bytes go through the screen like any output: into the log, through
+//! the parser, out to viewers.
 
 use std::io::Write;
 
@@ -56,9 +56,8 @@ const FRESH_MODES: [&[u8]; 30] = [
 
 impl Screen {
     /// Output that closes what the last CLI left open: first a synchronized update, then the
-    /// alternate screen. It goes before [`Screen::reset_for_restart`], which keeps the cursor
-    /// where this leaves it. Anything half-written ends at the first escape, as it would anyway:
-    /// a cut character is replaced, a string ends.
+    /// alternate screen. It goes before [`Screen::reset_for_restart`]. Anything half-written
+    /// ends at the first escape: a cut character is replaced, a string ends.
     pub fn leave_for_restart(&self) -> Vec<u8> {
         let open_update = self.synchronized_update_deadline().is_some();
         let parts: [(bool, &[u8]); 2] = [
@@ -73,17 +72,16 @@ impl Screen {
             .collect()
     }
 
-    /// Output that gives a fresh terminal's modes and tab stops, puts the cursor back where it
-    /// is, and keeps the native title with fresh status negotiation.
+    /// Output that restores a fresh terminal's modes and tab stops, moves the cursor home and
+    /// clears the screen and scrollback. It keeps the native title with fresh status negotiation.
     pub fn reset_for_restart(&self) -> Vec<u8> {
         let mut out = FRESH_MODES.concat();
         let cols = usize::from(self.cols());
         for column in (0..cols).filter(|column| column.is_multiple_of(8)) {
             write!(out, "\x1b[1;{}H\x1bH", column + 1).unwrap();
         }
-        let (column, row) = self.cursor();
-        write!(out, "\x1b[{};{}H", row + 1, column + 1).unwrap();
         out.extend_from_slice(TITLE_NEGOTIATION_RESET);
+        out.extend_from_slice(b"\x1b[H\x1b[J\x1b[3J");
         out
     }
 }
@@ -124,8 +122,7 @@ mod tests {
         )
     }
 
-    /// What a restart keeps: the rows, scrollback, title, and cursor position.
-    fn kept(screen: &Screen) -> (Vec<String>, (u16, u16), usize) {
+    fn contents(screen: &Screen) -> (Vec<String>, (u16, u16), usize) {
         (
             screen.text(100),
             screen.cursor(),
@@ -143,36 +140,36 @@ mod tests {
     }
 
     #[test]
-    fn a_restart_gives_a_fresh_terminal_s_modes_and_keeps_the_screen() {
-        let fresh = modes(&Screen::new(20, 6, 100));
+    fn a_restart_gives_a_fresh_terminal_s_modes_and_empty_screen() {
+        let fresh = Screen::new(20, 6, 100);
         let mut screen = Screen::new(20, 6, 100);
         for n in 0..8 {
             screen.feed(format!("history {n}\r\n").as_bytes());
         }
         screen.feed(b"\x1b]0;the title\x07");
         screen.feed(DIRTY);
-        assert_ne!(modes(&screen), fresh);
-        let before = kept(&screen);
+        assert_ne!(modes(&screen), modes(&fresh));
+        assert!(screen.terminal.term.grid().history_size() > 0);
+        assert_ne!(screen.cursor(), (0, 0));
         assert_eq!(restart(&mut screen), None, "the title stays");
-        assert_eq!(modes(&screen), fresh);
+        assert_eq!(screen.title_output(), b"\x1b]2;the title\x1b\\");
+        assert_eq!(modes(&screen), modes(&fresh));
         assert_eq!(
-            kept(&screen),
-            before,
-            "the rows, scrollback, and cursor stay"
+            contents(&screen),
+            contents(&fresh),
+            "the rows and scrollback are empty and the cursor is at the top left"
         );
         assert_eq!(screen.modes.active_charset, ActiveCharset::G0);
         assert_eq!(screen.modes.modify_other_keys, ModifyOtherKeys::Initial);
     }
 
     #[test]
-    fn a_restart_leaves_the_alternate_screen_and_what_was_unfinished_and_returns_to_the_main_cursor()
-     {
-        let fresh = modes(&Screen::new(20, 6, 100));
+    fn a_restart_leaves_the_alternate_screen_and_returns_to_an_empty_main_screen() {
+        let fresh = Screen::new(20, 6, 100);
         let unfinished: [&[u8]; 3] = [b"\x1b[3", b"\x1b]0;half a title", b"\xe4\xbd"];
         for tail in unfinished {
             let mut screen = Screen::new(20, 6, 100);
             screen.feed(b"main row\r\n\x1b[4;7H");
-            let main = kept(&screen);
             screen.feed(b"\x1b[?1049h\x1b[?1h\x1b[5;5Halternate\x1b[?2026hframe");
             screen.feed(tail);
             assert!(
@@ -185,11 +182,11 @@ mod tests {
                 !screen.on_alternate_screen() && screen.at_clean_point(),
                 "{tail:?}"
             );
-            assert_eq!(modes(&screen), fresh, "{tail:?}");
+            assert_eq!(modes(&screen), modes(&fresh), "{tail:?}");
             assert_eq!(
-                kept(&screen),
-                main,
-                "the main screen and its cursor come back: {tail:?}"
+                contents(&screen),
+                contents(&fresh),
+                "the main screen starts empty: {tail:?}"
             );
             // On the main screen, the reset's own first escape ends what was unfinished.
             let mut screen = Screen::new(20, 6, 100);
@@ -198,7 +195,8 @@ mod tests {
             assert!(screen.leave_for_restart().is_empty());
             restart(&mut screen);
             assert!(screen.at_clean_point(), "{tail:?}");
-            assert_eq!(modes(&screen), fresh, "{tail:?}");
+            assert_eq!(modes(&screen), modes(&fresh), "{tail:?}");
+            assert_eq!(contents(&screen), contents(&fresh), "{tail:?}");
         }
     }
 

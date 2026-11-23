@@ -189,17 +189,17 @@ pub(crate) enum AgentCommand {
     },
     /// The session the CLI reported, already committed; the record shows it from now on.
     RecordSession(Option<String>),
-    /// Readies the screen for run `run` of an ended agent: input for earlier runs is refused from
-    /// now on, the ended run's terminal is let go, viewers get its end, and the screen gets a fresh
-    /// terminal's modes at the new size, all through the screen log. Replies when done.
+    /// Reserves run `run` and its size. Refuses input for earlier runs and lets go of the old
+    /// terminal. Keeps the ended screen and replies when the log has room for the reset.
     PrepareRestart {
         run: u64,
         cols: u16,
         rows: u16,
         reply: oneshot::Sender<()>,
     },
-    /// Installs run `run`'s terminal once its process and cleared exit are committed, and replies
-    /// with the running record. A run that ended meanwhile then ends at once.
+    /// Installs run `run`'s terminal once its process and cleared exit are committed. Finishes the
+    /// old viewer frame, logs the screen reset and applies the new size before reading any output.
+    /// Replies with the running record. A run that ended meanwhile then ends at once.
     InstallRun {
         run: u64,
         master: PtyMaster,
@@ -287,6 +287,8 @@ pub(crate) enum ScreenStart {
         screen: Box<Screen>,
         log: Option<ScreenLog>,
         handed_over_cleanly: bool,
+        /// The size of an adopted resume, whose replayed screen is cleared before reading output.
+        restart_size: Option<(u16, u16)>,
     },
     /// An ended agent with no terminal: the screen stays in its files until something needs it.
     Released,

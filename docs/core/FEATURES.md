@@ -89,8 +89,9 @@ gets a name and inbox when it first calls a tool. From that point it can receive
   `Waiting for you` and `Error`. For an ended agent it shows `Ended (stopped by Facade)`, `Ended (code N)`,
   `Ended (signal <SIGNAL>)`, or `Ended` when the way it ended is unknown. Its `Session` line shows the same native
   name or preview as `list`, and `Session ID` the CLI's full session ID.
-- Resuming an `Ended` agent keeps its reference, directory and session. Resuming a `Saved` session creates an agent.
-  A session already in use produces the reference of the agent using it. Use `-d` to resume in the background.
+- Resuming an `Ended` agent keeps its reference, directory and session and starts with an empty terminal.
+  Resuming a `Saved` session creates an agent. A session already in use produces the reference of the agent using it.
+  Use `-d` to resume in the background.
 - `facade rename <AGENT> <NAME>` changes the name of a running or ended agent or connected Guest. The reference
   stays the same.
 

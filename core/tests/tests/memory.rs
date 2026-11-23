@@ -115,7 +115,7 @@ fn an_ended_agent_s_screen_leaves_memory_and_comes_back_when_read_or_shown() {
 
 #[test]
 #[cfg_attr(not(debug_assertions), ignore = "uses the test marks of debug builds")]
-fn a_resumed_agent_goes_on_from_the_screen_its_files_hold() {
+fn a_resumed_agent_starts_empty_and_saves_its_new_screen() {
     let home = TestHome::new("letgoresume");
     start_marking(&home);
     let agent = home.start_named_fake("worker", &[("FAKECLI_SESSION", SESSION)]);
@@ -141,14 +141,16 @@ fn a_resumed_agent_goes_on_from_the_screen_its_files_hold() {
         stdout(&resumed),
         stderr(&resumed)
     );
-    // The resumed CLI clears its screen as it starts, which pushes the earlier run's screen into
-    // the scrollback.
     let whole = |home: &TestHome| home.run_facade_ok(&["screen", &agent.id, "--lines", "2000"]);
+    assert!(wait_for_screen_text(
+        &home,
+        &agent.id,
+        &format!("session {SESSION}")
+    ));
+    let screen = whole(&home);
     assert!(
-        wait_until(secs(30), || home.screen(&agent.id).contains("❯")
-            && whole(&home).contains("said before")),
-        "{}",
-        whole(&home)
+        !screen.contains("said before"),
+        "the new session screen starts clear: {screen}"
     );
     // The resumed run writes on: what it writes reaches the screen and its log. Once the run ends,
     // the screen is let go again, and a read takes it from the files alone: a restart would find
@@ -160,8 +162,12 @@ fn a_resumed_agent_goes_on_from_the_screen_its_files_hold() {
     assert!(reaches(&home, &format!("screen-dropped-{}", agent.id)));
     let screen = whole(&home);
     assert!(
-        screen.contains("said before") && screen.contains("said after"),
-        "{screen}"
+        screen.contains("said after"),
+        "the resumed run's output is saved: {screen}"
+    );
+    assert!(
+        !screen.contains("said before"),
+        "reading from the files keeps the prior run's output cleared: {screen}"
     );
 }
 

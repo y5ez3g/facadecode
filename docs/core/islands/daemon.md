@@ -227,6 +227,15 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
   - The record shows a run's end before anything waiting on the run learns it. The installed run
     number changes when its terminal is installed. Input is fenced from the previous run as soon
     as restart preparation begins.
+  - Restart preparation reserves the next run and its requested size, waits for screen log room,
+    and keeps the ended screen. Once the replacement run is committed and its terminal opens,
+    the actor finishes the old viewer frame, logs an empty screen with fresh terminal modes,
+    and applies the requested size before reading the new run's output. The native title carries
+    across the reset.
+  - Recovery of a running record continues its replayed screen. When recovery adopts a Keeper
+    run for an ended record with a different PID, the actor clears the replayed screen before
+    reading output and uses the replacement terminal's size when available, or the replayed size.
+    The replacement run's state reading starts without evidence from the old grid.
   - An admitted Attach reports its viewer name for the life of its watch. The actor reads the CLI
     title from the terminal and restores the last title from the screen log.
   - Shared Attach uses the minimum column and row counts of live viewers with a valid capacity.
@@ -343,7 +352,7 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
 
 - **Owns:** the viewers and those waiting for their first snapshot, each shared viewer's capacity,
   the bytes queued for each, the redraws and exits they are owed, and the signal that drops a viewer too far behind.
-- **Keeps:** At most 1 MiB of output waits for a viewer; past that it is marked behind and later gets one redraw instead. Snapshots and redraws wait for a synchronized update to end. A viewer behind gets its redraw before the exit. Before a resume, a viewer still over 1 MiB is dropped and its client told to reconnect. `Removed` comes last.
+- **Keeps:** At most 1 MiB of output waits for a viewer; past that it is marked behind and later gets one redraw instead. Snapshots and redraws wait for a synchronized update to end. A viewer behind gets its redraw before the exit. When the new terminal is installed on resume, a viewer still over 1 MiB is dropped and its client told to reconnect. `Removed` comes last.
 - **Never does:** change the screen; read the terminal; decide when the exit goes out.
 - **Interface:** the actor: `new()`, `request(ViewerRequest)`, `admit(&Screen, exit, process)`, `remove(viewer)`, `show(&ParsedOutput)`, `redraw_all()`, `catch_up(&Screen, exit) -> bool`, `send_exit(&Screen, exit)`, `finish_run(&Screen, exit)`, `finish(&Screen, exit)`, `is_watched()`, `is_behind()`. The server's screen watches: `viewer_channel()`, `ViewerReceiver::{recv, stalled}`, `ViewerSnapshot`, `ViewerChange`.
 

@@ -569,7 +569,7 @@ fn antigravity_s_title_command_writes_the_conversation_and_runs_the_person_s_own
 }
 
 #[test]
-fn a_resumed_agent_keeps_its_id_name_record_and_screen_and_continues_its_session() {
+fn a_resumed_agent_keeps_its_id_name_and_session_and_starts_with_an_empty_screen() {
     let home = TestHome::new("resume");
     let first = home.start_named_fake("worker", &[("FAKECLI_SESSION", FIRST)]);
     assert!(records_session(&home, "worker", Some(FIRST)));
@@ -608,11 +608,10 @@ fn a_resumed_agent_keeps_its_id_name_record_and_screen_and_continues_its_session
         wait_for_screen_text(&home, "worker", &format!("session {FIRST}")),
         "the CLI selected the recorded session"
     );
-    // The fake CLI's first frame moves the earlier run's rows up into the scrollback.
     let screen = home.run_facade_ok(&["screen", "worker", "--lines", "2000"]);
     assert!(
-        screen.contains("> before the resume"),
-        "the screen keeps the earlier run's rows: {screen}"
+        !screen.contains("> before the resume"),
+        "output from the earlier run is absent: {screen}"
     );
     type_raw(&mut wire, &first.id, "after the resume\r");
     assert!(wait_for_screen_text(&home, "worker", "> after the resume"));
@@ -962,6 +961,38 @@ fn a_hook_from_an_earlier_run_cannot_reach_the_resumed_run() {
 }
 
 #[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses a test fault")]
+fn a_resume_that_cannot_be_saved_keeps_the_ended_screen() {
+    let home = TestHome::new("resumerefusedscreen");
+    let worker = home.start_named_fake("worker", &[("FAKECLI_SESSION", FIRST)]);
+    assert!(records_session(&home, "worker", Some(FIRST)));
+    let mut wire = connect(&home);
+    type_raw(&mut wire, &worker.id, "before the refused resume\r");
+    let marker = "> before the refused resume";
+    assert!(wait_for_screen_text(&home, "worker", marker));
+    home.run_facade_ok(&["stop", "worker"]);
+    home.fault("fail-restart-commit", "");
+    let denied = resume(&home, "worker");
+    assert_eq!(denied.status.code(), Some(1), "{}", stderr(&denied));
+    assert!(
+        stderr(&denied).contains("the agent store is temporarily unavailable"),
+        "{}",
+        stderr(&denied)
+    );
+    assert_eq!(home.agent_record(&worker.id).unwrap()["process"], "ended");
+
+    let screen = || home.run_facade_ok(&["screen", "worker", "--lines", "2000"]);
+    let live = screen();
+    drop(wire);
+    home.kill_home_processes();
+    let replayed = screen();
+    assert!(
+        live.contains(marker) && replayed.contains(marker),
+        "the refused resume keeps the ended screen live and after replay. Live: {live}\nReplayed: {replayed}"
+    );
+}
+
+#[test]
 fn recovery_commits_a_resume_the_interrupted_daemon_could_not_save() {
     let home = TestHome::new("resumecrash");
     home.start_facade_with(&[("FACADE_TEST_GATES", "before-restart-commit")]);
@@ -972,6 +1003,9 @@ fn recovery_commits_a_resume_the_interrupted_daemon_could_not_save() {
             && records_session(&home, "other", Some(SECOND))
     );
     let mut wire = connect(&home);
+    type_raw(&mut wire, &held.id, "before the interrupted resume\r");
+    let marker = "> before the interrupted resume";
+    assert!(wait_for_screen_text(&home, "held", marker));
     wire.call(
         "agent.stop",
         json!({ "selection": { "kind": "targets", "targets": [held.id] } }),
@@ -1017,6 +1051,11 @@ fn recovery_commits_a_resume_the_interrupted_daemon_could_not_save() {
         "held",
         &format!("session {FIRST}")
     ));
+    let screen = home.run_facade_ok(&["screen", "held", "--lines", "2000"]);
+    assert!(
+        !screen.contains(marker),
+        "the adopted run starts clear: {screen}"
+    );
     let again = resume(&home, "held");
     assert_eq!(
         (stdout(&again), stderr(&again), again.status.code()),
@@ -1193,11 +1232,14 @@ fn an_agent_whose_terminal_closed_resumes_and_keeps_logging_its_screen() {
     );
     drop(wire);
     home.kill_daemon();
-    // The fake CLI's first frame moves the earlier run's rows up into the scrollback.
     let screen = home.run_facade_ok(&["screen", "worker", "--lines", "2000"]);
     assert!(
-        screen.contains("> before the end") && screen.contains("> after the resume"),
+        screen.contains("> after the resume"),
         "the resumed run's output is logged: {screen}"
+    );
+    assert!(
+        !screen.contains("> before the end"),
+        "replaying the log keeps the earlier run's output cleared: {screen}"
     );
 }
 

@@ -376,6 +376,7 @@ async fn a_full_log_waiting_for_its_checkpoint_holds_output_and_input_but_answer
             log.begin_stalled_checkpoint(screen_log::Checkpoint::capture(&screen), released);
             log.fill_to_the_cap();
             ScreenStart::Recovered {
+                restart_size: None,
                 handed_over_cleanly: false,
                 screen: Box::new(screen),
                 log: Some(log),
@@ -464,6 +465,7 @@ async fn an_ended_run_whose_terminal_stays_open_tells_viewers_its_exit_after_the
         &home,
         record(ProcessState::Ended, Some(exit.clone()), 80, 24),
         |_| ScreenStart::Recovered {
+            restart_size: None,
             handed_over_cleanly: false,
             screen: Box::new(Screen::new(80, 24, SCROLLBACK_ROWS)),
             log: None,
@@ -540,6 +542,7 @@ async fn resizes_alone_keep_the_log_within_its_cap() {
         let mut log = ScreenLog::create(dir, "a1", screen_log::Checkpoint::capture(&screen));
         log.fill_to_the_cap();
         ScreenStart::Recovered {
+            restart_size: None,
             handed_over_cleanly: false,
             screen: Box::new(screen),
             log: Some(log),
@@ -1068,6 +1071,7 @@ async fn a_recovered_agent_s_input_reads_unknown_until_its_cli_writes() {
         "❯ \r\n".as_bytes(),
         Some("fake"),
         |_| ScreenStart::Recovered {
+            restart_size: None,
             handed_over_cleanly: false,
             screen: Box::new(Screen::new(40, 6, SCROLLBACK_ROWS)),
             log: None,
@@ -1120,6 +1124,7 @@ async fn a_recovered_agent_takes_the_reports_its_cli_wrote_while_no_daemon_read_
         record(ProcessState::Running, None, 40, 6),
         reported,
         |_| ScreenStart::Recovered {
+            restart_size: None,
             handed_over_cleanly: false,
             screen: Box::new(Screen::new(40, 6, SCROLLBACK_ROWS)),
             log: None,
@@ -1322,6 +1327,9 @@ async fn viewers_get_the_ended_run_before_the_next_and_one_that_never_reads_is_d
     assert!(harness.shows("LAST LINE", Duration::from_secs(10)).await);
     harness.end_run(FIRST_RUN, 5).await;
     harness.prepare_restart(2, 80, 24).await;
+    // Installing the replacement finishes the old viewers' frame. The CLI's side closes at once.
+    let master = test_terminal(80, 24).unwrap().0;
+    harness.install(2, master).await;
     // What the viewer reads, each redraw with its size. Reading makes room, so the next run's
     // screen can come while it reads.
     let mut kinds = Vec::new();
@@ -1363,14 +1371,13 @@ async fn viewers_get_the_ended_run_before_the_next_and_one_that_never_reads_is_d
         "the last screen takes more bytes than a read"
     );
     assert!(String::from_utf8_lossy(&last_redraw).contains("LAST LINE"));
-    // The CLI's side closes at once.
-    let master = test_terminal(80, 24).unwrap().0;
-    harness.install(2, master).await;
     harness.end_run(2, 6).await;
     // The viewer that never read still holds the first run's end beyond its budget: it is
     // dropped, not grown.
     let stalled = never.stalled();
     harness.prepare_restart(3, 80, 24).await;
+    let (master, _cli) = raw_terminal(80, 24);
+    harness.install(3, master).await;
     tokio::time::timeout(Duration::from_secs(5), stalled)
         .await
         .expect("the stalled viewer's client is disconnected");
@@ -1672,6 +1679,7 @@ async fn a_recovered_run_waits_for_its_server_from_the_recovery() {
         started: long_ago,
     };
     let screen = ScreenStart::Recovered {
+        restart_size: None,
         handed_over_cleanly: false,
         screen: Box::new(Screen::new(80, 24, SCROLLBACK_ROWS)),
         log: None,
@@ -2181,6 +2189,7 @@ async fn only_a_start_given_the_tools_readies_them() {
     let home = home("readyonly");
     let kept = Kept::new_run(ToolsGiven::Injected);
     let recovered = |dir: PathBuf| ScreenStart::Recovered {
+        restart_size: None,
         handed_over_cleanly: false,
         screen: Box::new(Screen::new(80, 24, SCROLLBACK_ROWS)),
         log: Some(ScreenLog::create(
