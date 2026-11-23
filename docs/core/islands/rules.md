@@ -258,7 +258,7 @@ Reads a CLI's screen for evidence of its state (`state.rs`). A rule can also hav
     - `turn_error` (OpenCode, over its input box): when a turn's model call failed, the error stands just over that turn's summary. It reads as `Error` with the CLI's words. A turn that produced words shows a rate in its summary, so it never reads as an error.
     - `background_correction` (Codex, around its input prompt): reads `Idle` when, over the prompt, a dim footer counts the commands still running in the background, drawn exactly as the CLI draws it or cut off at the screen's right edge, and over that stands the dim summary of a finished turn. The daemon uses this to correct Codex's `working` report regardless of the installed version.
     - `background_report` (Claude Code, in a report's words) gives the daemon a `background` pattern. A `working` report whose words match the pattern reads as `idle`.
-    - `frame_transcript` (Muse Code, around its input frame): `Working` while the working line stands over the frame, with at most a usage warning or queued input between them. `Idle` under the CLI's header, a question it answered, or the last line of an earlier conversation. Where no frame is drawn, `Blocked(Auth)` while all of its sign-in choices show, and `Blocked(Permission)` while its question about trusting the workspace shows. Part of a frame on the screen reads as None.
+    - `frame_transcript` (Muse Code, around its input frame): `Working` while the working line stands over the frame, with at most a usage warning or queued input between them. `Idle` under the CLI's header, a question it answered, or the end of an earlier conversation. The reader skips indented text and blank paragraph breaks when it looks for the answer marker. Where no frame is drawn, `Blocked(Auth)` while all of its sign-in choices show, and `Blocked(Permission)` while its question about trusting the workspace shows. Part of a frame on the screen reads as None.
   - To check rule files, the layer reads `COUNT` (`${count}`) and `PLURAL` (`${s}`): a footer must contain `COUNT` exactly once, and no placeholder other than these two.
 
 ### sessions
@@ -274,6 +274,8 @@ a folder (`sessions.rs` and `sessions/history/`).
   - `SavedSession.title` uses the saved native name when available and falls back to the existing
     conversation preview. The Claude Code and Pi readers find names between the transcript's
     head and tail windows, so later output does not hide a saved rename.
+    Muse Code looks up an individual session's first prompt in its transcript when the index has
+    no displayable title for it. The saved-session catalog reads the index.
   - A session ID has one spelling: a UUID in lowercase, or OpenCode's `ses_` followed by 1 to 64 letters and digits.
   - A session counts only once it is saved. If the file names a path that does not exist yet, it reads as no session, so a session the CLI has not saved cannot be resumed. This holds for every CLI.
   - A write goes to a temporary file that only its owner can read (base's `files::private_options`). The file is synced, then renamed over the session file, so a reader sees the old file or the new one, never part of either; the folder is synced through `files::sync_folder`.

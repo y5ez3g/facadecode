@@ -3,6 +3,7 @@
 mod claude;
 mod codex;
 mod indexes;
+mod muse;
 mod paths;
 mod pi;
 mod sqlite;
@@ -113,7 +114,7 @@ fn read_sessions(
         "codex" => configured("CODEX_HOME", ".codex").map(|root| codex::list(&root, scope)),
         "agy" => home
             .map(|home| indexes::antigravity(&home.join(".gemini").join("antigravity-cli"), scope)),
-        "muse" => data().map(|root| indexes::muse(&root.join("muse"), scope)),
+        "muse" => data().map(|root| muse::sessions(&root.join("muse"), scope)),
         "opencode" => {
             let file = value("OPENCODE_DB").unwrap_or("opencode.db");
             if file == ":memory:" {
@@ -258,4 +259,88 @@ fn entries(dir: &Path, take: impl Fn(&str) -> bool) -> Result<Vec<PathBuf>, Erro
         }
     }
     Ok(paths)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_folder::TestFolder;
+    use serde_json::json;
+
+    #[test]
+    fn muse_session_lookup_uses_the_first_prompt_before_the_index_has_it() {
+        // Created on November 23 at 05:15 UTC, under November 22 in Muse's local folders.
+        const ID: &str = "01a206d4-3420-7000-8000-0123456789ab";
+        let home = TestFolder::new("muse-unindexed");
+        let workspace = home.join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        let data = home.join("data");
+        let root = data.join("muse");
+        let session = root.join("sessions/2026/11/22").join(ID);
+        fs::create_dir_all(&session).unwrap();
+        let log = session.join("session.jsonl");
+        let records = [
+            json!({
+                "payload_type": "runtime.session.metadata",
+                "payload": { "record": { "workspace_root": workspace } }
+            }),
+            json!({
+                "payload_type": "runtime.user_intent.accepted",
+                "payload": { "refill_blocks": [{ "text": "Explain a flange\nUse two paragraphs." }] }
+            }),
+            json!({
+                "payload_type": "runtime.user_intent.accepted",
+                "payload": { "refill_blocks": [{ "text": "Show an example" }] }
+            }),
+        ];
+        fs::write(&log, records.map(|record| format!("{record}\n")).concat()).unwrap();
+        let index = rusqlite::Connection::open(root.join("session-index.db")).unwrap();
+        index
+            .execute_batch(
+                "CREATE TABLE sessions (session_id TEXT, workspace_root TEXT, first_user_prompt TEXT,
+                 updated_at_us INTEGER, session_log_path TEXT, status TEXT, prompt_count INTEGER);",
+            )
+            .unwrap();
+        let environment = BTreeMap::from([("XDG_DATA_HOME".into(), data.to_str().unwrap().into())]);
+        let rule = crate::find("muse").unwrap().unwrap();
+
+        let found = session_for_id(rule, &workspace, &environment, &[], ID, None)
+            .unwrap()
+            .expect("the running session is already in Muse's transcript");
+        assert_eq!(found.id, ID);
+        assert_eq!(found.folder, workspace);
+        assert_eq!(found.title.as_deref(), Some("Explain a flange"));
+        assert!(
+            session_for_id(rule, &home, &environment, &[], ID, None)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            list_sessions(rule, &workspace, &environment, &[])
+                .unwrap()
+                .is_empty()
+        );
+
+        index
+            .execute(
+                "INSERT INTO sessions VALUES (?1, ?2, '', 1, ?3, 'valid', 2)",
+                [ID, workspace.to_str().unwrap(), log.to_str().unwrap()],
+            )
+            .unwrap();
+        let untitled = session_for_id(rule, &workspace, &environment, &[], ID, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(untitled.title.as_deref(), Some("Explain a flange"));
+
+        index
+            .execute(
+                "UPDATE sessions SET first_user_prompt = 'Indexed prompt'",
+                [],
+            )
+            .unwrap();
+        let indexed = session_for_id(rule, &workspace, &environment, &[], ID, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(indexed.title.as_deref(), Some("Indexed prompt"));
+    }
 }

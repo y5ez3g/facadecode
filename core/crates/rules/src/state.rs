@@ -179,7 +179,7 @@ fn over_frame(page: &Page, upper: usize, transcript: &FrameTranscript) -> Option
         return Some(ScreenState::Idle);
     }
     let start = page
-        .climb(Some(nearest), |at| page.indented(at))
+        .climb(Some(nearest), |at| page.indented(at) || page.blank(at))
         .filter(|&at| page.whole(at))?;
     let marked =
         (transcript.idle_marks.iter()).any(|mark| page.text(start).starts_with(mark.as_str()));
