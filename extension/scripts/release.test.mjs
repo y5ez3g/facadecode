@@ -5,8 +5,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { test } from 'node:test';
 import mirrorWorker from '../../.github/release-mirror/worker.mjs';
-import { sourceBuild } from './core.mjs';
-import { coreArchive, corePrograms } from '../../core/scripts/package-core.mjs';
+import { sourceBuild } from './framework.mjs';
+import { frameworkArchive, frameworkPrograms } from '../../framework/scripts/package-framework.mjs';
 import {
 	candidateNeedsBuild, checksumsText, fileFor, marketplaceFile, parseChecksums, releaseNotes,
 	requiredReleaseFiles, sha256, storeOrder, targetsFor,
@@ -118,8 +118,8 @@ test('a standalone release requires its complete native, editor and installation
 	assert.equal(assets.length, 17);
 	assert.equal(new Set(assets).size, 17);
 	assert.equal(assets.filter(asset => asset.endsWith('.vsix')).length, 7);
-	assert.equal(assets.filter(asset => asset.startsWith('facade-core-') && !asset.endsWith('.txt')).length, 6);
-	for (const name of ['install.sh', 'install.ps1', 'facade-core-version.txt', 'SHA256SUMS']) assert.ok(assets.includes(name));
+	assert.equal(assets.filter(asset => asset.startsWith('facade-framework-') && !asset.endsWith('.txt')).length, 6);
+	for (const name of ['install.sh', 'install.ps1', 'facade-framework-version.txt', 'SHA256SUMS']) assert.ok(assets.includes(name));
 	assert.equal(requiredReleaseFiles('0.1.5').length, 8);
 });
 
@@ -144,13 +144,13 @@ test('SHA256SUMS is what sha256sum -c reads, and a malformed line is refused', (
 
 test('the official installer switches to a mirrored release after every asset is verified', async t => {
 	const version = '0.1.7';
-	const versionFile = 'facade-core-version.txt';
+	const versionFile = 'facade-framework-version.txt';
 	const build = `${version}+1700000000.${'a'.repeat(40)}`;
 	const contents = new Map([
 		['install.sh', 'new Unix installer'],
 		['install.ps1', 'new Windows installer'],
 		[versionFile, build + '\n'],
-		['facade-core-linux-x64.tar.gz', 'new archive'],
+		['facade-framework-linux-x64.tar.gz', 'new archive'],
 	]);
 	const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'facade-mirror-test-'));
 	t.after(() => {
@@ -191,6 +191,7 @@ test('the official installer switches to a mirrored release after every asset is
 	interrupted = false;
 	await publishMirror(version, assets, false, credentials);
 	assert.equal(await (await request(installSh)).text(), 'old Unix installer');
+	assert.ok(objects.has(`releases/${version}/facade-framework-linux-x64.tar.gz`));
 	await publishMirror(version, assets, true, credentials);
 	assert.equal(await (await request(installSh)).text(), contents.get('install.sh'));
 	assert.equal(await (await request(`https://facadecode.com/${versionFile}`)).text(), build + '\n');
@@ -202,7 +203,7 @@ test('the official installer switches to a mirrored release after every asset is
 test('website retention keeps ten formal releases and an unpublished candidate', async () => {
 	const stable = Array.from({ length: 11 }, (_, at) => `0.2.${10 - at}`);
 	const objects = [...stable, '0.2.11'].map(version => ({ key: `releases/${version}/SHA256SUMS` }));
-	objects.push({ key: 'facade-core-version.txt' });
+	objects.push({ key: 'facade-framework-version.txt' });
 	const deleted = [];
 	await pruneMirror(stable[0], stable, {
 		account: 'a'.repeat(32),
@@ -229,13 +230,13 @@ test('release notes are the changelog section of that version alone', () => {
 	assert.ok(releaseNotes(fs.readFileSync(path.join(import.meta.dirname, '../CHANGELOG.md'), 'utf8'), '0.1.1').length > 0);
 });
 
-const programsFor = target => corePrograms(target).map(program => [program, 'test fixture ' + target + ' ' + program]);
+const programsFor = target => frameworkPrograms(target).map(program => [program, 'test fixture ' + target + ' ' + program]);
 
 function writeArchive(directory, target, build, programs, license = 'fixture license') {
-	const core = path.join(directory, 'extension-' + target, 'core');
-	fs.mkdirSync(core, { recursive: true });
-	const name = coreArchive(target);
-	const archive = path.join(core, name);
+	const framework = path.join(directory, 'extension-' + target, 'framework');
+	fs.mkdirSync(framework, { recursive: true });
+	const name = frameworkArchive(target);
+	const archive = path.join(framework, name);
 	const files = [...programs, ['VERSION', build + '\n'], ['LICENSE.txt', license]];
 	if (target.startsWith('win32-')) {
 		writeZip(archive, files);
@@ -248,7 +249,7 @@ function writeArchive(directory, target, build, programs, license = 'fixture lic
 			fs.rmSync(scratch, { recursive: true, force: true });
 		}
 	}
-	fs.writeFileSync(path.join(core, 'SHA256SUMS'), sha256(fs.readFileSync(archive)) + '  ' + name + '\n');
+	fs.writeFileSync(path.join(framework, 'SHA256SUMS'), sha256(fs.readFileSync(archive)) + '  ' + name + '\n');
 }
 
 function writeNativePackages(directory, version, build, source, { mockSigning = false } = {}) {
@@ -290,8 +291,8 @@ test('the candidate verifier requires every native target and the tested bytes f
 	assert.throws(() => verifyNativePackages(directory, version, source), /Missing or unexpected native package targets/);
 	fs.renameSync(moved, root);
 
-	const filename = coreArchive('linux-x64');
-	const archive = path.join(root, 'core', filename);
+	const filename = frameworkArchive('linux-x64');
+	const archive = path.join(root, 'framework', filename);
 	const original = fs.readFileSync(archive);
 	fs.writeFileSync(archive, 'altered archive');
 	assert.throws(() => verifyNativePackages(directory, version, source), /differs from its candidate SHA256SUMS/);
@@ -300,9 +301,9 @@ test('the candidate verifier requires every native target and the tested bytes f
 	writeArchive(directory, 'linux-x64', build, programsFor('linux-arm64'));
 	assert.throws(() => captureNativePackage(root, 'linux-x64', version, source), /facade differs from the paired VSIX/);
 	writeArchive(directory, 'linux-x64', `${version}+1700000001.${source.revision}`, programsFor('linux-x64'));
-	assert.throws(() => captureNativePackage(root, 'linux-x64', version, source), /Core archive BUILD differs from the paired VSIX/);
+	assert.throws(() => captureNativePackage(root, 'linux-x64', version, source), /Framework archive BUILD differs from the paired VSIX/);
 	fs.writeFileSync(archive, original);
-	fs.writeFileSync(path.join(root, 'core', 'SHA256SUMS'), sha256(original) + '  ' + filename + '\n');
+	fs.writeFileSync(path.join(root, 'framework', 'SHA256SUMS'), sha256(original) + '  ' + filename + '\n');
 
 	assert.throws(() => captureNativePackage(root, 'linux-x64', version, { ...source, revision: 'd'.repeat(40) }), /VSIX BUILD differs from the source revision/);
 	const window = path.join(root, 'vsix', fileFor(version, 'universal'));
@@ -329,7 +330,7 @@ function disposableRelease(t) {
 	const inputs = path.join(directory, 'inputs');
 	const mirror = path.join(directory, 'mirror');
 	const release = path.join(directory, 'release');
-	const marker = path.join(mirror, 'facade-core-version.txt');
+	const marker = path.join(mirror, 'facade-framework-version.txt');
 	const github = path.join(directory, 'github.json');
 	const output = path.join(directory, 'output');
 	const logFile = path.join(directory, 'transport.log');
@@ -391,7 +392,7 @@ test('release preparation refuses invalid native inputs before writing the GitHu
 	const fixture = disposableRelease(t);
 	const win = path.join(fixture.inputs, 'extension-win32-x64', evidenceFile);
 	const linux = path.join(fixture.inputs, 'extension-linux-x64');
-	const linuxArchive = path.join(linux, 'core', coreArchive('linux-x64'));
+	const linuxArchive = path.join(linux, 'framework', frameworkArchive('linux-x64'));
 	const linuxVsix = path.join(linux, 'vsix', fileFor(fixture.version, 'linux-x64'));
 	const inspectWin = action => {
 		const record = JSON.parse(fs.readFileSync(win, 'utf8'));
@@ -411,7 +412,7 @@ test('release preparation refuses invalid native inputs before writing the GitHu
 		checkExit(fixture.prepare(), 1, /differs from its candidate SHA256SUMS/);
 	});
 	withArtifactChange(linuxArchive, undefined, () => {
-		checkExit(fixture.prepare(), 1, /Missing or unexpected files in core/);
+		checkExit(fixture.prepare(), 1, /Missing or unexpected files in framework/);
 	});
 	withArtifactChange(linuxVsix, fs.readFileSync(linuxVsix), () => {
 		vsix(linuxVsix, { target: 'linux-x64', name: 'facadecode', version: fixture.oldVersion });
@@ -455,7 +456,7 @@ test('release promotion checks the accepted source and bytes before switching st
 		assert.deepStrictEqual(candidate.assets.find(asset => asset.target === target), {
 			target, file: packageFile, sha256: sha256(fs.readFileSync(path.join(fixture.release, packageFile))),
 		});
-		assert.deepStrictEqual(Object.keys(signing.programs).sort(), corePrograms(target).sort());
+		assert.deepStrictEqual(Object.keys(signing.programs).sort(), frameworkPrograms(target).sort());
 	}
 	const window = fileFor(fixture.version, 'universal');
 	const linuxWindow = path.join(fixture.inputs, 'extension-linux-x64', 'vsix', window);
@@ -466,9 +467,9 @@ test('release promotion checks the accepted source and bytes before switching st
 	const digest = sha256(fs.readFileSync(sumFile));
 	assert.equal(fs.readFileSync(fixture.output, 'utf8'), 'manifest=' + digest + '\n');
 	const promote = fault => fixture.command('promote', ['--manifest-digest', digest], { fault });
-	const releaseArchive = path.join(fixture.release, coreArchive('linux-x64'));
+	const releaseArchive = path.join(fixture.release, frameworkArchive('linux-x64'));
 	const staged = path.join(fixture.mirror, 'releases', fixture.version);
-	const mirroredArchive = path.join(staged, coreArchive('linux-x64'));
+	const mirroredArchive = path.join(staged, frameworkArchive('linux-x64'));
 	const rewriteSums = (changedFile, action) => {
 		const sums = parseChecksums(fs.readFileSync(sumFile, 'utf8'));
 		sums.set(path.basename(changedFile), sha256(fs.readFileSync(changedFile)));
@@ -496,11 +497,11 @@ test('release promotion checks the accepted source and bytes before switching st
 	withArtifactChange(mirroredArchive, 'changed at the website', () => checkExit(promote(), 1, /differs from the GitHub Release/));
 	checkExit(fixture.command('promote', ['--manifest-digest', '0'.repeat(64)]), 1, /SHA256SUMS changed after mirroring/);
 	assert.equal(fs.readFileSync(fixture.marker, 'utf8'), fixture.oldVersion + '\n');
-	assert.doesNotMatch(fixture.log(), /r2 put facade-core-version\.txt|github release edit --latest/);
+	assert.doesNotMatch(fixture.log(), /r2 put facade-framework-version\.txt|github release edit --latest/);
 	assert.equal(fixture.latest(), 'extension/' + fixture.oldVersion);
 
 	for (const [fault, mismatch] of [
-		['stable-marker-changed', /facade-core-version\.txt differs from the GitHub Release/],
+		['stable-marker-changed', /facade-framework-version\.txt differs from the GitHub Release/],
 		['stable-alias-changed', /install\.ps1 differs from the GitHub Release/],
 	]) {
 		withArtifactChange(fixture.marker, fixture.oldVersion + '\n', () => checkExit(promote(fault), 1, mismatch));
@@ -514,12 +515,12 @@ test('release promotion checks the accepted source and bytes before switching st
 		assert.deepStrictEqual(fs.readFileSync(path.join(staged, file)), fs.readFileSync(path.join(fixture.release, file)));
 	}
 	const actions = fixture.log().split('\n');
-	assert.deepStrictEqual(actions.slice(actions.lastIndexOf('r2 put facade-core-version.txt'), -1), [
-		'r2 put facade-core-version.txt',
-		'website get /facade-core-version.txt',
+	assert.deepStrictEqual(actions.slice(actions.lastIndexOf('r2 put facade-framework-version.txt'), -1), [
+		'r2 put facade-framework-version.txt',
+		'website get /facade-framework-version.txt',
 		'website get /install.sh',
 		'website get /install.ps1',
-		'website get /facade-core-version.txt',
+		'website get /facade-framework-version.txt',
 		'github release edit --latest',
 		'github api repos/y5ez3g/facadecode/releases/latest',
 		'github release list',
@@ -534,7 +535,7 @@ test('partial promotion resumes the same pin and refuses a competing marker', t 
 	const pin = ['--manifest-digest', digest];
 	const marker = fixture.build + '\n';
 	const oldLatest = 'extension/' + fixture.oldVersion;
-	const markerWrites = () => fixture.log().match(/^r2 put facade-core-version\.txt$/gm)?.length ?? 0;
+	const markerWrites = () => fixture.log().match(/^r2 put facade-framework-version\.txt$/gm)?.length ?? 0;
 
 	checkExit(fixture.command('promote', pin, { fault: 'stable-alias-changed' }), 1,
 		/The website accepted the stable marker write.*Stable read-back failed.*install\.ps1 differs/);
@@ -545,14 +546,14 @@ test('partial promotion resumes the same pin and refuses a competing marker', t 
 	checkExit(fixture.command('promote', ['--resume', '--manifest-digest', '0'.repeat(64)]), 1,
 		/SHA256SUMS changed after mirroring/);
 	withArtifactChange(fixture.marker, '0.0.2\n', () => {
-		checkExit(fixture.command('promote', [...pin, '--resume']), 1, /facade-core-version\.txt differs/);
+		checkExit(fixture.command('promote', [...pin, '--resume']), 1, /facade-framework-version\.txt differs/);
 		assert.equal(fs.readFileSync(fixture.marker, 'utf8'), '0.0.2\n');
 		assert.equal(fixture.latest(), oldLatest);
 	});
 
 	withArtifactChange(fixture.marker, marker, () => {
 		checkExit(fixture.command('promote', [...pin, '--resume'], { fault: 'competing-stable-marker' }), 1,
-			/facade-core-version\.txt differs/);
+			/facade-framework-version\.txt differs/);
 		assert.equal(fs.readFileSync(fixture.marker, 'utf8'), '0.0.2\n');
 		assert.equal(fixture.latest(), oldLatest);
 	});
@@ -573,7 +574,7 @@ test('stores refuse wrong existing bytes before uploading any missing package', 
 	checkExit(fixture.command('stores', pin, { fault: 'marketplace-wrong-bytes' }), 1, /Marketplace serves another facadecode-linux-x64/);
 	checkExit(fixture.command('stores', pin, { fault: 'open-vsx-wrong-bytes' }), 1, /Open VSX serves another facadecode-linux-x64/);
 	assert.equal(fixture.log().match(/store read store-fixture\.invalid\/changed\.vsix/g)?.length, 2);
-	assert.doesNotMatch(fixture.log(), /unexpected subprocess|r2 put facade-core-version\.txt|github release edit --latest/);
+	assert.doesNotMatch(fixture.log(), /unexpected subprocess|r2 put facade-framework-version\.txt|github release edit --latest/);
 });
 
 test('the stores get the Window Component before the packages that install it', () => {

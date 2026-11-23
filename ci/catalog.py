@@ -5,28 +5,26 @@ import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-PRODUCTS = ('core', 'extension')
+PRODUCTS = ('framework', 'extension')
 STAGES = ('pr', 'native', 'scheduled', 'release')
-CASE_ID = re.compile(r'(?:core|extension)(?:/[A-Za-z0-9._-]+){3}')
-FLOW_ID = re.compile(r'(?:core|extension)/p0/[A-Za-z0-9._-]+')
+CASE_ID = re.compile(r'(?:framework|extension)(?:/[A-Za-z0-9._-]+){3}')
+FLOW_ID = re.compile(r'(?:framework|extension)/p0/[A-Za-z0-9._-]+')
 CASE_NAME = re.compile(r'\x60([A-Za-z0-9._-]+)\x60')
 NAME = re.compile(r'[a-z][a-z0-9_]*', re.ASCII)
 FIELDS = {'id', 'assertion', 'stage', 'existing_tests'}
 MOCHA_JOURNEYS = ('journeys', 'cross')
 VSIX_REHEARSALS = ('install-pair', 'upgrade-pair')
 NATIVE_INSTALL_CASES = (
-    'core/p0/install-upgrade/install',
-    'core/p0/install-upgrade/bad-archive',
+    'framework/p0/install-upgrade/install',
+    'framework/p0/install-upgrade/bad-archive',
 )
-NATIVE_INSTALL_BINDING = {'runner': 'core-install', 'target': 'linux-x64', 'name': 'installed-candidate'}
-NATIVE_SSH_CASE = 'core/p0/remote-execution/real-ssh'
-NATIVE_SSH_BINDING = {'runner': 'core-ssh', 'target': 'linux-x64', 'name': 'real-machine-route'}
-NATIVE_PRIOR_CASE = 'core/p0/prior-build/cold-migration'
-NATIVE_PRIOR_BINDING = {'runner': 'core-prior', 'target': 'linux-x64', 'name': 'cold-cutover'}
-NATIVE_HOT_CASE = 'core/p0/prior-build/hot-replacement'
-NATIVE_HOT_BINDING = {'runner': 'core-prior', 'target': 'linux-x64', 'name': 'hot-qa'}
-NATIVE_INCOMPATIBLE_CASE = 'core/p0/prior-build/incompatible-version'
-NATIVE_INCOMPATIBLE_BINDING = {'runner': 'core-prior', 'target': 'linux-x64', 'name': 'incompatible-qa'}
+NATIVE_INSTALL_BINDING = {'runner': 'framework-install', 'target': 'linux-x64', 'name': 'installed-candidate'}
+NATIVE_SSH_CASE = 'framework/p0/remote-execution/real-ssh'
+NATIVE_SSH_BINDING = {'runner': 'framework-ssh', 'target': 'linux-x64', 'name': 'real-machine-route'}
+NATIVE_HOT_CASE = 'framework/p0/prior-build/hot-replacement'
+NATIVE_HOT_BINDING = {'runner': 'framework-prior', 'target': 'linux-x64', 'name': 'hot-qa'}
+NATIVE_INCOMPATIBLE_CASE = 'framework/p0/prior-build/incompatible-version'
+NATIVE_INCOMPATIBLE_BINDING = {'runner': 'framework-prior', 'target': 'linux-x64', 'name': 'incompatible-qa'}
 NATIVE_REMOTE_EDITOR_CASE = 'extension/p0/remote-host/ssh-connect'
 NATIVE_REMOTE_EDITOR_BINDING = {'runner': 'extension-ssh', 'target': 'linux-x64', 'name': 'ssh-connect'}
 RELEASE_FIXTURE_CASES = (
@@ -38,14 +36,13 @@ NATIVE_BINDINGS = {
     **dict.fromkeys(RELEASE_FIXTURE_CASES, RELEASE_FIXTURE_BINDING),
     **dict.fromkeys(NATIVE_INSTALL_CASES, NATIVE_INSTALL_BINDING),
     NATIVE_SSH_CASE: NATIVE_SSH_BINDING,
-    NATIVE_PRIOR_CASE: NATIVE_PRIOR_BINDING,
     NATIVE_HOT_CASE: NATIVE_HOT_BINDING,
     NATIVE_INCOMPATIBLE_CASE: NATIVE_INCOMPATIBLE_BINDING,
     NATIVE_REMOTE_EDITOR_CASE: NATIVE_REMOTE_EDITOR_BINDING,
 }
 NATIVE_ROUTES = {binding['runner'] for binding in NATIVE_BINDINGS.values()}
 REQUIRED_EDITOR_ROUTES = {
-    'core/p0/remote-execution/remote-worktree': 'remote-worktree',
+    'framework/p0/remote-execution/remote-worktree': 'remote-worktree',
     'extension/p0/activation-shell/activation-failure': 'incompatible-activation',
     'extension/p0/window-replacement/replacement-in-flight': 'replacement-in-flight',
     'extension/p0/window-replacement/stale-owner': 'stale-owner',
@@ -53,20 +50,20 @@ REQUIRED_EDITOR_ROUTES = {
     'extension/p0/vsix-upgrade/upgrade-pair': 'upgrade-pair',
 }
 EDITOR_DRIVERS = {
-    'activation-failure': ('old', 'claude'),
-    'conversion': ('old', 'claude'),
-    'expiry': ('old', 'claude'),
+    'activation-failure': ('legacy', 'claude'),
+    'conversion': ('legacy', 'claude'),
+    'expiry': ('legacy', 'claude'),
     'incompatible-activation': ('none', 'claude'),
-    'install-pair': ('old', 'claude'),
-    'lifetime': ('rust', 'claude'),
-    'missing-session-unpin': ('rust', 'claude'),
-    'multi-window': ('rust', 'claude'),
-    'remote-worktree': ('rust', 'fake'),
-    'replacement-in-flight': ('old', 'claude'),
-    'shell-handoff': ('rust', 'codex'),
-    'stale-owner': ('old', 'claude'),
-    'switch': ('rust', 'claude'),
-    'upgrade-pair': ('old', 'claude'),
+    'install-pair': ('legacy', 'claude'),
+    'lifetime': ('framework', 'claude'),
+    'missing-session-unpin': ('framework', 'claude'),
+    'multi-window': ('framework', 'claude'),
+    'remote-worktree': ('framework', 'fake'),
+    'replacement-in-flight': ('legacy', 'claude'),
+    'shell-handoff': ('framework', 'codex'),
+    'stale-owner': ('legacy', 'claude'),
+    'switch': ('framework', 'claude'),
+    'upgrade-pair': ('legacy', 'claude'),
 }
 
 
@@ -123,13 +120,13 @@ def validate_binding(value, case_id):
     required_route = REQUIRED_EDITOR_ROUTES.get(case_id)
     if required_route and (runner != 'extension-editor' or value.get('journey') != required_route):
         raise AcceptanceError(f'{case_id}: requires the {required_route} editor route')
-    if runner == 'core-scenario':
+    if runner == 'framework-scenario':
         if (
-            not case_id.startswith('core/')
+            not case_id.startswith('framework/')
             or value.keys() != {'runner', 'target', 'name'}
             or not all(NAME.fullmatch(value[key]) for key in ('target', 'name'))
         ):
-            raise AcceptanceError(f'{case_id}: invalid Core scenario binding')
+            raise AcceptanceError(f'{case_id}: invalid Framework scenario binding')
     elif runner == 'extension-unit':
         if (not case_id.startswith('extension/') or '/p0/' in case_id
                 or value.keys() != {'runner', 'target', 'name'}
@@ -137,18 +134,18 @@ def validate_binding(value, case_id):
             raise AcceptanceError(f'{case_id}: invalid Extension unit binding')
     elif runner == 'extension-editor':
         _, boundary, _, name = case_id.split('/')
-        variants = set((name if boundary == 'p0' else boundary).split('-')) & {'old', 'rust'}
+        variants = set((name if boundary == 'p0' else boundary).split('-')) & {'legacy', 'framework'}
         if (
-            value.keys() != {'runner', 'engine', 'journey', 'built_in', 'name'}
-            or value['engine'] not in ('old', 'rust', 'none')
-            or (variants and value['engine'] not in variants)
+            value.keys() != {'runner', 'implementation', 'journey', 'built_in', 'name'}
+            or value['implementation'] not in ('legacy', 'framework', 'none')
+            or (variants and value['implementation'] not in variants)
         ):
             raise AcceptanceError(f'{case_id}: invalid Extension editor binding')
         journey = value['journey']
         if journey in MOCHA_JOURNEYS:
-            matches_route = value['built_in'] == 'claude' and value['engine'] in ('old', 'rust')
+            matches_route = value['built_in'] == 'claude' and value['implementation'] in ('legacy', 'framework')
         else:
-            matches_route = value['name'] == journey and EDITOR_DRIVERS.get(journey) == (value['engine'], value['built_in'])
+            matches_route = value['name'] == journey and EDITOR_DRIVERS.get(journey) == (value['implementation'], value['built_in'])
         if journey in REQUIRED_EDITOR_ROUTES.values():
             applies = required_route == journey
         else:
@@ -253,11 +250,11 @@ def documented_p0_cases(root):
 
 
 def discover_apis(root):
-    from inventory_core import discover as discover_core
+    from inventory_framework import discover as discover_framework
     from inventory_extension import discover as discover_extension
 
     inventory = {}
-    for product, discover in zip(PRODUCTS, (discover_core, discover_extension), strict=True):
+    for product, discover in zip(PRODUCTS, (discover_framework, discover_extension), strict=True):
         entries = discover(root)
         if not entries:
             raise AcceptanceError(f'{product}: API inventory is empty')

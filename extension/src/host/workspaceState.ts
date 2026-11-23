@@ -36,7 +36,7 @@ export class NotOwnedError extends FacadeError {
 }
 
 /**
- * The shared workspace sidecar (ARCHITECTURE-3.1). A Rust activation reads it directly. The old engine also keeps its editor
+ * The shared workspace sidecar (ARCHITECTURE-3.1). A Framework activation reads it directly. The legacy implementation also keeps its editor
  * Memento mirror. Each write takes its claim first, then the sidecar lock, and applies only this activation's changes.
  */
 export class KeptWorkspaceState implements vscode.Memento {
@@ -180,7 +180,7 @@ export class KeptWorkspaceState implements vscode.Memento {
 		if (value === undefined) { values.delete(key); } else { values.set(key, value); }
 	}
 
-	/** Old-engine initialization can recover a damaged sidecar from the existing editor state. */
+	/** Legacy implementation initialization can recover a damaged sidecar from the existing editor state. */
 	private read(recoverDamaged = false): Readonly<Record<string, unknown>> | undefined {
 		try {
 			const value: unknown = JSON.parse(fs.readFileSync(this.file, 'utf8'));

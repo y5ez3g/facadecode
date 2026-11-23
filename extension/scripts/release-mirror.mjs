@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { coreInstallers, coreVersionFile } from '../../core/scripts/package-core.mjs';
-import { parseCoreBuild } from './core.mjs';
+import { frameworkInstallers, frameworkVersionFile } from '../../framework/scripts/package-framework.mjs';
+import { parseFrameworkBuild } from './framework.mjs';
 
 const website = 'https://facadecode.com';
 const bucket = 'facadecode-releases';
@@ -29,14 +29,14 @@ function r2Request({
 export async function publishMirror(version, assets, latest, options) {
 	const request = options?.request ?? fetch;
 	const r2 = r2Request(options);
-	const stableFiles = [...coreInstallers, coreVersionFile];
+	const stableFiles = [...frameworkInstallers, frameworkVersionFile];
 	const expected = new Map(assets.map(asset => [asset.file, asset.sha256]));
 	assert.ok(stableFiles.every(file => expected.has(file)), 'The Release is missing a standalone installer or version marker');
-	const markerBytes = readFileSync(assets.find(asset => asset.file === coreVersionFile).path);
+	const markerBytes = readFileSync(assets.find(asset => asset.file === frameworkVersionFile).path);
 	const marker = markerBytes.toString('utf8');
 	const build = marker.trimEnd();
-	assert.ok(parseCoreBuild(build)?.version === version && marker === build + '\n', 'The Release BUILD marker names another version');
-	const markerDigest = expected.get(coreVersionFile);
+	assert.ok(parseFrameworkBuild(build)?.version === version && marker === build + '\n', 'The Release BUILD marker names another version');
+	const markerDigest = expected.get(frameworkVersionFile);
 	assert.equal(sha256(markerBytes), markerDigest, 'The stable marker differs from the GitHub Release');
 
 	async function check(key, digest) {
@@ -69,13 +69,13 @@ export async function publishMirror(version, assets, latest, options) {
 
 	if (latest) {
 		const resume = options?.resume;
-		if (!resume) await put(coreVersionFile, markerBytes);
+		if (!resume) await put(frameworkVersionFile, markerBytes);
 		try {
-			assert.ok(await check(coreVersionFile, markerDigest), 'The website has no stable marker for this candidate');
-			for (const file of coreInstallers) {
+			assert.ok(await check(frameworkVersionFile, markerDigest), 'The website has no stable marker for this candidate');
+			for (const file of frameworkInstallers) {
 				assert.ok(await check(file, expected.get(file)), `${file} is missing from the stable mirror`);
 			}
-			assert.ok(await check(coreVersionFile, markerDigest), 'The stable marker disappeared during read-back');
+			assert.ok(await check(frameworkVersionFile, markerDigest), 'The stable marker disappeared during read-back');
 		} catch (error) {
 			if (resume) throw error;
 			throw new Error(`The website accepted the stable marker write for Facade ${version}. Stable read-back failed. ${error.message}`, { cause: error });

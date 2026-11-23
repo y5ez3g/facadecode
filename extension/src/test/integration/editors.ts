@@ -12,9 +12,9 @@ import * as fs from 'fs';
 import { createConnection } from 'net';
 import * as path from 'path';
 import { createInterface } from 'readline';
-import type { DaemonHelloParams, DaemonHelloResult, DaemonOperations, Response } from '../../base/coreProtocol';
+import type { DaemonHelloParams, DaemonHelloResult, DaemonOperations, Response } from '../../base/frameworkProtocol';
 
-/** VS Code's fsPath lowercases the drive letter. Compare it like a path from Node or core. */
+/** VS Code's fsPath lowercases the drive letter. Compare it like a path from Node or framework. */
 export function normalizeDriveLetter(file: string): string {
 	return process.platform === 'win32' ? file.replace(/^[A-Z]:/u, drive => drive.toLowerCase()) : file;
 }
@@ -251,23 +251,23 @@ export function fakeClis(root: string): FakeClis {
 }
 
 /**
- * The daemon socket of Facade core for `home`, by the rule core and the extension share (`host/rust/connection.ts`'s `daemonSocketPath`):
+ * The daemon socket of Facade Code Framework for `home`, by the rule framework and the extension share (`host/framework/rpc.ts`'s `daemonSocketPath`):
  * on Windows a named pipe.
  */
-export function coreSocket(home: string): string {
+export function frameworkSocket(home: string): string {
 	const key = createHash('sha256').update(Buffer.from(home, 'utf8')).digest('hex').slice(0, 10);
-	return process.platform === 'win32' ? `\\\\.\\pipe\\facade-core-daemon-${key}`
-		: path.join('/tmp', `facade-core-${process.getuid?.() ?? 0}`, `daemon-${key}.sock`);
+	return process.platform === 'win32' ? `\\\\.\\pipe\\facade-framework-daemon-${key}`
+		: path.join('/tmp', `facade-framework-${process.getuid?.() ?? 0}`, `daemon-${key}.sock`);
 }
 
 /** Whether a daemon of `home` listens: its socket is there, or on Windows its pipe is among the pipes, which listing does not connect to. */
-export function coreListens(home: string): boolean {
-	const socket = coreSocket(home);
+export function frameworkListens(home: string): boolean {
+	const socket = frameworkSocket(home);
 	return process.platform === 'win32' ? fs.readdirSync('\\\\.\\pipe\\').includes(path.win32.basename(socket)) : fs.existsSync(socket);
 }
 
-/** Core's `facade` program in the folder `bin`, as the package carries it. */
-export function coreProgram(bin: string): string {
+/** Framework's `facade` program in the folder `bin`, as the package carries it. */
+export function frameworkProgram(bin: string): string {
 	return path.join(bin, process.platform === 'win32' ? 'facade.exe' : 'facade');
 }
 
@@ -280,36 +280,36 @@ export function detachedStartReference(stdout: string, name: string): string {
 }
 
 /** Reads the daemon's hello result as a terminal client. */
-export async function helloInCore(home: string): Promise<Response> {
-	return await readCore(home, { build: 'facade-editor-test', api_versions: [1], kind: 'terminal' });
+export async function helloInFramework(home: string): Promise<Response> {
+	return await readFramework(home, { build: 'facade-editor-test', api_versions: [1], kind: 'terminal' });
 }
 
-export async function callInCore(home: string, op: string, args: object): Promise<Response> {
-	return await readCore(home, { build: 'facade-editor-test', api_versions: [1], kind: 'terminal' }, { method: 'call', params: { op, args } }, 45_000);
+export async function callInFramework(home: string, op: string, args: object): Promise<Response> {
+	return await readFramework(home, { build: 'facade-editor-test', api_versions: [1], kind: 'terminal' }, { method: 'call', params: { op, args } }, 45_000);
 }
 
-export async function coreCall<O extends keyof DaemonOperations>(home: string, op: O, args: DaemonOperations[O]['args']): Promise<DaemonOperations[O]['result']> {
-	const reply = await callInCore(home, op, args);
+export async function frameworkCall<O extends keyof DaemonOperations>(home: string, op: O, args: DaemonOperations[O]['args']): Promise<DaemonOperations[O]['result']> {
+	const reply = await callInFramework(home, op, args);
 	if ('error' in reply) { throw new Error(`${op}: ${JSON.stringify(reply.error)}`); }
 	return reply.result as DaemonOperations[O]['result'];
 }
 
-export class CoreConnectionClosed extends Error {
+export class FrameworkConnectionClosed extends Error {
 	constructor() {
 		super('The test driver connection closed before it received a response');
 	}
 }
 
-async function readCore(home: string, hello: DaemonHelloParams, next?: { readonly method: string; readonly params: object }, timeout = 5_000): Promise<Response> {
-	const socket = createConnection(coreSocket(home));
+async function readFramework(home: string, hello: DaemonHelloParams, next?: { readonly method: string; readonly params: object }, timeout = 5_000): Promise<Response> {
+	const socket = createConnection(frameworkSocket(home));
 	const lines = createInterface({ input: socket });
-	const timer = setTimeout(() => socket.destroy(new Error(`The test driver could not read core within ${timeout} ms`)), timeout);
+	const timer = setTimeout(() => socket.destroy(new Error(`The test driver could not read framework within ${timeout} ms`)), timeout);
 	const send = (id: number, method: string, params: object) => socket.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
 	try {
 		return await new Promise<Response>((resolve, reject) => {
 			socket.once('connect', () => send(1, 'hello', hello));
 			socket.once('error', reject);
-			socket.once('close', () => reject(new CoreConnectionClosed()));
+			socket.once('close', () => reject(new FrameworkConnectionClosed()));
 			lines.on('line', line => {
 				try {
 					const response = JSON.parse(line) as Response;
@@ -345,41 +345,41 @@ export async function until<T>(what: string, probe: () => Promise<T | undefined>
  * The client only connects to an existing daemon, identifies agents by exact reference, and closes before the idle wait.
  * The owned-scope runner can retain a strict idle wait for the daemon and Keeper before removing its temporary roots.
  */
-export async function endCore(home: string, ms = 30_000, deferIdle?: (waiting: Promise<void>) => void): Promise<void> {
-	if (coreListens(home)) {
+export async function endFramework(home: string, ms = 30_000, deferIdle?: (waiting: Promise<void>) => void): Promise<void> {
+	if (frameworkListens(home)) {
 		try {
-			const hello = await helloInCore(home);
+			const hello = await helloInFramework(home);
 			if ('error' in hello) { throw new Error(`cleanup hello: ${JSON.stringify(hello.error)}`); }
 			const { machine_id: machine } = hello.result as DaemonHelloResult;
-			const { agents } = await coreCall(home, 'agent.list', { scope: { kind: 'local' } });
+			const { agents } = await frameworkCall(home, 'agent.list', { scope: { kind: 'local' } });
 			for (const agent of agents) {
 				if (agent.type === 'managed' && agent.reference.machine_id === machine) {
-					const removed = await coreCall(home, 'agent.remove', { target: agent.reference });
+					const removed = await frameworkCall(home, 'agent.remove', { target: agent.reference });
 					assert.deepStrictEqual(removed.reference, agent.reference);
 				}
 			}
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException).code;
-			if ((code !== 'ENOENT' && code !== 'ECONNREFUSED') || coreListens(home)) { throw error; }
+			if ((code !== 'ENOENT' && code !== 'ECONNREFUSED') || frameworkListens(home)) { throw error; }
 		}
 	}
 	if (deferIdle) {
-		deferIdle(waitForCoreIdle(home, ms, true));
+		deferIdle(waitForFrameworkIdle(home, ms, true));
 	} else {
-		await waitForCoreIdle(home, ms, false);
+		await waitForFrameworkIdle(home, ms, false);
 	}
 }
 
-async function waitForCoreIdle(home: string, ms: number, strict: boolean): Promise<void> {
-	const daemon = coreSocket(home);
+async function waitForFrameworkIdle(home: string, ms: number, strict: boolean): Promise<void> {
+	const daemon = frameworkSocket(home);
 	const keeper = path.join(path.dirname(daemon), path.basename(daemon).replace(/^daemon-/u, 'keeper-'));
-	const waiting = () => coreListens(home) || (strict && fs.existsSync(keeper));
+	const waiting = () => frameworkListens(home) || (strict && fs.existsSync(keeper));
 	const end = Date.now() + ms;
 	while (waiting() && Date.now() < end) {
 		await new Promise(resolve => setTimeout(resolve, 200));
 	}
 	if (waiting()) {
-		const message = `Facade core of ${home} still runs after ${ms} ms.`;
+		const message = `Facade Code Framework of ${home} still runs after ${ms} ms.`;
 		if (strict) { throw new Error(message); }
 		console.warn(message);
 	}

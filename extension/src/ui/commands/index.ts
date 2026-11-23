@@ -15,9 +15,9 @@ import { environmentLabel } from '../pickers/location';
 import { pickSession } from '../pickers/resume';
 import { messageOf } from '../../base/errors';
 import { newAgent } from '../pickers/newAgent';
-import { createRustPickers, type RustPickerDeps } from '../pickers/orchestrator';
+import { createFrameworkPickers, type FrameworkPickerDeps } from '../pickers/orchestrator';
 import { PanelPrefs } from '../order';
-import { AgentActions, registerAgentCommands, registerRustAgentCommands, targetOf, type RustCardActions } from './agent';
+import { AgentActions, registerAgentCommands, registerFrameworkAgentCommands, targetOf, type FrameworkCardActions } from './agent';
 
 /** Defined by the build: true only in the integration suite's build, whose test commands the shipped one has none of (UX-3.2). */
 declare const FACADE_TEST_MODE: boolean;
@@ -57,8 +57,8 @@ export interface UiDeps {
 }
 
 export interface OrchestratorUiDeps {
-	readonly agents: Pick<Agents, 'list' | 'get' | 'onDidChange' | 'pins'> & RustCardActions;
-	readonly pickers: Omit<RustPickerDeps, 'select' | 'locations' | 'media'>;
+	readonly agents: Pick<Agents, 'list' | 'get' | 'onDidChange' | 'pins'> & FrameworkCardActions;
+	readonly pickers: Omit<FrameworkPickerDeps, 'select' | 'locations' | 'media'>;
 	readonly locations: LocationPort;
 	readonly workspaceState: ConstructorParameters<typeof PanelPrefs>[0];
 	readonly onDidActivate: Event<RunId | undefined>;
@@ -155,12 +155,12 @@ export function registerOrchestratorUi(deps: OrchestratorUiDeps): vscode.Disposa
 		orchestrator: true,
 		icons: () => deps.pickers.icons
 	});
-	const pickers = createRustPickers({
+	const pickers = createFrameworkPickers({
 		...deps.pickers, locations,
 		media: vscode.Uri.joinPath(deps.extensionUri, 'media'),
 		select: run => model.select(run)
 	});
-	const actions: RustCardActions = {
+	const actions: FrameworkCardActions = {
 		open: async run => {
 			const opened = await agents.open(run);
 			if (opened) { model.select(run); }
@@ -220,7 +220,7 @@ export function registerOrchestratorUi(deps: OrchestratorUiDeps): vscode.Disposa
 			const run = targetOf(arg, model, agents, true);
 			return run === undefined ? undefined : view.showDetails(run);
 		}),
-		...registerRustAgentCommands({ model, agents, actions, notifyError: deps.notifyError, goToAgent: pickers.goToAgent }),
+		...registerFrameworkAgentCommands({ model, agents, actions, notifyError: deps.notifyError, goToAgent: pickers.goToAgent }),
 		...registerTestUi(model, view, agents)
 	];
 }

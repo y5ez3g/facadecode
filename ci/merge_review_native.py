@@ -8,15 +8,13 @@ import shutil
 import subprocess
 
 from catalog import (
-    AcceptanceError, NATIVE_INSTALL_CASES, NATIVE_PRIOR_CASE, NATIVE_REMOTE_EDITOR_CASE, NATIVE_SSH_CASE,
+    AcceptanceError, NATIVE_INSTALL_CASES, NATIVE_REMOTE_EDITOR_CASE, NATIVE_SSH_CASE,
     RELEASE_FIXTURE_CASES, read_json,
 )
-from check_native_install import verified_install
-import check_prior_build as cold
+from check_native_install import SHA256, verified_install
 import check_real_ssh_route as ssh
-from evidence import git
 from github_evidence import download_artifact
-from native_core import hash_file, read_markers, verify_native_cleanup
+from native_framework import hash_file, read_markers, verify_native_cleanup
 import remote_editor_evidence as remote
 
 
@@ -24,7 +22,7 @@ NATIVE_EDITOR_MINIMUM = 61
 
 
 def file_digests(recorded, names):
-    return recorded.keys() == set(names) and all(re.fullmatch(r'[0-9a-f]{64}', sha) for sha in recorded.values())
+    return recorded.keys() == set(names) and all(SHA256.fullmatch(sha) for sha in recorded.values())
 
 
 def check_ssh(folder, source):
@@ -33,31 +31,8 @@ def check_ssh(folder, source):
     if (receipt['source'] != source or not file_digests(receipt['program_sha256'], ssh.PROGRAMS)
             or receipt['success'] != ssh.ssh_success(receipt)
             or read_markers(folder / 'console.log', ssh.SUCCESS_MARKER) != [receipt['success']]):
-        raise AcceptanceError('native Core SSH receipt does not match the original route and attempt')
+        raise AcceptanceError('native Framework SSH receipt does not match the original route and attempt')
     return NATIVE_SSH_CASE
-
-
-def check_cold(root, folder, source):
-    output = folder / 'cold-cutover'
-    receipt = read_json(output / 'receipt.json')
-    prior = receipt['prior']
-    pinned = {**source, 'revision': cold.PRIOR_MAIN, 'tree': git(root, 'rev-parse', f'{cold.PRIOR_MAIN}^{{tree}}')}
-    candidate = receipt['candidate']
-    if (receipt['source'] != source or receipt['harness_sha256'] != cold.harness_hashes()
-            or (prior['role'], prior['source'], prior['target']) != ('prior-main', pinned, cold.TARGET)
-            or not file_digests(prior['program_sha256'], cold.PROGRAMS)
-            or not file_digests(candidate['program_sha256'], cold.PROGRAMS)
-            or any(not cold.HEX_DIGEST.fullmatch(candidate[key])
-                   for key in ('facade-fakecli_sha256', 'machines_sha256'))):
-        raise AcceptanceError('native cold migration does not name the expected pinned inputs')
-    cold.verify_command_logs(receipt, output)
-    verify_native_cleanup(receipt)
-    if (receipt['fallback_home_empty'] is not True
-            or receipt['observation'] != cold.cold_observation(output, Path(receipt['scope']))
-            or receipt['success'] != cold.prior_success(receipt)
-            or read_markers(folder / 'console.log', cold.SUCCESS_MARKER) != [receipt['success']]):
-        raise AcceptanceError('native cold migration receipt does not match the original execution')
-    return NATIVE_PRIOR_CASE
 
 
 def check_remote(root, folder, source):
@@ -65,7 +40,7 @@ def check_remote(root, folder, source):
     inputs = receipt['inputs']
     commit, assets = remote.pinned_assets()
     if (inputs['source'] != source or inputs['assets'] != assets or inputs['editor']['commit'] != commit
-            or not cold.HEX_DIGEST.fullmatch(inputs['editor']['sha256'])
+            or not SHA256.fullmatch(inputs['editor']['sha256'])
             or not file_digests(inputs['compiled_sha256'], remote.COMPILED)
             or inputs['harness_sha256'] != {name: hash_file(root / name) for name in remote.HARNESS}
             or receipt != remote.completed_receipt(folder, inputs)):
@@ -114,10 +89,8 @@ def replay_native(root, repo, candidate, records, output):
         return {'revision': candidate['merge'], 'tree': candidate['tree'], 'run': f'github/{run}/1'}
 
     observed = []
-    name = 'core-ssh-route-1'
+    name = 'framework-ssh-route-1'
     observed.append(check_ssh(paths[name], source(name)))
-    name = 'core-cold-migration-1'
-    observed.append(check_cold(root, paths[name], source(name)))
     name = 'extension-remote-ssh-1'
     observed.append(check_remote(root, paths[name], source(name)))
 
@@ -131,13 +104,13 @@ def replay_native(root, repo, candidate, records, output):
     if set(release['cases']) != set(RELEASE_FIXTURE_CASES):
         raise AcceptanceError('the release fixture does not cover the expected release contracts')
     name = 'native-install-linux-x64-1'
-    install, package = paths[name], packages / 'extension-linux-x64/core'
+    install, package = paths[name], packages / 'extension-linux-x64/framework'
     sidecar = install / 'SHA256SUMS'
     if sidecar.read_bytes() != (package / 'SHA256SUMS').read_bytes():
         raise AcceptanceError('the installed candidate checksum differs from the tested package set')
     project = repo.split('/')[1]
     installed_source = source(name)
-    verified_install(package / 'facade-core-linux-x64.tar.gz', sidecar, install / 'receipt.json',
+    verified_install(package / 'facade-framework-linux-x64.tar.gz', sidecar, install / 'receipt.json',
                      install / 'output.log', installed_source['run'], source=installed_source,
                      producer_checkout=Path('/home/runner/work') / project / project)
     observed.extend(NATIVE_INSTALL_CASES)

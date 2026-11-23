@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Check a real Core machine route with a private Linux OpenSSH peer.
+"""Check a real Framework machine route with a private Linux OpenSSH peer.
 
-Run beside core/scripts/ssh-check.sh after it has built the three test binaries.
+Run beside framework/scripts/ssh-check.sh after it has built the three test binaries.
 """
 
 import argparse
@@ -21,7 +21,7 @@ from pathlib import Path
 
 from catalog import AcceptanceError, NATIVE_SSH_CASE, read_json
 from evidence import digest, run_identity
-from native_core import (
+from native_framework import (
     SYSTEM_PATH, clean_native_scope, hash_file, interrupted, process_identity, query,
     read_markers, source_identity, verify_native_cleanup, wait_for, write_receipt,
 )
@@ -134,7 +134,7 @@ def machine(scope, name, programs, sockets):
     login, home, work, runtime = (scope / f'{name}-{part}' for part in ('login', 'facade', 'work', 'runtime'))
     for folder in (login, home, work, runtime):
         folder.mkdir(mode=0o700)
-    install = home / 'core/bin'
+    install = home / 'framework/bin'
     install.mkdir(parents=True)
     for program in PROGRAMS[:2]:
         shutil.copy2(programs[program], install / program)
@@ -152,7 +152,7 @@ def machine(scope, name, programs, sockets):
     }
     key = hashlib.sha256(os.fsencode(home)).hexdigest()[:10]
     for role in ('daemon', 'keeper'):
-        endpoint = Path(f'/tmp/facade-core-{os.getuid()}/{role}-{key}.sock')
+        endpoint = Path(f'/tmp/facade-framework-{os.getuid()}/{role}-{key}.sock')
         if os.path.lexists(endpoint):
             raise ValueError(f'fixture socket already exists at {endpoint}')
         sockets[f'{name}-{role}'] = endpoint
@@ -257,7 +257,7 @@ def exercise(scope, programs, sockets, children, evidence):
     wait_for('the private sshd to listen', lambda: 'Server listening' in ssh_log.read_text(), seconds=5)
     assert server.poll() is None, ssh_log.read_text()
     remote = ('printf "%s\\n%s\\n" "$HOME" "$FACADE_HOME"; '
-              'exec "$FACADE_HOME/core/bin/facade" daemon --detach')
+              'exec "$FACADE_HOME/framework/bin/facade" daemon --detach')
     boot = run('launch the peer over OpenSSH', ['/usr/bin/ssh', '-F', client_config, 'fixture-peer', remote])
     assert boot.stdout.splitlines()[:2] == [peer['HOME'], peer['FACADE_HOME']], boot
     run('launch the origin', [facade, 'daemon', '--detach'])

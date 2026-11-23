@@ -1,4 +1,4 @@
-const versionFile = 'facade-core-version.txt';
+const versionFile = 'facade-framework-version.txt';
 const installer = /^install\.(?:sh|ps1)$/;
 const stableBuild = /^([0-9]+\.[0-9]+\.[0-9]+)(?:\+[0-9]+\.[0-9a-f]{40})?$/;
 const releaseAsset = /^\/releases\/[0-9]+\.[0-9]+\.[0-9]+\/[a-zA-Z0-9][a-zA-Z0-9.-]*$/;

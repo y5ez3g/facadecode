@@ -7,12 +7,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { tempDir } from './util';
 import { folderKeyOf } from '../base/files';
-import type { AgentListEntry, CliListArgs, LocationListArgs, MachineInfo, ResumeCandidate, ResumeListArgs, StartArgs } from '../base/coreProtocol';
+import type { AgentListEntry, CliListArgs, LocationListArgs, MachineInfo, ResumeCandidate, ResumeListArgs, StartArgs } from '../base/frameworkProtocol';
 import { locationIdOf } from '../core/locations/catalog';
 import type { Catalog, ConversationEntry, CliChoice, CliChoices, LaunchRequest, Location, RunChange, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
 import type { PanelFilter } from '../webview/protocol';
 import type { MachineLaunch } from '../ui/pickers/machineLaunch';
-import type { RustPickerDeps } from '../ui/pickers/orchestrator';
+import type { FrameworkPickerDeps } from '../ui/pickers/orchestrator';
 import { TestEmitter, withModules } from './withModules';
 
 const BACK_BUTTON = { id: 'back' };
@@ -174,10 +174,10 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		load = withModules({ vscode: vscodeFor(ui) });
 	});
 
-	function rustPickers(overrides: Partial<RustPickerDeps>) {
-		const { createRustPickers } = load<typeof import('../ui/pickers/orchestrator')>(require.resolve('../ui/pickers/orchestrator'));
+	function frameworkPickers(overrides: Partial<FrameworkPickerDeps>) {
+		const { createFrameworkPickers } = load<typeof import('../ui/pickers/orchestrator')>(require.resolve('../ui/pickers/orchestrator'));
 		const unexpected = () => assert.fail('unexpected picker operation');
-		return createRustPickers({
+		return createFrameworkPickers({
 			media: { path: '/extension/media' } as never,
 			locations: {
 				snapshot: () => ({ locations: [], folders: ui.workspaceFolders, pending: false }),
@@ -432,7 +432,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		});
 
 		test('RULES-6.5: New Agent chooses a saved machine and folder before loading its CLIs; the branch is sent at launch', async () => {
-			const { OrchestratorLocations } = load<typeof import('../host/orchestrator/catalog')>(require.resolve('../host/orchestrator/catalog'));
+			const { OrchestratorLocations } = load<typeof import('../host/framework/catalog')>(require.resolve('../host/framework/catalog'));
 			const calls: unknown[][] = [];
 			const starts: StartArgs[] = [];
 			const remoteScope = { kind: 'machine', machine: '1234abcd' } as const;
@@ -454,7 +454,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				log: { event: assert.fail }
 			});
 			try {
-				const pickers = rustPickers({
+				const pickers = frameworkPickers({
 					locations,
 					machines: () => [
 						{ machine_id: 'local-id', short_id: '11111111', name: 'mbp', selector: 'mbp', state: 'online', connections: [] },
@@ -540,7 +540,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		});
 
 		test('RULES-6.5: same-name machines keep their canonical selectors, including a saved sleeping machine', async () => {
-			const { OrchestratorLocations } = load<typeof import('../host/orchestrator/catalog')>(require.resolve('../host/orchestrator/catalog'));
+			const { OrchestratorLocations } = load<typeof import('../host/framework/catalog')>(require.resolve('../host/framework/catalog'));
 			const localId = '11111111-0000-4000-8000-000000000000';
 			const first: MachineInfo = {
 				machine_id: '22222222-0000-4000-8000-000000000000', short_id: '22222222', name: 'buildbox', selector: '22222222', state: 'online', connections: []
@@ -569,7 +569,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				log: { event: assert.fail }
 			});
 			try {
-				const { newAgent } = rustPickers({
+				const { newAgent } = frameworkPickers({
 					locations, hostMachineId: () => local.machine_id, machines: () => [local, first, second],
 					listLocations: async args => {
 						queries.push(['location.list', args]);
@@ -1638,7 +1638,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const queries: ResumeListArgs[] = [];
 			const picked: ResumeCandidate[] = [];
 			const selected: string[] = [];
-			const { resumeAgent } = rustPickers({
+			const { resumeAgent } = frameworkPickers({
 				listResumes: async args => {
 					queries.push(args);
 					return {
@@ -2026,7 +2026,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const opened: AgentListEntry[] = [];
 			const selected: string[] = [];
 			let queries = 0;
-			const { goToAgent } = rustPickers({
+			const { goToAgent } = frameworkPickers({
 				listAgents: async () => { queries++; return { agents: [remote, guest, local], machines: [] }; },
 				open: async entry => { opened.push(entry); return entry.address; },
 				select: run => selected.push(run)

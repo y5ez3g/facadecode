@@ -105,7 +105,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		}
 	});
 
-	test('RULES-3.2, RULES-6.2: both engines expose their state in color and in words; workspace cards use the daemon state and TITLE', () => {
+	test('RULES-3.2, RULES-6.2: both implementations expose their state in color and in words; workspace cards use the daemon state and TITLE', () => {
 		const shown = (facts: RunFacts) => {
 			const card = cardOf(facts, { place, selected: false, menu, words: WORDS });
 			return [card.dot, card.stateText, card.line, card.label.split(', ').includes(card.stateText)];

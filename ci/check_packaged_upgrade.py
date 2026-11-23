@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rehearse a live upgrade between digest-pinned Linux x64 Core archives."""
+"""Rehearse a live upgrade between digest-pinned Linux x64 Framework archives."""
 
 import argparse
 from hashlib import sha256
@@ -22,13 +22,13 @@ from check_native_install import (
 )
 from check_prior_build import binary_hashes
 from evidence import digest, run_identity
-from native_core import (
+from native_framework import (
     ROOT, SYSTEM_PATH, clean_native_scope, hash_file, interrupted, process_identity, query,
     source_identity, verify_native_cleanup, wait_for, write_receipt,
 )
 
 
-INSTALLER = ROOT / 'core/install.sh'
+INSTALLER = ROOT / 'framework/install.sh'
 SESSION = '065e033f-12fe-4bac-9870-dc4e3d4971af'
 ORIGINAL = 'original receipt before packaged upgrade'
 FRESH = 'fresh receipt after packaged upgrade'
@@ -69,12 +69,12 @@ def exercise(scope, sockets, receipt, fake):
     home, state, project, tmp, runtime, transcripts = (
         scope / name for name in ('home', 'state', 'project', 'tmp', 'runtime', 'transcripts')
     )
-    bin_dir = state / 'core/bin'
+    bin_dir = state / 'framework/bin'
     for folder in (home, state, project, tmp, runtime, transcripts):
         folder.mkdir(mode=0o700)
     key = sha256(os.fsencode(state)).hexdigest()[:10]
     for role in ('daemon', 'keeper'):
-        endpoint = Path(f'/tmp/facade-core-{os.getuid()}/{role}-{key}.sock')
+        endpoint = Path(f'/tmp/facade-framework-{os.getuid()}/{role}-{key}.sock')
         if os.path.lexists(endpoint):
             raise AcceptanceError(f'fixture socket path already exists: {endpoint}')
         sockets[role] = endpoint
@@ -205,7 +205,7 @@ def exercise(scope, sockets, receipt, fake):
     assert all(after['processes'][role] == before['processes'][role] for role in ('keeper', 'cli')), after
     assert after['agent']['reference'] == before['agent']['reference'], after
     verify_shell_build('candidate')
-    daemon_log = (state / 'core/logs/daemon.log').read_text()
+    daemon_log = (state / 'framework/logs/daemon.log').read_text()
     receipt['keeper_api_versions'] = {}
     for role, observation in (('prior', before), ('candidate', after)):
         connected = re.search(
@@ -273,7 +273,7 @@ def main():
             exercise(scope, sockets, receipt, fake)
         finally:
             try:
-                logs = scope / 'state/core/logs'
+                logs = scope / 'state/framework/logs'
                 receipt['service_logs'] = {log.name: log.read_text() for log in sorted(logs.glob('*.log'))}
             finally:
                 clean_native_scope(scope, sockets, receipt)

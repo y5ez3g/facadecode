@@ -21,7 +21,7 @@ const RUN_ID = /^run-[0-9a-f]{32}$/;
 const AGENT_ID = /^a\d+$/;
 const AGENT_REF = /^[^/]+\/a\d+$/;
 
-function rustKey(run: string): boolean {
+function frameworkRunId(run: string): boolean {
 	return AGENT_REF.test(run) || AGENT_ID.test(run);
 }
 
@@ -50,7 +50,7 @@ export class PanelPrefs {
 		if (value === undefined) {
 			return [];
 		}
-		const valid = this.logicalWindow ? rustKey : (run: string) => RUN_ID.test(run);
+		const valid = this.logicalWindow ? frameworkRunId : (run: string) => RUN_ID.test(run);
 		const runs = Array.isArray(value) ? value.filter((run): run is string => typeof run === 'string' && valid(run)) : [];
 		if (!Array.isArray(value) || runs.length !== value.length) {
 			this.ignore(ORDER, 'card order');
@@ -60,18 +60,18 @@ export class PanelPrefs {
 
 	setOrder(order: readonly string[]): void {
 		// The current panel order remains usable when workspace storage cannot persist it.
-		this.save(ORDER, this.logicalWindow ? order.filter(rustKey) : [...order], 'card order');
+		this.save(ORDER, this.logicalWindow ? order.filter(frameworkRunId) : [...order], 'card order');
 	}
 
 	selection(): string | undefined {
 		if (!this.logicalWindow) { return undefined; }
 		const value = this.storage.get<unknown>(SELECTION);
-		return typeof value === 'string' && rustKey(value) ? value : undefined;
+		return typeof value === 'string' && frameworkRunId(value) ? value : undefined;
 	}
 
 	setSelection(run: string | undefined): void {
 		if (this.logicalWindow) {
-			this.save(SELECTION, run && rustKey(run) ? run : undefined, 'card selection');
+			this.save(SELECTION, run && frameworkRunId(run) ? run : undefined, 'card selection');
 		}
 	}
 

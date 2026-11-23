@@ -16,20 +16,20 @@ from check_native_install import (
     installer_args, verified_install, wrong_build,
 )
 from evidence import digest
-from native_core import ROOT, SYSTEM_PATH, hash_file, source_identity
+from native_framework import ROOT, SYSTEM_PATH, hash_file, source_identity
 
 
 def installed_observation(source, archive_sha, sidecar_sha, build, programs, corrupt_sha):
-    scope = '/tmp/fci-install-policy-fixture'
+    scope = Path('/tmp/fci-install-policy-fixture')
     target = 'a1@fixture-host'
-    cwd = scope + '/project'
+    cwd = str(scope / 'project')
     version = build.split('+', 1)[0]
-    bin_dir = f'{scope}/state/core/bin'
-    executable = f'{bin_dir}/{build}/facade'
+    bin_dir = scope / 'state/framework/bin'
+    executable = str(bin_dir / build / 'facade')
     machine = 'e3969844-767b-4587-a5c6-08835541efd5'
     runtime = {
         'reference': {'machine_id': machine, 'agent_id': 'a1'}, 'address': target, 'cwd': cwd,
-        'fake': {'pid': 3, 'start_ticks': 30, 'executable': scope + '/fixture-bin/facade-fakecli'},
+        'fake': {'pid': 3, 'start_ticks': 30, 'executable': str(scope / 'fixture-bin/facade-fakecli')},
         'services': {name: {'pid': pid, 'start_ticks': 20, 'executable': executable}
                      for name, pid in (('daemon', 1), ('keeper', 2))},
         'durable_machine': [[machine, 'fixture-host']],
@@ -42,14 +42,14 @@ def installed_observation(source, archive_sha, sidecar_sha, build, programs, cor
     settings_sha = 'c' * 64
     stable = digest({'install_tree': tree, 'runtime': runtime, 'settings_sha256': settings_sha})
     commands = []
-    shell = bin_dir + '/facade'
-    installer = Path(__file__).resolve().parents[1] / 'core/install.sh'
+    shell = str(bin_dir / 'facade')
+    installer = Path(__file__).resolve().parents[1] / 'framework/install.sh'
 
     def record(label, args, stdout='', stderr='', status=0):
         commands.append({'label': label, 'args': args, 'status': status, 'stdout': stdout, 'stderr': stderr})
 
     def install(stage, expected=None):
-        return installer_args(installer, f'{scope}/{stage}/{ASSET}', build, expected_build=expected)
+        return installer_args(installer, scope / stage / ASSET, build, expected_build=expected)
 
     record('install candidate', install('candidate'), f'Installed Facade {build} in {bin_dir}.\n')
     record('select the same candidate again', install('candidate'), f'Facade {build} is already up to date in {bin_dir}.\n')
@@ -60,7 +60,7 @@ def installed_observation(source, archive_sha, sidecar_sha, build, programs, cor
     screen = [shell, 'screen', target]
     record('read original screen', screen, 'Native install fixture')
     record('list the installed candidate agent', [shell, 'list'], f'installed-agent {target} qa-install {cwd}')
-    record('use installed MCP relay', [bin_dir + '/facade-mcp'], '\n'.join(map(json.dumps, [
+    record('use installed MCP relay', [str(bin_dir / 'facade-mcp')], '\n'.join(map(json.dumps, [
         {'jsonrpc': '2.0', 'id': 1, 'result': {'serverInfo': {'name': 'facade', 'version': version}}},
         {'jsonrpc': '2.0', 'id': 2, 'result': {'tools': [{'name': 'start_agent'}, {'name': 'list_agents'}]}},
     ])))
@@ -84,7 +84,7 @@ def installed_observation(source, archive_sha, sidecar_sha, build, programs, cor
         record(f'read screen after {label}', screen, marker)
     record('stop the fixture agent', [shell, 'stop', target])
     return {'source': source, 'archive_sha256': archive_sha, 'sidecar_sha256': sidecar_sha,
-            'fixture': scope, 'build': build, 'version': version, 'program_sha256': programs, 'installer_sha256': hash_file(installer),
+            'fixture': str(scope), 'build': build, 'version': version, 'program_sha256': programs, 'installer_sha256': hash_file(installer),
             'original_runtime': runtime, 'install_tree': tree, 'settings_sha256': settings_sha, 'fake_sha256': 'e' * 64,
             'commands': commands, 'refusals': refusals,
             'cleanup': {'status': 'pass', 'sockets_absent': True, 'log': 'no processes left\n'}}
@@ -131,7 +131,7 @@ class NativeInstallEvidence(unittest.TestCase):
             program = b'#!/bin/sh\nprintf "unexpected executable selection\\n" >&2\nexit 64\n'
             write_candidate(archive, sums, build + '\n', program)
             result = subprocess.run(
-                installer_args(ROOT / 'core/install.sh', archive, build, expected_build=pin),
+                installer_args(ROOT / 'framework/install.sh', archive, build, expected_build=pin),
                 cwd=root, env={'PATH': SYSTEM_PATH, 'HOME': str(profile), 'FACADE_HOME': str(target), 'TMPDIR': str(temp)},
                 capture_output=True, text=True, timeout=15,
             )
@@ -165,29 +165,29 @@ class NativeInstallEvidence(unittest.TestCase):
 set -eu
 if [ "$1" = --version ]; then printf '%s\\n' 'facade {build}'; exit; fi
 test "$1 $2" = 'daemon --takeover'
-mkdir -p "$FACADE_HOME/core/bin"
-cp "$0" "$FACADE_HOME/core/bin/facade"
+mkdir -p "$FACADE_HOME/framework/bin"
+cp "$0" "$FACADE_HOME/framework/bin/facade"
 """.encode()
                 write_candidate(archive, sums, build + '\n', program)
                 result = subprocess.run(
-                    ['sh', str(ROOT / 'core/install.sh'), '--package', str(archive), '--expected-build', build],
+                    ['sh', str(ROOT / 'framework/install.sh'), '--package', str(archive), '--expected-build', build],
                     cwd=root, env={**env, 'FACADE_HOME': str(home)}, capture_output=True, text=True, timeout=15,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(f'Installed Facade {build} in {home}/core/bin.', result.stdout)
+                self.assertIn(f'Installed Facade {build} in {home}/framework/bin.', result.stdout)
             result = subprocess.run(
                 ['sh', '-c', '. "$1"; printf "%s\\n" "$QA_PROFILE_MARKER" "$PATH"; command -v facade',
                  '--', str(sh_profile)], env=env, capture_output=True, text=True, check=True, timeout=10,
             )
             marker, resolved_path, launcher = result.stdout.splitlines()
             self.assertEqual(marker, 'preserved')
-            self.assertEqual(resolved_path, f'{first}/core/bin:{second}/core/bin:{initial_path}')
-            self.assertEqual(launcher, f'{first}/core/bin/facade')
+            self.assertEqual(resolved_path, f'{first}/framework/bin:{second}/framework/bin:{initial_path}')
+            self.assertEqual(launcher, f'{first}/framework/bin/facade')
             fish_lines = [line for line in fish_config.read_text().splitlines() if line]
             self.assertEqual(fish_lines, [
                 '# preserve this fish setting',
-                f"fish_add_path --path --prepend --move '{second}/core/bin'",
-                f"fish_add_path --path --prepend --move '{first}/core/bin'",
+                f"fish_add_path --path --prepend --move '{second}/framework/bin'",
+                f"fish_add_path --path --prepend --move '{first}/framework/bin'",
             ])
 
     @patch('check_native_install.archive_metadata')
@@ -256,7 +256,7 @@ cp "$0" "$FACADE_HOME/core/bin/facade"
             changed_installer = deepcopy(saved)
             for record in changed_installer['commands']:
                 if record['args'][0] == 'sh':
-                    record['args'][1] = '/wrong/checkout/core/install.sh'
+                    record['args'][1] = '/wrong/checkout/framework/install.sh'
             receipt.write_text(json.dumps(changed_installer))
             with self.assertRaisesRegex(AcceptanceError, 'exact command and outcome for install candidate'):
                 verified_install(archive, sums, receipt, output, attempt)

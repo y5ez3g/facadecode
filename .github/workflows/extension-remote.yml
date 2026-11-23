@@ -11,19 +11,19 @@ on:
       - 'extension/package*.json'
       - 'extension/tsconfig.json'
       - 'extension/.nvmrc'
-      - 'core/crates/**'
-      - 'core/protocol/**'
-      - 'core/rules/**'
-      - 'core/vendor/**'
-      - 'core/Cargo.*'
-      - 'core/rust-toolchain.toml'
-      - 'core/scripts/leftovers.sh'
+      - 'framework/crates/**'
+      - 'framework/protocol/**'
+      - 'framework/rules/**'
+      - 'framework/vendor/**'
+      - 'framework/Cargo.*'
+      - 'framework/rust-toolchain.toml'
+      - 'framework/scripts/leftovers.sh'
       - 'ci/check_remote_editor.sh'
       - 'ci/catalog.py'
       - 'ci/remote_editor_evidence.py'
       - 'ci/evidence.py'
       - 'ci/editor_archive.py'
-      - 'ci/native_core.py'
+      - 'ci/native_framework.py'
       - 'ci/fixtures/remote-ssh/**'
       - '.github/workflows/extension-remote.yml'
   workflow_dispatch:
@@ -57,7 +57,7 @@ jobs:
           cache: npm
           cache-dependency-path: extension/package-lock.json
       - name: Install the Linux editor prerequisites
-        working-directory: core
+        working-directory: framework
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools xvfb xauth libgtk-3-0t64 libnss3 libasound2t64
@@ -97,7 +97,7 @@ jobs:
       - name: Install editor build dependencies
         working-directory: extension
         run: npm ci
-      - name: Build the candidate editor and Core fixtures
+      - name: Build the candidate editor and Framework fixtures
         working-directory: extension
         run: |
           npm run compile

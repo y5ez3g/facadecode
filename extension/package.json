@@ -209,17 +209,17 @@
 				},
 				{
 					"command": "facade.resumeAgent",
-					"when": "view == facade.agents && facade.engine == rust",
+					"when": "view == facade.agents && facade.implementation == framework",
 					"group": "navigation@2"
 				},
 				{
 					"command": "facade.continueSession",
-					"when": "view == facade.agents && facade.engine != rust",
+					"when": "view == facade.agents && facade.implementation != framework",
 					"group": "navigation@2"
 				},
 				{
 					"command": "facade.goToAgent",
-					"when": "view == facade.agents && facade.engine == rust",
+					"when": "view == facade.agents && facade.implementation == framework",
 					"group": "navigation@3"
 				},
 				{
@@ -234,7 +234,7 @@
 				},
 				{
 					"command": "facade.newWorktree",
-					"when": "view == facade.agents && workspaceFolderCount != 0 && facade.engine != rust",
+					"when": "view == facade.agents && workspaceFolderCount != 0 && facade.implementation != framework",
 					"group": "1_locations@2"
 				},
 				{
@@ -246,77 +246,77 @@
 			"webview/context": [
 				{
 					"command": "facade.renameAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine != rust",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation != framework",
 					"group": "1_agent@1"
 				},
 				{
 					"command": "facade.moveUp",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveUp && facade.engine != rust",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveUp && facade.implementation != framework",
 					"group": "2_move@1"
 				},
 				{
 					"command": "facade.moveDown",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveDown && facade.engine != rust",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveDown && facade.implementation != framework",
 					"group": "2_move@2"
 				},
 				{
 					"command": "facade.stopAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && !webviewAgentEnded && facade.engine != rust",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && !webviewAgentEnded && facade.implementation != framework",
 					"group": "4_close@1"
 				},
 				{
 					"command": "facade.dismissAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewAgentEnded && facade.engine != rust",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewAgentEnded && facade.implementation != framework",
 					"group": "4_close@1"
 				},
 				{
 					"command": "facade.openTerminal",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine == rust && webviewAgentRunning",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation == framework && webviewAgentRunning",
 					"group": "1_agent@1"
 				},
 				{
 					"command": "facade.hideAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine == rust",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation == framework",
 					"group": "1_agent@2"
 				},
 				{
 					"command": "facade.stopAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine == rust && webviewAgentRunning",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation == framework && webviewAgentRunning",
 					"group": "1_agent@3"
 				},
 				{
 					"command": "facade.deleteAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine == rust",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation == framework",
 					"group": "1_agent@4"
 				},
 				{
 					"command": "facade.pinAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine == rust && webviewAgentPinnable && !webviewAgentPinned",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation == framework && webviewAgentPinnable && !webviewAgentPinned",
 					"group": "1_agent@5"
 				},
 				{
 					"command": "facade.unpinAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine == rust && webviewAgentPinned",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation == framework && webviewAgentPinned",
 					"group": "1_agent@6"
 				},
 				{
 					"command": "facade.renameAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine == rust",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation == framework",
 					"group": "1_agent@7"
 				}
 			],
 			"commandPalette": [
 				{
 					"command": "facade.resumeAgent",
-					"when": "facade.engine == rust"
+					"when": "facade.implementation == framework"
 				},
 				{
 					"command": "facade.continueSession",
-					"when": "facade.engine != rust"
+					"when": "facade.implementation != framework"
 				},
 				{
 					"command": "facade.showAgentLaunch",
-					"when": "facade.engine != rust"
+					"when": "facade.implementation != framework"
 				},
 				{
 					"command": "facade.renameAgent",
@@ -324,27 +324,27 @@
 				},
 				{
 					"command": "facade.openTerminal",
-					"when": "facade.engine == rust && facade.agentSelected && facade.agentSelectedRunning"
+					"when": "facade.implementation == framework && facade.agentSelected && facade.agentSelectedRunning"
 				},
 				{
 					"command": "facade.hideAgent",
-					"when": "facade.engine == rust && facade.agentSelected"
+					"when": "facade.implementation == framework && facade.agentSelected"
 				},
 				{
 					"command": "facade.stopAgent",
-					"when": "facade.agentSelected && ((facade.engine == rust && facade.agentSelectedRunning) || (facade.engine != rust && !facade.agentSelectedEnded))"
+					"when": "facade.agentSelected && ((facade.implementation == framework && facade.agentSelectedRunning) || (facade.implementation != framework && !facade.agentSelectedEnded))"
 				},
 				{
 					"command": "facade.deleteAgent",
-					"when": "facade.engine == rust && facade.agentSelected"
+					"when": "facade.implementation == framework && facade.agentSelected"
 				},
 				{
 					"command": "facade.copyAgentReference",
-					"when": "facade.engine == rust && facade.agentSelected"
+					"when": "facade.implementation == framework && facade.agentSelected"
 				},
 				{
 					"command": "facade.dismissAgent",
-					"when": "facade.agentSelected && facade.agentSelectedEnded && facade.engine != rust"
+					"when": "facade.agentSelected && facade.agentSelectedEnded && facade.implementation != framework"
 				},
 				{
 					"command": "facade.showAgentDetails",
@@ -566,7 +566,7 @@
 						"patternErrorMessage": "%config.home.pattern%",
 						"markdownDescription": "%config.home%"
 					},
-					"facade.rustEngine": {
+					"facade.framework": {
 						"type": "string",
 						"enum": [
 							"auto",
@@ -575,7 +575,7 @@
 						"default": "auto",
 						"scope": "machine",
 						"order": 1,
-						"markdownDescription": "%config.rustEngine%"
+						"markdownDescription": "%config.framework%"
 					}
 				}
 			}

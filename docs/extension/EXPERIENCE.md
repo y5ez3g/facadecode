@@ -1,7 +1,7 @@
 # VS Code experience
 
 [Facade Code](../PRODUCT.md) defines the product. [Shared rules](RULES.md#6-the-vs-code-entry-point) and the feature
-specifications define how these journeys behave in the Orchestrator-backed editor. The old engine retains its
+specifications define how these journeys behave in the Orchestrator-backed editor. The legacy implementation retains its
 transition rules in the corresponding feature specifications.
 
 ## 1 Start an agent

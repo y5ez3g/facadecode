@@ -10,20 +10,20 @@ from uuid import UUID
 
 from catalog import AcceptanceError, NATIVE_REMOTE_EDITOR_CASE, read_json
 from evidence import digest, run_identity
-from native_core import ROOT, hash_file, read_markers, source_identity, write_receipt
+from native_framework import ROOT, hash_file, read_markers, source_identity, write_receipt
 
 
 OBSERVATION = 'Facade native SSH connect observation '
 FIXTURE = ROOT / 'ci/fixtures/remote-ssh'
 COMPILED = (
     'out/test/integration/remote.js', 'out/test/integration/editors.js',
-    'out/test/integration/rustMultiWindow.js', 'out/test/integration/rustMultiWindowDriver.js',
+    'out/test/integration/frameworkMultiWindow.js', 'out/test/integration/frameworkMultiWindowDriver.js',
     'extension-it/package.json', 'extension-it/dist/extension.js', 'extension-it/dist/webview/webview.js',
     'extension-it/bin/facade', 'extension-it/bin/facade-mcp', 'window/package.json', 'window/dist/window.js',
 )
 HARNESS = (
     'ci/check_remote_editor.sh', 'ci/remote_editor_evidence.py', 'ci/fixtures/remote-ssh/Dockerfile',
-    'extension/src/test/integration/remote.ts', 'extension/src/test/integration/rustMultiWindowDriver.ts',
+    'extension/src/test/integration/remote.ts', 'extension/src/test/integration/frameworkMultiWindowDriver.ts',
 )
 
 

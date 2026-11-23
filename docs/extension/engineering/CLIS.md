@@ -1,6 +1,6 @@
 # CLI integrations
 
-Group 6 defines the active editor integration boundary and the current CLI configuration. Groups 1–5 describe the old-engine transition and its
+Group 6 defines the active editor integration boundary and the current CLI configuration. Groups 1–5 describe the legacy implementation transition and its
 adapters.
 
 Layer 4. This document specifies the CLI adapters and the effective launch configuration: how each CLI is found,
@@ -278,7 +278,7 @@ ptyd that reads no input (ARCHITECTURE-2.4), gives no such text.
 
 **Use per-run launch files first; write project files only where the CLI requires them and preserve user content.**
 
-The table below describes the old-engine adapters. CLIS-6.2 describes the current Orchestrator configuration.
+The table below describes the legacy implementation adapters. CLIS-6.2 describes the current Orchestrator configuration.
 
 Each built-in receives the `facade` server, the skill and an approval of Facade's own tools as its CLI takes them:
 
@@ -649,7 +649,7 @@ report its state stays unknown, not an integration error (CONFIGURATION-2.3).
 
 **Show Agent Command Line... displays the command line an agent would use, with its source and settings.**
 
-The old engine opens a read-only document titled `Agent Command Line` headed `Agent command line in {0}`.
+The legacy implementation opens a read-only document titled `Agent Command Line` headed `Agent command line in {0}`.
 The picker uses `Show Agent Command Line`, with ` · {folder}` appended at the second step.
 Show executable and environment sources, the folder, literal argument order, resulting YOLO, native sandbox and
 approval facts, folder trust and configuration errors. It includes the arguments and variables the Facade tools (2.2) and session
@@ -718,7 +718,7 @@ installed CLI is the runtime evidence.
 **The VS Code entry point obtains CLI choices, start results, titles and saved sessions from the Orchestrator.**
 
 The [product's CLI table](../../PRODUCT.md#cli-differences) summarizes CLI-specific behavior, including
-custom-program capabilities. The [rules implementation and specification](../../core/islands/rules.md) describe
+custom-program capabilities. The [rules implementation and specification](../../framework/islands/rules.md) describe
 adapter details. The editor uses RULES-6.6 for settings and LIFECYCLE-5.4 for Resume.
 
 ### 6.2 MCP configuration for Antigravity and OpenCode

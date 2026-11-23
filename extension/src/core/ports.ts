@@ -5,7 +5,7 @@
 // The contracts between the core and its environment (ARCHITECTURE-1.3): the core decides, these ports act. Only plain data
 // crosses them, so the core is tested with fakes and never imports vscode, sockets or a CLI's screen parser.
 
-import type { AgentRef, AgentState } from '../base/coreProtocol';
+import type { AgentRef, AgentState } from '../base/frameworkProtocol';
 
 export interface Disposable {
 	dispose(): void;
@@ -464,7 +464,7 @@ export interface RunMeta {
 	readonly titleSource?: 'conversation';
 	/** The conversation store its launch used, where its titles are read (CLIS-2.4). */
 	readonly titleStore?: string;
-	/** The old engine's persisted flag for a saved session started in a new run (PANEL-1.4). */
+	/** The legacy implementation's persisted flag for a saved session started in a new run (PANEL-1.4). */
 	readonly resumed?: true;
 	/** The last message sent to it, which its card's second line says, kept across a reload (PANEL-1.4). */
 	readonly said?: string;
@@ -517,7 +517,7 @@ export interface ConversationEntry {
 	readonly unavailable?: string;
 }
 
-/** A retained core agent offered by the Rust Resume picker under its original number (LIFECYCLE-3.2). */
+/** A retained Framework agent offered by the Framework Resume picker under its original number (LIFECYCLE-3.2). */
 export interface RetainedConversation {
 	readonly agent: string;
 	readonly alias: string;
@@ -579,7 +579,7 @@ export interface Pin {
 	readonly machine_id?: string;
 }
 
-export type RustPin = Pin & { readonly machine_id: string; readonly agent: string };
+export type FrameworkPin = Pin & { readonly machine_id: string; readonly agent: string };
 
 /** Pins in workspace storage, in their saved order (ARCHITECTURE-3.1). */
 export interface PinStore {
@@ -590,12 +590,12 @@ export interface PinStore {
 	reorder(ids: readonly string[]): void;
 }
 
-/** A Rust Pin's identity is unique within a workspace, independently of which member window writes it. */
-export interface RustPinStore extends PinStore {
+/** A Framework Pin's identity is unique within a workspace, independently of which member window writes it. */
+export interface FrameworkPinStore extends PinStore {
 	/** Saves the person's Pin, reusing an entry for its identity or a matching session-only Pin. */
-	pinAgent(pin: RustPin): Pin;
+	pinAgent(pin: FrameworkPin): Pin;
 	/** Applies fields changed by `after` to the same still-present entry (ARCHITECTURE-3.1). */
-	updatePin(before: RustPin, after: RustPin): void;
+	updatePin(before: FrameworkPin, after: FrameworkPin): void;
 	/** Unpins an agent in this workspace for worktree deletion (WORKTREES-3.3). */
 	removeAgentPins(machineId: string, agent: string): void;
 }
@@ -663,7 +663,7 @@ export interface RunError {
 }
 
 export interface RunFacts {
-	/** The Orchestrator facts for a card on the Rust engine (PANEL-4.1). */
+	/** The Orchestrator facts for a card on the Framework (PANEL-4.1). */
 	readonly orchestrator?: {
 		readonly reference: AgentRef;
 		readonly state: Exclude<AgentState, 'online'>;
@@ -671,7 +671,7 @@ export interface RunFacts {
 	};
 	/** The running machine's display name when its ID differs from the editor window's. */
 	readonly remoteMachine?: string;
-	/** The copyable, machine-qualified core reference. */
+	/** The copyable, machine-qualified Framework reference. */
 	readonly address?: string;
 	readonly sessionId?: string;
 	readonly resumable?: boolean;
@@ -896,7 +896,7 @@ export interface StartOutcome {
 /** A new or retained run, or a conversation already running (LIFECYCLE-3.2). */
 export type ResumeResult = RunId | { readonly running: RunId | 'elsewhere' };
 
-/** An agent a Rust window can adopt via Go to Agent (LIFECYCLE-2.3). */
+/** An agent a Framework window can adopt via Go to Agent (LIFECYCLE-2.3). */
 export interface OtherAgent {
 	readonly facts: RunFacts;
 	readonly windows: readonly { readonly label: string; readonly connected?: boolean }[];

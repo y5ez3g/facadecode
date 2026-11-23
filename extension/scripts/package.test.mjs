@@ -6,7 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { inflateSync } from 'node:zlib';
 import { test } from 'node:test';
-import { checkSources, coreTriple, namesDynamicLinker, programProblems, protocolProblems, versionProblems, withWorkspaceVersion, workspaceVersion, zipModes } from './core.mjs';
+import { checkSources, frameworkTriple, namesDynamicLinker, programProblems, protocolProblems, versionProblems, withWorkspaceVersion, workspaceVersion, zipModes } from './framework.mjs';
 import { binaryTarget, filesOfZip, hostTarget, nativeProblems, packageTarget } from './native.mjs';
 import { packageReadme } from './readme.mjs';
 
@@ -62,7 +62,7 @@ test('the staged product has usable README links and preserves both product and 
 	assert.match(notices, /2026 - present Facade Code contributors/);
 	// node-pty's Windows build ships ConPTY's conpty.dll and OpenConsole.exe, whose notice is not in node-pty's own
 	assert.match(notices, /^ConPTY \(conpty\.dll and OpenConsole\.exe/m);
-	assert.match(notices, /Facade core's copy in bin\/conpty\/: Microsoft\.Windows\.Console\.ConPTY 1\.25\.260303002/);
+	assert.match(notices, /Facade Code Framework's copy in bin\/conpty\/: Microsoft\.Windows\.Console\.ConPTY 1\.25\.260303002/);
 	assert.doesNotMatch(notices, /^None$/m);
 });
 
@@ -325,7 +325,7 @@ test('the packaged workspace extension names this host\'s target and carries tha
 	assert.match(identity(runtimeFiles), new RegExp(`\\bTargetPlatform="${target}"`));
 	assert.deepEqual(nativeProblems(runtimeFiles, target), []);
 	const binaries = runtimeFiles.filter(each => binaryTarget(each.bytes)).map(each => each.name);
-	// The PTY backend's, and core's programs (checked below)
+	// The PTY backend's, and framework's programs (checked below)
 	assert.ok(binaries.length && binaries.every(each => each.startsWith('extension/node_modules/node-pty/') || each.startsWith('extension/bin/')), binaries.join(', '));
 	for (const bundle of ['extension.js', 'ptyd.js']) {
 		assert.ok(runtimeFiles.some(each => each.name === `extension/dist/${bundle}`), `The package carries dist/${bundle}`);
@@ -368,7 +368,7 @@ function elfStatic(machine, linked = false) {
 	return bytes;
 }
 
-test('core\'s version is the extension\'s and the window component\'s, and the protocol copy is core\'s, or nothing is packaged', () => {
+test('framework\'s version is the extension\'s and the window component\'s, and the protocol copy is framework\'s, or nothing is packaged', () => {
 	const toml = '[workspace]\nmembers = ["a"]\n\n[workspace.package]\nversion = "0.2.0"\nedition = "2024"\n\n[workspace.dependencies]\nversion = "9"\n';
 	assert.equal(workspaceVersion(toml), '0.2.0');
 	assert.equal(workspaceVersion(withWorkspaceVersion(toml, '0.3.1')), '0.3.1');
@@ -377,16 +377,16 @@ test('core\'s version is the extension\'s and the window component\'s, and the p
 	assert.equal(workspaceVersion(crlf), '0.2.0');
 	assert.equal(workspaceVersion(withWorkspaceVersion(crlf, '0.3.1')), '0.3.1');
 	assert.throws(() => workspaceVersion('[package]\nversion = "1.0.0"\n'), /no workspace version/);
-	assert.deepEqual(versionProblems({ extension: '0.2.0', window: '0.2.0', core: '0.2.0' }), []);
-	assert.match(versionProblems({ extension: '0.2.0', window: '0.2.0', core: '0.2.1' }).join(), /core is 0\.2\.1, the extension 0\.2\.0/);
-	assert.match(versionProblems({ extension: '0.2.0', window: '0.1.5', core: '0.2.0' }).join(), /window is 0\.1\.5/);
+	assert.deepEqual(versionProblems({ extension: '0.2.0', window: '0.2.0', framework: '0.2.0' }), []);
+	assert.match(versionProblems({ extension: '0.2.0', window: '0.2.0', framework: '0.2.1' }).join(), /framework is 0\.2\.1, the extension 0\.2\.0/);
+	assert.match(versionProblems({ extension: '0.2.0', window: '0.1.5', framework: '0.2.0' }).join(), /window is 0\.1\.5/);
 	assert.deepEqual(protocolProblems(Buffer.from('a'), Buffer.from('a')), []);
-	assert.match(protocolProblems(Buffer.from('a'), Buffer.from('b')).join(), /not a copy of core\/protocol\/protocol\.ts/);
+	assert.match(protocolProblems(Buffer.from('a'), Buffer.from('b')).join(), /not a copy of framework\/protocol\/protocol\.ts/);
 	// This checkout: one version, one protocol
 	checkSources();
 });
 
-test('a package carries core\'s programs, executable on Unix, static on Linux, and with ConPTY on Windows (ARCHITECTURE-4.3)', () => {
+test('a package carries framework\'s programs, executable on Unix, static on Linux, and with ConPTY on Windows (ARCHITECTURE-4.3)', () => {
 	const modes = names => new Map(names.map(name => [name, 0o755]));
 	const pty = { name: 'extension/node_modules/node-pty/prebuilds/x/pty.node', bytes: Buffer.alloc(0) };
 	const mac = ['facade', 'facade-mcp'].map(program => ({ name: `extension/bin/${program}`, bytes: machO(ARM64) }));
@@ -402,7 +402,7 @@ test('a package carries core\'s programs, executable on Unix, static on Linux, a
 	assert.match(programProblems(linux(true), 'linux-x64', modes(names)).join(), /bin\/facade is not a static musl build/);
 	for (const [arch, machine, triple] of [['x64', 0x8664, 'x86_64'], ['arm64', 0xaa64, 'aarch64']]) {
 		const target = `win32-${arch}`;
-		assert.equal(coreTriple('win32', arch), `${triple}-pc-windows-msvc`);
+		assert.equal(frameworkTriple('win32', arch), `${triple}-pc-windows-msvc`);
 		const windows = ['facade.exe', 'facade-mcp.exe', 'conpty/conpty.dll', 'conpty/OpenConsole.exe']
 			.map(program => ({ name: `extension/bin/${program}`, bytes: pe(machine) }));
 		assert.deepEqual(programProblems([pty, ...windows], target, new Map()), []);
@@ -415,7 +415,7 @@ test('a package carries core\'s programs, executable on Unix, static on Linux, a
 	}
 });
 
-test('the packaged workspace extension carries core\'s programs of this host\'s target at the extension\'s version, and the window component none', () => {
+test('the packaged workspace extension carries framework\'s programs of this host\'s target at the extension\'s version, and the window component none', () => {
 	const target = hostTarget();
 	const { name, version } = JSON.parse(fs.readFileSync(path.join(stage, 'package.json'), 'utf8'));
 	const file = path.join(root, 'build', 'vsix', `${name}-${target}-${version}.vsix`);
@@ -431,6 +431,6 @@ test('the packaged workspace extension carries core\'s programs of this host\'s 
 	assert.equal(programs.find(each => each.name === 'extension/bin/VERSION').bytes.toString('utf8'),
 		`${version}+${revision.stdout.trim()}\n`);
 	assert.deepEqual(nativeProblems(files, target), []);
-	assert.equal(workspaceVersion(fs.readFileSync(path.join(root, '..', 'core', 'Cargo.toml'), 'utf8')), version);
+	assert.equal(workspaceVersion(fs.readFileSync(path.join(root, '..', 'framework', 'Cargo.toml'), 'utf8')), version);
 	assert.ok(!filesOfZip(path.join(root, 'build', 'vsix', `facadecode-window-${version}.vsix`)).some(each => each.name.startsWith('extension/bin/')));
 });

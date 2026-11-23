@@ -6,14 +6,14 @@
 // starts a PTY with - and its VSIX names it. The VSIX is read back as it was written: one whose manifest names another target,
 // or which carries a binary not of its target, is removed and refused.
 //
-// Core's programs go in every package (scripts/core.mjs); nothing is packaged where core's version is not the
-// extension's, or the extension's copy of the protocol is not core's. `--sign`, which the release run gives a Windows
+// Framework's programs go in every package (scripts/framework.mjs); nothing is packaged where framework's version is not the
+// extension's, or the extension's copy of the protocol is not framework's. `--sign`, which the release run gives a Windows
 // package, signs its programs (scripts/sign.mjs) and packages none that still has no trusted signature.
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { BIN, CORE_BUILD_FILE, buildCore, checkSources, coreTriple, executableBuild, programProblems, zipModes } from './core.mjs';
+import { BIN, FRAMEWORK_BUILD_FILE, buildFramework, checkSources, frameworkTriple, executableBuild, programProblems, zipModes } from './framework.mjs';
 import { filesOfZip, nativeProblems, packageTarget } from './native.mjs';
 import { createSigner, signFolder } from './sign.mjs';
 
@@ -31,8 +31,8 @@ const signer = process.argv.includes('--sign') ? createSigner() : undefined;
 
 execFileSync(process.execPath, [path.join(root, 'scripts', 'build.mjs'), '--production'], { stdio: 'inherit' });
 let build;
-if (coreTriple()) {
-	build = buildCore();
+if (frameworkTriple()) {
+	build = buildFramework();
 	if (signer) {
 		signFolder(signer, BIN);
 	}
@@ -51,7 +51,7 @@ for (const [stage, native] of [['window', false], ['extension', true]]) {
 	const files = filesOfZip(file);
 	const identity = files.find(each => each.name === 'extension.vsixmanifest')?.bytes.toString('utf8').match(/<Identity\b[^>]*>/)?.[0] ?? '';
 	const named = identity.match(/\bTargetPlatform="([^"]*)"/)?.[1];
-	const buildMarker = files.find(each => each.name === `extension/bin/${CORE_BUILD_FILE}`)?.bytes.toString('utf8');
+	const buildMarker = files.find(each => each.name === `extension/bin/${FRAMEWORK_BUILD_FILE}`)?.bytes.toString('utf8');
 	const problems = [
 		...(named === (native ? target : undefined) ? [] : [`its manifest names ${named === undefined ? 'no target' : `the target ${named}`}, not ${native ? target : 'none'}`]),
 		...nativeProblems(files, target, { none: !native }),
@@ -62,5 +62,5 @@ for (const [stage, native] of [['window', false], ['extension', true]]) {
 		fs.rmSync(file, { force: true });
 		throw new Error(`${path.basename(file)} is refused and removed: ${problems.join('; ')}.`);
 	}
-	console.info(`${path.basename(file)}: ${native ? `for ${target} alone, its native binaries all ${target}'s, core's programs with them` : 'for every target, no native binary'}.`);
+	console.info(`${path.basename(file)}: ${native ? `for ${target} alone, its native binaries all ${target}'s, framework's programs with them` : 'for every target, no native binary'}.`);
 }

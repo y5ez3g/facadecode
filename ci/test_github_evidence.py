@@ -40,29 +40,29 @@ class HostedEvidence(unittest.TestCase):
     def test_requires_this_attempts_product_and_artifact_identity(self):
         run = {'run_attempt': 2, 'id': 7, 'head_sha': 'a' * 40,
                'repository': {'id': 3}, 'head_repository': {'id': 3}}
-        core = {
-            'name': 'shadow-pilot-core-2', 'id': 31, 'expired': False, 'digest': 'sha256:' + 'b' * 64,
+        framework = {
+            'name': 'shadow-pilot-framework-2', 'id': 31, 'expired': False, 'digest': 'sha256:' + 'b' * 64,
             'size_in_bytes': 100, 'workflow_run': {'id': 7, 'head_sha': 'a' * 40,
                                                   'repository_id': 3, 'head_repository_id': 3},
         }
         with patch('github_evidence.gh_json') as gh:
-            gh.return_value = [{'total_count': 1, 'artifacts': [core]}]
-            self.assertEqual(artifact_manifest('run', run, ('core',)), {'core': core})
+            gh.return_value = [{'total_count': 1, 'artifacts': [framework]}]
+            self.assertEqual(artifact_manifest('run', run, ('framework',)), {'framework': framework})
             with self.assertRaisesRegex(AcceptanceError, 'missing artifacts'):
-                artifact_manifest('run', run, ('core', 'extension'))
+                artifact_manifest('run', run, ('framework', 'extension'))
             for changed in (
-                {**core, 'name': 'shadow-pilot-core-1'},
-                {**core, 'digest': None},
-                {**core, 'expired': True},
-                {**core, 'workflow_run': {**core['workflow_run'], 'head_sha': 'c' * 40}},
-                {**core, 'workflow_run': {**core['workflow_run'], 'id': 8}},
+                {**framework, 'name': 'shadow-pilot-framework-1'},
+                {**framework, 'digest': None},
+                {**framework, 'expired': True},
+                {**framework, 'workflow_run': {**framework['workflow_run'], 'head_sha': 'c' * 40}},
+                {**framework, 'workflow_run': {**framework['workflow_run'], 'id': 8}},
             ):
                 gh.return_value = [{'total_count': 1, 'artifacts': [changed]}]
                 with self.subTest(changed=changed), self.assertRaises(AcceptanceError):
-                    artifact_manifest('run', run, ('core',))
-            gh.return_value = [{'total_count': 2, 'artifacts': [core, core]}]
+                    artifact_manifest('run', run, ('framework',))
+            gh.return_value = [{'total_count': 2, 'artifacts': [framework, framework]}]
             with self.assertRaisesRegex(AcceptanceError, 'duplicate'):
-                artifact_manifest('run', run, ('core',))
+                artifact_manifest('run', run, ('framework',))
 
     def test_requires_each_selected_job_to_pass(self):
         reports = [
@@ -70,8 +70,8 @@ class HostedEvidence(unittest.TestCase):
             for name in ('Shadow catalog and policy tests', 'Shadow pilot (extension)', 'Shadow pilot evidence')
         ]
         check_jobs(reports, ('extension',))
-        with self.assertRaisesRegex(AcceptanceError, 'Shadow pilot \\(core\\)'):
-            check_jobs(reports, ('core', 'extension'))
+        with self.assertRaisesRegex(AcceptanceError, 'Shadow pilot \\(framework\\)'):
+            check_jobs(reports, ('framework', 'extension'))
         for status, conclusion in (('completed', 'failure'), ('completed', 'skipped'), ('queued', None)):
             bad = {**reports[1], 'status': status, 'conclusion': conclusion}
             with self.subTest(status=status, conclusion=conclusion), self.assertRaises(AcceptanceError):

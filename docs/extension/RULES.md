@@ -1,7 +1,7 @@
 # Shared rules
 
 [Facade Code](../PRODUCT.md) defines the product. Group 6 owns the Orchestrator-backed VS Code entry point.
-Groups 1–5 describe the old engine during the transition.
+Groups 1–5 describe the legacy implementation during the transition.
 
 | Group | Decides |
 | --- | --- |
@@ -118,7 +118,7 @@ slot has more time. A text whose paste, Enter and confirmation could not fit eve
 many hundred lines for Antigravity, or eight thousand characters, CJK ones, for Codex on Windows - is a permanent
 obstacle: a send of it fails at once as `invalid_argument` before its record is made - no message ID, nothing for
 read_messages - asking for shorter parts, and a start with it as its first prompt is refused the same way, before
-anything starts (MCP-2.3). Until the editor extension runs on core, it still starts such an agent and gives the prompt
+anything starts (MCP-2.3). In the legacy implementation, it still starts such an agent and gives the prompt
 up, nothing typed, its result saying so and its record staying readable through read_messages. Fitting is an admission, not a guarantee that the CLI finishes in time: a
 CLI that stalls still meets the deadline, the stage ending with its actual full, partial or unknown effects. A part of a message's text in the input, which no wait makes its own, is not waited for. An input still unavailable then means failure; delivery is not a promise to overcome a permanently
 unavailable target. A read through read_messages delivers the message immediately and cancels any paste that has not
@@ -205,11 +205,11 @@ continue within its deadline; work still owned by the closing side can end with 
 recovery solely to guarantee this edge case, and do not cancel B's independent work just to enforce a global rule.
 
 Reload or temporary disconnect is not closure. Reuse an existing in-flight operation only while its original run and
-deadline still apply; an expired operation does not get a fresh budget. On the old engine, a delivery under way when
+deadline still apply; an expired operation does not get a fresh budget. On the legacy implementation, a delivery under way when
 its window reloads goes on once the window shows its recipient again, within its original deadline. Use 1.6's
 draft and paste rules. A recipient that is unavailable can return within that deadline. If it ends or the deadline
 passes, end the delivery under 1.2 or 1.7. The old window relinquishes those deliveries when another window takes
-over its workspace. Closing every old-engine window ends remaining volatile delivery work. A newly started agent
+over its workspace. Closing every legacy implementation window ends remaining volatile delivery work. A newly started agent
 receives only messages addressed to its new run.
 No notification or message is scheduled for replay on the next opening.
 
@@ -243,9 +243,9 @@ There is no multi-user discovery, hosted service or assumption of shared home di
 
 | Identity | Meaning |
 | --- | --- |
-| Client network | This user's connected editor windows on one client computer on the old engine |
+| Client network | This user's connected editor windows on one client computer on the legacy implementation |
 | Execution environment | Where files, CLIs and processes exist |
-| Window instance | One editor window through reload, identified by its local handover record (ARCHITECTURE-2.2). True reopening is a new instance. The old engine routes by this identity. |
+| Window instance | One editor window through reload, identified by its local handover record (ARCHITECTURE-2.2). True reopening is a new instance. The legacy implementation routes by this identity. |
 | Workspace | Saved editor workspace/folder context for preferences and Pin intent |
 | Conversation key | Execution environment, CLI and exact vendor session ID |
 | Pin | Saved intent to restore an exact conversation. |
@@ -265,7 +265,7 @@ issuance or anti-impersonation system is required.
 
 Names can repeat. Resolve within the caller's normal reach under 4.3 and return ambiguity instead of guessing. An exact
 ID of an agent in the caller's window needs no other window, and a name resolves among agents of every window. While
-an old-engine window cannot be listed, only the exact ID of a listed agent can resolve. Once resolved, the operation
+a legacy implementation window cannot be listed, only the exact ID of a listed agent can resolve. Once resolved, the operation
 stays with that target through rename. An optional display name accompanying an ID is descriptive. Return the error
 for a missing record or a live-only operation on an ended agent. `#human` is the
 person's reference and never names an agent. Because `human` is an allowed agent name (LIFECYCLE-2.1), `@human` names
@@ -357,7 +357,7 @@ transition.
 
 ### 4.1 Ownership, reload and closure
 
-**The old engine keeps one owning window per agent.**
+**The legacy implementation keeps one owning window per agent.**
 
 Closing a creator leaves its children running in their own windows.
 
@@ -547,7 +547,7 @@ A later start or resume follows the Orchestrator's path validation.
 
 **The Orchestrator applies settings and permissions on the agent's machine.**
 
-Use that machine's `facade.json` and its `FACADE_HOME` or default home. `facade.home` applies to the old engine
+Use that machine's `facade.json` and its `FACADE_HOME` or default home. `facade.home` applies to the legacy implementation
 during the transition. A local start uses the initiating Shell, editor, or agent environment, including a Guest's
 relay environment. A start on another machine uses its SSH login environment. Resume keeps the original session,
 location, model, effort and CLI arguments, and uses the machine's current settings, including YOLO.
@@ -575,7 +575,7 @@ an editor whose extension host uses that machine's Orchestrator.
 
 **The Window Component cleans up stale terminal tabs after reconnect or extension restart.**
 
-Its existing old-engine duties apply during the transition. In the VS Code entry point, the Orchestrator has no
+Its existing legacy implementation duties apply during the transition. In the VS Code entry point, the Orchestrator has no
 window membership or automatic Remote-SSH registration. The extension reads persisted workspace visibility under
 6.1 and uses the Window Component's native key to locate saved Pins for a folderless window.
 

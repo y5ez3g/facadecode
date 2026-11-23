@@ -21,15 +21,15 @@ from uuid import UUID
 
 from catalog import AcceptanceError, NATIVE_INSTALL_CASES, read_json
 from evidence import digest, run_identity
-from native_core import (
+from native_framework import (
     ROOT, SYSTEM_PATH, clean_native_scope, hash_file, interrupted, process_identity, query,
     read_markers, source_identity, verify_native_cleanup, wait_for, write_receipt,
 )
 
 
-ASSET = 'facade-core-linux-x64.tar.gz'
+ASSET = 'facade-framework-linux-x64.tar.gz'
 PROGRAMS = ('facade', 'facade-mcp')
-CORE = ROOT / 'core'
+FRAMEWORK = ROOT / 'framework'
 SUCCESS_MARKER = 'Facade native install test '
 REFUSALS = ('corrupted-bytes', 'wrong-digest', 'wrong-build')
 REFUSAL_STAGES = ('corrupted', 'wrong-digest', 'wrong-build')
@@ -146,7 +146,7 @@ def relay_ready(stdout, version):
 
 
 def verify_install_commands(commands, scope, address, build, installer):
-    bin_dir = scope / 'state/core/bin'
+    bin_dir = scope / 'state/framework/bin'
     shell = str(bin_dir / 'facade')
     project = str(scope / 'project')
     records = iter(commands)
@@ -200,7 +200,7 @@ def verify_install_commands(commands, scope, address, build, installer):
         raise AcceptanceError('native install recorded unexpected commands after stopping the fixture agent')
 
 
-def install_success(receipt, build, programs, archive_sha, corrupt_sha, *, installer=CORE / 'install.sh'):
+def install_success(receipt, build, programs, archive_sha, corrupt_sha, *, installer=FRAMEWORK / 'install.sh'):
     try:
         if (receipt['build'], receipt['version'], receipt['program_sha256'], receipt['installer_sha256']) != (
                 build, build.split('+', 1)[0], programs, hash_file(installer)):
@@ -227,7 +227,7 @@ def install_success(receipt, build, programs, archive_sha, corrupt_sha, *, insta
         if row[:5] != [agent_id, 'installed-agent', 'qa-install', cwd, fake['pid']] or row[6] is not None:
             raise AcceptanceError('native install did not keep the original live agent record')
         services = runtime['services']
-        executable = str(scope / 'state/core/bin' / build / 'facade')
+        executable = str(scope / 'state/framework/bin' / build / 'facade')
         if (set(services) != {'daemon', 'keeper'} or {record['executable'] for record in services.values()} != {executable}
                 or fake['executable'] != str(scope / 'fixture-bin/facade-fakecli')
                 or len({record['pid'] for record in (*services.values(), fake)}) != 3
@@ -277,7 +277,7 @@ def verified_install(archive, sidecar, receipt_path, output, run, *, producer_ch
         raise AcceptanceError('native install candidate archive or checksum file changed during verification')
     verify_native_cleanup(receipt)
     expected = install_success(receipt, build, programs, archive_sha, sha256(corrupted_archive(archive)).hexdigest(),
-                               installer=producer_checkout / 'core/install.sh')
+                               installer=producer_checkout / 'framework/install.sh')
     if read_markers(output, SUCCESS_MARKER) != [expected] or receipt.get('success') != expected:
         raise AcceptanceError('native install did not observe the exact cases and archive')
     return len(expected['case_ids'])
@@ -302,7 +302,7 @@ def exercise(archive, sidecar, fake, receipt):
     isolated = Path(tempfile.mkdtemp(prefix='fci-install-', dir='/tmp')).resolve()
     receipt['fixture'] = str(isolated)
     key = sha256(os.fsencode(isolated / 'state')).hexdigest()[:10]
-    directory = Path(f'/tmp/facade-core-{os.getuid()}')
+    directory = Path(f'/tmp/facade-framework-{os.getuid()}')
     sockets = {role: directory / f'{role}-{key}.sock' for role in ('daemon', 'keeper')}
     if any(os.path.lexists(endpoint) for endpoint in sockets.values()):
         isolated.rmdir()
@@ -321,7 +321,7 @@ def exercise(archive, sidecar, fake, receipt):
 def check_installed_programs(archive, sidecar, fake, root, sockets, receipt):
     build, digests, expected = (receipt[key] for key in ('build', 'program_sha256', 'archive_sha256'))
     home, state, project, tmp, runtime = (root / name for name in ('home', 'state', 'project', 'tmp', 'runtime'))
-    bin_dir = state / 'core/bin'
+    bin_dir = state / 'framework/bin'
     config, cache, data, state_dir = (home / name for name in ('config', 'cache', 'data', 'state'))
     for directory in (home, state, project, tmp, runtime, config, cache, data, state_dir):
         directory.mkdir(mode=0o700)
@@ -364,7 +364,7 @@ def check_installed_programs(archive, sidecar, fake, root, sockets, receipt):
         return staged
 
     def install_package(label, package, status=0, expected_build=None):
-        return run(label, installer_args(CORE / 'install.sh', package, build,
+        return run(label, installer_args(FRAMEWORK / 'install.sh', package, build,
                                          expected_build=expected_build), status=status)
 
     try:
@@ -414,7 +414,7 @@ def check_installed_programs(archive, sidecar, fake, root, sockets, receipt):
             assert Path(original['executable']) == fake, original
             assert (Path('/proc') / str(fake_pid) / 'cwd').resolve(strict=True) == project
             assert starts.read_text().splitlines() == [str(fake_pid)]
-            db = state / 'core/facade.db'
+            db = state / 'framework/facade.db'
             with closing(sqlite3.connect(db.as_uri() + '?mode=ro', uri=True)) as store:
                 machine = [list(row) for row in store.execute('SELECT machine_id, name FROM machine')]
                 agents = [list(row) for row in store.execute('SELECT agent_id, name, cli, cwd, pid, created_at, exit_at FROM agents')]
@@ -479,7 +479,7 @@ def main():
         parser.exit(2, f'native install check: {error}\n')
     signal.signal(signal.SIGTERM, interrupted)
     receipt = {'source': source, 'archive': str(archive), 'archive_sha256': expected, 'sidecar_sha256': checksum,
-               'installer_sha256': hash_file(CORE / 'install.sh'), 'fake_sha256': hash_file(fake),
+               'installer_sha256': hash_file(FRAMEWORK / 'install.sh'), 'fake_sha256': hash_file(fake),
                'build': build, 'version': build.split('+', 1)[0], 'program_sha256': digests,
                'commands': [], 'refusals': {}}
     started = time.monotonic()

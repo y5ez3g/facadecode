@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay a refused Core takeover with digest-pinned Linux x64 QA builds."""
+"""Replay a refused Framework takeover with digest-pinned Linux x64 QA builds."""
 
 import argparse
 from contextlib import closing
@@ -22,14 +22,14 @@ from catalog import AcceptanceError, NATIVE_INCOMPATIBLE_CASE
 from check_native_install import ASSET, PROGRAMS, install_tree, installer_args, validate_inputs
 from check_real_ssh_route import SSHD, machine, ssh_configs
 from evidence import digest, run_identity
-from native_core import (
+from native_framework import (
     ROOT, SYSTEM_PATH, clean_native_scope, hash_file, interrupted, process_identity, query,
     source_identity, verify_native_cleanup, wait_for, write_receipt,
 )
 
 
-ABI_PATCH = ROOT / "ci/fixtures/core-keeper-api2.patch"
-INSTALLER = ROOT / "core/install.sh"
+ABI_PATCH = ROOT / "ci/fixtures/framework-keeper-api2.patch"
+INSTALLER = ROOT / "framework/install.sh"
 SUCCESS = "Facade native incompatible build test "
 REQUEST = "qa-incompatible-original"
 SESSION = "0ad87ed7-4a37-4a9a-89bd-6bd8a1debae2"
@@ -45,7 +45,7 @@ def fixture(scope, label, sockets, bin_dir):
         folder.mkdir(mode=0o700)
     key = sha256(os.fsencode(state)).hexdigest()[:10]
     for role in ("daemon", "keeper"):
-        endpoint = Path(f"/tmp/facade-core-{os.getuid()}/{role}-{key}.sock")
+        endpoint = Path(f"/tmp/facade-framework-{os.getuid()}/{role}-{key}.sock")
         assert not os.path.lexists(endpoint), endpoint
         sockets[f"{label}-{role}"] = endpoint
     env = {
@@ -83,7 +83,7 @@ def launcher_snapshot(location):
 
 
 def durable_state(state):
-    with closing(sqlite3.connect((state / "core/facade.db").as_uri() + "?mode=ro", uri=True)) as database:
+    with closing(sqlite3.connect((state / "framework/facade.db").as_uri() + "?mode=ro", uri=True)) as database:
         database.row_factory = sqlite3.Row
         tables = {
             "agents": 'SELECT agent_id, name, cli, cwd, pid, created_at, exit_at FROM agents',
@@ -117,23 +117,23 @@ def exercise(scope, output_dir, fake, sockets, processes, receipt):
     control, control_state, control_work = fixture(scope, "higher-only", sockets, fake.parent)
     install("install higher pair in an empty independent home", higher_archive, higher_build,
             control, control_work)
-    higher_shell = control_state / "core/bin/facade"
+    higher_shell = control_state / "framework/bin/facade"
     command("launch the genuine higher Daemon and Keeper", [higher_shell, "daemon", "--detach"],
             control, control_work)
     hello, info = query(sockets["higher-only-daemon"], "daemon.status", {})
     assert hello["build"] == hello["keeper"]["build"] == higher_build, hello
-    log = (control_state / "core/logs/daemon.log").read_text()
+    log = (control_state / "framework/logs/daemon.log").read_text()
     keeper = info["keeper_pid"]
     signature = f'daemon[{hello["pid"]}] info: connected to keeper {keeper} (Keeper API 2, build {higher_build})'
     assert signature in log, log
-    higher_control = launcher_snapshot(control_state / "core/bin")
+    higher_control = launcher_snapshot(control_state / "framework/bin")
     assert {name: value["sha256"] for name, value in higher_control.items()} == higher["program_sha256"]
     receipt["higher_control"] = {"hello": hello, "keeper_handshake": signature, "launchers": higher_control}
     (output_dir / "higher-only-daemon.log").write_text(log)
 
     origin, state, work = fixture(scope, "origin", sockets, fake.parent)
     install("install older pair with normal default activation", older_archive, lower_build, origin, work)
-    bin_dir = state / "core/bin"
+    bin_dir = state / "framework/bin"
     facade = bin_dir / "facade"
     receipt["runtime_baseline"] = command("read installed older Shell version", [facade, "--version"],
                                           origin, work).stdout.strip()
@@ -169,13 +169,13 @@ def exercise(scope, output_dir, fake, sockets, processes, receipt):
     wait_for("private OpenSSH fixture startup", lambda: "Server listening" in ssh_log.read_text(), seconds=5)
     launched = command("start the old peer through isolated OpenSSH", [
         "/usr/bin/ssh", "-F", client_config, "fixture-peer",
-        'printf "%s\\n%s\\n" "$HOME" "$FACADE_HOME"; exec "$FACADE_HOME/core/bin/facade" daemon --detach',
+        'printf "%s\\n%s\\n" "$HOME" "$FACADE_HOME"; exec "$FACADE_HOME/framework/bin/facade" daemon --detach',
     ], origin, work)
     assert launched.stdout.splitlines()[:2] == [peer["HOME"], peer["FACADE_HOME"]], launched
     peer_hello, _ = query(sockets["peer-daemon"], "daemon.status", {})
     assert peer_hello["build"] == lower_build, peer_hello
     command("give the old peer a distinct machine name", [
-        Path(peer["FACADE_HOME"]) / "core/bin/facade", "machine", "rename",
+        Path(peer["FACADE_HOME"]) / "framework/bin/facade", "machine", "rename",
         peer_hello["machine_id"].replace("-", ""), "qa-peer",
     ], peer, peer_work)
     command("save the actual old peer transport", [facade, "machine", "add", "--home", peer["FACADE_HOME"],
@@ -277,7 +277,7 @@ def exercise(scope, output_dir, fake, sockets, processes, receipt):
     receipt["input"] = {"before_sha256": sha256(old_keys).hexdigest(),
                         "fresh_suffix_sha256": sha256(final_keys[len(old_keys):]).hexdigest()}
     receipt["repeated_receipt"], receipt["fresh_receipt"], receipt["submissions"] = repeated, sent, complete
-    (output_dir / "older-daemon.log").write_bytes((state / "core/logs/daemon.log").read_bytes())
+    (output_dir / "older-daemon.log").write_bytes((state / "framework/logs/daemon.log").read_bytes())
 
 
 def main():

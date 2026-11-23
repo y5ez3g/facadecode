@@ -242,7 +242,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 			[[true, undefined], [false, 'gone']]);
 	});
 
-	test('the Rust host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)', async () => {
+	test('the Framework host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)', async () => {
 		panel.dispose();
 		orchestrator = true;
 		const local = runFacts(1, { id: 'workstation/a1', alias: 'a1', name: 'Gauge' });

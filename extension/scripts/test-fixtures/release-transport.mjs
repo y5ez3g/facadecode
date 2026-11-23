@@ -12,7 +12,7 @@ const tag = process.env.FACADE_RELEASE_TEST_TAG;
 const release = path.join(fixture, 'release');
 const state = path.join(fixture, 'github.json');
 const bucket = path.join(fixture, 'mirror');
-const marker = 'facade-core-version.txt';
+const marker = 'facade-framework-version.txt';
 const log = line => fs.appendFileSync(path.join(fixture, 'transport.log'), line + '\n');
 const read = file => fs.existsSync(file) ? fs.readFileSync(file) : undefined;
 

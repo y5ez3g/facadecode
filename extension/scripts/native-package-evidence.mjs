@@ -6,8 +6,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { coreArchive, corePrograms } from '../../core/scripts/package-core.mjs';
-import { CORE_BUILD_FILE, parseCoreBuild, sourceBuild } from './core.mjs';
+import { frameworkArchive, frameworkPrograms } from '../../framework/scripts/package-framework.mjs';
+import { FRAMEWORK_BUILD_FILE, parseFrameworkBuild, sourceBuild } from './framework.mjs';
 import { filesOfZip, packageTarget } from './native.mjs';
 import { fileFor, parseChecksums, sha256, targetsFor, verifyVsix } from './release-assets.mjs';
 import { verifyTimestampedSignatures } from './sign.mjs';
@@ -47,18 +47,18 @@ export function verifyArchivePrograms(archive, vsix, target, build) {
 	const zip = windows ? new Map(filesOfZip(archive).map(file => [file.name, file.bytes])) : null;
 	const member = name => zip ? zip.get(name)
 		: execFileSync('tar', ['-xOf', archive, name], { maxBuffer: 64 * 1024 * 1024 });
-	const programs = corePrograms(target).map(name => {
+	const programs = frameworkPrograms(target).map(name => {
 		const bytes = editor.get('extension/bin/' + name);
 		assert.ok(bytes?.length && member(name)?.equals(bytes), name + ' differs from the paired VSIX');
 		return [name, bytes];
 	});
-	const marker = member(CORE_BUILD_FILE);
+	const marker = member(FRAMEWORK_BUILD_FILE);
 	// Earlier release candidates recorded a numeric archive version before VSIXs carried BUILD.
-	if (build === undefined || parseCoreBuild(build)?.revision) {
-		assert.ok(marker && editor.get('extension/bin/' + CORE_BUILD_FILE)?.equals(marker), 'Core archive BUILD differs from the paired VSIX');
+	if (build === undefined || parseFrameworkBuild(build)?.revision) {
+		assert.ok(marker && editor.get('extension/bin/' + FRAMEWORK_BUILD_FILE)?.equals(marker), 'Framework archive BUILD differs from the paired VSIX');
 	}
 	const text = marker?.toString('utf8');
-	if (build !== undefined) assert.equal(text, build + '\n', 'Core archive names a different BUILD');
+	if (build !== undefined) assert.equal(text, build + '\n', 'Framework archive names a different BUILD');
 	return { programs, marker: text };
 }
 
@@ -91,11 +91,11 @@ export function captureNativePackage(directory, target, version, source, { signi
 	const componentName = fileFor(version, 'universal');
 	const vsix = 'vsix/' + vsixName;
 	const component = 'vsix/' + componentName;
-	const archiveName = coreArchive(target);
-	const archive = 'core/' + archiveName;
-	const manifest = 'core/SHA256SUMS';
+	const archiveName = frameworkArchive(target);
+	const archive = 'framework/' + archiveName;
+	const manifest = 'framework/SHA256SUMS';
 	requireFiles(directory, 'vsix', [vsixName, componentName]);
-	requireFiles(directory, 'core', [archiveName, 'SHA256SUMS']);
+	requireFiles(directory, 'framework', [archiveName, 'SHA256SUMS']);
 	const checksumBytes = fileBytes(directory, manifest);
 	const files = Object.fromEntries([vsix, component, archive, manifest].map(file => {
 		const bytes = file === manifest ? checksumBytes : fileBytes(directory, file);
@@ -108,7 +108,7 @@ export function captureNativePackage(directory, target, version, source, { signi
 		archiveName + ' differs from its candidate SHA256SUMS');
 	const { programs, marker } = verifyArchivePrograms(path.resolve(directory, archive), path.join(directory, vsix), target);
 	const build = marker?.trimEnd();
-	const parsed = parseCoreBuild(build);
+	const parsed = parseFrameworkBuild(build);
 	assert.equal(parsed?.version, version, 'VSIX BUILD differs from the release version');
 	assert.equal(parsed?.revision, source.revision, 'VSIX BUILD differs from the source revision');
 	assert.equal(marker, build + '\n', 'Invalid VSIX BUILD marker');
@@ -134,7 +134,7 @@ export function verifyNativePackages(directory, version, source, { requireSignin
 	assert.deepStrictEqual(present.sort(), [...expected].sort(), 'Missing or unexpected native package targets');
 	return platforms(version).map(target => {
 		const folder = 'extension-' + target;
-		requireFiles(directory, folder, ['core', evidenceFile, 'vsix']);
+		requireFiles(directory, folder, ['framework', evidenceFile, 'vsix']);
 		const root = path.join(directory, folder);
 		const record = JSON.parse(fileBytes(root, evidenceFile).toString('utf8'));
 		assert.deepStrictEqual(record.source, source, target + ' has a stale candidate source or run attempt');

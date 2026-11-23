@@ -52,7 +52,7 @@ function findDlib() {
 
 /**
  * What signing needs, found before anything is built: it fails in seconds where something is missing, the Azure sign-in
- * included, where signtool would otherwise get as far as the first file after core's build.
+ * included, where signtool would otherwise get as far as the first file after framework's build.
  */
 export function createSigner() {
 	if (process.platform !== 'win32') {

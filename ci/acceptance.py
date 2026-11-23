@@ -16,20 +16,19 @@ ROOT = Path(__file__).resolve().parent.parent
 POLICY_PATHS = {
     'docs/CI.md',
     '.github/workflows/ci-acceptance.yml',
-    '.github/workflows/core-check.yml',
-    '.github/workflows/core-compatibility.yml',
+    '.github/workflows/framework-check.yml',
     '.github/workflows/extension-check.yml',
     '.github/workflows/extension-remote.yml',
     '.github/workflows/extension-release.yml',
 }
-PRODUCT_GUIDES = {'core/README.md', 'core/AGENTS.md', 'extension/README.md', 'extension/AGENTS.md'}
+PRODUCT_GUIDES = {'framework/README.md', 'framework/AGENTS.md', 'extension/README.md', 'extension/AGENTS.md'}
 
 
 def affected_products(paths):
     changes = set(paths) - PRODUCT_GUIDES
     if changes & POLICY_PATHS or 'extension/src/base/names.ts' in changes:
         return PRODUCTS
-    if any(path.startswith(('core/', 'ci/', '.github/release-mirror/')) for path in changes):
+    if any(path.startswith(('framework/', 'ci/', '.github/release-mirror/')) for path in changes):
         return PRODUCTS
     if any(path.startswith('extension/') for path in changes):
         return ('extension',)
@@ -126,12 +125,6 @@ def argument_parser():
     ssh.add_argument('--bin-dir', type=Path, required=True)
     for field in ('receipt', 'output'):
         ssh.add_argument(field, type=Path)
-    prior = commands.add_parser('verify-native-prior', help='verify the native Core cold-cutover evidence')
-    prior.add_argument('--candidate-bin', type=Path, required=True)
-    prior.add_argument('--prior-bin', type=Path)
-    prior.add_argument('--manifest', type=Path)
-    prior.add_argument('evidence', type=Path)
-    prior.add_argument('console', type=Path)
     return parser
 
 
@@ -148,12 +141,12 @@ def report(cases, inventory, required_p0, pilots):
         stages = Counter((case.stage, case.test is not None) for case in cases.values() if case.product == product)
         for stage in sorted({stage for stage, _ in stages}):
             print(f'    {stage}: {stages[stage, True]} bound, {stages[stage, False]} pending')
-        for engine in ('old', 'rust') if product == 'extension' else ():
+        for implementation in ('legacy', 'framework') if product == 'extension' else ():
             api_cases = [case for case in cases.values()
-                         if case.id in inventory and case.id.split('/')[1].endswith('-' + engine)]
+                         if case.id in inventory and case.id.split('/')[1].endswith('-' + implementation)]
             bound = sum(case.test is not None for case in api_cases)
-            selected = sum(binding.get('engine') == engine for binding in pilots.values())
-            print(f'    {engine}: {bound}/{len(api_cases)} APIs bound, {selected} selected editor cases')
+            selected = sum(binding.get('implementation') == implementation for binding in pilots.values())
+            print(f'    {implementation}: {bound}/{len(api_cases)} APIs bound, {selected} selected editor cases')
     return pending
 
 
@@ -178,7 +171,7 @@ def render_table(cases, inventory, product):
     for case in selected:
         binding = 'Pending'
         if case.test:
-            variant = case.test.get('engine') or case.test['target']
+            variant = case.test.get('implementation') or case.test['target']
             binding = f'`{variant}` · `{case.test["name"]}`'
         origin = inventory.get(case.id)
         refs = (origin, *case.existing_tests) if origin else case.existing_tests
@@ -205,16 +198,7 @@ def main():
         if args.command == 'verify-native-ssh':
             from check_real_ssh_route import verified_ssh
             verified_ssh(args.bin_dir, args.receipt, args.output, run_identity(args.run_id, environ))
-            print('Linux x64 real SSH machine route passed and matched the tested Core programs')
-            return 0
-        if args.command == 'verify-native-prior':
-            from check_prior_build import verified_prior
-            try:
-                verified_prior(args.candidate_bin, args.evidence, args.console, run_identity(args.run_id, environ),
-                               args.prior_bin, args.manifest)
-            except (KeyError, TypeError) as error:
-                raise AcceptanceError('native prior-build evidence is incomplete or malformed') from error
-            print('Linux x64 Core cold migration passed and matched the tested inputs and cleanup')
+            print('Linux x64 real SSH machine route passed and matched the tested Framework programs')
             return 0
         cases, inventory, required_p0, pilots = load(ROOT)
         if args.command == 'catalog':

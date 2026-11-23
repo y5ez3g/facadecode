@@ -16,8 +16,8 @@ Security vulnerabilities are not reported in issues; see [`SECURITY.md`](SECURIT
 
 ## Code
 
-Start with the [repository instructions](AGENTS.md). Use [Core engineering](docs/core/ENGINEERING.md)
-for Rust and [the standalone extension instructions](extension/AGENTS.md) for editor work. The
+Start with the [repository instructions](AGENTS.md). Use [Framework engineering](docs/framework/ENGINEERING.md)
+for the Framework and [the standalone extension instructions](extension/AGENTS.md) for editor work. The
 [product guide](docs/PRODUCT.md) describes the shared behavior.
 
 For IDE work, open `ide/`, run its development commands there and follow [IDE engineering](docs/ide/ENGINEERING.md).

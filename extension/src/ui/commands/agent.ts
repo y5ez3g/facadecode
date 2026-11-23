@@ -20,7 +20,7 @@ export interface AgentCommandDeps {
 	readonly notifyError: HumanPort['error'];
 }
 
-export interface RustCardActions {
+export interface FrameworkCardActions {
 	open(run: RunId): Promise<boolean>;
 	hide(run: RunId): Promise<void>;
 	stop(run: RunId): Promise<void>;
@@ -89,7 +89,7 @@ export class AgentActions {
 		}
 	}
 
-	/** Stop Agent (LIFECYCLE-3.1) uses the active engine's stop and reports its result to the initiator. */
+	/** Stop Agent (LIFECYCLE-3.1) uses the active implementation's stop and reports its result to the initiator. */
 	async stop(run: RunId, outside?: { readonly facts: RunFacts; readonly stop: () => ReturnType<Agents['stop']> }): Promise<boolean> {
 		const facts = outside?.facts ?? this.deps.agents.get(run);
 		if (!facts) {
@@ -191,9 +191,9 @@ export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActi
 }
 
 /** The workspace card's actions use its current run and the parent's Orchestrator callbacks (PANEL-4.2). */
-export function registerRustAgentCommands(deps: Pick<AgentCommandDeps, 'model' | 'notifyError'> & {
+export function registerFrameworkAgentCommands(deps: Pick<AgentCommandDeps, 'model' | 'notifyError'> & {
 	readonly agents: Pick<Agents, 'get'>;
-	readonly actions: RustCardActions;
+	readonly actions: FrameworkCardActions;
 	readonly goToAgent: () => Promise<void>;
 }): vscode.Disposable[] {
 	const { agents, model, actions } = deps;

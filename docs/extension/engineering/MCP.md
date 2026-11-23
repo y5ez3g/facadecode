@@ -1,6 +1,6 @@
 # MCP contract
 
-Group 7 describes the active MCP boundary. Groups 1–6 preserve the old-engine interface during the transition.
+Group 7 describes the active MCP boundary. Groups 1–6 preserve the legacy implementation interface during the transition.
 
 Layer 4. [Rules](../RULES.md) owns effects and
 [Collaboration](../features/COLLABORATION.md) owns message experience.
@@ -75,7 +75,7 @@ Common failure reasons:
 | `out_of_reach` | A target outside the caller's creation tree with YOLO off |
 | `ended` | The target ended and cannot take the requested input |
 | `unsupported` | An unknown tool or a CLI without message input support |
-| `configuration_invalid` | Invalid settings or a server without a caller on the old engine |
+| `configuration_invalid` | Invalid settings or a server without a caller on the legacy implementation |
 | `unavailable` | Facade or a window cannot be reached, or the result is unknown |
 | `capacity_exceeded` | Input capacity is exhausted |
 | `partial_input` | Only part of the input reached the terminal |
@@ -110,7 +110,7 @@ or daemon reconnection. A message that could not be typed in time is withdrawn; 
 uncertain cannot be withdrawn.
 There is no later send result. The recipient's reply is a separate send.
 
-Calls route to a window through the old engine's tool link. A transport timeout ends waiting for a reply.
+Calls route to a window through the legacy implementation's tool link. A transport timeout ends waiting for a reply.
 Locally measured elapsed time uses a monotonic clock; process clocks are never subtracted across environments.
 read_messages and read_screen each read once and never wait for new activity. A continuing call sends no MCP progress
 notification and produces no progress popup. Result delivery remains finite, with no automatic human fallback.
@@ -196,7 +196,7 @@ A missing path answers:
 ```
 
 A start with a prompt has the same result fields. Its later Facade message says whether the prompt reached the agent;
-a prompt failure does not destroy a successfully started agent. The old engine gives up a prompt its delivery window
+a prompt failure does not destroy a successfully started agent. The legacy implementation gives up a prompt its delivery window
 cannot accommodate. Tool unavailability leaves a usable CLI running.
 COLLABORATION-2.2 owns native/post-start prompt selection. A failure states any known or unknown startup effects in
 message, including the path of a worktree that was created and kept. There is no task object, completion expectation
@@ -276,8 +276,8 @@ If delivery cannot start in time because of a draft, menu, unknown input box or 
 recipient's inbox and fail, saying it is safe to send again later. Pasted input whose submission is unconfirmed cannot
 be withdrawn; the failure says to inspect the recipient's screen before sending again. A disconnected call may have
 sent its message, as its failure says. There is no public cancel tool or later send result.
-On the old engine human contact means notification handoff in the sender's editor window. A terminal-window caller
-cannot notify `#human` on that engine. Delivery/reply/system-result errors remain with agents or end if nobody
+On the legacy implementation human contact means notification handoff in the sender's editor window. A terminal-window caller
+cannot notify `#human` with that implementation. Delivery/reply/system-result errors remain with agents or end if nobody
 can receive them. Success is delivery, not a reply or task completion. The recipient's reply is another send.
 
 The golden send to bob answers:
@@ -470,7 +470,7 @@ own its use, effects and success/retry boundaries; the skill provides cross-tool
 Necessary facts remain local to a tool that a client loads alone, especially inbox delivery acknowledgment, raw input's
 lack of draft protection, and the consequences of unknown input. The skill does not duplicate the eight argument
 schemas.
-The old engine's tool definitions and descriptions live in [schema/tools.ts](../../../extension/src/schema/tools.ts). The MCP annotations are:
+The legacy implementation's tool definitions and descriptions live in [schema/tools.ts](../../../extension/src/schema/tools.ts). The MCP annotations are:
 
 | Tools | readOnlyHint | destructiveHint | idempotentHint | openWorldHint |
 | --- | --- | --- | --- | --- |
@@ -511,8 +511,8 @@ with incompatible arguments fails explicitly.
 v1's MCP entry point.**
 
 The [product](../../PRODUCT.md) describes machine-scoped starts, Guest identity, addressing and message delivery.
-The [generated tool descriptions](../../../core/crates/base/src/texts/tools.json) define the tool arguments and
-results. The [daemon API](../../../core/protocol/DAEMON.md) defines the wire contract. VS Code starts and attaches through
+The [generated tool descriptions](../../../framework/crates/base/src/texts/tools.json) define the tool arguments and
+results. The [daemon API](../../../framework/protocol/DAEMON.md) defines the wire contract. VS Code starts and attaches through
 its own Orchestrator client. Background delivery failures and creator watchdog notices use the recipient's Facade
 inbox. A startup incident and a failed initial prompt share one notice. See RULES-6.7.
 

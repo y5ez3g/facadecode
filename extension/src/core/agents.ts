@@ -858,7 +858,7 @@ export class AgentService implements Agents, Disposable {
 		}
 		run.exactResume = plan.exactResume;
 		const sessionId = plan.sessionId ?? run.facts.sessionId;
-		// The old engine continues a saved session in a new run, for Continue Session or a restored Pin (PANEL-1.4).
+		// The legacy implementation continues a saved session in a new run, for Continue Session or a restored Pin (PANEL-1.4).
 		const resuming = !!options.resume && sessionId === options.resume.key.sessionId;
 		// A conversation it resumes is saved already: it can be pinned from the start, its Pin following its CLI should that name
 		// another (LIFECYCLE-3.4). A new one, an ID given it or not, waits for its CLI to name it.
@@ -1739,7 +1739,7 @@ function isRequestRun(value: unknown): value is RunFacts & { readonly requestOnl
 		typeof value.root === 'string' && !!value.root;
 }
 
-/** Keep the old engine's `resumed` field for any saved session started under a new agent number. */
+/** Keep the legacy implementation's `resumed` field for any saved session started under a new agent number. */
 function retainedRun(facts: RunFacts): RetainedRun {
 	const { sessionOpening, ...record } = facts;
 	return sessionOpening === 'continued' ? { ...record, resumed: true } : record;

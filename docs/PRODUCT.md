@@ -4,11 +4,11 @@ Facade Code runs coding CLIs such as Claude Code and Codex across your machines.
 messages, read terminal output and enter text. You can start and work with them from Shell, VS Code or an application
 that supports MCP.
 
-Use the [standalone Shell installation](core/FEATURES.md#install-the-standalone-shell) for `facade` and
-`facade-mcp`. For the editor entry point, use VS Code 1.105 or later and a
-[Facade Code extension package](../extension/GUIDE.md#install-for-your-workspace-host) with the Orchestrator-backed
-engine for the workspace host. To share an agent, point Shell and the editor at the same Orchestrator home on
-the execution host. Install and sign in to your coding CLI on the machine where it will run.
+Facade Code Framework provides Shell, the Orchestrator and the MCP relay. Install its `facade` and `facade-mcp`
+commands using the [standalone Shell installation](framework/FEATURES.md#install-the-standalone-shell).
+[Facade Code Extension](../extension/GUIDE.md#install-for-your-workspace-host) connects VS Code 1.105 or later to the
+Framework on the workspace host. To share an agent, point Shell and the editor at the same Facade home on the execution
+host. Install and sign in to your coding CLI on the machine where it will run.
 
 ![Two Orchestrators connect over SSH. VS Code and Shell attach to agent terminals, and an external app joins as a Guest over MCP.](0-facade.svg)
 
@@ -257,7 +257,7 @@ facade machine rename devbox build-box
 - **Remote installation.** SSH probes the executable in the selected remote home. Add or Connect installs the
   exact local build when that home needs an installation or an upgrade. An equally ranked build proceeds to the
   daemon handshake. If the remote build ranks higher, upgrade your local home first. Passive probes leave sleeping
-  services and installations alone. See [Folders and machines](core/FEATURES.md#folders-and-machines).
+  services and installations alone. See [Folders and machines](framework/FEATURES.md#folders-and-machines).
 - **Facade home.** Use `--home` to select a remote Facade home other than `~/.facade`.
 - **WSL and Dev Containers.** Each is a separate machine. Facade inside the environment uses its own local
   Orchestrator. To connect from outside, configure SSH in that environment and add it from the other machine.
@@ -393,12 +393,12 @@ receipt. Automatic reconnect retries reuse the original request's outcome when i
 
 The **keeper** is the parent of the managed CLIs and holds their terminals. The **daemon** manages agents and
 serves Facade's clients. Each service retains access to the terminals while the other restarts. An API-compatible
-daemon takeover keeps the keeper and its CLIs running while clients reconnect. See [Core architecture](core/ARCHITECTURE.md).
+daemon takeover keeps the keeper and its CLIs running while clients reconnect. See [Framework architecture](framework/ARCHITECTURE.md).
 
 - **Status.** `facade status` reports the local Facade home, settings file, version, service PIDs, managed
   agent count, connected machines and the fixed Guest MCP launcher. It queries sleeping services without
   starting them. The daemon and keeper each retain 30 days of logs.
-- **Installation.** Use the [standalone Shell installation](core/FEATURES.md#install-the-standalone-shell).
+- **Installation.** Use the [standalone Shell installation](framework/FEATURES.md#install-the-standalone-shell).
   The Orchestrator-backed extension ships the programs for its host and can install them into the selected
   Facade home offline. The selected home supplies the programs for the extension's commands. If another program
   is named `facade`, PATH determines which executable the shell starts.
@@ -446,7 +446,7 @@ Run `facade` to see the command groups. Use `facade <COMMAND> --help` for exampl
 Help and `--version` run without starting services. Results and receipts go to stdout. Empty-result guidance,
 diagnostics and progress go to stderr. An operation failure returns 1. Invalid usage returns 2. After a
 foreground `start`, `resume` or `attach` opens a terminal, Ctrl+] detaches and returns 0. If the agent's CLI
-exits first, the command returns its exit code or 128 plus its signal number. See [Shell commands](core/islands/facade.md#shell-commands).
+exits first, the command returns its exit code or 128 plus its signal number. See [Shell commands](framework/islands/facade.md#shell-commands).
 
 ## MCP
 
@@ -488,13 +488,13 @@ Helpers appear as cards. Windows for the same workspace share the remembered mem
   Run `facade machine add` there to make other machines reachable from that window.
 - **Window Component.** The component supplied with the extension cleans up terminal tabs left by a previous
   extension host after a reconnect or restart.
-- **Engine selection.** This guide describes the Orchestrator-backed Rust engine. The extension's original
-  engine follows the [old-engine rules](extension/PRODUCT.md#57-transition).
+- **Extension implementation.** The [Extension product guide](extension/PRODUCT.md) describes its Framework and
+  legacy implementation settings.
 - **Other actions.** Use Shell for machine administration and sending messages as a person. Use Git to remove
   a worktree.
 
 The [VS Code product guide](extension/PRODUCT.md) explains the editor entry in more detail. The
-[Glossary](core/GLOSSARY.md) defines shared terms such as Attach, Guest, Pin, Resume and YOLO.
+[Glossary](framework/GLOSSARY.md) defines shared terms such as Attach, Guest, Pin, Resume and YOLO.
 
 ## Common workflows
 

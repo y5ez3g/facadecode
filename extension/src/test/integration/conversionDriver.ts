@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import type { PanelState } from '../../webview/protocol';
-import { coreCall } from './editors';
+import { frameworkCall } from './editors';
 
 /**
  * A tab title without the spinner's frame a busy agent's tab shows before its name (LIFECYCLE-2.2).
@@ -22,23 +22,23 @@ const OUT = process.env.FACADE_IT_CONVERSION!;
 const RECORD = process.env.FACADE_IT_RECORD!;
 const REOPEN = process.env.FACADE_IT_REOPEN === '1';
 const NATIVE = process.env.FACADE_IT_NATIVE;
-const RUST = process.env.FACADE_IT_ENGINE === 'rust';
+const FRAMEWORK = process.env.FACADE_IT_IMPLEMENTATION === 'framework';
 const HOME = process.env.FACADE_HOME!;
 
 /** The active agents in the Orchestrator's roster, by address. */
-async function coreAgents(): Promise<string[]> {
-	return (await coreCall(HOME, 'agent.list', {})).agents.map(agent => agent.address);
+async function frameworkAgents(): Promise<string[]> {
+	return (await frameworkCall(HOME, 'agent.list', {})).agents.map(agent => agent.address);
 }
 
-/** Read the native session from the old run file or the Orchestrator's Inspect response. */
+/** Read the native session from the legacy run file or the Orchestrator's Inspect response. */
 async function sessionOf(runId: string, alias: string): Promise<string | undefined> {
-	if (!RUST) {
+	if (!FRAMEWORK) {
 		try {
 			const id: unknown = JSON.parse(fs.readFileSync(path.join(process.env.FACADE_HOME!, 'extension', 'runs', `${runId}.session.json`), 'utf8')).session_id;
 			return typeof id === 'string' && id ? id : undefined;
 		} catch { return undefined; }
 	}
-	return (await coreCall(HOME, 'agent.inspect', { target: alias })).agent.session || undefined;
+	return (await frameworkCall(HOME, 'agent.inspect', { target: alias })).agent.session || undefined;
 }
 /** Agents started beside the journey's own before it reloads, so that each reload's claim is timed in a busy window (VERIFICATION G2). */
 const LOAD = Number(process.env.FACADE_IT_LOAD ?? 0);
@@ -46,7 +46,7 @@ const LOAD = Number(process.env.FACADE_IT_LOAD ?? 0);
 /** A native process is observed from this isolated window's launch log, never from the owner's process list. */
 function pidOf(alias: string): number | undefined {
 	if (!NATIVE) {
-		const file = `${RECORD}.${RUST ? '#' : ''}${alias}`;
+		const file = `${RECORD}.${FRAMEWORK ? '#' : ''}${alias}`;
 		return fs.existsSync(file) ? Number(fs.readFileSync(file, 'utf8').trim()) : undefined;
 	}
 	const dir = path.join(process.env.FACADE_HOME!, 'extension', 'workspaces');
@@ -88,8 +88,8 @@ async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = 
  */
 function pinHolds(session: string): boolean {
 	const root = path.join(process.env.FACADE_HOME!, 'extension', 'workspaces');
-	const file = RUST ? 'orchestrator-workspace.json' : 'workspace-state.json';
-	const entry = RUST ? 'pins' : 'facade.pins';
+	const file = FRAMEWORK ? 'orchestrator-workspace.json' : 'workspace-state.json';
+	const entry = FRAMEWORK ? 'pins' : 'facade.pins';
 	const saved = (dir: string): unknown => {
 		try { return (JSON.parse(fs.readFileSync(path.join(root, dir, file), 'utf8')) as Record<string, unknown>)[entry]; } catch { return undefined; }
 	};
@@ -127,7 +127,7 @@ async function pinState(runId: string, pinned: boolean): Promise<void> {
 	});
 	await vscode.commands.executeCommand('facade.revealAgent', { run_id: runId });
 	await until('its native tab to agree', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs)
-		.some(tab => tab.input instanceof vscode.TabInputTerminal && unspun(tab.label).startsWith(card.name) && (RUST || tab.isPinned === pinned)) || undefined);
+		.some(tab => tab.input instanceof vscode.TabInputTerminal && unspun(tab.label).startsWith(card.name) && (FRAMEWORK || tab.isPinned === pinned)) || undefined);
 }
 
 export async function activate(): Promise<void> {
@@ -147,7 +147,7 @@ export async function activate(): Promise<void> {
 				if (!now.cardCount) {
 					await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 				}
-				// The Rust engine shows a pending card before core assigns its agent ID.
+				// The Framework shows a pending card before framework assigns its agent ID.
 				return now.cards.find(each => each.alias);
 			});
 			const alias = card.alias;
@@ -190,9 +190,9 @@ export async function activate(): Promise<void> {
 			const alias = card.alias;
 			const pid = await until('the restored CLI process', async () => pidOf(alias));
 			const session = await until('the restored native session identity', async () => sessionOf(card.runId, alias));
-			// The reopened window's cards and terminals, and the Rust records in this Facade home (RULES-4.1).
+			// The reopened window's cards and terminals, and the Framework records in this Facade home (RULES-4.1).
 			const { cards } = await state();
-			write({ phase: 'reopened', runId: card.runId, pid, session, terminals: vscode.window.terminals.length, cards: cards.map(each => ({ alias: each.alias, dot: each.dot })), ...RUST ? { core: await coreAgents() } : {} });
+			write({ phase: 'reopened', runId: card.runId, pid, session, terminals: vscode.window.terminals.length, cards: cards.map(each => ({ alias: each.alias, dot: each.dot })), ...FRAMEWORK ? { framework: await frameworkAgents() } : {} });
 			return;
 		}
 		const first = steps[0] as unknown as { runId: string; name: string };
@@ -209,7 +209,7 @@ export async function activate(): Promise<void> {
 			}
 			await pinState(runId, false);
 			write({ phase: 'reload-unpinned', runId, ...claim });
-			if (RUST) {
+			if (FRAMEWORK) {
 				await vscode.commands.executeCommand('facade.pinAgent', { run_id: runId });
 			} else {
 				await vscode.commands.executeCommand('workbench.action.pinEditor');
@@ -219,7 +219,7 @@ export async function activate(): Promise<void> {
 			vscode.workspace.updateWorkspaceFolders(1, 0, { uri: vscode.Uri.file(process.env.FACADE_IT_SECOND!) });
 			return;
 		}
-		if (RUST) {
+		if (FRAMEWORK) {
 			// The new workspace URI has its own roster. Go to Agent attaches the original Orchestrator run.
 			void vscode.commands.executeCommand('facade.goToAgent');
 			await until('the original agent in the new workspace', async () => {
@@ -232,12 +232,12 @@ export async function activate(): Promise<void> {
 		await pinState(runId, true);
 		const card = await until('the same card in the workspace', async () => (await state()).cards.find(each => each.runId === runId)).catch(() => undefined);
 		// A predecessor tab without a current pseudoterminal can remain after a workspace URI changes.
-		const terminals = () => vscode.window.terminals.filter(each => !RUST || 'pty' in each.creationOptions)
+		const terminals = () => vscode.window.terminals.filter(each => !FRAMEWORK || 'pty' in each.creationOptions)
 			.map(each => unspun(each.name));
 		await until('one live terminal of the agent', async () => terminals().filter(name => name === card?.name).length === 1 || undefined);
-		if (RUST && card) {
+		if (FRAMEWORK && card) {
 			await until('one Orchestrator view of the original agent', async () =>
-				(await coreCall(HOME, 'agent.inspect', { target: card.alias })).viewers.length === 1 || undefined);
+				(await frameworkCall(HOME, 'agent.inspect', { target: card.alias })).viewers.length === 1 || undefined);
 		}
 		write({ phase: 'workspace', folders: vscode.workspace.workspaceFolders?.length,
 			card: card ? { runId: card.runId, name: card.name, pinned: card.pinned } : null, terminals: terminals() });

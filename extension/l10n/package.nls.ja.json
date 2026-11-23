@@ -37,7 +37,7 @@
 	"command.continueSession": "セッションを続行...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "旧エンジン専用です。このフォルダーには旧エンジンの設定、エージェントの履歴、メッセージが保存されます。ここで指定したパスは `FACADE_HOME` や既定の `~/.facade` より優先されます。\n\n[facade.json で編集](command:facade.openSettingsFile)で YOLO、候補の名前、CLI の起動方法を変更できます。",
+	"config.home": "従来の実装専用です。このフォルダーには従来の実装の設定、エージェントの履歴、メッセージが保存されます。ここで指定したパスは `FACADE_HOME` や既定の `~/.facade` より優先されます。\n\n[facade.json で編集](command:facade.openSettingsFile)で YOLO、候補の名前、CLI の起動方法を変更できます。",
 	"config.home.pattern": "パスは ~/ で始まるか、絶対パスである必要があります。",
-	"config.rustEngine": "エージェントを動かすエンジンを制御します。新しい Rust エンジンは、最高のパフォーマンスを追求して設計されています。\n\n- `auto`: Rust エンジンを使います。このコンピューターで旧エンジンのエージェントがすべて終了すると、ウィンドウが切り替わります。実行中のエージェントが中断されることはなく、切り替え可能になるとすぐに Facade がウィンドウの再読み込みを促します。\n- `off`: 旧エンジンを使います。Rust エンジンで問題が起きた場合は、`off` を選んでウィンドウを再読み込みし、[GitHub の issue](https://github.com/y5ez3g/facadecode/issues) でお知らせください。\n\nリモート ウィンドウでは、リモート マシン側の設定が使われます。"
+	"config.framework": "エージェントを動かす実装を選びます。\n\n- `auto`: Facade Code Frameworkを使います。このコンピューターで従来の実装のエージェントがすべて終了すると、ウィンドウが切り替わります。実行中のエージェントが中断されることはなく、切り替え可能になるとすぐに Facade がウィンドウの再読み込みを促します。\n- `off`: 従来の実装を使います。Facade Code Frameworkで問題が起きた場合は、`off` を選んでウィンドウを再読み込みし、[GitHub の issue](https://github.com/y5ez3g/facadecode/issues) でお知らせください。\n\nリモート ウィンドウでは、リモート マシン側の設定が使われます。"
 }

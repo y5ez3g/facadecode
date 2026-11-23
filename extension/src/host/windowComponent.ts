@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The local component can retire stale Rust tabs (ARCHITECTURE-6.3). The old engine waits for its window services
+// The local component can retire stale Framework tabs (ARCHITECTURE-6.3). The legacy implementation waits for its window services
 // (ARCHITECTURE-4.3) when VS Code has not activated the component yet.
 
 import * as crypto from 'crypto';
@@ -28,7 +28,7 @@ export async function optionalTerminalOwner(_context: vscode.ExtensionContext, h
 	try {
 		const identity: unknown = await vscode.commands.executeCommand(WINDOW_TERMINAL_OWNER_COMMAND, session);
 		if (!isWindowTerminalIdentity(identity, session)) { return undefined; }
-		const claim = nextOwnerClaim(`rust-terminal:${identity.token}`, home);
+		const claim = nextOwnerClaim(`framework-terminal:${identity.token}`, home);
 		const owner = { session, claim, remote: vscode.env.remoteName !== undefined };
 		if (await vscode.commands.executeCommand(WINDOW_TERMINALS_COMMAND, { ...owner, kind: 'activate', handedOver: true }) === true) {
 			return owner;

@@ -6,7 +6,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
-import type { AgentInfo, AgentRef } from '../base/coreProtocol';
+import type { AgentInfo, AgentRef } from '../base/frameworkProtocol';
 import { withLongFileLock } from '../base/lock';
 import { WINDOW_LEGACY_INSTANCE_COMMAND } from '../base/windowIdentity';
 import { windowAddress } from '../host/windowNetwork';
@@ -36,7 +36,7 @@ async function bringsBackFolderlessWorkspace(home: string, withPin: boolean): Pr
 	const state = new Map<string, unknown>();
 	if (withPin) { state.set('facade.workspaceKey', previous.key); }
 	const open = (sessionId: string, withComponent = true, storage = state) => {
-		const { openRustWorkspace } = withModules({ vscode: {
+		const { openFrameworkWorkspace } = withModules({ vscode: {
 			env: { sessionId },
 			workspace: {},
 			l10n: { t: (text: string) => text },
@@ -48,8 +48,8 @@ async function bringsBackFolderlessWorkspace(home: string, withPin: boolean): Pr
 					return { version: 1, session, token, instanceId };
 				},
 			},
-		} })<typeof import('../host/orchestrator/workspace')>(require.resolve('../host/orchestrator/workspace'));
-		return openRustWorkspace({ workspaceState: {
+		} })<typeof import('../host/framework/workspace')>(require.resolve('../host/framework/workspace'));
+		return openFrameworkWorkspace({ workspaceState: {
 			get: (key: string) => storage.get(key),
 			update: async (key: string, value: unknown) => { storage.set(key, value); },
 		} } as never, { home, log: { event: assert.fail } });
@@ -65,7 +65,7 @@ async function bringsBackFolderlessWorkspace(home: string, withPin: boolean): Pr
 	}
 	const opened = open(`new-${withPin}`);
 	try {
-		// The prerelease editor persisted this member before completing its workspace import.
+		// The editor saved this member before completing its workspace import.
 		opened.show(agent);
 		const expected = {
 			members: withPin ? [agent, { machine_id: pin.machine_id, agent_id: pin.agent }] : [agent],
@@ -104,8 +104,8 @@ suite('Orchestrator workspace roster (RULES-6.1)', () => {
 			env: { sessionId },
 			workspace: { workspaceFolders: [{ uri: { toString: () => uri } }] },
 			EventEmitter: TestEmitter,
-		} })<typeof import('../host/orchestrator/workspace')>(require.resolve('../host/orchestrator/workspace'))
-			.openRustWorkspace({ workspaceState: { get: () => undefined } } as never, { home: temp.dir, log: { event: assert.fail } });
+		} })<typeof import('../host/framework/workspace')>(require.resolve('../host/framework/workspace'))
+			.openFrameworkWorkspace({ workspaceState: { get: () => undefined } } as never, { home: temp.dir, log: { event: assert.fail } });
 		const first = load('first');
 		const other = load('other');
 		const ref = (machine_id: string, agent_id = 'a7'): AgentRef => ({ machine_id, agent_id });
