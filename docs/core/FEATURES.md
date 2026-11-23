@@ -210,7 +210,9 @@ See [Machine sessions](../../core/protocol/DAEMON.md#machine-sessions).
 ## Restarts and diagnostics
 
 - The Orchestrator starts on demand and exits after 30 idle seconds. Saved SSH sessions also close after 30 idle
-  seconds. A foreground machine connection, an active Attach or a call in progress keeps its session active.
+  seconds, each on its own timer. A foreground machine connection, an active Attach or a call in progress keeps its
+  session active. A query or a machine table sync that finishes over a session restarts that session's 30 seconds
+  and the Orchestrator's; keepalives do not.
 - The keeper holds the CLI terminals during a daemon restart. The daemon keeps the terminals during a keeper restart.
   An API-compatible takeover replaces the daemon. The live keeper retains its CLIs and terminals while clients
   reconnect. See [Daemon takeover](../../core/protocol/DAEMON.md#daemon-takeover) for the compatibility checks.

@@ -410,6 +410,7 @@ impl Topology {
             let table = advertise::encode(self.machines());
             for (&id, link) in &self.links {
                 if changed || Some(id) == joined {
+                    let _activity = link.peer.hold_table_sync();
                     link.peer
                         .notify(Notification::new(methods::ADVERTISE, &table));
                 }

@@ -51,7 +51,8 @@ public `run()` entry point.
   each selected Agent's outcome. Scope stops report connected Guests as skipped.
 - The service opens after recovery has listed the readable agents. Thirty consecutive idle seconds
   allow it to exit. A running Agent, a connected Guest, an ordinary client or current work keeps
-  it active. Foreground SSH, in-flight calls and live terminal watches count as machine work.
+  it active. Foreground SSH, in-flight calls, live terminal watches and machine table sync count
+  as machine work.
 
 ## Interface
 
@@ -524,9 +525,11 @@ transport failures have distinct states. Queries report their own outcomes, incl
 failed. An idle session can close while its saved connection remains available for a later call.
 
 Explicit temporary SSH connect keeps work on both daemons. Calls and live terminal watches hold each
-participating session, including the forwarding hops. Advertisements, keepalives and roster sync
-are passive. The network releases a saved session after 30 idle seconds. The daemon has its own
-30-second idle timer.
+participating session, including the forwarding hops. Machine table sync over an open session
+counts as work on each end. The sender holds the session while queuing the sync, and the receiver
+holds it while processing the table. At each end, the session and daemon restart their own
+30-second idle timers when their last work ends. SSH keepalives, roster sync and local `daemon.ping`
+let the timers keep running.
 
 ### guests
 

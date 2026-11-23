@@ -234,6 +234,7 @@ actions they offer.
 | temporary connection | A connection held by a foreground `facade machine connect` command until that command exits | saved connection (for this) |
 | remote probe | What Facade runs first over a new SSH login: it learns the login shell and the version of Facade installed there, `RemoteProbe` | probe (for this) |
 | machine session | The two-way JSON-RPC exchange on a live connection. The daemons introduce themselves with `hello` before exchanging requests, responses, notifications and cancellations | CLI session, SSH login (for this) |
+| machine table sync | A daemon sending its machine table over a machine session, as an id-less `advertise`, after the table changes or a machine joins | advertisement (for this) |
 | route | The ordered machine IDs a call passes through. The forwarded `route` gives the remaining machines and ends with the destination | connection, link (for this) |
 | forward, forwarding | Carry a call or subscription through an intermediate machine. The original caller and payload travel intact, and responses follow the request's path back | relay (for this) |
 | sleeping, sleep | A machine whose Orchestrator exited because it had no running agents, local entry points using it, or work in progress | asleep, offline, unreachable (for this) |
@@ -342,6 +343,7 @@ code that mirrors them keeps it too.
 | `address` in an agent record | The copyable address that Shell calls an agent reference |
 | `reference` of type `AgentRef` | The agent's structured identity, with its full `machine_id` and `agent_id` |
 | `session_name` | The session name or preview, for the Shell tables' `SESSION` column and the `Session` line of `facade status` |
+| `advertise` | A machine table sync. The first one, which has an ID, is part of the machine introduction |
 | `attach.shell` | A dedicated Shell Attach watch. On the target run's exit, the daemon gives the client time to read the final output and exit result before closing the connection |
 | `clis` and `cli_error` in MCP | The available CLI names in a machine's discovery context, or the reason the lookup failed |
 | `timeout_seconds` in MCP | The total budget when a send or inbox read waits. A value of zero skips the wait |
