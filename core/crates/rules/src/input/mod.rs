@@ -10,7 +10,7 @@ use facade_base::model::terminal::{HiddenRows, InputInfo, InputState};
 use facade_screen::{ScreenView, VisibleCell};
 use regex::Regex;
 
-use crate::{BoxInput, Editor, Frame, InputRule, Menu, Prompt, Scrolled};
+use crate::{BoxInput, CountedScroll, Editor, Frame, InputRule, Menu, Prompt, Scrolled};
 
 pub use paste::{is_own_draft, is_same_draft, settle_time, with_paste_text};
 pub use probe::{ProbeVerdict, restored, shape_of, space_taken, verdict_of};
@@ -390,7 +390,7 @@ impl<'a> Screen<'a> {
         prompt: usize,
         end: usize,
         what: &str,
-        scrolled: Option<&Scrolled>,
+        scrolled: Option<&CountedScroll>,
         probe_unstyled_hint: bool,
     ) -> Reading {
         let rest_blank = (prompt + 1..end).all(|y| self.blank(y));
@@ -404,7 +404,7 @@ impl<'a> Screen<'a> {
         prompt: usize,
         end: usize,
         what: &str,
-        scrolled: Option<&Scrolled>,
+        scrolled: Option<&CountedScroll>,
         probe_unstyled_hint: bool,
     ) -> Reading {
         let place = format!("{what} at {}", row_span(prompt + 1, end));
@@ -479,12 +479,10 @@ impl<'a> Screen<'a> {
             self.char(y, 0) == frame.prompt
                 && (self.char(y, 1) == frame.gap || all_space(self.from(y, 1)))
         };
-        let mark_at = |y: usize, pattern: &Regex| {
-            if frame.scrolled.on_rules {
-                counted(pattern, &self.lines[y])
-            } else {
-                None
-            }
+        let (row_marks, rule_marks) = match &frame.scrolled {
+            Scrolled::Rows(marks) => (Some(marks), None),
+            Scrolled::Rules(marks) => (None, Some(marks)),
+            Scrolled::LastColumn { .. } => (None, None),
         };
         // Up from the cursor over wrapped rows to the prompt or a marked upper rule.
         let upper = (0..=cursor_row)
@@ -501,23 +499,23 @@ impl<'a> Screen<'a> {
             return missing();
         };
         let first = upper + 1;
-        let above = mark_at(upper, &frame.scrolled.above);
+        let above = rule_marks.and_then(|marks| counted(&marks.above, &self.lines[upper]));
         if first > cursor_row
             || !(above.is_some() || prompt_at(first) && frame.upper.is_match(&self.lines[upper]))
         {
             return missing();
         }
         // Down over wrapped rows to the lower rule.
-        let lower_at = |y: usize| {
-            frame.lower.is_match(&self.lines[y]) || mark_at(y, &frame.scrolled.below).is_some()
-        };
+        let below_at =
+            |y: usize| rule_marks.and_then(|marks| counted(&marks.below, &self.lines[y]));
+        let lower_at = |y: usize| frame.lower.is_match(&self.lines[y]) || below_at(y).is_some();
         let lower = (first + 1..self.height())
             .find(|&y| lower_at(y) || !self.wrapped(y))
             .filter(|&y| lower_at(y));
         let Some(lower) = lower else {
             return missing();
         };
-        let below = mark_at(lower, &frame.scrolled.below);
+        let below = below_at(lower);
         if above.is_some() || below.is_some() {
             let lines: Vec<&Cells> = (first..lower).map(|y| self.from(y, 2)).collect();
             return self.scrolled_draft(first, "the input frame", (above, below), &lines);
@@ -547,7 +545,7 @@ impl<'a> Screen<'a> {
             first,
             lower,
             "the input frame",
-            (!frame.scrolled.on_rules).then_some(&frame.scrolled),
+            row_marks,
             untouched_input && frame.probe_unstyled_hint,
         )
     }
@@ -589,8 +587,12 @@ impl<'a> Screen<'a> {
                 .last()
                 .is_some_and(|cell| cell.column + 1 == self.cols && cell.dim && cell.text == mark)
         };
-        let above = model.is_none() && marked(prompt, &rule.scroll_marks.above);
-        let below = model.is_none() && marked(last, &rule.scroll_marks.below);
+        let (above, below) = match &rule.scrolled {
+            Scrolled::LastColumn { above, below } if model.is_none() => {
+                (marked(prompt, above), marked(last, below))
+            }
+            _ => (false, false),
+        };
         if model.is_none() && !above && !below {
             return missing_model();
         }
@@ -686,10 +688,13 @@ impl<'a> Screen<'a> {
             };
         }
         if holds_writing(lines) {
-            let marks = (
-                counted(&rule.above, &self.lines[upper]),
-                counted(&rule.below, &self.lines[lower]),
-            );
+            let marks = match &rule.scrolled {
+                Scrolled::Rules(marks) => (
+                    counted(&marks.above, &self.lines[upper]),
+                    counted(&marks.below, &self.lines[lower]),
+                ),
+                _ => (None, None),
+            };
             return drafted(place, marks, lines);
         }
         if lines.len() > 1 || column > 3 {

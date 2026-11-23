@@ -10,7 +10,7 @@
 		"gap": " ",
 		"upper": "^(?:─+|─{2} [^─]+ ─+)$",
 		"lower": "^─+$",
-		"scrolled": { "above": "^↑ (\\d+) more lines?$", "below": "^↓ (\\d+) more lines?$" },
+		"scrolled": { "position": "rows", "above": "^↑ (\\d+) more lines?$", "below": "^↓ (\\d+) more lines?$" },
 		"menus": [{ "selected": "^⟩ \\d+ +\\S", "next": "^ {2}\\d+ +\\S" }]
 	},
 	"paste": {

@@ -336,16 +336,8 @@ pub struct Prompt {
     #[serde(default)]
     pub alternate_prompt: Option<String>,
     pub model_line: Pattern,
-    pub scroll_marks: ScrollMarks,
+    pub scrolled: Scrolled,
     pub menus: Vec<Menu>,
-}
-
-/// The dim marks in the last column of the first and last input rows. They have no counts.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ScrollMarks {
-    pub above: String,
-    pub below: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -353,10 +345,7 @@ pub struct ScrollMarks {
 pub struct Editor {
     pub upper: Pattern,
     pub lower: Pattern,
-    /// The upper rule while rows are scrolled out above; its one capture counts them.
-    pub above: Pattern,
-    /// The lower rule while rows are scrolled out below; its one capture counts them.
-    pub below: Pattern,
+    pub scrolled: Scrolled,
     /// The editor is at most this many rows tall, or this share of the screen where that is more.
     pub most_rows: usize,
     pub most_share: f64,
@@ -468,16 +457,24 @@ pub struct StatusGlyph {
     pub frame_ms: u64,
 }
 
-/// The rows that mark a draft scrolled out of the input; each pattern's one capture counts the
-/// hidden rows.
+/// Where a CLI marks a draft scrolled out of the input.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "position", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Scrolled {
+    /// Separate rows inside the frame.
+    Rows(CountedScroll),
+    /// Markers on the upper and lower border rules.
+    Rules(CountedScroll),
+    /// Dim glyphs in the last column of the first and last input rows, without counts.
+    LastColumn { above: String, below: String },
+}
+
+/// Each pattern's one capture counts the hidden rows on that side.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Scrolled {
+pub struct CountedScroll {
     pub above: Pattern,
     pub below: Pattern,
-    /// The patterns match the frame's rules when marked.
-    #[serde(default)]
-    pub on_rules: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -674,8 +671,11 @@ impl InputRule {
                 if let Some(alternate) = &prompt.alternate_prompt {
                     one_cell("alternate_prompt", alternate)?;
                 }
-                one_cell("scroll_marks.above", &prompt.scroll_marks.above)?;
-                one_cell("scroll_marks.below", &prompt.scroll_marks.below)?;
+                let Scrolled::LastColumn { above, below } = &prompt.scrolled else {
+                    return Err("prompt requires scrolled.position last_column".into());
+                };
+                one_cell("scrolled.above", above)?;
+                one_cell("scrolled.below", below)?;
             }
             InputRule::Editor(editor) => editor.check()?,
             InputRule::Box(input) => {
@@ -729,7 +729,12 @@ impl Frame {
     fn check(&self) -> Result<(), String> {
         one_cell("prompt", &self.prompt)?;
         one_cell("gap", &self.gap)?;
-        self.scrolled.check()?;
+        match &self.scrolled {
+            Scrolled::Rows(marks) | Scrolled::Rules(marks) => marks.check()?,
+            Scrolled::LastColumn { .. } => {
+                return Err("frame requires scrolled.position rows or rules".into());
+            }
+        }
         let texts = self
             .placeholder
             .iter()
@@ -743,8 +748,10 @@ impl Frame {
 
 impl Editor {
     fn check(&self) -> Result<(), String> {
-        counts_rows("above", &self.above)?;
-        counts_rows("below", &self.below)?;
+        let Scrolled::Rules(marks) = &self.scrolled else {
+            return Err("editor requires scrolled.position rules".into());
+        };
+        marks.check()?;
         if self.most_rows == 0 {
             return Err("most_rows must be positive".into());
         }
@@ -756,7 +763,7 @@ impl Editor {
     }
 }
 
-impl Scrolled {
+impl CountedScroll {
     fn check(&self) -> Result<(), String> {
         counts_rows("scrolled.above", &self.above)?;
         counts_rows("scrolled.below", &self.below)
@@ -997,6 +1004,37 @@ mod tests {
 
     fn refusal(name: &str, text: &str) -> String {
         Rule::parse(name, text).expect_err("the rule must be refused")
+    }
+
+    #[test]
+    fn embedded_input_rules_use_one_shape_for_hidden_row_markers() {
+        for (cli, source) in FILES {
+            let rule: serde_json::Value = serde_json::from_str(source).unwrap();
+            let input = rule["input"].as_object().unwrap();
+            for field in ["above", "below", "scroll_marks"] {
+                assert!(!input.contains_key(field), "{cli}: {field}");
+            }
+            let position = match cli {
+                "agy" | "muse" => "rows",
+                "claude" | "pi" => "rules",
+                "codex" => "last_column",
+                _ => {
+                    assert!(!input.contains_key("scrolled"), "{cli}");
+                    continue;
+                }
+            };
+            let scrolled = input["scrolled"].as_object().unwrap();
+            assert_eq!(scrolled["position"], position, "{cli}");
+            assert_eq!(scrolled.len(), 3, "{cli}: {scrolled:?}");
+            for field in ["above", "below"] {
+                assert!(
+                    scrolled[field]
+                        .as_str()
+                        .is_some_and(|mark| !mark.is_empty()),
+                    "{cli}: {field}"
+                );
+            }
+        }
     }
 
     #[test]

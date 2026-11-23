@@ -8,8 +8,7 @@
 		"mechanism": "editor",
 		"upper": "^(?:─+|─{2,} \\S.*? ─+)$",
 		"lower": "^─+(?: ↓ \\d+ more ─+)?$",
-		"above": "^─{2,} ↑ (\\d+) more ─+$",
-		"below": "^─+ ↓ (\\d+) more ─+$",
+		"scrolled": { "position": "rules", "above": "^─{2,} ↑ (\\d+) more ─+$", "below": "^─+ ↓ (\\d+) more ─+$" },
 		"most_rows": 5,
 		"most_share": 0.3,
 		"menus": [{ "selected": "^ ?→ \\S", "next": "^ {2,4}\\S", "hint": { "pattern": "[Ee]scape/[Cc]trl\\+[Cc]", "within": 40 } }]

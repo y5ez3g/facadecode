@@ -203,14 +203,15 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     and an open synchronized update. For automatic delivery the daemon also supplies whether the
     input is untouched.
   - Each mechanism (`frame`, `prompt`, `editor`, `box`, `prompt_row`) knows only the layout its CLI was recorded drawing. Any other screen reads `unknown`, or `interaction` when one of the rule's menus or questions shows.
+  - Frame, editor and prompt rules use a `scrolled` object with `position`, `above` and `below`.
+    For `rows` (Muse Code and Antigravity), one capture in each pattern counts the hidden rows
+    from separate marker rows inside the frame. For `rules` (Claude Code and Pi), the patterns
+    capture counts from the upper and lower border rules. A frame with a marked upper rule can
+    start on a continuation row.
   - Codex's `prompt` input accepts `›` and its `alternate_prompt`, `»` at Ultra effort.
-    When the model line is absent, a dim `scroll_marks.above` glyph (`↑`) in the last column of
-    the first input row or a dim `scroll_marks.below` glyph (`↓`) in the last column of the last
-    input row anchors the scrolled composer. The draft omits the glyphs and the reading reports
-    1 hidden row for each marked side.
-  - A frame's `scrolled` patterns capture hidden row counts from marker rows inside the frame, as
-    Antigravity draws them. With `on_rules`, the patterns match the frame's upper and lower rules,
-    as Claude Code draws them. A marked upper rule also allows the input to start on a continuation row.
+    Its `last_column` position uses dim glyphs (`↑` and `↓`) in the last column of the first
+    and last input rows. When the model line is absent, those glyphs anchor the scrolled composer.
+    The draft omits the glyphs and the reading reports one hidden row for each marked side.
   - OpenCode's box has one space between the bar and the text below `narrow_below` (44 columns),
     and two spaces from that width.
   - A screen in the middle of a synchronized update, a cursor off the screen, or a hidden terminal cursor with no inverse cell of the CLI's own at that position never reads `usable` or `draft`.

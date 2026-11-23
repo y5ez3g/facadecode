@@ -10,7 +10,7 @@
 		"gap": " ",
 		"upper": "^─+$",
 		"lower": "^─+$",
-		"scrolled": { "above": "^↑ (\\d+) more lines?$", "below": "^↓ (\\d+) more lines?$" },
+		"scrolled": { "position": "rows", "above": "^↑ (\\d+) more lines?$", "below": "^↓ (\\d+) more lines?$" },
 		"placeholder": {
 			"texts": [
 				"Accept-edits mode: file edits auto-approved (shift+tab to cycle)",

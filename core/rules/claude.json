@@ -11,7 +11,7 @@
 		"gap": "\u00a0",
 		"upper": "^(?:─+|─{3} [^─]+ ─+)$",
 		"lower": "^─+$",
-		"scrolled": { "above": "^─{3} ↑ (\\d+) more ─+$", "below": "^─{3} ↓ (\\d+) more ─+$", "on_rules": true },
+		"scrolled": { "position": "rules", "above": "^─{3} ↑ (\\d+) more ─+$", "below": "^─{3} ↓ (\\d+) more ─+$" },
 		"menus": [{ "selected": "^ ❯ \\S", "next": "^ {3}\\S" }]
 	},
 	"paste": {
