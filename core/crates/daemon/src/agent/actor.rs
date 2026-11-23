@@ -14,9 +14,10 @@ use std::time::Duration;
 
 use facade_base::api_v1::Size;
 use facade_base::model::error::{ErrorBody, Reason};
+use facade_base::model::message::DeliveryFailure;
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::{
-    model::agent::{AgentsUpdate, ManagedAgent, ManagedAgentState, ToolsState},
+    model::agent::{AgentRef, AgentsUpdate, ManagedAgent, ManagedAgentState, ToolsState},
     model::terminal::{DEFAULT_TERMINAL_SIZE, InputInfo, InputState},
 };
 use facade_rules::{BoxReading, InputRule, Rule};
@@ -35,8 +36,10 @@ use super::typist::{Modes, Typing, Typist};
 use super::viewers::{ViewKind, ViewerRequest, Viewers};
 use super::{
     ActorStart, AgentCommand, FIRST_RUN, Input, InputRejection, Inspection, MAX_INPUT_BYTES,
-    ScreenStart, Shared, Submission,
+    ScreenStart, Shared, Submission, WatchdogSink,
 };
+use crate::messages::{DeliveryHandle, PromptNotice, PromptWatch, Settled};
+use crate::waits::Trouble;
 use crate::{Sender, gate_for_test, pause_for_test};
 
 /// How long size, title and state changes wait to go out together.
@@ -105,6 +108,7 @@ pub(super) fn spawn(
         captures,
         launch_command,
         deliveries,
+        observed_loss,
         state,
     } = start;
     // The agent reads its CLI by the rule this build has under the rule's name.
@@ -150,6 +154,12 @@ pub(super) fn spawn(
         keeping: None,
         state_changed: false,
         state_at: None,
+        observed_end: observed_loss,
+        watchdog: None,
+        trouble: None,
+        watchdog_at: None,
+        prompt_result: None,
+        deliveries: deliveries.clone(),
         screen_status_at: None,
         typist: Typist::new(
             &info.agent_id,
@@ -217,6 +227,12 @@ struct Actor {
     keeping: Option<JoinHandle<()>>,
     /// Something the state rests on changed since the record last took it.
     state_changed: bool,
+    observed_end: bool,
+    watchdog: Option<(Option<PromptWatch>, WatchdogSink)>,
+    trouble: Option<Trouble>,
+    watchdog_at: Option<Instant>,
+    prompt_result: Option<watch::Receiver<Option<Settled>>>,
+    deliveries: DeliveryHandle,
     /// When to read the state again though nothing changed.
     state_at: Option<Instant>,
     /// When to read the CLI's screen for its status.
@@ -246,7 +262,7 @@ struct Actor {
     run: u64,
     /// The pending run and requested size. Its exit may arrive before its terminal.
     next_run: Option<(u64, Size)>,
-    early_exit: Option<(ProcessExit, bool)>,
+    early_exit: Option<(ProcessExit, bool, Option<AgentRef>)>,
     /// A size waiting for a full log's checkpoint writer; input waits until it is applied.
     pending_size: Option<SizeRequest>,
     /// The preparation reply waiting for a full log's checkpoint writer.
@@ -286,6 +302,14 @@ async fn sleep_until(at: Option<Instant>) {
     match at {
         Some(at) => tokio::time::sleep_until(at).await,
         None => std::future::pending().await,
+    }
+}
+
+async fn wait_for_prompt(prompt: &mut Option<watch::Receiver<Option<Settled>>>) {
+    if let Some(prompt) = prompt {
+        let _ = prompt.wait_for(Option::is_some).await;
+    } else {
+        std::future::pending().await
     }
 }
 
@@ -370,6 +394,8 @@ impl Actor {
                         break;
                     }
                 }
+                _ = sleep_until(self.watchdog_at), if self.watchdog.is_some() => self.report_trouble(),
+                _ = wait_for_prompt(&mut self.prompt_result) => self.report_trouble(),
                 // Continuous terminal output must not hold back a glyph frame.
                 _ = sleep_until(self.glyph_at), if self.glyph_at.is_some() => self.advance_glyph(),
                 event = self.terminal.ready(wait) => self.take_terminal(event),
@@ -642,13 +668,21 @@ impl Actor {
                     launch_command: self.launch_command.clone(),
                 });
             }
-            AgentCommand::ProcessExited { run, exit, stopped } => {
+            AgentCommand::ProcessExited {
+                run,
+                exit,
+                stopped,
+                stopped_by,
+            } => {
                 gate_for_test("before-exit-reaches-agent");
                 if self.next_run.is_some_and(|(number, _)| number == run) {
-                    self.early_exit.get_or_insert((exit, stopped));
+                    self.early_exit.get_or_insert((exit, stopped, stopped_by));
                 } else if run == self.run && self.exit.is_none() {
-                    self.end_run(exit, stopped);
+                    self.end_run(exit, stopped, stopped_by);
                 }
+            }
+            AgentCommand::WatchCreator { prompt, report } => {
+                self.watchdog = Some((prompt, report));
             }
             AgentCommand::RecordSession(session) => {
                 let changed = {
@@ -693,6 +727,10 @@ impl Actor {
                 self.next_run = None;
                 (self.exit, self.exit_sent, self.drain_deadline) = (None, false, None);
                 self.process = ProcessState::Running;
+                self.observed_end = false;
+                if let Some((prompt, _)) = &mut self.watchdog {
+                    *prompt = None;
+                }
                 self.captures = captures;
                 self.launch_command = launch_command;
                 self.undrawn = Some("the CLI has not written since it resumed");
@@ -719,8 +757,8 @@ impl Actor {
                 };
                 self.publish_now();
                 let _ = reply.send(record);
-                if let Some((exit, stopped)) = self.early_exit.take() {
-                    self.end_run(exit, stopped);
+                if let Some((exit, stopped, stopped_by)) = self.early_exit.take() {
+                    self.end_run(exit, stopped, stopped_by);
                 }
             }
             AgentCommand::Remove { reply } => {
@@ -1221,18 +1259,15 @@ impl Actor {
 
     /// The current run ended: the record says so first, input stops, and viewers get the exit once
     /// the run's output is read, or now if the terminal closed.
-    fn end_run(&mut self, exit: ProcessExit, stopped: bool) {
+    fn end_run(&mut self, exit: ProcessExit, stopped: bool, stopped_by: Option<AgentRef>) {
         self.publish_at = None;
         self.state.ended(&exit, stopped);
-        // Whatever waits on the run reads its end from the record, so the record goes first.
-        {
-            let mut record = self.links.shared.record.lock().unwrap();
-            let info = &mut record.info;
-            info.process = ProcessState::Ended;
-            info.exit = Some(exit.clone());
-        }
+        let creator = self.links.shared.record.lock().unwrap().info.creator_ref();
+        self.observed_end = !stopped || stopped_by.is_none() || stopped_by != creator;
         self.process = ProcessState::Ended;
+        self.exit = Some(exit.clone());
         self.record_state();
+        self.report_trouble();
         self.publish();
         self.viewers.note_exit(Instant::now());
         self.stop_input(&format!("#{} ended", self.id));
@@ -1240,7 +1275,6 @@ impl Actor {
         self.ready_at = None;
         (self.awaits_prompt, self.prompt_ready) = (false, None);
         self.links.room.notify_waiters();
-        self.exit = Some(exit.clone());
         let _ = self.links.exit.send(Some(exit));
         if self.terminal.is_closed() {
             self.send_exit();
@@ -1353,6 +1387,8 @@ impl Actor {
         let modes = Modes {
             bracketed_paste: screen.screen().bracketed_paste(),
             application_cursor_keys: screen.screen().application_cursor_keys(),
+            working: self.links.shared.record.lock().unwrap().info.state
+                == ManagedAgentState::Working,
         };
         let written = self.terminal.written();
         let queued = written + self.terminal.queued() as u64;
@@ -1740,20 +1776,61 @@ impl Actor {
         let said = self.state.said_line().cloned();
         let mut record = self.links.shared.record.lock().unwrap();
         let info = &mut record.info;
+        if self.process == ProcessState::Ended {
+            info.process = self.process;
+            info.exit.clone_from(&self.exit);
+        }
         let same = info.state == reading.state
             && info.state_detail == reading.detail
             && info.said == said
             && info.tools_state == reading.tools
             && info.tools_reason == reading.tools_reason;
-        if same {
-            return None;
-        }
         (info.state, info.state_detail, info.said) = (reading.state, reading.detail, said);
         (info.tools_state, info.tools_reason) = (reading.tools, reading.tools_reason);
-        Some(matches!(
+        let trouble = Trouble::observe(info, self.observed_end);
+        let urgent = matches!(
             info.state,
             ManagedAgentState::WaitingForYou | ManagedAgentState::Error
-        ))
+        );
+        if trouble != self.trouble {
+            self.trouble = trouble;
+            self.watchdog_at = trouble.map(|trouble| trouble.deadline(Instant::now()));
+            self.prompt_result = None;
+            record.incident += 1;
+        }
+        (!same).then_some(urgent)
+    }
+
+    fn report_trouble(&mut self) {
+        let (Some((prompt, report)), Some(trouble)) = (&self.watchdog, self.trouble) else {
+            return;
+        };
+        if self.watchdog_at.take().is_none() && self.prompt_result.take().is_none() {
+            return;
+        }
+        let (info, incident) = {
+            let record = self.links.shared.record.lock().unwrap();
+            (record.info.clone(), record.incident)
+        };
+        if let Some(prompt) = prompt {
+            let reason = match trouble {
+                Trouble::Waiting(_) => DeliveryFailure::InputInteraction,
+                Trouble::Error => DeliveryFailure::Timeout,
+                Trouble::Ended => DeliveryFailure::Ended,
+            };
+            match self
+                .deliveries
+                .prompt_notice(prompt, &info, incident, reason)
+            {
+                PromptNotice::Owned => return,
+                PromptNotice::InFlight(settled) => {
+                    self.prompt_result = Some(settled);
+                    return;
+                }
+                PromptNotice::Report => {}
+            }
+        }
+        report(info, trouble);
     }
 
     fn publish_state(&mut self) {

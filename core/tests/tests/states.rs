@@ -4,6 +4,7 @@
 
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
+use std::time::Instant;
 
 /// Starts program `cli` of the test's settings with `args` as agent `name` through the protocol,
 /// with `path` as its `PATH`.
@@ -827,10 +828,9 @@ fn work_no_one_asked_for_is_no_turn() {
     reaches(&home, "starter", "just_done");
 }
 
-/// An agent that another agent started and that has waited for the person for 20 seconds is told
-/// to its creator once, with what it waits for.
+/// A child waiting on permission for 30 seconds is reported once with the tools to respond.
 #[test]
-fn an_agent_waiting_for_the_person_for_20_seconds_is_told_to_its_creator_once() {
+fn a_child_waiting_for_30_seconds_is_reported_once_with_actions() {
     let home = TestHome::new("waitingtold");
     // The agents boss starts report their status as boss does: they get boss's environment.
     let boss = home.start_named_fake("boss", &[("FAKECLI_STATUS", "1")]);
@@ -847,6 +847,7 @@ fn an_agent_waiting_for_the_person_for_20_seconds_is_told_to_its_creator_once() 
         .unwrap()
         .to_string();
     reaches(&home, "child", "idle");
+    let since = Instant::now();
     submit(&home, "child", "/fake block permission Run npm test?");
     reaches(&home, "child", "waiting_for_you");
     let told = || -> Vec<String> {
@@ -860,8 +861,17 @@ fn an_agent_waiting_for_the_person_for_20_seconds_is_told_to_its_creator_once() 
         "boss was not told: {:?}",
         home.submitted_messages()
     );
+    assert!(
+        since.elapsed() >= secs(30),
+        "reported too soon: {:?}",
+        told()
+    );
     assert!(told()[0].contains("permission"), "{:?}", told());
-    // Still waiting 20 seconds later, it is not told again.
-    std::thread::sleep(secs(21));
-    assert_eq!(told().len(), 1, "{:?}", told());
+    assert!(told()[0].contains("read_screen"), "{:?}", told());
+    assert!(
+        told()[0].contains("press_keys") || told()[0].contains("type_text"),
+        "{:?}",
+        told()
+    );
+    assert!(!wait_until(secs(31), || told().len() > 1), "{:?}", told());
 }

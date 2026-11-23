@@ -12,6 +12,7 @@ use anyhow::Context;
 use facade_base::api_v1::ApiVersion;
 use facade_base::api_v1::daemon::KeeperInfo;
 use facade_base::api_v1::keeper::{HeldAgent, StartArgs, StopArgs, SyncArgs};
+use facade_base::model::agent::AgentRef;
 use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::service::{self, Report, RestartBackoff, Service};
@@ -21,10 +22,10 @@ use tokio::time::Instant;
 
 use super::{
     ExitRecorded, ExitSink, FoundKeeper, RunCredentialRecord, RunEvent, RunExit, RunIdentity,
-    RunKind, StartedRun,
+    RunKind, StartedRun, StopAccepted,
 };
 use client::{ConnectError, KeeperClient};
-use registry::{Run, RunRegistry, RunRole};
+use registry::{Run, RunRegistry, RunRole, StopState};
 
 const READY_WAIT: Duration = Duration::from_secs(10);
 
@@ -211,7 +212,7 @@ impl KeeperLink {
                             identity: identity.clone(),
                             master: copy,
                             exit: None,
-                            stopping: false,
+                            stop: StopState::None,
                             role: RunRole::Agent,
                             committed: kind == RunKind::Start,
                             installed: false,
@@ -239,23 +240,49 @@ impl KeeperLink {
         started
     }
 
-    /// Marks a registered run stopping and lets go of its copy of the terminal before the stop,
-    /// then waits for a ready keeper and its response.
-    pub(crate) async fn stop(&self, id: &str) -> Result<bool, ErrorBody> {
-        let running = self.runs.request_stop(id)?;
-        if running {
-            let keeper = self.wait_ready(false).await.ok_or_else(|| {
-                ErrorBody::new(
-                    Reason::Unavailable,
-                    format!(
-                        "the keeper did not become ready within 10 seconds; #{id} was not \
+    /// Asks the keeper to stop this generation, releasing our terminal copy first.
+    pub(crate) async fn stop(
+        &self,
+        id: &str,
+        run: u64,
+        caller: Option<AgentRef>,
+    ) -> Result<bool, ErrorBody> {
+        let keeper = self.wait_ready(false).await.ok_or_else(|| {
+            ErrorBody::new(
+                Reason::Unavailable,
+                format!(
+                    "the keeper did not become ready within 10 seconds; #{id} was not \
                          stopped yet"
-                    ),
-                )
-            })?;
-            Self::stop_with(&keeper, id).await?;
+                ),
+            )
+        })?;
+        let Some(was_stopping) = self.runs.request_stop(id, run)? else {
+            return Ok(false);
+        };
+        let stop = StopAccepted {
+            id: id.into(),
+            run,
+            caller: if was_stopping { None } else { caller },
+        };
+        let result = keeper
+            .stop(
+                &StopArgs {
+                    agent_id: id.into(),
+                },
+                Some(stop),
+            )
+            .await;
+        if let Err(error) = result {
+            if !was_stopping && !error.uncertain() {
+                self.runs.stop_refused(id, run);
+            }
+            return Err(error.into());
         }
-        Ok(running)
+        Ok(true)
+    }
+
+    pub(crate) fn confirm_stop(&self, stop: StopAccepted) {
+        self.runs.confirm_stop(stop);
     }
 
     /// Records the first exit and invokes its sink after releasing registry and pending locks.
@@ -341,7 +368,7 @@ impl KeeperLink {
                     birth: held.birth.clone(),
                 },
                 exit,
-                stopping: held.stopping,
+                stop: StopState::from_holder(held.stopping),
                 role: RunRole::Agent,
                 committed: true,
                 installed: true,
@@ -382,7 +409,7 @@ impl KeeperLink {
                             birth: held.birth.clone(),
                         },
                         exit: None,
-                        stopping: held.stopping,
+                        stop: StopState::from_holder(held.stopping),
                         role: RunRole::Unreadable,
                         committed: true,
                         installed: false,
@@ -539,10 +566,14 @@ impl KeeperLink {
 
     async fn stop_with(keeper: &KeeperClient, id: &str) -> Result<(), ErrorBody> {
         keeper
-            .stop(&StopArgs {
-                agent_id: id.into(),
-            })
+            .stop(
+                &StopArgs {
+                    agent_id: id.into(),
+                },
+                None,
+            )
             .await
+            .map_err(ErrorBody::from)
     }
 
     async fn stop_unrecorded(keeper: &KeeperClient, id: &str) -> Result<(), ErrorBody> {
@@ -594,14 +625,21 @@ impl KeeperLink {
         for held in plan.unrecorded {
             Self::stop_unrecorded(keeper, &held.agent_id).await?;
         }
-        for (args, master, stopping) in self.runs.missing(&keeper.hello.agents)? {
-            if stopping {
-                plan.stops.push(args.agent_id.clone());
+        for (args, master, stop) in self.runs.missing(&keeper.hello.agents)? {
+            if let Some(stop) = stop {
+                plan.stops.push(stop);
             }
             keeper.give_terminal(&args, master).await?;
         }
-        for id in plan.stops {
-            Self::stop_with(keeper, &id).await?;
+        for stop in plan.stops {
+            keeper
+                .stop(
+                    &StopArgs {
+                        agent_id: stop.id.clone(),
+                    },
+                    Some(stop),
+                )
+                .await?;
         }
         Ok(())
     }

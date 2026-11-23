@@ -28,7 +28,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
 
-use super::RunEvent;
+use super::{RunEvent, StopAccepted};
 
 const RESPONSE_WAIT: Duration = Duration::from_secs(10);
 const OUTBOX_LIMIT: usize = 256;
@@ -81,7 +81,7 @@ impl std::error::Error for ConnectError {}
 enum ExpectedReply {
     Hello(ApiVersions),
     Start,
-    Stop,
+    Stop(Option<StopAccepted>),
     SyncTakeBack,
     SyncAdopt,
     Ping,
@@ -99,7 +99,7 @@ impl ExpectedReply {
         match self {
             Self::Hello(_) => methods::HELLO,
             Self::Start => AgentStart::NAME,
-            Self::Stop => AgentStop::NAME,
+            Self::Stop(_) => AgentStop::NAME,
             Self::SyncTakeBack | Self::SyncAdopt => AgentSync::NAME,
             Self::Ping => DaemonPing::NAME,
         }
@@ -114,7 +114,7 @@ impl ExpectedReply {
                 Ok(Reply::Started(serde_json::from_value(value)?, master))
             }
             (Self::SyncTakeBack, Some(master)) => Ok(Reply::Terminal(master)),
-            (Self::Stop | Self::SyncAdopt | Self::Ping, None) => Ok(Reply::Empty),
+            (Self::Stop(_) | Self::SyncAdopt | Self::Ping, None) => Ok(Reply::Empty),
             (_, Some(_)) => anyhow::bail!("the response carried an unexpected terminal"),
             (_, None) => anyhow::bail!("the response did not carry the required terminal"),
         }
@@ -354,9 +354,13 @@ impl KeeperClient {
         Ok((process, terminal))
     }
 
-    pub async fn stop(&self, args: &StopArgs) -> Result<(), ErrorBody> {
+    pub async fn stop(
+        &self,
+        args: &StopArgs,
+        attribution: Option<StopAccepted>,
+    ) -> Result<(), CallError> {
         self.session
-            .call::<AgentStop>(ExpectedReply::Stop, args, None)
+            .call::<AgentStop>(ExpectedReply::Stop(attribution), args, None)
             .await?;
         Ok(())
     }
@@ -551,6 +555,14 @@ fn read(mut incoming: LineReceiver, io: &Transport) -> anyhow::Result<()> {
                     drop(calls);
                     if matches!(decoded, Ok(Reply::Hello(_))) {
                         negotiated = true;
+                    }
+                    if matches!(decoded, Ok(Reply::Empty))
+                        && let ExpectedReply::Stop(Some(stop)) = waiting.expected
+                    {
+                        io.exits
+                            .lock()
+                            .unwrap()
+                            .receive(RunEvent::StopAccepted(stop));
                     }
                     // The result owns its terminal until the waiting caller receives it.
                     if let Err(Ok(_)) = waiting.sender.send(decoded) {

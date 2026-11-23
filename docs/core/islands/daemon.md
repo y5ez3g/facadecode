@@ -143,14 +143,14 @@ the live route. [Start transaction](../../../core/crates/daemon/src/store/mod.rs
 
 ### Opening and upgrading a store
 
-The current database schema is `user_version = 5`. SQLite reserves this number for the application.
+The current database schema is `user_version = 6`. SQLite reserves this number for the application.
 The daemon and Keeper negotiate their API versions independently.
 
 Fresh stores initialize in their own transaction. The open path first refuses a nonempty development
 schema missing `saved_connections` before normal WAL setup. It disables checkpoint-on-close for that
 connection to preserve the existing database and WAL.
 
-Versions below 5 enter one migration transaction. For a version below 3, the daemon first snapshots known
+Versions below 6 enter one migration transaction. For a version below 3, the daemon first snapshots known
 machine names, adds normalized SSH arguments and last-seen timestamps, and creates the remembered-route and
 send-route tables and private receipt field. It adds Guest YOLO at version 0. Below 2 it adds the message
 withdrawal field and replaces the request index. Then it adds the agent start, launch, authentication and
@@ -158,9 +158,10 @@ removal fields. For agents missing launch choices it snapshots configured model 
 with empty original arguments.
 
 Below 4 it adds nullable `agents.launch_command`. Below 5 it adds `messages.command_line_reply` with
-default false, preserving existing messages, numbers and receipt keys. The migration writes `user_version`
-in the same transaction. A failed migration rolls back and open fails. Version 5 or higher skips migration and proceeds to normal
-reads. A newer layout may reach the ordinary writers if those reads succeed.
+default false. Below 6 it adds `messages.notify_failure` with default false. Both additions preserve existing
+messages, numbers and receipt keys. The migration writes `user_version` in the same transaction. A failed
+migration rolls back and open fails. Version 6 or higher proceeds to normal reads. A newer layout may reach
+the ordinary writers if those reads succeed.
 Recovery keeps unreadable agent rows and reserves their IDs. Keep a consistent backup of the whole stopped home
 and its workspace state before a format change. Opening a migrated store with older code has no general rollback
 guarantee. Use the backup if the change's approved rollback procedure requires it.
@@ -202,17 +203,19 @@ Changes to the stored contract follow the [compatibility review](../ENGINEERING.
 | `relays.rs`, `service.rs` | Establish relay actors and serve both local and forwarded operations. |
 | `recovery.rs` | Reconnects to keeper-held runs, restores screens and recovers pending deliveries. |
 | `command_line.rs` | Resolves launch environment, settings and program. `cli.list` uses the same resolver as start. |
-| `waits.rs` | Sends a wait notice to the creator, including when the creator is on a peer. |
+| `waits.rs` | Reports a managed run's trouble to its live agent creator, including across machines. |
 
 The daemon holds the service lock while it recovers. It reconnects to the keeper, opens and migrates
 SQLite, rebuilds the agents and screens, restores Guests and pending deliveries, and serves the socket
 once recovery is complete. The hourly sweep removes expired ended records and their inboxes, expires
 old messages and receipts, and prunes the daemon log.
 
-A managed Agent that waits continuously for 20 seconds on permission, a question or sign-in reports
-one notice to its creator. A different run or an interruption of the wait resets that period. The
-recipient gets the same delivery deadline as for other notices. A Guest receives it when it reads
-its inbox within that deadline.
+A managed agent with an agent creator earns one notice after the serving daemon observes a continuous
+30-second wait for permission, an answer or login, or a continuous 30-second error. A replacement daemon
+starts a fresh observation interval. A natural exit, a crash or a stop
+from another caller earns a notice at once. The creator must still be live. Recovery allows the next
+incident to earn a notice. An initial message failure and its startup trouble share one receipt.
+A Guest receives its notices through `read_messages`.
 
 ### agent
 
@@ -278,7 +281,7 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 
 - **Owns:** the `PtyIo` (none between runs or once the terminal closed), the input queue, the last output read, whether the CLI's side closed, the bytes written so far and when.
 - **Keeps:** Input is written in order, at most 64 KiB at a time; a read takes at most 64 KiB. The count of bytes written never resets, across runs too: the typist finds its own bytes by it. Letting go of the terminal drops the queued input. `ready` can be cancelled safely. A write under way is given the same head of the queue until it returns; clearing the queue keeps those bytes. `stop_reading` leaves no read under way.
-- **Never does:** parse output; decide what input may wait or how much; press Enter.
+- **Never does:** parse output, decide what input may wait, or select a submission key.
 - **Interface:** `new(Option<PtyMaster>)`, `install(PtyMaster)`, `detach()`, `stop_reading() -> Option<usize>` (async), `let_go_before_stop()`; `ready(TerminalWait) -> TerminalEvent` (`Read`, `Closed`, `Wrote`, `WriteFailed`), `read_now() -> Option<usize>`, `output() -> &[u8]`; `push(&[u8])`, `clear()`, `queued()`, `written()`, `written_at()`; `is_open()`, `is_closed()`, `set_size(cols, rows)`.
 
 #### screen
@@ -303,7 +306,7 @@ The terminal, as a `PtyIo`, and the input waiting for it.
   - Under `background_report`, a `working` report with matching words becomes idle evidence.
   - Under `background_correction`, a `working` report is narrowed to idle evidence while the screen
     matches the rule's idle anchors. The rule applies regardless of the CLI's installed version.
-  - A start and the tools' connection get 60 seconds each; time the CLI spends asking a question does not count.
+  - A start and the tools' connection get 30 seconds each. Time the CLI spends asking a question does not count.
   - Only `keep` writes the state file, through a private temporary file and a rename. What the screen shows is read again, never kept.
 - **Never does:** touch the terminal; change the agent's record; publish.
 - **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(asking, now)`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connection(open)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
@@ -337,11 +340,12 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
 - **Keeps:**
   - Each call goes in whole and in order; a pause counts from when its bytes reached the terminal.
   - A message's bytes are written only after `DeliveryHandle::begin_paste` recorded the paste.
-  - Enter goes only once the input box shows this paste alone and stays still for the CLI's settle time.
-  - A message is delivered once Enter reaches the terminal. When the deadline expires before
-    Enter, the typist can withdraw the message after the screen confirms it cleared its own draft.
+  - The submission key goes once the input box shows this paste alone and stays still for the CLI's settle time.
+    Codex queues an ordinary message with Tab while Working. The start prompt and recovered pastes use Enter.
+  - A message is delivered once its submission key reaches the terminal. When the deadline expires before
+    submission, the typist can withdraw the message after the screen confirms it cleared its own draft.
   - The start prompt is pasted alone; a paste an earlier daemon began is never typed again.
-  - The wait before Enter counts the paste rate from `PASTE_BYTES_PER_MS`. With console typing, characters above U+FFFF go as key-down records, and a paste's Enter and a message's time add `per_char` for each UTF-16 code unit.
+  - The wait before submission counts the paste rate from `PASTE_BYTES_PER_MS`. With console typing, characters above U+FFFF go as key-down records and the wait adds `per_char` for each UTF-16 code unit.
   - An input whose row may be a hint or a draft (it reads unsure) is probed once a run, by its child `probe`: a space where the input starts, then, once the input is drawn still, Backspace, and a check that the input is as it was. Nothing else is typed meanwhile. The input is read every 100 ms; still means two equal readings in a row that show the row, for at most a second after each key. Backspace goes only where the space went in, no menu or question shows, and the person typed nothing since the probe read the input; after a failed check nothing more is pressed. What a probe finds, a hint, a draft or neither for sure, is kept for the row until the CLI's next run, so a row is never probed twice in a run.
 - **Never does:** write the terminal (it hands its bytes to the actor); read the screen except through the reading the actor gives it; take the person's keys; touch the database.
 - **Interface:** the daemon builds `Typing::text(text, enter, sender)`, `Typing::keys(names)` and `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses `new(agent, paste_rule, console_typing, DeliveryHandle)`, `push`, `deliver`, `deliver_first`, `finish_paste`, `fail_ended`, `fail_all(written, why)`, `hold_pastes()`, and `step(now, written, queued, modes, typed, read, read_screen) -> Step { write, wake }`, where `typed` counts the person's writes and `read_screen` reads the input as the screen shows it; for probes, `recall(reading)` (a row a probe found a hint reads as an empty input, a draft as a draft), `want_probe()` (the start waits on an unsure input) and `clear_probes()` (a new run starts); it reads `take_submitted()`, `take_entered()`, `held_bytes()`, `paste_rule()`, `busy()`, `pasting()`, `types_calls()`, `reads_input()`, `probing()`. Through `DeliveryHandle` it asks `still_to_type(number)`, records `begin_paste(numbers)` and `settle(numbers, outcome)`.
@@ -363,20 +367,21 @@ authenticated Agent start when the target home has YOLO on. On a person's start 
 question stays available for the person.
 
 - **Owns:** the rule's `ReadyTools` and `TrustQuestion`, how far each has got, and when each wait ends.
-- **Keeps:** No wait goes past the start's 60 seconds. Enter goes only once the rule's text shows alone in the input box. Each key of the trust answer waits for the screen to be still for 1 second, the answer goes only while the selection shows on the answer that trusts, and it is given once per run.
+- **Keeps:** A bounded startup wait stays within the start's 30 seconds. Enter goes once the rule's text shows alone in the input box. Each key of the trust answer waits for the screen to be still for 1 second. The trusting answer goes once per run while it is selected.
 - **Never does:** type (it hands each `Press` to the actor, which gives it to the typist); read the terminal; hold input; change the state.
 - **Interface:** `new(rule, id)`, `begin(started, tools, allow_auto_trust) -> Option<Instant>`, `end()`, `step(now, &StartView, press) -> StartStep { wake, release_held, tools_not_started }`, `holds_input(InputState)`, `readies_tools()`, `is_under_way()`.
 
 ### messages
 
 Post assigns a message number in the SQLite transaction that keeps it. The receiving machine owns
-delivery state. A managed terminal confirms delivery when its Enter is written. A Guest confirms
+delivery state. A managed terminal confirms delivery when the submission key reaches it. A Guest confirms
 delivery by taking the message from its inbox. Both use the same deadline.
 
-An explicit inbox-only send returns after storage commits, and normal delivery continues on its background
-deadline. Delivery and result waits share the caller's remaining budget. The stored delivery deadline stays
-authoritative during daemon recovery and a receipt replay. A legacy v1 send with no wait field keeps its
-existing delivery behavior.
+An explicit inbox-only send returns after storage commits, and delivery continues on its background deadline.
+For a send from an authenticated agent, the original admission stores `notify_failure` with the sender and
+delivery deadline. Pending rows carry that ownership through daemon recovery. Schema version 6 gives existing
+rows a false value. Receipt replay uses the original decision. Delivery and result waits share the caller's
+remaining budget. A v1 send with no wait field uses a delivery wait.
 
 A command-line result wait belongs to the source daemon and closes with its request. The holder stores the
 reply marker with the original message. Only its verified recipient can answer the associated `#c`

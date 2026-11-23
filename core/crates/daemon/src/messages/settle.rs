@@ -1,10 +1,15 @@
 //! Ending deliveries: by their typist, by their deadline, and the results start prompts owe.
 
+use std::sync::atomic::Ordering;
+
 use facade_base::model::message::{
     Delivery, DeliveryFailure, DeliveryStatus, FACADE, Message, PromptOutcome, StartOutcome,
     TextWritten, start_result_text,
 };
-use facade_base::{model::agent::AgentRef, model::message::AgentDeliverStartResultArgs};
+use facade_base::{
+    model::agent::{AgentRef, ManagedAgent},
+    model::message::AgentDeliverStartResultArgs,
+};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
@@ -96,8 +101,22 @@ impl Deliveries {
             .filter(|number| outcome.withdraws(open[number].pasted))
             .collect();
         let due = Due::now();
-        let results = owed_results(open, &writes, &at, &due);
-        let written = match blocking_in_place(|| {
+        let mut failures = Vec::new();
+        let mut results = Vec::new();
+        if delivery.status == DeliveryStatus::Failure {
+            for &number in &ending {
+                let prompt = &open[&number];
+                if let Some(owed) = &prompt.owes {
+                    let (agent, incident) = owed.incident.clone().unwrap_or_else(|| (owed.agent)());
+                    results.push((
+                        number,
+                        result_message(&prompt.message, &delivery, owed, agent, &at, &due),
+                    ));
+                    failures.push((number, incident));
+                }
+            }
+        }
+        let recorded = blocking_in_place(|| {
             if cleaned_paste {
                 self.table.settle_cleaned_paste(&writes, &results)
             } else if withdrawals.is_empty() {
@@ -106,7 +125,21 @@ impl Deliveries {
                 self.table
                     .settle_with_withdrawals(&writes, &results, &withdrawals)
             }
-        }) {
+        });
+        if let Ok(written) = &recorded {
+            for (number, incident) in failures {
+                if written.settled.contains(&number) {
+                    let owed = open[&number]
+                        .owes
+                        .as_ref()
+                        .expect("a prompt that owes a result");
+                    owed.prompt
+                        .failed_incident
+                        .store(incident, Ordering::Relaxed);
+                }
+            }
+        }
+        let written = match recorded {
             Ok(written) => written,
             Err(err) => {
                 warn(&format!("{err:#}"));
@@ -198,38 +231,18 @@ impl Deliveries {
     }
 }
 
-/// The results that the prompts among `ending`, each ending as its delivery says at `at`, owe their
-/// senders, each paired with its prompt's number.
-pub(super) fn owed_results(
-    open: &OpenMap,
-    ending: &[(u64, &Delivery)],
-    at: &str,
-    due: &Due,
-) -> Vec<(u64, Message)> {
-    ending
-        .iter()
-        .filter_map(|&(number, delivery)| {
-            let prompt = open.get(&number)?;
-            let owed = prompt.owes.as_ref()?;
-            Some((
-                number,
-                result_message(&prompt.message, delivery, owed, at, due),
-            ))
-        })
-        .collect()
-}
-
 /// The result `prompt`, ending as `delivery` at `at`, owes its sender: from Facade, under the
 /// number the prompt keeps, on the sender's call, pending until `due`.
 fn result_message(
     prompt: &Message,
     delivery: &Delivery,
     owed: &OwedResult,
+    agent: ManagedAgent,
     at: &str,
     due: &Due,
 ) -> Message {
     let outcome = StartOutcome {
-        agent: (owed.agent)(),
+        agent,
         prompt: PromptOutcome {
             message_id: prompt.message_id.clone(),
             delivery: delivery.clone(),

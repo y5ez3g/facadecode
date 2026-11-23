@@ -1909,6 +1909,105 @@ fn an_antigravity_run_keeps_its_plugin_through_a_takeover_and_the_next_start_pla
     );
 }
 
+/// A pending Inbox send keeps its asynchronous notice across a compatible daemon takeover.
+#[test]
+fn a_pending_inbox_send_keeps_its_failure_notice_through_takeover() {
+    let home = TestHome::new("takeover-send-notice");
+    let worker = home.start_named_fake("worker", &[]);
+    let boss = home.start_named_fake("boss", &[]);
+    let before = home.hello_result().expect("the original daemon answers");
+    let original_keeper = keeper(&home);
+    home.run_facade_ok(&["type", &worker.address, "my draft"]);
+    assert!(wait_for_screen_text(&home, &worker.address, "❯ my draft"));
+    let mut tools = McpTestClient::open_configured(&home, &boss.id);
+    let admitted = tools.call(
+        "send_message",
+        json!({ "to": worker.address, "text": "explain the next step" }),
+    );
+    assert_eq!(admitted["status"], "success", "{admitted}");
+    assert_eq!(
+        admitted["data"]["delivery"], "waiting_in_inbox",
+        "{admitted}"
+    );
+    let message = admitted["data"]["id"].as_str().unwrap();
+    let (_, host) = worker.address.split_once('@').unwrap();
+    assert_eq!(message, format!("m1@{host}"));
+
+    // An explicit delivery wait is also pending at takeover and replays through its own call.
+    let waited = tools.send(
+        "tools/call",
+        json!({ "name": "send_message", "arguments": {
+            "to": worker.address, "text": "answer this call",
+            "wait_for": "delivery", "timeout_seconds": 30,
+        } }),
+    );
+    let admitted_both = format!("#{} sent m2 to #{}", boss.id, worker.id);
+    assert!(
+        wait_until(secs(10), || home.daemon_log().contains(&admitted_both)),
+        "{}",
+        home.daemon_log()
+    );
+    assert!(tools.answer(waited, secs(0)).is_none());
+    assert!(home.submitted_messages().is_empty());
+
+    let new_build = newer();
+    let upgraded = home
+        .command(program_of_build(&home, &new_build))
+        .arg("list")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        upgraded.status.success()
+            && stderr(&upgraded).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
+        "{}\n{}\n{}",
+        stderr(&upgraded),
+        home.daemon_log(),
+        home.keeper_log()
+    );
+    let after = home.hello_result().expect("the replacement daemon answers");
+    assert_eq!(after["api_version"], before["api_version"], "{after}");
+    assert_eq!(after["build"], new_build, "{after}");
+    assert_ne!(after["pid"], before["pid"], "{after}");
+    assert_eq!(keeper(&home), original_keeper);
+    assert!(alive(&boss.process) && alive(&worker.process));
+    assert!(home.screen(&worker.address).contains("❯ my draft"));
+    assert!(home.submitted_messages().is_empty());
+
+    // Ending the recipient now settles both messages in the replacement daemon.
+    home.run_facade_ok(&["stop", &worker.address]);
+    let failed = tools.tool_answer(waited);
+    assert_eq!(failed["status"], "failure", "{failed}");
+    assert_eq!(failed["reason"], "ended", "{failed}");
+    assert_eq!(failed["data"]["id"], format!("m2@{host}"), "{failed}");
+    assert!(alive(&boss.process), "the original sender remains live");
+    assert!(
+        wait_until(secs(10), || !home.submitted_messages().is_empty()),
+        "no notice for admitted {message} after the compatible takeover:\n{}\n{}",
+        home.daemon_log(),
+        home.keeper_log()
+    );
+    assert!(!wait_until(secs(2), || home.submitted_messages().len() > 1));
+    let terminal = home.submitted_messages();
+    assert_eq!(terminal.len(), 1, "{terminal:?}");
+    assert!(terminal[0].starts_with("🔔"), "{terminal:?}");
+    let read = tools.call("read_messages", json!({ "last": 10 }));
+    assert_eq!(read["status"], "success", "{read}");
+    let rows = read["data"]["messages"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{read}");
+    assert_eq!(rows[0]["from"], "facade", "{read}");
+    let inbox = rows[0]["text"].as_str().unwrap();
+    for text in [terminal[0].as_str(), inbox] {
+        for fact in [message, worker.address.as_str(), "ended", "submission key"] {
+            assert!(text.contains(fact), "missing {fact:?}: {text}");
+        }
+        assert!(
+            text.contains("resend") || text.contains("terminal before retrying"),
+            "{text}"
+        );
+    }
+}
+
 /// Sends waiting on their recipient's draft when a newer Facade takes over are typed once after it:
 /// facade-mcp's caller and `facade send` each answer what became of their message, not that it is
 /// unknown. The old daemon's drain does not wait for them, as the store keeps their messages.
@@ -2630,16 +2729,17 @@ fn a_v4_home_keeps_its_routes_sessions_and_receipts_at_cold_upgrade() {
     assert_eq!(local.submitted_messages(), sent);
 
     let db = read_db(&local.path);
-    assert_eq!(schema(&db), 5);
+    assert_eq!(schema(&db), 6);
     assert_eq!(marker_columns(&db), 1);
-    let saved: (i64, String) = db
+    let saved: (i64, i64, String) = db
         .query_row(
-            "SELECT command_line_reply, status FROM messages WHERE request_id = 'qa-v4-receipt'",
+            "SELECT command_line_reply, notify_failure, status
+             FROM messages WHERE request_id = 'qa-v4-receipt'",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!(saved, (0, "success".to_string()));
+    assert_eq!(saved, (0, 0, "success".to_string()));
     drop(db);
 
     let active = local.start_fake("v1-client");

@@ -141,7 +141,7 @@ fn settled_answer(
 }
 
 /// What the typist says an agent said: the message's text, from its sender.
-fn submission_of(message: &Message) -> Submission {
+pub(crate) fn submission_of(message: &Message) -> Submission {
     Submission {
         text: message.text.clone(),
         sender: Sender {
@@ -904,6 +904,7 @@ impl Daemon {
         let machine = origin.machine;
         let wait_for = args.wait_for;
         let wait_inbox = wait_for == Some(wire::SendWait::Inbox);
+        let notify_failure = wait_inbox && matches!(caller, Caller::Agent { .. });
         let call_until = due.instant;
         if let Some(request_id) = args.request_id.as_deref() {
             check_request_id(request_id)?;
@@ -1004,7 +1005,7 @@ impl Daemon {
         let (message, mut settled) =
             match self
                 .messages
-                .post(message, args.request_id.as_deref(), None)?
+                .post(message, args.request_id.as_deref(), None, notify_failure)?
             {
                 Posted::New(message, settled) => (message, settled),
                 // A call with the same ID kept its message first: this one joins it.
@@ -1034,6 +1035,9 @@ impl Daemon {
                 daemon
                     .deliver_message(&agent, &deliver, &mut settled, due.instant)
                     .await;
+                if notify_failure {
+                    daemon.report_send_failure(&deliver, settled.borrow().clone());
+                }
             });
             return Ok((
                 SendOutcome {
@@ -1087,6 +1091,55 @@ impl Daemon {
             expected_reply_to,
             Some(self.agent_label(&to)?),
         ))
+    }
+
+    /// Reports the settlement of an Inbox send marked at admission for its verified sender.
+    pub(crate) fn report_send_failure(self: &Arc<Self>, sent: &Message, settled: Option<Settled>) {
+        let (delivery, withdrawn) = match settled {
+            Some(Settled::Kept(message)) => (message.delivery, false),
+            Some(Settled::Withdrawn(message) | Settled::WithdrawnWhileWaiting { message, .. }) => {
+                (message.delivery, true)
+            }
+            Some(Settled::Cancelled) => return,
+            // The inbox was removed after admission, so the submission is unconfirmed.
+            None => (
+                Delivery {
+                    status: DeliveryStatus::Failure,
+                    reason: Some(DeliveryFailure::Ended),
+                    text_written: TextWritten::Unknown,
+                    enter_written: None,
+                    deadline: None,
+                    delivered_via: None,
+                    delivered_at: None,
+                },
+                false,
+            ),
+        };
+        if delivery.status != DeliveryStatus::Failure {
+            return;
+        }
+        let sender = AgentRef {
+            machine_id: sent
+                .from_machine_id
+                .clone()
+                .unwrap_or_else(|| self.machine_id.clone()),
+            agent_id: sent.from.clone(),
+        };
+        self.route_notice(
+            sender,
+            wire::Notice::SendFailed {
+                target: wire::AgentRef {
+                    machine_id: self.machine_id.clone(),
+                    agent_id: sent.to.clone(),
+                },
+                message: wire::MessageRef {
+                    machine_id: self.machine_id.clone(),
+                    message_id: sent.message_id.clone(),
+                },
+                delivery,
+                withdrawn,
+            },
+        );
     }
 
     async fn deliver_message(
@@ -1419,6 +1472,16 @@ impl Daemon {
             deadline,
             submission_of(message),
         );
+        self.hand_message_typing(to, number, typing, deadline).await
+    }
+
+    pub(crate) async fn hand_message_typing(
+        &self,
+        to: &AgentHandle,
+        number: u64,
+        typing: MessageTyping,
+        deadline: Instant,
+    ) -> bool {
         let handed = tokio::time::timeout_at(
             deadline,
             self.hand_input(to, Input::Message(typing), InputWait::Always),

@@ -388,7 +388,7 @@
         {
           "type": "string",
           "const": "starting",
-          "description": "The CLI has not shown what it is doing yet, within 60 seconds of its start or resume."
+          "description": "The CLI has not shown what it is doing yet, within 30 seconds of its start or resume."
         },
         {
           "type": "string",
@@ -413,7 +413,7 @@
         {
           "type": "string",
           "const": "error",
-          "description": "The CLI reported an error or its screen shows that the turn it reported ended failed, or,\nstarted by its rule's name, it showed nothing of what it is doing within 60 seconds of its\nstart or resume."
+          "description": "The CLI reported an error or its screen shows that the turn it reported ended failed, or,\nstarted by its rule's name, it showed nothing of what it is doing within 30 seconds of its\nstart or resume."
         },
         {
           "type": "string",
@@ -1171,6 +1171,22 @@
           "additionalProperties": false,
           "properties": {
             "op": {
+              "const": "internal.deliver_notice"
+            },
+            "args": {
+              "$ref": "#/$defs/InternalDeliverNoticeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
               "const": "internal.command_reply"
             },
             "args": {
@@ -1753,7 +1769,7 @@
         },
         "enter_written": {
           "type": "boolean",
-          "description": "Whether the Enter that submits it reached the recipient's terminal. Omitted when that is not\nknown: the recipient read the message while its typist was typing it, its typist did not say\nby the deadline, what it typed was still queued then, or the daemon before a restart had\nbegun its paste."
+          "description": "Whether the message's submission key (Enter or Tab) reached the recipient's terminal.\nOmitted when the write outcome is unknown, for example when the key was still queued at the\ndeadline or a restart interrupted delivery."
         },
         "deadline": {
           "type": "string",
@@ -1799,7 +1815,7 @@
         {
           "type": "string",
           "const": "timeout",
-          "description": "The input was empty, but the deadline passed before a paste of the message, its Enter, and\nits confirmation could fit."
+          "description": "The input was empty. The delivery deadline passed before the paste and submission key\ncould both reach the terminal and be confirmed."
         },
         {
           "type": "string",
@@ -2370,6 +2386,35 @@
         "viewer",
         "boot_id",
         "size"
+      ]
+    },
+    "InternalDeliverNoticeArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "recipient": {
+          "type": "object",
+          "properties": {
+            "machine_id": {
+              "type": "string"
+            },
+            "agent_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "machine_id",
+            "agent_id"
+          ],
+          "additionalProperties": false
+        },
+        "notice": {
+          "$ref": "#/$defs/Notice"
+        }
+      },
+      "required": [
+        "recipient",
+        "notice"
       ]
     },
     "InternalDeliverStartResultArgs": {
@@ -4337,6 +4382,22 @@
                           "additionalProperties": false,
                           "properties": {
                             "op": {
+                              "const": "internal.deliver_notice"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/InternalDeliverNoticeArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
                               "const": "internal.command_reply"
                             },
                             "args": {
@@ -4658,6 +4719,150 @@
     "NoArgs": {
       "type": "object",
       "additionalProperties": false
+    },
+    "Notice": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "agent_error"
+            },
+            "agent": {
+              "type": "object",
+              "properties": {
+                "machine_id": {
+                  "type": "string"
+                },
+                "agent_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "machine_id",
+                "agent_id"
+              ],
+              "additionalProperties": false
+            },
+            "name": {
+              "type": "string"
+            },
+            "state_detail": {
+              "$ref": "#/$defs/StateDetail"
+            },
+            "tools_reason": {
+              "$ref": "#/$defs/ToolsReason"
+            }
+          },
+          "required": [
+            "kind",
+            "agent",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "agent_ended"
+            },
+            "agent": {
+              "type": "object",
+              "properties": {
+                "machine_id": {
+                  "type": "string"
+                },
+                "agent_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "machine_id",
+                "agent_id"
+              ],
+              "additionalProperties": false
+            },
+            "name": {
+              "type": "string"
+            },
+            "exit": {
+              "$ref": "#/$defs/ProcessExit"
+            },
+            "how": {
+              "$ref": "#/$defs/HowEnded"
+            },
+            "resumable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "agent",
+            "name",
+            "exit",
+            "resumable"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "send_failed"
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "machine_id": {
+                  "type": "string"
+                },
+                "agent_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "machine_id",
+                "agent_id"
+              ],
+              "additionalProperties": false
+            },
+            "message": {
+              "type": "object",
+              "properties": {
+                "machine_id": {
+                  "type": "string"
+                },
+                "message_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "machine_id",
+                "message_id"
+              ],
+              "additionalProperties": false
+            },
+            "delivery": {
+              "$ref": "#/$defs/Delivery"
+            },
+            "withdrawn": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "target",
+            "message",
+            "delivery",
+            "withdrawn"
+          ]
+        }
+      ]
     },
     "Notification": {
       "type": "object",
@@ -5301,7 +5506,7 @@
         "from",
         "at"
       ],
-      "description": "What last went into an agent's message input with Enter: what the person submitted in its\nterminal and its CLI took, text typed with `agent.type` and `enter`, or a message delivered\nthrough the terminal."
+      "description": "The latest submission through an agent's terminal, from a person, an `agent.type` call with\n`enter`, or a message Facade delivered."
     },
     "Scope": {
       "oneOf": [
@@ -5898,7 +6103,7 @@
         {
           "type": "string",
           "const": "not_ready",
-          "description": "`error`: a CLI started by its rule's name showed nothing of what it is doing within 60\nseconds of its start or resume."
+          "description": "`error`: a CLI started by its rule's name showed nothing of what it is doing within 30\nseconds of its start or resume."
         },
         {
           "type": "string",
@@ -6196,6 +6401,9 @@
             },
             {
               "$ref": "#/$defs/EmptyResult"
+            },
+            {
+              "$ref": "#/$defs/EmptyResult"
             }
           ]
         }
@@ -6338,7 +6546,7 @@
         {
           "type": "string",
           "const": "not_connected",
-          "description": "Its Facade server did not connect within 60 seconds of the run's start or resume, or of a\ndaemon's recovery of the run."
+          "description": "Its Facade server did not connect within 30 seconds of the run's start or resume, or of a\ndaemon's recovery of the run."
         },
         {
           "type": "string",
@@ -6893,6 +7101,16 @@
       "internal.deliver_wait_notice": {
         "args": {
           "$ref": "#/$defs/InternalDeliverWaitNoticeArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/EmptyResult"
+        },
+        "local": [],
+        "forwarded": true
+      },
+      "internal.deliver_notice": {
+        "args": {
+          "$ref": "#/$defs/InternalDeliverNoticeArgs"
         },
         "result": {
           "$ref": "#/$defs/EmptyResult"

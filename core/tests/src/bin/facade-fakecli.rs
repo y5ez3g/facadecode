@@ -56,6 +56,8 @@
 //! makes its initial title `<glyph> <text>`, as Claude Code does run alone.
 //!
 //! `FAKECLI_LOOK=muse` shows a long paste as Muse 1.4.20 does, `[Pasted Content <n> chars]`.
+//! `FAKECLI_CODEX_INPUT=working` draws a Codex input, accepts Tab as submission,
+//! and reports Working before the first prompt arrives.
 //!
 //! Hints: `FAKECLI_HINT=<text>` draws `<text>` in color where an empty input starts, the cursor
 //! before it, as Muse 1.4.20 draws a hint once a turn has ended: not until `FAKECLI_TURN_MS`
@@ -233,6 +235,7 @@ fn base64(bytes: &[u8]) -> String {
 }
 
 struct FakeCli {
+    codex_input: bool,
     transcript: Vec<String>,
     wrap_transcript: bool,
     draft: Vec<InputSegment>,
@@ -331,7 +334,7 @@ impl FakeCli {
             .iter()
             .map(|piece| match piece {
                 InputSegment::Text(text) => text.clone(),
-                InputSegment::Paste { text, .. } if self.muse => {
+                InputSegment::Paste { text, .. } if self.muse || self.codex_input => {
                     format!("[Pasted Content {} chars]", text.chars().count())
                 }
                 InputSegment::Paste { number, text } => {
@@ -706,6 +709,8 @@ impl FakeCli {
         let shown = self.displayed_draft();
         let (prompt, footer) = if self.agy {
             (">", "? for shortcuts")
+        } else if self.codex_input {
+            ("›", "  test-model default · /isolated/work")
         } else {
             ("❯", "  Enter to send")
         };
@@ -738,11 +743,13 @@ impl FakeCli {
             }
             None => input_row + 2,
         };
-        frame.push_str(&format!(
-            "\x1b[{};1H\x1b[2m{}\x1b[0m",
-            lower,
-            "─".repeat(cols)
-        ));
+        if !self.codex_input {
+            frame.push_str(&format!(
+                "\x1b[{};1H\x1b[2m{}\x1b[0m",
+                lower,
+                "─".repeat(cols)
+            ));
+        }
         if suggestion.is_none() {
             frame.push_str(&format!("\x1b[{};1H\x1b[2m{footer}\x1b[0m", input_row + 3));
         }
@@ -1276,16 +1283,23 @@ fn run() -> anyhow::Result<()> {
             .and_then(|ms| ms.parse().ok())
             .map(Duration::from_millis)
     };
+    let codex_input = std::env::var("FAKECLI_CODEX_INPUT").as_deref() == Ok("working");
     let status = std::env::var("FAKECLI_STATUS")
         .is_ok_and(|v| v == "1")
-        .then(|| Status {
-            ready_at: Some(
-                Instant::now() + milliseconds("FAKECLI_STATUS_DELAY_MS").unwrap_or_default(),
-            ),
-            turn: milliseconds("FAKECLI_TURN_MS").unwrap_or(Duration::from_millis(400)),
-            turn_ends: None,
-            progress: std::env::var("FAKECLI_PROGRESS").is_ok_and(|v| v == "1"),
-            reports: vec!["\x1b]7501;?\x1b\\".into()],
+        .then(|| {
+            let mut reports = vec!["\x1b]7501;?\x1b\\".into()];
+            if codex_input {
+                reports.push(report("working", None, None));
+            }
+            Status {
+                ready_at: (!codex_input).then(|| {
+                    Instant::now() + milliseconds("FAKECLI_STATUS_DELAY_MS").unwrap_or_default()
+                }),
+                turn: milliseconds("FAKECLI_TURN_MS").unwrap_or(Duration::from_millis(400)),
+                turn_ends: None,
+                progress: std::env::var("FAKECLI_PROGRESS").is_ok_and(|v| v == "1"),
+                reports,
+            }
         });
     let server_answered = Arc::new(AtomicBool::new(false));
     let delay = milliseconds("FAKECLI_MCP_DELAY_MS").unwrap_or_default();
@@ -1298,6 +1312,7 @@ fn run() -> anyhow::Result<()> {
     };
     let agy = std::env::var("FAKECLI_LOOK").is_ok_and(|look| look == "agy");
     let mut app = FakeCli {
+        codex_input,
         claude,
         transcript: Vec::new(),
         wrap_transcript: std::env::var("FAKECLI_WRAP_TRANSCRIPT").is_ok_and(|value| value == "1"),
@@ -1485,6 +1500,7 @@ fn run() -> anyhow::Result<()> {
                     dirty = true;
                 }
                 b'\r' | b'\n' if takes_enter => app.submit(),
+                b'\t' if app.codex_input && app.menu.is_none() => app.submit(),
                 0x7f | 0x08 if ignore_backspace => {}
                 0x7f | 0x08 => app.backspace(),
                 0x03 => app.draft.clear(),

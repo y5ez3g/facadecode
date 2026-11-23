@@ -25,7 +25,9 @@ The Orchestrator's MCP server `facade` offers eight tools: start_agent, list_age
 
 The agent rows show each agent's current CLI. To discover what you can start, read each machine's `clis` string list, such as `["codex", "claude"]`. It contains only available CLI names. Copy one string into `start_agent.cli` and the machine's `selector` into `start_agent.machine`. The list is checked in the default start context; a different folder is checked again when starting. A missing `clis` field is not an empty list: check the machine's status and `cli_error`. You do not need to attempt an invalid start to discover CLIs.
 
-When a start includes a first prompt, a separate 🔔 result says whether the prompt reached the agent. A successful start confirms the run started. A 🔔 result or an idle state does not prove the agent completed its task.
+The start call returns once the launch is recorded. When a first prompt fails, Facade reports it under the reserved `result_message` ID. Successful prompt delivery is silent. A stop call waits up to 30 seconds for exit and reports the outcome in its response.
+
+If an agent you started stays blocked or in error for 30 seconds, or ends unexpectedly, Facade sends you a notice. For an agent waiting on you, read its screen and use `press_keys` or `type_text` to respond.
 
 ## Sending messages
 
@@ -37,9 +39,11 @@ When a start includes a first prompt, a separate 🔔 result says whether the pr
 
 `timeout_seconds` is an integer from 0 to 30 and defaults to 0 in both `send_message` and `read_messages`. Zero means do not wait. Setting `wait_for` alone does not enable waiting. For a send, a positive timeout requires `wait_for`. With a positive timeout, connection, resolution, sending or reading, waiting and the answer share one total call budget; delivery and reply waiting do not each get a separate budget.
 
-The server verifies your identity. A managed agent runs in a terminal held by Facade and normally receives replies through that terminal. Usually send with:
+From a managed agent, you can send without a wait and continue your work.
 
-`send_message({to: "a7@devbox", text: "Run the checks and reply to this message.", wait_for: "delivery", timeout_seconds: 30})`
+`send_message({to: "a7@devbox", text: "Run the checks and reply to this message."})`
+
+Replies and any later delivery failure come through your terminal. An explicit delivery or result wait reports failure in the call. The failure notice names the original message and its recipient. An untouched, withdrawn message can be sent again. Inspect the recipient's screen before retrying if the notice reports partial input or cannot confirm submission.
 
 A Guest receives messages by reading its inbox. When you need an answer as a Guest, send with:
 
@@ -65,7 +69,7 @@ Keep a Guest connection open and take replies promptly. A new reply to a Guest s
 
 For an agent's message, set `to` to its sender and `reply_to` to the inbox number you received:
 
-`send_message({to: "a3@laptop", text: "The checks passed.", reply_to: "m42", wait_for: "delivery", timeout_seconds: 30})`
+`send_message({to: "a3@laptop", text: "The checks passed.", reply_to: "m42"})`
 
 A command-line request that expects an answer appears as the command line with a sender address such as `#c42@devbox`. Its terminal message has the same single header line as other messages:
 

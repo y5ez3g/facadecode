@@ -26,7 +26,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use crate::agent::{self, ActorStart, AgentCommand, AgentHandle, Kept, ScreenStart, StateStart};
 use crate::command_line::{self, Configured};
 use crate::lifecycle::Work;
-use crate::messages::OwedResult;
+use crate::messages::{self, OwedResult, PromptWatch};
 use crate::runs::{ExitSink, FirstRead, RunExit, RunKind, RunRequest};
 use crate::store::{AgentRecord, CreationSource, InitialLaunch, RelayRunRecord, RemovalCause};
 use crate::windows::Destination;
@@ -36,9 +36,9 @@ use crate::{
 };
 
 /// The exit wait once the keeper took `agent.stop`, its 3 seconds before SIGKILL included.
-const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a resume waits for the ended run's exit to be saved and its session read.
-const PREVIOUS_RUN_TIMEOUT: Duration = Duration::from_secs(10);
+const PREVIOUS_RUN_TIMEOUT: Duration = Duration::from_secs(30);
 struct RunInstructions<'a> {
     address: String,
     folder: &'a str,
@@ -188,14 +188,26 @@ impl Drop for StartUnderWay {
 /// Where an early exit of a run goes: the actor's mailbox, made before the actor, so that an exit
 /// that comes first waits there for it.
 pub(crate) fn exit_sink(mailbox: mpsc::Sender<AgentCommand>) -> ExitSink {
-    Arc::new(move |RunExit { run, exit, stopped }| {
-        let mailbox = mailbox.clone();
-        tokio::spawn(async move {
-            let _ = mailbox
-                .send(AgentCommand::ProcessExited { run, exit, stopped })
-                .await;
-        });
-    })
+    Arc::new(
+        move |RunExit {
+                  run,
+                  exit,
+                  stopped,
+                  stopped_by,
+              }| {
+            let mailbox = mailbox.clone();
+            tokio::spawn(async move {
+                let _ = mailbox
+                    .send(AgentCommand::ProcessExited {
+                        run,
+                        exit,
+                        stopped,
+                        stopped_by,
+                    })
+                    .await;
+            });
+        },
+    )
 }
 
 /// How a log line names a call's request ID, where it has one.
@@ -716,6 +728,7 @@ impl Daemon {
             captures: prepared.captures,
             launch_command: prepared.launch_command.take(),
             deliveries: self.messages.delivery_handle(),
+            observed_loss: false,
             state: StateStart {
                 file: agent::state_file(&screen),
                 kept: Kept::new_run(prepared.tools),
@@ -738,14 +751,16 @@ impl Daemon {
             };
         // A prompt holds the run's messages from before the agent is listed, so that none goes
         // ahead of it.
+        let mut watch_prompt = None;
         let prompt = match kept {
             Some((prompt, owed)) => {
                 let owes = owed.clone().map(|reference| {
                     let agent = handle.clone();
-                    OwedResult {
-                        reference,
-                        agent: Arc::new(move || agent.info()),
-                    }
+                    let started_prompt = PromptWatch::new(messages::number(&prompt));
+                    watch_prompt = Some(started_prompt.clone());
+                    OwedResult::new(reference, started_prompt, move || {
+                        agent.prompt_result_facts()
+                    })
                 });
                 let settled = self.messages.deliver_prompt(prompt.clone(), owes);
                 let (ready, started) = oneshot::channel();
@@ -761,6 +776,7 @@ impl Daemon {
             self.publish(info.clone());
             self.runs.installed_run(&id, agent::FIRST_RUN)
         };
+        self.watch_creator(&handle, watch_prompt).await;
         // Listed now: the plugin's hold goes, and the session is followed.
         prepared.let_go_of_plugin();
         if self.runs.captures(&id) {
@@ -851,16 +867,25 @@ impl Daemon {
     pub(crate) async fn stop(
         self: &Arc<Self>,
         agent: &AgentHandle,
+        caller: &Caller,
     ) -> Result<(StopResult, AgentLabel), ErrorBody> {
         let _changing = agent.lock_run_change().await;
         gate_for_test("before-stop-run");
-        let result = self.stop_run(agent).await?;
+        let stopped_by = match caller {
+            Caller::Agent { agent, .. } => Some(crate::api::agent_ref(agent.clone())),
+            _ => None,
+        };
+        let result = self.stop_run(agent, stopped_by).await?;
         Ok((result, self.agent_label(agent)?))
     }
 
     /// Stops `agent`'s run while the caller holds its run change: only the keeper signals a CLI.
-    /// Waits up to 10 seconds for its exit. A run that ended before is left as it was.
-    pub(crate) async fn stop_run(&self, agent: &AgentHandle) -> Result<StopResult, ErrorBody> {
+    /// Waits up to 30 seconds for its exit. A run that ended before is left as it was.
+    pub(crate) async fn stop_run(
+        &self,
+        agent: &AgentHandle,
+        stopped_by: Option<AgentRef>,
+    ) -> Result<StopResult, ErrorBody> {
         let id = agent.id().to_string();
         let mut exit = agent.exit();
         if let Some(exit) = exit.borrow().clone() {
@@ -881,7 +906,8 @@ impl Daemon {
         if !agent.send(AgentCommand::LetGoBeforeStop { reply }).await || let_go.await.is_err() {
             return Err(agent_stopped(&id));
         }
-        let running = self.runs.stop(&id).await?;
+        let (run, _) = agent.installed_record();
+        let running = self.runs.stop(&id, run, stopped_by).await?;
         match tokio::time::timeout(STOP_TIMEOUT, exit.wait_for(Option::is_some)).await {
             Ok(Ok(exit)) => Ok(StopResult {
                 exit: exit.clone().expect("a recorded exit"),
@@ -958,7 +984,7 @@ impl Daemon {
     pub(crate) async fn remove(self: &Arc<Self>, agent: &AgentHandle) -> Result<(), ErrorBody> {
         let _changing = agent.lock_run_change().await;
         if agent.exit().borrow().is_none() {
-            self.stop_run(agent).await?;
+            self.stop_run(agent, None).await?;
         }
         self.remove_stopped(agent, RemovalCause::Removed).await
     }

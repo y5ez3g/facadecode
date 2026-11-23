@@ -28,6 +28,7 @@ use facade_base::api_v1::{
     keeper::{HeldAgent, StartArgs},
 };
 use facade_base::instructions::{self, ManagedRun};
+use facade_base::model::agent::AgentRef;
 use facade_base::model::error::ErrorBody;
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::programs::Held;
@@ -56,10 +57,20 @@ pub(crate) struct RunExit {
     pub(crate) exit: ProcessExit,
     /// Facade stopped the run.
     pub(crate) stopped: bool,
+    pub(crate) stopped_by: Option<AgentRef>,
+}
+
+/// A keeper acknowledgment tied to the exact run the daemon asked it to stop.
+pub(crate) struct StopAccepted {
+    pub(crate) id: String,
+    pub(crate) run: u64,
+    pub(crate) caller: Option<AgentRef>,
 }
 
 /// What the runs tell the daemon.
 pub(crate) enum RunEvent {
+    /// Ordered with the keeper's exit frames on the same connection.
+    StopAccepted(StopAccepted),
     /// The keeper reported a run's exit.
     Exited { id: String, exit: ProcessExit },
     /// Run `run` of agent `id` reported another session. The daemon commits it first, then tells
@@ -298,8 +309,17 @@ impl Runs {
 
     /// Asks the keeper to stop agent `id`'s run, waiting up to 10 seconds for a ready keeper.
     /// Returns whether it was still running.
-    pub(crate) async fn stop(&self, id: &str) -> Result<bool, ErrorBody> {
-        self.link.stop(id).await
+    pub(crate) async fn stop(
+        &self,
+        id: &str,
+        run: u64,
+        caller: Option<AgentRef>,
+    ) -> Result<bool, ErrorBody> {
+        self.link.stop(id, run, caller).await
+    }
+
+    pub(crate) fn confirm_stop(&self, stop: StopAccepted) {
+        self.link.confirm_stop(stop);
     }
 
     /// Records a run's first exit and hands it to the run's [`ExitSink`] once no lock is held.

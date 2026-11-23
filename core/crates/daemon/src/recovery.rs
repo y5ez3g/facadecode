@@ -45,7 +45,7 @@ use crate::agent::{
     self, ActorStart, AgentHandle, Input, MessageTyping, ScreenStart, StateStart, Submission,
 };
 use crate::lifecycle::Work;
-use crate::messages::{self, Outcome, OwedResult, Recipient, Settled, TakeUp};
+use crate::messages::{self, Outcome, OwedResult, PromptWatch, Recipient, Settled, TakeUp};
 use crate::operations::exit_sink;
 use crate::store::{AgentRecord, KeptMessage};
 use crate::{Daemon, Sender, blocking_in_place};
@@ -108,7 +108,7 @@ struct TypistWork {
     /// Pastes begun before the restart, by number: the earliest deadline and the pending messages.
     pastes: BTreeMap<u64, (Instant, Vec<Delivering>)>,
     /// Messages to deliver, in the order they were sent, with their deadlines.
-    messages: Vec<(Instant, Delivering)>,
+    messages: Vec<(Instant, Delivering, bool)>,
 }
 
 impl Daemon {
@@ -322,6 +322,7 @@ impl Daemon {
             captures: follows_session,
             launch_command,
             deliveries: self.messages.delivery_handle(),
+            observed_loss: matches!(then, Then::SaveExit(_)),
             state,
         };
         let handle = agent::spawn(actor, rx, tx, self.changes.clone())?;
@@ -443,12 +444,23 @@ impl Daemon {
     /// module's comment). A typist settles one paste before it begins the next, so an agent has at
     /// most one begun paste; more, which only a settlement the store could not write leaves, all
     /// fail as unconfirmed.
-    pub(crate) fn take_up_messages(self: &Arc<Self>) -> anyhow::Result<()> {
+    pub(crate) async fn take_up_messages(
+        self: &Arc<Self>,
+        recovered_prompts: &HashSet<u64>,
+    ) -> anyhow::Result<()> {
         // Deadlines are fixed now: time waiting for room in an input never lengthens a later one.
         let (now, started) = (SystemTime::now(), Instant::now());
         let mut typists: BTreeMap<String, TypistWork> = BTreeMap::new();
+        let mut first_prompts = HashMap::new();
         for kept in self.messages.pending()? {
-            self.take_up(kept, now, started, &mut typists);
+            let is_prompt = recovered_prompts.contains(&messages::number(&kept.message));
+            if let Some((id, prompt)) = self.take_up(kept, is_prompt, now, started, &mut typists) {
+                first_prompts.insert(id, prompt);
+            }
+        }
+        for agent in self.agents() {
+            self.watch_creator(&agent, first_prompts.remove(agent.id()))
+                .await;
         }
         for (id, work) in typists {
             let agent = self.get_agent(&id).expect("a running recipient");
@@ -465,34 +477,51 @@ impl Daemon {
             message,
             paste,
             result_owed,
+            notify_failure,
             ..
         }: KeptMessage,
+        is_prompt: bool,
         now: SystemTime,
         started: Instant,
         typists: &mut BTreeMap<String, TypistWork>,
-    ) {
+    ) -> Option<(String, PromptWatch)> {
         let recipient = self.get_agent(&message.to);
-        // A guest's messages wait for its next turn, with no deadline.
-        if recipient.as_ref().is_some_and(AgentHandle::is_guest) {
-            return;
+        let guest = recipient.as_ref().is_some_and(AgentHandle::is_guest);
+        // A guest reads its inbox. A marked Inbox send also keeps its original delivery deadline.
+        if guest && !notify_failure {
+            return None;
         }
         let whereabouts = match &recipient {
-            None => Recipient::NotListed,
             Some(agent) if agent.exit().borrow().is_some() => Recipient::Ended,
-            Some(_) => Recipient::Running,
+            Some(_) if !guest => Recipient::Running,
+            _ => Recipient::NotListed,
         };
         let decided = messages::decide(&message, paste, whereabouts, now);
         // A start's prompt still owes its result, which describes its agent as the prompt settles.
-        let owes = result_owed
-            .zip(recipient)
-            .map(|(number, agent)| OwedResult {
-                reference: number,
-                agent: Arc::new(move || agent.info()),
-            });
         let number = messages::number(&message);
+        let mut first_prompt = None;
+        let owes = result_owed.zip(recipient).map(|(reference, agent)| {
+            let prompt = PromptWatch::new(number);
+            first_prompt = Some((agent.id().to_owned(), prompt.clone()));
+            OwedResult::new(reference, prompt, move || agent.prompt_result_facts())
+        });
         let settled = self
             .messages
-            .take_up(message.clone(), paste.is_some(), owes);
+            .take_up(message.clone(), paste.is_some(), is_prompt, owes);
+        if notify_failure && let Some(work) = self.lifecycle.begin(Work::Send) {
+            let daemon = self.clone();
+            let sent = message.clone();
+            let mut settled = settled.clone();
+            tokio::spawn(async move {
+                let _work = work;
+                let answer = settled
+                    .wait_for(Option::is_some)
+                    .await
+                    .ok()
+                    .and_then(|result| result.clone());
+                daemon.report_send_failure(&sent, answer);
+            });
+        }
         if message.delivery.deadline.is_none() && !matches!(decided, TakeUp::Settle(_)) {
             // A prompt whose delivery had not begun begins it now; a later restart keeps the rest.
             let deadline = facade_base::time::iso_time(now + crate::delivery_limit());
@@ -502,11 +531,11 @@ impl Daemon {
         match decided {
             TakeUp::Settle(outcome) => self.messages.settle(&[number], outcome),
             TakeUp::Wait(left) => self.await_settlement((message, settled), started + left),
-            TakeUp::Type(left) => typists
-                .entry(to)
-                .or_default()
-                .messages
-                .push((started + left, (message, settled))),
+            TakeUp::Type(left) => typists.entry(to).or_default().messages.push((
+                started + left,
+                (message, settled),
+                is_prompt,
+            )),
             TakeUp::FinishPaste { paste, left } => {
                 let deadline = started + left;
                 let (earliest, pending) = typists
@@ -519,6 +548,7 @@ impl Daemon {
                 pending.push((message, settled));
             }
         }
+        first_prompt
     }
 
     /// The one paste `id`'s typist is to finish, rebuilt as it was pasted. Logs that its CLI may
@@ -586,13 +616,25 @@ impl Daemon {
         self: Arc<Self>,
         agent: AgentHandle,
         begun: Option<BegunPaste>,
-        messages: Vec<(Instant, Delivering)>,
+        messages: Vec<(Instant, Delivering, bool)>,
     ) {
         if let Some(begun) = begun {
             self.finish_paste(&agent, begun).await;
         }
-        for (deadline, (message, settled)) in messages {
-            if self.hand_to_typist(&agent, &message, deadline).await {
+        for (deadline, (message, settled), first_prompt) in messages {
+            let handed = if first_prompt {
+                let typing = MessageTyping::start_prompt(
+                    self.message_text(&message),
+                    messages::number(&message),
+                    deadline,
+                    crate::delivery::submission_of(&message),
+                );
+                self.hand_message_typing(&agent, messages::number(&message), typing, deadline)
+                    .await
+            } else {
+                self.hand_to_typist(&agent, &message, deadline).await
+            };
+            if handed {
                 self.await_settlement((message, settled), deadline);
             }
         }

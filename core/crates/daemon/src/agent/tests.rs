@@ -217,6 +217,7 @@ impl Harness {
             rule: rule.map(str::to_string),
             captures: false,
             launch_command: None,
+            observed_loss: false,
             deliveries: messages.delivery_handle(),
             state,
         };
@@ -797,6 +798,7 @@ async fn calls_cut_off_by_the_agent_s_end_say_what_was_typed() {
             run: FIRST_RUN,
             exit,
             stopped: false,
+            stopped_by: None,
         })
         .await
         .unwrap();
@@ -855,6 +857,7 @@ impl Harness {
             run,
             exit: exit_with(code),
             stopped: false,
+            stopped_by: None,
         })
         .await;
         let mut settled = self.handle.settled();
@@ -1190,6 +1193,7 @@ async fn input_and_exits_meant_for_an_ended_run_never_reach_the_run_that_resumes
             run: FIRST_RUN,
             exit: exit_with(7),
             stopped: false,
+            stopped_by: None,
         })
         .await;
     harness.round_trip().await;
@@ -1219,6 +1223,7 @@ async fn a_run_that_ends_before_its_terminal_is_installed_ends_the_agent_once_it
             run: 2,
             exit: exit_with(9),
             stopped: false,
+            stopped_by: None,
         })
         .await;
     harness.round_trip().await;
@@ -1507,6 +1512,7 @@ async fn a_server_that_connects_before_the_actor_first_runs_makes_the_tools_avai
         rule: None,
         captures: false,
         launch_command: None,
+        observed_loss: false,
         deliveries: crate::messages::tests::messages().0.delivery_handle(),
         state,
     };
@@ -1554,6 +1560,7 @@ async fn a_start_prompt_waits_for_the_tools_and_messages_sent_meanwhile_wait_beh
         rule: Some("fake".into()),
         captures: false,
         launch_command: None,
+        observed_loss: false,
         deliveries: post.delivery_handle(),
         state,
     };
@@ -1694,6 +1701,7 @@ async fn a_recovered_run_waits_for_its_server_from_the_recovery() {
         rule: None,
         captures: false,
         launch_command: None,
+        observed_loss: false,
         deliveries: messages.delivery_handle(),
         state,
     };
@@ -2755,6 +2763,7 @@ async fn an_ended_run_is_in_its_record_before_its_waiting_prompt_learns_it_ended
             run: FIRST_RUN,
             exit: exit_with(0),
             stopped: false,
+            stopped_by: None,
         })
         .await;
     let early = tokio::time::timeout(Duration::from_millis(500), &mut started).await;
@@ -2838,6 +2847,7 @@ async fn an_ended_run_is_in_its_record_before_a_message_being_typed_learns_it_en
             run: FIRST_RUN,
             exit: exit_with(0),
             stopped: false,
+            stopped_by: None,
         })
         .await;
     tokio::time::sleep(Duration::from_millis(500)).await;

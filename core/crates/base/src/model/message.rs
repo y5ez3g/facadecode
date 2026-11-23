@@ -4,8 +4,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::address::mcp::{exact_machine_selector, format_reference, parse_machine_selector};
+use crate::process::ProcessState;
 
-use super::agent::{AgentRef, ManagedAgent, ToolsState};
+use super::agent::{
+    ANSWER_WAIT, AgentRef, ManagedAgent, ManagedAgentState, ToolsState, error_words, exit_words,
+};
 use super::machine::WindowRef;
 use super::terminal::{CUT_MARK, display_name, first_control};
 
@@ -286,9 +289,60 @@ pub fn start_result_text_at(
             }
             why.push('.');
             lines.push(why);
+            let detail = agent.state_detail.as_ref();
+            if agent.process == ProcessState::Ended || agent.exit.is_some() {
+                let exit = agent.exit.as_ref().map_or_else(
+                    || "ended. Its exit status is unavailable".into(),
+                    |exit| exit_words(exit, detail.and_then(|detail| detail.how)),
+                );
+                lines.push(format!("The agent {exit}."));
+                lines.push(match &agent.session {
+                    Some(session) => format!(
+                        "Facade recorded session {}. Check `facade resume` for that session \
+                         before starting it again.",
+                        display_name(session)
+                    ),
+                    None => "Facade has no recorded session to resume. Read its screen before \
+                             starting it again."
+                        .into(),
+                });
+            } else if agent.state == ManagedAgentState::Error {
+                let error = error_words(detail, agent.tools_reason);
+                lines.push(format!(
+                    "The agent {error}. Read its screen to decide what to do next."
+                ));
+            } else if agent.state == ManagedAgentState::WaitingForYou
+                && let Some(wait) = detail
+                    .and_then(|detail| detail.kind)
+                    .and_then(|kind| kind.waiting_for())
+            {
+                lines.push(format!("The agent waits for {wait}. {ANSWER_WAIT}"));
+            }
         }
     }
     lines.join("\n")
+}
+
+/// A failed Inbox send, including the actual submission facts and a safe next step.
+pub fn send_failure_text(
+    message: &str,
+    target: &str,
+    delivery: &Delivery,
+    withdrawn: bool,
+) -> String {
+    let (typed, submitted) = input_facts(delivery);
+    let next = if withdrawn
+        && delivery.text_written == TextWritten::None
+        && delivery.enter_written == Some(false)
+    {
+        "Facade withdrew the message. You can resend it."
+    } else {
+        "Check the recipient's terminal before retrying."
+    };
+    let why = delivery.failure_reason(target);
+    format!(
+        "Message {message} to {target} failed.\nDelivery failed because {why}. {typed} {submitted} {next}"
+    )
 }
 
 /// What of a message reached the terminal, then what to check: before sending it again, or, after
@@ -297,23 +351,28 @@ fn input_words(delivery: &Delivery, before_retry: bool) -> String {
     if delivery.text_written == TextWritten::None && delivery.enter_written == Some(false) {
         return "Nothing was entered in the terminal.".into();
     }
+    let (text, submitted) = input_facts(delivery);
+    let check = if before_retry {
+        "Check the terminal before sending it again."
+    } else {
+        "Check the terminal for leftover input."
+    };
+    format!("{text} {submitted} {check}")
+}
+
+fn input_facts(delivery: &Delivery) -> (&'static str, &'static str) {
     let text = match delivery.text_written {
         TextWritten::None => "No message text was entered.",
         TextWritten::Partial => "Only part of the message was entered.",
         TextWritten::Full => "The full message was entered.",
         TextWritten::Unknown | TextWritten::Unrecognized => "How much text was entered is unknown.",
     };
-    let enter = match delivery.enter_written {
-        Some(true) => "Enter was pressed.",
-        Some(false) => "Enter was not pressed.",
-        None => "Whether Enter was pressed is unknown.",
+    let submitted = match delivery.enter_written {
+        Some(true) => "The submission key was pressed.",
+        Some(false) => "The submission key was not pressed.",
+        None => "Whether the submission key was pressed is unknown.",
     };
-    let check = if before_retry {
-        "Check the terminal before sending it again."
-    } else {
-        "Check the terminal for leftover input."
-    };
-    format!("{text} {enter} {check}")
+    (text, submitted)
 }
 
 /// The message as its recipient's terminal shows it: a header naming its sender, its number, the
@@ -377,10 +436,9 @@ pub struct Delivery {
     pub reason: Option<DeliveryFailure>,
     /// How much of the message reached the recipient's terminal.
     pub text_written: TextWritten,
-    /// Whether the Enter that submits it reached the recipient's terminal. Omitted when that is not
-    /// known: the recipient read the message while its typist was typing it, its typist did not say
-    /// by the deadline, what it typed was still queued then, or the daemon before a restart had
-    /// begun its paste.
+    /// Whether the message's submission key (Enter or Tab) reached the recipient's terminal.
+    /// Omitted when the write outcome is unknown, for example when the key was still queued at the
+    /// deadline or a restart interrupted delivery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enter_written: Option<bool>,
     /// When a pending delivery fails if the message is not delivered by then. Omitted once it is
@@ -403,8 +461,12 @@ impl Delivery {
         let typed = match (self.text_written, self.enter_written) {
             (TextWritten::None, _) => "nothing was typed",
             (TextWritten::Partial, _) => "part of it was typed",
-            (TextWritten::Full, Some(true)) => "all of it and its Enter were typed",
-            (TextWritten::Full, Some(false)) => "all of it was typed, but not its Enter",
+            (TextWritten::Full, Some(true)) => {
+                "the full message and its submission key reached the terminal"
+            }
+            (TextWritten::Full, Some(false)) => {
+                "the full message reached the terminal without its submission key"
+            }
             (TextWritten::Full, None) => "all of it was typed",
             (TextWritten::Unknown | TextWritten::Unrecognized, _) => {
                 "what of it was typed is not known"
@@ -476,8 +538,8 @@ pub enum DeliveryFailure {
     /// The recipient's input was not recognized as empty until the deadline: its screen did not
     /// show it as its CLI's rule describes it.
     InputUnknown,
-    /// The input was empty, but the deadline passed before a paste of the message, its Enter, and
-    /// its confirmation could fit.
+    /// The input was empty. The delivery deadline passed before the paste and submission key
+    /// could both reach the terminal and be confirmed.
     Timeout,
     /// Its paste began, but the recipient's CLI did not take the message before the deadline. A
     /// paste its terminal had not taken whole by then still goes in, and no Enter follows it.
@@ -773,7 +835,7 @@ mod tests {
                 delivery,
             },
         };
-        let words = |agent, delivery| start_result_text(&outcome(agent, delivery));
+        let words = |agent: &ManagedAgent, delivery| start_result_text(&outcome(agent, delivery));
         let typed = delivery(
             DeliveryStatus::Success,
             None,
@@ -808,8 +870,8 @@ mod tests {
             words(&agent, read_while_typed),
             "helper (#a5) has started.\nYour initial message #m42 has been passed on through \
              read_messages.\n\
-             How much text was entered is unknown. Whether Enter was pressed is unknown. Check the \
-             terminal for leftover input."
+             How much text was entered is unknown. Whether the submission key was pressed is \
+             unknown. Check the terminal for leftover input."
         );
         let ended = delivery(
             DeliveryStatus::Failure,
@@ -825,10 +887,34 @@ mod tests {
              #a5 ended before the message was delivered."
         );
         assert_eq!(
-            start_result_text_at(&outcome(&agent, ended), "a5@devbox", "m42@devbox"),
+            start_result_text_at(&outcome(&agent, ended.clone()), "a5@devbox", "m42@devbox"),
             "helper (a5@devbox) has started.\nYour initial message m42@devbox could not be delivered. \
              Nothing was entered in the terminal.\na5@devbox ended before the message was delivered."
         );
+        let ended_agent = ManagedAgent {
+            process: ProcessState::Ended,
+            state: ManagedAgentState::Ended,
+            ..agent.clone()
+        };
+        assert!(words(&ended_agent, ended.clone()).ends_with(
+            "The agent ended. Its exit status is unavailable.\n\
+             Facade has no recorded session to resume. Read its screen before starting it again."
+        ));
+        let ended_with_session = ManagedAgent {
+            exit: Some(crate::process::ProcessExit {
+                code: Some(7),
+                signal: None,
+                reason: None,
+                at: agent.created_at.clone(),
+            }),
+            session: Some("recorded-session".into()),
+            ..ended_agent
+        };
+        assert!(words(&ended_with_session, ended).ends_with(
+            "The agent ended with exit code 7.\n\
+             Facade recorded session recorded-session. Check `facade resume` for that session \
+             before starting it again."
+        ));
         let unconfirmed = delivery(
             DeliveryStatus::Failure,
             Some(DeliveryFailure::SubmissionUnconfirmed),
@@ -839,8 +925,8 @@ mod tests {
         assert_eq!(
             words(&agent, unconfirmed),
             "helper (#a5) has started.\nDelivery of your initial message #m42 could not be \
-             confirmed. The full message was entered. Enter was not \
-             pressed. Check the terminal before sending it again.\n#a5's CLI did not take the \
+             confirmed. The full message was entered. The submission key was not pressed. \
+             Check the terminal before sending it again.\n#a5's CLI did not take the \
              message before the deadline."
         );
         let unavailable = ManagedAgent {
@@ -852,7 +938,7 @@ mod tests {
             words(&unavailable, typed.clone()).lines().nth(1),
             Some(
                 "Its Facade tools are unavailable: its Facade server did not connect within \
-                 60 seconds."
+                 30 seconds."
             )
         );
         let result = Message {
@@ -923,12 +1009,12 @@ mod tests {
             (
                 TextWritten::Full,
                 Some(false),
-                "all of it was typed, but not its Enter",
+                "the full message reached the terminal without its submission key",
             ),
             (
                 TextWritten::Full,
                 Some(true),
-                "all of it and its Enter were typed",
+                "the full message and its submission key reached the terminal",
             ),
         ] {
             assert_eq!(

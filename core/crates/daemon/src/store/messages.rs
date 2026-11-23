@@ -11,7 +11,8 @@
 //! within the hour finds the message again through `messages_request`, in the transaction that
 //! would keep a new one, so that two calls with one ID keep one message. A withdrawal with a
 //! request ID keeps only its receipt. Confirmed command replies are also kept as receipts,
-//! hidden from inbox and history reads.
+//! hidden from inbox and history reads. `notify_failure` preserves an authenticated Inbox send's
+//! notice decision when its delivery is still pending at takeover.
 //!
 //! A message takes its number in the transaction that writes it, so no message lacks one and no
 //! number goes to two. Deleting messages never lowers the counter. A value this build does not
@@ -37,7 +38,7 @@ const COLUMNS: &str = "number, \"from\", from_name, \"to\", text, reply_to, at, 
                        text_written, enter_written, deadline, delivered_via, delivered_at, paste, \
                        from_window, call_id, result_owed, result, human_windows, \
                        from_machine_id, reply_to_machine_id, result_owed_machine_id, withdrawn, \
-                       command_line_reply";
+                       command_line_reply, notify_failure";
 
 /// Creates the table and its indexes. `messages_undelivered` lets reads scan only messages that
 /// are still waiting.
@@ -109,6 +110,11 @@ pub(super) fn migrate_command_line_replies(connection: &Connection) -> rusqlite:
     )
 }
 
+pub(super) fn migrate_failure_notices(connection: &Connection) -> rusqlite::Result<()> {
+    connection
+        .execute_batch("ALTER TABLE messages ADD COLUMN notify_failure INTEGER NOT NULL DEFAULT 0;")
+}
+
 /// The first recipient and checked reply of a send, retained by its originating machine.
 pub(crate) struct SendRoute {
     pub(crate) recipient: AgentRef,
@@ -173,6 +179,7 @@ pub(crate) struct KeptMessage {
     pub(crate) message: Message,
     pub(crate) paste: Option<u64>,
     pub(crate) result_owed: Option<MessageRef>,
+    pub(crate) notify_failure: bool,
     pub(crate) withdrawn: bool,
     /// The window subscriptions that took or refused a message to the person.
     pub(crate) window_delivery: Option<Vec<WindowDeliveryOutcome>>,
@@ -284,6 +291,7 @@ fn read_message(row: &Row) -> rusqlite::Result<KeptMessage> {
             }),
         window_delivery,
         withdrawn: row.get("withdrawn")?,
+        notify_failure: row.get("notify_failure")?,
     })
 }
 
@@ -302,6 +310,7 @@ fn write(
     number: i64,
     message: &Message,
     request: Option<RequestId<'_>>,
+    notify_failure: bool,
 ) -> rusqlite::Result<()> {
     let delivery = &message.delivery;
     let reply_to = message
@@ -316,7 +325,7 @@ fn write(
         &format!(
             "INSERT INTO messages ({COLUMNS}, request_id, request_window_id) VALUES
              (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL, ?15, ?16,
-              NULL, ?17, NULL, NULLIF(?18, (SELECT machine_id FROM machine)), ?19, NULL, 0, ?20, ?21, ?22)"
+              NULL, ?17, NULL, NULLIF(?18, (SELECT machine_id FROM machine)), ?19, NULL, 0, ?20, ?21, ?22, ?23)"
         ),
         params![
             number,
@@ -339,6 +348,7 @@ fn write(
             message.from_machine_id,
             message.reply_to_machine_id,
             message.command_line_reply,
+            notify_failure,
             request.map(|request| request.id),
             request.and_then(|request| request.caller_window_id),
         ],
@@ -372,7 +382,7 @@ fn find_request(
 /// Writes `message` under the next number, in `connection`'s transaction. Returns it with its ID.
 pub(super) fn insert(connection: &Connection, message: &Message) -> rusqlite::Result<Message> {
     let number = take_number(connection)?;
-    write(connection, number, message, None)?;
+    write(connection, number, message, None, false)?;
     Ok(Message {
         message_id: format!("m{number}"),
         ..message.clone()
@@ -491,18 +501,24 @@ fn write_result(connection: &Connection, prompt: u64, result: &Message) -> rusql
     }) else {
         return Ok(false);
     };
-    connection.execute(
-        "UPDATE messages SET result_owed = NULL, result_owed_machine_id = NULL WHERE number = ?1",
-        [prompt as i64],
-    )?;
+    clear_result_debt(connection, prompt)?;
     if machine_id != local_machine(connection)? {
         return Ok(true);
     }
     let caller_there = recipient_there(connection, &result.to)?;
     if caller_there {
-        write(connection, number, result, None)?;
+        write(connection, number, result, None, false)?;
     }
     Ok(caller_there)
+}
+
+fn clear_result_debt(connection: &Connection, prompt: u64) -> rusqlite::Result<()> {
+    connection.execute(
+        "UPDATE messages SET result_owed = NULL, result_owed_machine_id = NULL \
+         WHERE number = ?1 AND (result_owed IS NOT NULL OR result_owed_machine_id IS NOT NULL)",
+        [prompt as i64],
+    )?;
+    Ok(())
 }
 
 fn recipient_there(connection: &Connection, recipient: &str) -> rusqlite::Result<bool> {
@@ -541,7 +557,10 @@ fn write_delivery(
     let changed = connection.execute(
         &format!(
             "UPDATE messages SET status = ?2, reason = ?3, text_written = ?4, enter_written = ?5, \
-             deadline = ?6, delivered_via = ?7, delivered_at = ?8 WHERE number = ?1 AND withdrawn = 0 AND private_receipt = 0 AND ({condition})"
+             deadline = ?6, delivered_via = ?7, delivered_at = ?8, \
+             result_owed = CASE WHEN ?2 = 'success' THEN NULL ELSE result_owed END, \
+             result_owed_machine_id = CASE WHEN ?2 = 'success' THEN NULL ELSE result_owed_machine_id END \
+             WHERE number = ?1 AND withdrawn = 0 AND private_receipt = 0 AND ({condition})"
         ),
         params![
             number as i64,
@@ -624,7 +643,7 @@ impl MessageTable {
                         && kept.message.result == message.result)
                         .then_some(Kept::Earlier(kept)));
                 }
-                write(connection, number, message, None)?;
+                write(connection, number, message, None, false)?;
                 Ok(Some(Kept::New(message.clone())))
             },
         )
@@ -689,6 +708,7 @@ impl MessageTable {
         &self,
         message: &Message,
         request: Option<RequestId>,
+        notify_failure: bool,
     ) -> anyhow::Result<Kept> {
         self.0.transaction(
             || "save a message".to_string(),
@@ -705,7 +725,7 @@ impl MessageTable {
                     return Ok(Kept::Earlier(earlier));
                 }
                 let number = take_number(transaction)?;
-                write(transaction, number, message, request)?;
+                write(transaction, number, message, request, notify_failure)?;
                 Ok(Kept::New(Message {
                     message_id: format!("m{number}"),
                     ..message.clone()
@@ -776,7 +796,7 @@ impl MessageTable {
                     return Ok(earlier.message);
                 }
                 let number = number_of(message) as i64;
-                write(transaction, number, message, request)?;
+                write(transaction, number, message, request, false)?;
                 transaction.execute(
                     "UPDATE messages SET private_receipt = 1 WHERE number = ?1",
                     [number],
@@ -906,12 +926,11 @@ impl MessageTable {
     pub(crate) fn record_unstarted_reads(
         &self,
         read: &[(u64, &Delivery)],
-        results: &[(u64, Message)],
     ) -> anyhow::Result<Settlement> {
         self.write_deliveries(
             read,
             "status = 'pending' AND paste IS NULL",
-            results,
+            &[],
             Withdrawal::Unstarted(&[]),
         )
     }
@@ -1393,7 +1412,7 @@ mod tests {
         assert!(
             store
                 .message_table()
-                .insert_message(&message(0, "a2"), None)
+                .insert_message(&message(0, "a2"), None, false)
                 .is_err()
         );
         store
@@ -1447,7 +1466,8 @@ mod tests {
                 .unwrap()
                 .into_message(),
             store
-                .insert_message(&from_elsewhere, None)
+                .message_table()
+                .insert_message(&from_elsewhere, None, true)
                 .unwrap()
                 .into_message(),
         ];
@@ -1481,6 +1501,7 @@ mod tests {
                     message: kept[0].clone(),
                     paste: Some(1),
                     result_owed: None,
+                    notify_failure: false,
                     window_delivery: None,
                     withdrawn: false,
                 },
@@ -1488,6 +1509,7 @@ mod tests {
                     message: kept[2].clone(),
                     paste: None,
                     result_owed: None,
+                    notify_failure: true,
                     window_delivery: None,
                     withdrawn: false,
                 }
@@ -1645,6 +1667,7 @@ mod tests {
                 message: kept.clone(),
                 paste: None,
                 result_owed: Some(reference.clone()),
+                notify_failure: false,
                 window_delivery: None,
                 withdrawn: false,
             }]

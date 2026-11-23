@@ -19,7 +19,6 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Instant;
 
 use super::outcome::read_delivery;
-use super::settle::owed_results;
 #[cfg(test)]
 use super::warn;
 use super::{
@@ -437,8 +436,7 @@ impl Messages {
 }
 
 impl Deliveries {
-    /// Delivers, by this read, the messages among `messages` not delivered yet: writes their
-    /// deliveries and the results they owe, tells their sends, and hands the results on.
+    /// Delivers unread messages, clears any prompt result debts, and tells their sends.
     fn deliver_read(
         &self,
         open: &mut OpenMap,
@@ -468,12 +466,10 @@ impl Deliveries {
             .iter()
             .map(|message| (number(message), &message.delivery))
             .collect();
-        let due = Due::now();
-        let results = owed_results(open, &writes, at, &due);
         let recorded = blocking_in_place(|| match mode {
             #[cfg(test)]
-            ReadMode::Compatibility => self.table.record_reads(&writes, &results),
-            ReadMode::Unstarted => self.table.record_unstarted_reads(&writes, &results),
+            ReadMode::Compatibility => self.table.record_reads(&writes, &[]),
+            ReadMode::Unstarted => self.table.record_unstarted_reads(&writes),
         })
         .map_err(ErrorBody::internal)?;
         pause_for_test("after-read-commit");
@@ -488,7 +484,6 @@ impl Deliveries {
             }
             self.updated(message);
         }
-        self.hand_on(open, results, &recorded.results, &due);
         Ok(())
     }
 }

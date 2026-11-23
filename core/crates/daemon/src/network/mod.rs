@@ -866,6 +866,7 @@ fn validate_request(
             },
             DaemonCall::InternalDeliverStartResult(args) => exact(&args.recipient)?,
             DaemonCall::InternalDeliverWaitNotice(args) => exact(&args.recipient)?,
+            DaemonCall::InternalDeliverNotice(args) => exact(&args.recipient)?,
             _ => {}
         },
         ForwardRequest::Watch(watch) => {

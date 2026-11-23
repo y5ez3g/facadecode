@@ -55,7 +55,7 @@ mod testing;
 mod topics;
 mod waits;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
@@ -533,12 +533,17 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
     });
     daemon.sweep(SystemTime::now());
     gate_for_test("before-recovery");
+    let recovered_prompts = opened
+        .records
+        .iter()
+        .filter_map(|record| record.prompt)
+        .collect::<HashSet<_>>();
     daemon
         .recover(held_agents, opened.records, &opened.agent_ids, &progress)
         .await?;
     daemon.expire_agents(&kept_since(SystemTime::now())).await;
     daemon.restore_guests()?;
-    daemon.take_up_messages()?;
+    daemon.take_up_messages(&recovered_prompts).await?;
     // A plugin whose runs ended while no daemon ran goes now.
     let users = daemon
         .agents()
@@ -552,7 +557,6 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
     }
     tokio::spawn(follow_runs(daemon.clone(), run_events_rx));
     tokio::spawn(sweep_every_hour(daemon.clone()));
-    tokio::spawn(waits::follow_waits(daemon.clone()));
     // Clients are accepted only after recovery, so that they see every readable agent.
     let listener = server::bind()?;
     let lifecycle = daemon.lifecycle.clone();
@@ -597,6 +601,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
 async fn follow_runs(daemon: Arc<Daemon>, mut events: mpsc::UnboundedReceiver<RunEvent>) {
     while let Some(event) = events.recv().await {
         match event {
+            RunEvent::StopAccepted(stop) => daemon.runs.confirm_stop(stop),
             RunEvent::Exited { id, exit } => daemon.record_exit(&id, exit),
             RunEvent::Session {
                 id,

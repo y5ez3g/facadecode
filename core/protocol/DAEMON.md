@@ -144,14 +144,21 @@ environment. Daemon status gives the home, settings path, build, PIDs and local 
 `agent.send` delivers to an eligible managed agent or Guest.
 The public receipt identifies the assigning machine in a message address such as
 `m42@devbox`. Replies can carry an address or a full message reference. Each reply target
-is verified at entry. A managed agent's delivery is confirmed when its terminal takes
-the submission. A Guest can read complete messages inline.
+is verified at entry. Terminal delivery is confirmed when the submission key reaches
+the terminal. The receipt field `delivery.enter_written` reports that write.
+Codex uses Tab to queue ordinary messages while Working. Initial prompts and recovered
+drafts use Enter, as does ordinary delivery outside that Codex path. A Guest can read
+complete messages inline.
 
 Omitting `wait_for` keeps the released delivery wait, 30-second cap and receipt replay.
 Explicit `wait_for:"inbox"` returns once the message is saved in the recipient's inbox.
-Background delivery keeps its ordinary limit. `"delivery"` waits for the managed
+Background delivery keeps its ordinary limit. A delivery failure from the original Inbox
+admission is reported as a Facade message to its live authenticated agent sender. A replay
+keeps the original send's notification behavior. A pending send keeps that decision through
+daemon takeover. `"delivery"` waits for the managed
 terminal's submission or the Guest's read. `"result"` waits for delivery and the first
-explicit reply to the original message from its recipient.
+explicit reply to the original message from its recipient. Explicit delivery and result
+waits report their outcome in the call.
 
 Explicit waits use `time_left_ms` as the remaining total budget. The cap is 300 seconds
 for Terminal and 30 seconds for a verified MCP actor. Each forward carries the explicit
@@ -184,6 +191,13 @@ or takeover cannot reopen the original Shell reply waiter.
 `agent.send` that has yet to start pasting can be cancelled. Once the original request
 finishes it reports its actual outcome.
 
+An agent start returns when launch is recorded. An initial message can reserve a result
+number at launch. Failed delivery uses that number and carries the agent's observed state
+and the input facts. Successful delivery leaves the number unused. A managed agent with
+an agent creator can also report 30 seconds of continuous waiting or Error, or an observed
+end, through the creator's Facade inbox. An effective stop by the creator is reported in
+the stop call. A startup delivery failure and its watchdog incident share one notification.
+
 ### YOLO and creation trees
 
 A managed agent reads YOLO from the executing machine's settings on start or resume. A Guest
@@ -212,6 +226,7 @@ independently. Direct external `kind:"mcp"` hello is refused.
 bracketed paste mode when enabled. Keys use the active terminal modes. A successful text or
 keys receipt means the input reached the terminal. If only part was written, `partial_input`
 reports `details.text_written` with optional `enter_written`, or `details.keys_sent`.
+For a text input call, `details.enter_written` reports its requested Enter.
 
 Raw bytes use standard Base64 with padding and require a full agent reference. They can be
 sent without an ID. A raw call with an ID acknowledges entry into the daemon's memory queue.
@@ -306,7 +321,7 @@ going idle.
 
 ```jsonl daemon-machine
 {"jsonrpc":"2.0","id":1,"method":"hello","params":{"api_versions":[1],"build":"1.0.0+example","kind":"machine","machine":{"machine_id":"11111111-1111-4111-8111-111111111111","boot_id":"33333333-3333-4333-8333-333333333333","name":"laptop"}}}
-{"jsonrpc":"2.0","id":1,"result":{"api_version":1,"build":"1.0.1+example","machine_id":"22222222-2222-4222-8222-222222222222","pid":4322,"agent_count":1,"ops":["agent.start","agent.stop","agent.resume_list","agent.resume","agent.inspect","agent.screen","agent.type","agent.send","agent.remove","agent.rename","cli.list","location.list","machine.rename","daemon.status","internal.agent_records","internal.resume_records","internal.ensure_route","internal.attach_resize","internal.deliver_start_result","internal.deliver_wait_notice","internal.command_reply"],"topics":["agents","attach"],"machine":{"boot_id":"55555555-5555-4555-8555-555555555555","name":"devbox","ssh_cleans_processes":true}}}
+{"jsonrpc":"2.0","id":1,"result":{"api_version":1,"build":"1.0.1+example","machine_id":"22222222-2222-4222-8222-222222222222","pid":4322,"agent_count":1,"ops":["agent.start","agent.stop","agent.resume_list","agent.resume","agent.inspect","agent.screen","agent.type","agent.send","agent.remove","agent.rename","cli.list","location.list","machine.rename","daemon.status","internal.agent_records","internal.resume_records","internal.ensure_route","internal.attach_resize","internal.deliver_start_result","internal.deliver_wait_notice","internal.deliver_notice","internal.command_reply"],"topics":["agents","attach"],"machine":{"boot_id":"55555555-5555-4555-8555-555555555555","name":"devbox","ssh_cleans_processes":true}}}
 {"jsonrpc":"2.0","id":2,"method":"advertise","params":{"machines":[]}}
 {"jsonrpc":"2.0","id":2,"result":{}}
 {"jsonrpc":"2.0","method":"advertise","params":{"machines":[]}}
@@ -320,6 +335,17 @@ checks the next machine and the remaining time budget. Use exact references for 
 agent targets. An authenticated forwarded Attach can return `view:{viewer,boot_id}` for
 the holder's live view. The entry daemon uses that binding and the original caller for
 `internal.attach_resize`. The public watch response carries `watch` and `snapshot`.
+
+Forwarded Facade notifications use `internal.deliver_wait_notice`,
+`internal.deliver_start_result` and `internal.deliver_notice`. The machine hello response lists
+the receiving daemon's supported operations. The recipient daemon and each forwarding hop decode
+calls through their operation registry. Older builds return their ordinary unknown-operation error
+for `internal.deliver_notice` and continue serving existing operations on the same link.
+`internal.deliver_notice` carries error, exit and failed-send facts.
+Its caller is a verified Terminal for the source machine, and the exact recipient belongs
+to the receiving daemon. The source agent, or both the failed message and its target,
+belong to that source machine. The receiving daemon checks that the recipient is live
+and formats addresses in its machine view before posting the notice.
 
 ```jsonl daemon-machine
 {"jsonrpc":"2.0","id":74,"method":"forward","params":{"route":["22222222-2222-4222-8222-222222222222"],"caller":{"kind":"agent","agent":{"machine_id":"11111111-1111-4111-8111-111111111111","agent_id":"a2"},"root":{"machine_id":"11111111-1111-4111-8111-111111111111","agent_id":"a2"},"yolo":true},"method":"call","params":{"op":"internal.command_reply","args":{"request_id":"send-20","original":{"machine_id":"11111111-1111-4111-8111-111111111111","message_id":"m42"},"reply":{"reference":{"machine_id":"11111111-1111-4111-8111-111111111111","message_id":"m43"},"text":"Checks passed."}}}}}
@@ -489,6 +515,7 @@ Operations available to `call`. Set `op` to the name and `args` to its arguments
 | `internal.attach_resize` | `InternalAttachResizeArgs` | `EmptyResult` | machine forward | Set the capacity of a forwarded view at its holder. |
 | `internal.deliver_start_result` | `InternalDeliverStartResultArgs` | `EmptyResult` | machine forward | Deliver a start receipt to its recipient. |
 | `internal.deliver_wait_notice` | `InternalDeliverWaitNoticeArgs` | `EmptyResult` | machine forward | Deliver a wait notice to its recipient. |
+| `internal.deliver_notice` | `InternalDeliverNoticeArgs` | `EmptyResult` | machine forward | Deliver an error, exit, or failed-send notice to its recipient. |
 | `internal.command_reply` | `CommandReplyArgs` | `EmptyResult` | machine forward | Return a reply to the daemon waiting for it. |
 
 ## Error reasons
@@ -724,7 +751,7 @@ The agent's current state.
 
 ### CallParams
 
-`{ readonly op: 'agent.list'; readonly args: AgentListArgs } \| { readonly op: 'agent.start'; readonly args: StartArgs } \| { readonly op: 'agent.stop'; readonly args: StopArgs } \| { readonly op: 'agent.resume_list'; readonly args: ResumeListArgs } \| { readonly op: 'agent.resume'; readonly args: ResumeArgs } \| { readonly op: 'agent.inspect'; readonly args: AgentTargetArgs } \| { readonly op: 'agent.screen'; readonly args: ScreenArgs } \| { readonly op: 'agent.type'; readonly args: AgentTypeArgs } \| { readonly op: 'agent.send'; readonly args: SendArgs } \| { readonly op: 'agent.remove'; readonly args: AgentTargetArgs } \| { readonly op: 'agent.rename'; readonly args: RenameArgs } \| { readonly op: 'attach.resize'; readonly args: AttachResizeArgs } \| { readonly op: 'cli.list'; readonly args: CliListArgs } \| { readonly op: 'location.list'; readonly args: LocationListArgs } \| { readonly op: 'machine.list'; readonly args: NoArgs } \| { readonly op: 'machine.connect'; readonly args: MachineConnectArgs } \| { readonly op: 'machine.remove'; readonly args: MachineRemoveArgs } \| { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } \| { readonly op: 'daemon.status'; readonly args: StatusArgs } \| { readonly op: 'daemon.log'; readonly args: LogArgs } \| { readonly op: 'daemon.upgrade'; readonly args: DaemonUpgradeArgs } \| { readonly op: 'internal.agent_records'; readonly args: InternalAgentRecordsArgs } \| { readonly op: 'internal.resume_records'; readonly args: NoArgs } \| { readonly op: 'internal.ensure_route'; readonly args: InternalEnsureRouteArgs } \| { readonly op: 'internal.attach_resize'; readonly args: InternalAttachResizeArgs } \| { readonly op: 'internal.deliver_start_result'; readonly args: InternalDeliverStartResultArgs } \| { readonly op: 'internal.deliver_wait_notice'; readonly args: InternalDeliverWaitNoticeArgs } \| { readonly op: 'internal.command_reply'; readonly args: CommandReplyArgs }`
+`{ readonly op: 'agent.list'; readonly args: AgentListArgs } \| { readonly op: 'agent.start'; readonly args: StartArgs } \| { readonly op: 'agent.stop'; readonly args: StopArgs } \| { readonly op: 'agent.resume_list'; readonly args: ResumeListArgs } \| { readonly op: 'agent.resume'; readonly args: ResumeArgs } \| { readonly op: 'agent.inspect'; readonly args: AgentTargetArgs } \| { readonly op: 'agent.screen'; readonly args: ScreenArgs } \| { readonly op: 'agent.type'; readonly args: AgentTypeArgs } \| { readonly op: 'agent.send'; readonly args: SendArgs } \| { readonly op: 'agent.remove'; readonly args: AgentTargetArgs } \| { readonly op: 'agent.rename'; readonly args: RenameArgs } \| { readonly op: 'attach.resize'; readonly args: AttachResizeArgs } \| { readonly op: 'cli.list'; readonly args: CliListArgs } \| { readonly op: 'location.list'; readonly args: LocationListArgs } \| { readonly op: 'machine.list'; readonly args: NoArgs } \| { readonly op: 'machine.connect'; readonly args: MachineConnectArgs } \| { readonly op: 'machine.remove'; readonly args: MachineRemoveArgs } \| { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } \| { readonly op: 'daemon.status'; readonly args: StatusArgs } \| { readonly op: 'daemon.log'; readonly args: LogArgs } \| { readonly op: 'daemon.upgrade'; readonly args: DaemonUpgradeArgs } \| { readonly op: 'internal.agent_records'; readonly args: InternalAgentRecordsArgs } \| { readonly op: 'internal.resume_records'; readonly args: NoArgs } \| { readonly op: 'internal.ensure_route'; readonly args: InternalEnsureRouteArgs } \| { readonly op: 'internal.attach_resize'; readonly args: InternalAttachResizeArgs } \| { readonly op: 'internal.deliver_start_result'; readonly args: InternalDeliverStartResultArgs } \| { readonly op: 'internal.deliver_wait_notice'; readonly args: InternalDeliverWaitNoticeArgs } \| { readonly op: 'internal.deliver_notice'; readonly args: InternalDeliverNoticeArgs } \| { readonly op: 'internal.command_reply'; readonly args: CommandReplyArgs }`
 
 ### Caller
 
@@ -877,7 +904,7 @@ What became of a message.
 | `status` | `DeliveryStatus` | yes | `pending` while the message is being delivered, then `success` or `failure`. |
 | `reason` | `DeliveryFailure` | no | Why it was not delivered. Omitted unless it failed. |
 | `text_written` | `TextWritten` | yes | How much of the message reached the recipient's terminal. |
-| `enter_written` | `boolean` | no | Whether the Enter that submits it reached the recipient's terminal. Omitted when that is not known: the recipient read the message while its typist was typing it, its typist did not say by the deadline, what it typed was still queued then, or the daemon before a restart had begun its paste. |
+| `enter_written` | `boolean` | no | Whether the message's submission key (Enter or Tab) reached the recipient's terminal. Omitted when the write outcome is unknown, for example when the key was still queued at the deadline or a restart interrupted delivery. |
 | `deadline` | `string` | no | When a pending delivery fails if the message is not delivered by then. Omitted once it is settled. |
 | `delivered_via` | `DeliveredVia` | no | How the message was delivered. Omitted unless it was. |
 | `delivered_at` | `string` | no | When the message was delivered. Omitted unless it was. |
@@ -1031,6 +1058,13 @@ How an agent's message input reads on its screen. A reading never means input ma
 | `boot_id` | `string` | yes |  |
 | `size` | `{ readonly cols: number; readonly rows: number }` | yes |  |
 | `colors` | `TerminalColors` | no |  |
+
+### InternalDeliverNoticeArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `recipient` | `{ readonly machine_id: string; readonly agent_id: string }` | yes |  |
+| `notice` | `Notice` | yes |  |
 
 ### InternalDeliverStartResultArgs
 
@@ -1267,6 +1301,10 @@ What a location is.
 
 `Record<string, never>`
 
+### Notice
+
+`{ readonly kind: 'agent_error'; readonly agent: { readonly machine_id: string; readonly agent_id: string }; readonly name: string; readonly state_detail?: StateDetail; readonly tools_reason?: ToolsReason } \| { readonly kind: 'agent_ended'; readonly agent: { readonly machine_id: string; readonly agent_id: string }; readonly name: string; readonly exit: ProcessExit; readonly how?: HowEnded; readonly resumable: boolean } \| { readonly kind: 'send_failed'; readonly target: { readonly machine_id: string; readonly agent_id: string }; readonly message: { readonly machine_id: string; readonly message_id: string }; readonly delivery: Delivery; readonly withdrawn: boolean }`
+
 ### Notification
 
 | Field | Type | Required | Description |
@@ -1415,7 +1453,7 @@ A start prompt's message ID and what became of it.
 
 ### Said
 
-What last went into an agent's message input with Enter: what the person submitted in its terminal and its CLI took, text typed with `agent.type` and `enter`, or a message delivered through the terminal.
+The latest submission through an agent's terminal, from a person, an `agent.type` call with `enter`, or a message Facade delivered.
 
 | Field | Type | Required | Description |
 |---|---|---|---|

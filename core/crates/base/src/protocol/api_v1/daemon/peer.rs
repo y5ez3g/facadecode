@@ -4,6 +4,9 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::Value;
 
+use crate::model::agent::HowEnded;
+use crate::process::ProcessExit;
+
 use super::super::frame::{
     ErrorBody, Request, Size, decode_arguments, encode_line, object, object_only, object_schema,
     present, present_object, size_input, size_input_schema, strict_flattened_object,
@@ -13,8 +16,8 @@ use super::agents::{
     agent_ref_input, agent_ref_input_schema, message_ref_input, message_ref_input_schema,
 };
 use super::{
-    AgentInfo, AgentRef, CallParams, CommandReply, MachineInfo, Message, MessageRef,
-    SingleMachineScope, StartOutcome, TerminalColors, WaitKind, methods,
+    AgentInfo, AgentRef, CallParams, CommandReply, Delivery, MachineInfo, Message, MessageRef,
+    SingleMachineScope, StartOutcome, StateDetail, TerminalColors, ToolsReason, WaitKind, methods,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -295,6 +298,65 @@ pub struct InternalDeliverWaitNoticeArgs {
     pub name: String,
     #[serde(deserialize_with = "wait_kind")]
     pub kind: WaitKind,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InternalDeliverNoticeArgs {
+    #[serde(deserialize_with = "agent_ref_input")]
+    #[schemars(schema_with = "agent_ref_input_schema")]
+    pub recipient: AgentRef,
+    pub notice: Notice,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Notice {
+    AgentError {
+        #[serde(deserialize_with = "agent_ref_input")]
+        #[schemars(schema_with = "agent_ref_input_schema")]
+        agent: AgentRef,
+        name: String,
+        #[serde(
+            default,
+            deserialize_with = "present_object",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(with = "StateDetail")]
+        state_detail: Option<StateDetail>,
+        #[serde(
+            default,
+            deserialize_with = "present",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(with = "ToolsReason")]
+        tools_reason: Option<ToolsReason>,
+    },
+    AgentEnded {
+        #[serde(deserialize_with = "agent_ref_input")]
+        #[schemars(schema_with = "agent_ref_input_schema")]
+        agent: AgentRef,
+        name: String,
+        exit: ProcessExit,
+        #[serde(
+            default,
+            deserialize_with = "present",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(with = "HowEnded")]
+        how: Option<HowEnded>,
+        resumable: bool,
+    },
+    SendFailed {
+        #[serde(deserialize_with = "agent_ref_input")]
+        #[schemars(schema_with = "agent_ref_input_schema")]
+        target: AgentRef,
+        #[serde(deserialize_with = "message_ref_input")]
+        #[schemars(schema_with = "message_ref_input_schema")]
+        message: MessageRef,
+        delivery: Delivery,
+        withdrawn: bool,
+    },
 }
 
 fn wait_kind<'de, D: Deserializer<'de>>(deserializer: D) -> Result<WaitKind, D::Error> {

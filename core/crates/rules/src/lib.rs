@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use facade_base::key_input::Key;
 use facade_base::model::terminal::InputMechanism;
 use facade_base::system::{SYSTEM, System};
 use regex::Regex;
@@ -169,12 +170,12 @@ pub struct ReadyTools {
     pub close: String,
 }
 
-/// What typing into a CLI that reads console input records needs: a wait before Enter for each
+/// What typing into a CLI that reads console input records needs: a wait before submission for each
 /// character typed, and characters above U+FFFF sent as key-down records.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConsoleRule {
-    /// The wait before Enter, in milliseconds, for each UTF-16 code unit of the text typed.
+    /// The wait before submission, in milliseconds, for each UTF-16 code unit of the text typed.
     pub per_char_ms: u64,
     /// Characters above U+FFFF go as win32-input-mode key-down records: the CLI loses them
     /// otherwise.
@@ -184,7 +185,7 @@ pub struct ConsoleRule {
 /// How the typist types into a CLI where it reads console input records.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConsoleTyping {
-    /// The wait before Enter for each UTF-16 code unit of the text typed.
+    /// The wait before submission for each UTF-16 code unit of the text typed.
     pub per_char: Duration,
     /// Characters above U+FFFF go as key-down records
     /// ([`facade_base::terminal::key_down_records`]).
@@ -206,7 +207,7 @@ pub fn console_typing(rule: &Rule) -> Option<ConsoleTyping> {
 }
 
 /// How the CLI takes a pasted message: what its input shows of a paste, and how long the message
-/// shows there before the Enter that submits it.
+/// shows there before submitting it.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PasteRule {
@@ -214,9 +215,12 @@ pub struct PasteRule {
     /// words, `📨 Message from `, are typed before its paste.
     #[serde(default)]
     pub lead: bool,
-    /// How long a message shows as the input's own draft before its Enter, in milliseconds.
+    /// How long a message shows as the input's own draft before submission, in milliseconds.
     #[serde(default)]
     pub enter_ms: u64,
+    /// Tab queues a message in this CLI while it is working.
+    #[serde(default)]
+    tab_while_working: bool,
     /// How much longer for each line of the message, in milliseconds.
     #[serde(default)]
     pub line_ms: u64,
@@ -654,6 +658,15 @@ fn is_literal(arg: &str) -> bool {
 }
 
 impl PasteRule {
+    /// Which key submits a checked message draft.
+    pub fn submission_key(&self, working: bool) -> Key {
+        if working && self.tab_while_working {
+            Key::Tab
+        } else {
+            Key::Enter
+        }
+    }
+
     fn check(&self) -> Result<(), String> {
         for (index, each) in self.placeholders.iter().enumerate() {
             let expected = usize::from(each.count != PasteCount::SingleLine);

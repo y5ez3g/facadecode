@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::address::mcp::{exact_machine_selector, format_reference};
-use crate::process::{ProcessExit, ProcessState};
+use crate::process::{EndReason, ProcessExit, ProcessState};
 
 use super::machine::WindowRef;
 
@@ -14,6 +14,17 @@ impl ManagedAgent {
             machine_id: self.machine_id.clone(),
             agent_id: self.agent_id.clone(),
         }
+    }
+
+    pub fn creator_ref(&self) -> Option<AgentRef> {
+        Some(AgentRef {
+            machine_id: self
+                .creator_machine_id
+                .as_ref()
+                .unwrap_or(&self.machine_id)
+                .clone(),
+            agent_id: self.creator.clone()?,
+        })
     }
 }
 
@@ -184,7 +195,7 @@ impl ToolsState {
 pub enum ToolsReason {
     /// Facade could not give them to this run's CLI; the daemon's log says why.
     NotGiven,
-    /// Its Facade server did not connect within 60 seconds of the run's start or resume, or of a
+    /// Its Facade server did not connect within 30 seconds of the run's start or resume, or of a
     /// daemon's recovery of the run.
     NotConnected,
     /// Its CLI starts its servers only with its first turn or its panel of servers, and the run's
@@ -218,7 +229,7 @@ impl ToolsReason {
     pub fn words(self) -> &'static str {
         match self {
             ToolsReason::NotGiven => "Facade could not give them to its CLI",
-            ToolsReason::NotConnected => "its Facade server did not connect within 60 seconds",
+            ToolsReason::NotConnected => "its Facade server did not connect within 30 seconds",
             ToolsReason::NotStarted => {
                 "its CLI did not start its Facade server before its first turn"
             }
@@ -236,7 +247,7 @@ impl ToolsReason {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ManagedAgentState {
-    /// The CLI has not shown what it is doing yet, within 60 seconds of its start or resume.
+    /// The CLI has not shown what it is doing yet, within 30 seconds of its start or resume.
     Starting,
     /// The CLI is working, or stopped working less than a second ago.
     Working,
@@ -252,7 +263,7 @@ pub enum ManagedAgentState {
     /// The CLI is not working and waits for nothing.
     Idle,
     /// The CLI reported an error or its screen shows that the turn it reported ended failed, or,
-    /// started by its rule's name, it showed nothing of what it is doing within 60 seconds of its
+    /// started by its rule's name, it showed nothing of what it is doing within 30 seconds of its
     /// start or resume.
     Error,
     /// The CLI's process ended; `state_detail.how` says how, where that is known.
@@ -314,7 +325,7 @@ pub enum StateReason {
     TakenBack,
     /// `unknown`: the CLI's screen shows nothing its rule recognizes.
     Unrecognized,
-    /// `error`: a CLI started by its rule's name showed nothing of what it is doing within 60
+    /// `error`: a CLI started by its rule's name showed nothing of what it is doing within 30
     /// seconds of its start or resume.
     NotReady,
     /// `error`: the CLI cannot use the Facade tools it was given; `tools_reason` says why.
@@ -350,7 +361,7 @@ impl StateReason {
             StateReason::TakenBack => "its CLI took back what it reported",
             StateReason::Unrecognized => "its screen shows nothing its CLI's rule recognizes",
             StateReason::NotReady => {
-                "its CLI showed nothing of what it is doing within 60 seconds of its start"
+                "its CLI showed nothing of what it is doing within 30 seconds of its start"
             }
             StateReason::ToolsUnavailable => "its CLI cannot use the Facade tools it was given",
             StateReason::Unknown => "a reason this build does not recognize",
@@ -377,6 +388,15 @@ pub enum WaitKind {
 }
 
 impl WaitKind {
+    pub fn waiting_for(self) -> Option<&'static str> {
+        match self {
+            Self::Permission => Some("permission"),
+            Self::Question => Some("an answer to its question"),
+            Self::Auth => Some("someone to sign in"),
+            Self::Unknown | Self::Unrecognized => None,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             WaitKind::Permission => "permission",
@@ -415,9 +435,49 @@ impl HowEnded {
     }
 }
 
-/// What last went into an agent's message input with Enter: what the person submitted in its
-/// terminal and its CLI took, text typed with `agent.type` and `enter`, or a message delivered
-/// through the terminal.
+pub fn exit_words(exit: &ProcessExit, how: Option<HowEnded>) -> String {
+    let action = match how {
+        Some(HowEnded::Stopped) => "was stopped",
+        Some(HowEnded::Crashed) => "crashed",
+        _ => "ended",
+    };
+    if let Some(code) = exit.code {
+        format!("{action} with exit code {code}")
+    } else if let Some(signal) = &exit.signal {
+        format!(
+            "{action} with signal {}",
+            crate::model::terminal::display_name(signal)
+        )
+    } else if exit.reason == Some(EndReason::TerminalClosed) {
+        format!("{action} after its terminal closed")
+    } else {
+        format!("{action}. Its exit status is unavailable")
+    }
+}
+
+pub fn error_words(detail: Option<&StateDetail>, tools: Option<ToolsReason>) -> String {
+    if let Some(text) = detail.and_then(|detail| detail.text.as_deref()) {
+        format!(
+            "reported an error: {}",
+            crate::model::terminal::display_name(text)
+        )
+    } else if let Some(reason) = tools {
+        format!(
+            "is in Error because its Facade tools are unavailable: {}",
+            reason.words()
+        )
+    } else if let Some(reason) = detail.and_then(|detail| detail.reason) {
+        format!("is in Error because {}", reason.words())
+    } else {
+        "is in Error".into()
+    }
+}
+
+pub const ANSWER_WAIT: &str =
+    "Use `read_screen` to read its screen, then `press_keys` or `type_text` to respond.";
+
+/// The latest submission through an agent's terminal, from a person, an `agent.type` call with
+/// `enter`, or a message Facade delivered.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct Said {
     /// The text on one line, at most 1,024 characters.
@@ -530,7 +590,7 @@ pub struct AgentLabel {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentState {
-    /// The CLI has not shown what it is doing yet, within 60 seconds of its start or resume.
+    /// The CLI has not shown what it is doing yet, within 30 seconds of its start or resume.
     Starting,
     /// The CLI is working, or stopped working less than a second ago.
     Working,
@@ -546,7 +606,7 @@ pub enum AgentState {
     /// The CLI is not working and waits for nothing.
     Idle,
     /// The CLI reported an error or its screen shows that the turn it reported ended failed, or,
-    /// started by its rule's name, it showed nothing of what it is doing within 60 seconds of its
+    /// started by its rule's name, it showed nothing of what it is doing within 30 seconds of its
     /// start or resume.
     Error,
     /// The CLI's process ended; `state_detail.how` says how, where that is known.

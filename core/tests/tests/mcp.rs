@@ -4,6 +4,7 @@
 
 use std::io::Write;
 use std::process::Stdio;
+use std::time::Instant;
 
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
@@ -669,7 +670,7 @@ fn a_long_screen_is_complete_and_inline() {
     }
 }
 
-/// A stop whose exit is not seen within the daemon's stop wait says the termination is unconfirmed:
+/// A stop whose exit is not seen within 30 seconds says the termination is unconfirmed:
 /// the stop went out and goes on. The final screen remains available after it leaves the roster.
 #[test]
 fn a_stop_that_runs_out_of_time_says_its_termination_is_unconfirmed() {
@@ -678,12 +679,14 @@ fn a_stop_that_runs_out_of_time_says_its_termination_is_unconfirmed() {
     let ada = home.start_named_fake("ada", &[]);
     home.start_named_fake("helper", &[]);
     let mut ada = McpTestClient::open_configured(&home, &ada.id);
+    let began = Instant::now();
     let stopped = ada.call("stop_agent", json!({ "agent": "helper" }));
+    assert!(began.elapsed() >= secs(30), "{stopped}");
     assert_eq!(stopped["status"], "failure", "{stopped}");
     assert_eq!(stopped["reason"], "unavailable", "{stopped}");
     let message = stopped["message"].as_str().expect("a stop diagnostic");
     assert!(
-        message.contains("did not end within the 10-second stop wait"),
+        message.contains("did not end within the 30-second stop wait"),
         "{stopped}"
     );
     assert!(!message.contains("list_agents"), "{stopped}");
@@ -843,71 +846,53 @@ fn a_prompt_given_to_claude_stays_its_prompt() {
     );
 }
 
-/// A terminal client's start through Facade API v1 gives the agent its first message once its
-/// CLI's tools connected, however long after the start that is, as its time to be delivered counts
-/// from then: the person's words under a header naming them, as `facade send` sends them, and what
-/// was last said to the agent.
+/// A terminal client's first prompt is delivered when the 30-second startup window closes
+/// with the CLI's tools still unavailable. It is the first thing the CLI submits.
 #[test]
-fn a_start_prompt_is_the_agent_s_first_message_once_its_tools_connected() {
+fn a_start_prompt_is_delivered_at_the_30_second_startup_cutoff() {
     let home = TestHome::new("startprompt");
+    let began = Instant::now();
     let started = home.start_with_prompt(
         "ada",
         "fake",
         "say hi",
-        &[("FAKECLI_MCP_DELAY_MS", "32000")],
+        &[("FAKECLI_MCP_DELAY_MS", "90000")],
     );
     assert!(started["result"].is_object(), "{started}");
-    // The CLI starts its Facade server 32 seconds after its own start, past the 29.5 seconds a
-    // message has to be delivered: the CLI shows its empty input while its tools connect.
     assert!(
-        wait_until(secs(30), || home.screen("ada").contains("❯")),
+        wait_until(secs(10), || home.screen("ada").contains("❯")),
         "{}",
         home.screen("ada")
     );
-    std::thread::sleep(secs(25));
     assert_eq!(
         home.agent_from_watch("ada").unwrap()["tools_state"],
         "connecting"
     );
-    assert_eq!(
-        home.submitted_messages(),
-        Vec::<String>::new(),
-        "the prompt waits for the tools"
-    );
-    assert!(
-        wait_until(secs(30), || !home.submitted_messages().is_empty()),
-        "{}",
-        home.screen("ada")
-    );
-    assert_eq!(
-        home.submitted_messages(),
-        ["📨 Message from the command line · m1\nsay hi"]
-    );
-    // What was said is recorded once the daemon has seen the CLI take the prompt, a moment after
-    // the CLI logs it.
+    assert!(home.submitted_messages().is_empty());
+
+    // The relay is still delayed when the startup cutoff releases the first prompt.
     let said = || {
         home.agent_from_watch("ada")
             .is_some_and(|row| row["said"]["text"] == "say hi")
     };
     assert!(
-        wait_until(secs(10), said),
-        "{:?}",
-        home.agent_from_watch("ada")
+        wait_until(secs(40), said),
+        "{:?}\n{}",
+        home.agent_from_watch("ada"),
+        home.daemon_log()
+    );
+    assert!(
+        began.elapsed() >= secs(30),
+        "the prompt was delivered early"
+    );
+    assert_eq!(
+        home.submitted_messages(),
+        ["📨 Message from the command line · m1\nsay hi"]
     );
     let row = home.agent_from_watch("ada").unwrap();
-    assert_eq!(
-        (
-            &row["tools_state"],
-            &row["said"]["text"],
-            &row["said"]["from"]
-        ),
-        (
-            &json!("available"),
-            &json!("say hi"),
-            &json!("command_line")
-        ),
-        "{row}"
-    );
+    assert_eq!(row["tools_state"], "unavailable", "{row}");
+    assert_eq!(row["tools_reason"], "not_connected", "{row}");
+    assert_eq!(row["said"]["from"], "command_line", "{row}");
     assert!(
         wait_until(secs(10), || home
             .daemon_log()
@@ -2822,7 +2807,22 @@ fn each_cli_s_guest_server_responds_as_recorded(through: Through) {
         // Each direct relay case uses a fresh machine so the test process's PID does not
         // reconnect a Guest from the preceding CLI's case.
         let home = TestHome::new(&format!("mcpgold-{cli}"));
-        std::fs::write(home.path.join("facade.json"), "{ \"names\": [] }\n").unwrap();
+        std::fs::write(
+            home.path.join("facade.json"),
+            json!({
+                "names": [],
+                "clis": {
+                    "claude": { "enabled": false },
+                    "codex": { "enabled": false },
+                    "agy": { "enabled": false },
+                    "muse": { "enabled": false },
+                    "opencode": { "enabled": false },
+                    "pi": { "enabled": false },
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
         let host = home.start_named_fake("host", &[]);
         wait_for_tools(&home, &["host"]);
         // The host's server is its own relay program. A direct connection comes from this test's

@@ -155,7 +155,7 @@ export interface BatchStopResult {
 	readonly machines?: MachineQuery[];
 }
 
-export type CallParams = { readonly op: 'agent.list'; readonly args: AgentListArgs } | { readonly op: 'agent.start'; readonly args: StartArgs } | { readonly op: 'agent.stop'; readonly args: StopArgs } | { readonly op: 'agent.resume_list'; readonly args: ResumeListArgs } | { readonly op: 'agent.resume'; readonly args: ResumeArgs } | { readonly op: 'agent.inspect'; readonly args: AgentTargetArgs } | { readonly op: 'agent.screen'; readonly args: ScreenArgs } | { readonly op: 'agent.type'; readonly args: AgentTypeArgs } | { readonly op: 'agent.send'; readonly args: SendArgs } | { readonly op: 'agent.remove'; readonly args: AgentTargetArgs } | { readonly op: 'agent.rename'; readonly args: RenameArgs } | { readonly op: 'attach.resize'; readonly args: AttachResizeArgs } | { readonly op: 'cli.list'; readonly args: CliListArgs } | { readonly op: 'location.list'; readonly args: LocationListArgs } | { readonly op: 'machine.list'; readonly args: NoArgs } | { readonly op: 'machine.connect'; readonly args: MachineConnectArgs } | { readonly op: 'machine.remove'; readonly args: MachineRemoveArgs } | { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } | { readonly op: 'daemon.status'; readonly args: StatusArgs } | { readonly op: 'daemon.log'; readonly args: LogArgs } | { readonly op: 'daemon.upgrade'; readonly args: DaemonUpgradeArgs } | { readonly op: 'internal.agent_records'; readonly args: InternalAgentRecordsArgs } | { readonly op: 'internal.resume_records'; readonly args: NoArgs } | { readonly op: 'internal.ensure_route'; readonly args: InternalEnsureRouteArgs } | { readonly op: 'internal.attach_resize'; readonly args: InternalAttachResizeArgs } | { readonly op: 'internal.deliver_start_result'; readonly args: InternalDeliverStartResultArgs } | { readonly op: 'internal.deliver_wait_notice'; readonly args: InternalDeliverWaitNoticeArgs } | { readonly op: 'internal.command_reply'; readonly args: CommandReplyArgs };
+export type CallParams = { readonly op: 'agent.list'; readonly args: AgentListArgs } | { readonly op: 'agent.start'; readonly args: StartArgs } | { readonly op: 'agent.stop'; readonly args: StopArgs } | { readonly op: 'agent.resume_list'; readonly args: ResumeListArgs } | { readonly op: 'agent.resume'; readonly args: ResumeArgs } | { readonly op: 'agent.inspect'; readonly args: AgentTargetArgs } | { readonly op: 'agent.screen'; readonly args: ScreenArgs } | { readonly op: 'agent.type'; readonly args: AgentTypeArgs } | { readonly op: 'agent.send'; readonly args: SendArgs } | { readonly op: 'agent.remove'; readonly args: AgentTargetArgs } | { readonly op: 'agent.rename'; readonly args: RenameArgs } | { readonly op: 'attach.resize'; readonly args: AttachResizeArgs } | { readonly op: 'cli.list'; readonly args: CliListArgs } | { readonly op: 'location.list'; readonly args: LocationListArgs } | { readonly op: 'machine.list'; readonly args: NoArgs } | { readonly op: 'machine.connect'; readonly args: MachineConnectArgs } | { readonly op: 'machine.remove'; readonly args: MachineRemoveArgs } | { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } | { readonly op: 'daemon.status'; readonly args: StatusArgs } | { readonly op: 'daemon.log'; readonly args: LogArgs } | { readonly op: 'daemon.upgrade'; readonly args: DaemonUpgradeArgs } | { readonly op: 'internal.agent_records'; readonly args: InternalAgentRecordsArgs } | { readonly op: 'internal.resume_records'; readonly args: NoArgs } | { readonly op: 'internal.ensure_route'; readonly args: InternalEnsureRouteArgs } | { readonly op: 'internal.attach_resize'; readonly args: InternalAttachResizeArgs } | { readonly op: 'internal.deliver_start_result'; readonly args: InternalDeliverStartResultArgs } | { readonly op: 'internal.deliver_wait_notice'; readonly args: InternalDeliverWaitNoticeArgs } | { readonly op: 'internal.deliver_notice'; readonly args: InternalDeliverNoticeArgs } | { readonly op: 'internal.command_reply'; readonly args: CommandReplyArgs };
 
 export type Caller = { readonly kind: 'terminal'; readonly machine_id: string } | { readonly kind: 'ide'; readonly machine_id: string } | { readonly kind: 'agent'; readonly agent: { readonly machine_id: string; readonly agent_id: string }; readonly root: { readonly machine_id: string; readonly agent_id: string }; readonly yolo: boolean };
 
@@ -365,6 +365,11 @@ export interface InternalAttachResizeArgs {
 	readonly colors?: TerminalColors;
 }
 
+export interface InternalDeliverNoticeArgs {
+	readonly recipient: { readonly machine_id: string; readonly agent_id: string };
+	readonly notice: Notice;
+}
+
 export interface InternalDeliverStartResultArgs {
 	readonly recipient: { readonly machine_id: string; readonly agent_id: string };
 	readonly message: { readonly message_id: string; readonly message_ref?: { readonly machine_id: string; readonly message_id: string }; readonly from: string; readonly from_machine_id?: string; readonly from_name?: string; readonly to: string; readonly text: string; readonly reply_to?: string; readonly reply_to_machine_id?: string; readonly call_id?: string; readonly result?: { readonly agent: { readonly reference: { readonly machine_id: string; readonly agent_id: string }; readonly address: string; readonly type: AgentKind; readonly label?: string; readonly unreachable?: boolean; readonly name: string; readonly cli: string; readonly args: string[]; readonly model?: string; readonly effort?: string; readonly title?: string; readonly cwd: string; readonly pid?: number; readonly process: ProcessState; readonly size?: { readonly cols: number; readonly rows: number }; readonly created_at: string; readonly started_at: string; readonly creator_kind?: CreatorKind; readonly creator?: { readonly machine_id: string; readonly agent_id: string }; readonly root: { readonly machine_id: string; readonly agent_id: string }; readonly yolo: boolean; readonly exit?: ProcessExit; readonly session?: string; readonly state: AgentState; readonly state_detail?: StateDetail; readonly said?: Said; readonly tools_state: ToolsState; readonly tools_reason?: ToolsReason }; readonly prompt: PromptOutcome }; readonly at: string; readonly delivery: Delivery };
@@ -537,6 +542,8 @@ export interface MessageRef {
 
 export type NoArgs = Record<string, never>;
 
+export type Notice = { readonly kind: 'agent_error'; readonly agent: { readonly machine_id: string; readonly agent_id: string }; readonly name: string; readonly state_detail?: StateDetail; readonly tools_reason?: ToolsReason } | { readonly kind: 'agent_ended'; readonly agent: { readonly machine_id: string; readonly agent_id: string }; readonly name: string; readonly exit: ProcessExit; readonly how?: HowEnded; readonly resumable: boolean } | { readonly kind: 'send_failed'; readonly target: { readonly machine_id: string; readonly agent_id: string }; readonly message: { readonly machine_id: string; readonly message_id: string }; readonly delivery: Delivery; readonly withdrawn: boolean };
+
 export interface Notification {
 	readonly jsonrpc: JsonRpc;
 	readonly method: string;
@@ -641,9 +648,8 @@ export interface ResumeResult {
 
 export type ResumeTarget = { readonly kind: 'agent'; readonly reference: { readonly machine_id: string; readonly agent_id: string } } | { readonly kind: 'session'; readonly machine_id: string; readonly cli: string; readonly session: string; readonly folder: string } | { readonly kind: 'selector'; readonly selector: string; readonly scope?: SingleMachineScope; readonly folder?: string };
 
-/** What last went into an agent's message input with Enter: what the person submitted in its
- * terminal and its CLI took, text typed with `agent.type` and `enter`, or a message delivered
- * through the terminal. */
+/** The latest submission through an agent's terminal, from a person, an `agent.type` call with
+ * `enter`, or a message Facade delivered. */
 export interface Said {
 	readonly text: string;
 	readonly from: string;
@@ -865,6 +871,7 @@ export interface DaemonOperations {
 	readonly "internal.attach_resize": { readonly args: InternalAttachResizeArgs; readonly result: EmptyResult };
 	readonly "internal.deliver_start_result": { readonly args: InternalDeliverStartResultArgs; readonly result: EmptyResult };
 	readonly "internal.deliver_wait_notice": { readonly args: InternalDeliverWaitNoticeArgs; readonly result: EmptyResult };
+	readonly "internal.deliver_notice": { readonly args: InternalDeliverNoticeArgs; readonly result: EmptyResult };
 	readonly "internal.command_reply": { readonly args: CommandReplyArgs; readonly result: EmptyResult };
 }
 

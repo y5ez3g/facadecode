@@ -47,7 +47,7 @@ pub(crate) use messages::{
 #[cfg(test)]
 use windows::WindowTable;
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const FILE_NAME: &str = "facade.db";
 
 const SCHEMA: &str = "
@@ -932,6 +932,9 @@ fn migrate(
     if version < 5 {
         messages::migrate_command_line_replies(&transaction)?;
     }
+    if version < 6 {
+        messages::migrate_failure_notices(&transaction)?;
+    }
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
@@ -1064,7 +1067,7 @@ impl Store {
         message: &Message,
         request: Option<RequestId>,
     ) -> anyhow::Result<Kept> {
-        self.message_table().insert_message(message, request)
+        self.message_table().insert_message(message, request, false)
     }
     pub(crate) fn test_machine_id(&self) -> String {
         self.connection

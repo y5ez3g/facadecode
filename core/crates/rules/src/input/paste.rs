@@ -1,6 +1,6 @@
 //! Whether the input box shows a pasted message as its own draft: the message's text, wrapped and
 //! indented as the CLI's rows draw it, or the placeholder the CLI draws for a paste of its size. A
-//! message's Enter goes only over its own draft.
+//! message's submission key goes only over its own draft.
 
 use std::ops::Range;
 use std::time::Duration;
@@ -81,8 +81,7 @@ pub fn with_paste_text(paste: &PasteRule, draft: &str, texts: &[String]) -> Stri
     given + &draft[copied..]
 }
 
-/// How long a message's own draft shows before its Enter: the CLI's wait, and its wait for each
-/// line. Never waits itself.
+/// How long a message's own draft shows before submission, including the wait for each line.
 pub fn settle_time(paste: &PasteRule, text: &str) -> Duration {
     Duration::from_millis(paste.enter_ms + line_count(text) as u64 * paste.line_ms)
 }

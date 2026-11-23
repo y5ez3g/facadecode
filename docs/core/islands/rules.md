@@ -58,7 +58,7 @@ files in `core/rules/`. It is a library; it starts no program.
   the file a start's command resolved to. On Windows, Pi's and Muse Code's installers' wrappers
   start the CLI's own program; everything else is as base's `programs::direct_command` has it.
 - `console_typing(rule) -> Option<ConsoleTyping>`, for the typist: on Windows, for a CLI that reads
-  console input records, the wait before Enter for each UTF-16 code unit typed and whether
+  console input records, the wait before submission for each UTF-16 code unit typed and whether
   characters above U+FFFF go as key-down records.
 - The input, state, sessions and wiring functions listed under each child below.
 - `session_meta_keys`, `always_load_keys`, `instructions_from_server`: what each CLI's MCP client
@@ -131,14 +131,14 @@ Rust regular expressions.
 | `arguments` | how the CLI reads its arguments, and the options and keys Facade sets itself |
 | `choices` | the arguments that give a model and an effort |
 | `input` | the layout of the input box: `frame`, `prompt`, `editor`, `box` or `prompt_row` |
-| `paste` | how long a paste shows before Enter, and the placeholders the CLI draws for it |
+| `paste` | the settle time, submission key policy, and placeholders for a pasted message |
 | `session` | `capture` (`session_start` or `none`) and the `resume` arguments with `${session_id}` |
 | `status` | how Facade reads the CLI's state from its screen or a report's words |
 | `status_glyph` | the CLI's glyph for viewer titles once the CLI has reported its state. The `working` list holds one or more glyph frames, each shown for `frame_ms` milliseconds. The `resting` glyph is for Starting after a report, Idle, Just done, Waiting for you and Error. Every glyph must be nonempty, and `frame_ms` must be positive |
 | `ready_tools` | what to type so the CLI starts Facade's tools before its first turn |
 | `mcp` | the session `_meta` or environment key and the CLI's always-load key |
 | `yolo` | `work` controls for native permissions, `startup` controls for YOLO agent starts, and the trust question to answer |
-| `console` | on Windows, for a CLI that reads console input records: `per_char_ms`, the wait before Enter for each UTF-16 code unit, and `records_above_bmp` |
+| `console` | on Windows, for a CLI that reads console input records: `per_char_ms`, the wait before submission for each UTF-16 code unit, and `records_above_bmp` |
 
 **Adding a CLI.** Write `core/rules/<cli>.json` and add it to `FILES` in `lib.rs`; its place there
 is its place in `facade`'s lists. With a rule file alone, Facade starts the CLI and reads its
@@ -229,7 +229,7 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     Antigravity's `[Pasted text #N M chars]` counts Unicode scalar values, including line breaks.
   - Antigravity's mode placeholders include
     `Auto mode: edits & safe commands auto-approved (shift+tab to cycle)`.
-- **Never does:** decide whether input may be typed; press Enter; read CLI reports, hooks or session files; keep state between readings.
+- **Never does:** decide when to type, write terminal input, read CLI reports, hooks or session files, or keep state between readings.
 - **Interface** (re-exported from `facade_rules`):
   - `read_box(&InputRule, &ScreenView) -> BoxReading` gives the reading, the draft's text,
     the input's first row and whether the reading is unsure. The `InputLine` includes the
@@ -242,9 +242,10 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     tracking when the CLI takes a person's draft.
   - `with_paste_text(&PasteRule, draft, pastes) -> String`: the agent actor uses it to give back the pasted text behind each placeholder in a draft the person submits.
   - For the typist:
-    - `is_own_draft(&PasteRule, draft, text, lead, hidden) -> bool`: whether the box shows the message before its Enter.
-    - `settle_time(&PasteRule, text) -> Duration`: how long that draft must stay the same before the Enter, which is the CLI's wait plus its wait for each line.
-    - `is_same_draft(draft, seen, text, lead, hidden) -> bool`: whether the draft is still the one it pressed Enter over. The placeholder's paste number must match too, because a later paste of the same size gets a new number.
+    - `is_own_draft(&PasteRule, draft, text, lead, hidden) -> bool` matches the message in the input box before submission.
+    - `settle_time(&PasteRule, text) -> Duration` gives the base wait plus the wait for each line.
+    - `is_same_draft(draft, seen, text, lead, hidden) -> bool` compares the observed drafts, including the placeholder's paste number.
+    - `PasteRule::submission_key(working) -> Key` selects Tab for Codex while Working and Enter otherwise.
   - For the typist's probe, each from the row before its key and the reading after:
     - `space_taken(&InputLine, &BoxReading) -> bool`: whether its space went in: the cursor one column on, the row its space ahead of the text it held, or its space alone.
     - `verdict_of(&InputLine, &BoxReading) -> ProbeVerdict`: the row gone, a `Hint`; moved on by the space, a `Draft`; else `Other`.
@@ -257,7 +258,7 @@ Reads a CLI's screen for evidence of its state (`state.rs`). A rule can also hav
 
 - **Owns:** no state. For screen readings it uses `status` (a `StateRule`, which names the mechanism and its patterns) and `input` (where the input is drawn). It also owns the screens recorded from each CLI that the readers are tested against, in `tests/state/<cli>.json`.
 - **Keeps:** a reader recognizes only the layout its CLI was recorded drawing. Any other screen reads as None, so a CLI that draws differently keeps its own reports. A rule reads its screen only around the input kind its mechanism names; any other pairing reads nothing. Readers work on logical lines: rows joined by a soft wrap count as one line, and rows separated by a line break never do. A line that began above the screen is never evidence, and neither is text in the input.
-- **Never does:** keep anything between readings, read the CLI's own reports, type into the CLI, or press Enter.
+- **Never does:** keep anything between readings, read the CLI's own reports, or write terminal input.
 - **Interface:**
   - `read_state(rule, view) -> Option<ScreenState>`, where `ScreenState` is `Working`, `Idle`, `Blocked(BlockKind)` or `Error(words)`. The daemon's agent state calls it on each complete frame, but only while the selected evidence calls for a screen reading and never while the CLI is drawing a synchronized update. It is None when the rule has no `status` section, or when the screen shows nothing that section recognizes.
   - The `status` mechanisms:

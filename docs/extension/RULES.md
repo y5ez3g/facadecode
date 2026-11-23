@@ -565,7 +565,8 @@ The [product's CLI table](../PRODUCT.md#cli-differences) owns the summary of dif
 **The editor entry point handles starts, Attach and recovery; Shell handles machines and sending messages.**
 
 The Orchestrator owns the common Shell and MCP contracts, including Guest identity, delivery outcomes and the eight
-tools. A first prompt and a long wait produce results (🔔) for the agent that started it.
+tools. A failed background delivery or a watchdog incident produces a Facade notice (🔔). Startup trouble and
+the first prompt's failure share one notice. The [product guide](../PRODUCT.md#messages) defines the outcomes.
 The editor displays its own operation errors. Open the agent's terminal or inspect its state to see its work.
 WSL and Dev Containers reached as machines use SSH you configure and `facade machine add`. Remote-SSH itself opens
 an editor whose extension host uses that machine's Orchestrator.

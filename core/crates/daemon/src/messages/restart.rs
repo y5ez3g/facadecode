@@ -24,16 +24,17 @@ impl Messages {
     }
 
     /// Opens again the delivery of `message`, which the daemon before left pending: its paste begun
-    /// where `pasted`, owing `owes` where it is a start's prompt.
+    /// where `pasted`, with the startup prompt and its result debt where applicable.
     pub(crate) fn take_up(
         &self,
         mut message: Message,
         pasted: bool,
+        prompt: bool,
         owes: Option<OwedResult>,
     ) -> watch::Receiver<Option<Settled>> {
         let mut open = self.deliveries.lock();
         self.deliveries.identify(&mut message);
-        Deliveries::open(&mut open.agents, message, pasted, false, owes)
+        Deliveries::open(&mut open.agents, message, pasted, prompt, owes)
     }
 }
 

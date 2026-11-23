@@ -31,11 +31,12 @@ const KNOWN_KEYS: &str = "keys are Enter (or Return), Escape (or Esc), Tab, Shif
                           and Ctrl+A to Ctrl+Z, in any letter case, or any one \
                           character other than a control character";
 
-/// Terminal modes sampled by the actor; no locks are taken.
+/// Terminal modes and working state sampled by the actor.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Modes {
     pub(crate) bracketed_paste: bool,
     pub(crate) application_cursor_keys: bool,
+    pub(crate) working: bool,
 }
 
 /// Bytes to queue now and the next timer to arrange; neither operation waits.
@@ -290,7 +291,7 @@ impl MessageTyping {
         prompt
     }
 
-    /// Maximum bytes for the text, paste brackets and Enter; no I/O or locks.
+    /// Maximum bytes for the text, paste brackets and the one-byte submission key.
     pub(crate) fn most_bytes(&self) -> usize {
         paste_bytes(&self.text) + Key::Enter.most_bytes()
     }
@@ -335,7 +336,7 @@ struct Batch {
 
 enum DeliveryPhase {
     Draft(DraftCheck),
-    Entered,
+    Submitting,
     Clearing { until: Instant },
 }
 
@@ -395,7 +396,7 @@ impl Batch {
     fn held(&self) -> usize {
         match self.phase {
             DeliveryPhase::Draft(_) => 1,
-            DeliveryPhase::Entered | DeliveryPhase::Clearing { .. } => 0,
+            DeliveryPhase::Submitting | DeliveryPhase::Clearing { .. } => 0,
         }
     }
 }
@@ -795,9 +796,9 @@ impl Typist {
         };
         let deadline = match batch.phase {
             DeliveryPhase::Draft(_) => batch.deadline(),
-            // A byte in flight may reach the terminal. Its write receipt decides whether
-            // Enter went, and Post can still report an unknown outcome if the terminal hangs.
-            DeliveryPhase::Entered => None,
+            // The write receipt confirms whether the submission key reached the terminal.
+            // Post can still report an unknown outcome if the terminal hangs.
+            DeliveryPhase::Submitting => None,
             DeliveryPhase::Clearing { until } => Some(until),
         };
         if deadline.is_some_and(|at| at <= now) {
@@ -818,7 +819,7 @@ impl Typist {
             .as_ref()
             .is_some_and(|receipt| receipt.complete(written));
         match &batch.phase {
-            DeliveryPhase::Entered => (TextWritten::Full, Some(full)),
+            DeliveryPhase::Submitting => (TextWritten::Full, Some(full)),
             DeliveryPhase::Clearing { .. } => (TextWritten::Full, Some(false)),
             DeliveryPhase::Draft(draft) if draft.recovered => (TextWritten::Unknown, None),
             DeliveryPhase::Draft(_) => {
@@ -867,7 +868,7 @@ impl Typist {
         };
         if let Some(batch) = self.batch.take() {
             return match batch.phase {
-                DeliveryPhase::Entered => self.settle_delivery(&batch.messages, Outcome::Typed),
+                DeliveryPhase::Submitting => self.settle_delivery(&batch.messages, Outcome::Typed),
                 DeliveryPhase::Clearing { until } => self.check_cleared(batch, read(), now, until),
                 DeliveryPhase::Draft(draft) => self.check_draft(
                     batch.messages,
@@ -876,6 +877,7 @@ impl Typist {
                     now,
                     offset,
                     typed,
+                    modes.working,
                     read(),
                     paused,
                 ),
@@ -981,6 +983,7 @@ impl Typist {
         now: Instant,
         offset: u64,
         typed: u64,
+        working: bool,
         reading: BoxReading,
         paused: Option<Instant>,
     ) -> Step {
@@ -1060,16 +1063,20 @@ impl Typist {
                 let settled = since + facade_rules::settle_time(rule, &draft.text);
                 if now >= settled && paused.is_none() {
                     crate::pause_for_test("before-message-enter");
+                    // Recovered drafts can be first prompts, so retain Enter for them.
+                    let working_message = working
+                        && !draft.recovered
+                        && !messages.iter().any(|message| message.prompt);
+                    let mut write = Vec::new();
+                    rule.submission_key(working_message)
+                        .write(false, &mut write);
                     self.batch = Some(Batch {
                         messages,
-                        phase: DeliveryPhase::Entered,
+                        phase: DeliveryPhase::Submitting,
                     });
-                    self.record_write(offset, 1, Duration::ZERO);
+                    self.record_write(offset, write.len(), Duration::ZERO);
                     crate::gate_for_test("message-enter");
-                    return Step {
-                        write: vec![b'\r'],
-                        wake: None,
-                    };
+                    return Step { write, wake: None };
                 }
                 settled.max(paused.unwrap_or(now))
             }
@@ -1224,6 +1231,7 @@ mod tests {
     const ANY: Modes = Modes {
         bracketed_paste: true,
         application_cursor_keys: false,
+        working: false,
     };
     const ALIASES: [&str; 6] = [
         "Return",

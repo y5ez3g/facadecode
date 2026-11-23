@@ -1,8 +1,11 @@
 //! The handle an agent's typist delivers messages through.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
-use super::{Deliveries, Outcome, warn};
+use facade_base::model::{agent::ManagedAgent, message::DeliveryFailure};
+
+use super::{Deliveries, Outcome, PromptNotice, PromptWatch, warn};
 use crate::{blocking_in_place, pause_for_test};
 
 /// What a typist may ask of the messages: whether a message is still to be typed, leave to paste
@@ -57,5 +60,32 @@ impl DeliveryHandle {
     /// Ends the deliveries among `numbers` still open, as `outcome` says.
     pub(crate) fn settle(&self, numbers: &[u64], outcome: Outcome) {
         self.0.settle(numbers, outcome);
+    }
+
+    /// Gives a due incident to the startup prompt under the paste fence. A paste already in
+    /// flight keeps its real outcome and may leave the watchdog to report after success.
+    pub(crate) fn prompt_notice(
+        &self,
+        prompt: &PromptWatch,
+        agent: &ManagedAgent,
+        incident: u64,
+        reason: DeliveryFailure,
+    ) -> PromptNotice {
+        let mut open = self.0.lock();
+        if let Some(delivery) = open.agents.get_mut(&prompt.number) {
+            if let Some(owed) = &mut delivery.owes {
+                owed.incident = Some((agent.clone(), incident));
+            }
+            if delivery.pasted {
+                return PromptNotice::InFlight(delivery.settled.subscribe());
+            }
+            self.0
+                .settle_open(&mut open.agents, &[prompt.number], Outcome::untyped(reason));
+        }
+        if prompt.failed_incident.load(Ordering::Relaxed) == incident {
+            PromptNotice::Owned
+        } else {
+            PromptNotice::Report
+        }
     }
 }

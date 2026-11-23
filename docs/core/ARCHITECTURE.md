@@ -287,7 +287,8 @@ The daemon's layer calls its islands in a fixed order so state can be recovered 
    Ending the connection removes the record and inbox together and settles the messages it has not taken.
 7. **Starting a helper across machines.** The starter's machine reserves a message number for the first prompt's result.
    The running machine commits the agent, prompt and reserved number in one transaction so a retry finds the same
-   result. A start from Shell or VS Code creates no result message.
+   receipt. A failed prompt uses the reserved number. Successful delivery clears it. Shell and VS Code starts
+   have no creator inbox.
 8. **Finishing a dedicated Shell Attach.** The server learns that the watched run has exited independently of the
    dedicated Shell connection's outgoing buffer. It allows a short drain for the final screen bytes and exit
    status, then closes the connection and releases its watch. Shared connections keep their independent watches.

@@ -474,6 +474,11 @@ impl Daemon {
                 .await?;
                 Ok(json!({}))
             }
+            InternalDeliverNotice(args) if forwarded => {
+                self.deliver_notice(caller, args, incoming.and_then(|call| call.remaining))
+                    .await?;
+                Ok(value_of(api_v1::EmptyResult {}))
+            }
             InternalCommandReply(args) if forwarded => {
                 self.accept_command_reply(caller, args)?;
                 Ok(value_of(api_v1::EmptyResult {}))
@@ -627,7 +632,7 @@ impl Daemon {
         let agent = self.local_target(caller, &reference, OperationTarget::Stop)?;
         let address = self.agent_address(&reference)?;
         let (result, label) = self
-            .stop(&agent)
+            .stop(&agent, caller)
             .await
             .map_err(|error| self.with_agent_error(&agent, error))?;
         if result.already_ended {

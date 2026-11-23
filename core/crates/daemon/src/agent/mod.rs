@@ -32,14 +32,15 @@ use facade_base::model::error::ErrorBody;
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::terminal::PtyMaster;
 use facade_base::{
-    model::agent::{AgentsUpdate, ManagedAgent},
+    model::agent::{AgentRef, AgentsUpdate, ManagedAgent},
     model::terminal::InputInfo,
 };
 use facade_screen::{Screen, TerminalColors};
 use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::time::Instant;
 
-use crate::messages::DeliveryHandle;
+use crate::messages::{DeliveryHandle, PromptWatch};
+use crate::waits::Trouble;
 use crate::{Sender, ToolsGiven};
 
 pub(crate) use facade_base::key_input::MAX_INPUT_BYTES;
@@ -57,10 +58,12 @@ pub(crate) const MAX_QUEUED_COMMANDS: usize = 1024;
 /// The number of an agent's first run.
 pub(crate) const FIRST_RUN: u64 = 1;
 
+pub(crate) type WatchdogSink = Box<dyn Fn(ManagedAgent, Trouble) + Send>;
+
 /// The pause after an Escape, so that the CLI does not read it with the next key as Alt.
 const ESCAPE_DELAY: Duration = Duration::from_millis(50);
 /// How long a run's start may take before its CLI should show its input.
-const START_TIMEOUT: Duration = Duration::from_secs(60);
+const START_TIMEOUT: Duration = Duration::from_secs(30);
 
 // The screen log sizes its largest record by what one feed takes; a read never brings more.
 const _: () = assert!(terminal::MAX_READ_BYTES <= screen::MAX_FEED_BYTES);
@@ -186,6 +189,12 @@ pub(crate) enum AgentCommand {
         run: u64,
         exit: ProcessExit,
         stopped: bool,
+        stopped_by: Option<AgentRef>,
+    },
+    /// Enables reports to the creator once the startup prompt is registered.
+    WatchCreator {
+        prompt: Option<PromptWatch>,
+        report: WatchdogSink,
     },
     /// The session the CLI reported, already committed; the record shows it from now on.
     RecordSession(Option<String>),
@@ -263,6 +272,8 @@ pub(crate) struct ActorStart {
     pub(crate) launch_command: Option<String>,
     /// Where the typist settles the messages it delivers.
     pub(crate) deliveries: DeliveryHandle,
+    /// Recovery just observed the loss of the terminal for this run.
+    pub(crate) observed_loss: bool,
     pub(crate) state: StateStart,
 }
 
@@ -357,6 +368,7 @@ struct Shared {
 
 struct Record {
     info: ManagedAgent,
+    incident: u64,
     installed_run: u64,
     title: Option<String>,
 }
@@ -366,6 +378,7 @@ impl Shared {
         Self {
             record: Mutex::new(Record {
                 info,
+                incident: 0,
                 installed_run: FIRST_RUN,
                 title: None,
             }),
@@ -415,6 +428,11 @@ impl AgentHandle {
     /// A copy of the agent's record.
     pub(crate) fn info(&self) -> ManagedAgent {
         self.shared.record.lock().unwrap().info.clone()
+    }
+
+    pub(crate) fn prompt_result_facts(&self) -> (ManagedAgent, u64) {
+        let record = self.shared.record.lock().unwrap();
+        (record.info.clone(), record.incident)
     }
 
     /// The full title supplied by the terminal, for the caller to project.

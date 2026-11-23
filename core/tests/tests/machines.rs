@@ -3087,6 +3087,366 @@ fn an_idless_peer_cancel_withdraws_a_pending_forwarded_send() {
     assert_eq!(process_identity(worker.pid), worker.process);
 }
 
+#[test]
+fn an_unwaited_peer_failure_reports_one_qualified_notice_after_retry() {
+    let origin = TestHome::new("notice-origin");
+    let peer = TestHome::new("notice-peer");
+    let origin_id = name_machine(&origin, "origin");
+    let peer_id = name_machine(&peer, "peer");
+    let boss = origin.start_named_fake("boss", &[]);
+    let worker = peer.start_named_fake("worker", &[]);
+    assert_eq!(boss.id, worker.id, "machine-local IDs should collide");
+    peer.run_facade_ok(&["type", &worker.address, "draft on the peer"]);
+    assert!(wait_for_screen_text(
+        &peer,
+        &worker.address,
+        "draft on the peer"
+    ));
+    let bridge = ObservedMachineLink::open(&origin, &peer);
+    wait_for_route(&origin, &peer_id, &[&peer_id]);
+    wait_for_route(&peer, &origin_id, &[&origin_id]);
+    let mut sender = McpTestClient::open(&origin, &boss.id);
+    let admitted = sender.call(
+        "send_message",
+        json!({ "to": worker.address, "text": "one peer message" }),
+    );
+    assert_eq!(admitted["status"], "success", "{admitted}");
+    assert_eq!(
+        admitted["data"],
+        json!({ "id": "m1@peer", "delivery": "waiting_in_inbox" }),
+        "{admitted}"
+    );
+    let original = observed_frame(&bridge.from_front, "the original peer send", |frame| {
+        frame["method"] == "forward" && frame["params"]["params"]["op"] == "agent.send"
+    });
+    assert_eq!(
+        original["params"]["params"]["args"]["wait_for"], "inbox",
+        "{original}"
+    );
+    assert_eq!(
+        original["params"]["caller"]["agent"],
+        json!({ "machine_id": origin_id, "agent_id": boss.id }),
+        "{original}"
+    );
+
+    // Replay the same business request on the authenticated peer link, as a delivery wait.
+    // Use a new frame ID for the response and keep the original caller and request ID.
+    let mut retry = original.clone();
+    let retry_id = 424_242;
+    retry["id"] = json!(retry_id);
+    retry["params"]["params"]["args"]["wait_for"] = json!("delivery");
+    retry["params"]["params"]["args"]["time_left_ms"] = json!(20_000);
+    let request_id = original["params"]["params"]["args"]["request_id"]
+        .as_str()
+        .expect("the business request ID");
+    writeln!(bridge.peer_socket.try_clone().unwrap(), "{retry}").unwrap();
+    assert!(
+        wait_until(secs(8), || peer
+            .daemon_log()
+            .contains(&format!("request {request_id} again"))),
+        "the waited replay did not join the original: {}",
+        peer.daemon_log()
+    );
+    peer.run_facade_ok(&["stop", &worker.address]);
+
+    // Read the frames once, keeping both the correlated retry receipt and any background notice.
+    let mut replay = None;
+    let mut forwarded = Vec::new();
+    let deadline = Instant::now() + secs(8);
+    while let Ok(frame) = bridge
+        .from_peer
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+    {
+        if frame["id"] == retry_id && frame.get("method").is_none() {
+            replay = Some(frame);
+        } else if frame["method"] == "forward"
+            && frame["params"]["params"]["op"] == "internal.deliver_notice"
+        {
+            forwarded.push(frame);
+        }
+    }
+    let replay = replay.expect("the peer answers the waited replay");
+    assert_eq!(replay["result"]["id"], "m1@peer", "{replay}");
+    assert_eq!(replay["result"]["repeated"], true, "{replay}");
+    assert_eq!(
+        replay["result"]["message"]["delivery"]["reason"], "ended",
+        "{replay}"
+    );
+    assert_eq!(
+        forwarded.len(),
+        1,
+        "expected one peer notice: {forwarded:?}"
+    );
+    let notice = &forwarded[0]["params"];
+    assert_eq!(notice["route"], json!([origin_id]), "{notice}");
+    assert_eq!(
+        notice["caller"],
+        json!({ "kind": "terminal", "machine_id": peer_id }),
+        "{notice}"
+    );
+    let args = &notice["params"]["args"];
+    assert_eq!(
+        args["recipient"],
+        json!({ "machine_id": origin_id, "agent_id": boss.id })
+    );
+    let facts = &args["notice"];
+    assert_eq!(facts["kind"], "send_failed", "{facts}");
+    assert_eq!(
+        facts["target"],
+        json!({ "machine_id": peer_id, "agent_id": worker.id })
+    );
+    assert_eq!(
+        facts["message"],
+        json!({ "machine_id": peer_id, "message_id": "m1" })
+    );
+    assert_eq!(facts["delivery"]["status"], "failure", "{facts}");
+    assert_eq!(facts["delivery"]["reason"], "ended", "{facts}");
+    assert_eq!(facts["delivery"]["text_written"], "none", "{facts}");
+    let withdrawn = replay["result"]["withdrawn"].as_bool().unwrap_or(false);
+    assert_eq!(facts["withdrawn"], withdrawn, "{facts}");
+    let ack = observed_frame(&bridge.from_front, "the accepted notice", |frame| {
+        frame["id"] == forwarded[0]["id"] && frame.get("method").is_none()
+    });
+    assert_eq!(ack["result"], json!({}), "{ack}");
+    let denied = connect(&origin).call("internal.deliver_notice", args.clone());
+    assert_eq!(error_reason(&denied), "refused", "{denied}");
+
+    let terminal = origin.submitted_messages();
+    assert_eq!(terminal.len(), 1, "{terminal:?}");
+    assert!(terminal[0].starts_with("🔔"), "{terminal:?}");
+    assert!(
+        terminal[0].contains("a1@peer") && terminal[0].contains("m1@peer"),
+        "{terminal:?}"
+    );
+    let read = sender.call("read_messages", json!({ "last": 10 }));
+    let rows = read["data"]["messages"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{read}");
+    let row = &rows[0];
+    assert_eq!(
+        row,
+        &json!({ "id": "m1", "from": "facade", "at": row["at"], "text": row["text"] }),
+        "{read}"
+    );
+    let text = row["text"].as_str().unwrap();
+    assert!(
+        text.contains("a1@peer") && text.contains("m1@peer"),
+        "{read}"
+    );
+    assert!(text.contains("submission key"), "{read}");
+    if withdrawn {
+        assert!(text.contains("resend"), "{read}");
+    } else {
+        assert!(text.contains("terminal before retrying"), "{read}");
+    }
+    assert!(peer.submitted_messages().is_empty());
+}
+
+/// An older v1 peer rejects the new notice while the authenticated connection still delivers
+/// calls that both versions support.
+#[test]
+#[ignore = "requires a pre-notice v1 facade binary in FACADE_TEST_PRE_NOTICE_PEER"]
+fn a_pre_notice_v1_peer_refuses_the_notice_and_keeps_the_link() {
+    let prior = std::path::PathBuf::from(
+        std::env::var_os("FACADE_TEST_PRE_NOTICE_PEER")
+            .expect("the absolute path to the pre-notice facade binary"),
+    );
+    assert!(prior.is_absolute() && prior.is_file(), "{prior:?}");
+    let current = TestHome::new("notice-current");
+    let old = TestHome::new("notice-older");
+    let current_id = name_machine(&current, "current");
+    let worker = current.start_named_fake("worker", &[]);
+    let started = run_using_ok(&old, &prior, &["start", "-d", "--name", "boss", "fake"]);
+    let boss = old.started_agent(&started);
+    let old_id = old.hello_result().unwrap()["machine_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    run_using_ok(
+        &old,
+        &prior,
+        &["machine", "rename", &old_id.replace('-', ""), "older"],
+    );
+    assert!(wait_for_screen_text(&old, "boss", "❯"));
+
+    let bridge = ObservedMachineLink::open(&current, &old);
+    wait_for_route(&current, &old_id, &[&old_id]);
+    wait_for_route(&old, &current_id, &[&current_id]);
+    let hello = observed_frame(&bridge.from_front, "the v1 greeting", |frame| {
+        frame["method"] == "hello"
+    });
+    let welcome = observed_frame(&bridge.from_peer, "the older v1 welcome", |frame| {
+        frame["id"] == hello["id"] && frame.get("method").is_none()
+    });
+    assert_eq!(welcome["result"]["api_version"], 1, "{welcome}");
+    let ops = welcome["result"]["ops"].as_array().unwrap();
+    assert!(
+        ops.contains(&json!("internal.deliver_wait_notice")),
+        "{welcome}"
+    );
+    assert!(
+        !ops.contains(&json!("internal.deliver_notice")),
+        "{welcome}"
+    );
+
+    current.run_facade_ok(&["type", &worker.address, "existing draft"]);
+    assert!(wait_for_screen_text(
+        &current,
+        &worker.address,
+        "existing draft"
+    ));
+    let mut sender = McpTestClient::open_configured(&old, &boss.id);
+    let admitted = sender.call(
+        "send_message",
+        json!({ "to": worker.address, "text": "fail across versions" }),
+    );
+    assert_eq!(admitted["status"], "success", "{admitted}");
+    assert_eq!(
+        admitted["data"]["delivery"], "waiting_in_inbox",
+        "{admitted}"
+    );
+    current.run_facade_ok(&["stop", &worker.address]);
+
+    let notice = observed_frame(
+        &bridge.from_front,
+        "the new notice on the v1 link",
+        |frame| {
+            frame["method"] == "forward"
+                && frame["params"]["params"]["op"] == "internal.deliver_notice"
+        },
+    );
+    assert_eq!(notice["params"]["route"], json!([old_id]), "{notice}");
+    assert_eq!(
+        notice["params"]["params"]["args"]["notice"]["kind"], "send_failed",
+        "{notice}"
+    );
+    let refusal = observed_frame(&bridge.from_peer, "the older peer's refusal", |frame| {
+        frame["id"] == notice["id"] && frame.get("method").is_none()
+    });
+    assert_eq!(error_reason(&refusal), "invalid_argument", "{refusal}");
+    assert_eq!(
+        refusal["error"]["message"], "unknown operation internal.deliver_notice",
+        "{refusal}"
+    );
+    assert!(old.submitted_messages().is_empty());
+
+    let text = "a regular message on the same link";
+    let result = connect(&current).call_ok(
+        "agent.send",
+        json!({
+            "to": { "machine_id": old_id, "agent_id": boss.id }, "text": text,
+            "wait_for": "delivery",
+        }),
+    );
+    assert_eq!(
+        result["message"]["delivery"]["status"], "success",
+        "{result}"
+    );
+    let sent = observed_frame(
+        &bridge.from_front,
+        "the existing operation on that link",
+        |frame| frame["method"] == "forward" && frame["params"]["params"]["op"] == "agent.send",
+    );
+    assert_eq!(sent["params"]["params"]["args"]["text"], text, "{sent}");
+    let received = observed_frame(
+        &bridge.from_peer,
+        "the older peer's delivery result",
+        |frame| frame["id"] == sent["id"] && frame.get("method").is_none(),
+    );
+    assert_eq!(
+        received["result"]["message"]["delivery"]["status"], "success",
+        "{received}"
+    );
+    let submissions = old.submitted_messages();
+    assert_eq!(submissions.len(), 1, "{submissions:?}");
+    assert!(submissions[0].ends_with(text), "{submissions:?}");
+}
+
+#[test]
+fn peers_keep_the_wait_and_start_result_notice_shapes() {
+    let origin = TestHome::new("legacy-notice-origin");
+    let peer = TestHome::new("legacy-notice-peer");
+    peer.start_facade_with(&[
+        ("FAKECLI_STATUS", "1"),
+        ("FACADE_TEST_GATES", "before-prompt-delivery"),
+    ]);
+    let origin_id = name_machine(&origin, "origin");
+    let peer_id = name_machine(&peer, "peer");
+    let boss = origin.start_named_fake("boss", &[]);
+    let boss_ref = json!({ "machine_id": origin_id, "agent_id": boss.id });
+    let bridge = ObservedMachineLink::open(&origin, &peer);
+    wait_for_route(&origin, &peer_id, &[&peer_id]);
+    wait_for_route(&peer, &origin_id, &[&origin_id]);
+    let mut creator = McpTestClient::open(&origin, &boss.id);
+    let start = creator.call(
+        "start_agent",
+        json!({ "name": "blocked", "cli": "fake", "machine": "peer", "folder": peer.project }),
+    );
+    assert_eq!(start["status"], "success", "{start}");
+    let blocked = start["data"]["id"].as_str().unwrap();
+    assert!(wait_for_screen_text(&peer, blocked, "❯"));
+    peer.run_facade_ok(&[
+        "type",
+        blocked,
+        "/fake block question Which branch?",
+        "--enter",
+    ]);
+
+    let start = creator.call(
+        "start_agent",
+        json!({
+            "name": "first-prompt", "cli": "fake", "machine": "peer", "folder": peer.project,
+            "prompt": "do not deliver this",
+        }),
+    );
+    assert_eq!(start["status"], "success", "{start}");
+    let reserved = start["data"]["result_message"].as_str().unwrap();
+    let first_prompt = start["data"]["id"].as_str().unwrap();
+    peer.wait_for_gate("before-prompt-delivery");
+    peer.run_facade_ok(&["stop", first_prompt]);
+    peer.release_gate("before-prompt-delivery");
+
+    let result = observed_frame(&bridge.from_peer, "the forwarded start failure", |frame| {
+        frame["params"]["params"]["op"] == "internal.deliver_start_result"
+    });
+    let args = &result["params"]["params"]["args"];
+    assert_eq!(args.as_object().unwrap().len(), 2, "{args}");
+    assert_eq!(args["recipient"], boss_ref);
+    let message = &args["message"];
+    assert_eq!(message["message_id"], reserved, "{message}");
+    assert_eq!(message["from"], "facade", "{message}");
+    let outcome = &message["result"];
+    assert_eq!(outcome["agent"]["process"], "ended", "{outcome}");
+    assert_eq!(
+        outcome["agent"]["reference"],
+        json!({
+            "machine_id": peer_id, "agent_id": first_prompt.split_once('@').unwrap().0,
+        })
+    );
+    assert_eq!(
+        outcome["prompt"]["delivery"]["reason"], "ended",
+        "{outcome}"
+    );
+
+    let wait = observed_frame(
+        &bridge.from_peer,
+        "the forwarded permission notice",
+        |frame| frame["params"]["params"]["op"] == "internal.deliver_wait_notice",
+    );
+    assert_eq!(
+        wait["params"]["params"]["args"],
+        json!({
+            "recipient": boss_ref, "name": "blocked", "kind": "question",
+            "waiting": { "machine_id": peer_id, "agent_id": blocked.split_once('@').unwrap().0 },
+        }),
+        "{wait}"
+    );
+    assert!(wait_until(secs(8), || origin.submitted_messages().len() >= 2));
+    let terminal = origin.submitted_messages();
+    assert_eq!(terminal.len(), 2, "{terminal:?}");
+    assert!(terminal.iter().any(|text| text.contains(first_prompt)));
+    assert!(terminal.iter().any(|text| text.contains(blocked)));
+}
+
 /// Once the peer accepts raw input, a cut link can hide the result while the bytes still arrive.
 #[test]
 #[cfg_attr(not(debug_assertions), ignore = "uses the test gate of debug builds")]
@@ -3289,11 +3649,12 @@ fn an_authenticated_peer_reads_the_holders_exact_resumable_session() {
     assert!(denied.get("result").is_none(), "{denied}");
 }
 
-/// A managed creator receives its remote child's first-prompt result under the reserved receipt.
+/// A managed creator receives one reserved receipt when its remote child's first prompt fails.
 #[test]
 fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
     let origin = TestHome::new("start-result-origin");
     let holder = TestHome::new("start-result-holder");
+    holder.start_facade_with(&[("FACADE_TEST_GATES", "before-prompt-delivery")]);
     let launches = holder.project.join("child-launches");
     std::fs::write(
         holder.path.join("facade.json"),
@@ -3344,6 +3705,17 @@ fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
     assert_eq!(child["reference"], child_ref, "{child}");
     assert_eq!(child["creator"], creator_ref, "{child}");
     assert_eq!(child["process"], "running", "{child}");
+    assert!(alive(&process));
+
+    // The holder cannot begin the prompt's paste or start its delivery clock at this gate.
+    // Let the person's stop settle the child first. The live creator still owns the result.
+    holder.wait_for_gate("before-prompt-delivery");
+    holder.run_facade_ok(&["stop", address]);
+    let ended = holder.inspect_agent(address)["agent"].clone();
+    assert_eq!(ended["reference"], child_ref, "{ended}");
+    assert_eq!(ended["process"], "ended", "{ended}");
+    assert!(ended["exit"].is_object(), "{ended}");
+    holder.release_gate("before-prompt-delivery");
 
     let forwarded = observed_frame(&bridge.from_peer, "the holder's start outcome", |frame| {
         frame["method"] == "forward"
@@ -3368,12 +3740,14 @@ fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
     assert_eq!(message["to"], creator.id, "{message}");
     let outcome = &message["result"];
     assert_eq!(outcome["agent"]["reference"], child_ref, "{outcome}");
-    assert_eq!(outcome["agent"]["pid"], child["pid"], "{outcome}");
-    let delivered = &outcome["prompt"]["delivery"];
-    assert_eq!(delivered["status"], "success", "{delivered}");
-    assert_eq!(delivered["delivered_via"], "terminal", "{delivered}");
-    assert_eq!(delivered["text_written"], "full", "{delivered}");
-    assert_eq!(delivered["enter_written"], true, "{delivered}");
+    assert_eq!(outcome["agent"]["process"], "ended", "{outcome}");
+    assert_eq!(outcome["agent"]["exit"], ended["exit"], "{outcome}");
+    let delivery = &outcome["prompt"]["delivery"];
+    assert_eq!(delivery["status"], "failure", "{delivery}");
+    assert_eq!(delivery["reason"], "ended", "{delivery}");
+    assert!(delivery.get("delivered_via").is_none(), "{delivery}");
+    assert_eq!(delivery["text_written"], "none", "{delivery}");
+    assert_eq!(delivery["enter_written"], false, "{delivery}");
     let answer = observed_frame(
         &bridge.from_front,
         "the creator host's acknowledgement",
@@ -3410,21 +3784,24 @@ fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
         .expect("the prompt's ID");
     let receipt_id = receipt.as_str().expect("the reserved receipt ID");
     let title = format!("child ({address}) has started.");
-    let summary = format!("Your initial message {prompt_id}@holder has been passed on.");
+    let summary = format!(
+        "Your initial message {prompt_id}@holder could not be delivered. Nothing was entered in the terminal."
+    );
     assert_eq!(row["id"], receipt_id, "{row}");
     assert_eq!(row["from"], "facade", "{row}");
-    assert_eq!(row["text"], format!("{title}\n{summary}"), "{row}");
+    let heading = format!("{title}\n");
+    let body = row["text"]
+        .as_str()
+        .and_then(|text| text.strip_prefix(heading.as_str()))
+        .unwrap_or_else(|| panic!("the start result has no heading: {row}"));
+    assert!(body.lines().any(|line| line == summary), "{row}");
+    let why = format!("{address} ended before the message was delivered.");
+    assert!(body.lines().any(|line| line == why), "{row}");
     assert_eq!(
         origin.submitted_messages(),
-        [format!("🔔 {title} · {receipt_id}\n{summary}")]
+        [format!("🔔 {title} · {receipt_id}\n{body}")]
     );
-    assert_eq!(
-        holder.submitted_messages(),
-        [format!(
-            "📨 Message from creator ({}) · {prompt_id}\n{prompt}",
-            creator.address
-        )]
-    );
+    assert!(holder.submitted_messages().is_empty());
     assert_eq!(
         std::fs::read_to_string(&launches)
             .unwrap()
@@ -3432,10 +3809,10 @@ fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
             .collect::<Vec<_>>(),
         [pid.to_string()]
     );
-    assert_eq!(process_identity(pid), process);
-    assert!(alive(&process));
+    assert!(!alive(&process));
+    assert!(alive(&creator.process));
     println!(
-        "Start outcome {receipt_id} for {address} with PID {pid}. Foreign outcome refusal {refused}"
+        "Failed start outcome {receipt_id} for {address}, launch PID {pid}. Foreign outcome refusal {refused}"
     );
 }
 

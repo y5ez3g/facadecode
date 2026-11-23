@@ -1,32 +1,28 @@
-//! Reports a CLI waiting on a permission, question, or sign-in to the Agent that started it.
-//! Each continuous wait is reported once, after twenty seconds. Agent states come from the
-//! `agents` topic's changes.
+//! Creator watchdog notices and authenticated delivery to the recipient's system inbox.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use facade_base::api_v1::daemon as wire;
-use facade_base::api_v1::daemon::Caller;
-use facade_base::model::agent::AgentRef;
-use facade_base::model::error::{ErrorBody, Reason};
-use facade_base::process::ProcessState;
-use facade_base::{
-    model::agent::{AgentsUpdate, ManagedAgent, ManagedAgentState, WaitKind},
-    model::message::FACADE,
-    model::terminal::display_name,
+use facade_base::api_v1::daemon::{self as wire, Caller};
+use facade_base::model::agent::{
+    ANSWER_WAIT, AgentRef, ManagedAgent, ManagedAgentState, WaitKind, error_words, exit_words,
 };
+use facade_base::model::error::{ErrorBody, Reason};
+use facade_base::model::message::{DeliveryStatus, FACADE, send_failure_text};
+use facade_base::model::terminal::display_name;
+use facade_base::process::ProcessState;
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Instant;
 
+use crate::agent::{AgentCommand, AgentHandle};
 use crate::api;
 use crate::delivery::pending_message;
-use crate::messages::{self, Due, Posted};
+use crate::lifecycle::Work;
+use crate::messages::{self, Due, Posted, PromptWatch};
 use crate::{Daemon, Sender, log};
 
-/// How long a started agent waits before its creator is told.
-const WAIT_REPORT_DELAY: Duration = Duration::from_secs(20);
+/// How long a continuously blocked or errored run waits before its creator is told.
+const WAIT_REPORT_DELAY: Duration = Duration::from_secs(30);
 
 #[derive(Deserialize, Serialize)]
 pub(crate) struct WaitNotice {
@@ -36,131 +32,117 @@ pub(crate) struct WaitNotice {
     pub(crate) kind: WaitKind,
 }
 
-/// What a started agent waits on, where it is something its creator is told of.
-fn waiting_on(info: &ManagedAgent) -> Option<WaitKind> {
-    if info.state != ManagedAgentState::WaitingForYou || info.creator.is_none() {
-        return None;
-    }
-    let kind = info.state_detail.as_ref()?.kind?;
-    matches!(
-        kind,
-        WaitKind::Permission | WaitKind::Question | WaitKind::Auth
-    )
-    .then_some(kind)
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Trouble {
+    Waiting(WaitKind),
+    Error,
+    Ended,
 }
 
-/// Sleeps until `at`, or for ever without it.
-async fn sleep_until(at: Option<Instant>) {
-    match at {
-        Some(at) => tokio::time::sleep_until(at).await,
-        None => std::future::pending().await,
-    }
-}
-
-/// One time an agent started waiting.
-struct Wait {
-    kind: WaitKind,
-    since: Instant,
-    told: bool,
-}
-
-/// Follows the agents' states and tells creators of the waits that last twenty seconds.
-pub(crate) async fn follow_waits(daemon: Arc<Daemon>) {
-    let mut changes = daemon.changes.subscribe();
-    let mut waits: HashMap<String, Wait> = HashMap::new();
-    let note = |waits: &mut HashMap<String, Wait>, info: &ManagedAgent| match waiting_on(info) {
-        Some(kind) => {
-            let same = waits
-                .get(&info.agent_id)
-                .is_some_and(|wait| wait.kind == kind);
-            if !same {
-                let wait = Wait {
-                    kind,
-                    since: Instant::now(),
-                    told: false,
-                };
-                waits.insert(info.agent_id.clone(), wait);
-            }
+impl Trouble {
+    pub(crate) fn observe(info: &ManagedAgent, observed_end: bool) -> Option<Self> {
+        if info.creator.is_none() || info.guest {
+            return None;
         }
-        None => drop(waits.remove(&info.agent_id)),
-    };
-    loop {
-        // The first wait not told yet comes due twenty seconds after it began; with none, only a
-        // change of the agents wakes this.
-        let due = waits
-            .values()
-            .filter(|wait| !wait.told)
-            .map(|wait| wait.since + WAIT_REPORT_DELAY)
-            .min();
-        tokio::select! {
-            change = changes.recv() => match change {
-                Ok(AgentsUpdate::Updated { agent }) => note(&mut waits, &agent),
-                Ok(AgentsUpdate::Removed { agent_id, .. }) => drop(waits.remove(&agent_id)),
-                Err(RecvError::Lagged(_)) => {
-                    let infos = daemon.agent_infos();
-                    waits.retain(|id, _| infos.iter().any(|info| info.agent_id == *id));
-                    infos.iter().for_each(|info| note(&mut waits, info));
+        match info.process {
+            ProcessState::Ended if observed_end => Some(Self::Ended),
+            ProcessState::Running => match info.state {
+                ManagedAgentState::WaitingForYou => {
+                    let kind = info.state_detail.as_ref()?.kind?;
+                    kind.waiting_for().map(|_| Self::Waiting(kind))
                 }
-                Err(RecvError::Closed) => return,
+                ManagedAgentState::Error => Some(Self::Error),
+                _ => None,
             },
-            () = sleep_until(due) => {
-                for (id, wait) in &mut waits {
-                    if wait.told || wait.since.elapsed() < WAIT_REPORT_DELAY {
-                        continue;
-                    }
-                    wait.told = true;
-                    // Still waiting on the same thing, as its record says now.
-                    let Some(info) = daemon.get_agent(id).map(|agent| agent.info()) else {
-                        continue;
-                    };
-                    if waiting_on(&info) == Some(wait.kind) {
-                        daemon.tell_creator(&info, wait.kind);
-                    }
-                }
-            }
+            _ => None,
         }
     }
-}
 
-/// The words a creator is told of what its agent `info` waits on: what it waits for first, then
-/// who can answer.
-fn waiting_text(name: &str, address: &str, kind: WaitKind) -> String {
-    let agent = format!("{} ({address})", display_name(name));
-    let (what, who) = match kind {
-        WaitKind::Permission => ("the person's permission", "Only the person can give it."),
-        WaitKind::Auth => ("the person to sign in", "Only the person can sign in."),
-        _ => (
-            "an answer to its question",
-            "You or the person can answer it.",
-        ),
-    };
-    format!("{agent}, which you started, waits for {what}.\nIt has waited 20 seconds. {who}")
+    pub(crate) fn deadline(self, now: Instant) -> Instant {
+        match self {
+            Self::Ended => now,
+            Self::Waiting(_) | Self::Error => now + WAIT_REPORT_DELAY,
+        }
+    }
 }
 
 impl Daemon {
-    /// Routes a wait notification to the machine that holds the creator's inbox.
-    fn tell_creator(self: &Arc<Self>, info: &ManagedAgent, kind: WaitKind) {
-        let Some(agent_id) = info.creator.clone() else {
+    pub(crate) async fn watch_creator(
+        self: &Arc<Self>,
+        agent: &AgentHandle,
+        prompt: Option<PromptWatch>,
+    ) {
+        if agent.info().creator.is_none() {
+            return;
+        }
+        let daemon = Arc::downgrade(self);
+        let rule = agent
+            .rule()
+            .and_then(|name| facade_rules::find(name).ok().flatten());
+        let report = Box::new(move |info: ManagedAgent, trouble| {
+            if let Some(daemon) = daemon.upgrade() {
+                let resumable = trouble == Trouble::Ended
+                    && rule
+                        .zip(info.session.as_deref())
+                        .is_some_and(|(rule, session)| rule.resume_args(session).is_some());
+                daemon.tell_creator(info, trouble, resumable);
+            }
+        });
+        agent
+            .send(AgentCommand::WatchCreator { prompt, report })
+            .await;
+    }
+
+    pub(crate) fn tell_creator(
+        self: &Arc<Self>,
+        info: ManagedAgent,
+        trouble: Trouble,
+        resumable: bool,
+    ) {
+        let Some(recipient) = info.creator_ref() else {
             return;
         };
-        let notice = WaitNotice {
-            recipient: AgentRef {
-                machine_id: info
-                    .creator_machine_id
-                    .clone()
-                    .unwrap_or_else(|| self.machine_id.clone()),
-                agent_id,
+        let agent = api::wire_ref(&info.reference());
+        let notice = match trouble {
+            Trouble::Waiting(kind) => {
+                self.route_wait_notice(WaitNotice {
+                    recipient,
+                    waiting: info.reference(),
+                    name: info.name,
+                    kind,
+                });
+                return;
+            }
+            Trouble::Error => wire::Notice::AgentError {
+                agent,
+                name: info.name,
+                state_detail: info.state_detail,
+                tools_reason: info.tools_reason,
             },
-            waiting: AgentRef {
-                machine_id: self.machine_id.clone(),
-                agent_id: info.agent_id.clone(),
-            },
-            name: info.name.clone(),
-            kind,
+            Trouble::Ended => {
+                let Some(exit) = info.exit else {
+                    return;
+                };
+                wire::Notice::AgentEnded {
+                    agent,
+                    name: info.name,
+                    exit,
+                    how: info.state_detail.and_then(|detail| detail.how),
+                    resumable,
+                }
+            }
+        };
+        self.route_notice(recipient, notice);
+    }
+
+    fn route_wait_notice(self: &Arc<Self>, notice: WaitNotice) {
+        let Some(work) = self.lifecycle.begin(Work::Send) else {
+            return;
         };
         let due = Due::now();
         let daemon = self.clone();
         tokio::spawn(async move {
+            let _work = work;
             let target = notice.recipient.machine_id.clone();
             let caller = Caller::Terminal {
                 machine_id: daemon.machine_id.clone(),
@@ -186,60 +168,192 @@ impl Daemon {
                     .await
                     .map(|_| ())
             };
-            if let Err(error) = result {
-                log(
-                    "warn",
-                    &format!("could not deliver a wait notice: {}", error.message),
-                );
-            }
+            log_notice_error(result);
         });
     }
 
-    /// Posts a system message on the creator's machine. Forwarded notices are accepted only from
-    /// the machine running the waiting Agent.
+    pub(crate) fn route_notice(self: &Arc<Self>, recipient: AgentRef, notice: wire::Notice) {
+        let Some(work) = self.lifecycle.begin(Work::Send) else {
+            return;
+        };
+        let due = Due::now();
+        let daemon = self.clone();
+        tokio::spawn(async move {
+            let _work = work;
+            let target = recipient.machine_id.clone();
+            let caller = Caller::Terminal {
+                machine_id: daemon.machine_id.clone(),
+            };
+            let args = wire::InternalDeliverNoticeArgs {
+                recipient: api::wire_ref(&recipient),
+                notice,
+            };
+            let left = due.instant.saturating_duration_since(Instant::now());
+            let result = if target == daemon.machine_id {
+                daemon.deliver_notice(&caller, args, Some(left)).await
+            } else {
+                daemon
+                    .network_call::<wire::InternalDeliverNotice>(&target, &caller, args, Some(left))
+                    .await
+                    .map(|_| ())
+            };
+            log_notice_error(result);
+        });
+    }
+
     pub(crate) async fn deliver_wait_notice(
         &self,
         caller: &Caller,
         notice: WaitNotice,
         remaining: Option<Duration>,
     ) -> Result<(), ErrorBody> {
+        let source = &notice.waiting.machine_id;
+        self.check_notice(caller, &notice.recipient, source)?;
+        let address = self.agent_address(&notice.waiting)?;
+        let name = display_name(&notice.name);
+        let what = notice.kind.waiting_for().unwrap_or("the person");
+        let seconds = WAIT_REPORT_DELAY.as_secs();
+        let text = format!(
+            "{name} ({address}), which you started, waits for {what}.\nIt has waited {seconds} seconds. {ANSWER_WAIT}"
+        );
+        self.post_notice(&notice.recipient, source, text, remaining)
+            .await
+    }
+
+    pub(crate) async fn deliver_notice(
+        &self,
+        caller: &Caller,
+        args: wire::InternalDeliverNoticeArgs,
+        remaining: Option<Duration>,
+    ) -> Result<(), ErrorBody> {
+        let recipient = api::agent_ref(args.recipient);
+        let source = match &args.notice {
+            wire::Notice::AgentError { agent, .. } | wire::Notice::AgentEnded { agent, .. } => {
+                &agent.machine_id
+            }
+            wire::Notice::SendFailed {
+                target,
+                message,
+                delivery,
+                ..
+            } => {
+                if message.machine_id != target.machine_id
+                    || delivery.status != DeliveryStatus::Failure
+                {
+                    return Err(ErrorBody::refused(
+                        "a failed-send notice needs a failed message on the target's machine",
+                    ));
+                }
+                &target.machine_id
+            }
+        };
+        self.check_notice(caller, &recipient, source)?;
+        let text = match args.notice {
+            wire::Notice::AgentError {
+                agent,
+                name,
+                state_detail,
+                tools_reason,
+            } => {
+                let label = self.notice_agent(agent, &name)?;
+                let error = error_words(state_detail.as_ref(), tools_reason);
+                format!(
+                    "{label} {error}.\nIt has been in Error for {} seconds. Use `read_screen` to decide what to do next.",
+                    WAIT_REPORT_DELAY.as_secs()
+                )
+            }
+            wire::Notice::AgentEnded {
+                agent,
+                name,
+                exit,
+                how,
+                resumable,
+            } => {
+                let label = self.notice_agent(agent, &name)?;
+                let ended = exit_words(&exit, how);
+                let next = if resumable {
+                    "Its saved session can be resumed."
+                } else {
+                    "It has no resumable saved session."
+                };
+                format!("{label} {ended}.\n{next}")
+            }
+            wire::Notice::SendFailed {
+                target,
+                message,
+                delivery,
+                withdrawn,
+            } => {
+                let target = self.agent_address(&api::agent_ref(target))?;
+                let message = self.message_address(&api::message_ref(message))?;
+                send_failure_text(&message, &target, &delivery, withdrawn)
+            }
+        };
+        self.post_notice(&recipient, caller.machine_id(), text, remaining)
+            .await
+    }
+
+    fn notice_agent(&self, agent: wire::AgentRef, name: &str) -> Result<String, ErrorBody> {
+        let address = self.agent_address(&api::agent_ref(agent))?;
+        Ok(format!("{} ({address})", display_name(name)))
+    }
+
+    fn check_notice(
+        &self,
+        caller: &Caller,
+        recipient: &AgentRef,
+        source: &str,
+    ) -> Result<(), ErrorBody> {
         if !matches!(caller, Caller::Terminal { .. })
-            || caller.machine_id() != notice.waiting.machine_id
-            || self.machine_id != notice.recipient.machine_id
+            || caller.machine_id() != source
+            || self.machine_id != recipient.machine_id
         {
             return Err(ErrorBody::refused(
-                "the wait notice does not match the sending or receiving machine",
+                "the notice does not match the sending or receiving machine",
             ));
         }
-        let Some(creator) = self.get_agent(&notice.recipient.agent_id) else {
+        Ok(())
+    }
+
+    async fn post_notice(
+        &self,
+        recipient: &AgentRef,
+        source: &str,
+        text: String,
+        remaining: Option<Duration>,
+    ) -> Result<(), ErrorBody> {
+        let agent = self.get_agent(&recipient.agent_id).ok_or_else(|| {
+            ErrorBody::new(Reason::NotFound, "the notice recipient is no longer listed")
+        })?;
+        if agent.info().process != ProcessState::Running {
             return Err(ErrorBody::new(
-                Reason::NotFound,
-                "the creator is no longer listed",
+                Reason::Ended,
+                "the notice recipient has stopped",
             ));
-        };
-        if creator.info().process != ProcessState::Running {
-            return Err(ErrorBody::new(Reason::Ended, "the creator has stopped"));
         }
         let due = Due::within(remaining.map(|time| time.as_millis() as u64));
         let from = Sender {
             from: FACADE.to_string(),
             from_name: None,
         };
-        let text = waiting_text(
-            &notice.name,
-            &self.agent_address(&notice.waiting)?,
-            notice.kind,
-        );
-        let mut message = pending_message(from, creator.id(), text, None, Some(due.at));
-        message.from_machine_id =
-            (notice.waiting.machine_id != self.machine_id).then_some(notice.waiting.machine_id);
-        if let Posted::New(message, mut settled) = self.messages.post(message, None, None)?
-            && (creator.is_guest() || self.hand_to_typist(&creator, &message, due.instant).await)
+        let mut message = pending_message(from, agent.id(), text, None, Some(due.at));
+        message.from_machine_id = (source != self.machine_id).then(|| source.to_string());
+        if let Posted::New(message, mut settled) = self.messages.post(message, None, None, false)?
+            && (agent.is_guest() || self.hand_to_typist(&agent, &message, due.instant).await)
         {
             self.messages
                 .settle_by_deadline(messages::number(&message), &mut settled, due.instant)
                 .await;
         }
         Ok(())
+    }
+}
+
+fn log_notice_error(result: Result<(), ErrorBody>) {
+    if let Err(error) = result {
+        log(
+            "warn",
+            &format!("could not deliver a notice: {}", error.message),
+        );
     }
 }

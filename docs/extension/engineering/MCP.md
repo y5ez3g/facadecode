@@ -513,8 +513,8 @@ v1's MCP entry point.**
 The [product](../../PRODUCT.md) describes machine-scoped starts, Guest identity, addressing and message delivery.
 The [generated tool descriptions](../../../core/crates/base/src/texts/tools.json) define the tool arguments and
 results. The [daemon API](../../../core/protocol/DAEMON.md) defines the wire contract. VS Code starts and attaches through
-its own Orchestrator client. Agent messages, including the result of delivering a first prompt or a long
-wait, use the Orchestrator's contract and its delivery outcomes. See RULES-6.7.
+its own Orchestrator client. Background delivery failures and creator watchdog notices use the recipient's Facade
+inbox. A startup incident and a failed initial prompt share one notice. See RULES-6.7.
 
 ### 7.2 Connection identity and inline results
 
@@ -568,6 +568,11 @@ the caller can choose from.
 Facade resends with the original caller, target and internal request identity. It reuses the outcome even when the
 original attempt was withdrawn. Each new `send_message` call creates a message. By default, its receipt confirms
 inbox acceptance, and `read_messages` takes an immediate snapshot.
+
+Managed agents normally use inbox acceptance. Replies arrive in their terminals, and a failed background
+delivery earns a Facade notice. A guest can wait for a linked reply with `wait_for: "result"` and a positive
+`timeout_seconds`. A successful background delivery creates no notice. A repeat keeps the original delivery
+and its notice decision.
 
 Set `timeout_seconds` from 1 to 30 to wait. For a send, also set `wait_for` to `delivery` for receipt by the target or
 `result` for its first linked reply. The duration covers the whole call. After `reply_timeout`, an agent can use the

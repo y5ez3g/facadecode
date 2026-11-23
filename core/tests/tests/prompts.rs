@@ -1,6 +1,6 @@
 //! Start prompts and Facade's results: a prompt kept with its agent and answered pending, delivered
-//! before any other message once the CLI's tools connected or will not, and the one result it owes
-//! the agent that started it, written as the prompt is settled, across daemon restarts too.
+//! before other messages once the CLI's tools settle, and the result owed on failure, including
+//! across daemon restarts.
 
 use std::process::{Child, Stdio};
 
@@ -104,15 +104,8 @@ fn prompt(host: &str) -> String {
     format!("📨 Message from boss (a1@{host}) · m1\nfix the bug")
 }
 
-/// The result boss's prompt owes boss, as boss's CLI takes it.
-fn result(host: &str) -> String {
-    format!(
-        "🔔 child (a2@{host}) has started. · m2\nYour initial message m1@{host} has been passed on."
-    )
-}
-
-/// The result of boss's prompt where the child ended before it was delivered.
-fn ended_result(host: &str) -> String {
+/// The delivery facts in the result of a prompt the child ended before receiving.
+fn ended_result_prefix(host: &str) -> String {
     format!(
         "🔔 child (a2@{host}) has started. · m2\nIts Facade tools are unavailable: its CLI \
          ended.\nYour initial message m1@{host} could not be delivered. Nothing was entered in the \
@@ -120,12 +113,19 @@ fn ended_result(host: &str) -> String {
     )
 }
 
-/// start_agent with a prompt answers once the CLI runs: the prompt pending, with no deadline yet,
-/// with the call and the result to follow. The new agent's first submission is the prompt under its
-/// header; the caller's terminal then shows the result, which names the prompt, under 🔔 and its
-/// own number. Each comes once, and the result reads as its facts.
+fn wait_for_ended_result(home: &TestHome, host: &str) -> bool {
+    let prefix = ended_result_prefix(host);
+    wait_until(secs(40), || {
+        home.submitted_messages()
+            .iter()
+            .any(|text| text.starts_with(&prefix))
+    })
+}
+
+/// A first prompt goes to the new agent once. Successful settlement leaves the reserved result
+/// number unused in the caller's inbox and terminal.
 #[test]
-fn start_agent_s_prompt_goes_first_and_its_caller_gets_one_result() {
+fn start_agent_s_prompt_goes_first_without_a_success_notice() {
     let home = TestHome::new("promptfirst");
     let (mut boss, here) = boss(&home);
     let host = host(&home);
@@ -135,41 +135,46 @@ fn start_agent_s_prompt_goes_first_and_its_caller_gets_one_result() {
         (&json!(format!("a2@{host}")), &json!("child")),
         "{started}"
     );
-    assert!(
-        wait_for_submission(&home, &result(&host)),
-        "{:?}",
-        home.submitted_messages()
-    );
+    assert_eq!(started["data"]["result_message"], "m2", "{started}");
+    assert!(wait_for_submission(&home, &prompt(&host)));
+    // The second delivered message confirms that the typist has settled the prompt.
+    let next = home.run_facade_ok(&["send", "child", "next", "-w"]);
+    assert!(next.contains(&format!("Delivered m3@{host}")), "{next}");
+    let read = boss.call("read_messages", json!({ "after": "m1" }));
+    assert_eq!(read["status"], "success", "{read}");
+    assert_eq!(read["data"]["messages"], json!([]), "{read}");
     assert_eq!(
         home.submitted_messages(),
-        [prompt(&host), result(&host)],
-        "the prompt first, then its result, each once"
+        [
+            prompt(&host),
+            "📨 Message from the command line · m3\nnext".into()
+        ]
     );
-    // The result is delivered once the daemon has seen the CLI take it, a moment after the CLI logs
-    // it, when boss's record says Facade said it: a read before then would deliver it.
-    assert!(
-        wait_until(LOADED_TIMEOUT, || record(&home, "boss")["said"]["from"]
-            == "facade"),
-        "{}",
-        record(&home, "boss")
-    );
-    let read = boss.call("read_messages", json!({ "after": "m1" }));
-    let row = &read["data"]["messages"][0];
+}
+
+#[test]
+fn a_child_reading_its_initial_prompt_settles_it_silently() {
+    let home = TestHome::new("promptreadsits");
+    home.start_facade_with(&[("FACADE_TEST_GATES", "before-prompt-delivery")]);
+    let (mut boss, here) = boss(&home);
+    let started = start_child(&mut boss, &here, "fix the bug");
+    assert_eq!(started["data"]["result_message"], "m2", "{started}");
+    home.wait_for_gate("before-prompt-delivery");
+    let mut child = McpTestClient::open(&home, "a2");
+    let read = child.call("read_messages", json!({}));
+    let rows = read["data"]["messages"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{read}");
+    assert_eq!(rows[0]["id"], "m1", "{read}");
+    assert_eq!(rows[0]["text"], "fix the bug", "{read}");
+    home.release_gate("before-prompt-delivery");
+
+    home.run_facade_ok(&["send", "child", "after the read", "-w"]);
+    let inbox = boss.call("read_messages", json!({ "last": 10 }));
+    assert_eq!(inbox["data"]["messages"], json!([]), "{inbox}");
     assert_eq!(
-        (&row["id"], &row["from"]),
-        (&json!("m2"), &json!("facade")),
-        "{read}"
+        home.submitted_messages(),
+        ["📨 Message from the command line · m3\nafter the read"]
     );
-    assert!(
-        row["text"]
-            .as_str()
-            .is_some_and(|text| text.contains(&format!("child (a2@{host}) has started"))),
-        "a result says what it is in words: {read}"
-    );
-    assert_eq!(started["data"]["result_message"], row["id"], "{started}");
-    let again = boss.call("read_messages", json!({ "after": row["id"] }));
-    assert_eq!(again["status"], "success", "{again}");
-    assert_eq!(again["data"]["messages"], json!([]), "{again}");
 }
 
 /// A message sent to the new agent while its prompt waits for the tools goes after the prompt.
@@ -198,11 +203,7 @@ fn a_message_sent_while_the_prompt_waits_goes_after_it() {
         home.submitted_messages()
     );
     assert_eq!(submitted(&home, "📨"), [prompt(&host), message.to_string()]);
-    assert!(
-        wait_for_submission(&home, &result(&host)),
-        "{:?}",
-        home.submitted_messages()
-    );
+    assert_eq!(submitted(&home, "🔔"), Vec::<String>::new());
 }
 
 /// A prompt whose agent ends before it is delivered fails as ended, nothing typed, and its result
@@ -218,7 +219,7 @@ fn a_prompt_whose_agent_ends_first_gets_a_result_saying_so() {
     home.run_facade_ok(&["stop", "child"]);
     home.release_gate("before-prompt-delivery");
     assert!(
-        wait_for_submission(&home, &ended_result(&host)),
+        wait_for_ended_result(&home, &host),
         "{:?}",
         home.submitted_messages()
     );
@@ -247,7 +248,7 @@ fn a_prompt_whose_agent_ends_before_its_tools_settle_fails_as_ended() {
     assert_eq!(record(&home, "child")["tools_state"], "connecting");
     home.run_facade_ok(&["stop", "child"]);
     assert!(
-        wait_for_submission(&home, &ended_result(&host)),
+        wait_for_ended_result(&home, &host),
         "{:?}",
         home.submitted_messages()
     );
@@ -293,16 +294,14 @@ fn prompted_by(home: &TestHome, guest: &str) -> bool {
     })
 }
 
-/// A guest's start with a prompt is owed one result, as an agent's is: it waits in the guest's
-/// inbox, as the guest's other messages do, and a read that waits takes it, with its facts.
-/// Nothing is typed: a guest's terminal is not Facade's.
+/// A successful first prompt leaves a guest's waiting read to time out.
 #[test]
-fn a_guest_s_start_prompt_owes_it_a_result_that_a_read_delivers() {
+fn a_guest_s_successful_start_prompt_leaves_its_waiting_read_empty() {
     let home = TestHome::new("promptguest");
     let (mut guest, address) = guest(&home, &[]);
     let waiting = guest.send(
         "tools/call",
-        json!({ "name": "read_messages", "arguments": { "timeout_seconds": 30 } }),
+        json!({ "name": "read_messages", "arguments": { "timeout_seconds": 5 } }),
     );
     start_from_the_guest(&home, &mut guest, "hello child");
     assert!(
@@ -310,22 +309,12 @@ fn a_guest_s_start_prompt_owes_it_a_result_that_a_read_delivers() {
         "{:?}",
         home.submitted_messages()
     );
+    home.run_facade_ok(&["send", "child", "after the prompt", "-w"]);
     let read = guest.tool_answer(waiting);
-    let taken = &read["data"]["messages"];
-    assert_eq!(taken.as_array().map(Vec::len), Some(1), "{read}");
-    assert_eq!(taken[0]["from"], "facade", "{read}");
-    assert!(
-        taken[0]["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("has started.")),
-        "{read}"
-    );
+    assert_eq!(read["status"], "failure", "{read}");
+    assert_eq!(read["reason"], "timeout", "{read}");
     let again = guest.call("read_messages", json!({}));
-    assert_eq!(
-        again["data"]["messages"],
-        json!([]),
-        "the read delivered it: {again}"
-    );
+    assert_eq!(again["data"]["messages"], json!([]), "{again}");
     assert_eq!(
         submitted(&home, "🔔"),
         Vec::<String>::new(),
@@ -394,11 +383,9 @@ fn a_prompt_settled_while_a_guest_s_inbox_goes_writes_it_no_result() {
     );
 }
 
-/// A guest's start prompt still waiting when its daemon ends is delivered by the next daemon, to
-/// which the guest's server connects again: the result the prompt owes waits in the guest's inbox
-/// for its next read, as it would have without the restart.
+/// A pending guest prompt survives daemon replacement and stays silent when delivered.
 #[test]
-fn a_guest_s_start_prompt_that_outlives_its_daemon_still_owes_it_its_result() {
+fn a_guest_s_start_prompt_that_outlives_its_daemon_is_silent_on_success() {
     let home = TestHome::new("promptguestrestart");
     home.start_facade_with(&[("FACADE_TEST_GATES", "before-prompt-delivery")]);
     let (mut guest, address) = guest(&home, &[]);
@@ -411,23 +398,26 @@ fn a_guest_s_start_prompt_that_outlives_its_daemon_still_owes_it_its_result() {
         home.submitted_messages(),
         home.daemon_log()
     );
-    let read = guest.call("read_messages", json!({ "timeout_seconds": 30 }));
-    let taken = &read["data"]["messages"];
-    assert_eq!(
-        (taken.as_array().map(Vec::len), &taken[0]["from"]),
-        (Some(1), &json!("facade")),
-        "{read}"
-    );
+    home.run_facade_ok(&["send", "child", "after the prompt", "-w"]);
+    let read = guest.call("read_messages", json!({}));
+    assert_eq!(read["data"]["messages"], json!([]), "{read}");
 }
 
-/// A result read before it is typed is delivered by the read, with its facts, and never typed.
+/// A failure result read before it is typed is delivered by the read, with its facts, and never
+/// typed.
 #[test]
-fn a_result_read_before_it_is_typed_is_never_typed() {
+fn a_failure_result_read_before_it_is_typed_is_never_typed() {
     let home = TestHome::new("promptread");
-    home.start_facade_with(&[("FACADE_TEST_GATES", "before-result-delivery")]);
+    home.start_facade_with(&[(
+        "FACADE_TEST_GATES",
+        "before-prompt-delivery,before-result-delivery",
+    )]);
     let (mut boss, here) = boss(&home);
     let host = host(&home);
     start_child(&mut boss, &here, "fix the bug");
+    home.wait_for_gate("before-prompt-delivery");
+    home.run_facade_ok(&["stop", "child"]);
+    home.release_gate("before-prompt-delivery");
     home.wait_for_gate("before-result-delivery");
     let read = boss.call("read_messages", json!({}));
     let row = &read["data"]["messages"][0];
@@ -436,20 +426,26 @@ fn a_result_read_before_it_is_typed_is_never_typed() {
         (&json!("m2"), &json!("facade")),
         "{read}"
     );
+    let text = row["text"].as_str().unwrap();
+    assert!(text.contains(&format!("m1@{host}")), "{read}");
+    assert!(text.contains("Nothing was entered"), "{read}");
+    assert!(text.contains("no recorded session to resume"), "{read}");
+    assert!(
+        text.contains("Read its screen before starting it again"),
+        "{read}"
+    );
     home.release_gate("before-result-delivery");
     std::thread::sleep(secs(3));
     assert_eq!(
         home.submitted_messages(),
-        [prompt(&host)],
+        Vec::<String>::new(),
         "the result is never typed"
     );
 }
 
-/// A daemon that ends while a prompt waits for its CLI's tools leaves it to the next daemon, which
-/// delivers it, and the result follows, once. The next daemon does not wait for the tools again:
-/// the result says where they were.
+/// A prompt pending before a daemon replacement is delivered once and success stays silent.
 #[test]
-fn a_prompt_waiting_for_the_tools_outlives_its_daemon_and_its_result_follows_once() {
+fn a_prompt_waiting_for_the_tools_outlives_its_daemon_and_succeeds_silently() {
     let home = TestHome::new("promptrestart");
     home.start_facade_with(&[("FACADE_TEST_GATES", "before-prompt-delivery")]);
     let (mut boss, here) = boss(&home);
@@ -458,50 +454,52 @@ fn a_prompt_waiting_for_the_tools_outlives_its_daemon_and_its_result_follows_onc
     home.wait_for_gate("before-prompt-delivery");
     crash(&home);
     assert!(
-        wait_until(secs(40), || !submitted(&home, "🔔").is_empty()),
+        wait_for_submission(&home, &prompt(&host)),
         "{:?}\n{}",
         home.submitted_messages(),
         home.daemon_log()
     );
-    std::thread::sleep(secs(2));
-    let results = submitted(&home, "🔔");
+    home.run_facade_ok(&["send", "child", "after the prompt", "-w"]);
+    let read = boss.call("read_messages", json!({}));
+    assert_eq!(read["data"]["messages"], json!([]), "{read}");
     assert_eq!(
-        (submitted(&home, "📨"), results.len()),
-        (vec![prompt(&host)], 1),
-        "each once: {results:?}"
-    );
-    let (first, last) = (results[0].lines().next(), results[0].lines().last());
-    let started = format!("🔔 child (a2@{host}) has started. · m2");
-    let passed = format!("Your initial message m1@{host} has been passed on.");
-    assert_eq!(
-        (first, last),
-        (Some(started.as_str()), Some(passed.as_str()))
+        home.submitted_messages(),
+        [
+            prompt(&host),
+            "📨 Message from the command line · m3\nafter the prompt".into()
+        ]
     );
 }
 
-/// A daemon that ends after the prompt was settled, before its result was typed, leaves the result
-/// to the next daemon, which types it once.
+/// A failure result committed before daemon replacement is typed once by the next daemon.
 #[test]
-fn a_result_its_daemon_did_not_type_is_typed_once_by_the_next() {
+fn a_failure_result_its_daemon_did_not_type_is_typed_once_by_the_next() {
     let home = TestHome::new("resultrestart");
-    home.start_facade_with(&[("FACADE_TEST_GATES", "before-result-delivery")]);
+    home.start_facade_with(&[(
+        "FACADE_TEST_GATES",
+        "before-prompt-delivery,before-result-delivery",
+    )]);
     let (mut boss, here) = boss(&home);
     let host = host(&home);
     start_child(&mut boss, &here, "fix the bug");
+    home.wait_for_gate("before-prompt-delivery");
+    home.run_facade_ok(&["stop", "child"]);
+    home.release_gate("before-prompt-delivery");
     home.wait_for_gate("before-result-delivery");
-    assert_eq!(home.submitted_messages(), [prompt(&host)]);
+    assert!(home.submitted_messages().is_empty());
     crash(&home);
     assert!(
-        wait_for_submission(&home, &result(&host)),
+        wait_for_ended_result(&home, &host),
         "{:?}\n{}",
         home.submitted_messages(),
         home.daemon_log()
     );
     std::thread::sleep(secs(2));
-    assert_eq!(
-        home.submitted_messages(),
-        [prompt(&host), result(&host)],
-        "each once"
+    let messages = home.submitted_messages();
+    assert_eq!(messages.len(), 1, "one failure result: {messages:?}");
+    assert!(
+        messages[0].starts_with(&ended_result_prefix(&host)),
+        "{messages:?}"
     );
 }
 

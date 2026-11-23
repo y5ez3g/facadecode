@@ -11,6 +11,12 @@ const TOOLS: &str = "The Orchestrator's MCP tools start, list and stop agents, e
 const RESULT: &str = "A 🔔 message reports an Orchestrator result; it is not the recipient's \
                       answer or proof of task completion.";
 
+const MANAGED_SEND: &str = "Managed agents usually omit wait_for and timeout_seconds when sending. \
+                            Replies and later delivery failures arrive through the terminal. \
+                            You can resend a withdrawn message if nothing was typed. \
+                            Check the recipient's terminal before retrying partial or unconfirmed \
+                            input.";
+
 /// The instructions for MCP initialization before the connection has a known agent.
 pub fn for_connection() -> String {
     format!(
@@ -20,8 +26,8 @@ pub fn for_connection() -> String {
          timeout_seconds defaults to 0 for both send_message and read_messages: sending confirms \
          inbox acceptance only, and reading returns a snapshot. To wait, set a positive \
          timeout_seconds up to 30. A send also requires wait_for: \"delivery\" or \"result\"; setting \
-         wait_for alone does not enable waiting. Managed agents usually use wait_for: \"delivery\" \
-         with timeout_seconds: 30. Guests needing an answer should use wait_for: \"result\" with \
+         wait_for alone does not enable waiting. {MANAGED_SEND} \
+         Guests needing an answer should use wait_for: \"result\" with \
          timeout_seconds: 30. A positive timeout is one total call budget. After reply_timeout, \
          continue with read_messages using the original full message ID as reply_to and a positive \
          timeout_seconds; do not resend the task. A replyable command-line request appears as the \
@@ -72,8 +78,7 @@ pub fn for_managed(address: &str, run: &ManagedRun<'_>) -> String {
     format!(
         "You are managed agent {address}, working in {} on machine {}.{creator} {TOOLS} {reach} \
          Messages are typed into your terminal. You can use read_messages to take messages before \
-         typing begins. Usually send with wait_for: \"delivery\" and timeout_seconds: 30, then \
-         receive replies through normal terminal delivery. timeout_seconds defaults to 0 for both \
+         typing begins. {MANAGED_SEND} timeout_seconds defaults to 0 for both \
          send_message and read_messages: sending confirms inbox acceptance only, and reading returns \
          a snapshot. Setting wait_for alone does not enable waiting. Use wait_for: \"result\" with a \
          positive timeout_seconds when this call needs a linked reply. A positive timeout is one \

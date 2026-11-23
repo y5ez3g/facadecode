@@ -15,6 +15,7 @@
 	},
 	"paste": {
 		"enter_ms": 80,
+		"tab_while_working": true,
 		"placeholders": [
 			{ "pattern": "^\\[PastedContent(\\d+)chars?\\]$", "count": "chars" },
 			{ "pattern": "^\\[PastedContent(\\d+)chars?\\]$", "count": "chars", "after_first_character": true }

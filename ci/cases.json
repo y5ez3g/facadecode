@@ -775,6 +775,19 @@
       }
     },
     {
+      "id": "core/daemon/operation/internal.deliver_notice",
+      "assertion": "Observe one authenticated background delivery failure with the original qualified message and target. Replaying the admitted send preserves its single notice.",
+      "stage": "pr",
+      "existing_tests": [
+        "core/tests/tests/machines.rs"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "an_unwaited_peer_failure_reports_one_qualified_notice_after_retry"
+      }
+    },
+    {
       "id": "core/daemon/operation/internal.deliver_start_result",
       "assertion": "Read the remote start outcome at the requester and correlate the receipt and exact Agent reference with the single remote process started.",
       "stage": "pr",

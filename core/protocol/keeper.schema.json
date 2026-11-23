@@ -115,7 +115,7 @@
         {
           "type": "string",
           "const": "starting",
-          "description": "The CLI has not shown what it is doing yet, within 60 seconds of its start or resume."
+          "description": "The CLI has not shown what it is doing yet, within 30 seconds of its start or resume."
         },
         {
           "type": "string",
@@ -140,7 +140,7 @@
         {
           "type": "string",
           "const": "error",
-          "description": "The CLI reported an error or its screen shows that the turn it reported ended failed, or,\nstarted by its rule's name, it showed nothing of what it is doing within 60 seconds of its\nstart or resume."
+          "description": "The CLI reported an error or its screen shows that the turn it reported ended failed, or,\nstarted by its rule's name, it showed nothing of what it is doing within 30 seconds of its\nstart or resume."
         },
         {
           "type": "string",

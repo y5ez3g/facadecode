@@ -76,7 +76,7 @@ gets a name and inbox when it first calls a tool. From that point it can receive
 - `facade stop <AGENT>...` ends one or more managed agents and keeps their records, screens and inboxes for 30 days.
   Their helpers keep running. Use `--local`, `--machine <MACHINE>` or `--all` to stop running managed agents in one
   scope. Scope stops skip Guests and probe remote machines without waking them. A partial failure returns 1 after
-  stopping the other targets.
+  stopping the other targets. It waits up to 30 seconds for an exit after requesting a stop.
 - `facade resume` lists resumable agents on reachable machines and CLI sessions in the current directory. `--local`
   lists this machine's candidates with zero SSH. `--machine <MACHINE>` lists the named machine's resumable managed
   agents. The `SESSION` column uses the same native name or preview as `list`. The state is `Ended` for a managed
@@ -89,6 +89,7 @@ gets a name and inbox when it first calls a tool. From that point it can receive
   `Ended (signal <SIGNAL>)`, or `Ended` when the way it ended is unknown. Its `Session` line shows the same native
   name or preview as `list`, and `Session ID` the CLI's full session ID.
 - Resuming an `Ended` agent keeps its reference, directory and session and starts with an empty terminal.
+  Resume waits up to 30 seconds for the previous run to finish releasing its resources.
   Resuming a `Saved` session creates an agent. A session already in use produces the reference of the agent using it.
   Use `-d` to resume in the background.
 - `facade rename <AGENT> <NAME>` changes the name of a running or ended agent or connected Guest. The reference
@@ -134,8 +135,10 @@ an address such as `m17@devbox`. To answer a message, copy the sender address in
 into `reply_to`. A Shell request waiting for a reply has a sender address such as `#c17@devbox`. The original recipient
 can send one linked reply while that invocation waits.
 
-For a managed agent, the Orchestrator waits for an empty input box, pastes the message and presses Enter. A Guest
-takes messages with `read_messages`. Background delivery has a 30-second deadline. When Shell explicitly waits,
+For a managed agent, the Orchestrator waits for an empty input box and checks the pasted draft before submitting it.
+Codex queues an ordinary message with Tab while Working. Idle delivery, startup prompts and recovered in-flight
+drafts use Enter. A Guest takes messages with `read_messages`. Background delivery has a 30-second deadline.
+When Shell explicitly waits,
 delivery uses the remaining command budget. Facade withdraws undelivered messages at their deadline and retains
 message history for 30 days.
 
@@ -162,6 +165,9 @@ Pass `FACADE_HOME` in that server's environment to use a different home. For bot
 defaults to 0 and accepts up to 30 seconds. A send with a positive timeout requires `wait_for` set to `delivery`
 or `result`. After `reply_timeout`, an agent can call `read_messages` with the original full message address in
 `reply_to` and a positive timeout. Read pages with `after` or `last`. Tool results carry complete message text inline.
+Managed agents receive replies and background failures in their terminals. A first prompt's failure and its
+startup problem share one 🔔. The live agent creator also receives one notice per incident when its agent waits
+for permission, an answer or login for 30 seconds, stays in Error for 30 seconds, or ends without its request.
 See the [MCP contract](../extension/engineering/MCP.md#7-mcp-through-the-orchestrator).
 
 ## Access and settings

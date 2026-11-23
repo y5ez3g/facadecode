@@ -67,7 +67,7 @@ the identity of that run or matches the agent's own CLI session. Each other conn
 | message | Text sent to one recipient, with its own message number such as `m17` | mail, letter, note |
 | send | Put a message on its way | post |
 | save | Commit a message to the recipient's inbox for delivery. Shell reports `Saved` | deliver (for this) |
-| deliver, delivery | Submit a message with Enter in a managed agent's terminal, have a Guest take it with `read_messages`, or return a linked reply to a waiting Shell command | hand over |
+| deliver, delivery | Submit a message in a managed agent's terminal, have a Guest take it with `read_messages`, or return a linked reply to a waiting Shell command | hand over |
 | take | Collect a waiting message with `read_messages` | — |
 | inbox | The messages waiting for one agent | mailbox |
 | settle | A delivery getting its outcome: delivered or failed | — |
@@ -84,7 +84,7 @@ the identity of that run or matches the agent's own CLI session. Each other conn
 | Use | Means | Not these |
 |---|---|---|
 | input | The bytes written into a terminal | — |
-| input box | The CLI's field where text is typed before Enter | — |
+| input box | The CLI's field where text is typed before submission | — |
 | draft | The text in the input box that was not entered yet | — |
 | hint | Text a CLI draws in its empty input box that is not a draft, dim or colored, such as a suggestion | placeholder (for this) |
 | probe | A space typed into the input box and taken back, to tell a hint from a draft where a reading cannot | — |
@@ -295,7 +295,7 @@ a message on another machine includes the machine.
 | win32-input-mode | The console host's input mode, `CSI ?9001h`, in which keys travel as key records | — |
 | key-down record | A key press in win32-input-mode's form, `CSI <vk>;<sc>;<char>;1;<cs>;<rc>_` | — |
 | console input record | An input event as a Windows console holds it: a key, or a change of size | — |
-| console typing | What a CLI that reads console input records needs: a wait for each UTF-16 code unit before Enter, and key-down records for characters above U+FFFF | — |
+| console typing | A wait for each UTF-16 code unit before submission, and key-down records for characters above U+FFFF, for a CLI that reads console input records | — |
 | wrapper | A script that starts a CLI's real program, such as npm's `.cmd` shim, Pi's `pi.cmd` or Muse Code's PowerShell script; Facade starts the program directly where it can | launcher |
 
 ## Naming rules

@@ -54,6 +54,14 @@ Facade Code
 
 ## Product principles
 
+- **People and agents have the same actions.** Agents can inspect waiting terminals and respond with
+  `press_keys` or `type_text`.
+- **Background failures earn a 🔔 notice.** Calls return after their synchronous work. A background failure
+  tells the calling agent what happened and how to continue. Successful background work is silent. An explicit wait
+  reports its outcome in the return value.
+- **The watchdog reports one notice for each observed incident.** The serving daemon measures a continuous
+  30-second wait or Error state and tells the live creator. A replacement daemon starts a fresh interval.
+  The creator also receives an immediate notice when the agent ends without that creator stopping it.
 - **YOLO controls native work prompts.** Facade handles the prompts it causes in either mode. YOLO bypasses
   native work approvals where supported, and clears supported startup prompts for agent starts. Person starts
   keep the CLI's native startup prompts.
@@ -65,6 +73,8 @@ Facade Code
 - **Newer builds replace older builds.** Compare the numeric version first, then the source commit time.
   Equal ranks keep the selected build. Install, upgrade, VS Code and SSH share this order. When the remote
   home ranks higher, SSH reports that the local installation needs an upgrade.
+- **Product waits use 30 seconds.** This applies to startup, stop, resume, messages and the watchdog.
+  Shell defaults to 30 seconds for `facade send --timeout` and lets you choose up to 300 seconds.
 
 ## Agents
 
@@ -274,8 +284,8 @@ facade start -d -n Nova codex --model gpt-6.2-sol
 ```
 
 A Shell start receipt confirms the agent has started. Use `facade send` to send it a task and check the receipt.
-For MCP `start_agent`, the Orchestrator handles delivery of an optional first prompt and sends a 🔔 result
-to the agent that started it.
+MCP `start_agent` returns once the launch is recorded. If an optional first prompt fails, Facade sends the
+creator a 🔔. A startup blockage and its first prompt failure share that notice.
 
 - **Defaults.** Shell uses this machine and the current folder. VS Code uses its extension host and a workspace
   folder. MCP uses the calling agent's machine and folder. A Guest starts from the machine it joined. When no
@@ -341,14 +351,14 @@ from the receipt into `read_messages`.
 
 | Recipient | Delivery |
 | --- | --- |
-| Managed agent | Facade waits for an empty input box, pastes the text and submits it. The receipt confirms delivery after submission. Unconfirmed input produces a failure. |
+| Managed agent | Facade waits for an empty input box, pastes the text and submits it. Codex queues the message with Tab while Working. The receipt confirms delivery after the submit key reaches the terminal. |
 | Guest | The Guest takes the message from its inbox with `read_messages`. The read confirms delivery. |
 | Ended agent | Facade reports that the agent has stopped. |
 | Agent outside the caller's reach | Facade reports a permissions error and withholds the target's identity. |
 
 Background delivery has a 30-second deadline. An explicit Shell wait uses the remaining command budget, set with
-`-t` from 1 to 300 seconds. When delivery fails before submission, Facade withdraws the message. A caller waiting
-for delivery gets the reason.
+`-t` from 1 to 300 seconds. Facade reports the delivery facts. An untouched, withdrawn message can be resent.
+Check the recipient's screen before retrying partial or unconfirmed input.
 
 ```text
 📨 Message from ada (a3@laptop) · m42
@@ -357,10 +367,11 @@ for delivery gets the reason.
 📨 Message from eve (a9@devbox) · m45 · Reply to m17@devbox
 ```
 
-Facade marks delivery and wait notices with 🔔. The creator receives the result of an agent's first task delivery.
-A wait for permission, an answer or a login that lasts 20 seconds produces one notice per wait. A Guest creator
-must be reading messages with a matching filter to take the notice. Creators that are agents have inboxes.
-Shell and VS Code starts have no creator inbox.
+Managed agents normally send without waiting. Replies arrive in their terminals and failed background deliveries
+show as 🔔. A startup problem and an undelivered first message share one notice. After startup, the watchdog
+reports a sustained wait, a sustained error or an unexpected end to the live agent creator. For a waiting agent,
+read its screen and respond with keys or text. For an ended agent, the notice gives the exit facts and whether its
+saved session can be resumed. A Guest creator takes notices from its inbox.
 
 Message records last 30 days. MCP `read_messages` reads the caller's own inbox. Shell exposes the send
 receipt. Automatic reconnect retries reuse the original request's outcome when its receipt is available.

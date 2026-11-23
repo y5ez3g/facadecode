@@ -140,14 +140,21 @@ environment. Daemon status gives the home, settings path, build, PIDs and local 
 `agent.send` delivers to an eligible managed agent or Guest.
 The public receipt identifies the assigning machine in a message address such as
 `m42@devbox`. Replies can carry an address or a full message reference. Each reply target
-is verified at entry. A managed agent's delivery is confirmed when its terminal takes
-the submission. A Guest can read complete messages inline.
+is verified at entry. Terminal delivery is confirmed when the submission key reaches
+the terminal. The receipt field `delivery.enter_written` reports that write.
+Codex uses Tab to queue ordinary messages while Working. Initial prompts and recovered
+drafts use Enter, as does ordinary delivery outside that Codex path. A Guest can read
+complete messages inline.
 
 Omitting `wait_for` keeps the released delivery wait, 30-second cap and receipt replay.
 Explicit `wait_for:"inbox"` returns once the message is saved in the recipient's inbox.
-Background delivery keeps its ordinary limit. `"delivery"` waits for the managed
+Background delivery keeps its ordinary limit. A delivery failure from the original Inbox
+admission is reported as a Facade message to its live authenticated agent sender. A replay
+keeps the original send's notification behavior. A pending send keeps that decision through
+daemon takeover. `"delivery"` waits for the managed
 terminal's submission or the Guest's read. `"result"` waits for delivery and the first
-explicit reply to the original message from its recipient.
+explicit reply to the original message from its recipient. Explicit delivery and result
+waits report their outcome in the call.
 
 Explicit waits use `time_left_ms` as the remaining total budget. The cap is 300 seconds
 for Terminal and 30 seconds for a verified MCP actor. Each forward carries the explicit
@@ -180,6 +187,13 @@ or takeover cannot reopen the original Shell reply waiter.
 `agent.send` that has yet to start pasting can be cancelled. Once the original request
 finishes it reports its actual outcome.
 
+An agent start returns when launch is recorded. An initial message can reserve a result
+number at launch. Failed delivery uses that number and carries the agent's observed state
+and the input facts. Successful delivery leaves the number unused. A managed agent with
+an agent creator can also report 30 seconds of continuous waiting or Error, or an observed
+end, through the creator's Facade inbox. An effective stop by the creator is reported in
+the stop call. A startup delivery failure and its watchdog incident share one notification.
+
 ### YOLO and creation trees
 
 A managed agent reads YOLO from the executing machine's settings on start or resume. A Guest
@@ -208,6 +222,7 @@ independently. Direct external `kind:"mcp"` hello is refused.
 bracketed paste mode when enabled. Keys use the active terminal modes. A successful text or
 keys receipt means the input reached the terminal. If only part was written, `partial_input`
 reports `details.text_written` with optional `enter_written`, or `details.keys_sent`.
+For a text input call, `details.enter_written` reports its requested Enter.
 
 Raw bytes use standard Base64 with padding and require a full agent reference. They can be
 sent without an ID. A raw call with an ID acknowledges entry into the daemon's memory queue.
@@ -316,6 +331,17 @@ checks the next machine and the remaining time budget. Use exact references for 
 agent targets. An authenticated forwarded Attach can return `view:{viewer,boot_id}` for
 the holder's live view. The entry daemon uses that binding and the original caller for
 `internal.attach_resize`. The public watch response carries `watch` and `snapshot`.
+
+Forwarded Facade notifications use `internal.deliver_wait_notice`,
+`internal.deliver_start_result` and `internal.deliver_notice`. The machine hello response lists
+the receiving daemon's supported operations. The recipient daemon and each forwarding hop decode
+calls through their operation registry. Older builds return their ordinary unknown-operation error
+for `internal.deliver_notice` and continue serving existing operations on the same link.
+`internal.deliver_notice` carries error, exit and failed-send facts.
+Its caller is a verified Terminal for the source machine, and the exact recipient belongs
+to the receiving daemon. The source agent, or both the failed message and its target,
+belong to that source machine. The receiving daemon checks that the recipient is live
+and formats addresses in its machine view before posting the notice.
 
 ```jsonl daemon-machine
 {"jsonrpc":"2.0","id":74,"method":"forward","params":{"route":["22222222-2222-4222-8222-222222222222"],"caller":{"kind":"agent","agent":{"machine_id":"11111111-1111-4111-8111-111111111111","agent_id":"a2"},"root":{"machine_id":"11111111-1111-4111-8111-111111111111","agent_id":"a2"},"yolo":true},"method":"call","params":{"op":"internal.command_reply","args":{"request_id":"send-20","original":{"machine_id":"11111111-1111-4111-8111-111111111111","message_id":"m42"},"reply":{"reference":{"machine_id":"11111111-1111-4111-8111-111111111111","message_id":"m43"},"text":"Checks passed."}}}}}

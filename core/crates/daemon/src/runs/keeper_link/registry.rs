@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use facade_base::api_v1::keeper::{HeldAgent, SyncArgs};
+use facade_base::model::agent::AgentRef;
 use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::terminal::PtyMaster;
@@ -13,7 +14,9 @@ use tokio::time::Instant;
 
 use crate::runs::credential_digest;
 
-use super::{ExitRecorded, ExitSink, RecordedExit, RunCredentialRecord, RunExit, RunIdentity};
+use super::{
+    ExitRecorded, ExitSink, RecordedExit, RunCredentialRecord, RunExit, RunIdentity, StopAccepted,
+};
 
 #[derive(PartialEq, Eq)]
 pub(super) enum RunRole {
@@ -22,11 +25,27 @@ pub(super) enum RunRole {
     Cleanup,
 }
 
+pub(super) enum StopState {
+    None,
+    Requested,
+    Confirmed(Option<AgentRef>),
+}
+
+impl StopState {
+    pub fn from_holder(stopping: bool) -> Self {
+        if stopping {
+            Self::Confirmed(None)
+        } else {
+            Self::None
+        }
+    }
+}
+
 pub(super) struct Run {
     pub identity: ProcessIdentity,
     pub master: PtyMaster,
     pub exit: Option<ProcessExit>,
-    pub stopping: bool,
+    pub stop: StopState,
     pub role: RunRole,
     pub committed: bool,
     /// The daemon has committed the record and installed the agent's terminal.
@@ -57,7 +76,7 @@ pub(super) struct RunRegistry {
 }
 
 pub(super) struct Reconciliation {
-    pub stops: Vec<String>,
+    pub stops: Vec<StopAccepted>,
     pub unrecorded: Vec<HeldAgent>,
 }
 
@@ -209,8 +228,8 @@ impl RunRegistry {
         run.exit.is_none().then(|| run.identity.clone())
     }
 
-    pub fn request_stop(&self, id: &str) -> Result<bool, ErrorBody> {
-        let running = {
+    pub fn request_stop(&self, id: &str, number: u64) -> Result<Option<bool>, ErrorBody> {
+        let was_stopping = {
             let mut runs = self.runs.lock().unwrap();
             let run = runs.get_mut(id).ok_or_else(|| {
                 ErrorBody::new(
@@ -218,15 +237,37 @@ impl RunRegistry {
                     format!("agent #{id} has no terminal to stop; nothing was sent"),
                 )
             })?;
-            let running = run.exit.is_none();
-            if running {
-                run.stopping = true;
-                run.master.let_go_before_stop();
+            if run.exit.is_some() || run.number != number {
+                return Ok(None);
             }
-            running
+            run.master.let_go_before_stop();
+            let was_stopping = !matches!(run.stop, StopState::None);
+            if !was_stopping {
+                run.stop = StopState::Requested;
+            }
+            was_stopping
         };
         self.changed.notify_waiters();
-        Ok(running)
+        Ok(Some(was_stopping))
+    }
+
+    pub fn stop_refused(&self, id: &str, number: u64) {
+        if let Some(run) = self.runs.lock().unwrap().get_mut(id)
+            && run.number == number
+            && matches!(run.stop, StopState::Requested)
+        {
+            run.stop = StopState::None;
+        }
+    }
+
+    pub fn confirm_stop(&self, stop: StopAccepted) {
+        if let Some(run) = self.runs.lock().unwrap().get_mut(&stop.id)
+            && run.number == stop.run
+            && run.exit.is_none()
+            && !matches!(run.stop, StopState::Confirmed(_))
+        {
+            run.stop = StopState::Confirmed(stop.caller);
+        }
     }
 
     pub fn exit(&self, id: &str, exit: ProcessExit) -> RecordedExit {
@@ -240,12 +281,17 @@ impl RunRegistry {
                     run.exit = Some(exit.clone());
                     facade_base::service::mark_for_test("recorded-run-exit");
                     let delivery = run.exits.clone().map(|sink| {
+                        let (stopped, stopped_by) = match &mut run.stop {
+                            StopState::Confirmed(caller) => (true, caller.take()),
+                            _ => (false, None),
+                        };
                         (
                             sink,
                             RunExit {
                                 run: run.number,
                                 exit,
-                                stopped: run.stopping,
+                                stopped,
+                                stopped_by,
                             },
                         )
                     });
@@ -281,6 +327,7 @@ impl RunRegistry {
                                 run: start.number,
                                 exit,
                                 stopped: false,
+                                stopped_by: None,
                             },
                         )),
                     )
@@ -315,7 +362,7 @@ impl RunRegistry {
                 Some(run) => {
                     run.role = RunRole::Cleanup;
                     run.exits = None;
-                    run.stopping = true;
+                    run.stop = StopState::Requested;
                     run.master.let_go_before_stop();
                     true
                 }
@@ -392,13 +439,13 @@ impl RunRegistry {
         keeper: u32,
         inventory: &[HeldAgent],
     ) -> Result<Reconciliation, ErrorBody> {
-        let runs = self.runs.lock().unwrap();
+        let mut runs = self.runs.lock().unwrap();
         let mut plan = Reconciliation {
             stops: vec![],
             unrecorded: vec![],
         };
         for held in inventory {
-            if let Some(run) = runs.get(&held.agent_id) {
+            if let Some(run) = runs.get_mut(&held.agent_id) {
                 if run.identity
                     != (ProcessIdentity {
                         pid: held.pid,
@@ -413,8 +460,16 @@ impl RunRegistry {
                         ),
                     ));
                 }
-                if run.stopping && !held.stopping {
-                    plan.stops.push(held.agent_id.clone());
+                if held.stopping {
+                    if !matches!(run.stop, StopState::Confirmed(_)) {
+                        run.stop = StopState::Confirmed(None);
+                    }
+                } else if !matches!(run.stop, StopState::None) {
+                    plan.stops.push(StopAccepted {
+                        id: held.agent_id.clone(),
+                        run: run.number,
+                        caller: None,
+                    });
                 }
             } else {
                 plan.unrecorded.push(held.clone());
@@ -426,7 +481,7 @@ impl RunRegistry {
     pub fn missing(
         &self,
         inventory: &[HeldAgent],
-    ) -> Result<Vec<(SyncArgs, PtyMaster, bool)>, ErrorBody> {
+    ) -> Result<Vec<(SyncArgs, PtyMaster, Option<StopAccepted>)>, ErrorBody> {
         let runs = self.runs.lock().unwrap();
         let mut terminals = Vec::new();
         let present: HashSet<_> = inventory
@@ -450,7 +505,11 @@ impl RunRegistry {
                     birth: run.identity.birth.clone(),
                 },
                 master,
-                run.stopping,
+                (!matches!(run.stop, StopState::None)).then(|| StopAccepted {
+                    id: id.clone(),
+                    run: run.number,
+                    caller: None,
+                }),
             ));
         }
         Ok(terminals)

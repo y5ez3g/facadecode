@@ -127,6 +127,7 @@ operations! {
     InternalAttachResize: "internal.attach_resize", "Set the capacity of a forwarded view at its holder.", InternalAttachResizeArgs => EmptyResult, PEER, true;
     InternalDeliverStartResult: "internal.deliver_start_result", "Deliver a start receipt to its recipient.", InternalDeliverStartResultArgs => EmptyResult, PEER, true;
     InternalDeliverWaitNotice: "internal.deliver_wait_notice", "Deliver a wait notice to its recipient.", InternalDeliverWaitNoticeArgs => EmptyResult, PEER, true;
+    InternalDeliverNotice: "internal.deliver_notice", "Deliver an error, exit, or failed-send notice to its recipient.", InternalDeliverNoticeArgs => EmptyResult, PEER, true;
     InternalCommandReply: "internal.command_reply", "Return a reply to the daemon waiting for it.", CommandReplyArgs => EmptyResult, PEER, true;
 }
 

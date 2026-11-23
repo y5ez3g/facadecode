@@ -14,8 +14,8 @@
 //! - A send can cancel before its paste begins. A delivery that times out untyped is withdrawn,
 //!   including a start's prompt. The terminal can also withdraw a message once it confirms clearing
 //!   its paste before Enter. A withdrawn request keeps a private receipt for repeats.
-//! - A start's prompt from an agent owes that agent a result. The settlement that ends the prompt
-//!   writes the result in the same transaction, and the result is delivered like any message.
+//! - A start's prompt from an agent reserves that agent a result. Settlement clears the debt in
+//!   the same transaction and writes a result if delivery failed.
 //! - A send with a request ID finds, within the hour, the message it kept first, and keeps no other.
 //!   A confirmed command reply keeps a private receipt for its sender's retries.
 //! - A message to the person counts as delivered once a window subscription takes it. The table
@@ -29,6 +29,7 @@ mod restart;
 mod settle;
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, SystemTime};
 
@@ -115,9 +116,48 @@ pub(crate) enum Earlier {
 /// The result a start's prompt owes the agent or guest that sent it.
 pub(crate) struct OwedResult {
     /// The number reserved on the creator's machine.
-    pub(crate) reference: MessageRef,
+    reference: MessageRef,
     /// The started agent as it stands; the result describes it as it is when the prompt ends.
-    pub(crate) agent: Arc<dyn Fn() -> ManagedAgent + Send + Sync>,
+    agent: Box<dyn Fn() -> (ManagedAgent, u64) + Send + Sync>,
+    prompt: PromptWatch,
+    incident: Option<(ManagedAgent, u64)>,
+}
+
+impl OwedResult {
+    pub(crate) fn new(
+        reference: MessageRef,
+        prompt: PromptWatch,
+        agent: impl Fn() -> (ManagedAgent, u64) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            reference,
+            prompt,
+            agent: Box::new(agent),
+            incident: None,
+        }
+    }
+}
+
+/// The first prompt's committed failure, identified by the actor incident it describes.
+#[derive(Clone)]
+pub(crate) struct PromptWatch {
+    number: u64,
+    failed_incident: Arc<AtomicU64>,
+}
+
+impl PromptWatch {
+    pub(crate) fn new(number: u64) -> Self {
+        Self {
+            number,
+            failed_incident: Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
+
+pub(crate) enum PromptNotice {
+    Report,
+    Owned,
+    InFlight(watch::Receiver<Option<Settled>>),
 }
 
 /// A result ready for the daemon to deliver before its deadline.
@@ -289,6 +329,7 @@ impl Deliveries {
         message: &Message,
         request_id: Option<&str>,
         caller_window_id: Option<&str>,
+        notify_failure: bool,
     ) -> Result<Kept, ErrorBody> {
         let since = hour_ago();
         let request = request_id.map(|id| RequestId {
@@ -296,7 +337,7 @@ impl Deliveries {
             since: &since,
             caller_window_id,
         });
-        blocking_in_place(|| self.table.insert_message(message, request))
+        blocking_in_place(|| self.table.insert_message(message, request, notify_failure))
             .map_err(ErrorBody::internal)
     }
 
@@ -406,11 +447,12 @@ impl Messages {
         message: Message,
         request_id: Option<&str>,
         caller_window_id: Option<&str>,
+        notify_failure: bool,
     ) -> Result<Posted, ErrorBody> {
         let mut open = self.deliveries.lock();
         let kept = self
             .deliveries
-            .keep(&message, request_id, caller_window_id)?;
+            .keep(&message, request_id, caller_window_id, notify_failure)?;
         Ok(self.deliveries.posted(&mut open, kept))
     }
 

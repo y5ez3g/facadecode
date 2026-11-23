@@ -23,7 +23,7 @@ pub(crate) fn post_new(
     messages: &Messages,
     message: Message,
 ) -> (Message, watch::Receiver<Option<Settled>>) {
-    match messages.post(message, None, None).unwrap() {
+    match messages.post(message, None, None, false).unwrap() {
         Posted::New(message, settled) => (message, settled),
         Posted::Earlier(_) => unreachable!("a message with no request ID is new"),
     }
@@ -120,10 +120,15 @@ fn a_request_id_posts_one_message_found_while_delivered_and_once_settled() {
         from: HUMAN.into(),
         ..message(0, to)
     };
-    let Posted::New(first, _) = post.post(fresh("a2"), Some("r1"), Some("win-1")).unwrap() else {
+    let Posted::New(first, _) = post
+        .post(fresh("a2"), Some("r1"), Some("win-1"), false)
+        .unwrap()
+    else {
         panic!("a new message")
     };
-    let again = post.post(fresh("a2"), Some("r1"), Some("win-2")).unwrap();
+    let again = post
+        .post(fresh("a2"), Some("r1"), Some("win-2"), false)
+        .unwrap();
     assert!(
         matches!(&again, Posted::Earlier(Earlier::Delivering(message, _)) if *message == first),
         "it joins the first even from another window"
@@ -153,7 +158,9 @@ fn a_request_id_posts_one_message_found_while_delivered_and_once_settled() {
                 .is_none()
         );
     }
-    let different = post.post(fresh("a3"), Some("r1"), Some("win-1")).unwrap();
+    let different = post
+        .post(fresh("a3"), Some("r1"), Some("win-1"), false)
+        .unwrap();
     assert!(matches!(different, Posted::New(message, _) if message.message_id == "m2"));
 }
 
@@ -168,7 +175,9 @@ fn a_message_whose_paste_has_not_begun_is_withdrawn_and_not_kept() {
         at: facade_base::time::iso_now(),
         ..message(1, "a2")
     };
-    let Posted::New(sent, settled) = post.post(message.clone(), Some("cancelled"), None).unwrap()
+    let Posted::New(sent, settled) = post
+        .post(message.clone(), Some("cancelled"), None, false)
+        .unwrap()
     else {
         panic!("a new message")
     };
@@ -189,7 +198,9 @@ fn a_message_whose_paste_has_not_begun_is_withdrawn_and_not_kept() {
         "its paste never begins"
     );
     let (reopened, _store) = messages_on_disk(&folder);
-    let repeated = reopened.post(message, Some("cancelled"), None).unwrap();
+    let repeated = reopened
+        .post(message, Some("cancelled"), None, false)
+        .unwrap();
     assert!(
         matches!(repeated, Posted::Earlier(Earlier::Withdrawn(receipt))
         if receipt.message_id == sent.message_id
@@ -647,7 +658,9 @@ async fn a_message_nobody_settled_by_its_deadline_fails_as_timeout() {
         at: facade_base::time::iso_now(),
         ..message(1, "a2")
     };
-    let Posted::New(sent, mut settled) = post.post(message.clone(), Some("timeout"), None).unwrap()
+    let Posted::New(sent, mut settled) = post
+        .post(message.clone(), Some("timeout"), None, false)
+        .unwrap()
     else {
         panic!("a new message")
     };
@@ -664,7 +677,7 @@ async fn a_message_nobody_settled_by_its_deadline_fails_as_timeout() {
         )
     );
     assert!(post.inbox("a2").is_empty());
-    let repeated = post.post(message, Some("timeout"), None).unwrap();
+    let repeated = post.post(message, Some("timeout"), None, false).unwrap();
     assert!(
         matches!(repeated, Posted::Earlier(Earlier::Withdrawn(receipt))
         if receipt.message_id == sent.message_id && receipt.delivery == delivery)
@@ -792,18 +805,17 @@ fn prompt(post: &Messages, store: &Store, caller: &str, to: &str) -> (u64, u64) 
     info.machine_id.clone_from(&owed.machine_id);
     drop(post.deliver_prompt(
         kept.clone(),
-        Some(OwedResult {
-            reference: owed,
-            agent: Arc::new(move || info.clone()),
-        }),
+        Some(OwedResult::new(
+            owed,
+            PromptWatch::new(number(&kept)),
+            move || (info.clone(), 0),
+        )),
     ));
     (number(&kept), number_owed)
 }
 
-/// The settlement of a start's prompt, by its typist or a read, writes the result it owes in
-/// the same transaction: from Facade, to the prompt's sender, under the number the prompt
-/// keeps, with its call, its facts and their words. The result is handed on for delivery, once;
-/// a timed-out prompt is withdrawn. A result for a caller that was removed is not written.
+/// A typed or read prompt uses no result number. A prompt failure settles and writes the
+/// Facade result in the same transaction, under the reserved number, with its call and facts.
 #[test]
 fn a_prompt_s_settlement_writes_the_result_it_owes_and_hands_it_on_once() {
     let folder = TestFolder::new("messages-prompt-result");
@@ -822,57 +834,23 @@ fn a_prompt_s_settlement_writes_the_result_it_owes_and_hands_it_on_once() {
         Some("2026-11-11T00:00:29.500Z")
     );
     post.settle(&[typed], Outcome::Typed);
-    let PostedResult::Local {
-        message: result, ..
-    } = results.try_recv().expect("the result is handed on")
-    else {
-        panic!("the result is for a local caller")
-    };
     assert_eq!(
-        result,
-        post.message(&format!("m{owed}")).unwrap(),
-        "as it is kept"
-    );
-    assert_eq!(
-        (
-            result.from.as_str(),
-            result.to.as_str(),
-            result.call_id.as_deref()
-        ),
-        ("facade", "a1", Some("7"))
-    );
-    assert_eq!(
-        result.text,
-        "Nova (#a2) has started.\nYour initial message #m1 has been passed on."
-    );
-    assert_eq!(
-        result.result.unwrap().prompt.delivery.delivered_via,
+        post.message(&format!("m{typed}"))
+            .unwrap()
+            .delivery
+            .delivered_via,
         Some(DeliveredVia::TypedIntoInput)
     );
-    assert_eq!(result.delivery.status, DeliveryStatus::Pending);
-    assert!(
-        post.delivery_handle().still_to_type(owed),
-        "its delivery is under way"
-    );
+    assert_eq!(post.message(&format!("m{owed}")), None);
+    assert!(results.try_recv().is_err());
 
     let (read, owed) = prompt(&post, &store, "a3", "a4");
     assert_eq!(
         ids(&post.read("a4", &MessagesWatchArgs::default()).unwrap()),
         [format!("m{read}")]
     );
-    let PostedResult::Local {
-        message: result, ..
-    } = results.try_recv().expect("a read settles the prompt too")
-    else {
-        panic!("the result is for a local caller")
-    };
-    assert_eq!(
-        (result.message_id, result.text.lines().nth(1)),
-        (
-            format!("m{owed}"),
-            Some("Your initial message #m3 has been passed on through read_messages.")
-        )
-    );
+    assert_eq!(post.message(&format!("m{owed}")), None);
+    assert!(results.try_recv().is_err());
 
     let (failed, owed) = prompt(&post, &store, "a5", "a6");
     post.settle(&[failed], Outcome::untyped(DeliveryFailure::Timeout));
@@ -883,6 +861,17 @@ fn a_prompt_s_settlement_writes_the_result_it_owes_and_hands_it_on_once() {
         panic!("the failure result is for a local caller")
     };
     assert_eq!(result.message_id, format!("m{owed}"));
+    assert_eq!(result, post.message(&format!("m{owed}")).unwrap());
+    assert_eq!(
+        (
+            result.from.as_str(),
+            result.to.as_str(),
+            result.call_id.as_deref()
+        ),
+        ("facade", "a5", Some("7"))
+    );
+    assert_eq!(result.delivery.status, DeliveryStatus::Pending);
+    assert!(post.delivery_handle().still_to_type(owed));
     assert_eq!(
         result.result.unwrap().prompt.delivery.reason,
         Some(DeliveryFailure::Timeout)
@@ -897,7 +886,7 @@ fn a_prompt_s_settlement_writes_the_result_it_owes_and_hands_it_on_once() {
     assert!(results.try_recv().is_err(), "with no second result");
 
     let (orphaned, owed) = prompt(&post, &store, "a7", "a8");
-    post.settle(&[orphaned], Outcome::Typed);
+    post.settle(&[orphaned], Outcome::untyped(DeliveryFailure::Timeout));
     assert!(
         results.try_recv().is_err(),
         "no result for a caller that is not listed"

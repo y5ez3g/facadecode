@@ -253,7 +253,10 @@ impl ToolStart {
         }
         let failure = match view.input {
             InputState::Unknown => {
-                "its input showed nothing it could read within 60 seconds of its start".into()
+                format!(
+                    "its input showed nothing it could read within {} seconds of its start",
+                    START_TIMEOUT.as_secs()
+                )
             }
             InputState::Usable if view.works => {
                 "it was working when its input first showed empty".into()

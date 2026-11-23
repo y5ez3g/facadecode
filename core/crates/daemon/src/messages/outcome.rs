@@ -20,8 +20,8 @@ pub(crate) enum Outcome {
         reason: DeliveryFailure,
         text_written: TextWritten,
     },
-    /// Not delivered. `text_written` says how much of it reached the terminal; `enter_written` is
-    /// None where nobody knows whether its Enter did.
+    /// Not delivered. `text_written` tracks the text that reached the terminal.
+    /// `enter_written` tracks the submission key and is None when the write outcome is unknown.
     Failed {
         reason: DeliveryFailure,
         text_written: TextWritten,
@@ -47,7 +47,7 @@ impl Outcome {
     }
 
     /// Takes a message out of its inbox when it expired before pasting or the terminal confirmed
-    /// clearing its paste before Enter.
+    /// clearing its paste before submission.
     pub(super) fn withdraws(self, pasted: bool) -> bool {
         match self {
             Outcome::Withdrawn { .. } => pasted,

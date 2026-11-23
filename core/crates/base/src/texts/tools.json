@@ -7,7 +7,7 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Start a managed agent. Returns its address as data.id, plus name, folder and machine_id. With a first prompt, result_message can identify its separate delivery result.",
+    "description": "Start a managed agent. Returns after recording the launch with its address as data.id, plus name, folder and machine_id. If a first prompt fails to reach the agent, Facade sends a notice using data.result_message. Prompt delivery that succeeds produces no notice.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -78,7 +78,7 @@
       "idempotentHint": true,
       "openWorldHint": false
     },
-    "description": "Stop a running managed agent. A confirmed stop returns its address as data.id and ended as data.state. An already ended agent returns an error. If the stop cannot be confirmed, the tool reports that outcome. Its record and screen stay, and the agents it started keep running.",
+    "description": "Stop a running managed agent and wait up to 30 seconds for exit. A confirmed stop returns its address as data.id and ended as data.state. An already ended agent returns an error. If the stop cannot be confirmed, the tool reports that outcome. Its record and screen stay, and the agents it started keep running.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -102,7 +102,7 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Send one complete message. With timeout_seconds omitted or 0, return after Facade saves it in the recipient's inbox; success confirms acceptance for delivery. To wait, set timeout_seconds to 1–30 and wait_for to \"delivery\" for confirmed delivery, or \"result\" for the first reply from the original recipient linked to this message. A positive timeout requires wait_for and is one total call budget. data.id identifies this send; data.delivery states the confirmed delivery fact. Managed agents usually wait for delivery and receive replies through their terminals. Guests needing an answer should wait for result. On reply_timeout, continue with read_messages using the same full data.id as reply_to and a positive timeout_seconds; do not resend the task. To answer a command-line request, copy its sender address, such as #c42@devbox, into to and its received message number into reply_to. The first matching reply goes directly to the command while it is waiting. returned_to_request confirms that handoff. If the command has finished waiting, the reply fails with ended.",
+    "description": "Send one complete message. With timeout_seconds omitted or 0, return after Facade saves it in the recipient's inbox. Success then confirms inbox acceptance. Managed agents usually send this way and receive replies and later failures in their terminals. To wait, set timeout_seconds to 1–30 and wait_for to \"delivery\" for confirmed delivery, or \"result\" for the first reply from the original recipient linked to this message. Explicit waits report delivery failures in the response. Use a positive timeout_seconds with wait_for: \"result\" when you need an answer as a Guest. A positive timeout requires wait_for and is one total call budget. data.id identifies this send and data.delivery reports what was confirmed. After reply_timeout, continue with read_messages using the same full data.id as reply_to and a positive timeout_seconds. Do not resend the task. To answer a command-line request, copy its sender address, such as #c42@devbox, into to and its received message number into reply_to. The first matching reply goes directly to the command while it is waiting. returned_to_request confirms that handoff. If the command has finished waiting, the reply fails with ended.",
     "inputSchema": {
       "type": "object",
       "properties": {
