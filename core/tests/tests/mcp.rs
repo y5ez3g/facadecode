@@ -2227,6 +2227,64 @@ impl Golden {
     }
 }
 
+/// A local MCP send delayed after computing its budget still settles a blocked draft by its
+/// original deadline. Clearing the draft after the receipt only writes the requested control key.
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the test gate of debug builds")]
+fn a_delayed_mcp_send_withdraws_its_message_by_the_original_deadline() {
+    let home = TestHome::new("relay-send-deadline");
+    home.start_facade_with(&[("FACADE_TEST_GATES", "mcp-before-send")]);
+    let keys = home.project.join("worker-keys");
+    let worker = home.start_named_fake("worker", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
+    let boss = home.start_named_fake("boss", &[]);
+    type_draft(&home, &worker.id, "my draft");
+    let before = std::fs::read(&keys).unwrap();
+    let mut sender = McpTestClient::relay_configured(&home, &boss.id);
+    let request = sender.send(
+        "tools/call",
+        json!({
+            "name": "send_message",
+            "arguments": {
+                "to": worker.address, "text": "never paste this delayed message",
+                "wait_for": "delivery", "timeout_seconds": 6,
+            }
+        }),
+    );
+    home.wait_for_gate("mcp-before-send");
+    // This exceeds the time reserved for settlement and the reply, so restarting the relative
+    // budget at admission would let this send stay pending beyond the original tool deadline.
+    std::thread::sleep(secs(2));
+    home.release_gate("mcp-before-send");
+
+    let receipt = sender.tool_answer(request);
+    assert_eq!(receipt["status"], "failure", "{receipt}");
+    assert!(
+        matches!(receipt["reason"].as_str(), Some("input_draft" | "timeout")),
+        "{receipt}"
+    );
+    assert!(receipt["data"]["id"].is_string(), "{receipt}");
+    assert!(
+        receipt["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("nothing was typed; it was withdrawn from")),
+        "{receipt}"
+    );
+    assert_eq!(std::fs::read(&keys).unwrap(), before);
+    assert!(home.screen(&worker.id).contains("❯ my draft"));
+
+    home.run_facade_ok(&["type", &worker.address, "--key", "Ctrl+C"]);
+    assert!(wait_until(secs(10), || !home
+        .screen(&worker.id)
+        .contains("❯ my draft")));
+    std::thread::sleep(secs(2));
+    let inbox = McpTestClient::open_configured(&home, &worker.id)
+        .call("read_messages", json!({ "last": 10 }));
+    assert_eq!(inbox["data"]["messages"], json!([]), "{inbox}");
+    let mut expected = before;
+    expected.push(0x03);
+    assert_eq!(std::fs::read(&keys).unwrap(), expected);
+}
+
 /// Over a relay connection, a `send_message` its client cancels while its message waits is
 /// withdrawn, and answered all the same, so that every request has one answer: MCP has the client
 /// ignore it.

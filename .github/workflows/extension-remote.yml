@@ -22,6 +22,7 @@ on:
       - 'ci/catalog.py'
       - 'ci/remote_editor_evidence.py'
       - 'ci/evidence.py'
+      - 'ci/editor_archive.py'
       - 'ci/native_core.py'
       - 'ci/fixtures/remote-ssh/**'
       - '.github/workflows/extension-remote.yml'
@@ -88,17 +89,14 @@ jobs:
           while IFS=$'\t' read -r id release url checksum; do
             fetch "$id-$release.vsix" "$url" "$checksum"
           done < "$assets/providers.tsv"
-      - name: Install editor build dependencies and the pinned desktop editor
-        working-directory: extension
+      - name: Stage the verified official desktop editor
         run: |
-          npm ci
-          version=$(jq -er .name ../ci/fixtures/remote-ssh/official-server-linux-x64.json)
-          node - "$version" "$RUNNER_TEMP/facade-remote-editor.txt" <<'JS'
-          const fs = require('node:fs');
-          require('@vscode/test-electron').downloadAndUnzipVSCode(process.argv[2]).then(executable => {
-            fs.writeFileSync(process.argv[3], executable);
-          }).catch(error => { console.error(error); process.exitCode = 1; });
-          JS
+          python3 -B ci/editor_archive.py linux-x64 \
+            --cache "$RUNNER_TEMP/facade-desktop-cache" --stage "$RUNNER_TEMP/facade-desktop" \
+            --log "$RUNNER_TEMP/facade-desktop.log" > "$RUNNER_TEMP/facade-remote-editor.txt"
+      - name: Install editor build dependencies
+        working-directory: extension
+        run: npm ci
       - name: Build the candidate editor and Core fixtures
         working-directory: extension
         run: |

@@ -668,19 +668,31 @@ preparation records that run and reuses its source test results. Otherwise prepa
 The two Windows packaging jobs sign in `extension-signing`, the only environment whose OIDC sign-in Azure
 accepts for the signing identity. Its variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` name the identity. A manual
 run of the extension checks workflow with `sign` signs the same way without releasing.
-The prepare action puts all platform VSIX files, the window
-component, installers, native archives, version marker and `SHA256SUMS` on the tagged draft. It downloads the draft's
-files and checks their hashes and VSIX manifests. It then opens the candidate as a Pre-release with instructions for
-installing that exact version.
+The prepare action accepts the native packages only when every target's digest record matches the tag's commit and
+tree, the workflow run and native package attempt, and the downloaded files. A retry of the GitHub Pre-release job
+keeps the successful build job's attempt and original package files. The Windows jobs verify the embedded,
+timestamped signatures in the packaged programs before recording their digests. Prepare puts all platform VSIX files,
+the window component, installers, native archives, version marker, `release-candidate.json` and `SHA256SUMS` on the
+tagged draft. The candidate record names the source, targets, file digests and Windows signature checks. Prepare
+checks the set of attached files, downloads them and checks their hashes and VSIX manifests. It then opens the
+candidate as a Pre-release with instructions for installing that exact version.
 
 The `mirror` mode stages the Pre-release on the website for exact-version installs during dogfood. The mirror job
 copies the verified files to `/releases/<version>/<asset>` in the website's R2 bucket and reads every file back to
 compare its hash. The stable version marker advances only in `publish` mode. After dogfood, the owner runs the release
 workflow with the candidate tag and `publish`. The stores job waits for approval in the `extension-stores` environment,
-downloads the Release's files, checks them against `SHA256SUMS`, publishes the window component before the platform
-packages to VS Code Marketplace and Open VSX, skips files a store already lists, and passes only once both stores serve
-every file byte for byte. Promotion updates the website's stable version marker and marks the same GitHub Release
-Latest. The website serves `/install.sh` and `/install.ps1` for the new stable version as UTF-8 text directly from R2.
+downloads the Release's files and checks them against `SHA256SUMS`. It checks the bytes already listed by each store
+before uploading any missing package. It publishes the window component before the platform packages to VS Code
+Marketplace and Open VSX, and passes only once both stores serve every file byte for byte. Mirror, stores and promotion
+require a candidate record that matches the tag and attached release
+bytes. Stores and promotion also require the `SHA256SUMS` digest verified by the mirror job. Promotion verifies that
+every staged file is still available with its accepted digest before updating the website's stable marker. It reads
+back the marker and the pinned installers before marking the same GitHub Release Latest. The website serves
+`/install.sh` and `/install.ps1` for the new stable version as UTF-8 text directly from R2.
+If the marker write succeeds and read-back fails, the workflow reports a failed promotion before changing GitHub
+Latest. A retry with the same manifest digest and the candidate already selected verifies the website without
+rewriting the marker. Use `promote --resume` for an explicit recovery that requires the website to still select
+that exact candidate. It stops if the marker or an installer differs during read-back.
 After promotion it retains the ten most recent formal releases in the mirror. GitHub retains the exact-version releases.
 The CI run, Release, mirror and stores use the same bytes. A same-named asset with different bytes stops the release.
 A rerun with the complete candidate verifies the existing files. The publish action uses them without rebuilding.

@@ -131,14 +131,15 @@ jobs:
           TAG: ${{ needs.plan.outputs.tag }}
           BUILD: ${{ needs.plan.outputs.build }}
           SOURCE: ${{ needs.plan.outputs.source }}
+          PACKAGE_ATTEMPT: ${{ needs.build.outputs.package_attempt }}
         run: |
+          git fetch --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
           if [[ "$BUILD" == true ]]; then
-            git fetch --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
-            if [[ $(git rev-parse "$TAG^{commit}") != "$SOURCE" ]]; then
+            if [[ $(git rev-parse "refs/tags/$TAG^{commit}") != "$SOURCE" ]]; then
               echo "::error::$TAG changed during the build. Prepare it again."
               exit 1
             fi
-            node scripts/release.mjs github --tag "$TAG" --input-dir build/release-input
+            node scripts/release.mjs github --tag "$TAG" --input-dir build/release-input --package-attempt "$PACKAGE_ATTEMPT"
           else
             node scripts/release.mjs verify --tag "$TAG" --prepare
           fi
@@ -169,7 +170,9 @@ jobs:
           TAG: ${{ needs.plan.outputs.tag }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: node scripts/release.mjs mirror --tag "$TAG"
+        run: |
+          git fetch --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
+          node scripts/release.mjs mirror --tag "$TAG"
 
   stores:
     name: VS Code Marketplace and Open VSX
@@ -195,7 +198,9 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
           MANIFEST: ${{ needs.mirror.outputs.manifest }}
-        run: node scripts/release.mjs stores --tag "$TAG" --manifest-digest "$MANIFEST"
+        run: |
+          git fetch --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
+          node scripts/release.mjs stores --tag "$TAG" --manifest-digest "$MANIFEST"
 
   promote:
     name: Promote the verified stable release
@@ -223,4 +228,6 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           MANIFEST: ${{ needs.mirror.outputs.manifest }}
-        run: node scripts/release.mjs promote --tag "$TAG" --manifest-digest "$MANIFEST"
+        run: |
+          git fetch --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
+          node scripts/release.mjs promote --tag "$TAG" --manifest-digest "$MANIFEST"

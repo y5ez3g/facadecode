@@ -329,7 +329,7 @@ impl Relay {
         };
         let services = ActorServices {
             authenticate: Box::new(|_, _, _| Err(ErrorBody::internal("unit tests have no daemon"))),
-            connect: Box::new(|_| anyhow::bail!("unit tests have no daemon")),
+            connect: Box::new(|_, _| anyhow::bail!("unit tests have no daemon")),
             read_inbox: Box::new(|_, _, _| Err(ErrorBody::internal("unit tests have no daemon"))),
             managed_instructions: Box::new(|_| Ok(None)),
             ready: Box::new(|_| anyhow::bail!("unit tests have no daemon")),

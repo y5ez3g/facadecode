@@ -434,6 +434,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
     match base_service::lock_home(&core, base_service::Service::Daemon)? {
         Locked::Held => {
             pause_for_test("after-daemon-lock");
+            gate_for_test("after-daemon-lock");
             #[cfg(debug_assertions)]
             if core.join("die-after-lock").exists() {
                 use std::io::Write;

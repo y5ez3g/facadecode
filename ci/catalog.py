@@ -29,7 +29,13 @@ NATIVE_INCOMPATIBLE_CASE = 'core/p0/prior-build/incompatible-version'
 NATIVE_INCOMPATIBLE_BINDING = {'runner': 'core-prior', 'target': 'linux-x64', 'name': 'incompatible-qa'}
 NATIVE_REMOTE_EDITOR_CASE = 'extension/p0/remote-host/ssh-connect'
 NATIVE_REMOTE_EDITOR_BINDING = {'runner': 'extension-ssh', 'target': 'linux-x64', 'name': 'ssh-connect'}
+RELEASE_FIXTURE_CASES = (
+    'extension/p0/release/invalid-artifact',
+    'extension/p0/release/stable-pointer',
+)
+RELEASE_FIXTURE_BINDING = {'runner': 'extension-release', 'target': 'linux-x64', 'name': 'release-script-fixtures'}
 NATIVE_BINDINGS = {
+    **dict.fromkeys(RELEASE_FIXTURE_CASES, RELEASE_FIXTURE_BINDING),
     **dict.fromkeys(NATIVE_INSTALL_CASES, NATIVE_INSTALL_BINDING),
     NATIVE_SSH_CASE: NATIVE_SSH_BINDING,
     NATIVE_PRIOR_CASE: NATIVE_PRIOR_BINDING,
@@ -196,7 +202,9 @@ def read_cases(root):
         if case_id in NATIVE_BINDINGS:
             if test is None:
                 raise AcceptanceError(f'{case_id}: missing executable native binding')
-            if test != NATIVE_INSTALL_BINDING and row['stage'] != 'native':
+            if test == RELEASE_FIXTURE_BINDING and row['stage'] != 'release':
+                raise AcceptanceError(f'{case_id}: release script fixture requires the release stage')
+            if test not in (NATIVE_INSTALL_BINDING, RELEASE_FIXTURE_BINDING) and row['stage'] != 'native':
                 raise AcceptanceError(f'{case_id}: this native route requires a native stage')
         if test and test.get('journey') in VSIX_REHEARSALS and row['stage'] != 'release':
             raise AcceptanceError(f'{case_id}: installed VSIX rehearsal requires a release stage')

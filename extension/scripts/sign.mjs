@@ -82,6 +82,20 @@ export function isSigned(signer, file) {
 	return spawnSync(signer.signtool, ['verify', '/pa', '/q', file]).status === 0;
 }
 
+/** Check the embedded signatures on the bytes recovered from the Windows package. */
+export function verifyTimestampedSignatures(files) {
+	if (process.platform !== 'win32') {
+		throw new Error('Windows package signatures must be verified on Windows.');
+	}
+	const signtool = findSigntool();
+	for (const file of files) {
+		const result = spawnSync(signtool, ['verify', '/pa', '/tw', file], { stdio: 'inherit' });
+		if (result.status !== 0) {
+			throw new Error(`Trusted timestamped signature verification failed for ${path.basename(file)}.`);
+		}
+	}
+}
+
 /**
  * Signs the files and timestamps each signature. ⚠️ The certificate lives three days - Azure makes a new one every day - and
  * the timestamp is what keeps a signature valid after it, so it is never left out.

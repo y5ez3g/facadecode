@@ -60,16 +60,18 @@ fn input_from_one_connection_preserves_order() {
 fn each_terminal_query_gets_one_reply_with_multiple_viewers() {
     let home = TestHome::new("query");
     let mut wire = connect(&home);
-    let script = "echo READY; read go; stty raw -echo min 0 time 0; printf '\\033[6n'; sleep 1; \
-                  printf 'REPLIES:'; cat -v; printf ':END\\r\\n'; sleep 60";
+    let ask = "/fake cursor\r";
     for viewers in 0..3 {
-        let agent = start_script(&mut wire, &home, &format!("q{viewers}"), script);
-        assert!(wait_for_screen_text(&home, &agent, "READY"));
+        let keys = home.project.join(format!("keys-{viewers}"));
+        let worker = home.start_fake_with(
+            &format!("q{viewers}"),
+            &[("FAKECLI_KEYS", keys.to_str().unwrap())],
+        );
         let terms: Vec<TestTerminal> = (0..viewers)
             .map(|_| {
                 TestTerminal::spawn(
                     home.command(&test_binaries().facade)
-                        .args(["attach", &agent]),
+                        .args(["attach", &worker.address]),
                     80,
                     24,
                 )
@@ -77,23 +79,34 @@ fn each_terminal_query_gets_one_reply_with_multiple_viewers() {
             .collect();
         for term in &terms {
             assert!(
-                term.wait_for(secs(10), |text| text.contains("READY")),
+                term.wait_for(secs(10), |text| text.contains("Facade test CLI")),
                 "{}",
                 term.text()
             );
         }
-        type_raw(&mut wire, &agent, "go\r");
-        assert!(
-            wait_for_screen_text(&home, &agent, ":END"),
-            "{}",
-            home.screen(&agent)
-        );
-        let screen = home.screen(&agent);
-        let replies = &screen[screen.find("REPLIES:").unwrap()..screen.find(":END").unwrap()];
+        let inspected = home.inspect_agent(&worker.address);
         assert_eq!(
-            replies.matches("^[[").count(),
-            1,
-            "{viewers} terminals showed it: {replies}"
+            inspected["attachments"].as_array().map_or(0, Vec::len),
+            viewers,
+            "{inspected}"
+        );
+        assert!(wait_until(secs(10), || keys.is_file()));
+        let mut expected = std::fs::read(&keys).unwrap();
+        expected.extend_from_slice(ask.as_bytes());
+        expected.extend_from_slice(b"\x1b[2;3R");
+        type_raw(&mut wire, &worker.address, ask);
+        assert!(
+            wait_until(secs(10), || std::fs::read(&keys)
+                .is_ok_and(|bytes| bytes.len() >= expected.len())),
+            "{viewers} viewers, received {:?}",
+            std::fs::read(&keys)
+        );
+        // Keep all viewers attached while giving duplicate replies time to arrive.
+        std::thread::sleep(secs(1));
+        assert_eq!(
+            std::fs::read(&keys).unwrap(),
+            expected,
+            "{viewers} viewers must result in exactly one cursor report"
         );
     }
 }

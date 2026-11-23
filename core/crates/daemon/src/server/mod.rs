@@ -30,7 +30,13 @@ pub(crate) struct Client {
     pub(crate) kind: ClientKind,
     pub(crate) api_version: ApiVersion,
     /// The stable actor of an in-process connection, supplied by its authenticated caller.
-    pub(crate) verified_actor: Option<AgentRef>,
+    pub(crate) verified_actor: Option<VerifiedActor>,
+}
+
+/// The identity and optional send cutoff supplied by an authenticated in-process caller.
+pub(crate) struct VerifiedActor {
+    pub(crate) reference: AgentRef,
+    pub(crate) send_deadline: Option<Instant>,
 }
 
 /// An ID shared by local and forwarded watches on this daemon.
@@ -269,12 +275,16 @@ pub(crate) async fn serve_connection<S: Service>(service: Arc<S>, socket: Server
 pub(crate) async fn serve_actor<S: Service>(
     service: Arc<S>,
     socket: ServerSocket,
-    actor: AgentRef,
+    actor: VerifiedActor,
 ) {
     serve_peer(service, socket, Some(actor)).await;
 }
 
-async fn serve_peer<S: Service>(service: Arc<S>, socket: ServerSocket, actor: Option<AgentRef>) {
+async fn serve_peer<S: Service>(
+    service: Arc<S>,
+    socket: ServerSocket,
+    actor: Option<VerifiedActor>,
+) {
     if let Err(err) = connection::serve(service, socket, actor).await {
         log("warn", &format!("a connection ended: {err}"));
     }

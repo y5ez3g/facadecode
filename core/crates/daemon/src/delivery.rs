@@ -313,6 +313,7 @@ impl Daemon {
         mut args: wire::SendArgs,
         incoming: Option<Forwarded>,
         mut cancel: Cancel,
+        send_deadline: Option<std::time::Instant>,
     ) -> Result<wire::SendResult, ErrorBody> {
         if args.allow_unsupported_receipt && !matches!(caller, Caller::Terminal { .. }) {
             return Err(ErrorBody::refused(
@@ -346,7 +347,11 @@ impl Daemon {
                 } else {
                     left
                 };
-                Due::until(Instant::now() + left)
+                let due = Instant::now() + left;
+                let due = send_deadline
+                    .map(Instant::from_std)
+                    .map_or(due, |cutoff| cutoff.min(due));
+                Due::until(due)
             }
         };
         if !forwarded

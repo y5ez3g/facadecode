@@ -89,31 +89,38 @@ fn commands_starting_facade_together_start_one_keeper_and_one_daemon() {
 )]
 fn a_daemon_outlives_the_terminal_that_launched_it() {
     let home = TestHome::new("detached");
+    let gate = "after-daemon-lock";
     let mut command = home.command(&test_binaries().facade);
-    command
-        .arg("list")
-        .env("FACADE_TEST_PAUSE_AT", "after-daemon-lock");
-    let mut term = TestTerminal::spawn(&mut command, 80, 24);
+    command.arg("list").env("FACADE_TEST_GATES", gate);
+    let term = TestTerminal::spawn(&mut command, 80, 24);
+    home.wait_for_gate(gate);
+    let (pid, birth) = home.lock_record("daemon").expect("a daemon holds the lock");
+    let daemon = process_identity(pid);
     assert!(
-        wait_until(secs(10), || home.lock_record("daemon").is_some()),
-        "no daemon started"
+        !birth.is_empty() && daemon.birth == birth && alive(&daemon),
+        "the daemon lock does not name a live process: {daemon:?}"
     );
-    let daemon = home.lock_record("daemon").unwrap().0;
-    assert!(wait_until(secs(5), || stopped(daemon)));
-    kill_process(term.pid());
-    term.wait_exit(secs(5));
+    assert!(!socket_exists(&home.daemon_socket()));
+
+    // Dropping the terminal ends the launching command and closes its terminal.
     drop(term);
-    resume_process(daemon);
     assert!(
-        wait_until(secs(10), || home.hello_result().is_some()),
-        "the daemon did not survive its terminal: {}",
-        home.daemon_log()
+        alive(&daemon),
+        "the original daemon {pid} exited when the terminal closed"
+    );
+    home.release_gate(gate);
+    assert!(
+        wait_until(LOADED_TIMEOUT, || home.daemon_pid() == Some(pid)
+            && alive(&daemon)),
+        "the original daemon {pid} did not answer after its terminal closed:\n{}\n{}",
+        home.daemon_log(),
+        home.keeper_log()
     );
     // A controlling terminal is Unix's; on Windows the daemon runs without a console.
     #[cfg(unix)]
     {
         let tty = std::process::Command::new("ps")
-            .args(["-o", "tty=", "-p", &daemon.to_string()])
+            .args(["-o", "tty=", "-p", &pid.to_string()])
             .output()
             .unwrap();
         assert!(

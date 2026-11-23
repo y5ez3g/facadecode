@@ -166,9 +166,9 @@ impl Daemon {
                 evidence.clone(),
                 bound.clone(),
             );
-            Box::new(move |reference: &AgentRef| {
+            Box::new(move |reference: &AgentRef, send_deadline| {
                 let actor = attached_actor(&bound, reference)?;
-                daemon.connect_relay_actor(&runtime, &evidence.process, actor)
+                daemon.connect_relay_actor(&runtime, &evidence.process, actor, send_deadline)
             })
         };
         let read_inbox = {
@@ -247,7 +247,7 @@ impl Daemon {
                     return Ok(None);
                 };
                 let actor = BoundActor::managed(run, &daemon.machine_id);
-                daemon.connect_relay_actor(&runtime, &evidence.process, &actor)
+                daemon.connect_relay_actor(&runtime, &evidence.process, &actor, None)
             })
         };
         let services = ActorServices {
@@ -491,6 +491,7 @@ impl Daemon {
         runtime: &tokio::runtime::Handle,
         process: &RelayProcess,
         actor: &BoundActor,
+        send_deadline: Option<Instant>,
     ) -> anyhow::Result<Option<DaemonClient>> {
         let agent = actor.current(self, process)?;
         let managed_run = actor.run.map(|(run, _)| run);
@@ -499,9 +500,12 @@ impl Daemon {
             facade_base::sockets::pair()?
         };
         let daemon = self.clone();
-        let reference = crate::api::wire_ref(&actor.reference);
+        let verified = server::VerifiedActor {
+            reference: crate::api::wire_ref(&actor.reference),
+            send_deadline,
+        };
         runtime.spawn(async move {
-            let service = server::serve_actor(daemon, theirs, reference);
+            let service = server::serve_actor(daemon, theirs, verified);
             if let Some(run) = managed_run {
                 let mut exit = agent.exit();
                 let _presence = agent.tools_connected();

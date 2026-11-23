@@ -239,7 +239,7 @@ mod tests {
                 kind: AgentKind::Managed,
             })
         });
-        services.connect = Box::new(|_| panic!("a rejected tool call must not connect"));
+        services.connect = Box::new(|_, _| panic!("a rejected tool call must not connect"));
         relay
     }
 

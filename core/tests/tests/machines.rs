@@ -2928,6 +2928,118 @@ fn a_cross_machine_send_replays_its_original_settlement_after_reconnect() {
     );
 }
 
+/// A peer cancel withdraws a forwarded send held behind a draft. The originating client
+/// recovers the receiver's settlement by retrying with the original request ID.
+#[test]
+fn an_idless_peer_cancel_withdraws_a_pending_forwarded_send() {
+    let origin = TestHome::new("cancel-origin");
+    let peer = TestHome::new("cancel-peer");
+    let origin_id = name_machine(&origin, "origin");
+    let peer_id = name_machine(&peer, "peer");
+    let keys = peer.project.join("worker-keys");
+    let worker = peer.start_named_fake("worker", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
+    let target = json!({ "machine_id": peer_id, "agent_id": worker.id });
+    peer.run_facade_ok(&["type", &worker.address, "hold the forwarded message"]);
+    assert!(wait_for_screen_text(
+        &peer,
+        &worker.address,
+        "❯ hold the forwarded message"
+    ));
+    let before = std::fs::read(&keys).unwrap();
+    assert!(!before.is_empty(), "the draft reached the recipient");
+    let bridge = ObservedMachineLink::open(&origin, &peer);
+    wait_for_route(&origin, &peer_id, &[&peer_id]);
+
+    let mut sender = connect(&origin);
+    let text = "withdraw this forwarded message";
+    let args =
+        json!({ "to": target, "text": text, "request_id": "peer-cancel", "wait_for": "delivery" });
+    let send_id = sender.send("call", json!({ "op": "agent.send", "args": args }));
+    let sent = observed_frame(&bridge.from_front, "the pending forwarded send", |frame| {
+        frame["method"] == "forward" && frame["params"]["params"]["op"] == "agent.send"
+    });
+    assert_eq!(sent["params"]["route"], json!([peer_id]), "{sent}");
+    assert_eq!(
+        sent["params"]["caller"],
+        json!({ "kind": "terminal", "machine_id": origin_id }),
+        "{sent}"
+    );
+    assert_eq!(sent["params"]["params"]["args"], args, "{sent}");
+    let peer_request = sent["id"].as_u64().expect("the peer request ID");
+    let admitted = format!("sent m1 to #{}, request peer-cancel", worker.id);
+    assert!(wait_until(secs(10), || peer
+        .daemon_log()
+        .contains(&admitted)));
+    assert_eq!(std::fs::read(&keys).unwrap(), before);
+
+    let acknowledgement = sender.request("cancel", json!({ "id": send_id }));
+    assert_eq!(acknowledgement["result"], json!({}), "{acknowledgement}");
+    let cancel = observed_frame(&bridge.from_front, "the peer cancellation", |frame| {
+        frame["method"] == "cancel"
+    });
+    assert_eq!(
+        cancel,
+        json!({ "jsonrpc": "2.0", "method": "cancel", "params": { "id": peer_request } })
+    );
+    let original = sender
+        .wait_for_response(send_id, LOADED_TIMEOUT)
+        .expect("the cancelled originating request settles");
+    assert_eq!(original["id"], send_id, "{original}");
+    assert_eq!(error_reason(&original), "unavailable", "{original}");
+    assert_eq!(
+        original["error"]["data"]["details"]["execution"], "outcome_unknown",
+        "{original}"
+    );
+    assert_eq!(std::fs::read(&keys).unwrap(), before);
+    assert!(peer.submitted_messages().is_empty());
+
+    let replay = sender.call("agent.send", args);
+    assert_eq!(error_reason(&replay), "cancelled", "{replay}");
+    assert!(
+        replay["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("m1 was withdrawn"),
+        "{replay}"
+    );
+    let retried = observed_frame(
+        &bridge.from_front,
+        "the replay of the forwarded send",
+        |frame| frame["method"] == "forward" && frame["params"]["params"]["op"] == "agent.send",
+    );
+    assert_ne!(retried["id"], peer_request, "{retried}");
+    let result = observed_frame(&bridge.from_peer, "the peer's replay settlement", |frame| {
+        if frame.get("method").is_none() {
+            assert!(
+                frame["id"].is_u64() && frame["id"] != peer_request,
+                "unexpected cancel response: {frame}"
+            );
+        }
+        frame["id"] == retried["id"]
+    });
+    assert_eq!(error_reason(&result), "cancelled", "{result}");
+    assert_eq!(std::fs::read(&keys).unwrap(), before);
+
+    peer.run_facade_ok(&["type", &worker.address, "--key", "Ctrl+C"]);
+    let fresh = "fresh message after peer cancellation";
+    let next = sender.call_ok(
+        "agent.send",
+        json!({ "to": target, "text": fresh, "request_id": "peer-cancel-fresh", "wait_for": "delivery" }),
+    );
+    assert_eq!(next["id"], "m2@peer", "{next}");
+    assert_eq!(next["recipient"]["reference"], target, "{next}");
+    assert_eq!(next["message"]["delivery"]["status"], "success", "{next}");
+    let expected = [format!("📨 Message from the command line · m2\n{fresh}")];
+    assert!(wait_until(secs(10), || peer.submitted_messages() == expected));
+    let input = std::fs::read(&keys).unwrap();
+    assert!(
+        !input
+            .windows(text.len())
+            .any(|part| part == text.as_bytes())
+    );
+    assert_eq!(process_identity(worker.pid), worker.process);
+}
+
 /// Once the peer accepts raw input, a cut link can hide the result while the bytes still arrive.
 #[test]
 #[cfg_attr(not(debug_assertions), ignore = "uses the test gate of debug builds")]
@@ -3054,6 +3166,230 @@ fn authenticated_peer_lists_exact_holder_records_and_local_access_is_refused() {
         "internal.agent_records is unavailable to this client"
     );
     assert!(alive(&peer_run.process) && alive(&local_run.process));
+}
+
+/// A person's named-machine resume query reads the holder's record through the authenticated
+/// peer. The same internal operation is unavailable over the local client connection.
+#[test]
+fn an_authenticated_peer_reads_the_holders_exact_resumable_session() {
+    let origin = TestHome::new("resume-records-origin");
+    let holder = TestHome::new("resume-records-holder");
+    let origin_id = name_machine(&origin, "origin");
+    let holder_id = name_machine(&holder, "holder");
+    let local_session = "86da4482-2bae-4a45-b193-a5664c19826a";
+    let holder_session = "065e033f-12fe-4bac-9870-dc4e3d4971af";
+    let local = origin.start_named_fake("worker", &[("FAKECLI_SESSION", local_session)]);
+    let remote = holder.start_named_fake("worker", &[("FAKECLI_SESSION", holder_session)]);
+    assert_eq!(local.id, remote.id);
+    for (home, agent, session) in [
+        (&origin, &local, local_session),
+        (&holder, &remote, holder_session),
+    ] {
+        assert!(wait_until(LOADED_TIMEOUT, || home
+            .inspect_agent(&agent.address)["agent"]["session"]
+            == session));
+        home.run_facade_ok(&["stop", &agent.address]);
+        let stopped = home.inspect_agent(&agent.address);
+        assert_eq!(stopped["agent"]["process"], "ended", "{stopped}");
+        assert_eq!(stopped["agent"]["session"], session, "{stopped}");
+    }
+    let bridge = ObservedMachineLink::open(&origin, &holder);
+    wait_for_route(&origin, &holder_id, &[&holder_id]);
+    let listed = connect(&origin).call_ok(
+        "agent.resume_list",
+        json!({ "scope": { "kind": "machine", "machine": holder_id } }),
+    );
+    let request = observed_frame(
+        &bridge.from_front,
+        "the forwarded resume records query",
+        |frame| {
+            frame["method"] == "forward"
+                && frame["params"]["params"]["op"] == "internal.resume_records"
+        },
+    );
+    assert_eq!(request["params"]["params"]["args"], json!({}), "{request}");
+    assert_eq!(request["params"]["route"], json!([holder_id]), "{request}");
+    assert_eq!(
+        request["params"]["caller"],
+        json!({ "kind": "terminal", "machine_id": origin_id }),
+        "{request}"
+    );
+    let reply = observed_frame(&bridge.from_peer, "the holder's resume records", |frame| {
+        frame["id"] == request["id"] && frame.get("method").is_none()
+    });
+    let reference = json!({ "machine_id": holder_id, "agent_id": remote.id });
+    for rows in [&reply["result"], &listed["items"]] {
+        let [item] = rows
+            .as_array()
+            .expect("the holder's resume candidates")
+            .as_slice()
+        else {
+            panic!("expected only the holder's record: {rows}");
+        };
+        assert_eq!(
+            item["target"],
+            json!({ "kind": "agent", "reference": reference }),
+            "{item}"
+        );
+        assert_eq!(item["agent"], reference, "{item}");
+        assert_eq!(item["machine_id"], holder_id, "{item}");
+        assert_eq!(item["session"], holder_session, "{item}");
+        assert_eq!(item["name"], "worker", "{item}");
+        assert_eq!(item["stopped"], true, "{item}");
+    }
+    let denied = connect(&holder).call("internal.resume_records", json!({}));
+    assert_eq!(error_reason(&denied), "refused", "{denied}");
+    assert!(denied.get("result").is_none(), "{denied}");
+}
+
+/// A managed creator receives its remote child's first-prompt result under the reserved receipt.
+#[test]
+fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
+    let origin = TestHome::new("start-result-origin");
+    let holder = TestHome::new("start-result-holder");
+    let launches = holder.project.join("child-launches");
+    std::fs::write(
+        holder.path.join("facade.json"),
+        json!({ "clis": { "fake": { "command": test_binaries().fakecli, "env": {
+            "FAKECLI_LOG": holder.fake_log, "FAKECLI_STARTS": launches,
+        } } } })
+        .to_string(),
+    )
+    .unwrap();
+    let origin_id = name_machine(&origin, "origin");
+    let holder_id = name_machine(&holder, "holder");
+    let creator = origin.start_named_fake("creator", &[]);
+    let creator_ref = json!({ "machine_id": origin_id, "agent_id": creator.id });
+    let bridge = ObservedMachineLink::open(&origin, &holder);
+    wait_for_route(&origin, &holder_id, &[&holder_id]);
+    wait_for_route(&holder, &origin_id, &[&origin_id]);
+
+    let mut caller = McpTestClient::open_configured(&origin, &creator.id);
+    let prompt = "finish the remote fixture";
+    let started = caller.call(
+        "start_agent",
+        json!({
+            "cli": "fake", "name": "child", "machine": holder_id,
+            "folder": holder.project, "prompt": prompt,
+        }),
+    );
+    assert_eq!(started["status"], "success", "{started}");
+    assert_eq!(started["data"]["machine_id"], holder_id, "{started}");
+    let start = observed_frame(&bridge.from_front, "the managed remote start", |frame| {
+        frame["method"] == "forward" && frame["params"]["params"]["op"] == "agent.start"
+    });
+    assert_eq!(start["params"]["caller"]["kind"], "agent", "{start}");
+    assert_eq!(start["params"]["caller"]["agent"], creator_ref, "{start}");
+    assert_eq!(start["params"]["route"], json!([holder_id]), "{start}");
+    assert_eq!(
+        start["params"]["params"]["args"]["prompt"], prompt,
+        "{start}"
+    );
+    let receipt = &started["data"]["result_message"];
+    let expected_receipt = json!({ "machine_id": origin_id, "message_id": receipt });
+    assert_eq!(start["params"]["start_result"], expected_receipt, "{start}");
+    let address = started["data"]["id"].as_str().expect("the child's address");
+    assert_eq!(address, format!("{}@holder", creator.id), "{started}");
+    let child = holder.inspect_agent(address)["agent"].clone();
+    let pid = child["pid"].as_i64().expect("the holder's CLI has a PID") as i32;
+    let process = process_identity(pid);
+    let child_ref = json!({ "machine_id": holder_id, "agent_id": creator.id });
+    assert_eq!(child["reference"], child_ref, "{child}");
+    assert_eq!(child["creator"], creator_ref, "{child}");
+    assert_eq!(child["process"], "running", "{child}");
+
+    let forwarded = observed_frame(&bridge.from_peer, "the holder's start outcome", |frame| {
+        frame["method"] == "forward"
+            && frame["params"]["params"]["op"] == "internal.deliver_start_result"
+    });
+    assert_eq!(
+        forwarded["params"]["route"],
+        json!([origin_id]),
+        "{forwarded}"
+    );
+    assert_eq!(
+        forwarded["params"]["caller"],
+        json!({ "kind": "terminal", "machine_id": holder_id }),
+        "{forwarded}"
+    );
+    let args = &forwarded["params"]["params"]["args"];
+    assert_eq!(args["recipient"], creator_ref, "{args}");
+    let message = &args["message"];
+    assert_eq!(message["message_ref"], expected_receipt, "{message}");
+    assert_eq!(message["message_id"], *receipt, "{message}");
+    assert_eq!(message["from"], "facade", "{message}");
+    assert_eq!(message["to"], creator.id, "{message}");
+    let outcome = &message["result"];
+    assert_eq!(outcome["agent"]["reference"], child_ref, "{outcome}");
+    assert_eq!(outcome["agent"]["pid"], child["pid"], "{outcome}");
+    let delivered = &outcome["prompt"]["delivery"];
+    assert_eq!(delivered["status"], "success", "{delivered}");
+    assert_eq!(delivered["delivered_via"], "terminal", "{delivered}");
+    assert_eq!(delivered["text_written"], "full", "{delivered}");
+    assert_eq!(delivered["enter_written"], true, "{delivered}");
+    let answer = observed_frame(
+        &bridge.from_front,
+        "the creator host's acknowledgement",
+        |frame| frame["id"] == forwarded["id"] && frame.get("method").is_none(),
+    );
+    assert_eq!(answer["result"], json!({}), "{answer}");
+
+    // The same authenticated holder can only report an agent on its own machine.
+    let mut foreign = forwarded.clone();
+    let probe_id = 9_000_001;
+    foreign["id"] = json!(probe_id);
+    foreign["params"]["params"]["args"]["message"]["result"]["agent"]["reference"]["machine_id"] =
+        json!(origin_id);
+    writeln!(&bridge.front_socket, "{foreign}").unwrap();
+    let refused = observed_frame(
+        &bridge.from_front,
+        "the refusal of a foreign start result",
+        |frame| frame["id"] == probe_id && frame.get("method").is_none(),
+    );
+    assert_eq!(error_reason(&refused), "refused", "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "the start result does not belong to the forwarding machine and local recipient",
+        "{refused}"
+    );
+
+    let read = caller.call("read_messages", json!({ "last": 10 }));
+    assert_eq!(read["status"], "success", "{read}");
+    let [row] = read["data"]["messages"].as_array().unwrap().as_slice() else {
+        panic!("expected exactly one start result: {read}");
+    };
+    let prompt_id = outcome["prompt"]["message_id"]
+        .as_str()
+        .expect("the prompt's ID");
+    let receipt_id = receipt.as_str().expect("the reserved receipt ID");
+    let title = format!("child ({address}) has started.");
+    let summary = format!("Your initial message {prompt_id}@holder has been passed on.");
+    assert_eq!(row["id"], receipt_id, "{row}");
+    assert_eq!(row["from"], "facade", "{row}");
+    assert_eq!(row["text"], format!("{title}\n{summary}"), "{row}");
+    assert_eq!(
+        origin.submitted_messages(),
+        [format!("🔔 {title} · {receipt_id}\n{summary}")]
+    );
+    assert_eq!(
+        holder.submitted_messages(),
+        [format!(
+            "📨 Message from creator ({}) · {prompt_id}\n{prompt}",
+            creator.address
+        )]
+    );
+    assert_eq!(
+        std::fs::read_to_string(&launches)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        [pid.to_string()]
+    );
+    assert_eq!(process_identity(pid), process);
+    assert!(alive(&process));
+    println!(
+        "Start outcome {receipt_id} for {address} with PID {pid}. Foreign outcome refusal {refused}"
+    );
 }
 
 /// The first hop stays authenticated while a live subscription loses and regains its provider.

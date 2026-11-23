@@ -8,6 +8,7 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { setTimeout as wait } from 'timers/promises';
 import * as zlib from 'zlib';
 import { build } from 'esbuild';
 import type { Card } from '../webview/protocol';
@@ -23,7 +24,6 @@ suite('The agent panel in Chromium', function () {
 	let socket: WebSocket;
 	let call: (method: string, params?: object) => Promise<any>;
 	let evaluate: (expression: string) => Promise<any>;
-	const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 	const until = async (check: () => boolean | Promise<boolean>, ms = 8_000, what = 'Chromium did not become ready') => {
 		const deadline = Date.now() + ms;
 		while (!await check()) {
@@ -108,14 +108,14 @@ suite('The agent panel in Chromium', function () {
 		// What it said last, for a start that fails
 		let said = '';
 		child.stderr?.on('data', chunk => { said = `${said}${chunk}`.slice(-2_000); });
-		// Chromium makes the file before it writes the port in it: read once the port is there, or it has ended
-		const portOf = () => fs.existsSync(path.join(profile, 'DevToolsActivePort')) ? fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0] : '';
-		await until(() => /^\d+$/.test(portOf()) || child.exitCode !== null || child.signalCode !== null, 60_000).catch(() => undefined);
-		if (!/^\d+$/.test(portOf())) {
-			const ended = child.exitCode !== null || child.signalCode !== null ? `it ended (${child.exitCode ?? child.signalCode})` : 'it is still running';
-			throw new Error(`Chromium did not become ready within 60 seconds: ${ended}; it said: ${said.trim() || 'nothing'}`);
-		}
-		const port = portOf();
+
+		// Keep the successful read. Another read could hit a file lock on Windows.
+		const port = await waitForChromiumPort(
+			path.join(profile, 'DevToolsActivePort'),
+			child,
+			() => said
+		);
+
 		const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json() as { type: string; webSocketDebuggerUrl: string }[];
 		socket = new WebSocket(pages.find(page => page.type === 'page')!.webSocketDebuggerUrl);
 		await new Promise<void>(resolve => socket.addEventListener('open', () => resolve(), { once: true }));
@@ -2416,5 +2416,66 @@ suite('The agent panel in Chromium', function () {
 		const systemOff = await evaluate(`(async () => { await settledOf(); return eyesAt(); })()`) as number[];
 		assert.ok(aside[0] > 0 && editorOff[0] > 0 && systemOff[0] > 0, JSON.stringify([aside, editorOff, systemOff]));
 		assert.deepStrictEqual([editor, system], [[0, 0], [0, 0]]);
+	});
+});
+
+async function waitForChromiumPort(
+	portFile: string,
+	child: Pick<ChildProcess, 'exitCode' | 'signalCode'>,
+	stderr: () => string,
+	readFile: (file: string, encoding: 'utf8') => string = fs.readFileSync
+): Promise<string> {
+	const timeoutSeconds = 60;
+	const deadline = performance.now() + timeoutSeconds * 1_000;
+	while (true) {
+		// Chromium can leave the file missing, empty or locked while it publishes the port.
+		try {
+			const [port] = readFile(portFile, 'utf8').split('\n', 1);
+			if (/^\d+$/.test(port)) { return port; }
+		} catch (error) {
+			if (error?.code !== 'ENOENT' && error?.code !== 'EBUSY') { throw error; }
+		}
+		const exit = child.exitCode ?? child.signalCode;
+		if (exit !== null || performance.now() >= deadline) {
+			const status = exit === null ? 'Chromium is still running.' : `Chromium exited (${exit}).`;
+			throw new Error(`Chromium did not become ready within ${timeoutSeconds} seconds. ${status}\n${stderr().trim() || 'No stderr output.'}`);
+		}
+		await wait(30);
+	}
+}
+
+suite('Chromium DevTools port discovery (ARCHITECTURE-5.1)', () => {
+	const portFile = path.join('profile', 'DevToolsActivePort');
+	const running = { exitCode: null, signalCode: null };
+
+	test('waits for a missing, locked or empty file and returns the port once readable', async () => {
+		const reads = [
+			Object.assign(new Error('missing'), { code: 'ENOENT' }),
+			Object.assign(new Error('locked'), { code: 'EBUSY' }),
+			'',
+			'41850\n/devtools/browser/test'
+		];
+		const port = await waitForChromiumPort(portFile, running, () => '', file => {
+			assert.strictEqual(file, portFile);
+			const result = reads.shift();
+			assert.ok(result !== undefined, 'the readable port only needs one read');
+			if (result instanceof Error) { throw result; }
+			return result;
+		});
+		assert.strictEqual(port, '41850');
+	});
+
+	test('reports a file permission error on the first attempt', async () => {
+		const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+		let reads = 0;
+		await assert.rejects(waitForChromiumPort(portFile, running, () => '', () => {
+			if (++reads === 1) { throw denied; }
+			return '41850\n';
+		}), error => error === denied);
+	});
+
+	test('reports an early browser exit with its stderr', async () => {
+		await assert.rejects(waitForChromiumPort(portFile, { exitCode: null, signalCode: 'SIGTERM' }, () => 'Unusable profile\n', () => ''),
+			/Chromium exited \(SIGTERM\)\.\nUnusable profile/);
 	});
 });

@@ -7,6 +7,7 @@ import sys
 from collections import Counter
 from os import environ, fsdecode
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from catalog import AcceptanceError, PRODUCTS, discover_apis, json_object, load
 from evidence import git, make_plan, run_identity, run_pilots, verify_receipts
@@ -58,7 +59,17 @@ def baseline_cases(root, base):
     return document['cases']
 
 
+def require_new_bindings(cases, baseline):
+    if not baseline:
+        return
+    previous = {row['id'] for row in baseline}
+    unbound = sorted(case.id for case in cases.values() if case.id not in previous and not case.test)
+    if unbound:
+        raise AcceptanceError('new acceptance obligations need an executable binding:\n  ' + '\n  '.join(unbound))
+
+
 def review_bound_cases(cases, baseline):
+    require_new_bindings(cases, baseline)
     lost = []
     changed = []
     for old in baseline:
@@ -219,8 +230,9 @@ def main():
                 raise AcceptanceError('--vscode applies to the Extension pilot')
             if args.editor_workers is not None and args.product != 'extension':
                 raise AcceptanceError('--editor-workers applies to the Extension pilot')
-            receipts = [run_pilots(ROOT, plan, args.product, args.output.resolve(), args.vscode,
-                                   editor_workers=args.editor_workers or 2)]
+            with TemporaryDirectory(prefix='fci-editor-') as scratch:
+                receipts = [run_pilots(ROOT, plan, args.product, args.output.resolve(), args.vscode,
+                                       editor_stage=Path(scratch), editor_workers=args.editor_workers or 2)]
         else:
             receipts = args.receipts
         passed = verify_receipts(plan, receipts, args.product)

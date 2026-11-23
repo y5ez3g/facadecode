@@ -404,7 +404,12 @@
       "existing_tests": [
         "core/tests/tests/reliability.rs",
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "an_idless_peer_cancel_withdraws_a_pending_forwarded_send"
+      }
     },
     {
       "id": "core/daemon/machine-notification/changed",
@@ -775,7 +780,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "a_remote_childs_first_prompt_result_reaches_its_creator_once"
+      }
     },
     {
       "id": "core/daemon/operation/internal.deliver_wait_notice",
@@ -804,7 +814,12 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "an_authenticated_peer_reads_the_holders_exact_resumable_session"
+      }
     },
     {
       "id": "core/daemon/operation/location.list",
@@ -3436,7 +3451,12 @@
       "stage": "release",
       "existing_tests": [
         "extension/scripts/release.test.mjs"
-      ]
+      ],
+      "test": {
+        "runner": "extension-release",
+        "target": "linux-x64",
+        "name": "release-script-fixtures"
+      }
     },
     {
       "id": "extension/p0/release/signed-artifacts",
@@ -3452,7 +3472,12 @@
       "stage": "release",
       "existing_tests": [
         "extension/scripts/release.test.mjs"
-      ]
+      ],
+      "test": {
+        "runner": "extension-release",
+        "target": "linux-x64",
+        "name": "release-script-fixtures"
+      }
     },
     {
       "id": "extension/p0/remote-host/ssh-connect",

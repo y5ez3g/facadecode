@@ -441,6 +441,10 @@ impl FakeCli {
                 .extend(["\x1b]10;?\x07", "\x1b]11;?\x1b\\", "\x1b]12;?\x07"].map(String::from));
             return;
         }
+        if first.trim() == "/fake cursor" {
+            self.queries.push("\x1b[2;3H\x1b[6n".into());
+            return;
+        }
         if let Some(question) = first.trim().strip_prefix("/fake menu ") {
             self.menu = Some(question.to_string());
             return;

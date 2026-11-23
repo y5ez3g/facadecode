@@ -2,7 +2,7 @@ from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 from zipfile import ZipFile
 
 from catalog import AcceptanceError
@@ -13,27 +13,37 @@ class HostedEvidence(unittest.TestCase):
     def test_current_pr_requires_the_exact_open_head_base_and_workflow(self):
         repo, pull, head, base, merge = 'owner/name', 15, 'a' * 40, 'b' * 40, 'c' * 40
         linkage = {'number': pull, 'head': {'sha': head}, 'base': {'sha': base}}
-        candidate = {**linkage, 'state': 'open', 'merge_commit_sha': merge}
-        with patch('github_evidence.gh_json', return_value=candidate) as gh:
+        candidate = {**linkage, 'state': 'open', 'merge_commit_sha': merge,
+                     'base': {'sha': base, 'ref': 'main', 'repo': {'full_name': repo}}}
+        live = {'ref': 'refs/heads/main', 'object': {'sha': base}}
+        with patch('github_evidence.gh_json', side_effect=[candidate, live]) as gh:
             self.assertEqual(current_pull_merge(repo, pull, head, base), merge)
-            gh.assert_called_once_with('repos/owner/name/pulls/15')
-            for changed in (
-                {'state': 'closed'}, {'head': {'sha': 'd' * 40}}, {'base': {'sha': 'd' * 40}},
-                {'number': 16}, {'merge_commit_sha': None},
-            ):
-                gh.return_value = {**candidate, **changed}
-                with self.subTest(changed=changed), self.assertRaises(AcceptanceError):
-                    current_pull_merge(repo, pull, head, base)
+            self.assertEqual(gh.call_args_list, [call('repos/owner/name/pulls/15'),
+                                                 call('repos/owner/name/git/ref/heads/main')])
+        for changed in (
+            {'state': 'closed'}, {'head': {'sha': 'd' * 40}}, {'base': {'sha': 'd' * 40}},
+            {'number': 16}, {'merge_commit_sha': None},
+        ):
+            with self.subTest(changed=changed), patch('github_evidence.gh_json', side_effect=[
+                {**candidate, **changed}, live,
+            ]), self.assertRaises(AcceptanceError):
+                current_pull_merge(repo, pull, head, base)
+        advanced = {**live, 'object': {'sha': 'd' * 40}}
+        with patch('github_evidence.gh_json', side_effect=[candidate, advanced]), (
+                self.assertRaisesRegex(AcceptanceError, 'older revision of main')):
+            current_pull_merge(repo, pull, head, base)
         check_pull_run({'pull_requests': [linkage]}, pull, head, base)
         for records in ([], [linkage, linkage], [{**linkage, 'base': {'sha': 'd' * 40}}]):
             with self.subTest(records=records), self.assertRaises(AcceptanceError):
                 check_pull_run({'pull_requests': records}, pull, head, base)
 
     def test_requires_this_attempts_product_and_artifact_identity(self):
-        run = {'run_attempt': 2, 'id': 7, 'head_sha': 'a' * 40, 'repository': {'id': 3}}
+        run = {'run_attempt': 2, 'id': 7, 'head_sha': 'a' * 40,
+               'repository': {'id': 3}, 'head_repository': {'id': 3}}
         core = {
             'name': 'shadow-pilot-core-2', 'id': 31, 'expired': False, 'digest': 'sha256:' + 'b' * 64,
-            'workflow_run': {'id': 7, 'head_sha': 'a' * 40, 'repository_id': 3},
+            'size_in_bytes': 100, 'workflow_run': {'id': 7, 'head_sha': 'a' * 40,
+                                                  'repository_id': 3, 'head_repository_id': 3},
         }
         with patch('github_evidence.gh_json') as gh:
             gh.return_value = [{'total_count': 1, 'artifacts': [core]}]

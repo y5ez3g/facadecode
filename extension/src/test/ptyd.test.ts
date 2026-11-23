@@ -524,7 +524,9 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		await second.request('setMeta', { run: 'r3', meta });
 		const { info } = await second.request('attach', { run: 'r3' });
 		assert.deepStrictEqual([info.run, info.pid, info.startedAt, info.meta], ['r3', before.pid, before.startedAt, meta]);
-		assert.strictEqual(await second.request('terminate', { run: 'r3', graceMs: 200 }), 'terminated');
+		// Use the extension's cleanup grace (LIFECYCLE-4.2) so a slow ConPTY exit can be confirmed.
+		assert.strictEqual(await second.request('terminate', { run: 'r3', graceMs: 3_000 }), 'terminated');
+		await until('the transferred process to be gone', () => !alive(before.pid));
 	});
 
 	test('terminate hangs up the process group and answers its actual end; one that ignores the hang-up is killed after the grace, its children with it; an ended or unknown run already exited (LIFECYCLE-4.2)', async () => {

@@ -572,6 +572,7 @@ impl Daemon {
                                 start_result: forward.start_result,
                                 remaining: forward.time_left_ms.map(Duration::from_millis),
                             }),
+                            None,
                         )
                         .await
                     }

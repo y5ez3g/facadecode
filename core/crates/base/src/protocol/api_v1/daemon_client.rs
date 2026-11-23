@@ -9,7 +9,10 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::paths::{ClientSocket, connect_client_until, is_connection_lost};
+use crate::paths::{
+    ClientSocket, allow_timeout_on_hangup, clear_client_timeouts, connect_client_until,
+    is_connection_lost,
+};
 
 use super::daemon::{
     self, AgentSend, AgentStart, ChangedParams, ClientKind, ClosingParams, HANDOVER_TIME,
@@ -167,11 +170,9 @@ impl DaemonClient {
         let result = self
             .ask(methods::CALL, &params, Some(until))
             .and_then(|id| self.answer_to(id, Some(until)));
-        let reset_read = self.reader.get_ref().set_read_timeout(None);
-        let reset_write = self.writer.set_write_timeout(None);
+        let reset = clear_client_timeouts(&self.writer);
         let result = result?;
-        reset_read?;
-        reset_write?;
+        reset?;
         Ok(result)
     }
 
@@ -414,7 +415,8 @@ impl BufRead for DeadlineReader<'_> {
     fn fill_buf(&mut self) -> io::Result<&[u8]> {
         let time = remaining(self.until)?;
         if self.reader.buffer().is_empty() {
-            self.reader.get_ref().set_read_timeout(Some(time))?;
+            let socket = self.reader.get_ref();
+            allow_timeout_on_hangup(socket, socket.set_read_timeout(Some(time)))?;
         }
         self.reader.fill_buf().map_err(transfer_error)
     }
@@ -530,4 +532,62 @@ fn connect_transport(
         Ok(stream) => stream,
     };
     Ok(opening(&stream).then_some(stream))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixStream;
+
+    fn after_peer_closed(bytes: &[u8]) -> BufReader<ClientSocket> {
+        let (client, mut peer) = UnixStream::pair().unwrap();
+        peer.write_all(bytes).unwrap();
+        drop(peer);
+        BufReader::new(client)
+    }
+
+    #[test]
+    fn a_deadline_read_drains_a_complete_reply_after_the_peer_closes() {
+        let result = serde_json::json!({ "delivered": true });
+        let mut reader = after_peer_closed(&encode_line(&Response::ok(2, result.clone())));
+        let mut line = Vec::new();
+        let expired = read_frame(&mut reader, &mut line, Some(Instant::now())).unwrap_err();
+        assert_eq!(expired.kind(), ErrorKind::TimedOut);
+
+        let until = Instant::now() + Duration::from_secs(1);
+        let message = read_frame(&mut reader, &mut line, Some(until)).unwrap();
+        let Some(ServerMessage::Response(response)) = message else {
+            panic!("expected the queued response, received {message:?}");
+        };
+        assert_eq!(response.id, Some(2));
+        assert_eq!(response_result::<Value>(response).unwrap(), result);
+        let hangup = Err(io::Error::from_raw_os_error(libc::EINVAL));
+        allow_timeout_on_hangup(reader.get_ref(), hangup).unwrap();
+        clear_client_timeouts(reader.get_ref()).unwrap();
+    }
+
+    #[test]
+    fn a_closed_peer_supplies_no_receipt_from_eof_or_partial_json() {
+        let until = Instant::now() + Duration::from_secs(1);
+        let mut line = Vec::new();
+        let mut eof = after_peer_closed(b"");
+        assert!(
+            read_frame(&mut eof, &mut line, Some(until))
+                .unwrap()
+                .is_none()
+        );
+
+        let mut partial = after_peer_closed(br#"{"jsonrpc":"2.0","id":2,"result":"#);
+        let error = read_frame(&mut partial, &mut line, Some(until)).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn readable_bytes_from_a_live_peer_do_not_mask_an_invalid_timeout() {
+        let (client, mut peer) = UnixStream::pair().unwrap();
+        peer.write_all(b"queued").unwrap();
+        let changed = Err(io::Error::from_raw_os_error(libc::EINVAL));
+        let error = allow_timeout_on_hangup(&client, changed).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EINVAL));
+    }
 }

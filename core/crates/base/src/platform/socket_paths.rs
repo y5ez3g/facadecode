@@ -91,6 +91,42 @@ fn connect_unix_client_until(path: &Path, until: Instant) -> io::Result<ClientSo
     Ok(stream)
 }
 
+/// Clears the timeouts shared by the client's read and write handles.
+pub(crate) fn clear_client_timeouts(socket: &ClientSocket) -> io::Result<()> {
+    allow_timeout_on_hangup(socket, socket.set_read_timeout(None)).and(allow_timeout_on_hangup(
+        socket,
+        socket.set_write_timeout(None),
+    ))
+}
+
+/// macOS can reject a timeout change with EINVAL after the peer closes. A read-side hangup
+/// confirms that any remaining bytes can be read without waiting for the peer.
+pub(crate) fn allow_timeout_on_hangup(
+    socket: &ClientSocket,
+    changed: io::Result<()>,
+) -> io::Result<()> {
+    #[cfg(unix)]
+    if changed
+        .as_ref()
+        .is_err_and(|error| error.raw_os_error() == Some(libc::EINVAL))
+    {
+        use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+        use std::os::fd::AsFd;
+
+        let mut reads = [PollFd::new(socket.as_fd(), PollFlags::POLLIN)];
+        if poll(&mut reads, PollTimeout::ZERO).is_ok()
+            && reads[0]
+                .revents()
+                .is_some_and(|events| events.contains(PollFlags::POLLHUP))
+        {
+            return Ok(());
+        }
+    }
+    #[cfg(windows)]
+    let _ = socket;
+    changed
+}
+
 /// Signals EOF to the peer on Unix while keeping the read side open.
 /// Windows named pipes have no half-close, so their readers stay connected.
 pub fn shutdown_write_if_supported(socket: &ClientSocket) -> io::Result<()> {

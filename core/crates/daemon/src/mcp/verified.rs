@@ -30,7 +30,7 @@ pub(crate) type Authenticate = Box<
 >;
 
 pub(crate) type ActorConnect =
-    Box<dyn Fn(&AgentRef) -> anyhow::Result<Option<DaemonClient>> + Send + Sync>;
+    Box<dyn Fn(&AgentRef, Option<Instant>) -> anyhow::Result<Option<DaemonClient>> + Send + Sync>;
 
 pub(crate) type ReadInbox =
     Box<dyn Fn(&AgentRef, InboxRead, Cancel) -> Result<Value, ErrorBody> + Send + Sync>;
