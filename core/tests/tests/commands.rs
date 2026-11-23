@@ -103,17 +103,21 @@ fn interactive_start_propagates_process_exit_status() {
             term.text()
         );
         assert_eq!(term.output_count(&said), 1);
-        if id == "a1" {
-            let text = term.text_with_scrollback();
-            assert!(text.contains("INTERACTIVE-FRAME"), "{text}");
-            assert_eq!(term.output_count("To continue this session, run:"), 1);
-            assert_eq!(term.output_count("demo resume stored-session"), 1);
-            assert!(
-                text.trim_end()
-                    .ends_with(&format!("  demo resume stored-session\n{said}")),
-                "{text}"
-            );
+        // The agent's text, including the hint it prints on its way out, leaves with its view:
+        // the restored text ends with the opening line and the receipt.
+        let text = term.text_with_scrollback();
+        for shown in [
+            "INTERACTIVE-FRAME",
+            "To continue this session",
+            "demo resume",
+        ] {
+            assert!(!text.contains(shown), "{script}: {text}");
         }
+        let opening = format!("Started {name} ({reference}). Press Ctrl+] to detach.");
+        assert!(
+            text.trim_end().ends_with(&format!("{opening}\n{said}")),
+            "{script}: {text}"
+        );
     }
 }
 

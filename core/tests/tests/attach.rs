@@ -164,14 +164,196 @@ fn foreground_alternate_first_start_hands_the_same_shell_page_back() {
     assert!(term.canonical_input_and_echo_enabled());
 }
 
-fn wait_for_viewport(term: &TestTerminal, rows: [&str; 3], alternate: bool) {
-    // ConPTY can place the logical grid below the opening line.
+/// Starts `cli -c script` in the foreground as `name`, below a shell page with history above it.
+fn start_below_a_shell_page(home: &TestHome, name: &str, script: &str) -> TestTerminal {
+    let term = TestTerminal::spawn(
+        home.command(shell()).args([
+            "-c",
+            "printf 'HOST-HISTORY\\n'; \
+             i=0; while [ \"$i\" -lt 24 ]; do printf 'shell line %s\\n' \"$i\"; i=$((i + 1)); done; \
+             printf 'HOST-PAGE\\nHOST-PROMPT\\n'; \
+             name=$1; shift; facade start --name \"$name\" \"$@\"; result=$?; \
+             printf 'HOST-RETURN\\n'; exit \"$result\"",
+            "host",
+            name,
+            home.shell_cli(),
+            "-c",
+            script,
+        ]),
+        100,
+        24,
+    );
+    assert!(
+        term.wait_for_output(LOADED_TIMEOUT, &format!("Started {name} (")),
+        "{}",
+        term.text_with_scrollback()
+    );
+    term
+}
+
+/// After the attachment ends, the host is on its main screen and the shell page is as before,
+/// followed by the opening line, `receipt` and the shell's next line, with none of `agent_text`.
+fn assert_shell_page_returned(
+    term: &TestTerminal,
+    opening: &str,
+    receipt: &str,
+    agent_text: &[&str],
+) {
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("HOST-RETURN")),
+        "{}",
+        term.text_with_scrollback()
+    );
+    assert!(!term.on_alternate_screen());
+    let text = term.text_with_scrollback();
+    assert_eq!(text.matches("HOST-HISTORY").count(), 1, "{text}");
+    for shown in agent_text {
+        assert!(!text.contains(shown), "{shown}: {text}");
+    }
+    let (_, after) = text
+        .split_once("HOST-PAGE\nHOST-PROMPT\n")
+        .unwrap_or_else(|| panic!("no shell page: {text}"));
+    assert_eq!(
+        after.trim_end(),
+        format!("{opening}\n{receipt}\nHOST-RETURN"),
+        "{text}"
+    );
+}
+
+#[test]
+fn foreground_exit_hands_the_shell_page_back() {
+    let home = TestHome::new("exit-page");
+    let _wire = connect(&home);
+    // The kinds of CLI recorded: one drawing on its main screen that writes its resume hint twice,
+    // one leaving its alternate screen to print a hint, and one leaving it to reprint a transcript
+    // longer than the screen.
+    let cases = [
+        (
+            "Main-hint",
+            "quit-main",
+            "printf 'MAIN-FRAME\\n'; \
+             while [ ! -f quit-main ]; do sleep 0.05; done; \
+             printf 'Resume with -c MAIN-HINT\\nMAIN-FRAME\\nResume with -c MAIN-HINT\\n'; exit 0",
+            "MAIN-FRAME",
+            &["MAIN-FRAME", "Resume with", "MAIN-HINT"][..],
+        ),
+        (
+            "Alternate-hint",
+            "quit-hint",
+            "printf '\\033[?1049h\\033[1;1HALT-FRAME'; \
+             while [ ! -f quit-hint ]; do sleep 0.05; done; \
+             printf '\\033[?1049lTo continue this session, run:\\n  demo resume ALT-HINT\\n'; exit 0",
+            "ALT-FRAME",
+            &["ALT-FRAME", "To continue this session", "ALT-HINT"][..],
+        ),
+        (
+            "Transcript",
+            "quit-transcript",
+            "printf '\\033[?1049h\\033[1;1HTRANSCRIPT-FRAME'; \
+             while [ ! -f quit-transcript ]; do sleep 0.05; done; \
+             printf '\\033[?1049l'; \
+             i=0; while [ \"$i\" -lt 40 ]; do printf 'TRANSCRIPT-LINE %s\\n' \"$i\"; i=$((i + 1)); done; \
+             exit 0",
+            "TRANSCRIPT-FRAME",
+            &["TRANSCRIPT-FRAME", "TRANSCRIPT-LINE"][..],
+        ),
+    ];
+    for (name, gate, script, frame, agent_text) in cases {
+        let mut term = start_below_a_shell_page(&home, name, script);
+        assert!(
+            term.wait_for(LOADED_TIMEOUT, |view| view.contains(frame))
+                && term.on_alternate_screen(),
+            "{name}: {}",
+            term.text()
+        );
+        let address = home.inspect_agent(name)["agent"]["address"]
+            .as_str()
+            .expect("an address")
+            .to_string();
+        std::fs::write(home.project.join(gate), b"").unwrap();
+        let status = term.wait_exit(LOADED_TIMEOUT);
+        assert!(
+            status.is_some_and(|status| status.success()),
+            "{name}: {status:?}"
+        );
+        assert_shell_page_returned(
+            &term,
+            &format!("Started {name} ({address}). Press Ctrl+] to detach."),
+            &format!("{name} ({address}) exited with code 0."),
+            agent_text,
+        );
+    }
+}
+
+#[test]
+fn detach_from_a_main_screen_cli_hands_the_shell_page_back() {
+    let home = TestHome::new("detach-page");
+    let _wire = connect(&home);
+    let name = "Main-detach";
+    let mut term = start_below_a_shell_page(
+        &home,
+        name,
+        "printf 'MAIN-FRAME\\n'; while IFS= read -r line; do printf 'GOT-%s\\n' \"$line\"; done; sleep 60",
+    );
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("MAIN-FRAME"))
+            && term.on_alternate_screen(),
+        "{}",
+        term.text()
+    );
+    let address = home.inspect_agent(name)["agent"]["address"]
+        .as_str()
+        .expect("an address")
+        .to_string();
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert_detach_receipt(&term, name, &address);
+    assert_shell_page_returned(
+        &term,
+        &format!("Started {name} ({address}). Press Ctrl+] to detach."),
+        &format!("Detached from {name} ({address}). The agent is still running."),
+        &["MAIN-FRAME"],
+    );
+    assert_eq!(home.inspect_agent(&address)["agent"]["process"], "running");
+
+    // Attach shows the agent again and takes input.
+    let mut again = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["attach", &address]),
+        100,
+        24,
+    );
+    assert!(
+        again.wait_for(LOADED_TIMEOUT, |view| view.contains("MAIN-FRAME"))
+            && again.on_alternate_screen(),
+        "{}",
+        again.text()
+    );
+    again.send(b"hello\r");
+    assert!(
+        again.wait_for(LOADED_TIMEOUT, |view| view.contains("GOT-hello")),
+        "{}",
+        again.text()
+    );
+    again.send(b"\x1d");
+    assert!(
+        again
+            .wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+}
+
+/// Waits for `rows` at the top of the host's alternate screen, which shows the agent on either of
+/// its screens for the whole attachment.
+fn wait_for_viewport(term: &TestTerminal, rows: [&str; 3]) {
     assert!(
         wait_until(LOADED_TIMEOUT, || {
-            term.rows().windows(rows.len()).any(|shown| shown == rows)
-                && term.on_alternate_screen() == alternate
+            term.rows()[..rows.len()] == rows && term.on_alternate_screen()
         }),
-        "expected {rows:?} in alternate={alternate}, got {:?}",
+        "expected {rows:?} in the host's alternate screen, got {:?}",
         term.rows()
     );
 }
@@ -205,7 +387,7 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
     );
     let initial_rows = ["PRIMARY-TOP", "primary-stale-tail", "PRIMARY-BOTTOM"];
     wait_for_title(&small, 0, "Native snapshot");
-    wait_for_viewport(&small, initial_rows, false);
+    wait_for_viewport(&small, initial_rows);
     let mut large = TestTerminal::spawn(
         home.command(&test_binaries().facade)
             .args(["attach", &address]),
@@ -213,7 +395,7 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
         35,
     );
     wait_for_title(&large, 0, "Native snapshot");
-    wait_for_viewport(&large, initial_rows, false);
+    wait_for_viewport(&large, initial_rows);
     let agent_info = home.inspect_agent(&address);
     let size = json!({ "cols": 80, "rows": 24 });
     assert_eq!(agent_info["agent"]["size"], size);
@@ -233,7 +415,6 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
             "Native steady",
             ["PRIMARY-TOP", "short", "PRIMARY-BOTTOM"],
             false,
-            false,
         ),
         (
             "alternate",
@@ -241,14 +422,12 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
             "Native alternate",
             ["ALT-TOP", "alternate-stale-tail", "ALT-BOTTOM"],
             true,
-            true,
         ),
         (
             "update",
             "\x1b]9;4;1;63\x07",
             "Native alternate update",
             ["ALT-TOP", "small", "ALT-BOTTOM"],
-            true,
             false,
         ),
         (
@@ -256,18 +435,17 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
             "\x1b]9;4;0;0\x07",
             "Native primary return",
             ["PRIMARY-TOP", "back", "PRIMARY-BOTTOM"],
-            false,
             true,
         ),
     ];
     let mut activity_counts = Vec::new();
-    for (gate, activity, title, rows, alternate, full_draw) in batches {
+    for (gate, activity, title, rows, full_draw) in batches {
         let starts = [small.output_len(), large.output_len()];
         std::fs::write(home.project.join(gate), b"").unwrap();
         let mut counts = [0; 2];
         for (index, (term, from)) in [&small, &large].into_iter().zip(starts).enumerate() {
             wait_for_title(term, from, title);
-            wait_for_viewport(term, rows, alternate);
+            wait_for_viewport(term, rows);
             counts[index] = String::from_utf8_lossy(&term.output_since(from))
                 .matches(activity)
                 .count();
@@ -278,10 +456,9 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
         let cleared = ["\x1b[J", "\x1b[0J", "\x1b[1J", "\x1b[2J", "\x1b[3J"]
             .iter()
             .any(|clear| frame.contains(clear));
+        // Full draws stay on the agent's screen switches, and the host keeps its alternate screen.
         assert_eq!(cleared, full_draw, "{gate}: {frame:?}");
-        if !full_draw {
-            assert!(!frame.contains("\x1b[?1049"), "{gate}: {frame:?}");
-        }
+        assert!(!frame.contains("\x1b[?1049"), "{gate}: {frame:?}");
     }
 
     // Make the larger terminal larger still. The shared grid stays at 80×24, but the host
@@ -290,7 +467,7 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
     large.resize(130, 40);
     wait_for_title(&large, from, "Native primary return");
     assert!(String::from_utf8_lossy(&large.output_since(from)).contains("\x1b[J"));
-    wait_for_viewport(&large, ["PRIMARY-TOP", "back", "PRIMARY-BOTTOM"], false);
+    wait_for_viewport(&large, ["PRIMARY-TOP", "back", "PRIMARY-BOTTOM"]);
     assert_eq!(home.inspect_agent(&address)["agent"]["size"], size);
 
     for term in [&mut large, &mut small] {
@@ -627,7 +804,7 @@ fn no_reconnect_note_follows_the_note_of_a_signal() {
     );
 }
 
-/// Detach recognizes a combined alternate-screen sequence and restores the main-screen cursor.
+/// Attach follows a combined alternate-screen sequence, and detach returns the shell page.
 #[test]
 fn detach_leaves_alternate_screen_set_with_other_modes() {
     let home = TestHome::new("detachmixed");
@@ -673,13 +850,21 @@ fn detach_leaves_alternate_screen_set_with_other_modes() {
     let address = address(&home, &agent);
     assert_detach_receipt(&term, "mixed", &address);
     assert!(!term.on_alternate_screen(), "left on the alternate screen");
+    // The agent's screens leave with the view: the receipt follows the opening line.
     let rows = term.rows();
     assert!(
         rows.windows(2).any(|lines| {
-            lines[0].contains("SAVED-MAIN-CONTEXT") && lines[1].contains("Detached from mixed (")
+            lines[0].ends_with("Press Ctrl+] to detach.")
+                && lines[1].starts_with("Detached from mixed (")
         }),
-        "the receipt should follow the saved main-screen context: {rows:?}"
+        "the receipt should follow the opening line: {rows:?}"
     );
+    for shown in ["SAVED-MAIN-CONTEXT", "ALT-READY"] {
+        assert!(
+            !rows.iter().any(|row| row.contains(shown)),
+            "{shown}: {rows:?}"
+        );
+    }
 }
 
 /// Termination during the initial redraw must restore a terminal whose reader is slow.

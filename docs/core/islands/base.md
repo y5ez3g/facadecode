@@ -189,12 +189,12 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   `upgrade_command(version)` builds the installer command with the current environment and optional validated
   pin. SSH pins its installer to the local release. Both prefer GitHub and fall back to the matching website script.
   Shell can opt in to a receipt carrying the exact failed file and HTTP status.
-- `console::{VtModes, ConsoleReader, ConsoleSignals, visible_content_end}`: what attach needs of
-  the person's console beside crossterm's size and raw mode. On Windows, Attach can read the
-  visible content boundary and consume an exact queued release from its detach chord. A native
-  wheel record gives one-based viewport coordinates, a signed delta and terminal modifier bits.
-  Attach sets capture according to the viewed screen's tracking mode. `VtModes` restores the
-  console's input and output modes on handback.
+- `console::{VtModes, ConsoleReader, ConsoleSignals}`: what Attach needs of the person's
+  console beside crossterm's size and raw mode. On Windows, Attach can consume an exact
+  queued release from its detach chord. A native wheel record gives one-based viewport
+  coordinates, a signed delta and terminal modifier bits. Attach sets capture according to the
+  viewed screen's tracking mode. `VtModes` restores the console's input and output modes on
+  handback.
 
 **Rules**
 - `settings::{Settings, Member, Json, is_space}`: rules reads the CLI entries of `clis`.

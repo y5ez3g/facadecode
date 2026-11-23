@@ -41,12 +41,6 @@ impl Drop for VtModes {
     }
 }
 
-/// The lower of the cursor and the last row containing text, as a 1-based viewport row.
-/// Returns `None` if the viewport cannot be read or on Unix.
-pub fn visible_content_end() -> Option<u16> {
-    imp::visible_content_end()
-}
-
 /// What one read of the console brought.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConsoleRead {

@@ -95,8 +95,11 @@ wake it when needed.
 ## Terminals
 
 - `facade attach a3@devbox` opens a running managed agent's terminal. Ctrl+] detaches with exit code 0 and leaves
-  the agent running. A CLI exit returns its actual exit status. Both paths return to the same shell with its
-  scrollback and print one receipt. While attached, the CLI's native buffer, title and mouse mode control the view.
+  the agent running. A CLI exit returns its actual exit status. The attached view uses the terminal app's alternate
+  screen, as any full-screen program does. Every end returns to the shell page and scrollback from before the attach
+  and prints one receipt; nothing the agent showed stays, including what a CLI prints as it exits. While attached,
+  the CLI's own screens, title and mouse mode control the view, and the terminal app keeps no history of the agent's
+  output: `facade screen -n <lines> <agent>` reads it.
 - `facade screen [-n <lines>] <agent>` reads the last lines of the screen and scrollback as text. It also reads the
   last screen of a stopped agent.
 - `facade type <agent> "hello" -k Enter "again" -k Enter` pastes text and presses keys in the given order.

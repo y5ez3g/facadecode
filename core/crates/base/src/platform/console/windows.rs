@@ -12,9 +12,8 @@ use windows_sys::Win32::System::Console::{
     ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT, GetConsoleMode,
     GetConsoleScreenBufferInfo, GetStdHandle, INPUT_RECORD, KEY_EVENT, LEFT_ALT_PRESSED,
     LEFT_CTRL_PRESSED, MOUSE_EVENT, MOUSE_EVENT_RECORD, MOUSE_WHEELED, PeekConsoleInputW,
-    RIGHT_ALT_PRESSED, RIGHT_CTRL_PRESSED, ReadConsoleInputW, ReadConsoleOutputCharacterW,
-    SHIFT_PRESSED, STD_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode,
-    WINDOW_BUFFER_SIZE_EVENT,
+    RIGHT_ALT_PRESSED, RIGHT_CTRL_PRESSED, ReadConsoleInputW, SHIFT_PRESSED, STD_HANDLE,
+    STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
 };
 
 use super::{ConsoleRead, ConsoleSignal};
@@ -110,47 +109,6 @@ fn screen_buffer_info(output: HANDLE) -> Option<CONSOLE_SCREEN_BUFFER_INFO> {
         return None;
     }
     Some(info)
-}
-
-pub(super) fn visible_content_end() -> Option<u16> {
-    let output = std_handle(STD_OUTPUT_HANDLE).ok()?;
-    let info = screen_buffer_info(output)?;
-    let window = info.srWindow;
-    let width = u16::try_from(i32::from(window.Right) - i32::from(window.Left) + 1).ok()?;
-    if width == 0 || window.Top > window.Bottom {
-        return None;
-    }
-    let cursor = info.dwCursorPosition.Y.clamp(window.Top, window.Bottom);
-    let mut cells = vec![0u16; usize::from(width)];
-    let mut end = cursor;
-    for row in (cursor..=window.Bottom).rev() {
-        let start = COORD {
-            X: window.Left,
-            Y: row,
-        };
-        let mut read = 0;
-        // SAFETY: `cells` holds `width` UTF-16 units and `read` is writable.
-        let got = unsafe {
-            ReadConsoleOutputCharacterW(
-                output,
-                cells.as_mut_ptr(),
-                u32::from(width),
-                start,
-                &mut read,
-            )
-        };
-        if got == 0 || read == 0 {
-            return None;
-        }
-        if cells[..read as usize]
-            .iter()
-            .any(|&cell| !matches!(cell, 0 | 0x20))
-        {
-            end = row;
-            break;
-        }
-    }
-    u16::try_from(i32::from(end) - i32::from(window.Top) + 1).ok()
 }
 
 /// How many input records one read takes at most.

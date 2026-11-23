@@ -273,7 +273,7 @@ fn a_start_interrupted_before_its_record_is_undone_and_its_number_never_reused()
 }
 
 #[test]
-fn attach_reconnects_and_never_duplicates_the_scrollback() {
+fn attach_reconnects_without_leaving_or_duplicating_the_view() {
     let home = TestHome::new("reattach");
     let mut wire = connect(&home);
     let agent_id = start_script(
@@ -311,6 +311,22 @@ fn attach_reconnects_and_never_duplicates_the_scrollback() {
         );
         // The first visible bytes can arrive while the rest of the frame is still being drawn.
         home.wait_for_gate("attach-reconnected");
+        // The reconnect redraws the view in place: the host keeps its alternate screen, and the
+        // agent's visible rows are there once.
+        assert!(term.on_alternate_screen(), "attempt {round}");
+        let redraw = String::from_utf8_lossy(&term.output_since(previous)).into_owned();
+        assert!(
+            !redraw.contains("\x1b[?1049"),
+            "attempt {round}: {redraw:?}"
+        );
+        let shown = term.text();
+        for row in ["numbered-150", "READY"] {
+            assert_eq!(
+                shown.matches(row).count(),
+                1,
+                "attempt {round}, {row}:\n{shown}"
+            );
+        }
     }
     assert_eq!(term.output_count(ATTACH_RECONNECT_NOTE), 0);
     assert_eq!(
@@ -323,19 +339,12 @@ fn attach_reconnects_and_never_duplicates_the_scrollback() {
         "{}",
         term.text()
     );
-    let shown = term.text_with_scrollback();
-    for n in 1..=150 {
-        assert_eq!(
-            shown.matches(&format!("numbered-{n:03}\n")).count(),
-            1,
-            "numbered-{n:03} must appear once:\n{shown}"
-        );
-    }
     term.send(b"\x1d");
     assert!(
         term.wait_exit(secs(5))
             .is_some_and(|status| status.success())
     );
+    assert!(!term.on_alternate_screen(), "left on the alternate screen");
 }
 
 /// Disconnected input is discarded. Attach redraws the screen before reporting its UTF-8 bytes.
