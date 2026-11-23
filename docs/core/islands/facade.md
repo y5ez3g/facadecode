@@ -84,15 +84,12 @@ set and the live keeper's negotiated version before replacement. A refusal can i
 block replacement. After acceptance, Facade waits for the requested build to answer a fresh hello.
 
 `facade daemon --detach` is the background entry for an editor or relay. The caller confirms readiness with hello.
-The installer's `facade daemon --takeover` entry checks the selected Facade home and exits 0 if the services are idle.
-For a running service, it waits for the installed build to answer a compatible daemon hello. The installer activates
-the public `facade` and `facade-mcp` paths after this check succeeds. `facade upgrade` checks stable release metadata
-first. It prints the up-to-date receipt when the current version is at or above the stable channel without
-running an installer or asking for takeover. `facade upgrade --version X.Y.Z` runs the installer pinned to
-that release, including a candidate available under the exact version. The pinned path bypasses the stable
-check and can install an older release when services are idle. A running newer daemon may refuse the takeover.
-Both forms report the actual version and installed launcher folder when available. Machine connections pin
-the installer to the local release.
+The installer's `facade daemon --takeover` entry selects an eligible program set in a sleeping home and leaves
+services asleep. For a running service, it applies the build order and the existing daemon and Keeper admission,
+then waits for a compatible hello from the installed build. `--install-only` can select while the services sleep.
+`facade upgrade` checks stable build metadata against the current home's selection. `facade upgrade --version X.Y.Z`
+uses that release's BUILD marker and the same replacement order. Both pass the complete BUILD to the installer
+and report the selected build and launcher folder when available. An SSH installation pins the complete local BUILD.
 
 ## Modules
 
@@ -189,9 +186,10 @@ A valid hello and its reply cross the relay byte for byte, and the session conti
 A passive `machine serve --no-start` returns 3 when the Orchestrator is sleeping. The relay carries the
 authenticated peer's idle notification for the Orchestrator to handle.
 
-SSH attempts the installed program at its fixed path and negotiates the daemon API independently of the
-software build. A missing install uses the pinned installer when the entry permits installation. The platform
-commands live in Base and the installer contract is shared with the background connection path. A hidden SSH
+SSH probes the program in the selected remote home. A missing or lower-ranked installation uses the pinned
+installer when that operation permits it. A higher-ranked installation asks the person to upgrade the local
+home. The machine hello still verifies the daemon API and identity. The platform commands live in Base and
+the installer contract is shared with the background connection path. A hidden SSH
 administration entry handles enrollment and reciprocal removal over an already authenticated login. Add and
 Connect take their logout warning from the verified peer flag in the confirmed `connected` notification.
 

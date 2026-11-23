@@ -407,7 +407,7 @@ fn status_shows_settings_services_and_connected_machines() {
     let text = status_text(&status, "peer-id", "0.1.6", launcher);
     assert_eq!(
         text,
-        "Facade 0.1.6 is running on peer.\nActive agents       12\nConnected machines  devbox\n\n\
+        "Facade 0.1.6+abc is running on peer.\nCLI version         0.1.6\nActive agents       12\nConnected machines  devbox\n\n\
          Home                /home/you/.facade\nSettings            /home/you/.facade/facade.json\n\
          Daemon PID          16968\nKeeper PID          16752\n\n\
          Guest MCP           Add \"/home/you/.facade/core/bin/facade-mcp\" as a stdio server."

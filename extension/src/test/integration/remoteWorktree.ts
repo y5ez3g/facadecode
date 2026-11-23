@@ -13,11 +13,15 @@ import { multiWindowDriverFiles, withRustWindows } from './rustMultiWindow';
 
 const SCENARIO = 'a_remote_worktree_is_shared_by_the_shell_and_editor';
 const EDITOR_EVIDENCE = 'remote editor evidence ';
+const EDITOR_STAGE = path.resolve(__dirname, '../../..', 'extension-it');
 
 /** Run the Core fixture, which keeps its SSH route and Shell Attach clients alive while the editor opens. */
 export function runRemoteWorktree(home: string, executable: string): 'rust' {
 	assert.deepStrictEqual([process.platform, process.arch], ['linux', 'x64']);
 	const core = path.resolve(__dirname, '../../../../..', 'core');
+	// Cargo adds the package version to the source stamp.
+	const [, stamp] = fs.readFileSync(path.join(EDITOR_STAGE, 'bin', 'VERSION'), 'utf8').trim().split('+', 2);
+	assert.ok(stamp, 'The editor stage records its source build.');
 	const gitConfig = path.join(home, 'gitconfig');
 	fs.writeFileSync(gitConfig, '');
 	const result = spawnSync('cargo', [
@@ -30,6 +34,7 @@ export function runRemoteWorktree(home: string, executable: string): 'rust' {
 			HOME: home, CARGO_HOME: process.env.CARGO_HOME ?? path.join(os.homedir(), '.cargo'),
 			RUSTUP_HOME: process.env.RUSTUP_HOME ?? path.join(os.homedir(), '.rustup'),
 			GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: gitConfig, CARGO_INCREMENTAL: '0',
+			FACADE_BUILD: stamp,
 			FACADE_TEST_REMOTE_WORKTREE_NODE: process.execPath, FACADE_TEST_REMOTE_WORKTREE_BRIDGE: __filename,
 			VSCODE_EXECUTABLE: executable,
 		}
@@ -62,7 +67,6 @@ async function observeWorktree(args: readonly string[]): Promise<void> {
 	sanitizedEnvironment();
 
 	const editor = officialEditor();
-	const stage = path.resolve(__dirname, '../../..', 'extension-it');
 	const driver = path.join(root, 'driver');
 	fs.mkdirSync(driver);
 	for (const [name, value] of Object.entries(multiWindowDriverFiles())) {
@@ -90,7 +94,7 @@ async function observeWorktree(args: readonly string[]): Promise<void> {
 			'telemetry.telemetryLevel': 'off'
 		}));
 		return spawn(editor, [project, '--new-window', '--disable-extensions', ...profile.args,
-			`--extensionDevelopmentPath=${stage}`, `--extensionDevelopmentPath=${driver}`,
+			`--extensionDevelopmentPath=${EDITOR_STAGE}`, `--extensionDevelopmentPath=${driver}`,
 			`--remote-debugging-port=${port}`, '--locale=en', ...EDITOR_FLAGS], {
 			env: { ...process.env, ...profile.env, FACADE_HOME: home, FACADE_IT_WINDOW_CONTROL: control,
 				FACADE_IT_WINDOW_NO_COMPONENT: '1' },

@@ -14,22 +14,21 @@ arm64. On Windows it uses native pseudo consoles.
 Use the archive for your operating system and architecture, its installer and `SHA256SUMS` from a
 [release](https://github.com/y5ez3g/facadecode/releases) whose notes identify daemon and Keeper API v1.
 Keep the checksum file beside the archive. While the matching release is unpublished, build the packages
-from your checkout with the steps below. Use the release notes or artifact revision to identify the build
-when two candidates report the same version.
+from your checkout with the steps below. Use `facade --version` to see the numeric version and the release
+build's source commit time and hash.
 
 | Host | Package | Install from the download directory |
 | --- | --- | --- |
 | macOS or Linux | `facade-core-darwin-<arch>.tar.gz` or `facade-core-linux-<arch>.tar.gz` | `sh ./install.sh --package /absolute/path/to/archive.tar.gz` |
 | Windows | `facade-core-win32-<arch>.zip` | `.\install.ps1 -Package C:\path\to\archive.zip` |
 
-The installers check the package hash and install `facade` and `facade-mcp` together. The default bin directory is
-`~/.local/bin` on macOS and Linux and `%LOCALAPPDATA%\Facade\bin` on Windows. Open a new terminal if needed,
-then run `facade --version` and `facade status` to confirm the executable and Facade home. If the IDE launcher
-uses the same name, invoke the standalone executable by its full path.
+The installers check the package hash and install `facade` and `facade-mcp` together. They use `FACADE_HOME`,
+or `~/.facade` by default, and put that home's `core/bin` on PATH. Open a new terminal if needed, then run
+`facade --version` and `facade status` to confirm the executable and Facade home. If a program uses the same name,
+invoke the home launcher by its full path.
 
-The installer keeps one build per version in an install root. If it reports different programs at the same version,
-use a distinct version or follow the selected build's replacement instructions. Keep the Facade home when
-replacing installed programs.
+The installer, the extension and `facade upgrade` select a build by numeric version and then source commit time.
+A build with a higher rank can replace the selected build. Equal or lower ranks keep the selected version.
 
 The [VS Code extension](../../extension/GUIDE.md#install-for-your-workspace-host) ships Core for its workspace host. When using it with Shell,
 use compatible builds and the same Facade home. See [compatible takeover and planned restarts](#restarts-and-diagnostics)
@@ -190,10 +189,10 @@ handles tool approval, trust and sandbox settings. See the [product description]
   runs. SSH prompts appear in the command's terminal.
 - Saved connections are opened on demand. A saved machine without running work can sleep. Explicit operations
   such as a named agent start can wake it through a saved route, including any needed intermediate machines.
-- The SSH connection first uses the remote program at its installed path. The daemon API handshake decides
-  compatibility, so the builds can have different software versions. A permitted explicit connection can install
-  a program on an uninstalled peer through the regular installer. A passive connection uses the installed
-  `machine serve --no-start`. It leaves sleeping services idle and reports a missing installation without installing.
+- SSH selects the program from the requested remote home. An explicit connection to a missing or lower-ranked
+  installation installs the exact local build for the remote platform. An equally ranked installation proceeds
+  to the daemon API handshake. A higher remote build requires a local upgrade. Passive probes use
+  `machine serve --no-start` for eligible installations and report installations that need attention.
 - To prepare an SSH machine offline, keep its release archive and `SHA256SUMS` together. Run the installer with
   `--package <ARCHIVE>` on macOS or Linux or `-Package <ARCHIVE>` on Windows before connecting.
 - `facade machine list` reads the local machine table with zero SSH. It distinguishes a disconnected saved
@@ -226,15 +225,16 @@ See [Machine sessions](../../core/protocol/DAEMON.md#machine-sessions).
   and Pins are saved. Then close the clients, let the agents finish and wait for both services to exit. Switch
   Shell, VS Code and the participating SSH hosts to compatible builds before reconnecting. Reuse the same Facade
   homes and editor profile and workspace storage. Check the builds' [storage compatibility](islands/daemon.md#storage-format-and-migrations).
-- `facade upgrade` checks the stable version before downloading the installer. It skips installation when
-  already up to date. `facade upgrade --version X.Y.Z` runs the regular installer for the `extension/X.Y.Z` release.
-  The installed build takes over a running Orchestrator when its compatibility checks pass, keeping agents running.
+- `facade upgrade` checks the stable build against the current home's selection before downloading the installer.
+  `facade upgrade --version X.Y.Z` reads the BUILD marker of the `extension/X.Y.Z` release. Both forms pin the
+  exact build when installing. The installed build takes over a running Orchestrator when its compatibility
+  checks pass, keeping agents running.
 - `facade status` reports the local home, settings file, versions, daemon and keeper process IDs, active agent count,
   connected machines and Guest MCP launcher. When the local Orchestrator is sleeping, status says so without
   starting it.
 - The logs are `core/logs/daemon.log` and `core/logs/keeper.log` inside the home. Each service keeps 30 days. VS Code
   can read recent daemon log lines for diagnostics.
 - `facade` shows the command groups. `facade <COMMAND> --help` shows examples, arguments and options.
-  `facade --version` prints the CLI version.
+  `facade --version` prints the invoked program's build.
 - Query results and completion receipts go to stdout. Empty-result guidance, diagnostics, warnings and progress go
   to stderr. Command failures return 1 and usage errors return 2.

@@ -614,17 +614,15 @@ fn programs_deleted_while_facade_runs_are_put_back_before_a_start_names_them() {
     );
 }
 
-/// A daemon of the same build from other bytes, started while the keeper runs the build's programs,
-/// installs its own by copy and rename, as release builds are installed: the keeper runs on from
-/// the file it started from and takes the new daemon, and an agent that ran before types on. The
-/// keeper starts the next daemon from the new file.
+/// Offering a different copy of the selected build leaves the live program set in place.
 #[cfg(unix)]
 #[test]
-fn programs_installed_again_while_the_keeper_runs_them_are_replaced_by_copy_and_rename() {
+fn an_equal_build_leaves_the_live_programs_keeper_and_cli_in_place() {
     use std::io::Write;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::MetadataExt;
+
     let home = TestHome::new("reinstall");
-    let copy = |name: &str, extra: &[u8]| {
+    let copy = |name: &str| {
         let folder = home.folder().join(name);
         std::fs::create_dir_all(&folder).unwrap();
         for (program, binary) in [
@@ -633,111 +631,72 @@ fn programs_installed_again_while_the_keeper_runs_them_are_replaced_by_copy_and_
         ] {
             std::fs::copy(binary, folder.join(program)).unwrap();
         }
-        // Bytes at its end change the file, not the program.
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(folder.join("facade"))
-            .unwrap()
-            .write_all(extra)
-            .unwrap();
         folder.join("facade")
     };
-    let (first, second) = (
-        copy("first", b""),
-        copy("second", b"other bytes of this build"),
+    let first = copy("first");
+    let second = copy("second");
+    // Bytes at the end distinguish the candidate without changing its build.
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&second)
+        .unwrap()
+        .write_all(b"other bytes of this build")
+        .unwrap();
+    assert_ne!(
+        std::fs::metadata(&first).unwrap().len(),
+        std::fs::metadata(&second).unwrap().len()
     );
-    let without_switch = |program: &std::path::Path, words: &[&str]| {
-        let mut command = home.command(program);
-        command
+    let run = |program: &Path, words: &[&str]| {
+        let output = home
+            .command(program)
             .args(words)
             .env_remove("FACADE_TEST_LINK_PROGRAMS")
-            .stdin(std::process::Stdio::null());
-        command
-    };
-    // macOS checks a program the first time it runs, for a second or more; the second copy's check
-    // is not timed below.
-    assert!(
-        without_switch(&second, &["--version"])
+            .stdin(std::process::Stdio::null())
             .output()
-            .unwrap()
-            .status
-            .success()
-    );
-    let detached = without_switch(&first, &["daemon", "--detach"])
-        .output()
-        .unwrap();
-    assert!(detached.status.success(), "{}", stderr(&detached));
+            .unwrap();
+        assert!(output.status.success(), "{words:?}: {}", stderr(&output));
+        stdout(&output)
+    };
+    assert_eq!(run(&first, &["--version"]), run(&second, &["--version"]));
+
+    run(&first, &["daemon", "--detach"]);
     let agent = home.start_named_fake("w1", &[]);
-    let bin = home.path.join("core").join("bin");
-    let installed = bin.join(std::fs::read_link(bin.join("facade")).unwrap());
-    let keeper = home.keeper_pid().expect("the keeper runs");
-    assert!(
-        command_of(keeper).starts_with(&format!("{} keeper", bin.join("facade").display())),
-        "the keeper runs {}",
-        command_of(keeper)
-    );
-    let (daemon, before) = (
-        home.daemon_pid().unwrap(),
-        std::fs::metadata(&installed).unwrap().ino(),
-    );
-    // The keeper is held still meanwhile, so that it starts no daemon of its own before the second
-    // copy's.
-    pause_process(keeper);
-    let ending = process_identity(daemon);
-    kill_process(daemon);
-    let ended = wait_until(secs(10), || !alive(&ending));
-    let said = home.folder().join("second.log");
-    let mut serving = without_switch(&second, &["daemon"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::fs::File::create(&said).unwrap())
-        .spawn()
-        .unwrap();
-    let length = std::fs::metadata(&second).unwrap().len();
-    let replaced = wait_until(secs(10), || {
-        std::fs::metadata(&installed).is_ok_and(|meta| meta.len() == length)
-    });
-    resume_process(keeper);
-    let log = || std::fs::read_to_string(&said).unwrap_or_default();
-    assert!(
-        ended && replaced,
-        "the daemon ended: {ended}; the second copy was installed: {replaced}; {}",
-        log()
-    );
-    assert!(
-        wait_until(secs(30), || home.daemon_pid() == Some(serving.id() as i32)),
-        "the second copy's daemon serves: {}",
-        log()
-    );
-    assert_eq!(
-        std::fs::read(&installed).unwrap(),
-        std::fs::read(&second).unwrap(),
-        "the build's folder holds the second copy"
-    );
-    let meta = std::fs::symlink_metadata(&installed).unwrap();
-    assert!(
-        !meta.file_type().is_symlink()
-            && meta.permissions().mode() & 0o777 == 0o700
-            && meta.ino() != before,
-        "{meta:?}"
-    );
-    assert_eq!(home.keeper_pid(), Some(keeper), "the keeper runs on");
-    type_raw(&mut connect(&home), &agent.id, "after the install\r");
+    let keeper = process_identity(home.keeper_pid().expect("the keeper runs"));
+    let daemon = process_identity(home.daemon_pid().expect("the daemon runs"));
+    let bin = home.path.join("core/bin");
+    let snapshot = |name: &str| {
+        let launcher = bin.join(name);
+        let link = std::fs::read_link(&launcher).unwrap();
+        let selected = bin.join(&link);
+        (
+            link,
+            std::fs::symlink_metadata(launcher).unwrap().ino(),
+            std::fs::metadata(&selected).unwrap().ino(),
+            std::fs::read(selected).unwrap(),
+        )
+    };
+    let programs = ["facade", "facade-mcp"];
+    let before = programs.map(snapshot);
+    assert_ne!(before[0].2, std::fs::metadata(&first).unwrap().ino());
+    assert!(before[0].3 == std::fs::read(&first).unwrap());
+
+    run(&second, &["daemon", "--install-only"]);
+
+    for (name, original) in programs.into_iter().zip(before) {
+        assert!(
+            snapshot(name) == original,
+            "{name} and its launcher stay in place"
+        );
+    }
+    assert_eq!(home.keeper_pid(), Some(keeper.pid as i32));
+    assert_eq!(home.daemon_pid(), Some(daemon.pid as i32));
+    assert!(alive(&keeper) && alive(&daemon) && alive(&agent.process));
+    type_raw(&mut connect(&home), &agent.id, "after the equal build\r");
     assert!(
         wait_until(secs(10), || home.submitted_messages()
-            == ["after the install"]),
+            == ["after the equal build"]),
         "{:?}",
         home.submitted_messages()
-    );
-    let second_daemon = serving.id() as i32;
-    kill_process(second_daemon);
-    let _ = serving.wait();
-    let again = home
-        .wait_for_daemon_after(second_daemon, secs(20))
-        .expect("the keeper starts the daemon again");
-    assert!(
-        command_of(again).starts_with(&format!("{} daemon", bin.join("facade").display())),
-        "the keeper started {}",
-        command_of(again)
     );
 }
 
@@ -768,7 +727,21 @@ fn facade_started_from_a_copy_runs_on_once_that_copy_is_gone() {
             .stdin(std::process::Stdio::null());
         command
     };
-    let detached = as_copy(&["daemon", "--detach"]).output().unwrap();
+    // A failed exec did not start the daemon. Give a transient busy executable up to 500 ms.
+    let mut detach = as_copy(&["daemon", "--detach"]);
+    let retry_until = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    let detached = loop {
+        match detach.output() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                let remaining = retry_until.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    panic!("could not execute the copied daemon: {error}");
+                }
+                std::thread::sleep(remaining.min(std::time::Duration::from_millis(25)));
+            }
+            result => break result.unwrap(),
+        }
+    };
     assert!(detached.status.success(), "{}", stderr(&detached));
     let bin = home.path.join("core").join("bin");
     let build = bin.join(

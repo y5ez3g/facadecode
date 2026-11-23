@@ -68,7 +68,9 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 
 **Every program**
 - Build and version helpers include `build_id()`, `version()`, `VERSION`, `build_version(build)`,
-  `version_of(build)` and `takes_over(newer, running)`. Call `take_test_build()` first in `main`.
+  `version_of(build)`, `compare_builds(left, right)` and `takes_over(newer, running)`.
+  Compare the stable version, then the source commit time. Equal ranks keep the selected set.
+  Call `take_test_build()` first in `main`.
   Tests can make a program play another build through a script or a file beside the program.
   `this_program()` locates the program. `install` and `point_launchers_at` carry the file named with
   `TEST_BUILD_SUFFIX` beside it.
@@ -121,11 +123,12 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   `address::mcp` handles the MCP address spelling.
   `ssh` extracts the destination from the supplied OpenSSH login arguments and keeps the original
   arguments in their order. When the remote platform is unknown, Route and Travel identify its
-  login shell over the authenticated stream. The bootstrap probes the fixed installation path,
-  reads the client's install or serve decision, and writes `ready` before running machine serve
-  on the same streams. It serves any installed build and uses the authenticated machine hello
-  to establish compatibility before registration. Only a waking attempt may install a missing
-  peer. A passive attempt uses `--no-start` and recognizes exit 3 as sleeping.
+  login shell over the authenticated stream. The bootstrap probes the selected remote home's
+  launcher and reads the client's install or serve decision. A permitted installation of a
+  missing or lower-ranked build pins the complete local BUILD and verifies the selected launcher.
+  A higher remote build requires a local upgrade. The bootstrap writes `ready` before running
+  machine serve on the same streams. The authenticated machine hello checks API compatibility
+  and identity. A passive attempt uses `--no-start` and recognizes exit 3 as sleeping.
   On Windows, the foreground command keeps its output capture pipes private before starting the
   process that holds the saved SSH link.
   `system::hostname` and `system::login_environment` supply the host name and login environment.
@@ -173,7 +176,7 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 - `programs::{install_running, current_build, point_launchers_at, launcher}`;
   `service::{create_private_home, launch, live_holder}` to start the keeper;
   `unix_process::calling_program()` for a hook's CLI.
-- `ssh` prepares the fixed-path administration bootstrap and SSH arguments for Shell. It resolves the SSH account
+- `ssh` prepares the selected-home administration bootstrap and SSH arguments for Shell. It resolves the SSH account
   and the source IP observed by the remote sshd. Dedicated keys live in the Facade home's `core/ssh/` folder,
   with owner-only access to the private file. `SshKeyProof` checks the dedicated key used by an independent
   OpenSSH login. Authorization changes and host trust changes carry the exact entries to roll back.
@@ -183,12 +186,10 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   trust and revocation policy. A changed or revoked key, or no safe user file for first-time trust, fails the
   return and preserves the forward connection. Host trust appends honor HashKnownHosts. Rollback blanks
   only this attempt's confirmed records in place and preserves unrelated native appends.
-- `install::latest_stable(current)` checks both Core version files and provides a fixed pin only for a newer
-  metadata-confirmed release. If both files return 404, a GitHub release tag at or below the current version
-  confirms the up-to-date result. `installed_bin` identifies the active standalone launcher.
-  `upgrade_command(version)` builds the installer command with the current environment and optional validated
-  pin. SSH pins its installer to the local release. Both prefer GitHub and fall back to the matching website script.
-  Shell can opt in to a receipt carrying the exact failed file and HTTP status.
+- `install` reads the release BUILD marker and builds installer commands for the current home.
+  The numeric version selects the download location. The full BUILD pins the exact package when
+  known. Upgrade and SSH leave PATH management to the standalone installer. Shell can request a
+  receipt carrying the exact failed file and HTTP status.
 - `console::{VtModes, ConsoleReader, ConsoleSignals}`: what Attach needs of the person's
   console beside crossterm's size and raw mode. On Windows, Attach can consume an exact
   queued release from its detach chord. A native wheel record gives one-based viewport
@@ -283,8 +284,8 @@ What Facade asks of the operating system. `core/crates/base/src/platform/`.
   start in them; `core/` and `core/logs/` are made this user's alone, and the home keeps the mode
   the person gave it; on Windows they inherit their folders' access. A run is only ever given a
   launcher's path, never a build's program, so its next hook or MCP server is the current build's.
-  Installed programs and Windows launchers are refreshed when their bytes differ, even with the
-  same build ID.
+  Selection publishes complete higher-ranked program sets in the resolved home. Equal or lower
+  arrivals leave the selected files and launchers in place.
   `Held` puts back what the person deleted in the `core/bin/` it opened the build from, never in
   another home's.
 - **Never does:** uses protocol, settings or texts. The lock record is written with `serde_json`

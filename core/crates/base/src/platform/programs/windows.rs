@@ -454,11 +454,40 @@ fn npm_native_shim(text: &str) -> Option<&str> {
 
 // Facade's installed programs.
 
+pub(super) fn check_conpty(source: &Path) -> anyhow::Result<()> {
+    for name in ["conpty.dll", "OpenConsole.exe"] {
+        let file = source.join(CONPTY_FOLDER).join(name);
+        anyhow::ensure!(
+            file.is_file(),
+            "missing ConPTY companion {}",
+            file.display()
+        );
+    }
+    Ok(())
+}
+
+pub(super) fn check_managed_directory(path: &Path) -> io::Result<()> {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.is_dir() && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+        return Ok(());
+    }
+    Err(io::Error::other(format!(
+        "cannot use {}: expected a directory without a link",
+        path.display()
+    )))
+}
+
 impl Bin {
     /// Makes this folder and `build`'s.
     pub(super) fn make_private(&self, build: &Path) -> io::Result<()> {
-        std::fs::create_dir_all(&self.0)?;
-        std::fs::create_dir_all(build)
+        for folder in [&self.0, build] {
+            std::fs::create_dir_all(folder)?;
+            check_managed_directory(folder)?;
+        }
+        Ok(())
     }
 
     /// The build the `facade.exe` launcher is a copy of, as the record beside it names it.
@@ -469,10 +498,12 @@ impl Bin {
 
     /// Makes each launcher a copy of `build`'s program, renaming one in use aside, and then records
     /// `build` as the current one. Renamed copies that nothing runs any more are deleted first.
-    pub(super) fn link_launchers(&self, build: &str) -> io::Result<()> {
+    pub(super) fn link_launchers(&self, build: &str) -> anyhow::Result<()> {
+        check_managed_directory(&self.0)?;
+        check_managed_directory(&self.build(build)?)?;
         self.delete_set_aside();
         let current = self.current();
-        for name in PROGRAMS {
+        for name in PROGRAMS.into_iter().rev() {
             let launcher = self.0.join(name);
             let source = self.0.join(build).join(name);
             place_file(&source, &launcher)?;
@@ -561,6 +592,7 @@ fn place_file(source: &Path, target: &Path) -> io::Result<()> {
 /// Puts a copy of every file in the folder `source`, and in its folders, in `target`.
 fn place_folder(source: &Path, target: &Path) -> io::Result<()> {
     std::fs::create_dir_all(target)?;
+    check_managed_directory(target)?;
     for entry in std::fs::read_dir(source)? {
         let entry = entry?;
         let (from, to) = (entry.path(), target.join(entry.file_name()));

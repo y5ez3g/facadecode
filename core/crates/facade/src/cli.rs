@@ -168,18 +168,20 @@ pub(crate) enum Command {
     Keeper,
     #[command(hide = true)]
     Daemon {
-        #[arg(long, conflicts_with = "takeover")]
+        #[arg(long, conflicts_with_all = ["takeover", "install_only"])]
         detach: bool,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "install_only")]
         takeover: bool,
+        #[arg(long)]
+        install_only: bool,
     },
 }
 
 fn upgrade_version(value: &str) -> Result<String, &'static str> {
-    if value.split('.').count() == 3
-        && value
-            .split('.')
-            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    if value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || byte == b'.')
+        && facade_base::version_of(value).is_some()
     {
         Ok(value.to_owned())
     } else {
@@ -312,7 +314,7 @@ pub(crate) fn parse_from(argv: &[OsString]) -> Result<Arguments, ParseError> {
     }
     static VERSION: OnceLock<String> = OnceLock::new();
     let parsed = LexicalArguments::command()
-        .version(VERSION.get_or_init(facade_base::version).as_str())
+        .version(VERSION.get_or_init(facade_base::build_id).as_str())
         .try_get_matches_from(argv)
         .and_then(|matches| Ok((LexicalArguments::from_arg_matches(&matches)?, matches)));
     let (lexical, matches) = match parsed {

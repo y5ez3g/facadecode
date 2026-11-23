@@ -1,33 +1,53 @@
 //! Selects a release, runs its standalone installer and presents the result.
 
+use std::cmp::Ordering;
 use std::io::{self, Write as _};
+use std::path::Path;
 use std::process::Stdio;
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, anyhow, bail, ensure};
 use facade_base::api_v1::daemon::AgentLabel;
-use facade_base::install;
+use facade_base::{install, paths, programs};
 
 use crate::single_line;
 
 pub(crate) fn run(version: Option<&str>) -> anyhow::Result<()> {
+    let home = paths::facade_home()?;
+    let launcher = programs::launcher("facade")?;
+    let selected = programs::current_build().filter(|_| launcher.is_file());
     if let Some(version) = version {
-        return install_version(version);
+        let build = install::release_build(version).with_context(|| {
+            format!(
+                "Could not verify the BUILD for release {version}. {}",
+                matching_package()
+            )
+        })?;
+        if let Some(current) = selected.as_deref() {
+            let rank = facade_base::compare_builds(&build, current).with_context(|| {
+                format!(
+                    "Cannot compare the selected build {current} at {}",
+                    launcher.display()
+                )
+            })?;
+            if rank != Ordering::Greater {
+                return up_to_date(current, &launcher);
+            }
+        }
+        return install_version(&build, &home);
     }
 
-    let current = facade_base::version();
-    let numbers = facade_base::version_of(&current).with_context(|| {
-        format!("Could not check for updates from GitHub or facadecode.com: invalid local version {current}")
-    })?;
-    if let Some(version) = install::latest_stable(numbers)
+    let current = selected.unwrap_or_else(facade_base::build_id);
+    if let Some(build) = install::latest_stable(&current)
         .context("Could not check for updates from GitHub or facadecode.com")?
     {
-        return install_version(&version);
+        return install_version(&build, &home);
     }
 
-    let bin = facade_base::this_program()
-        .ok()
-        .and_then(|program| install::installed_bin(&program));
-    if let Some(bin) = bin {
+    up_to_date(&current, &launcher)
+}
+
+fn up_to_date(current: &str, launcher: &Path) -> anyhow::Result<()> {
+    if let Some(bin) = launcher.parent().filter(|_| launcher.is_file()) {
         println_or_end!(
             "Facade {current} is already up to date in {}.",
             bin.display()
@@ -38,8 +58,22 @@ pub(crate) fn run(version: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn install_version(version: &str) -> anyhow::Result<()> {
-    let output = install::upgrade_command(Some(version))
+fn matching_package() -> &'static str {
+    if cfg!(windows) {
+        "Use a current installer with -Package and the matching release archive."
+    } else {
+        "Use a current installer with --package and the matching release archive."
+    }
+}
+
+fn install_version(build: &str, home: &Path) -> anyhow::Result<()> {
+    let version = facade_base::build_version(build);
+    ensure!(
+        facade_base::takes_over(build, version),
+        "Could not verify a dated BUILD for release {version}. {}",
+        matching_package()
+    );
+    let output = install::upgrade_command(version, build, home)?
         .env("FACADE_UPGRADE_REPORT", "1")
         .env("FACADE_UPGRADE_ASSET_REPORT", "1")
         .stdin(Stdio::inherit())
@@ -50,6 +84,7 @@ fn install_version(version: &str) -> anyhow::Result<()> {
     let mut installed = None;
     let mut asset_error = None;
     let mut download_error = None;
+    let mut refused = false;
     let mut blockers = Vec::new();
     let mut diagnostics = Vec::new();
     for line in stdout.lines() {
@@ -59,6 +94,8 @@ fn install_version(version: &str) -> anyhow::Result<()> {
                 .map(|(asset, status)| (asset, http_status(status)));
         } else if let Some(status) = line.strip_prefix("facade-upgrade-download-error ") {
             download_error = Some(status);
+        } else if line == "facade-upgrade-installer-refused" {
+            refused = true;
         } else if let Some(payload) = line.strip_prefix("facade-upgrade-blockers ") {
             if let Ok(agents) = serde_json::from_str::<Vec<AgentLabel>>(payload) {
                 blockers = agents;
@@ -71,6 +108,12 @@ fn install_version(version: &str) -> anyhow::Result<()> {
     }
 
     if !output.status.success() {
+        if refused {
+            bail!(
+                "Could not upgrade Facade to {build}. The installer cannot verify the exact BUILD. {}",
+                matching_package()
+            );
+        }
         if let Some((asset, Some(status))) = asset_error {
             return Err(asset_http_error(version, asset, status));
         }
@@ -147,6 +190,7 @@ fn is_install_receipt(line: &str) -> bool {
             line.strip_prefix("Facade ")?
                 .split_once(" is already up to date in ")
         });
-    result
-        .is_some_and(|(version, bin)| facade_base::version_of(version).is_some() && !bin.is_empty())
+    result.is_some_and(|(build, bin)| {
+        facade_base::compare_builds(build, build).is_some() && !bin.is_empty()
+    })
 }

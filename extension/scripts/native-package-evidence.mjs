@@ -7,6 +7,7 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { coreArchive, corePrograms } from '../../core/scripts/package-core.mjs';
+import { CORE_BUILD_FILE, parseCoreBuild, sourceBuild } from './core.mjs';
 import { filesOfZip, packageTarget } from './native.mjs';
 import { fileFor, parseChecksums, sha256, targetsFor, verifyVsix } from './release-assets.mjs';
 import { verifyTimestampedSignatures } from './sign.mjs';
@@ -40,7 +41,7 @@ function requireFiles(directory, subdirectory, names) {
 		'Missing or unexpected files in ' + subdirectory);
 }
 
-export function verifyArchivePrograms(archive, vsix, target, version) {
+export function verifyArchivePrograms(archive, vsix, target, build) {
 	const editor = new Map(filesOfZip(vsix).map(file => [file.name, file.bytes]));
 	const windows = target.startsWith('win32-');
 	const zip = windows ? new Map(filesOfZip(archive).map(file => [file.name, file.bytes])) : null;
@@ -51,8 +52,14 @@ export function verifyArchivePrograms(archive, vsix, target, version) {
 		assert.ok(bytes?.length && member(name)?.equals(bytes), name + ' differs from the paired VSIX');
 		return [name, bytes];
 	});
-	assert.equal(member('VERSION')?.toString('utf8'), version + '\n', 'Core archive names a different version');
-	return programs;
+	const marker = member(CORE_BUILD_FILE);
+	// Earlier release candidates recorded a numeric archive version before VSIXs carried BUILD.
+	if (build === undefined || parseCoreBuild(build)?.revision) {
+		assert.ok(marker && editor.get('extension/bin/' + CORE_BUILD_FILE)?.equals(marker), 'Core archive BUILD differs from the paired VSIX');
+	}
+	const text = marker?.toString('utf8');
+	if (build !== undefined) assert.equal(text, build + '\n', 'Core archive names a different BUILD');
+	return { programs, marker: text };
 }
 
 function verifyPackagedSignatures(programs) {
@@ -99,8 +106,13 @@ export function captureNativePackage(directory, target, version, source, { signi
 	const checksums = parseChecksums(checksumBytes.toString('utf8'));
 	assert.deepStrictEqual([...checksums], [[archiveName, files[archive].sha256]],
 		archiveName + ' differs from its candidate SHA256SUMS');
-	const programs = verifyArchivePrograms(path.resolve(directory, archive), path.join(directory, vsix), target, version);
-	const record = { target, version, source, files };
+	const { programs, marker } = verifyArchivePrograms(path.resolve(directory, archive), path.join(directory, vsix), target);
+	const build = marker?.trimEnd();
+	const parsed = parseCoreBuild(build);
+	assert.equal(parsed?.version, version, 'VSIX BUILD differs from the release version');
+	assert.equal(parsed?.revision, source.revision, 'VSIX BUILD differs from the source revision');
+	assert.equal(marker, build + '\n', 'Invalid VSIX BUILD marker');
+	const record = { target, version, build, source, files };
 	if (verifySignatures || signing !== undefined) {
 		assert.ok(target.startsWith('win32-'), 'Unexpected Windows signing evidence for ' + target);
 		record.signing = signingRecord(programs);
@@ -154,6 +166,7 @@ function main(args) {
 		const source = { revision: head('HEAD'), tree: head('HEAD^{tree}'),
 			run: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT };
 		const record = captureNativePackage(directory, values.target, version, source, { verifySignatures: values.sign });
+		assert.equal(record.build, sourceBuild(version), 'Native package BUILD differs from its source commit');
 		fs.writeFileSync(path.join(directory, evidenceFile), JSON.stringify(record, null, 2) + '\n');
 		console.log('Recorded native package evidence for ' + values.target + ' on ' + source.tree);
 		return;

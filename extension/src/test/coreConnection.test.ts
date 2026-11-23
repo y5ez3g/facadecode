@@ -7,7 +7,8 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
-import { once } from 'events';
+import { EventEmitter, once } from 'events';
+import { PassThrough } from 'stream';
 import type { ScreenChange, ScreenSnapshot, WatchParams } from '../base/coreProtocol';
 import { connectWithin } from '../base/connect';
 import { lineReader } from '../base/lines';
@@ -89,6 +90,60 @@ const welcome = {
 };
 
 suite('Core connection (ARCHITECTURE-1.4)', () => {
+	test('carries typed startup refusal and planned restart details through the editor adapter', async () => {
+		const home = tempDir('facade-startup-report-');
+		try {
+			const program = path.join(home.dir, FACADE_PROGRAM);
+			for (const reason of ['refused', 'protocol_incompatible'] as const) {
+				const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough() });
+				const load = withModules({ child_process: { spawn: (file: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
+					assert.deepStrictEqual([file, args], [program, ['daemon', '--takeover']]);
+					assert.deepStrictEqual([options.env.FACADE_HOME, options.env.FACADE_EDITOR_STARTUP_REPORT], [home.dir, '1']);
+					return child;
+				} } });
+				const { startDaemon } = load<typeof import('../host/rust/rpc')>(require.resolve('../host/rust/rpc'));
+				const { DaemonError } = load<typeof import('../host/rust/types')>(require.resolve('../host/rust/types'));
+				const data = { reason, details: { next: 'Plan a restart before retrying.' } };
+				const body = { code: -32000, message: 'Plan a restart before retrying.', data };
+				const result = startDaemon({ home: home.dir, program, log: assert.fail }, '--takeover');
+				child.stdout.end(`facade-editor-daemon-error ${JSON.stringify(body)}\n`);
+				child.stderr.end('Startup diagnostics\n');
+				child.emit('close', 1);
+				await assert.rejects(result, (error: unknown) => {
+					assert.ok(error instanceof DaemonError);
+					assert.deepStrictEqual([error.code, error.message, error.reason, error.data], [body.code, body.message, reason, data]);
+					return true;
+				});
+			}
+		} finally { home.remove(); }
+	});
+
+	test('keeps startup failures without a typed stdout report as ordinary errors', async () => {
+		const home = tempDir('facade-startup-error-');
+		try {
+			const program = path.join(home.dir, FACADE_PROGRAM);
+			for (const [event, detail] of [['error', 'ENOENT'], ['close', 'ordinary startup failure']] as const) {
+				const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough() });
+				const load = withModules({ child_process: { spawn: () => child } });
+				const { startDaemon } = load<typeof import('../host/rust/rpc')>(require.resolve('../host/rust/rpc'));
+				const { DaemonError } = load<typeof import('../host/rust/types')>(require.resolve('../host/rust/types'));
+				const result = startDaemon({ home: home.dir, program, log: assert.fail }, '--detach');
+				if (event === 'error') {
+					child.emit('error', new Error(detail));
+				} else {
+					child.stdout.end(`${detail}\n`);
+					child.stderr.end('facade-editor-daemon-error {"code":-32000,"message":"wrong stream","data":{"reason":"refused"}}\n');
+					child.emit('close', 1);
+				}
+				await assert.rejects(result, (error: unknown) => {
+					assert.ok(error instanceof Error && !(error instanceof DaemonError));
+					assert.ok(error.message.includes(detail), error.message);
+					return true;
+				});
+			}
+		} finally { home.remove(); }
+	});
+
 	test('uses the exact daemon socket name', () => {
 		const home = 'D:\\Facade home\\\u4f60\u597d';
 		if (process.platform === 'win32') {

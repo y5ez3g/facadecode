@@ -14,6 +14,7 @@ import { registerOrchestratorUi, type OrchestratorUiDeps } from '../../ui/comman
 import { WindowColours } from '../execution/terminalColours';
 import { WindowHuman } from '../human';
 import { facadeInTerminals, startEnvironment } from '../rust/environment';
+import { startDaemon } from '../rust/rpc';
 import { rustSettings } from '../rust/settings';
 import { FACADE_PROGRAM } from '../rust/types';
 import { optionalTerminalOwner } from '../windowComponent';
@@ -81,9 +82,16 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 	let stopAgents: (() => Promise<unknown> | undefined) | undefined;
 	let step = vscode.l10n.t('connect to the Orchestrator');
 	try {
-		const link = await connectOrchestrator({
+		await startDaemon({
 			home: deps.root,
 			program: path.join(context.extensionPath, FACADE_PROGRAM),
+			log: log.event
+		}, '--takeover');
+		const program = path.join(deps.root, 'core', FACADE_PROGRAM);
+		log.event(`Using Facade program ${program}.`);
+		const link = await connectOrchestrator({
+			home: deps.root,
+			program,
 			build: String(context.extension.packageJSON.version),
 			log: log.event
 		});

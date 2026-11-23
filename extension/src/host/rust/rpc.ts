@@ -62,31 +62,6 @@ export async function connectDaemonSocket(home: string, waitMs: number): Promise
 	return connectWithin(socket, waitMs);
 }
 
-/** Whether the daemon of build `running` hands over to build `newer`: only a higher release version does, as core decides it. */
-export function takesOver(newer: string, running: string): boolean {
-	const a = versionOf(newer);
-	const b = versionOf(running);
-	if (!a || !b) {
-		return false;
-	}
-	for (let i = 0; i < 3; i++) {
-		if (a[i] !== b[i]) {
-			return a[i] > b[i];
-		}
-	}
-	return false;
-}
-
-/** The three numbers of a build such as `0.2.1+4f2a`, none unless it has exactly three. */
-function versionOf(build: string): bigint[] | undefined {
-	const parts = build.split('+', 1)[0].split('.');
-	if (parts.length !== 3 || parts.some(part => !/^\d+$/.test(part))) {
-		return undefined;
-	}
-	const numbers = parts.map(BigInt);
-	return numbers.every(number => number <= 0xffff_ffff_ffff_ffffn) ? numbers : undefined;
-}
-
 export function unavailable(message: string): DaemonError {
 	return new DaemonError(message, 'unavailable', { reason: 'unavailable' });
 }
@@ -96,22 +71,45 @@ export function errorOf(body: ErrorBody | undefined): DaemonError {
 	return new DaemonError(body?.message ?? 'Facade core answered with an error.', data.reason, data, body?.code);
 }
 
-/** Runs `facade daemon --detach` for `home`: where Facade starts, or already runs, it answers with code 0. */
-export function startDaemon(options: Pick<DaemonOptions, 'home' | 'program' | 'log'>): Promise<void> {
+function startupRefusal(stdout: string): DaemonError | undefined {
+	const prefix = 'facade-editor-daemon-error ';
+	const report = stdout.split(/\r?\n/).find(line => line.startsWith(prefix));
+	if (!report) { return undefined; }
+	try {
+		const body = JSON.parse(report.slice(prefix.length)) as ErrorBody | null;
+		const reason = body?.data?.reason;
+		if ((reason === 'refused' || reason === 'protocol_incompatible') &&
+			typeof body?.message === 'string' && Number.isInteger(body.code)) {
+			return errorOf(body);
+		}
+	} catch {
+		// Keep the ordinary startup error when the child did not send a usable report.
+	}
+	return undefined;
+}
+
+/** Selects the bundled programs or starts the home launcher for the given home. */
+export function startDaemon(options: Pick<DaemonOptions, 'home' | 'program' | 'log'>, mode: '--takeover' | '--detach'): Promise<void> {
 	return new Promise((resolve, reject) => {
-		const child = spawn(options.program, ['daemon', '--detach'], { env: { ...process.env, FACADE_HOME: options.home }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-		let output = '';
-		child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString('utf8'); });
-		child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString('utf8'); });
+		const child = spawn(options.program, ['daemon', mode], {
+			env: { ...process.env, FACADE_HOME: options.home, FACADE_EDITOR_STARTUP_REPORT: '1' },
+			stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true
+		});
+		let stdout = '';
+		let stderr = '';
+		child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk; });
+		child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk; });
 		child.once('error', err => reject(new Error(`Could not run ${options.program}: ${messageOf(err)}`)));
 		child.once('close', code => {
+			const detail = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n');
 			if (code === 0) {
-				if (output.trim()) {
-					options.log(output.trim());
+				if (detail) {
+					options.log(detail);
 				}
 				resolve();
 			} else {
-				reject(new Error(output.trim() || `${options.program} daemon --detach exited with code ${code}`));
+				reject(startupRefusal(stdout) ??
+					new Error(`${options.program} daemon ${mode} exited with code ${code}${detail ? `\n${detail}` : ''}`));
 			}
 		});
 	});

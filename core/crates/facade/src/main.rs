@@ -130,7 +130,7 @@ fn main() {
                 action: MachineAction::Serve(_) | MachineAction::SshAdmin { .. }
             }
     );
-    let code = run(command).unwrap_or_else(|error| {
+    let code = dispatch(command).unwrap_or_else(|error| {
         if hidden {
             eprintln!("facade: {error:#}");
             errors::exit_code(&error)
@@ -139,6 +139,26 @@ fn main() {
         }
     });
     std::process::exit(code)
+}
+
+fn dispatch(command: Command) -> anyhow::Result<i32> {
+    if !matches!(
+        command,
+        Command::PrintVersion
+            | Command::Keeper
+            | Command::Daemon { takeover: true, .. }
+            | Command::Daemon {
+                install_only: true,
+                ..
+            }
+            | Command::Machine {
+                action: MachineAction::Serve(_) | MachineAction::SshAdmin { .. }
+            }
+    ) && let Some(code) = facade_base::programs::run_in_selected_home()?
+    {
+        return Ok(code);
+    }
+    run(command)
 }
 
 /// Writes `text` to standard output, for [`print_or_end`] and [`println_or_end`]. Where the reader
@@ -409,7 +429,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
             Ok(0)
         }
         Command::PrintVersion => {
-            println_or_end!("facade {}", facade_base::version());
+            println_or_end!("facade {}", facade_base::build_id());
             Ok(0)
         }
         Command::Hook { event } => {
@@ -419,8 +439,14 @@ fn run(command: Command) -> anyhow::Result<i32> {
         }
         Command::Keeper => facade_keeper::serve().map(|()| 0),
         Command::Daemon { takeover: true, .. } => daemon_client::takeover(),
+        Command::Daemon {
+            install_only: true, ..
+        } => facade_base::programs::select_running().map(|_| 0),
         Command::Daemon { detach: true, .. } => daemon_client::detach(),
-        Command::Daemon { .. } => facade_daemon::run().map(|()| 0),
+        Command::Daemon { .. } => {
+            facade_base::programs::validate_running_build()?;
+            facade_daemon::run().map(|()| 0)
+        }
         Command::Machine { action } => machine::run(
             action,
             &connect_or_start,

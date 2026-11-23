@@ -27,8 +27,8 @@ pub mod start;
 pub mod time;
 
 pub use build::{
-    TEST_BUILD_SUFFIX, VERSION, build_id, build_version, take_test_build, takes_over, this_program,
-    version, version_of,
+    TEST_BUILD_SUFFIX, VERSION, build_id, build_version, compare_builds, take_test_build,
+    takes_over, this_program, version, version_of,
 };
 pub use platform::modules::*;
 pub use protocol::{address, api_v1, base64, jsonrpc, operations};

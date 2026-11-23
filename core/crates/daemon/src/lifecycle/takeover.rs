@@ -101,18 +101,10 @@ impl Lifecycle {
     ) -> Result<DaemonUpgradeResult, ErrorBody> {
         let ours = facade_base::build_id();
         if !facade_base::takes_over(&args.build, &ours) {
-            let same_version = facade_base::version_of(&args.build).is_some()
-                && facade_base::version_of(&args.build) == facade_base::version_of(&ours);
-            let why = if same_version {
-                format!(
-                    "{} is of this Facade's own version, {ours}: builds of one version do not \
-                     take over from each other",
-                    args.build
-                )
-            } else {
-                format!("{} is not newer than this Facade, {ours}", args.build)
-            };
-            return Err(operation_error(Reason::Refused, why));
+            return Err(operation_error(
+                Reason::Refused,
+                format!("{} is not newer than this Facade, {ours}", args.build),
+            ));
         }
         if highest_common(&args.daemon_api_versions, SUPPORTED_API_VERSIONS).is_none() {
             return Err(ErrorBody::protocol_incompatible(
@@ -169,8 +161,7 @@ impl Lifecycle {
             .collect();
         let (program, build) = (args.program.clone(), args.build.clone());
         crate::blocking(move || {
-            facade_base::programs::install(Path::new(&program), &build)?;
-            facade_base::programs::point_launchers_at(&build, &builds)
+            facade_base::programs::select_for_takeover(Path::new(&program), &build, &builds)
         })
         .await
         .map_err(|error| {

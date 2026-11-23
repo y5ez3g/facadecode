@@ -1,6 +1,6 @@
 //! Stable Core metadata and HTTP evidence for older installers.
 
-use std::path::PathBuf;
+use std::{cmp::Ordering, path::PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 
@@ -9,8 +9,12 @@ use super::{RELEASES, WEBSITE};
 const VERSION_FILE: &str = "facade-core-version.txt";
 const CHECKSUMS: &str = "SHA256SUMS";
 
-/// Selects a newer stable Core version, if either release origin confirms one.
-pub fn latest_stable(current: [u64; 3]) -> Result<Option<String>> {
+/// Selects the full ID of a newer stable build advertised by the release origins.
+pub fn latest_stable(current: &str) -> Result<Option<String>> {
+    ensure!(
+        crate::compare_builds(current, current).is_some(),
+        "invalid local build {current}"
+    );
     let website = format!("{WEBSITE}/{VERSION_FILE}");
     let github = format!("{RELEASES}/latest/download/{VERSION_FILE}");
     let sources = [&website, &github];
@@ -41,19 +45,42 @@ pub fn latest_stable(current: [u64; 3]) -> Result<Option<String>> {
             bail!("{url}: did not redirect to a stable extension release tag");
         };
         ensure!(
-            numbers <= current,
+            numbers <= crate::version_of(current).expect("current build is stable"),
             "{url}: release {tag} is newer than this build, but {VERSION_FILE} returned HTTP 404 from both origins"
         );
         return Ok(None);
     }
 
     let [website, github] = responses.map(|response| response.and_then(Response::version));
+    let selected = newest_marker(website, github)?;
+    Ok(crate::takes_over(&selected, current).then_some(selected))
+}
+
+/// Resolves the dated BUILD marker for one numeric release tag.
+pub fn release_build(version: &str) -> Result<String> {
+    ensure!(
+        stable_version(version).is_some(),
+        "invalid release version {version}"
+    );
+    let read = |url: String| -> Result<String> {
+        let build = request(&url, Request::Version)?.version()?;
+        ensure!(
+            crate::build_version(&build) == version && crate::takes_over(&build, version),
+            "{url}: expected a dated BUILD for release {version}, found {build}"
+        );
+        Ok(build)
+    };
+    let [github, website] = super::tagged_asset_urls(version, VERSION_FILE).map(read);
+    newest_marker(website, github)
+}
+
+fn newest_marker(website: Result<String>, github: Result<String>) -> Result<String> {
     let selected = match (website, github) {
-        (Ok(one), Ok(two)) if two.0 > one.0 => two,
+        (Ok(one), Ok(two)) if crate::takes_over(&two, &one) => two,
         (Ok(version), _) | (_, Ok(version)) => version,
         (Err(website), Err(github)) => bail!("facadecode.com: {website:#}. GitHub: {github:#}"),
     };
-    Ok((selected.0 > current).then_some(selected.1))
+    Ok(selected)
 }
 
 pub(super) fn stable_version(version: &str) -> Option<[u64; 3]> {
@@ -135,16 +162,18 @@ impl Response {
         self.exit.success() && matches!(self.http, Some(200..=299))
     }
 
-    fn version(self) -> Result<([u64; 3], String)> {
+    fn version(self) -> Result<String> {
         ensure!(self.available(), "{VERSION_FILE}: {}", self.detail());
         let version = self
             .text
             .strip_suffix("\r\n")
             .or_else(|| self.text.strip_suffix('\n'))
             .unwrap_or(&self.text);
-        let numbers =
-            stable_version(version).context("invalid stable version in facade-core-version.txt")?;
-        Ok((numbers, version.to_owned()))
+        ensure!(
+            crate::compare_builds(version, version) == Some(Ordering::Equal),
+            "invalid stable build in {VERSION_FILE}"
+        );
+        Ok(version.to_owned())
     }
 
     fn detail(&self) -> String {

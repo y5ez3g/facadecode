@@ -423,8 +423,13 @@ test('the packaged workspace extension carries core\'s programs of this host\'s 
 	assert.deepEqual(programProblems(files, target, zipModes(file)), []);
 	const programs = files.filter(each => each.name.startsWith('extension/bin/'));
 	assert.deepEqual(programs.map(each => each.name).sort(), target.startsWith('win32-')
-		? ['extension/bin/conpty/OpenConsole.exe', 'extension/bin/conpty/conpty.dll', 'extension/bin/facade-mcp.exe', 'extension/bin/facade.exe']
-		: ['extension/bin/facade', 'extension/bin/facade-mcp']);
+		? ['extension/bin/VERSION', 'extension/bin/conpty/OpenConsole.exe', 'extension/bin/conpty/conpty.dll', 'extension/bin/facade-mcp.exe', 'extension/bin/facade.exe']
+		: ['extension/bin/VERSION', 'extension/bin/facade', 'extension/bin/facade-mcp']);
+	const revision = spawnSync('git', ['show', '-s', '--format=%ct.%H', 'HEAD'], { cwd: root, encoding: 'utf8' });
+	assert.equal(revision.status, 0, revision.stderr);
+	assert.match(revision.stdout.trim(), /^\d+\.[0-9a-f]{40}$/);
+	assert.equal(programs.find(each => each.name === 'extension/bin/VERSION').bytes.toString('utf8'),
+		`${version}+${revision.stdout.trim()}\n`);
 	assert.deepEqual(nativeProblems(files, target), []);
 	assert.equal(workspaceVersion(fs.readFileSync(path.join(root, '..', 'core', 'Cargo.toml'), 'utf8')), version);
 	assert.ok(!filesOfZip(path.join(root, 'build', 'vsix', `facadecode-window-${version}.vsix`)).some(each => each.name.startsWith('extension/bin/')));

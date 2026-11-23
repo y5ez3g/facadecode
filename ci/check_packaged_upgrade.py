@@ -35,10 +35,11 @@ FRESH = 'fresh receipt after packaged upgrade'
 
 
 def package_identity(role, archive, checksums, pin, metadata):
-    version, programs, archive_sha, checksums_sha = metadata
+    build, programs, archive_sha, checksums_sha = metadata
     if archive_sha != pin:
         raise AcceptanceError(f'{role} archive does not match the supplied SHA-256 pin')
-    return {'archive': str(archive), 'checksums': str(checksums), 'version': version,
+    return {'archive': str(archive), 'checksums': str(checksums), 'build': build,
+            'version': build.split('+', 1)[0],
             'archive_sha256': archive_sha, 'checksums_sha256': checksums_sha, 'program_sha256': programs}
 
 
@@ -52,26 +53,23 @@ def stage_archive(folder, package):
     return archive
 
 
-def installed_programs(install, runtime, package, build):
-    share = install / 'share/facade'
-    version = package['version']
-    current = share / 'current'
-    assert current.readlink() == Path('versions') / version, current
+def installed_programs(runtime, package):
+    build = Path(package['build'])
     for name in PROGRAMS:
-        assert (install / 'bin' / name).readlink() == Path('../share/facade/current') / name, name
-        assert (runtime / name).readlink() == Path(build) / name, name
+        assert (runtime / name).readlink() == build / name, name
     observed = {
-        'external': binary_hashes(install / 'bin'), 'runtime': binary_hashes(runtime),
-        'current': str(current.readlink()),
+        'external': binary_hashes(runtime), 'runtime': binary_hashes(runtime / build),
+        'current': str(build),
     }
     assert observed['external'] == observed['runtime'] == package['program_sha256'], observed
     return observed
 
 
 def exercise(scope, sockets, receipt, fake):
-    home, state, install, project, tmp, runtime, transcripts = (
-        scope / name for name in ('home', 'state', 'install', 'project', 'tmp', 'runtime', 'transcripts')
+    home, state, project, tmp, runtime, transcripts = (
+        scope / name for name in ('home', 'state', 'project', 'tmp', 'runtime', 'transcripts')
     )
+    bin_dir = state / 'core/bin'
     for folder in (home, state, project, tmp, runtime, transcripts):
         folder.mkdir(mode=0o700)
     key = sha256(os.fsencode(state)).hexdigest()[:10]
@@ -88,7 +86,7 @@ def exercise(scope, sockets, receipt, fake):
     packages = {role: stage_archive(scope / role, receipt[role]) for role in ('prior', 'candidate')}
     env = {key: str(value) for key, value in {
         'CI_ACCEPTANCE_ROOT': scope, 'HOME': home, 'FACADE_HOME': state, 'TMPDIR': tmp,
-        'XDG_RUNTIME_DIR': runtime, 'PATH': f'{install}/bin:{SYSTEM_PATH}',
+        'XDG_RUNTIME_DIR': runtime, 'PATH': f'{bin_dir}:{SYSTEM_PATH}',
         'TERM': 'xterm-256color', 'LC_ALL': 'C.UTF-8',
     }.items()}
     keys, starts = scope / 'keys', scope / 'starts'
@@ -102,7 +100,7 @@ def exercise(scope, sockets, receipt, fake):
     }}}) + '\n')
     settings_sha = hash_file(settings)
     transcript = transcripts / f'{SESSION}.jsonl'
-    facade = install / 'bin/facade'
+    facade = bin_dir / 'facade'
 
     def command(label, argv, *, relay=False):
         args = list(map(str, argv))
@@ -117,11 +115,14 @@ def exercise(scope, sockets, receipt, fake):
         return result.stdout
 
     def install_package(role):
-        version = receipt[role]['version']
-        installed = command(f'install {role}', installer_args(INSTALLER, packages[role], install, version))
-        assert f'Installed Facade {version} in {install / "bin"}.' in installed.splitlines(), installed
-        version_output = command(f'read {role} Shell version', [facade, '--version'])
-        assert version_output.strip() == f'facade {version}', version_output
+        build = receipt[role]['build']
+        installed = command(f'install {role}', installer_args(INSTALLER, packages[role], build))
+        assert f'Installed Facade {build} in {bin_dir}.' in installed.splitlines(), installed
+
+    def verify_shell_build(role):
+        reported = command(f'read {role} Shell version', [facade, '--version'])
+        build = receipt[role]['build']
+        assert reported.strip() == f'facade {build}', reported
 
     def inspect(target):
         return query(endpoint, 'agent.inspect', {'target': target})[1]['agent']
@@ -130,7 +131,7 @@ def exercise(scope, sockets, receipt, fake):
         package = receipt[role]
         hello, status = query(endpoint, 'daemon.status', {})
         build = hello['build']
-        assert Path(build).name == build and build.split('+', 1)[0] == package['version'], (role, hello)
+        assert build == package['build'], (role, hello)
         assert (status['home'], status['build'], status['daemon_pid'], status['agent_count']) == (
             str(state), build, hello['pid'], 1), status
         agent = inspect(target)
@@ -141,13 +142,12 @@ def exercise(scope, sockets, receipt, fake):
         processes = {name: process_identity(pid) for name, pid in (
             ('daemon', hello['pid']), ('keeper', status['keeper_pid']), ('cli', agent['pid']),
         )}
-        bin_dir = state / 'core/bin'
         assert processes['daemon']['executable'] == str(bin_dir / build / 'facade'), processes
         assert processes['cli']['executable'] == str(staged_fake), processes
         assert starts.read_text().splitlines() == [str(agent['pid'])], starts
         assert hash_file(settings) == settings_sha, settings
         return {'hello': hello, 'agent': agent, 'processes': processes,
-                'programs': installed_programs(install, bin_dir, package, build), 'settings_sha256': settings_sha}
+                'programs': installed_programs(bin_dir, package), 'settings_sha256': settings_sha}
 
     def request(text, request_id):
         return {'to': reference, 'text': text, 'request_id': request_id}
@@ -167,6 +167,7 @@ def exercise(scope, sockets, receipt, fake):
         return [json.loads(line)['message'] for line in transcript.read_text().splitlines()]
 
     install_package('prior')
+    verify_shell_build('prior')
     started = command('start the fake CLI through the prior Shell', [
         facade, 'start', '-d', '--name', 'upgrade-agent', '--workdir', project, 'qa-upgrade',
     ])
@@ -203,6 +204,7 @@ def exercise(scope, sockets, receipt, fake):
     assert after['hello']['keeper'] == keeper, after
     assert all(after['processes'][role] == before['processes'][role] for role in ('keeper', 'cli')), after
     assert after['agent']['reference'] == before['agent']['reference'], after
+    verify_shell_build('candidate')
     daemon_log = (state / 'core/logs/daemon.log').read_text()
     receipt['keeper_api_versions'] = {}
     for role, observation in (('prior', before), ('candidate', after)):
@@ -216,7 +218,7 @@ def exercise(scope, sockets, receipt, fake):
 
     screen = command('read the original screen through the candidate Shell', [facade, 'screen', target])
     assert ORIGINAL in screen, screen
-    mcp = command('use the candidate MCP relay', [install / 'bin/facade-mcp'], relay=True)
+    mcp = command('use the candidate MCP relay', [bin_dir / 'facade-mcp'], relay=True)
     assert relay_ready(mcp, receipt['candidate']['version']), mcp
 
     repeated = receipt['repeated_receipt'] = send(original_request)
@@ -250,9 +252,9 @@ def main():
         source = source_identity(run_identity(args.run_id, {}))
         fake = args.fake_executable.resolve()
         prior = package_identity('prior', args.prior_archive.absolute(), args.prior_checksums.absolute(),
-                                 args.prior_sha256, validate_inputs(args.prior_archive, args.prior_checksums, fake))
+                                 args.prior_sha256, validate_inputs(args.prior_archive, args.prior_checksums, fake, local=True))
         candidate = package_identity('candidate', args.candidate_archive.absolute(), args.candidate_checksums.absolute(),
-                                     args.candidate_sha256, archive_metadata(args.candidate_archive, args.candidate_checksums))
+                                     args.candidate_sha256, archive_metadata(args.candidate_archive, args.candidate_checksums, local=True))
         if tuple(map(int, candidate['version'].split('.'))) <= tuple(map(int, prior['version'].split('.'))):
             raise AcceptanceError('live upgrade requires a candidate with a higher numeric version than the prior archive')
         receipt = {'source': source, 'mode': 'local-qa', 'target': 'linux-x64', 'prior': prior, 'candidate': candidate,

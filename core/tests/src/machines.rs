@@ -25,6 +25,7 @@ pub fn install_machine_ssh_with_programs(machines: &[(&str, &TestHome, &Path)]) 
     let shell = crate::shell();
     #[cfg(windows)]
     let shell = crate::git_install().join("usr/bin/sh.exe");
+    let utilities = shell_path(shell.parent().unwrap());
     let shell = shell_path(&shell);
     #[cfg(unix)]
     let pause = Path::new("/bin/sleep").to_path_buf();
@@ -46,6 +47,14 @@ pub fn install_machine_ssh_with_programs(machines: &[(&str, &TestHome, &Path)]) 
         );
         let program = shell_path(facade);
         let path = home.path.to_str().expect("the test home must be UTF-8");
+        #[cfg(unix)]
+        let unix_home = path.to_owned();
+        #[cfg(windows)]
+        let unix_home = format!(
+            "/{}{}",
+            path[..1].to_ascii_lowercase(),
+            path[2..].replace('\\', "/")
+        );
         let encoded_home: String = path
             .as_bytes()
             .iter()
@@ -80,21 +89,30 @@ pub fn install_machine_ssh_with_programs(machines: &[(&str, &TestHome, &Path)]) 
         let disconnected = shell_literal(&format!(
             "ssh: connect to host {destination}: Connection refused"
         ));
-        let installed = home.user_home().join(".local/bin/facade");
-        std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
-        std::fs::write(
-            &installed,
-            format!(
-                "#!/bin/sh\nexport PATH=\"$QA_SSH_PROGRAM_PATH\"\nunset QA_SSH_PROGRAM_PATH\nexec {program} \"$@\"\n"
-            ),
-        )
-        .unwrap();
-        #[cfg(unix)]
-        std::fs::set_permissions(
-            &installed,
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
+        let shim = format!("#!/bin/sh\nexport FACADE_HOME={source}\nexec {program} \"$@\"\n");
+        for installed in [
+            home.user_home().join(".local/bin/facade"),
+            home.path.join("core/bin/facade"),
+        ] {
+            if installed.exists() {
+                continue;
+            }
+            std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+            std::fs::write(&installed, &shim).unwrap();
+            #[cfg(unix)]
+            std::fs::set_permissions(
+                &installed,
+                std::os::unix::fs::PermissionsExt::from_mode(0o755),
+            )
+            .unwrap();
+        }
+        install_script(
+            &home.fixture_bin(),
+            "curl",
+            "#!/bin/sh\necho 'The SSH fixture has no download' >&2\nexit 64\n",
+        );
+        let unix_home = shell_literal(&unix_home);
+        let fixture_bin = shell_path(&home.fixture_bin());
         writeln!(
             targets,
             "  {target}|*@{target}|{ip}|*@{ip})
@@ -124,6 +142,9 @@ pub fn install_machine_ssh_with_programs(machines: &[(&str, &TestHome, &Path)]) 
       exit 255
     fi
     encoded_home={encoded_home}
+    native_home={source}
+    unix_home={unix_home}
+    fixture_bin={fixture_bin}
     program={program}
     serves={serves}
     target_ip={ip}
@@ -263,6 +284,7 @@ if [ "$#" -eq 0 ]; then
   esac
   while :; do
     case "$line" in
+      *'exec "$program" machine serve'*|*'exec "$program" machine ssh-admin'*) break ;;
       *' machine serve '*"--home-hex $encoded_home"\'*|*' machine ssh-admin '*"--home-hex $encoded_home"\'*) break ;;
       *' machine serve '*|*' machine ssh-admin --home-hex '*) printf '%s\n' 'SSH command did not select the isolated Facade home' >&2; exit 64 ;;
     esac
@@ -277,19 +299,33 @@ $line"
 fi
 [ "$#" -eq 1 ] || exit 64
 case "$1" in
-  'sh -c '*"--home-hex $encoded_home"*) ;;
+  'sh -c '*"--home-hex $encoded_home"*|'sh -c '*'program="$FACADE_HOME/core/bin/facade"'*) ;;
   *) printf '%s\n' 'SSH command did not select the isolated Facade home' >&2; exit 64 ;;
 esac
 case "$1" in
-  *' machine serve --no-start '*) printf '%s\n' no-start >> "$serves" ;;
-  *' machine serve '*) printf '%s\n' wake >> "$serves" ;;
-  *' machine ssh-admin '*) printf '%s\n' admin >> "$serves" ;;
+  *' machine serve --no-start'*) printf '%s\n' no-start >> "$serves" ;;
+  *' machine serve'*) printf '%s\n' wake >> "$serves" ;;
+  *' machine ssh-admin'*) printf '%s\n' admin >> "$serves" ;;
 esac
-# The fixed test installation restores the program PATH. With PATH empty during bootstrap,
-# an unexpected download request fails inside the fixture.
-export QA_SSH_PROGRAM_PATH="$PATH"
-export PATH=
-exec {shell} -c "exec {shell} ${{1#sh }}"
+# Keep the bootstrap's utilities available and put the fixture's curl refusal first.
+export PATH="$fixture_bin":{utilities}:"$PATH"
+case "$1" in
+  *'program="$FACADE_HOME/core/bin/facade"'*)
+    # Unpack the generated sh -c words. The fixture simulates a Unix login on Windows too.
+    eval "set -- $1"
+    script=$3
+    shift 3
+    [ "$1" = facade-install ] || exit 64
+    case "$2" in
+      ''|"$native_home"|"$unix_home") ;;
+      *) printf '%s\n' 'SSH command did not select the isolated Facade home' >&2; exit 64 ;;
+    esac
+    shift 2
+    export FACADE_HOME="$unix_home"
+    exec {shell} -c "$script" facade-install "$unix_home" "$@"
+    ;;
+  *) exec {shell} -c "exec {shell} ${{1#sh }}" ;;
+esac
 "#
     );
     for (_, home, _) in machines {

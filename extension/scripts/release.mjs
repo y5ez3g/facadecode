@@ -16,7 +16,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { coreArchive, coreInstallers, coreVersionFile } from '../../core/scripts/package-core.mjs';
-import { CORE, withWorkspaceVersion } from './core.mjs';
+import { CORE, parseCoreBuild, sourceBuild, withWorkspaceVersion } from './core.mjs';
 import { signingRecord, validateSource, verifyArchivePrograms, verifyNativePackages } from './native-package-evidence.mjs';
 import {
 	SUMS, checksumsText, compareVersions, fileFor, nativeTargets, parseChecksums, sha256, targetsFor, verifyVsix,
@@ -74,9 +74,9 @@ export function releaseNotes(changelog, version) {
 }
 
 /** The standalone version marker and installers from the candidate's tag. */
-function taggedInstallers(version, work, commit) {
+function taggedInstallers(build, work, commit) {
 	const releaseVersion = path.join(work, coreVersionFile);
-	fs.writeFileSync(releaseVersion, version + '\n');
+	fs.writeFileSync(releaseVersion, build + '\n');
 	const paths = [];
 	for (const file of coreInstallers) {
 		const installer = path.join(work, file);
@@ -281,7 +281,11 @@ async function releaseRun(tag, inputDir, work, packageAttempt = process.env.GITH
 	const version = versionOfTag(tag);
 	assert.ok(coreFilesFor(version).length, `${tag} uses the historical archive catalog`);
 	const source = { ...taggedSource(tag, version), run: process.env.GITHUB_RUN_ID, attempt: packageAttempt };
+	const build = sourceBuild(version, source.revision);
 	const packages = verifyNativePackages(inputDir, version, source, { requireSigning: true });
+	for (const record of packages) {
+		assert.equal(record.build, build, record.target + ' native package BUILD differs from the tagged source');
+	}
 	const packaged = (record, folder, file, target) => {
 		const relative = folder + '/' + file;
 		return { target, file, path: path.join(inputDir, 'extension-' + record.target, relative), sha256: record.files[relative].sha256 };
@@ -291,7 +295,7 @@ async function releaseRun(tag, inputDir, work, packageAttempt = process.env.GITH
 	artifacts.push(packaged(linux, 'vsix', fileFor(version, 'universal'), 'universal'));
 	const core = [
 		...packages.map(record => packaged(record, 'core', coreArchive(record.target))),
-		...taggedInstallers(version, work, source.revision),
+		...taggedInstallers(build, work, source.revision),
 	];
 	const candidate = {
 		schemaVersion: 1,
@@ -313,14 +317,14 @@ async function releaseRun(tag, inputDir, work, packageAttempt = process.env.GITH
 		'macOS, Linux and WSL',
 		'',
 		'```sh',
-		`sh -c 'script=$(curl -fsSL "$1") && sh -c "$script" -- --version "$2"' facade-install ${downloads}/install.sh ${version}`,
+		`sh -c 'script=$(curl -fsSL "$1") && sh -c "$script" -- --version "$2" --expected-build "$3"' facade-install ${downloads}/install.sh ${version} ${build}`,
 		'```',
 		'',
 		'Windows PowerShell',
 		'',
 		'```powershell',
 		`$response = Invoke-WebRequest -UseBasicParsing '${downloads}/install.ps1'`,
-		`& ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($response.RawContentStream.ToArray()))) -Version ${version}`,
+		`& ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($response.RawContentStream.ToArray()))) -Version ${version} -ExpectedBuild ${build}`,
 		'```',
 		'',
 	].join('\n');
@@ -330,7 +334,7 @@ async function releaseRun(tag, inputDir, work, packageAttempt = process.env.GITH
 	publishGithubRelease({ tag, version, commit, artifacts, core, notes, latest: false, prerelease: true, work });
 }
 
-function verifyCandidate(tag, version, assets, candidate) {
+function verifyCandidate(tag, version, build, assets, candidate) {
 	assert.equal(candidate?.schemaVersion, 1, 'Unsupported release candidate record');
 	assert.equal(candidate.tag, tag, 'Release candidate record names another version');
 	validateSource(candidate.source ?? {});
@@ -347,10 +351,21 @@ function verifyCandidate(tag, version, assets, candidate) {
 	for (const target of nativeTargets) {
 		const archive = byName.get(coreArchive(target));
 		const vsix = byName.get(fileFor(version, target));
-		const programs = verifyArchivePrograms(archive.path, vsix.path, target, version);
+		const { programs } = verifyArchivePrograms(archive.path, vsix.path, target, build);
 		if (target.startsWith('win32-')) windowsSignatures[target] = signingRecord(programs);
 	}
 	assert.deepStrictEqual(candidate.windowsSignatures, windowsSignatures, `${tag} signing evidence differs from the packaged programs`);
+}
+
+export function verifyReleaseBuild(tag, marker) {
+	const version = versionOfTag(tag);
+	const build = marker.trimEnd();
+	const parsed = parseCoreBuild(build);
+	assert.ok(parsed?.version === version && marker === build + '\n', `${tag} has an invalid BUILD marker`);
+	if (parsed.revision) {
+		assert.equal(build, sourceBuild(version, resolveCommit('refs/tags/' + tag)), `${tag} BUILD marker differs from the tag commit`);
+	}
+	return build;
 }
 
 function verifyRelease(tag, work, { prepare = false, requireCandidate = false } = {}) {
@@ -371,23 +386,26 @@ function verifyRelease(tag, work, { prepare = false, requireCandidate = false } 
 		requireReleaseAssets(release, [...requiredReleaseFiles(version), candidateFile]);
 	}
 	const assets = downloadRelease(tag, version, work, coreFiles);
-	if (standalone) {
-		assert.equal(fs.readFileSync(path.join(work, coreVersionFile), 'utf8'), version + '\n',
-			`${tag} has a version marker for another release`);
-	}
+	const build = standalone ? verifyReleaseBuild(tag, fs.readFileSync(path.join(work, coreVersionFile), 'utf8')) : undefined;
 	const sums = path.join(work, SUMS);
 	if (hasCandidate) {
 		const digests = parseChecksums(fs.readFileSync(sums, 'utf8'));
 		assert.deepStrictEqual([...digests.keys()].sort(), assets.map(asset => asset.file).sort(), `${tag} has an unexpected ${SUMS} file set`);
-		verifyCandidate(tag, version, assets, JSON.parse(fs.readFileSync(path.join(work, candidateFile), 'utf8')));
+		verifyCandidate(tag, version, build, assets, JSON.parse(fs.readFileSync(path.join(work, candidateFile), 'utf8')));
+	} else if (build && build !== version) {
+		for (const target of nativeTargets) {
+			const vsix = assets.find(asset => asset.target === target);
+			const archive = assets.find(asset => asset.file === coreArchive(target));
+			verifyArchivePrograms(archive.path, vsix.path, target, build);
+		}
 	}
 	assets.push({ file: SUMS, path: sums, sha256: sha256(fs.readFileSync(sums)) });
 	if (prepare && release.isDraft) publishCandidateDraft(tag);
 	console.log(`${tag}: verified ${assets.length} Release files.`);
-	return { version, assets };
+	return { version, build, assets };
 }
 
-async function checkPromotion(version) {
+async function checkPromotion(version, build) {
 	const newest = extensionReleaseVersions({ stable: true }).sort(compareVersions).at(-1);
 	assert.ok(!newest || compareVersions(version, newest) >= 0, `Stable Facade is already at ${newest}`);
 	const response = await fetch(`https://facadecode.com/${coreVersionFile}`, {
@@ -396,14 +414,18 @@ async function checkPromotion(version) {
 	if (response.status === 404) return;
 	assert.ok(response.ok, `The website's stable marker returned HTTP ${response.status}`);
 	const mirrored = (await response.text()).trim();
-	assert.match(mirrored, /^[0-9]+\.[0-9]+\.[0-9]+$/, 'The website has an invalid stable version');
-	assert.ok(compareVersions(version, mirrored) >= 0, `The website is already at Facade ${mirrored}`);
+	const current = parseCoreBuild(mirrored);
+	assert.ok(current, 'The website has an invalid stable BUILD');
+	const versionOrder = compareVersions(version, current.version);
+	const buildTime = BigInt(parseCoreBuild(build).time ?? -1);
+	assert.ok(versionOrder > 0 || (versionOrder === 0 && buildTime >= BigInt(current.time ?? -1)),
+		`The website is already at Facade ${mirrored}`);
 	return mirrored;
 }
 
 async function mirrorRun(tag, work) {
-	const { version, assets } = verifyRelease(tag, work, { requireCandidate: true });
-	await checkPromotion(version);
+	const { version, build, assets } = verifyRelease(tag, work, { requireCandidate: true });
+	await checkPromotion(version, build);
 	await publishMirror(version, assets, false);
 	const digest = assets.find(asset => asset.file === SUMS).sha256;
 	if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `manifest=${digest}\n`);
@@ -415,10 +437,10 @@ function requireMirroredManifest(actual, expected) {
 }
 
 async function promoteRun(tag, work, manifest, resume) {
-	const { version, assets } = verifyRelease(tag, work, { requireCandidate: true });
+	const { version, build, assets } = verifyRelease(tag, work, { requireCandidate: true });
 	requireMirroredManifest(assets.find(asset => asset.file === SUMS).sha256, manifest);
-	const stable = await checkPromotion(version);
-	await publishMirror(version, assets, true, { resume: resume || stable === version });
+	const stable = await checkPromotion(version, build);
+	await publishMirror(version, assets, true, { resume: resume || stable === build });
 	gh(['release', 'edit', tag, '--repo', repository, '--prerelease=false', '--latest']);
 	assert.equal(JSON.parse(gh(['api', `repos/${repository}/releases/latest`])).tag_name, tag,
 		`GitHub Latest did not switch to ${tag}`);

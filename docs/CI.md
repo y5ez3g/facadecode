@@ -599,9 +599,9 @@ python3 -B ci/check_packaged_upgrade.py \
     --output-dir "$work/packaged-upgrade" --run-id packaged-upgrade-local
 ```
 
-The shipped installer installs and activates both verified packages in the same disposable
+The shipped installer selects and activates each exact BUILD in the same disposable
 home. The candidate replaces the Daemon while the Keeper and fake CLI retain their process
-identities and the CLI retains its reported session. Both launchers resolve to the candidate
+identities and the CLI retains its reported session. Both home launchers resolve to the candidate
 programs. The old screen and receipt remain available, and the same CLI receives exactly one
 fresh submission. Retain each archive's provenance, the console output and `receipt.json`
 with the observed commands and scoped cleanup. This local QA evidence records a compatible
@@ -634,8 +634,8 @@ The higher build negotiates Keeper API 2 in a fresh home. Its direct `daemon --t
 against the older live Keeper refuses the exact Agent before changing program or durable
 state. The original process, route, session and receipt stay usable. A repeat produces no
 new terminal input and a fresh message reaches the same CLI once. The separate installer
-check records the verified inactive version cache it can leave when activation fails and
-checks the active installation. This is local source QA for the native incompatible case.
+check verifies that refusal leaves the selected home's program files, launchers and state
+intact. This is local source QA for the native incompatible case.
 
 ### Native Extension Remote SSH
 

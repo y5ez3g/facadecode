@@ -653,6 +653,10 @@ win32-arm64, together with the window component. Publication requires each platf
 from the release run. The version advances when preparing a release; already published versions retain their original
 artifacts. [Official manifest reference](https://code.visualstudio.com/api/references/extension-manifest).
 
+The native Cargo build uses the source commit time and hash. The main executable reports
+`<version>+<commit time>.<commit hash>`. Its build ID travels with the paired programs in the VSIX and standalone
+archive, and the release marker carries the same ID. Release tags and mirror directories use the numeric version.
+
 The extension checks workflow builds candidate packages for darwin-x64, darwin-arm64, linux-x64, linux-arm64,
 win32-x64 and win32-arm64. It uses `macos-15-intel` for Intel Macs, `ubuntu-24.04-arm` for Linux ARM64 and
 `windows-11-arm` for Windows ARM64. Each job verifies its requested target against its native host before
@@ -816,7 +820,10 @@ The Orchestrator validates the request before creating a worktree or process. St
 the result of that item. Resume passes the returned exact target from a local, folder-scoped query.
 
 The workspace host's [activation](../../../extension/src/extension.ts#L11) selects the engine and starts the
-[Orchestrator connection](../../../extension/src/host/orchestrator/index.ts#L77) for the resolved home. After hello,
+[Orchestrator connection](../../../extension/src/host/orchestrator/index.ts#L77) for the resolved home. On activation
+or a home switch, the extension offers its bundled program set for selection. The home keeps an equal or higher
+selection. A higher bundled build installs from the extension files and can take over after normal admission.
+Commands use the selected home launcher. After hello,
 it opens the workspace state, installs the machine and agent watches and connects them to the Panel. The
 [agent view](../../../extension/src/host/orchestrator/agents.ts#L76) reconciles confirmed roster snapshots
 with local members and Pins. Opening a terminal uses Attach (6.3). [Deactivation](../../../extension/src/host/orchestrator/index.ts#L215)

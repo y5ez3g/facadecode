@@ -392,7 +392,7 @@ fn bootstrap_ssh(
     let command = |shell| {
         let command = match bootstrap {
             Bootstrap::Serve | Bootstrap::InstalledServe => {
-                ssh::remote_login_bootstrap_command(shell, home, build, true)
+                ssh::remote_login_bootstrap_command(shell, home, build, true, may_install)
             }
             Bootstrap::Admin(mode) => ssh::remote_login_admin_command(shell, home, build, mode),
         };
@@ -408,44 +408,51 @@ fn bootstrap_ssh(
     let unix_command = command(RemoteLoginShell::Unix)?;
     let mut session = SshSession::spawn(words, interactive)
         .map_err(|error| ssh_failure(destination, ssh_args, &format!("{error:#}")))?;
-    let probe_login =
-        |input: &mut ChildStdin, output: &mut BufReader<ChildStdout>| -> anyhow::Result<_> {
-            if !send_ssh(input, ssh::REMOTE_PLATFORM_PROBE)? {
-                return Ok(None);
-            }
-            let Some(shell) = read_login_marker(output, ssh::parse_remote_platform)? else {
-                return Ok(None);
-            };
-            let remote = match shell {
-                RemoteLoginShell::Unix => unix_command,
-                _ => command(shell)?,
-            };
-            if !send_ssh(input, remote.as_bytes())?
-                || read_login_marker(output, |line| {
-                    (line == ssh::REMOTE_BOOTSTRAP_BEGIN).then_some(())
-                })?
-                .is_none()
-            {
-                return Ok(None);
-            }
-            let Some(line) = read_bootstrap_line(output)? else {
-                return Ok(None);
-            };
-            let probe = ssh::parse_remote_probe(std::str::from_utf8(&line)?).map_err(|error| {
-                if error == ssh::SshArgumentError::Probe {
-                    Problem::StartupPrints {
-                        destination: display_name(destination),
-                    }
-                    .into()
-                } else {
-                    anyhow::Error::new(error).context(format!(
-                        "invalid Facade version on {}",
-                        display_name(destination)
-                    ))
-                }
-            })?;
-            Ok(Some(ssh::bootstrap_action(&probe, may_install)))
+    let probe_login = |input: &mut ChildStdin,
+                       output: &mut BufReader<ChildStdout>|
+     -> anyhow::Result<_> {
+        if !send_ssh(input, ssh::REMOTE_PLATFORM_PROBE)? {
+            return Ok(None);
+        }
+        let Some(shell) = read_login_marker(output, ssh::parse_remote_platform)? else {
+            return Ok(None);
         };
+        let remote = match shell {
+            RemoteLoginShell::Unix => unix_command,
+            _ => command(shell)?,
+        };
+        if !send_ssh(input, remote.as_bytes())?
+            || read_login_marker(output, |line| {
+                (line == ssh::REMOTE_BOOTSTRAP_BEGIN).then_some(())
+            })?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let Some(line) = read_bootstrap_line(output)? else {
+            return Ok(None);
+        };
+        let parse_error = |error| {
+            if error == ssh::SshArgumentError::Probe {
+                Problem::StartupPrints {
+                    destination: display_name(destination),
+                }
+                .into()
+            } else {
+                anyhow::Error::new(error).context(format!(
+                    "invalid Facade bootstrap report from {}",
+                    display_name(destination)
+                ))
+            }
+        };
+        let home = ssh::parse_remote_home(shell.system(), &line).map_err(parse_error)?;
+        let Some(line) = read_bootstrap_line(output)? else {
+            return Ok(None);
+        };
+        let probe = ssh::parse_remote_probe(std::str::from_utf8(&line)?).map_err(parse_error)?;
+        let action = ssh::bootstrap_action(&probe, build, may_install).map_err(parse_error)?;
+        Ok(Some((shell, home, action)))
+    };
     let prelude = std::thread::scope(|scope| {
         let (report, result) = mpsc::sync_channel(1);
         let input = &mut session.input;
@@ -469,7 +476,7 @@ fn bootstrap_ssh(
             }
         }
     });
-    let action = match prelude {
+    let (shell, home, action) = match prelude {
         Ok(Some(setup)) => setup,
         Ok(None) => {
             let (status, stderr) = session.finish(false)?;
@@ -492,6 +499,13 @@ fn bootstrap_ssh(
                     "The installed Facade on {destination} cannot open this verified connection. Update Facade there and try again."
                 )),
             };
+        }
+        BootstrapAction::UpgradeLocal => {
+            session.finish(true)?;
+            let destination = display_name(destination);
+            anyhow::bail!(
+                "Facade on {destination} is newer than local build {build}. Upgrade local Facade and retry."
+            );
         }
     };
     match send_ssh(&mut session.input, directive) {
@@ -532,11 +546,11 @@ fn bootstrap_ssh(
     };
     let destination = display_name(destination);
     if action == BootstrapAction::Install {
+        let command = ssh::remote_install_command(shell.system(), build, &home)?;
         Err(anyhow::anyhow!(
-            "Could not install Facade {} on {destination}.\n{reason}\n\
-             Check that the release includes the installer, or install the same Facade version \
-             on {destination} and retry.",
-            facade_base::build_version(build)
+            "Could not install Facade {build} on {destination}.\n{reason}\n\
+             To install Facade {build} manually on {destination}, run:\n{command}\n\
+             For offline installation, use the matching release archive and SHA256SUMS with the installer's package option."
         ))
     } else {
         Err(anyhow::anyhow!(

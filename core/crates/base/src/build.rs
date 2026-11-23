@@ -4,18 +4,38 @@
 //! script of its own and names the build in `FACADE_TEST_BUILD`, the script in
 //! `FACADE_TEST_PROGRAM`.
 
-use std::path::PathBuf;
+use std::{cmp::Ordering, path::PathBuf};
 
 /// The package version of every Facade program in this build.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Whether a running Facade of build `running` hands over to one of build `newer`. Only a release
-/// with a higher version takes over; a pre-release such as `0.2.0-rc1` neither takes over nor is
-/// taken over. Both the command that asks and the daemon it asks go by this.
+/// Orders stable builds by version and then source commit time. Legacy builds without a time
+/// sort first at their version. The source hash identifies a build without affecting its rank.
+pub fn compare_builds(left: &str, right: &str) -> Option<Ordering> {
+    Some(build_order(left)?.cmp(&build_order(right)?))
+}
+
+fn build_order(build: &str) -> Option<([u64; 3], Option<u64>)> {
+    let version = version_of(build)?;
+    let Some((_, source)) = build.split_once('+') else {
+        return Some((version, None));
+    };
+    let (time, hash) = match source.split_once('.') {
+        Some((time, hash)) if time.bytes().all(|byte| byte.is_ascii_digit()) => {
+            (Some(time.parse().ok()?), hash)
+        }
+        Some(_) => return None,
+        None => (None, source),
+    };
+    if hash.is_empty() || !hash.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some((version, time))
+}
+
+/// Whether a running Facade of build `running` can hand over to the newer build.
 pub fn takes_over(newer: &str, running: &str) -> bool {
-    version_of(newer)
-        .zip(version_of(running))
-        .is_some_and(|(newer, running)| newer > running)
+    compare_builds(newer, running) == Some(Ordering::Greater)
 }
 
 /// The version `build` names, its three numbers before any `+` (`[0, 2, 1]` for `0.2.1+4f2a`).
@@ -29,8 +49,8 @@ pub fn version_of(build: &str) -> Option<[u64; 3]> {
     numbers.try_into().ok()
 }
 
-/// This build, as services compare it: [`VERSION`], then `+` and the commit that `FACADE_BUILD`
-/// named when it was compiled, if any. In a test, the build the test has it play.
+/// This build's identity: [`VERSION`], then `+` and the source commit time and hash from
+/// `FACADE_BUILD`, if any. In a test, the build the test has it play.
 pub fn build_id() -> String {
     if let Some(played) = played() {
         return played.build.clone();

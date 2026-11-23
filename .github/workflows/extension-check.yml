@@ -193,11 +193,12 @@ jobs:
         run: |
           root=$(mktemp -d "$RUNNER_TEMP/facade-install.XXXXXX")
           mkdir "$root/home" "$root/tmp"
+          build=$(cat bin/VERSION)
           env -i HOME="$root/home" PATH="$PATH" FACADE_HOME="$root/state" TMPDIR="$root/tmp" \
-            sh ../core/install.sh --install-root "$root/home/.local" \
+            sh ../core/install.sh --version "${build%%+*}" --expected-build "$build" \
             --package "build/core/facade-core-$FACADE_PACKAGE_TARGET.tar.gz" --no-path --no-activate
-          "$root/home/.local/bin/facade" --version
-          test -x "$root/home/.local/bin/facade-mcp"
+          test "$("$root/state/core/bin/facade" --version)" = "facade $build"
+          test -x "$root/state/core/bin/facade-mcp"
       - name: Install the local core archive on Windows
         if: matrix.engine == 'old' && runner.os == 'Windows'
         shell: powershell
@@ -212,12 +213,14 @@ jobs:
           $env:FACADE_HOME = Join-Path $root 'state'
           $env:TEMP = $env:TMP = Join-Path $root 'tmp'
           New-Item -ItemType Directory -Path $env:TEMP | Out-Null
-          $install = Join-Path $env:LOCALAPPDATA 'Facade'
-          & ..\core\install.ps1 -InstallRoot $install -Package "build\core\facade-core-$target.zip" -NoPath -NoActivate
-          & "$install\bin\facade.exe" --version
-          if ($LASTEXITCODE -ne 0) { throw 'Installed facade did not run.' }
-          foreach ($file in 'facade-mcp.exe', 'conpty\OpenConsole.exe', 'conpty\conpty.dll') {
-            if (-not (Test-Path -LiteralPath "$install\bin\$file" -PathType Leaf)) { throw "Missing $file." }
+          $build = (Get-Content -Raw -LiteralPath 'bin/VERSION').Trim()
+          $version = ($build -split '\+', 2)[0]
+          & ..\core\install.ps1 -Version $version -ExpectedBuild $build -Package "build\core\facade-core-$target.zip" -NoPath -NoActivate
+          $bin = Join-Path $env:FACADE_HOME 'core\bin'
+          $reported = & "$bin\facade.exe" --version
+          if ($LASTEXITCODE -ne 0 -or $reported -cne "facade $build") { throw 'Installed facade did not report the exact BUILD.' }
+          foreach ($file in 'facade-mcp.exe', "$build\conpty\OpenConsole.exe", "$build\conpty\conpty.dll") {
+            if (-not (Test-Path -LiteralPath "$bin\$file" -PathType Leaf)) { throw "Missing $file." }
           }
       - name: Verify the installed Linux x64 candidate
         if: github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.engine == 'old'

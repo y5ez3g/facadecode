@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { coreInstallers, coreVersionFile } from '../../core/scripts/package-core.mjs';
+import { parseCoreBuild } from './core.mjs';
 
 const website = 'https://facadecode.com';
 const bucket = 'facadecode-releases';
@@ -31,6 +32,12 @@ export async function publishMirror(version, assets, latest, options) {
 	const stableFiles = [...coreInstallers, coreVersionFile];
 	const expected = new Map(assets.map(asset => [asset.file, asset.sha256]));
 	assert.ok(stableFiles.every(file => expected.has(file)), 'The Release is missing a standalone installer or version marker');
+	const markerBytes = readFileSync(assets.find(asset => asset.file === coreVersionFile).path);
+	const marker = markerBytes.toString('utf8');
+	const build = marker.trimEnd();
+	assert.ok(parseCoreBuild(build)?.version === version && marker === build + '\n', 'The Release BUILD marker names another version');
+	const markerDigest = expected.get(coreVersionFile);
+	assert.equal(sha256(markerBytes), markerDigest, 'The stable marker differs from the GitHub Release');
 
 	async function check(key, digest) {
 		const result = await request(`${website}/${key}`, { redirect: 'error', signal: AbortSignal.timeout(60_000) });
@@ -62,11 +69,7 @@ export async function publishMirror(version, assets, latest, options) {
 
 	if (latest) {
 		const resume = options?.resume;
-		const bytes = readFileSync(assets.find(asset => asset.file === coreVersionFile).path);
-		assert.equal(bytes.toString(), version + '\n', 'The Release version marker names another version');
-		const markerDigest = expected.get(coreVersionFile);
-		assert.equal(sha256(bytes), markerDigest, 'The stable marker differs from the GitHub Release');
-		if (!resume) await put(coreVersionFile, bytes);
+		if (!resume) await put(coreVersionFile, markerBytes);
 		try {
 			assert.ok(await check(coreVersionFile, markerDigest), 'The website has no stable marker for this candidate');
 			for (const file of coreInstallers) {

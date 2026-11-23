@@ -662,7 +662,7 @@ pub(crate) fn status(client: Option<&mut DaemonClient>) -> anyhow::Result<()> {
         .filter(|path| path.is_file())
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(|| "facade-mcp".into());
-    let cli_version = facade_base::version();
+    let cli_version = facade_base::build_id();
     let text = match client {
         Some(client) => {
             let result = client.call::<DaemonStatus>(StatusArgs {
@@ -969,7 +969,7 @@ pub(crate) fn status_text(
     cli_version: &str,
     launcher: &str,
 ) -> String {
-    let version = facade_base::build_version(&status.build);
+    let version = status.build.as_str();
     let local = status
         .machines
         .iter()

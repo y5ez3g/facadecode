@@ -11,7 +11,7 @@ use facade_base::api_v1::{ErrorBody, MAX_LINE_BYTES};
 use facade_base::ssh::{
     BOOTSTRAP_INSTALL, BOOTSTRAP_READY, BOOTSTRAP_SERVE, BootstrapAction, REMOTE_BOOTSTRAP_BEGIN,
     REMOTE_PLATFORM_PROBE, RemoteLoginShell, RemoteProbe, SshMode, bootstrap_action,
-    parse_remote_platform, parse_remote_probe, remote_install_command,
+    parse_remote_home, parse_remote_platform, parse_remote_probe, remote_install_command,
     remote_login_bootstrap_command, spawn_ssh_async, ssh_login_args,
 };
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -102,18 +102,26 @@ impl Pipes {
             };
             wire::error(reason, format!("Could not start SSH: {error}"))
         })?;
-        let (shell, probe) = match wire::in_time(pipes.probe(home, build, wake)).await {
-            Ok(probed) => probed,
-            Err(error) => {
-                return Err(FailedAttempt::from_ssh(
-                    ssh,
-                    pipes.finish().await,
-                    error,
-                    false,
-                ));
-            }
-        };
-        let action = bootstrap_action(&probe, wake);
+        // Only an explicit wake on a saved route can install on its peer.
+        let may_install = wake;
+        let (shell, remote_home, probe) =
+            match wire::in_time(pipes.probe(home, build, wake, may_install)).await {
+                Ok(probed) => probed,
+                Err(error) => {
+                    return Err(FailedAttempt::from_ssh(
+                        ssh,
+                        pipes.finish().await,
+                        error,
+                        false,
+                    ));
+                }
+            };
+        let action = bootstrap_action(&probe, build, may_install).map_err(|error| {
+            ErrorBody::invalid_argument(format!(
+                "Invalid Facade build reported by {}. {error}.",
+                ssh.config.ssh_destination,
+            ))
+        })?;
         let ready = match action {
             BootstrapAction::Serve => wire::in_time(pipes.serve(BOOTSTRAP_SERVE)).await,
             BootstrapAction::Install => pipes.serve(BOOTSTRAP_INSTALL).await,
@@ -121,6 +129,15 @@ impl Pipes {
                 return Err(wire::error(
                     "not_found",
                     "Facade is not installed on the remote machine. Connect to it explicitly to install Facade.",
+                ).into());
+            }
+            BootstrapAction::UpgradeLocal => {
+                return Err(wire::error(
+                    "unavailable",
+                    format!(
+                        "Facade on {} is newer than local build {build}. Upgrade local Facade and retry.",
+                        ssh.config.ssh_destination,
+                    ),
                 ).into());
             }
         };
@@ -133,10 +150,11 @@ impl Pipes {
                     && diagnostics.exit_code() == Some(3);
                 let mut failure = FailedAttempt::from_ssh(ssh, diagnostics, error, sleeping);
                 if action == BootstrapAction::Install
-                    && let Ok(command) = remote_install_command(shell.system(), build, home)
+                    && let Ok(command) = remote_install_command(shell.system(), build, &remote_home)
                 {
                     failure.error.message.push_str(&format!(
-                        "\nTo install Facade manually on {}, run:\n{command}",
+                        "\nTo install Facade {build} manually on {}, run:\n{command}\n\
+                         For offline installation, use the matching release archive and SHA256SUMS with the installer's package option.",
                         ssh.config.ssh_destination,
                     ));
                 }
@@ -179,7 +197,8 @@ impl Pipes {
         home: Option<&str>,
         build: &str,
         wake: bool,
-    ) -> Result<(RemoteLoginShell, RemoteProbe), ErrorBody> {
+        may_install: bool,
+    ) -> Result<(RemoteLoginShell, String, RemoteProbe), ErrorBody> {
         self.send(REMOTE_PLATFORM_PROBE).await?;
         let shell = find_login_line(
             &mut self.read,
@@ -187,7 +206,7 @@ impl Pipes {
             "SSH closed before identifying the remote login shell.",
         )
         .await?;
-        let command = remote_login_bootstrap_command(shell, home, build, wake)
+        let command = remote_login_bootstrap_command(shell, home, build, wake, may_install)
             .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
         self.send(command.as_bytes()).await?;
         find_login_line(
@@ -199,6 +218,14 @@ impl Pipes {
         let line = read_control(&mut self.read).await?.ok_or_else(|| {
             wire::error(
                 "unavailable",
+                "SSH closed before reporting the remote Facade home.",
+            )
+        })?;
+        let home = parse_remote_home(shell.system(), &line)
+            .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
+        let line = read_control(&mut self.read).await?.ok_or_else(|| {
+            wire::error(
+                "unavailable",
                 "SSH closed before reporting the remote Facade version.",
             )
         })?;
@@ -206,7 +233,7 @@ impl Pipes {
             .map_err(|_| ErrorBody::invalid_argument("Expected a UTF-8 Facade version line."))?;
         let probe = parse_remote_probe(line)
             .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
-        Ok((shell, probe))
+        Ok((shell, home, probe))
     }
 
     async fn send(&mut self, bytes: &[u8]) -> Result<(), ErrorBody> {

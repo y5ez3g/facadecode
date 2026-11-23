@@ -134,7 +134,7 @@ def machine(scope, name, programs, sockets):
     login, home, work, runtime = (scope / f'{name}-{part}' for part in ('login', 'facade', 'work', 'runtime'))
     for folder in (login, home, work, runtime):
         folder.mkdir(mode=0o700)
-    install = login / '.local/bin'
+    install = home / 'core/bin'
     install.mkdir(parents=True)
     for program in PROGRAMS[:2]:
         shutil.copy2(programs[program], install / program)
@@ -257,7 +257,7 @@ def exercise(scope, programs, sockets, children, evidence):
     wait_for('the private sshd to listen', lambda: 'Server listening' in ssh_log.read_text(), seconds=5)
     assert server.poll() is None, ssh_log.read_text()
     remote = ('printf "%s\\n%s\\n" "$HOME" "$FACADE_HOME"; '
-              'exec "$HOME/.local/bin/facade" daemon --detach')
+              'exec "$FACADE_HOME/core/bin/facade" daemon --detach')
     boot = run('launch the peer over OpenSSH', ['/usr/bin/ssh', '-F', client_config, 'fixture-peer', remote])
     assert boot.stdout.splitlines()[:2] == [peer['HOME'], peer['FACADE_HOME']], boot
     run('launch the origin', [facade, 'daemon', '--detach'])

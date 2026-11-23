@@ -119,17 +119,23 @@ mod release_sources {
         }
 
         fn upgrade(&self, home: &TestHome, arguments: &[&str]) -> std::process::Output {
+            self.upgrade_command(home, arguments)
+                .output()
+                .expect("could not run facade upgrade")
+        }
+
+        fn upgrade_command(&self, home: &TestHome, arguments: &[&str]) -> std::process::Command {
             let proxy = format!("http://{}", self.proxy.local_addr().unwrap());
-            home.command(&test_binaries().facade)
+            let mut command = home.command(&test_binaries().facade);
+            command
                 .env("FACADE_TEST_RELEASE_CURL", &self.curl)
                 .env("HTTPS_PROXY", &proxy)
                 .env("ALL_PROXY", &proxy)
                 .env("NO_PROXY", "")
                 .arg("upgrade")
                 .args(arguments)
-                .stdin(Stdio::null())
-                .output()
-                .expect("could not run facade upgrade")
+                .stdin(Stdio::null());
+            command
         }
 
         fn requests(&self) -> Vec<String> {
@@ -166,14 +172,20 @@ case "$url" in
     https://facadecode.com/facade-core-version.txt) route=mirror ;;
     https://github.com/y5ez3g/facadecode/releases/latest/download/facade-core-version.txt) route=github ;;
     https://github.com/y5ez3g/facadecode/releases/latest) route=redirect ;;
+    https://github.com/y5ez3g/facadecode/releases/download/extension%2F*/facade-core-version.txt) route=github-fixed ;;
+    https://facadecode.com/releases/*/facade-core-version.txt) route=mirror-fixed ;;
     https://github.com/y5ez3g/facadecode/releases/download/extension%2F*/install.*) route=installer ;;
     https://facadecode.com/releases/*/install.*) route=installer ;;
     https://github.com/y5ez3g/facadecode/releases/download/extension%2F*/facade-core-*|https://facadecode.com/releases/*/facade-core-*) route=archive ;;
     https://github.com/y5ez3g/facadecode/releases/download/extension%2F*/SHA256SUMS|https://facadecode.com/releases/*/SHA256SUMS) route=checksums ;;
     *) printf '%s\n' "Unexpected release URL: $url" >&2; exit 64 ;;
 esac
+if [ "$route" = installer ] && [ -n "$output" ] && [ "${QA_REQUIRE_IN_MEMORY_INSTALLER:-}" = yes ]; then
+    printf '%s\n' 'The installer download used an output file' >&2
+    exit 64
+fi
 case "$route:$head" in
-    mirror:no|github:no|archive:yes|checksums:yes) expected=$(printf '\t%%{http_code}') ;;
+    mirror:no|github:no|mirror-fixed:no|github-fixed:no|archive:yes|checksums:yes) expected=$(printf '\t%%{http_code}') ;;
     redirect:yes) expected=$(printf '%%{redirect_url}\t%%{http_code}') ;;
     installer:no) expected='%{http_code}' ;;
     *) printf '%s\n' "Unexpected release request: $route:$head" >&2; exit 64 ;;
@@ -216,36 +228,116 @@ done
 if [ "$fail" = yes ] && [ "$code" -ge 400 ]; then exit 22; fi
 "#;
 
-    fn installer_url(origin: &str, version: &str) -> String {
-        let extension = if cfg!(windows) { "ps1" } else { "sh" };
-        let prefix = if origin == GITHUB {
+    fn tagged_asset(origin: &str, version: &str, asset: &str) -> String {
+        let release = if origin == GITHUB {
             format!("{origin}/download/extension%2F{version}")
         } else {
             format!("{origin}/releases/{version}")
         };
-        format!("{prefix}/install.{extension}")
+        format!("{release}/{asset}")
+    }
+
+    fn installer_url(origin: &str, version: &str) -> String {
+        let asset = if cfg!(windows) {
+            "install.ps1"
+        } else {
+            "install.sh"
+        };
+        tagged_asset(origin, version, asset)
+    }
+
+    fn fixed_marker_requests(version: &str) -> Vec<String> {
+        [GITHUB, MIRROR]
+            .map(|origin| tagged_asset(origin, version, "facade-core-version.txt"))
+            .to_vec()
+    }
+
+    fn dated_build(version: &str) -> String {
+        format!("{version}+1700000000.{}", "c".repeat(40))
+    }
+
+    fn fixed_marker(sources: &Releases, version: &str) -> String {
+        let build = dated_build(version);
+        sources.response("github-fixed", 200, &format!("{build}\n"));
+        sources.response("mirror-fixed", 200, &format!("{build}\n"));
+        build
     }
 
     fn installer_receipt() -> &'static str {
         if cfg!(windows) {
-            "param([string] $Version)\n[Console]::WriteLine(\"Installed Facade $Version in qa-bin.\")\n"
+            "param([string] $Version, [string] $ExpectedBuild, [string] $InstallRoot, [switch] $NoPath)\n\
+             if (!$ExpectedBuild -or !$NoPath -or $InstallRoot -ne $env:FACADE_HOME) { exit 64 }\n\
+             [Console]::WriteLine(\"Installed Facade $ExpectedBuild in qa-bin.\")\n"
         } else {
-            "test \"$1\" = --version || exit 64\nprintf 'Installed Facade %s in qa-bin.\\n' \"$2\"\n"
+            r#"version= expected= root= no_path=no
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --version) version=$2; shift 2 ;;
+        --expected-build) expected=$2; shift 2 ;;
+        --install-root) root=$2; shift 2 ;;
+        --no-path) no_path=yes; shift ;;
+        *) exit 64 ;;
+    esac
+done
+test -n "$version" && test -n "$expected" && test "$no_path" = yes && test "$root" = "$FACADE_HOME" || exit 64
+printf 'Installed Facade %s in qa-bin.\n' "$expected"
+"#
         }
     }
 
     #[test]
+    fn default_upgrade_keeps_the_numeric_route_and_pins_the_newer_same_version_build() {
+        let home = TestHome::new("upgrade-same-version-pin");
+        home.start_fake("existing");
+        let build = format!("{CURRENT}+9999999999.{}", "d".repeat(40));
+        let sources = Releases::new(&home);
+        sources.response("mirror", 200, &build);
+        sources.response("github", 200, CURRENT);
+        sources.response("installer", 200, installer_receipt());
+        let output = sources.upgrade(&home, &[]);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        assert_eq!(
+            stdout(&output),
+            format!("Installed Facade {build} in qa-bin.\n")
+        );
+        assert_eq!(
+            sources.requests().last(),
+            Some(&installer_url(GITHUB, CURRENT))
+        );
+    }
+
+    #[test]
     fn upgrade_selects_the_highest_valid_stable_version() {
+        let build_8 = dated_build("0.1.8");
+        let build_9 = dated_build("0.1.9");
+        let build_10 = dated_build("0.1.10");
+        let lf = format!("{build_9}\n");
+        let crlf = format!("{build_10}\r\n");
         for (name, mirror, github, wanted) in [
-            ("both", (200, "0.1.9\n"), (200, "0.1.10\r\n"), "0.1.10"),
-            ("mirror", (200, "0.1.8"), (404, ""), "0.1.8"),
-            ("github", (200, "0.1.99-rc.1"), (200, "0.1.9"), "0.1.9"),
-            ("body-lf", (200, "0.1.\n99"), (200, "0.1.9"), "0.1.9"),
-            ("body-crlf", (200, "0.1.\r\n99"), (200, "0.1.9"), "0.1.9"),
+            ("both", (200, lf.as_str()), (200, crlf.as_str()), "0.1.10"),
+            ("mirror", (200, build_8.as_str()), (404, ""), "0.1.8"),
+            (
+                "github",
+                (200, "0.1.99-rc.1"),
+                (200, build_9.as_str()),
+                "0.1.9",
+            ),
+            (
+                "body-lf",
+                (200, "0.1.\n99"),
+                (200, build_9.as_str()),
+                "0.1.9",
+            ),
+            (
+                "body-crlf",
+                (200, "0.1.\r\n99"),
+                (200, build_9.as_str()),
+                "0.1.9",
+            ),
             (
                 "body-extra-line",
                 (200, "0.1.99\r\n\r\n"),
-                (200, "0.1.9"),
+                (200, build_9.as_str()),
                 "0.1.9",
             ),
         ] {
@@ -258,7 +350,7 @@ if [ "$fail" = yes ] && [ "$code" -ge 400 ]; then exit 22; fi
             assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
             assert_eq!(
                 stdout(&output),
-                format!("Installed Facade {wanted} in qa-bin.\n")
+                format!("Installed Facade {} in qa-bin.\n", dated_build(wanted))
             );
             assert!(output.stderr.is_empty(), "{}", stderr(&output));
             let requests = sources.requests();
@@ -300,7 +392,10 @@ if [ "$fail" = yes ] && [ "$code" -ge 400 ]; then exit 22; fi
             assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
             assert_eq!(
                 stdout(&output),
-                format!("Facade {CURRENT} is already up to date.\n")
+                format!(
+                    "Facade {CURRENT} is already up to date in {}.\n",
+                    home.path.join("core").join("bin").display()
+                )
             );
             assert!(output.stderr.is_empty(), "{}", stderr(&output));
             let mut requests = sources.requests();
@@ -357,18 +452,153 @@ if [ "$fail" = yes ] && [ "$code" -ge 400 ]; then exit 22; fi
     }
 
     #[test]
-    fn a_fixed_upgrade_version_never_reads_stable_metadata() {
+    fn a_fixed_upgrade_resolves_the_tagged_build_and_pins_it() {
         let home = TestHome::new("upgrade-pin");
         let sources = Releases::new(&home);
+        let build = fixed_marker(&sources, CURRENT);
         sources.response("installer", 200, installer_receipt());
         let output = sources.upgrade(&home, &["--version", CURRENT]);
         assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
         assert_eq!(
             stdout(&output),
-            format!("Installed Facade {CURRENT} in qa-bin.\n")
+            format!("Installed Facade {build} in qa-bin.\n")
         );
         assert!(output.stderr.is_empty(), "{}", stderr(&output));
-        assert_eq!(sources.requests(), [installer_url(GITHUB, CURRENT)]);
+        let mut expected = fixed_marker_requests(CURRENT);
+        expected.push(installer_url(GITHUB, CURRENT));
+        assert_eq!(sources.requests(), expected);
+    }
+
+    #[test]
+    fn a_fixed_upgrade_refuses_without_a_dated_marker_for_its_tag() {
+        let other = format!("{}+1700000000.{}", newer(), "c".repeat(40));
+        for (status, body) in [(404, ""), (200, other.as_str()), (200, CURRENT)] {
+            let home = TestHome::new("upgrade-unverified");
+            let sources = Releases::new(&home);
+            sources.response("github-fixed", status, body);
+            sources.response("mirror-fixed", status, body);
+            sources.response("installer", 200, installer_receipt());
+            let output = sources.upgrade(&home, &["--version", CURRENT]);
+            assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+            assert!(stdout(&output).is_empty(), "{}", stdout(&output));
+            let error = stderr(&output);
+            assert!(error.contains("facade-core-version.txt"), "{error}");
+            assert!(error.contains("matching release archive"), "{error}");
+            assert_eq!(sources.requests(), fixed_marker_requests(CURRENT));
+            assert!(!home.path.join("core").exists());
+        }
+    }
+
+    #[test]
+    fn a_fixed_upgrade_keeps_a_newer_build_selected_in_the_home() {
+        let home = TestHome::new("upgrade-selected-build");
+        let build = format!("{CURRENT}+1800000000.{}", "d".repeat(40));
+        let program = build_doing_as(&home, &build, "", "");
+        let installed = home
+            .command(&program)
+            .args(["daemon", "--install-only"])
+            .output()
+            .unwrap();
+        assert!(installed.status.success(), "{}", stderr(&installed));
+        let sources = Releases::new(&home);
+        fixed_marker(&sources, CURRENT);
+        sources.response("installer", 200, installer_receipt());
+        let output = sources.upgrade(&home, &["--version", CURRENT]);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        assert_eq!(
+            stdout(&output),
+            format!(
+                "Facade {build} is already up to date in {}.\n",
+                home.path.join("core").join("bin").display()
+            )
+        );
+        assert_eq!(sources.requests(), fixed_marker_requests(CURRENT));
+        assert!(!socket_exists(&home.daemon_socket()));
+        assert!(!socket_exists(&home.keeper_socket()));
+    }
+
+    #[test]
+    fn a_fixed_upgrade_does_not_run_an_installer_without_a_build_pin() {
+        let home = TestHome::new("upgrade-unpinned-installer");
+        let sources = Releases::new(&home);
+        let build = fixed_marker(&sources, CURRENT);
+        let installer = if cfg!(windows) {
+            "param([string] $Version)\n[Console]::Error.WriteLine('Unpinned installer ran')\n"
+        } else {
+            "printf '%s\\n' 'Unpinned installer ran' >&2\n"
+        };
+        sources.response("installer", 200, installer);
+        let output = sources.upgrade(&home, &["--version", CURRENT]);
+        let error = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{error}");
+        assert!(stdout(&output).is_empty(), "{}", stdout(&output));
+        assert!(!error.contains("Unpinned installer ran"), "{error}");
+        assert!(
+            error.contains(&build) && error.contains("matching release archive"),
+            "{error}"
+        );
+        let mut expected = fixed_marker_requests(CURRENT);
+        expected.push(installer_url(GITHUB, CURRENT));
+        assert_eq!(sources.requests(), expected);
+        assert!(!home.path.join("core").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_powershell_installer_download_stays_in_memory() {
+        let home = TestHome::new("upgrade-memory-download");
+        let temp = home.folder().join("outside-download-temp");
+        std::fs::create_dir_all(&temp).unwrap();
+        let sources = Releases::new(&home);
+        let build = fixed_marker(&sources, CURRENT);
+        sources.response("installer", 200, installer_receipt());
+        let output = sources
+            .upgrade_command(&home, &["--version", CURRENT])
+            .env("TMP", &temp)
+            .env("TEMP", &temp)
+            .env("QA_REQUIRE_IN_MEMORY_INSTALLER", "yes")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        assert_eq!(
+            stdout(&output),
+            format!("Installed Facade {build} in qa-bin.\n")
+        );
+        assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_upgrade_refuses_temp_inside_the_selected_home() {
+        let home = TestHome::new("upgrade-home-temp");
+        let temp = home.path.join("inside-download-temp");
+        std::fs::create_dir_all(&temp).unwrap();
+        let sources = Releases::new(&home);
+        fixed_marker(&sources, CURRENT);
+        sources.response("installer", 200, installer_receipt());
+        let output = sources
+            .upgrade_command(&home, &["--version", CURRENT])
+            .env("TMP", &temp)
+            .env("TEMP", &temp)
+            .output()
+            .unwrap();
+        let error = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{error}");
+        assert!(stdout(&output).is_empty(), "{}", stdout(&output));
+        assert!(
+            error.contains("Installer temporary directory")
+                && error.contains("inside the selected Facade home")
+                && error.contains("outside it and retry"),
+            "{error}"
+        );
+        assert!(
+            sources
+                .requests()
+                .iter()
+                .all(|url| !url.ends_with("/install.ps1"))
+        );
+        assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0);
+        assert!(!home.path.join("core").exists());
     }
 
     #[test]
@@ -376,6 +606,7 @@ if [ "$fail" = yes ] && [ "$code" -ge 400 ]; then exit 22; fi
         let home = TestHome::new("upgrade-missing");
         let sources = Releases::new(&home);
         let version = newer();
+        fixed_marker(&sources, &version);
         sources.response("installer", 404, "");
         let output = sources.upgrade(&home, &["--version", &version]);
         assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
@@ -388,7 +619,11 @@ if [ "$fail" = yes ] && [ "$code" -ge 400 ]; then exit 22; fi
         );
         assert_eq!(
             sources.requests(),
-            [github, installer_url(MIRROR, &version)]
+            [
+                fixed_marker_requests(&version),
+                vec![github, installer_url(MIRROR, &version)]
+            ]
+            .concat()
         );
     }
 
@@ -424,13 +659,18 @@ if [ "$fail" = yes ] && [ "$code" -ge 400 ]; then exit 22; fi
         let asset = target_asset();
         let detail = package_download_error(&version, &asset);
         let installer = if cfg!(windows) {
-            format!("param([string] $Version)\n[Console]::Error.WriteLine('{detail}')\nexit 1\n")
+            format!(
+                "param([string] $Version, [string] $ExpectedBuild)\nif (!$ExpectedBuild) {{ exit 64 }}\n[Console]::Error.WriteLine('{detail}')\nexit 1\n"
+            )
         } else {
-            format!("printf '%s\\n' '{detail}' >&2\nexit 1\n")
+            format!(
+                "case \" $* \" in *' --expected-build '*) ;; *) exit 64 ;; esac\nprintf '%s\\n' '{detail}' >&2\nexit 1\n"
+            )
         };
         for archive_status in [404, 200] {
             let home = TestHome::new("upgrade-package");
             let sources = Releases::new(&home);
+            fixed_marker(&sources, &version);
             sources.response("installer", 200, &installer);
             sources.response("archive", archive_status, "");
             sources.response("checksums", 404, "");
@@ -448,7 +688,8 @@ if [ "$fail" = yes ] && [ "$code" -ge 400 ]; then exit 22; fi
                     "error: Could not upgrade Facade to {version}: {missing} returned HTTP 404.\n"
                 )
             );
-            let mut expected = vec![installer_url(GITHUB, &version)];
+            let mut expected = fixed_marker_requests(&version);
+            expected.push(installer_url(GITHUB, &version));
             for origin in [
                 format!("{GITHUB}/download/extension%2F{version}"),
                 format!("{MIRROR}/releases/{version}"),
@@ -473,14 +714,15 @@ if [ "$fail" = yes ] && [ "$code" -ge 400 ]; then exit 22; fi
         ] {
             let home = TestHome::new("upgrade-asset-report");
             let sources = Releases::new(&home);
+            fixed_marker(&sources, &version);
             let receipt = format!("facade-upgrade-asset-error SHA256SUMS {status}");
             let installer = if cfg!(windows) {
                 format!(
-                    "param([string] $Version)\nif ($env:FACADE_UPGRADE_REPORT -ne '1' -or $env:FACADE_UPGRADE_ASSET_REPORT -ne '1') {{ exit 64 }}\n[Console]::Error.WriteLine('{transport}')\n[Console]::WriteLine('{receipt}')\n[Console]::Error.WriteLine('{detail}')\nexit 1\n"
+                    "param([string] $Version, [string] $ExpectedBuild)\nif (!$ExpectedBuild -or $env:FACADE_UPGRADE_REPORT -ne '1' -or $env:FACADE_UPGRADE_ASSET_REPORT -ne '1') {{ exit 64 }}\n[Console]::Error.WriteLine('{transport}')\n[Console]::WriteLine('{receipt}')\n[Console]::Error.WriteLine('{detail}')\nexit 1\n"
                 )
             } else {
                 format!(
-                    "test \"$FACADE_UPGRADE_REPORT\" = 1 && test \"$FACADE_UPGRADE_ASSET_REPORT\" = 1 || exit 64\nprintf '%s\\n' '{transport}' >&2\nprintf '%s\\n' '{receipt}'\nprintf '%s\\n' '{detail}' >&2\nexit 1\n"
+                    "case \" $* \" in *' --expected-build '*) ;; *) exit 64 ;; esac\ntest \"$FACADE_UPGRADE_REPORT\" = 1 && test \"$FACADE_UPGRADE_ASSET_REPORT\" = 1 || exit 64\nprintf '%s\\n' '{transport}' >&2\nprintf '%s\\n' '{receipt}'\nprintf '%s\\n' '{detail}' >&2\nexit 1\n"
                 )
             };
             sources.response("installer", 200, &installer);
@@ -501,7 +743,9 @@ if [ "$fail" = yes ] && [ "$code" -ge 400 ]; then exit 22; fi
                 assert_eq!(error.lines().filter(|line| *line == transport).count(), 1);
                 assert_eq!(error.lines().filter(|line| *line == detail).count(), 1);
             }
-            assert_eq!(sources.requests(), [installer_url(GITHUB, &version)]);
+            let mut expected = fixed_marker_requests(&version);
+            expected.push(installer_url(GITHUB, &version));
+            assert_eq!(sources.requests(), expected);
         }
     }
 
@@ -573,23 +817,22 @@ fn program_of_build(home: &TestHome, build: &str) -> PathBuf {
     build_failing_as(home, build, "")
 }
 
-/// A client with changed bytes and the same build ID starts services from those bytes after the
-/// home's earlier services have ended.
+/// An equal candidate leaves the selected binaries in use after the services sleep.
 #[cfg(any(windows, target_os = "linux"))]
 #[test]
-fn a_client_with_the_same_build_and_different_bytes_restarts_the_services() {
-    restart_with_changed_bytes(false);
+fn an_equal_build_with_different_bytes_leaves_the_selected_services() {
+    keep_equal_build_bytes(false);
 }
 
 /// An existing build folder may hold a hard link to the earlier program.
 #[cfg(target_os = "linux")]
 #[test]
-fn a_client_with_the_same_build_and_different_bytes_replaces_a_hard_link() {
-    restart_with_changed_bytes(true);
+fn an_equal_build_with_different_bytes_leaves_the_selected_hard_link() {
+    keep_equal_build_bytes(true);
 }
 
 #[cfg(any(windows, target_os = "linux"))]
-fn restart_with_changed_bytes(hard_link: bool) {
+fn keep_equal_build_bytes(hard_link: bool) {
     use std::io::Write;
 
     let home = TestHome::new(if hard_link {
@@ -651,7 +894,7 @@ fn restart_with_changed_bytes(hard_link: bool) {
     let previous_keeper = process_identity(home.keeper_pid().unwrap());
     let previous_daemon = process_identity(home.daemon_pid().unwrap());
     assert!(service_images_match(
-        &home, "before", &old_bytes, &new_bytes, false
+        &home, "before", &old_bytes, &new_bytes
     ));
     {
         let mut wire = connect(&home);
@@ -694,21 +937,24 @@ fn restart_with_changed_bytes(hard_link: bool) {
     );
     assert!(alive(&second.process), "the new fake CLI runs");
     assert!(
-        service_images_match(&home, "after", &old_bytes, &new_bytes, true),
-        "a client with the same build ID must restart both services from its own bytes"
+        service_images_match(&home, "after", &old_bytes, &new_bytes),
+        "both services start from the selected installation"
     );
+    assert!(std::fs::read(&installed).unwrap() == old_bytes);
+    #[cfg(target_os = "linux")]
+    if hard_link {
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(
+            std::fs::metadata(&before).unwrap().ino(),
+            std::fs::metadata(&installed).unwrap().ino()
+        );
+    }
 }
 
 /// Reads the service's actual program: /proc keeps the running inode on Linux, even if its path
 /// was replaced; Windows reports the image path and holds that file while the service runs.
 #[cfg(any(windows, target_os = "linux"))]
-fn service_images_match(
-    home: &TestHome,
-    when: &str,
-    old: &[u8],
-    new: &[u8],
-    want_new: bool,
-) -> bool {
+fn service_images_match(home: &TestHome, when: &str, old: &[u8], new: &[u8]) -> bool {
     let services = [
         ("keeper", home.keeper_pid().unwrap()),
         ("daemon", home.daemon_pid().unwrap()),
@@ -736,7 +982,7 @@ fn service_images_match(
             path.display(),
             bytes.len()
         );
-        matched &= if want_new { is_new } else { is_old };
+        matched &= is_old;
     }
     matched
 }
@@ -763,6 +1009,12 @@ fn build_doing_as(home: &TestHome, build: &str, role: &str, what: &str) -> PathB
         let program = folder.join("facade.exe");
         std::fs::copy(&test_binaries().facade, &program).unwrap();
         std::fs::copy(&test_binaries().mcp, folder.join("facade-mcp.exe")).unwrap();
+        let conpty = folder.join("conpty");
+        let source = test_binaries().facade.parent().unwrap().join("conpty");
+        std::fs::create_dir_all(&conpty).unwrap();
+        for name in ["conpty.dll", "OpenConsole.exe"] {
+            std::fs::copy(source.join(name), conpty.join(name)).unwrap();
+        }
         std::fs::write(
             folder.join("facade.exe.test-build"),
             format!("{build}\n{}\n", folder.join("ran.log").display()),
@@ -1749,47 +2001,37 @@ fn sends_waiting_through_a_takeover_are_typed_once_and_answered() {
     );
 }
 
-/// A running Facade whose version is a pre-release of this version, such as this version with
-/// `-rc1`, is taken over by no build: a command of this version asks nothing, says nothing, and
-/// works with it. The command and the daemon decide by one rule.
+/// A prerelease build cannot become a home's selected installation.
 #[test]
-fn a_pre_release_that_runs_is_taken_over_by_no_build() {
+fn a_pre_release_is_refused_before_a_fresh_home_is_changed() {
     let home = TestHome::new("prerelease");
-    let candidate = program_of_build(&home, &pre_release());
+    let build = pre_release();
+    let candidate = program_of_build(&home, &build);
     let detached = home
         .command(&candidate)
         .args(["daemon", "--detach"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
-    assert!(detached.status.success(), "{}", stderr(&detached));
-    assert_eq!(home.hello_result().unwrap()["build"], pre_release());
-    let listed = home
-        .command(&test_binaries().facade)
-        .args(["list"])
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert!(
-        listed.status.success()
-            && listed.stdout.is_empty()
-            && stderr(&listed).starts_with("No active agents.\n"),
-        "{}",
-        stderr(&listed)
-    );
     assert_eq!(
-        home.hello_result().unwrap()["build"],
-        pre_release(),
-        "nothing taken over"
+        detached.status.code(),
+        Some(1),
+        "{}{}",
+        stdout(&detached),
+        stderr(&detached)
     );
+    assert!(stderr(&detached).contains(&build), "{}", stderr(&detached));
+    assert!(!home.path.join("core/bin").exists());
+    for role in ["daemon", "keeper"] {
+        assert!(!home.path.join(format!("core/{role}.lock")).exists());
+    }
 }
 
 /// The machine table shows the version and the API keeps the build suffix.
 #[test]
 fn machine_list_shows_the_version_and_the_api_keeps_the_build() {
     let home = TestHome::new("machineversion");
-    let version = pre_release();
-    let build = format!("{version}+4f2a");
+    let build = format!("{CURRENT}+1700000000.{}", "a".repeat(40));
     let program = program_of_build(&home, &build);
     let output = home
         .command(&program)
@@ -1799,39 +2041,27 @@ fn machine_list_shows_the_version_and_the_api_keeps_the_build() {
         .unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
     let table = stdout(&output);
-    assert_eq!(
-        Table::parse(&table).column("VERSION"),
-        [version.as_str()],
-        "{table}"
-    );
+    assert_eq!(Table::parse(&table).column("VERSION"), [CURRENT], "{table}");
 
     let listed = connect(&home).call_ok("machine.list", json!({}));
     assert_eq!(listed["machines"][0]["build"], build);
 }
 
-/// The daemon itself refuses a takeover by a build of its own version and by an older one, and says
-/// why; the running Facade stays as it was.
+/// The daemon keeps the running installation when an equal or older build offers a takeover.
 #[test]
-fn the_daemon_refuses_a_takeover_by_its_own_version_and_an_older_one() {
+fn the_daemon_refuses_a_takeover_by_an_equal_or_older_build() {
     let home = TestHome::new("takeoverrefused");
     home.start_fake("w1");
     let (before, daemon) = (keeper(&home), home.daemon_pid().unwrap());
     let launcher = launcher_build(&home.path).expect("the launchers point at a build");
     let mut wire = connect(&home);
     let program = program_of_build(&home, &newer());
-    for (build, why) in [
-        (
-            CURRENT.to_string(),
-            format!(
-                "{CURRENT} is of this Facade's own version, {CURRENT}: builds of one version do not \
-                 take over from each other"
-            ),
-        ),
-        (
-            older(),
-            format!("{} is not newer than this Facade, {CURRENT}", older()),
-        ),
-    ] {
+    let current = home.hello_result().unwrap()["build"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for build in [current.clone(), older()] {
+        let why = format!("{build} is not newer than this Facade, {current}");
         let args = json!({
             "program": program, "build": build, "daemon_api_versions": DAEMON_API_VERSIONS,
             "keeper_api_versions": [1],
@@ -1854,6 +2084,105 @@ fn the_daemon_refuses_a_takeover_by_its_own_version_and_an_older_one() {
         launcher_build(&home.path).expect("the launchers point at a build"),
         launcher
     );
+}
+
+#[test]
+#[cfg(unix)]
+fn install_only_refuses_linked_program_directories() {
+    let selected = facade_base::build_id();
+    for link in ["bin".into(), format!("bin/{selected}")] {
+        let home = TestHome::new("linked-program-directory");
+        let isolated = home.folder().join("unselected-program-directory");
+        std::fs::create_dir(&isolated).unwrap();
+        let sentinel = isolated.join("keep");
+        std::fs::write(&sentinel, b"unchanged").unwrap();
+        let managed = home.path.join("core").join(&link);
+        std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&isolated, &managed).unwrap();
+
+        let offered = home.run_facade(&["daemon", "--install-only"]);
+        assert_eq!(offered.status.code(), Some(1), "{}", stderr(&offered));
+        assert_eq!(std::fs::read_link(&managed).unwrap(), isolated);
+        assert_eq!(std::fs::read_dir(&isolated).unwrap().count(), 1);
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"unchanged");
+        assert!(!socket_exists(&home.daemon_socket()));
+        assert!(!socket_exists(&home.keeper_socket()));
+    }
+}
+
+#[test]
+fn a_same_version_newer_build_changes_only_its_selected_home() {
+    let first = TestHome::new("home-build-first");
+    let second = TestHome::new("home-build-second");
+    let older = format!("{CURRENT}+1700000000.{}", "a".repeat(40));
+    let newer = format!("{CURRENT}+1700000001.{}", "b".repeat(40));
+    let older_program = program_of_build(&first, &older);
+    let newer_program = program_of_build(&first, &newer);
+    let run = |home: &TestHome, program: &Path, args: &[&str]| {
+        let output = home
+            .command(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}{}",
+            stdout(&output),
+            stderr(&output)
+        );
+        stdout(&output)
+    };
+    let launcher = |home: &TestHome| home.path.join("core/bin").join(program_name("facade"));
+    let selected = |home: &TestHome| {
+        let build = launcher_build(&home.path).expect("the home has a selected program set");
+        assert_eq!(
+            run(home, &launcher(home), &["--version"]),
+            format!("facade {build}\n")
+        );
+        build
+    };
+
+    for home in [&first, &second] {
+        run(home, &older_program, &["daemon", "--install-only"]);
+        assert_eq!(selected(home), older);
+        assert!(home.hello_result().is_none());
+    }
+    run(&first, &newer_program, &["daemon", "--takeover"]);
+    run(&first, &older_program, &["daemon", "--install-only"]);
+    assert_eq!(selected(&first), newer);
+    assert_eq!(selected(&second), older);
+    assert!(first.hello_result().is_none());
+    assert!(second.hello_result().is_none());
+
+    let reported = run(&second, &launcher(&first), &["--version"]);
+    assert_eq!(reported, format!("facade {newer}\n"));
+    assert!(second.hello_result().is_none());
+    let started = run(
+        &second,
+        &launcher(&first),
+        &["start", "-d", "--name", "other-home", "fake"],
+    );
+    let agent = second.started_agent(&started);
+    assert!(alive(&agent.process));
+    assert_eq!(second.hello_result().unwrap()["build"], older);
+    assert!(first.hello_result().is_none());
+
+    let refused = second
+        .command(&newer_program)
+        .args(["daemon", "--install-only"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "{}{}",
+        stdout(&refused),
+        stderr(&refused)
+    );
+    assert_eq!(selected(&second), older);
+    assert!(alive(&agent.process));
 }
 
 #[test]

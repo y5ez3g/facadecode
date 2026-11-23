@@ -5,6 +5,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use facade_base::api_v1::daemon::{
     self, AgentLabel, DaemonUpgrade, DaemonUpgradeArgs, DaemonUpgradeResult,
 };
@@ -13,8 +14,8 @@ use facade_base::api_v1::{
     ApiVersion, ApiVersions, ErrorBody, NoArgs, Request, ServerMessage, encode_line, keeper,
     read_server_message,
 };
-use facade_base::paths::ClientSocket;
 use facade_base::service::{self, Candidate, Report, Service};
+use facade_base::{paths::ClientSocket, programs};
 
 use crate::errors::{self, Problem, ServeFailure};
 
@@ -176,7 +177,10 @@ fn connect_with_takeover(
         |socket, until| DaemonClient::connect(socket, until, opening),
     )?;
     let running = &client.hello_result.build;
-    if running == &ours || purpose != Purpose::Install && !facade_base::takes_over(&ours, running) {
+    if !facade_base::takes_over(&ours, running)
+        || programs::current_build()
+            .is_some_and(|selected| selected != ours && !facade_base::takes_over(&ours, &selected))
+    {
         return Ok(client);
     }
 
@@ -189,9 +193,15 @@ fn connect_with_takeover(
         .map_or(until, |deadline| deadline.min(until));
     let replacement = wait_for_closing(client, until, cancelled)
         .and_then(|()| {
-            reach_daemon(false, cancelled, timeout, Some(until), |socket, until| {
-                Ok(DaemonClient::connect(socket, until, opening)?
-                    .filter(|client| client.hello_result.build == ours))
+            // With no CLI to hold, the keeper can exit with the old daemon. Start the selected
+            // services in that case so the already-awake home can finish its takeover.
+            reach_daemon(true, cancelled, timeout, Some(until), |socket, until| {
+                Ok(
+                    DaemonClient::connect(socket, until, opening)?.filter(|client| {
+                        let build = &client.hello_result.build;
+                        build == &ours || facade_base::takes_over(build, &ours)
+                    }),
+                )
             })
         })
         .map_err(|failure| match failure {
@@ -205,7 +215,7 @@ fn connect_with_takeover(
         eprintln!(
             "{}",
             errors::took_over(
-                &ours,
+                &replacement.hello_result.build,
                 &handed.from,
                 &format!("{count} {}", if count == 1 { "agent" } else { "agents" }),
                 asked.elapsed(),
@@ -221,6 +231,7 @@ fn connect_with_takeover(
 struct TakeoverRefusal {
     message: String,
     blockers: Vec<AgentLabel>,
+    body: Option<ErrorBody>,
 }
 
 impl std::fmt::Display for TakeoverRefusal {
@@ -271,15 +282,29 @@ fn ask_to_take_over(
         time_left(until, cancelled)?;
     }
     result.map_err(|error| {
-        let blockers = error
-            .downcast_ref::<ErrorBody>()
+        let body = error.downcast_ref::<ErrorBody>().cloned();
+        let blockers = body
+            .as_ref()
             .filter(|body| body.data.reason == "protocol_incompatible")
             .and_then(|body| body.data.details.as_ref()?.get("agents"))
             .and_then(|agents| serde_json::from_value(agents.clone()).ok())
             .unwrap_or_default();
+        let mut message = errors::takeover_refused(ours, &running, &error);
+        if facade_base::version_of(ours) == facade_base::version_of(&running)
+            && error
+                .downcast_ref::<ErrorBody>()
+                .is_some_and(|body| body.data.reason == "refused")
+            && let Ok(home) = facade_base::paths::facade_home()
+        {
+            message.push_str(&format!(
+                ". Let agents finish and stop the daemon and keeper for {} before retrying",
+                home.display()
+            ));
+        }
         permanent(TakeoverRefusal {
-            message: errors::takeover_refused(ours, &running, &error),
+            message,
             blockers,
+            body,
         })
     })
 }
@@ -349,20 +374,15 @@ fn takeover_versions(supported: &[ApiVersion]) -> ApiVersions {
 struct StartedKeeper(Option<Candidate>);
 
 impl StartedKeeper {
-    /// Starts a keeper through the launcher; the keeper starts the daemon. Installs this build
-    /// first, and points the launcher at it where the launcher names no build, an older one, or
-    /// one without a version, which no build could ever take over from.
+    /// Starts a keeper through the selected launcher; the keeper starts the daemon.
     fn start(&mut self) -> anyhow::Result<()> {
-        let ours = facade_base::build_id();
-        facade_base::programs::install_running()?;
-        let named = facade_base::programs::current_build();
-        if named.is_none_or(|named| {
-            facade_base::version_of(&named).is_none() || facade_base::takes_over(&ours, &named)
-        }) {
-            facade_base::programs::point_launchers_at(&ours, &[])?;
+        if let Some(launcher) = programs::select_running_if_idle()? {
+            self.0 = Some(
+                service::launch(Service::Keeper, &launcher, &[]).with_context(|| {
+                    format!("could not start the keeper from {}", launcher.display())
+                })?,
+            );
         }
-        let launcher = facade_base::programs::launcher("facade")?;
-        self.0 = Some(service::launch(Service::Keeper, &launcher, &[])?);
         Ok(())
     }
 
@@ -525,11 +545,12 @@ fn still_starting(error: &anyhow::Error) -> bool {
 
 /// `facade daemon --detach` starts the service for an editor, which confirms with its own hello.
 pub(super) fn detach() -> anyhow::Result<i32> {
+    programs::validate_running_build()?;
     match connect_with_takeover(Purpose::Background, &|| false, &mut |_| true) {
         Err(ConnectFailure::Timeout(still)) if still_starting(&still) => {
             eprintln!("facade: {still:#}")
         }
-        Err(failure) => return Err(failure.into()),
+        Err(failure) => return Err(report_editor_startup(failure.into())),
         Ok(_) => {}
     }
     Ok(0)
@@ -540,9 +561,9 @@ fn services_running(core: &Path) -> std::io::Result<bool> {
         || service::live_holder(core, Service::Keeper)?.is_some())
 }
 
-/// Connects only to running services and waits for this build to take over.
+/// Selects a sleeping home's programs or waits for an admitted live takeover.
 pub(super) fn takeover() -> anyhow::Result<i32> {
-    if services_running(&facade_base::paths::core_dir()?)?
+    if programs::select_running_if_idle()?.is_none()
         && let Err(failure) = connect_with_takeover(Purpose::Install, &|| false, &mut |_| true)
     {
         let error = anyhow::Error::from(failure);
@@ -555,7 +576,44 @@ pub(super) fn takeover() -> anyhow::Result<i32> {
             let _ =
                 writeln!(stdout, "facade-upgrade-blockers {payload}").and_then(|()| stdout.flush());
         }
-        return Err(error);
+        return Err(report_editor_startup(error));
     }
     Ok(0)
+}
+
+/// Reports typed daemon refusals separately from human diagnostics for editor startup.
+fn report_editor_startup(error: anyhow::Error) -> anyhow::Error {
+    if std::env::var("FACADE_EDITOR_STARTUP_REPORT").as_deref() != Ok("1") {
+        return error;
+    }
+    let body = if let Some(refusal) = error.downcast_ref::<TakeoverRefusal>() {
+        refusal.body.clone().map(|mut body| {
+            body.message.clone_from(&refusal.message);
+            body
+        })
+    } else {
+        error.downcast_ref::<ErrorBody>().cloned().map(|mut body| {
+            // A daemon from before API v1 rejects the new hello arguments.
+            if body.code == -32602 && body.data.reason == "invalid_argument" {
+                body.data.reason = "protocol_incompatible".into();
+                body.message = format!(
+                    "The running Facade core did not accept daemon API v1. Finish workspace imports in the prerelease editor, let its agents finish, and stop its daemon and keeper before switching the editor, CLI and participating SSH endpoints together. {}",
+                    body.message
+                );
+            }
+            body
+        })
+    };
+    if let Some(body) = body
+        && matches!(
+            body.data.reason.as_str(),
+            "protocol_incompatible" | "refused"
+        )
+        && let Ok(payload) = serde_json::to_string(&body)
+    {
+        let mut stdout = std::io::stdout().lock();
+        let _ =
+            writeln!(stdout, "facade-editor-daemon-error {payload}").and_then(|()| stdout.flush());
+    }
+    error
 }

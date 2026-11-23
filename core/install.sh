@@ -5,31 +5,36 @@ umask 077
 fail() { printf 'facade install: %s\n' "$*" >&2; exit 1; }
 
 version=
+expected_build=
+latest_build=
 package=
-root="${HOME:?HOME is required}/.local"
+root=${FACADE_HOME:-}
 add_path=true
-activate=true
+mode=--takeover
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --version|--package|--install-root)
+        --version|--expected-build|--package|--install-root)
             [ "$#" -ge 2 ] && [ -n "$2" ] || fail "$1 requires a value."
             case "$1" in
                 --version) version=$2 ;;
+                --expected-build) expected_build=$2 ;;
                 --package) package=$2 ;;
                 --install-root) root=$2 ;;
             esac
             shift
             ;;
         --no-path) add_path=false ;;
-        --no-activate) activate=false ;;
+        --no-activate) mode=--install-only ;;
         --help)
-            printf '%s\n' 'Usage: install.sh [--version X.Y.Z] [--package ARCHIVE] [--install-root DIRECTORY] [--no-path] [--no-activate]'
+            printf '%s\n' 'Usage: install.sh [--version X.Y.Z] [--expected-build BUILD] [--package ARCHIVE] [--install-root HOME] [--no-path] [--no-activate]'
             exit 0 ;;
         *) fail "Unknown argument $1. Use --help." ;;
     esac
     shift
 done
-case "$root" in /*) ;; *) fail 'The install root must be an absolute path.' ;; esac
+profile_home=${HOME:-${USERPROFILE:-}}
+[ -n "$root" ] || root="${profile_home:?HOME or USERPROFILE is required}/.facade"
+case "$root" in /*) ;; *) fail 'The Facade home must be an absolute path.' ;; esac
 case "$(uname -s)" in
     Linux) os=linux ;;
     Darwin) os=darwin ;;
@@ -48,11 +53,14 @@ valid_version() {
     case "$1" in *[!0-9.]*) return 1 ;; esac
     printf '%s\n' "$1" | LC_ALL=C grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
 }
-read_version() {
+valid_build() {
+    case "$1" in *[!0-9A-Za-z.+]*) return 1 ;; esac
+    printf '%s\n' "$1" | LC_ALL=C grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(\+([0-9]+\.)?[0-9A-Za-z]+)?$'
+}
+read_build() {
     LC_ALL=C awk '
-        { sub(/\r$/, "") }
-        NR == 1 && /^[0-9]+\.[0-9]+\.[0-9]+$/ { version = $0 }
-        END { if (NR != 1 || version == "") exit 1; print version }
+        NR == 1 { sub(/\r$/, ""); build = $0 }
+        END { if (NR != 1 || build == "") exit 1; print build }
     ' "$1"
 }
 failed_http=-
@@ -77,14 +85,17 @@ fail_download() {
     fail "$@"
 }
 [ -z "$version" ] || valid_version "$version" || fail 'Use a release version such as 0.1.6.'
+[ -z "$expected_build" ] || valid_build "$expected_build" || fail 'Use a valid Facade BUILD for --expected-build.'
 
-data="$root/share/facade"
-bin="$root/bin"
-versions="$data/versions"
-mkdir -p "$versions"
-work=$(mktemp -d "$versions/.install.XXXXXX")
+bin="${root%/}/core/bin"
+temp=$(cd -P -- "${TMPDIR:-/tmp}" && pwd -P) || fail 'Could not open the temporary directory.'
+if [ -d "$root" ]; then
+    target_dir=$(cd -P -- "$root" && pwd -P)
+    case "$temp/" in "${target_dir%/}/"*) fail 'Use a temporary directory outside the Facade home.' ;; esac
+fi
+work=$(mktemp -d "$temp/facade-install.XXXXXX")
 work_name=${work##*/}
-trap 'rm -rf -- "${versions:?}/${work_name:?}"' 0
+trap 'rm -rf -- "${temp:?}/${work_name:?}"' 0
 trap 'exit 1' HUP INT TERM
 
 if [ -n "$package" ]; then
@@ -96,11 +107,18 @@ else
         download "$releases/latest/download/facade-core-version.txt" "$version_file" ||
             download "$mirror/facade-core-version.txt" "$version_file" ||
             fail_download 'Could not download the stable Facade version from GitHub or facadecode.com.'
-        version=$(read_version "$version_file") || fail 'The stable release did not provide a valid version.'
+        latest_build=$(read_build "$version_file") && valid_build "$latest_build" ||
+            fail 'The stable release did not provide a valid BUILD.'
+        version=${latest_build%%+*}
     fi
-    download_package "$releases/download/extension%2F$version" ||
-        download_package "$mirror/releases/$version" ||
-        fail_download "Could not download $asset and its checksums for Facade $version from GitHub or facadecode.com."
+    if ! download_package "$releases/download/extension%2F$version" &&
+        ! download_package "$mirror/releases/$version"; then
+        message="Could not download $asset and its checksums for Facade $version from GitHub or facadecode.com."
+        if [ -n "${expected_build:-$latest_build}" ]; then
+            message="$message Supply the matching release archive with --package."
+        fi
+        fail_download "$message"
+    fi
 fi
 expected=$(LC_ALL=C awk -v asset="$asset" '
     { sub(/\r$/, "") }
@@ -118,88 +136,140 @@ fi
 stage="$work/payload"
 mkdir "$stage"
 tar -xzf "$work/$asset" -C "$stage"
-build=$(read_version "$stage/VERSION") || fail 'The package did not provide a valid version.'
-[ -z "$version" ] || [ "$build" = "$version" ] || fail "Expected Facade $version, found $build in the package."
+build=$(read_build "$stage/VERSION") && valid_build "$build" || fail 'The package did not provide a valid BUILD.'
+pin=${expected_build:-$latest_build}
+[ -z "$pin" ] || [ "$build" = "$pin" ] ||
+    fail "Expected Facade build $pin, found $build in the package. Supply the matching release archive with --package."
+[ -z "$version" ] || [ "${build%%+*}" = "$version" ] || fail "Expected Facade $version, found $build in the package."
 for program in facade facade-mcp; do
     [ -f "$stage/$program" ] || fail "The package has no $program."
     chmod 755 "$stage/$program"
 done
 
-destination="$versions/$build"
-if [ -e "$destination" ]; then
+reported=$("$stage/facade" --version) && [ "$reported" = "facade $build" ] ||
+    fail "The packaged executable does not report Facade build $build. Supply the matching release archive with --package."
+
+before=
+if [ -x "$bin/facade" ]; then
+    before=$(FACADE_HOME="$root" "$bin/facade" --version)
+fi
+FACADE_HOME="$root" "$stage/facade" daemon "$mode"
+reported=$(FACADE_HOME="$root" "$bin/facade" --version)
+selected=${reported#facade }
+[ "$reported" = "facade $selected" ] && valid_build "$selected" ||
+    fail 'The home launcher did not report a valid Facade BUILD.'
+
+if [ "$reported" = "$before" ] || [ "$selected" != "$build" ]; then
+    printf 'Facade %s is already up to date in %s.\n' "$selected" "$bin"
+    exit 0
+fi
+
+remove_legacy_programs() {
+    legacy_bin="$profile_home/.local/bin"
+    legacy_data="$profile_home/.local/share/facade"
+    owned=false
     for program in facade facade-mcp; do
-        cmp -s "$stage/$program" "$destination/$program" ||
-            fail "Facade $build already exists with different files in $destination."
+        launcher="$legacy_bin/$program"
+        if [ -L "$launcher" ] && [ "$(readlink "$launcher")" = "../share/facade/current/$program" ]; then
+            rm -- "$launcher"
+            owned=true
+        fi
     done
-else
-    mv -- "$stage" "$destination"
-fi
-
-mkdir -p "$bin"
-for program in facade facade-mcp; do
-    launcher="$bin/$program"
-    target="../share/facade/current/$program"
-    if [ -e "$launcher" ] || [ -L "$launcher" ]; then
-        [ "$(readlink "$launcher" || :)" = "$target" ] || fail "$launcher is already used by another installation. Move it first."
+    if ! "$owned" || [ -L "$legacy_data" ] || [ -L "$legacy_data/versions" ]; then
+        return
     fi
-done
-if [ -e "$data/current" ] && [ ! -L "$data/current" ]; then
-    fail "$data/current is already used by another installation. Move it first."
-fi
-up_to_date=false
-if [ -L "$data/current" ] && [ "$(readlink "$data/current")" = "versions/$build" ] &&
-    [ -L "$bin/facade" ] && [ -L "$bin/facade-mcp" ]; then
-    up_to_date=true
-fi
-
-if "$activate"; then
-    "$destination/facade" daemon --takeover
-fi
-
-# One switch selects the two programs together. Do not follow a directory symlink.
-if ! "$up_to_date"; then
-    ln -s "versions/$build" "$work/current"
-    if [ "$os" = darwin ]; then
-        mv -fh -- "$work/current" "$data/current"
-    else
-        mv -fT -- "$work/current" "$data/current"
+    if [ -L "$legacy_data/current" ]; then
+        target=$(readlink "$legacy_data/current")
+        if [ "${target#versions/}" != "$target" ] && valid_version "${target#versions/}"; then
+            rm -- "$legacy_data/current"
+        fi
     fi
-    for program in facade facade-mcp; do
-        [ -L "$bin/$program" ] || ln -s "../share/facade/current/$program" "$bin/$program"
+    for folder in "$legacy_data"/versions/*; do
+        [ -d "$folder" ] && [ ! -L "$folder" ] || continue
+        version_name=${folder##*/}
+        valid_version "$version_name" && [ -f "$folder/VERSION" ] &&
+            [ "$(read_build "$folder/VERSION")" = "$version_name" ] || continue
+        rm -f -- "$folder/facade" "$folder/facade-mcp" "$folder/VERSION" "$folder/LICENSE.txt"
+        rmdir -- "$folder" 2>/dev/null || :
     done
-fi
+    rmdir -- "$legacy_data/versions" "$legacy_data" 2>/dev/null || :
+}
 
-if "$add_path"; then
-    # Add the same shell statement to login and interactive profiles once.
-    escaped=$(printf '%s\n' "$bin" | sed "s/'/'\\\\''/g")
-    path_line="case \":\$PATH:\" in *:'$escaped':*) ;; *) export PATH=\"\$PATH\":'$escaped' ;; esac"
-    add_to_profile() {
-        if ! grep -Fqx -- "$2" "$1" 2>/dev/null; then
-            printf '\n%s\n' "$2" >> "$1"
+if "$add_path" && [ "${FACADE_UPGRADE_REPORT:-}" != 1 ] && [ -n "$profile_home" ]; then
+    # Running each profile puts its most recently selected home first.
+    legacy_shell_path_line() {
+        escaped=$(printf '%s\n' "$1" | sed "s/'/'\\\\''/g")
+        printf '%s\n' "case \":\$PATH:\" in *:'$escaped':*) ;; *) export PATH=\"\$PATH\":'$escaped' ;; esac"
+    }
+    remove_profile_line() {
+        if [ -f "$1" ] && grep -Fqx -- "$2" "$1"; then
+            OLD_FACADE_LINE="$2" awk '$0 != ENVIRON["OLD_FACADE_LINE"]' "$1" > "$work/profile"
+            cat "$work/profile" > "$1"
         fi
     }
-    add_to_profile "$HOME/.profile" "$path_line"
-    for profile in "$HOME/.bash_profile" "$HOME/.bash_login"; do
+    move_profile_entry() {
+        if [ -f "$1" ]; then
+            FACADE_PROFILE_ENTRY="$2" awk '
+                BEGIN { entry = "\n" ENVIRON["FACADE_PROFILE_ENTRY"] "\n"; profile = "\n" }
+                { profile = profile $0 "\n" }
+                END {
+                    while ((start = index(profile, entry))) {
+                        before = substr(profile, 1, start)
+                        if (before ~ /\n\n$/) before = substr(before, 1, length(before) - 1)
+                        profile = before substr(profile, start + length(entry))
+                    }
+                    printf "%s", substr(profile, 2)
+                }
+            ' "$1" > "$work/profile"
+            cat "$work/profile" > "$1"
+        fi
+        printf '\n%s\n' "$2" >> "$1"
+    }
+    escaped=$(printf '%s\n' "$bin" | sed "s/'/'\\\\''/g")
+    path_marker="# Facade PATH for '$escaped'"
+    path_lines=$(
+        printf '%s\n' "$path_marker" 'export PATH="$(' "    _facade_bin='$escaped'"
+        cat <<'PATH_SETUP'
+    _facade_path=":${PATH-}:"
+    while [ "${_facade_path#*":$_facade_bin:"}" != "$_facade_path" ]; do
+        _facade_path=${_facade_path%%":$_facade_bin:"*}:${_facade_path#*":$_facade_bin:"}
+    done
+    case $_facade_path in
+        :) printf '%s' "$_facade_bin" ;;
+        *) _facade_path=${_facade_path#:}
+           printf '%s:%s' "$_facade_bin" "${_facade_path%:}" ;;
+    esac
+)"
+PATH_SETUP
+    )
+    old_line=$(legacy_shell_path_line "$profile_home/.local/bin")
+    zsh_profile="${ZDOTDIR:-$profile_home}/.zshrc"
+    for profile in "$profile_home/.profile" "$profile_home/.bash_profile" "$profile_home/.bash_login" "$profile_home/.bashrc" "$zsh_profile"; do
+        remove_profile_line "$profile" "$old_line"
+    done
+    move_profile_entry "$profile_home/.profile" "$path_lines"
+    for profile in "$profile_home/.bash_profile" "$profile_home/.bash_login"; do
         if [ -f "$profile" ]; then
-            add_to_profile "$profile" "$path_line"
+            move_profile_entry "$profile" "$path_lines"
             break
         fi
     done
-    add_to_profile "$HOME/.bashrc" "$path_line"
-    add_to_profile "${ZDOTDIR:-$HOME}/.zshrc" "$path_line"
+    move_profile_entry "$profile_home/.bashrc" "$path_lines"
+    move_profile_entry "$zsh_profile" "$path_lines"
+    fish_path_line() {
+        fish_path=$(printf '%s\n' "$1" | sed "s/[\\\\']/\\\\&/g")
+        printf '%s\n' "fish_add_path --path $2 '$fish_path'"
+    }
+    fish_config="${XDG_CONFIG_HOME:-$profile_home/.config}/fish/conf.d"
+    remove_profile_line "$fish_config/facade.fish" "$(fish_path_line "$profile_home/.local/bin" --append)"
     if command -v fish >/dev/null 2>&1; then
-        fish_config="${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d"
-        fish_path=$(printf '%s\n' "$bin" | sed "s/[\\\\']/\\\\&/g")
         mkdir -p "$fish_config"
-        add_to_profile "$fish_config/facade.fish" "fish_add_path --path --append '$fish_path'"
+        move_profile_entry "$fish_config/facade.fish" "$(fish_path_line "$bin" '--prepend --move')"
     fi
-    case ":$PATH:" in
-        *:"$bin":*) ;;
+    remove_legacy_programs
+    case "$PATH:" in
+        "$bin":*) ;;
         *) printf 'Open a new terminal to use facade and facade-mcp.\n' ;;
     esac
 fi
-if "$up_to_date" && [ "${FACADE_UPGRADE_REPORT:-}" = 1 ]; then
-    printf 'Facade %s is already up to date in %s.\n' "$build" "$bin"
-else
-    printf 'Installed Facade %s in %s.\n' "$build" "$bin"
-fi
+printf 'Installed Facade %s in %s.\n' "$selected" "$bin"

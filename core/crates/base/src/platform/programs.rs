@@ -9,6 +9,7 @@
 //! A build's folder is removed when the launchers move to another build, unless it is the build
 //! they moved from, a service still runs from it, or it changed in the last ten minutes.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::File;
@@ -16,6 +17,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
+
+use anyhow::{Context, bail, ensure};
 
 #[cfg(unix)]
 use std::fs::{OpenOptions, Permissions};
@@ -209,10 +212,26 @@ pub fn launcher(program: &str) -> anyhow::Result<PathBuf> {
 }
 
 /// Installs this build's programs, the running program and the `facade-mcp` beside it, and returns
-/// the installed `facade`, which the services run.
+/// the installed `facade` for a daemon starting under its service lock. Publication follows
+/// keeper admission.
 pub fn install_running() -> anyhow::Result<PathBuf> {
     let program = crate::this_program()?;
-    install(&program, &crate::build_id())
+    let build = crate::build_id();
+    let bin = Bin::here()?;
+    let installed = bin.build(&build)?.join(PROGRAMS[0]);
+    if bin.current().as_deref() == Some(&build) && installed.is_file() {
+        return Ok(installed);
+    }
+    let _lock = bin.lock()?;
+    if bin.current().as_deref() == Some(&build) && installed.is_file() {
+        return Ok(installed);
+    }
+    ensure!(
+        bin.should_select(&build)?,
+        "Facade {build} is no longer selected. Run {}",
+        bin.0.join(PROGRAMS[0]).display()
+    );
+    bin.install_set(&program, &build)
 }
 
 /// Installs `program`, a `facade` of build `build`, with the `facade-mcp` beside it, and returns
@@ -226,11 +245,131 @@ pub fn current_build() -> Option<String> {
     Bin::here().ok()?.current()
 }
 
+/// Checks the invoked build before a daemon command can take service locks.
+pub fn validate_running_build() -> anyhow::Result<()> {
+    Bin::here()?.validate_build(&crate::build_id())
+}
+
+/// Selects this candidate in a sleeping home, or returns the launcher already selected there.
+pub fn select_running() -> anyhow::Result<PathBuf> {
+    let launcher = launcher(PROGRAMS[0])?;
+    select_running_if_idle()?.with_context(|| {
+        format!(
+            "Services for {} are running. Use 'facade daemon --takeover' with the candidate or stop the services before installing",
+            launcher.display()
+        )
+    })
+}
+
+/// Selects a sleeping home's programs. None means a live service must admit the replacement.
+pub fn select_running_if_idle() -> anyhow::Result<Option<PathBuf>> {
+    use crate::service::{self, Service};
+
+    let bin = Bin::here()?;
+    let launcher = bin.0.join(PROGRAMS[0]);
+    let build = crate::build_id();
+    if !bin.should_select(&build)? {
+        return Ok(Some(launcher));
+    }
+    let core = crate::paths::core_dir()?;
+    let live = || -> io::Result<bool> {
+        Ok(service::live_holder(&core, Service::Daemon)?.is_some()
+            || service::live_holder(&core, Service::Keeper)?.is_some())
+    };
+    if live()? {
+        return Ok(None);
+    }
+    let _lock = bin.lock()?;
+    if bin.should_select(&build)? {
+        if live()? {
+            return Ok(None);
+        }
+        bin.install_set(&crate::this_program()?, &build)?;
+        bin.point_at(&build, &[])?;
+    }
+    Ok(Some(launcher))
+}
+
+/// Publishes a candidate after the running daemon admitted it. Selection and publication share
+/// the cold install lock.
+pub fn select_for_takeover(program: &Path, build: &str, running: &[String]) -> anyhow::Result<()> {
+    let bin = Bin::here()?;
+    let eligible = || -> anyhow::Result<bool> {
+        if bin.should_select(build)? {
+            return Ok(true);
+        }
+        ensure!(
+            bin.current().as_deref() == Some(build),
+            "Facade {build} was superseded. Run {}",
+            bin.0.join(PROGRAMS[0]).display()
+        );
+        Ok(false)
+    };
+    if eligible()? {
+        let _lock = bin.lock()?;
+        if eligible()? {
+            bin.install_set(program, build)?;
+            bin.point_at(build, running)?;
+        }
+    }
+    Ok(())
+}
+
 /// Points the launchers at build `build`. Where they pointed at another build, the build folders
 /// no longer needed are removed: those of neither build, nor of one in `running`, which services
 /// run from, nor changed in the last ten minutes. A process that runs a removed program runs on.
 pub fn point_launchers_at(build: &str, running: &[String]) -> anyhow::Result<()> {
-    Bin::here()?.point_at(build, running)
+    let bin = Bin::here()?;
+    if bin.current().as_deref() == Some(build) {
+        return Ok(());
+    }
+    let _lock = bin.lock()?;
+    if bin.should_select(build)? {
+        bin.point_at(build, running)?;
+    }
+    ensure!(
+        bin.current().as_deref() == Some(build),
+        "Facade {build} is no longer selected. Run {}",
+        bin.0.join(PROGRAMS[0]).display()
+    );
+    Ok(())
+}
+
+/// Runs an ordinary Shell command through the target launcher if the invoked program belongs to
+/// another home that supplied this shell's PATH.
+pub fn run_in_selected_home() -> anyhow::Result<Option<i32>> {
+    let program = crate::this_program()?;
+    let Some(folder) = program.parent() else {
+        return Ok(None);
+    };
+    let installed_bin = [Some(folder), folder.parent()]
+        .into_iter()
+        .flatten()
+        .find(|folder| folder.ends_with(Path::new("core").join("bin")));
+    let Some(installed_bin) = installed_bin else {
+        return Ok(None);
+    };
+    let bin = Bin::here()?;
+    let launcher = bin.0.join(PROGRAMS[0]);
+    if !launcher.is_file()
+        || super::files::real_path(installed_bin)? == super::files::real_path(&bin.0)?
+    {
+        return Ok(None);
+    }
+    #[cfg(unix)]
+    check_owned_directory(&bin.0)?;
+    let mut command = std::process::Command::new(&launcher);
+    command.args(std::env::args_os().skip(1));
+    #[cfg(unix)]
+    let outcome = {
+        use std::os::unix::process::CommandExt;
+        Err(command.exec())
+    };
+    #[cfg(windows)]
+    let outcome = command
+        .status()
+        .map(|status| Some(status.code().unwrap_or(1)));
+    outcome.with_context(|| format!("could not run {}", launcher.display()))
 }
 
 /// A programs' folder: `core/bin/` of a home, or a test's.
@@ -241,21 +380,84 @@ impl Bin {
         Ok(Bin(crate::paths::core_dir()?.join("bin")))
     }
 
+    fn lock(&self) -> anyhow::Result<File> {
+        let core = self.0.parent().expect("bin is inside the core directory");
+        #[cfg(unix)]
+        if !core.is_dir() {
+            let home = core.parent().expect("core is inside the home");
+            super::files::create_private_folder_all(home)?;
+            check_owned_directory(&home.canonicalize()?)?;
+        }
+        super::files::create_private_folder_all(core)?;
+        #[cfg(unix)]
+        check_owned_directory(core)?;
+        #[cfg(windows)]
+        windows::check_managed_directory(core)?;
+        let path = core.join("programs.lock");
+        let file = super::files::private_options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("could not open {}", path.display()))?;
+        file.lock()
+            .with_context(|| format!("could not lock {}", path.display()))?;
+        Ok(file)
+    }
+
+    fn should_select(&self, candidate: &str) -> anyhow::Result<bool> {
+        self.validate_build(candidate)?;
+        let Some(current) = self.current() else {
+            return Ok(true);
+        };
+        match crate::compare_builds(candidate, &current) {
+            Some(order) => Ok(order == Ordering::Greater),
+            None => bail!(
+                "cannot compare Facade {candidate} with selected build {current} at {}. Both builds must be stable",
+                self.0.join(PROGRAMS[0]).display()
+            ),
+        }
+    }
+
+    fn validate_build(&self, build: &str) -> anyhow::Result<()> {
+        ensure!(
+            crate::compare_builds(build, build).is_some(),
+            "cannot select invalid or prerelease Facade build {build} at {}. Use a stable build",
+            self.0.join(PROGRAMS[0]).display()
+        );
+        Ok(())
+    }
+
     /// Build `build`'s folder. A build's name must be one path component.
     fn build(&self, build: &str) -> anyhow::Result<PathBuf> {
-        let component =
-            !build.is_empty() && !build.starts_with('.') && !build.contains(['/', '\0']);
-        if !component {
+        if build.starts_with('.') || !super::files::valid_folder_name(build) {
             anyhow::bail!("{build:?} is not a build's name");
         }
         Ok(self.0.join(build))
     }
 
+    fn install_set(&self, program: &Path, build: &str) -> anyhow::Result<PathBuf> {
+        let source = program
+            .parent()
+            .with_context(|| format!("{} has no folder", program.display()))?;
+        let server = source.join(PROGRAMS[1]);
+        ensure!(
+            server.is_file(),
+            "missing companion program {}",
+            server.display()
+        );
+        #[cfg(windows)]
+        windows::check_conpty(source)?;
+        self.install(program, build)
+    }
+
     /// Makes this folder and `build`'s, each private to this user.
     #[cfg(unix)]
-    fn make_private(&self, build: &Path) -> io::Result<()> {
+    fn make_private(&self, build: &Path) -> anyhow::Result<()> {
         for folder in [&self.0, build] {
-            std::fs::create_dir_all(folder)?;
+            super::files::create_private_folder_all(folder)?;
+            check_owned_directory(folder)?;
             std::fs::set_permissions(folder, Permissions::from_mode(0o700))?;
         }
         Ok(())
@@ -291,11 +493,6 @@ impl Bin {
         if cfg!(debug_assertions) {
             carry_test_build(program, &installed)?;
         }
-        // Windows launchers are copies: this build may have new bytes under the same name.
-        #[cfg(windows)]
-        if self.current().as_deref() == Some(build) {
-            self.point_at(build, &[])?;
-        }
         // Marked as changed now, so that another build's start leaves it while it waits to become
         // current.
         let _ = mark_changed(&folder);
@@ -305,7 +502,9 @@ impl Bin {
     /// The build the `facade` launcher points into.
     #[cfg(unix)]
     fn current(&self) -> Option<String> {
-        let target = std::fs::read_link(self.0.join(PROGRAMS[0])).ok()?;
+        let target = PROGRAMS
+            .iter()
+            .find_map(|name| std::fs::read_link(self.0.join(name)).ok())?;
         let first = target.iter().next()?;
         Some(first.to_string_lossy().into_owned())
     }
@@ -329,8 +528,10 @@ impl Bin {
     /// Points each launcher at `build`'s program, by a link relative to this folder, where it does
     /// not already.
     #[cfg(unix)]
-    fn link_launchers(&self, build: &str) -> io::Result<()> {
-        for name in PROGRAMS {
+    fn link_launchers(&self, build: &str) -> anyhow::Result<()> {
+        check_owned_directory(&self.0)?;
+        check_owned_directory(&self.build(build)?)?;
+        for name in PROGRAMS.into_iter().rev() {
             let target = Path::new(build).join(name);
             let launcher = self.0.join(name);
             if std::fs::read_link(&launcher).ok().as_ref() != Some(&target) {
@@ -430,16 +631,21 @@ impl Held {
                 .filter(|(name, _)| !place.join(name).is_file());
             gone.collect::<Vec<_>>()
         };
-        let (gone_programs, gone_launchers) = (gone_from(&folder), gone_from(&bin.0));
-        if gone_programs.is_empty() && gone_launchers.is_empty() {
+        if gone_from(&folder).is_empty() && gone_from(&bin.0).is_empty() {
             return Ok(());
         }
+        let _lock = bin.lock()?;
         bin.make_private(&folder)?;
-        for (name, file) in gone_programs {
+        for (name, file) in gone_from(&folder) {
             make_in_place(&folder.join(name), |fresh| copy_from_start(file, fresh))?;
         }
-        if !gone_launchers.is_empty() {
-            bin.link_launchers(&self.build)?;
+        if !gone_from(&bin.0).is_empty() {
+            let selected = bin.current().unwrap_or_else(|| self.build.clone());
+            bin.link_launchers(&selected)?;
+            if cfg!(debug_assertions) {
+                let program = bin.build(&selected)?.join(PROGRAMS[0]);
+                carry_test_build(&program, &bin.0.join(PROGRAMS[0]))?;
+            }
         }
         Ok(())
     }
@@ -466,6 +672,21 @@ impl Held {
 }
 
 // Files.
+
+#[cfg(unix)]
+fn check_owned_directory(path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = std::fs::symlink_metadata(path)
+        .with_context(|| format!("could not inspect {}", path.display()))?;
+    // SAFETY: getuid reads this process's user ID.
+    ensure!(
+        metadata.is_dir() && metadata.uid() == unsafe { libc::getuid() },
+        "cannot use {}: it is not a directory owned by this user",
+        path.display()
+    );
+    Ok(())
+}
 
 /// Puts `source` at `target`. With `link`, a link to the file `source` is, never to a link on the
 /// way, which could lead back to `target`. Else a private copy, made only where `target` holds

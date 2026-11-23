@@ -177,6 +177,10 @@ fn conflicting_list_resume_and_stop_scopes_are_usage_errors_without_starting_fac
 fn misplaced_machine_add_options_never_reach_ssh() {
     let home = TestHome::new("add-usage");
     install_machine_ssh(&[("devbox", &home)], &test_binaries().facade);
+    let core = home.path.join("core");
+    let bin = core.join("bin");
+    let launcher = bin.join("facade");
+    let original = std::fs::read(&launcher).unwrap();
     assert_eq!(
         said(&home.run_facade(&["machine", "add", "devbox", "--bidirectional"])),
         (
@@ -204,7 +208,16 @@ fn misplaced_machine_add_options_never_reach_ssh() {
         assert_eq!((out.as_str(), code), ("", Some(2)), "{args:?}: {error}");
         assert!(error.starts_with("error: Put "), "{args:?}: {error}");
     }
-    assert!(!reached(&home));
+    assert!(!socket_exists(&home.daemon_socket()));
+    assert!(!socket_exists(&home.keeper_socket()));
+    for (dir, only_entry) in [(core, "bin"), (bin, "facade")] {
+        let entries: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, [only_entry]);
+    }
+    assert_eq!(std::fs::read(launcher).unwrap(), original);
     assert!(!home.folder().join("ssh-attempts").exists());
 }
 
@@ -786,7 +799,7 @@ fn version_flags_and_retired_commands_reach_no_facade() {
         assert_eq!(
             said(&home.run_facade(&[flag])),
             (
-                format!("facade {}\n", env!("CARGO_PKG_VERSION")),
+                format!("facade {}\n", facade_base::build_id()),
                 String::new(),
                 Some(0)
             )

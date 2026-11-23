@@ -198,6 +198,53 @@ fn ssh_arguments_for_add_connect_and_saved_sessions() {
     assert_eq!(decode_home_hex(HOME_HEX).unwrap(), REMOTE_HOME);
 }
 
+#[test]
+fn ssh_refuses_a_newer_remote_home_before_serving() {
+    let local = TestHome::new("local-older-build");
+    let remote = TestHome::new("remote-newer-build");
+    let build = format!("999.0.0+1700000000.{}", "d".repeat(40));
+    let remote_program = install_script(
+        &remote.folder().join("remote-program"),
+        "facade",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/ssh-program-calls\"\nif [ \"$1\" = --version ]; then printf '%s\\n' 'facade {build}'; exit 0; fi\nexit 64\n"
+        ),
+    );
+    install_machine_ssh_with_programs(&[
+        ("newer", &remote, &remote_program),
+        ("local", &local, &test_binaries().facade),
+    ]);
+    let output = run_using(
+        &local,
+        &test_binaries().facade,
+        &[
+            "machine",
+            "add",
+            "--home",
+            remote.path.to_str().unwrap(),
+            "newer",
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}{}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("is newer than local build")
+            && stderr(&output).contains("Upgrade local Facade"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(remote.user_home().join("ssh-program-calls")).unwrap(),
+        "--version\n"
+    );
+    assert!(remote.hello_result().is_none());
+}
+
 fn machines_json(home: &TestHome) -> Value {
     connect(home).call_ok("machine.list", json!({}))
 }

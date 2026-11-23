@@ -1,51 +1,30 @@
 //! Looks up stable releases and runs the published Facade installer.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 mod releases;
 
-pub use releases::{UpgradeDownloadFailure, latest_stable, legacy_package_failure};
+pub use releases::{UpgradeDownloadFailure, latest_stable, legacy_package_failure, release_build};
 
 const RELEASES: &str = "https://github.com/y5ez3g/facadecode/releases";
 const WEBSITE: &str = "https://facadecode.com";
 
-/// The default standalone installer's bin, if its Facade launcher names this executable.
-pub fn installed_bin(program: &Path) -> Option<PathBuf> {
-    use super::files::real_path;
-
-    #[cfg(unix)]
-    let (root, versions, name) = (
-        PathBuf::from(std::env::var_os("HOME")?).join(".local"),
-        "share/facade/versions",
-        "facade",
-    );
-    #[cfg(windows)]
-    let (root, versions, name) = (
-        PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Facade"),
-        "versions",
-        "facade.exe",
-    );
-    if !root.is_absolute() {
-        return None;
-    }
-    let bin = root.join("bin");
-    let target = real_path(&bin.join(name)).ok()?;
-    let version_dir = target.parent()?;
-    releases::stable_version(version_dir.file_name()?.to_str()?)?;
-    if target.file_name()? != name
-        || version_dir.parent()? != real_path(&root.join(versions)).ok()?
-        || !target.is_file()
-        || real_path(program).ok()? != target
-    {
-        return None;
-    }
-    Some(bin)
+#[derive(Clone, Copy, Default)]
+pub(super) struct InstallerOptions<'a> {
+    pub(super) version: Option<&'a str>,
+    pub(super) expected_build: Option<&'a str>,
+    pub(super) use_facade_home: bool,
+    pub(super) no_path: bool,
 }
 
-/// Runs the published installer with the calling Facade command's environment.
-/// A pin must have three nonempty ASCII decimal components.
-pub fn upgrade_command(version: Option<&str>) -> Command {
+/// Runs the published installer for this home, with the numeric version for release routing and
+/// the exact build for package verification.
+pub fn upgrade_command(
+    version: &str,
+    expected_build: &str,
+    home: &Path,
+) -> anyhow::Result<Command> {
     #[cfg(unix)]
     {
         let mut command = Command::new("sh");
@@ -56,19 +35,32 @@ pub fn upgrade_command(version: Option<&str>) -> Command {
             ""
         };
         command
+            .env("FACADE_HOME", home)
             .args([
                 "-c",
                 &format!("{curl}{UNIX_DOWNLOAD}{UNIX_UPGRADE}"),
                 "facade-install",
             ])
-            .args(script_urls(version, "sh"));
-        if let Some(version) = version {
-            command.args(["--version", version]);
-        }
-        command
+            .args(script_urls(Some(version), "sh"))
+            .args(["--version", version, "--no-path", "--install-root"])
+            .arg(home)
+            .args(["--expected-build", expected_build]);
+        Ok(command)
     }
     #[cfg(windows)]
     {
+        let temp = std::env::temp_dir();
+        let resolved_temp = temp.canonicalize().unwrap_or_else(|_| temp.clone());
+        let resolved_home = home.canonicalize().unwrap_or_else(|_| home.to_owned());
+        let home_key = super::files::folder_key(&resolved_home);
+        anyhow::ensure!(
+            !resolved_temp
+                .ancestors()
+                .any(|ancestor| super::files::folder_key(ancestor) == home_key),
+            "Installer temporary directory {} is inside the selected Facade home {}. Set TMP and TEMP to a directory outside it and retry.",
+            temp.display(),
+            home.display()
+        );
         let mut command = super::programs::command("powershell.exe");
         let curl = if let Some(path) = releases::test_curl_program() {
             command.env("FACADE_TEST_RELEASE_CURL", path);
@@ -77,31 +69,44 @@ pub fn upgrade_command(version: Option<&str>) -> Command {
             POWERSHELL_SYSTEM_CURL
         };
         let installer = powershell_install_using(
-            version,
+            InstallerOptions {
+                version: Some(version),
+                expected_build: Some(expected_build),
+                use_facade_home: true,
+                no_path: true,
+            },
             // Encode the captured receipt without changing the calling console's code page.
             "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)",
             WINDOWS_DOWNLOAD_ERROR,
             "",
             curl,
+            WINDOWS_UPGRADE_PIN_CHECK,
         );
         command
+            .env("FACADE_HOME", home)
+            .env("TMP", &temp)
+            .env("TEMP", &temp)
             .args(POWERSHELL_OPTIONS)
             .args(["-Command", &installer]);
-        command
+        Ok(command)
     }
 }
 
 pub(super) fn script_urls(version: Option<&str>, extension: &str) -> [String; 2] {
     match version {
-        Some(version) => [
-            format!("{RELEASES}/download/extension%2F{version}/install.{extension}"),
-            format!("{WEBSITE}/releases/{version}/install.{extension}"),
-        ],
+        Some(version) => tagged_asset_urls(version, &format!("install.{extension}")),
         None => [
             format!("{RELEASES}/latest/download/install.{extension}"),
             format!("{WEBSITE}/install.{extension}"),
         ],
     }
+}
+
+fn tagged_asset_urls(version: &str, asset: &str) -> [String; 2] {
+    [
+        format!("{RELEASES}/download/extension%2F{version}/{asset}"),
+        format!("{WEBSITE}/releases/{version}/{asset}"),
+    ]
 }
 
 pub(super) const UNIX_DOWNLOAD: &str = r#"
@@ -137,7 +142,19 @@ if [ "$status" -ne 0 ]; then
     exit "$status"
 fi
 shift 2
+case "$script" in
+    *--expected-build*) ;;
+    *) printf 'facade-upgrade-installer-refused\n'; exit 1 ;;
+esac
 sh -c "$script" -- "$@"
+"#;
+
+#[cfg(windows)]
+const WINDOWS_UPGRADE_PIN_CHECK: &str = r#"
+if ('ExpectedBuild' -notin @($installer.Ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })) {
+    [Console]::WriteLine('facade-upgrade-installer-refused')
+    exit 1
+}
 "#;
 
 #[cfg(windows)]
@@ -154,59 +171,80 @@ const WINDOWS_DOWNLOAD_ERROR: &str = r#"
 pub(super) const POWERSHELL_OPTIONS: [&str; 3] = ["-NoLogo", "-NoProfile", "-NonInteractive"];
 const POWERSHELL_SYSTEM_CURL: &str = r"Join-Path $env:SystemRoot 'System32\curl.exe'";
 
-pub(super) fn powershell_install(
-    version: Option<&str>,
+pub(super) fn powershell_install_with_options(
+    options: InstallerOptions<'_>,
     prefix: &str,
     download_error: &str,
     output: &str,
 ) -> String {
     powershell_install_using(
-        version,
+        options,
         prefix,
         download_error,
         output,
         POWERSHELL_SYSTEM_CURL,
+        "",
     )
 }
 
 fn powershell_install_using(
-    version: Option<&str>,
+    options: InstallerOptions<'_>,
     prefix: &str,
     download_error: &str,
     output: &str,
     curl: &str,
+    pin_check: &str,
 ) -> String {
-    let [github, website] = script_urls(version, "ps1");
-    let arguments = version.map_or_else(String::new, |version| format!(" -Version '{version}'"));
+    let [github, website] = script_urls(options.version, "ps1");
+    let mut arguments = String::new();
+    for (option, value) in [
+        ("-Version", options.version),
+        ("-ExpectedBuild", options.expected_build),
+    ] {
+        if let Some(value) = value {
+            use std::fmt::Write as _;
+            let _ = write!(arguments, " {option} '{}'", value.replace('\'', "''"));
+        }
+    }
+    if options.use_facade_home {
+        arguments.push_str(" -InstallRoot $env:FACADE_HOME");
+    }
+    if options.no_path {
+        arguments.push_str(" -NoPath");
+    }
     format!(
         r#"
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 {prefix}
 $curl = {curl}
-$download = [IO.Path]::GetTempFileName()
 $script = $null
 $observedHttp = '-'
+$encoding = [Console]::OutputEncoding
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 try {{
     foreach ($url in '{github}', '{website}') {{
         $http = '-'
         try {{
-            $http = & $curl -q --proto '=https' --proto-redir '=https' -fsL `
-                --connect-timeout 10 --max-time 30 --output $download --write-out '%{{http_code}}' $url
+            $response = (& $curl -q --proto '=https' --proto-redir '=https' -fsL `
+                --connect-timeout 10 --max-time 30 --write-out '%{{http_code}}' $url) -join "`n"
         }} catch {{
             continue
         }}
+        if ($response.Length -ge 3) {{ $http = $response.Substring($response.Length - 3) }}
         if ($LASTEXITCODE -eq 0 -and $http -match '\A2[0-9]{{2}}\z') {{
-            $script = [IO.File]::ReadAllText($download, [Text.Encoding]::UTF8)
+            $script = $response.Substring(0, $response.Length - 3)
             break
         }}
         if ($http -match '\A[1-5][0-9]{{2}}\z') {{ $observedHttp = $http }}
     }}
 }} finally {{
-    [IO.File]::Delete($download)
+    [Console]::OutputEncoding = $encoding
 }}
 if ($null -eq $script) {{ {download_error} }}
-& ([ScriptBlock]::Create($script)){arguments}{output}
+$installer = [ScriptBlock]::Create($script)
+{pin_check}
+& $installer{arguments}{output}
 if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
 "#
     )

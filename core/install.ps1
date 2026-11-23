@@ -2,22 +2,30 @@
 param(
     [string] $Version,
     [string] $Package,
-    [string] $InstallRoot = (Join-Path $env:LOCALAPPDATA 'Facade'),
+    [string] $InstallRoot = $env:FACADE_HOME,
     [switch] $NoPath,
-    [switch] $NoActivate
+    [switch] $NoActivate,
+    [string] $ExpectedBuild
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $PSNativeCommandUseErrorActionPreference = $false
 $versionPattern = '[0-9]+\.[0-9]+\.[0-9]+'
+$buildPattern = "$versionPattern(?:\+(?:[0-9]+\.)?[0-9A-Za-z]+)?"
 if ($PSBoundParameters.ContainsKey('Version') -and $Version -notmatch "\A$versionPattern\z") {
     throw 'Use a release version such as 0.1.6.'
 }
-if ($InstallRoot -notmatch '^[a-zA-Z]:[/\\]') {
-    throw 'The install root must be an absolute path on a local drive.'
+if ($PSBoundParameters.ContainsKey('ExpectedBuild') -and $ExpectedBuild -cnotmatch "\A$buildPattern\z") {
+    throw 'Use a valid Facade BUILD for -ExpectedBuild.'
 }
-$InstallRoot = [IO.Path]::GetFullPath($InstallRoot)
+if (-not $InstallRoot) {
+    $profileHome = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }
+    $InstallRoot = [IO.Path]::Combine($profileHome, '.facade')
+}
+if ($InstallRoot -notmatch '^(?:[a-zA-Z]:[/\\]|\\\\[^\\]+\\[^\\]+)') {
+    throw 'The Facade home must be an absolute path.'
+}
 # Select the host's package even when Windows PowerShell is running under emulation.
 $processor = Get-CimInstance -ClassName Win32_Processor -Property Architecture | Select-Object -First 1
 $arch = switch ($processor.Architecture) {
@@ -29,17 +37,21 @@ $releases = 'https://github.com/y5ez3g/facadecode/releases'
 $mirror = 'https://facadecode.com'
 $asset = "facade-core-win32-$arch.zip"
 $programs = @('facade.exe', 'facade-mcp.exe', 'conpty\conpty.dll', 'conpty\OpenConsole.exe')
-$bin = Join-Path $InstallRoot 'bin'
-$versions = Join-Path $InstallRoot 'versions'
-$work = Join-Path $versions ('.install-' + [guid]::NewGuid())
-$next = Join-Path $work 'next'
-$previous = Join-Path $work 'previous'
+$bin = [IO.Path]::Combine($InstallRoot, 'core', 'bin')
+$temp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+$target = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\') + '\'
+if ($temp.StartsWith($target, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Use a temporary directory outside the Facade home.'
+}
+$work = Join-Path $temp ('facade-install-' + [guid]::NewGuid())
 $downloadFailure = @{ Asset = ''; Http = '-' }
+$latestBuild = $null
 
-function Read-Version {
+function Read-Build {
     param([string] $File, [string] $InvalidMessage)
 
-    $record = [regex]::Match([IO.File]::ReadAllText($File), "\A($versionPattern)(?:\r?\n)?\z")
+    if (-not [IO.File]::Exists($File)) { throw $InvalidMessage }
+    $record = [regex]::Match([IO.File]::ReadAllText($File), "\A($buildPattern)(?:\r?\n)?\z")
     if (-not $record.Success) { throw $InvalidMessage }
     $record.Groups[1].Value
 }
@@ -71,15 +83,73 @@ function Write-DownloadFailure {
     }
 }
 
-function Add-FacadePath {
-    param([string] $Directory)
+function Get-LegacyInstall {
+    if (-not $env:LOCALAPPDATA) { return }
+    $legacy = Join-Path $env:LOCALAPPDATA 'Facade'
+    $legacyBin = Join-Path $legacy 'bin'
+    $legacyVersions = Join-Path $legacy 'versions'
+    $entry = Get-Item -LiteralPath $legacyBin -Force -ErrorAction SilentlyContinue
+    if (-not $entry) { return @{ Bin = $legacyBin } }
+    $selected = @($entry.Target)[0]
+    if ($entry.LinkType -ne 'Junction' -or -not $selected -or
+        (Split-Path -Parent $selected) -ne $legacyVersions -or
+        (Split-Path -Leaf $selected) -notmatch "\A$versionPattern\z") {
+        return
+    }
+
+    foreach ($parent in $legacy, $legacyVersions) {
+        $folder = Get-Item -LiteralPath $parent -Force -ErrorAction SilentlyContinue
+        if (-not $folder -or ($folder.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return }
+    }
+    return @{ Bin = $legacyBin; Root = $legacy; Versions = $legacyVersions }
+}
+
+function Remove-LegacyInstall {
+    param([hashtable] $Legacy)
+
+    [IO.Directory]::Delete($Legacy.Bin)
+    foreach ($folder in Get-ChildItem -LiteralPath $Legacy.Versions -Directory -Force) {
+        if ($folder.Name -notmatch "\A$versionPattern\z" -or
+            ($folder.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+        $marker = Join-Path $folder.FullName 'VERSION'
+        if (-not [IO.File]::Exists($marker) -or [IO.File]::ReadAllText($marker).TrimEnd("`r", "`n") -ne $folder.Name) { continue }
+        foreach ($file in 'facade.exe', 'facade-mcp.exe', 'VERSION', 'LICENSE.txt') {
+            [IO.File]::Delete((Join-Path $folder.FullName $file))
+        }
+        $conpty = Get-Item -LiteralPath (Join-Path $folder.FullName 'conpty') -Force -ErrorAction SilentlyContinue
+        if ($conpty -and $conpty.PSIsContainer -and -not ($conpty.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            foreach ($file in 'conpty.dll', 'OpenConsole.exe', 'LICENSE') {
+                [IO.File]::Delete((Join-Path $conpty.FullName $file))
+            }
+            if (-not (Get-ChildItem -LiteralPath $conpty.FullName -Force)) { [IO.Directory]::Delete($conpty.FullName) }
+        }
+        if (-not (Get-ChildItem -LiteralPath $folder.FullName -Force)) { [IO.Directory]::Delete($folder.FullName) }
+    }
+    foreach ($folder in $Legacy.Versions, $Legacy.Root) {
+        if (-not (Get-ChildItem -LiteralPath $folder -Force)) { [IO.Directory]::Delete($folder) }
+    }
+}
+
+function Set-FacadePath {
+    param([string] $Directory, [string] $OldDirectory)
+
+    function Updated-Path([string] $Value) {
+        $entries = @(if ($Value) {
+            $Value -split ';' | Where-Object {
+                $expanded = [Environment]::ExpandEnvironmentVariables($_)
+                $expanded -ne $Directory -and (-not $OldDirectory -or $expanded -ne $OldDirectory)
+            }
+        })
+        return (@($Directory) + $entries) -join ';'
+    }
 
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
     try {
         $userPath = $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-        if ($Directory -notin ([Environment]::ExpandEnvironmentVariables($userPath) -split ';')) {
+        $updated = Updated-Path $userPath
+        if ($updated -cne $userPath) {
             $kind = if ($key.GetValueNames() -contains 'Path') { $key.GetValueKind('Path') } else { 'ExpandString' }
-            $key.SetValue('Path', (($userPath.TrimEnd(';'), $Directory | Where-Object { $_ }) -join ';'), $kind)
+            $key.SetValue('Path', $updated, $kind)
             # Explorer reloads user environment when it receives WM_SETTINGCHANGE.
             if (-not ('FacadeInstall.Environment' -as [type])) {
                 Add-Type @'
@@ -103,11 +173,24 @@ namespace FacadeInstall {
     } finally {
         $key.Dispose()
     }
-    if ($Directory -notin ($env:Path -split ';')) {
-        $env:Path = "$env:Path;$Directory"
+    $env:Path = Updated-Path $env:Path
+}
+
+function Update-StandalonePath {
+    param([string] $Directory)
+
+    $legacy = Get-LegacyInstall
+    Set-FacadePath $Directory $legacy.Bin
+    if ($legacy.Versions) {
+        try {
+            Remove-LegacyInstall $legacy
+        } catch [IO.IOException], [UnauthorizedAccessException] {
+            Write-Warning "Could not remove all files from the old Facade installation. Close any running Shell from that installation. $($_.Exception.Message)"
+        }
     }
 }
 
+$previousHome = $env:FACADE_HOME
 [void][IO.Directory]::CreateDirectory($work)
 try {
     $archive = Join-Path $work $asset
@@ -124,12 +207,15 @@ try {
                 Write-DownloadFailure
                 throw 'Could not download the stable Facade version from GitHub or facadecode.com.'
             }
-            $Version = Read-Version $versionFile 'The stable release did not provide a valid version.'
+            $latestBuild = Read-Build $versionFile 'The stable release did not provide a valid BUILD.'
+            $Version = ($latestBuild -split '\+', 2)[0]
         }
         if (-not (Get-ReleasePackage "$releases/download/extension%2F$Version") -and
             -not (Get-ReleasePackage "$mirror/releases/$Version")) {
             Write-DownloadFailure
-            throw "Could not download $asset and its checksums for Facade $Version from GitHub or facadecode.com."
+            $message = "Could not download $asset and its checksums for Facade $Version from GitHub or facadecode.com."
+            if ($ExpectedBuild -or $latestBuild) { $message += ' Supply the matching release archive with -Package.' }
+            throw $message
         }
     }
     $expected = @(Get-Content -LiteralPath $checksums | ForEach-Object {
@@ -143,59 +229,48 @@ try {
 
     $stage = Join-Path $work 'payload'
     Expand-Archive -LiteralPath $archive -DestinationPath $stage
-    $build = Read-Version (Join-Path $stage 'VERSION') 'The package did not provide a valid version.'
-    if ($Version -and $build -cne $Version) { throw "Expected Facade $Version, found $build in the package." }
+    $build = Read-Build (Join-Path $stage 'VERSION') 'The package did not provide a valid BUILD.'
+    $pin = if ($ExpectedBuild) { $ExpectedBuild } else { $latestBuild }
+    if ($pin -and $build -cne $pin) {
+        throw "Expected Facade build $pin, found $build in the package. Supply the matching release archive with -Package."
+    }
+    if ($Version -and ($build -split '\+', 2)[0] -cne $Version) { throw "Expected Facade $Version, found $build in the package." }
     foreach ($program in $programs) {
         if (-not [IO.File]::Exists((Join-Path $stage $program))) { throw "The package has no $program." }
     }
-    $destination = Join-Path $versions $build
-    if ([IO.Directory]::Exists($destination)) {
-        foreach ($program in $programs) {
-            $incoming = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $stage $program)).Hash
-            $installed = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $destination $program)).Hash
-            if ($incoming -ne $installed) {
-                throw "Facade $build already exists with different files in $destination."
-            }
-        }
-    } else {
-        [IO.Directory]::Move($stage, $destination)
+    $candidate = Join-Path $stage 'facade.exe'
+    $reported = & $candidate --version
+    if ($LASTEXITCODE -ne 0 -or $reported -isnot [string] -or $reported -cne "facade $build") {
+        throw "The packaged executable does not report Facade build $build. Supply the matching release archive with -Package."
     }
 
-    $existing = Get-Item -LiteralPath $bin -Force -ErrorAction SilentlyContinue
-    if ($existing -and ($existing.LinkType -ne 'Junction' -or (Split-Path -Parent (@($existing.Target)[0])) -ne $versions)) {
-        throw "$bin is already used by another installation. Move it first."
+    $env:FACADE_HOME = $InstallRoot
+    $launcher = Join-Path $bin 'facade.exe'
+    $before = $null
+    if ([IO.File]::Exists($launcher)) {
+        $before = & $launcher --version
+        if ($LASTEXITCODE -ne 0) { throw 'Could not read the home launcher BUILD.' }
     }
-    $upToDate = $existing -and (@($existing.Target)[0] -eq $destination)
-    if (-not $upToDate) {
-        New-Item -ItemType Junction -Path $next -Target $destination | Out-Null
+    $mode = if ($NoActivate) { '--install-only' } else { '--takeover' }
+    & $candidate daemon $mode
+    if ($LASTEXITCODE -ne 0) { throw "Could not select Facade $build (exit $LASTEXITCODE)." }
+    $reported = & $launcher --version
+    if ($LASTEXITCODE -ne 0 -or $reported -isnot [string] -or -not ($reported -cmatch "\Afacade ($buildPattern)\z")) {
+        throw 'The home launcher did not report a valid Facade BUILD.'
     }
+    $selected = $Matches[1]
+    $upToDate = $reported -ceq $before -or $selected -cne $build
 
-    if (-not $NoActivate) {
-        & (Join-Path $destination 'facade.exe') daemon --takeover
-        if ($LASTEXITCODE -ne 0) { throw "Facade $build could not take over the running service (exit $LASTEXITCODE)." }
+    if (-not $upToDate -and -not $NoPath -and $env:FACADE_UPGRADE_REPORT -ne '1') {
+        Update-StandalonePath $bin
+        Write-Output 'Open a new terminal if your shell has an older PATH.'
     }
-
-    # Switch the junction without writing over an executable or ConPTY file in use.
-    if (-not $upToDate) {
-        if ($existing) { [IO.Directory]::Move($bin, $previous) }
-        try {
-            [IO.Directory]::Move($next, $bin)
-        } catch {
-            if ($existing) { [IO.Directory]::Move($previous, $bin) }
-            throw
-        }
-    }
-    if (-not $NoPath) { Add-FacadePath $bin }
 } finally {
-    # Windows PowerShell's recursive removal can fail on a junction to a version in use.
-    foreach ($junction in $next, $previous) {
-        if ([IO.Directory]::Exists($junction)) { [IO.Directory]::Delete($junction) }
-    }
+    $env:FACADE_HOME = $previousHome
     if ([IO.Directory]::Exists($work)) { [IO.Directory]::Delete($work, $true) }
 }
-if ($upToDate -and $env:FACADE_UPGRADE_REPORT -eq '1') {
-    Write-Output "Facade $build is already up to date in $bin."
+if ($upToDate) {
+    Write-Output "Facade $selected is already up to date in $bin."
 } else {
-    Write-Output "Installed Facade $build in $bin."
+    Write-Output "Installed Facade $selected in $bin."
 }
-if (-not $NoPath) { Write-Output 'Open a new terminal if your shell has an older PATH.' }

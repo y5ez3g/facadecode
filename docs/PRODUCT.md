@@ -52,6 +52,14 @@ Facade Code
 | Commits, merges, reviews and worktree removal | Your Git tools. Facade can create a worktree when starting an agent. |
 | SSH configuration and account access | You. Connect the machines you control. |
 
+## Product principles
+
+- **A Facade home is one installation.** Its programs, data and services belong to that home. Select a home with
+  `FACADE_HOME` and manage its installation independently.
+- **Newer builds replace older builds.** Compare the numeric version first, then the source commit time.
+  Equal ranks keep the selected build. Install, upgrade, VS Code and SSH share this order. When the remote
+  home ranks higher, SSH reports that the local installation needs an upgrade.
+
 ## Agents
 
 An agent is a named participant in Facade. A **managed agent** runs a CLI in a terminal held by the Orchestrator.
@@ -230,10 +238,10 @@ facade machine rename devbox build-box
   authorization for the peer with zero SSH. With `--bidirectional`, it verifies the peer's identity and tries
   to remove the return connection and its authorization before completing local cleanup. Shell reports each
   side's outcome and returns 1 if either side could not be confirmed.
-- **Remote installation.** SSH tries the remote Facade program at its installed path first. The daemon API
-  handshake determines whether the installed builds can work together. An explicit Add or Connect can install Facade
-  on an uninstalled machine through the regular installer when authorized. Passive probes leave sleeping services
-  and missing installations alone. See [Folders and machines](core/FEATURES.md#folders-and-machines).
+- **Remote installation.** SSH probes the executable in the selected remote home. Add or Connect installs the
+  exact local build when that home needs an installation or an upgrade. An equally ranked build proceeds to the
+  daemon handshake. If the remote build ranks higher, upgrade your local home first. Passive probes leave sleeping
+  services and installations alone. See [Folders and machines](core/FEATURES.md#folders-and-machines).
 - **Facade home.** Use `--home` to select a remote Facade home other than `~/.facade`.
 - **WSL and Dev Containers.** Each is a separate machine. Facade inside the environment uses its own local
   Orchestrator. To connect from outside, configure SSH in that environment and add it from the other machine.
@@ -374,14 +382,16 @@ daemon takeover keeps the keeper and its CLIs running while clients reconnect. S
   agent count, connected machines and the fixed Guest MCP launcher. It queries sleeping services without
   starting them. The daemon and keeper each retain 30 days of logs.
 - **Installation.** Use the [standalone Shell installation](core/FEATURES.md#install-the-standalone-shell).
-  The Orchestrator-backed extension ships the programs for its extension host. If the Facade
-  Code IDE launcher is also installed under `facade`, your PATH determines which command runs.
+  The Orchestrator-backed extension ships the programs for its host and can install them into the selected
+  Facade home offline. The selected home supplies the programs for the extension's commands. If another program
+  is named `facade`, PATH determines which executable the shell starts.
 - **Lifetime.** Services start on demand and exit after 30 idle seconds. Running agents, foreground
   connections, active Attach views and requests in progress keep the services in use.
-- **Upgrade.** `facade upgrade` checks for a newer stable release before downloading the installer.
-  `facade upgrade --version X.Y.Z` runs the installer for the specified version. When the active services
-  pass the compatibility check, the new daemon takes over and the agents keep running.
-- **Version.** `facade --version` prints the Shell CLI version.
+- **Upgrade.** `facade upgrade` checks for a newer stable build for the current home before downloading the
+  installer. `facade upgrade --version X.Y.Z` selects a release within the same build order. When the active
+  services pass the compatibility check, the new daemon takes over and the agents keep running.
+- **Version.** `facade --version` prints the build of the invoked executable. Release builds include the source
+  commit time and hash.
 
 ## Shell
 

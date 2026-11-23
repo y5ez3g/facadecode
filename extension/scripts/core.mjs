@@ -7,6 +7,7 @@
 // This file also holds what packaging checks about core: that its version is the extension's, that the extension's copy of the
 // protocol is core's, and that a package carries the programs as it should.
 import { execFileSync } from 'node:child_process';
+import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -15,8 +16,32 @@ import { binaryTarget } from './native.mjs';
 const extension = path.join(import.meta.dirname, '..');
 export const CORE = path.join(extension, '..', 'core');
 export const BIN = path.join(extension, 'bin');
+export const CORE_BUILD_FILE = 'VERSION';
 /** The programs, by the name each is run by; the Cargo package that builds each is named beside it. */
 export const PROGRAMS = { facade: 'facade', 'facade-mcp': 'facade-relay' };
+
+export function parseCoreBuild(build) {
+	const match = /^([0-9]+\.[0-9]+\.[0-9]+)(?:\+([0-9]+)\.([0-9a-f]{40}))?$/.exec(build);
+	if (match && match[0] === build) {
+		return { version: match[1], time: match[2], revision: match[3] };
+	}
+}
+
+export function sourceBuild(version, revision = 'HEAD') {
+	const stamp = execFileSync('git', ['log', '--no-walk', '--format=%ct.%H', revision + '^{commit}', '--'], {
+		cwd: CORE, encoding: 'utf8',
+	}).trim();
+	const build = `${version}+${stamp}`;
+	assert.ok(parseCoreBuild(build)?.revision, 'Invalid source build ' + build);
+	return build;
+}
+
+export function executableBuild(program) {
+	const output = execFileSync(program, ['--version'], { encoding: 'utf8' });
+	const build = /^facade (.+)\r?\n$/.exec(output)?.[1];
+	assert.ok(parseCoreBuild(build), `${program} did not report a valid Facade build`);
+	return build;
+}
 
 /** The Rust target core is built for on this host, or none for an unsupported host. */
 export function coreTriple(platform = process.platform, arch = process.arch) {
@@ -32,7 +57,11 @@ export function buildCore(triple = coreTriple()) {
 	if (!triple) {
 		throw new Error(`Core is built for macOS, Windows and Linux on x64 and arm64, not for ${process.platform}-${process.arch}.`);
 	}
-	execFileSync('cargo', ['build', '--release', '--locked', '--target', triple, ...Object.values(PROGRAMS).flatMap(name => ['-p', name])], { cwd: CORE, stdio: 'inherit' });
+	const version = workspaceVersion(fs.readFileSync(path.join(CORE, 'Cargo.toml'), 'utf8'));
+	const build = sourceBuild(version);
+	execFileSync('cargo', ['build', '--release', '--locked', '--target', triple, ...Object.values(PROGRAMS).flatMap(name => ['-p', name])], {
+		cwd: CORE, stdio: 'inherit', env: { ...process.env, FACADE_BUILD: build.slice(version.length + 1) },
+	});
 	const built = path.join(path.resolve(CORE, process.env.CARGO_TARGET_DIR ?? 'target'), triple, 'release');
 	fs.rmSync(BIN, { recursive: true, force: true });
 	fs.mkdirSync(BIN, { recursive: true });
@@ -50,7 +79,9 @@ export function buildCore(triple = coreTriple()) {
 			fs.copyFileSync(path.join(built, 'conpty', file), path.join(BIN, 'conpty', file));
 		}
 	}
-	console.info(`Core ${workspaceVersion(fs.readFileSync(path.join(CORE, 'Cargo.toml'), 'utf8'))}: ${Object.keys(PROGRAMS).join(', ')} for ${triple} in bin/.`);
+	fs.writeFileSync(path.join(BIN, CORE_BUILD_FILE), build + '\n');
+	console.info(`Core ${build}: ${Object.keys(PROGRAMS).join(', ')} for ${triple} in bin/.`);
+	return build;
 }
 
 /** A Cargo.toml's `[workspace.package]` table up to its version's digits, with LF or CRLF line ends (Windows checkouts). */

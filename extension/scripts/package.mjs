@@ -10,9 +10,10 @@
 // extension's, or the extension's copy of the protocol is not core's. `--sign`, which the release run gives a Windows
 // package, signs its programs (scripts/sign.mjs) and packages none that still has no trusted signature.
 import { execFileSync } from 'node:child_process';
+import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { BIN, buildCore, checkSources, coreTriple, programProblems, zipModes } from './core.mjs';
+import { BIN, CORE_BUILD_FILE, buildCore, checkSources, coreTriple, executableBuild, programProblems, zipModes } from './core.mjs';
 import { filesOfZip, nativeProblems, packageTarget } from './native.mjs';
 import { createSigner, signFolder } from './sign.mjs';
 
@@ -29,11 +30,14 @@ if (process.argv.includes('--sign') && !target.startsWith('win32-')) {
 const signer = process.argv.includes('--sign') ? createSigner() : undefined;
 
 execFileSync(process.execPath, [path.join(root, 'scripts', 'build.mjs'), '--production'], { stdio: 'inherit' });
+let build;
 if (coreTriple()) {
-	buildCore();
+	build = buildCore();
 	if (signer) {
 		signFolder(signer, BIN);
 	}
+	const program = target.startsWith('win32-') ? 'facade.exe' : 'facade';
+	assert.equal(executableBuild(path.join(BIN, program)), build, 'The built executable reports a different BUILD');
 	fs.cpSync(BIN, path.join(root, 'build', 'extension', 'bin'), { recursive: true });
 }
 fs.rmSync(out, { recursive: true, force: true });
@@ -47,10 +51,12 @@ for (const [stage, native] of [['window', false], ['extension', true]]) {
 	const files = filesOfZip(file);
 	const identity = files.find(each => each.name === 'extension.vsixmanifest')?.bytes.toString('utf8').match(/<Identity\b[^>]*>/)?.[0] ?? '';
 	const named = identity.match(/\bTargetPlatform="([^"]*)"/)?.[1];
+	const buildMarker = files.find(each => each.name === `extension/bin/${CORE_BUILD_FILE}`)?.bytes.toString('utf8');
 	const problems = [
 		...(named === (native ? target : undefined) ? [] : [`its manifest names ${named === undefined ? 'no target' : `the target ${named}`}, not ${native ? target : 'none'}`]),
 		...nativeProblems(files, target, { none: !native }),
-		...(native ? programProblems(files, target, zipModes(file)) : [])
+		...(native ? programProblems(files, target, zipModes(file)) : []),
+		...(native && buildMarker !== `${build}\n` ? ['its BUILD marker differs from the compiled build'] : []),
 	];
 	if (problems.length) {
 		fs.rmSync(file, { force: true });

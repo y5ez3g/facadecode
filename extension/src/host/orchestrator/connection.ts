@@ -215,7 +215,7 @@ class Link implements OrchestratorLink {
 			} else if (!started && attempt.absent) {
 				// The launcher waits for a live keeper and starts one if it exited without CLIs.
 				started = true;
-				await startDaemon(this.options);
+				await startDaemon(this.options, '--detach');
 				deadline = Date.now() + waitMs;
 			}
 			const remaining = deadline - Date.now();

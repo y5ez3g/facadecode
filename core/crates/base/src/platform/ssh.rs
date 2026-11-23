@@ -1,5 +1,6 @@
 //! Shared arguments for a foreground or saved machine connection.
 
+use std::cmp::Ordering;
 use std::ffi::OsString;
 use std::fmt;
 use std::io;
@@ -76,9 +77,9 @@ impl fmt::Display for SshArgumentError {
                 "give SSH login options with their values and keep the session open with standard input and no TTY"
             }
             Self::RemoteCommand => "supply SSH login arguments without a remote command",
-            Self::Home => "the remote home must be a nonempty UTF-8 path",
-            Self::Version => "supply a stable release version for the remote installer",
-            Self::Probe => "expected a missing or version response from the remote Facade probe",
+            Self::Home => "the remote Facade home must be an absolute UTF-8 path",
+            Self::Version => "expected a stable Facade build ID",
+            Self::Probe => "expected a home and build report from the remote Facade probe",
         })
     }
 }
@@ -490,18 +491,47 @@ fn is_windows_absolute_path(path: &[u8]) -> bool {
     }
 }
 
-const UNIX_PROGRAM: &str = r#""$HOME/.local/bin/facade""#;
-const WINDOWS_PROGRAM: &str = r#"(Join-Path $env:LOCALAPPDATA 'Facade\bin\facade.exe')"#;
+const UNIX_HOME: &str = r#"if [ -n "$1" ]; then
+    FACADE_HOME=$1
+elif [ -z "${FACADE_HOME:-}" ]; then
+    user_home=${HOME:-${USERPROFILE:-}}
+    FACADE_HOME=${user_home:+$user_home/.facade}
+fi
+case "$FACADE_HOME" in
+    /*) export FACADE_HOME ;;
+    *) printf '%s\n' 'The remote Facade home must be an absolute path.' >&2; exit 1 ;;
+esac
+"#;
+
+fn windows_home_script(remote_home: Option<&str>) -> String {
+    let select = match remote_home {
+        Some(home) => {
+            let bytes = STANDARD.encode(home);
+            format!("$env:FACADE_HOME = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{bytes}')); ")
+        }
+        None => "if (!$env:FACADE_HOME) { \
+                     $userHome = $env:HOME; if (!$userHome) { $userHome = $env:USERPROFILE }; \
+                     if ($userHome) { $env:FACADE_HOME = [IO.Path]::Combine($userHome, '.facade') } \
+                 }; "
+            .to_owned(),
+    };
+    format!(
+        r"$ErrorActionPreference = 'Stop'; {select}if ($env:FACADE_HOME -notmatch '\A(?:[a-z]:[\/\\]|\\\\[^\\]+\\[^\\]+)') {{ throw 'The remote Facade home must be an absolute path.' }}; "
+    )
+}
+
+const UNIX_PROGRAM: &str = r#"program="$FACADE_HOME/core/bin/facade""#;
+const WINDOWS_PROGRAM: &str = r"$program = Join-Path $env:FACADE_HOME 'core\bin\facade.exe'";
 
 fn unix_probe_script(installed: &str, missing: &str) -> String {
     format!(
-        r#"for dir in "$HOME" "$HOME/.local" "$HOME/.local/bin"; do
+        r#"for dir in "$FACADE_HOME" "$FACADE_HOME/core" "$FACADE_HOME/core/bin"; do
             if [ -d "$dir" ] && [ -x "$dir" ]; then continue; fi
-            if [ "$dir" != "$HOME" ] && [ ! -e "$dir" ] && [ ! -L "$dir" ]; then break; fi
+            if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then break; fi
             printf 'Cannot access Facade installation directory: %s\n' "$dir" >&2
             exit 1
         done
-        if [ -e {UNIX_PROGRAM} ] || [ -L {UNIX_PROGRAM} ]; then
+        if [ -e "$program" ] || [ -L "$program" ]; then
             {installed}
         else
             {missing}
@@ -511,8 +541,7 @@ fn unix_probe_script(installed: &str, missing: &str) -> String {
 
 fn windows_probe_script(installed: &str, missing: &str) -> String {
     format!(
-        "$ErrorActionPreference = 'Stop'; $program = {WINDOWS_PROGRAM}; \
-         try {{ $item = Get-Item -LiteralPath $program -Force -ErrorAction Stop }} \
+        "try {{ $item = Get-Item -LiteralPath $program -Force }} \
          catch [System.Management.Automation.ItemNotFoundException] {{ $item = $null }}; \
          if ($null -ne $item) {{ {installed} }} else {{ {missing} }}"
     )
@@ -524,86 +553,99 @@ pub fn remote_serve_command(
     remote_home: Option<&str>,
     wake: bool,
 ) -> Result<String, SshArgumentError> {
-    let arguments = serve_arguments(remote_home, wake)?;
-    Ok(match system {
-        RemoteSystem::Unix => sh_command(&format!("exec {UNIX_PROGRAM} {arguments}"), &[]),
-        RemoteSystem::Windows => powershell_command(&format!(
-            "$ErrorActionPreference = 'Stop'; & {WINDOWS_PROGRAM} {arguments}; exit $LASTEXITCODE"
-        )),
-    })
-}
-
-fn serve_arguments(remote_home: Option<&str>, wake: bool) -> Result<String, SshArgumentError> {
-    let mut arguments = String::from("machine serve");
-    if !wake {
-        arguments.push_str(" --no-start");
-    }
-    if let Some(home) = remote_home {
-        arguments.push_str(" --home-hex ");
-        arguments.push_str(&home_hex(home)?);
-    }
-    Ok(arguments)
-}
-
-/// Runs the installer pinned to the release part of the build version.
-pub fn remote_install_command(
-    system: RemoteSystem,
-    version: &str,
-    remote_home: Option<&str>,
-) -> Result<String, SshArgumentError> {
-    let version = release_version(version)?;
+    let arguments = serve_arguments(wake);
     if let Some(home) = remote_home {
         check_home(home)?;
     }
     Ok(match system {
-        RemoteSystem::Unix => {
-            unix_pinned_command(&unix_install_script(remote_home), version, remote_home)
-        }
-        RemoteSystem::Windows => powershell_command(&windows_install_script(version, remote_home)),
+        RemoteSystem::Unix => sh_command(
+            &format!("{UNIX_HOME}{UNIX_PROGRAM}\nexec \"$program\" {arguments}"),
+            &[remote_home.unwrap_or_default()],
+        ),
+        RemoteSystem::Windows => powershell_command(&format!(
+            "{}{WINDOWS_PROGRAM}; & $program {arguments}; exit $LASTEXITCODE",
+            windows_home_script(remote_home),
+        )),
     })
 }
 
-fn release_version(version: &str) -> Result<&str, SshArgumentError> {
-    if crate::version_of(version).is_none() {
+fn serve_arguments(wake: bool) -> &'static str {
+    if wake {
+        "machine serve"
+    } else {
+        "machine serve --no-start"
+    }
+}
+
+/// Runs the installer pinned to this exact build in the resolved remote home.
+pub fn remote_install_command(
+    system: RemoteSystem,
+    build: &str,
+    home: &str,
+) -> Result<String, SshArgumentError> {
+    let version = release_version(build)?;
+    check_absolute_home(system, home)?;
+    Ok(match system {
+        RemoteSystem::Unix => unix_pinned_command(
+            &format!("{UNIX_HOME}{}", unix_install_script()),
+            Some(home),
+            version,
+            build,
+        ),
+        RemoteSystem::Windows => powershell_command(&windows_install_script(
+            version,
+            build,
+            &windows_home_script(Some(home)),
+        )),
+    })
+}
+
+fn release_version(build: &str) -> Result<&str, SshArgumentError> {
+    if crate::compare_builds(build, build).is_none() {
         return Err(SshArgumentError::Version);
     }
-    Ok(crate::build_version(version))
+    Ok(crate::build_version(build))
 }
 
-fn unix_pinned_command(script: &str, version: &str, remote_home: Option<&str>) -> String {
+fn unix_pinned_command(
+    script: &str,
+    remote_home: Option<&str>,
+    version: &str,
+    build: &str,
+) -> String {
     let [github, website] = install::script_urls(Some(version), "sh");
-    let mut arguments = vec![github.as_str(), website.as_str(), version];
-    arguments.extend(remote_home);
-    sh_command(script, &arguments)
-}
-
-fn unix_install_script(remote_home: Option<&str>) -> String {
-    let home = if remote_home.is_some() {
-        r#"export FACADE_HOME="$4"; "#
-    } else {
-        ""
-    };
-    let download = install::UNIX_DOWNLOAD;
-    format!(
-        r#"{download}{home}fetch_installer "$1" "$2" || {{
-    printf '%s\n' 'Could not download Facade installer.' >&2
-    exit "$status"
-}}
-sh -c "$script" -- --version "$3" >&2"#
+    sh_command(
+        script,
+        &[
+            remote_home.unwrap_or_default(),
+            &github,
+            &website,
+            version,
+            build,
+        ],
     )
 }
 
-fn windows_install_script(version: &str, remote_home: Option<&str>) -> String {
-    let prefix = remote_home.map_or_else(String::new, |home| {
-        let bytes = STANDARD.encode(home);
-        format!(
-            "$env:FACADE_HOME = [Text.Encoding]::UTF8.GetString(\
-             [Convert]::FromBase64String('{bytes}'))"
-        )
-    });
-    install::powershell_install(
-        Some(version),
-        &prefix,
+fn unix_install_script() -> String {
+    let download = install::UNIX_DOWNLOAD;
+    format!(
+        r#"{download}fetch_installer "$2" "$3" || {{
+    printf '%s\n' 'Could not download Facade installer.' >&2
+    exit "$status"
+}}
+sh -c "$script" -- --version "$4" --expected-build "$5" --install-root "$FACADE_HOME" --no-path >&2"#
+    )
+}
+
+fn windows_install_script(version: &str, build: &str, prefix: &str) -> String {
+    install::powershell_install_with_options(
+        install::InstallerOptions {
+            version: Some(version),
+            expected_build: Some(build),
+            no_path: true,
+            use_facade_home: true,
+        },
+        prefix,
         "throw 'Could not download Facade installer.'",
         " | ForEach-Object { [Console]::Error.WriteLine($_) }",
     )
@@ -620,6 +662,7 @@ pub enum BootstrapAction {
     Serve,
     Install,
     NeedsInstall,
+    UpgradeLocal,
 }
 
 pub const BOOTSTRAP_SERVE: &[u8] = b"serve\n";
@@ -635,11 +678,32 @@ pub enum SshAdminMode {
 
 #[derive(Clone, Copy)]
 enum BootstrapTarget {
-    Serve { wake: bool },
+    Serve { wake: bool, may_install: bool },
     Admin(SshAdminMode),
 }
 
-/// Reads the bootstrap's first line, before the caller sends its decision.
+/// Reads the absolute home chosen by the remote bootstrap.
+pub fn parse_remote_home(system: RemoteSystem, line: &[u8]) -> Result<String, SshArgumentError> {
+    let hex = line.strip_prefix(b"home ").ok_or(SshArgumentError::Probe)?;
+    let hex = std::str::from_utf8(hex).map_err(|_| SshArgumentError::Home)?;
+    let home = decode_home_hex(hex)?;
+    check_absolute_home(system, &home)?;
+    Ok(home)
+}
+
+fn check_absolute_home(system: RemoteSystem, home: &str) -> Result<(), SshArgumentError> {
+    check_home(home)?;
+    let absolute = match system {
+        RemoteSystem::Unix => home.starts_with('/'),
+        RemoteSystem::Windows => is_windows_absolute_path(home.as_bytes()),
+    };
+    if !absolute {
+        return Err(SshArgumentError::Home);
+    }
+    Ok(())
+}
+
+/// Reads the build report, before the caller sends its decision.
 pub fn parse_remote_probe(line: &str) -> Result<RemoteProbe, SshArgumentError> {
     match line.trim_end_matches(['\r', '\n']) {
         "missing" => Ok(RemoteProbe::Missing),
@@ -656,11 +720,26 @@ pub fn parse_remote_probe(line: &str) -> Result<RemoteProbe, SshArgumentError> {
 }
 
 /// Chooses how to reach an installed peer. Its API hello selects compatibility.
-pub fn bootstrap_action(probe: &RemoteProbe, wake: bool) -> BootstrapAction {
-    match (probe, wake) {
-        (RemoteProbe::Installed(_), _) => BootstrapAction::Serve,
-        (RemoteProbe::Missing, true) => BootstrapAction::Install,
-        (RemoteProbe::Missing, false) => BootstrapAction::NeedsInstall,
+pub fn bootstrap_action(
+    probe: &RemoteProbe,
+    local: &str,
+    may_install: bool,
+) -> Result<BootstrapAction, SshArgumentError> {
+    match probe {
+        RemoteProbe::Installed(remote) => match crate::compare_builds(remote, local) {
+            Some(Ordering::Greater) => Ok(BootstrapAction::UpgradeLocal),
+            Some(Ordering::Less) if may_install => Ok(BootstrapAction::Install),
+            Some(_) => Ok(BootstrapAction::Serve),
+            None => Err(SshArgumentError::Version),
+        },
+        RemoteProbe::Missing => {
+            release_version(local)?;
+            Ok(if may_install {
+                BootstrapAction::Install
+            } else {
+                BootstrapAction::NeedsInstall
+            })
+        }
     }
 }
 
@@ -668,14 +747,15 @@ pub fn bootstrap_action(probe: &RemoteProbe, wake: bool) -> BootstrapAction {
 pub fn remote_bootstrap_command(
     system: RemoteSystem,
     remote_home: Option<&str>,
-    version: &str,
+    build: &str,
     wake: bool,
+    may_install: bool,
 ) -> Result<String, SshArgumentError> {
     bootstrap_command(
         system,
         remote_home,
-        version,
-        BootstrapTarget::Serve { wake },
+        build,
+        BootstrapTarget::Serve { wake, may_install },
         false,
     )
 }
@@ -684,20 +764,21 @@ pub fn remote_bootstrap_command(
 pub fn remote_login_bootstrap_command(
     shell: RemoteLoginShell,
     remote_home: Option<&str>,
-    version: &str,
+    build: &str,
     wake: bool,
+    may_install: bool,
 ) -> Result<String, SshArgumentError> {
     let command = bootstrap_command(
         shell.system(),
         remote_home,
-        version,
-        BootstrapTarget::Serve { wake },
+        build,
+        BootstrapTarget::Serve { wake, may_install },
         true,
     )?;
     Ok(login_command(shell, &command))
 }
 
-/// Probes the fixed-path administration helper on the authenticated login.
+/// Probes the selected home's administration helper on the authenticated login.
 pub fn remote_login_admin_command(
     shell: RemoteLoginShell,
     remote_home: Option<&str>,
@@ -725,21 +806,17 @@ fn login_command(shell: RemoteLoginShell, command: &str) -> String {
 fn bootstrap_command(
     system: RemoteSystem,
     remote_home: Option<&str>,
-    version: &str,
+    build: &str,
     target: BootstrapTarget,
     from_login: bool,
 ) -> Result<String, SshArgumentError> {
-    let version = release_version(version)?;
+    let version = release_version(build)?;
+    if let Some(home) = remote_home {
+        check_home(home)?;
+    }
     let (arguments, allow_install) = match target {
-        BootstrapTarget::Serve { wake } => (serve_arguments(remote_home, wake)?, wake),
-        BootstrapTarget::Admin(mode) => {
-            let mut arguments = String::from("machine ssh-admin");
-            if let Some(home) = remote_home {
-                arguments.push_str(" --home-hex ");
-                arguments.push_str(&home_hex(home)?);
-            }
-            (arguments, mode == SshAdminMode::Enroll)
-        }
+        BootstrapTarget::Serve { wake, may_install } => (serve_arguments(wake), may_install),
+        BootstrapTarget::Admin(mode) => ("machine ssh-admin", mode == SshAdminMode::Enroll),
     };
     let admin = matches!(target, BootstrapTarget::Admin(_));
     Ok(match system {
@@ -750,24 +827,32 @@ fn bootstrap_command(
                 String::new()
             };
             let probe = unix_probe_script(
-                &format!(
-                    r#"report=$({UNIX_PROGRAM} --version) || exit 1
-                    case "$report" in
-                        'facade '*) printf 'version %s\n' "${{report#facade }}" ;;
-                        *) printf 'Unexpected version from %s\n' {UNIX_PROGRAM} >&2; exit 1 ;;
-                    esac"#
-                ),
+                r#"report=$("$program" --version) || exit 1
+                case "$report" in
+                    *'
+'*) printf 'Unexpected version from %s\n' "$program" >&2; exit 1 ;;
+                    'facade '*) printf 'version %s\n' "${report#facade }" ;;
+                    *) printf 'Unexpected version from %s\n' "$program" >&2; exit 1 ;;
+                esac"#,
                 "printf '%s\\n' missing",
             );
             let install = if allow_install {
-                format!("{} || exit $?", unix_install_script(remote_home))
+                format!(
+                    r#"{} || exit $?
+                    report=$("$program" --version) || exit 1
+                    if [ "$report" != "facade $5" ]; then
+                        printf 'Expected Facade %s in %s, got %s\n' "$5" "$FACADE_HOME" "$report" >&2
+                        exit 1
+                    fi"#,
+                    unix_install_script()
+                )
             } else {
-                "printf '%s\\n' 'Facade installation requires an active connection' >&2; exit 1"
+                "printf '%s\\n' 'This connection does not permit Facade installation.' >&2; exit 1"
                     .to_owned()
             };
             let admin_probe = if admin {
                 format!(
-                    r#"if ! marker=$({UNIX_PROGRAM} machine ssh-admin --probe </dev/null 2>/dev/null && printf .) ||
+                    r#"if ! marker=$("$program" machine ssh-admin --probe </dev/null 2>/dev/null && printf .) ||
                     [ "$marker" != 'facade-ssh-admin
 .' ]; then
                     printf '%s\n' {BOOTSTRAP_UNSUPPORTED}
@@ -779,7 +864,10 @@ fn bootstrap_command(
                 String::new()
             };
             let script = format!(
-                r#"{begin}{probe}
+                r#"{UNIX_HOME}{UNIX_PROGRAM}
+                {begin}encoded_home=$(printf '%s' "$FACADE_HOME" | od -An -v -tx1 | tr -d ' \n') || exit 1
+                printf 'home %s\n' "$encoded_home" || exit 1
+                {probe}
                 IFS= read -r action || exit 1
                 case "$action" in
                     serve) ;;
@@ -787,12 +875,12 @@ fn bootstrap_command(
                     *) printf '%s\n' 'Expected a Facade bootstrap decision' >&2; exit 1 ;;
                 esac
                 {admin_probe}printf '%s\n' {BOOTSTRAP_READY} || exit 1
-                exec {UNIX_PROGRAM} {arguments}"#
+                exec "$program" {arguments}"#
             );
             if allow_install {
-                unix_pinned_command(&script, version, remote_home)
+                unix_pinned_command(&script, remote_home, version, build)
             } else {
-                sh_command(&script, &[])
+                sh_command(&script, &[remote_home.unwrap_or_default()])
             }
         }
         RemoteSystem::Windows => {
@@ -809,9 +897,15 @@ fn bootstrap_command(
                 "[Console]::WriteLine('missing')",
             );
             let install = if allow_install {
-                windows_install_script(version, remote_home)
+                format!(
+                    "{}\n$report = & $program --version; \
+                     if ($LASTEXITCODE -ne 0 -or $report -isnot [string] -or $report -cne 'facade {build}') {{ \
+                         throw \"Expected Facade {build} in $env:FACADE_HOME, got $report\" \
+                     }}",
+                    windows_install_script(version, build, "")
+                )
             } else {
-                "throw 'Facade installation requires an active connection'".to_owned()
+                "throw 'This connection does not permit Facade installation.'".to_owned()
             };
             let admin_probe = if admin {
                 format!(
@@ -827,7 +921,10 @@ fn bootstrap_command(
                 String::new()
             };
             powershell_command(&format!(
-                "{begin}{probe}; \
+                "{}{WINDOWS_PROGRAM}; {begin}\
+                 $hex = [BitConverter]::ToString([Text.Encoding]::UTF8.GetBytes($env:FACADE_HOME)); \
+                 [Console]::WriteLine('home ' + $hex.Replace('-', '').ToLowerInvariant()); \
+                 {probe}; \
                  $action = [Console]::ReadLine(); if ($null -eq $action) {{ exit 1 }}; \
                  switch -CaseSensitive ($action) {{ \
                      'serve' {{ }} \
@@ -835,7 +932,8 @@ fn bootstrap_command(
                      default {{ throw 'Expected a Facade bootstrap decision' }} \
                  }}; \
                  {admin_probe}[Console]::WriteLine('{BOOTSTRAP_READY}'); \
-                 & $program {arguments}; exit $LASTEXITCODE"
+                 & $program {arguments}; exit $LASTEXITCODE",
+                windows_home_script(remote_home),
             ))
         }
     })
@@ -861,11 +959,13 @@ fn sh_word(value: &str) -> String {
 }
 
 fn powershell_command(script: &str) -> String {
-    let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    // CMD has a short command line limit. Use a UTF-8 payload and run it in the same scope
+    // so the bootstrap's exit status becomes the PowerShell process's exit status.
+    let payload = STANDARD.encode(script);
     format!(
-        "powershell.exe {} -EncodedCommand {}",
+        "powershell.exe {} -Command \
+         \". ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{payload}'))))\"",
         install::POWERSHELL_OPTIONS.join(" "),
-        STANDARD.encode(bytes)
     )
 }
 
