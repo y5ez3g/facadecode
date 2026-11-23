@@ -54,7 +54,7 @@ impl Plugins {
         let program = self.held.facade_mcp();
         let facade = self.held.facade_launcher();
         let (program, facade) = (program.to_string_lossy(), facade.to_string_lossy());
-        facade_rules::plugin_files_v3(&program, &facade)
+        facade_rules::plugin_files(&program, &facade)
     }
 
     pub(super) fn note_unrecorded(&self, projects: Vec<PathBuf>) {

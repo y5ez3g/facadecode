@@ -77,7 +77,7 @@ files in `core/rules/`. It is a library; it starts no program.
 
 - `facade-base` provides `settings` for reading `facade.json`. The `daemon` module provides
   `InputMechanism`, `InputInfo`, `InputState`, `HiddenRows` and `is_session_id`. The runtime files
-  and plugin use `skill::text_v3` and `version()`. Rules uses `system` (`SYSTEM`, `env_var`, `home_folder_in`),
+  and plugin use `skill::text` and `version()`. Rules uses `system` (`SYSTEM`, `env_var`, `home_folder_in`),
   `programs` (`direct_command`, `on_path`) and `files` (`private_options`, `is_private`,
   `sync_folder`), and `base64` for encoded PowerShell hooks.
 - `facade-screen`: `ScreenView` and its cells, which the input and state readers read.
@@ -363,7 +363,7 @@ session. It also defines the formats of Facade's hooks.
     and `remove_wiring_environment(cli, env)`, behind `Rule::remove_wiring_environment`.
   - Daemon run preparation supplies `ManagedServer` (the `Server` configuration and this run's
     MCP arguments) and `SessionReport` (`facade`, session file, cwd). It writes and cleans up
-    Antigravity's folder plugin using `uses_folder_plugin(cli)`, `plugin_files_v3(program, facade)`,
+    Antigravity's folder plugin using `uses_folder_plugin(cli)`, `plugin_files(program, facade)`,
     `plugin_version(manifest)`, `PLUGIN_FOLDER`, `PLUGIN_MEMBERS` and `SKILL_FILE`.
   - `runs_start_guest_entry`, `guest_entry_serves_run` and `session_ends_with_process` support
     the older running-session paths.

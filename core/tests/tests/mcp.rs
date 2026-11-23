@@ -1303,7 +1303,7 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
     );
     assert_eq!(
         std::fs::read_to_string(plugin.join("skills/facade/SKILL.md")).unwrap(),
-        facade_base::skill::text_v3(),
+        facade_base::skill::text(),
         "and the skill"
     );
     let servers: Value =

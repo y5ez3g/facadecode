@@ -6,7 +6,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
-use super::plugin::{AGY_RUN_TOKEN, ALLOW_TOOLS, plugin_description, plugin_files_v3};
+use super::plugin::{AGY_RUN_TOKEN, ALLOW_TOOLS, plugin_description, plugin_files};
 use super::servers::{
     Entry, SERVER, claude_entry, codex_entry, opencode_allow, opencode_entry,
     opencode_native_entry, pi_entry, runs_facade_mcp,
@@ -242,7 +242,7 @@ pub(super) fn muse_run(server: &Server, entry: Option<&Entry>, skill: String) ->
 pub(super) fn agy_managed(server: &Server, credential: Option<&str>) -> Wiring {
     Wiring {
         settings: Some(json!({ "permissions": { "allow": [ALLOW_TOOLS] } })),
-        plugin: plugin_files_v3(server.program, server.facade),
+        plugin: plugin_files(server.program, server.facade),
         env: credential
             .map(|value| vec![(AGY_RUN_TOKEN.into(), value.into())])
             .unwrap_or_default(),

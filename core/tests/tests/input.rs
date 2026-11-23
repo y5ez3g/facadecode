@@ -407,7 +407,7 @@ fn shell_type_writes_exact_paste_and_enter_bytes_to_its_target() {
 
 /// The CLI validates a whole batch, and Facade API v1's agent.type still types its legacy frames.
 #[test]
-fn public_keys_have_a_limit_and_v3_keeps_its_existing_keys() {
+fn public_keys_have_a_limit_and_api_v1_keeps_its_existing_keys() {
     let home = TestHome::new("publickeys");
     let pressed = home.project.join("pressed");
     let agent = home.start_fake_with("worker", &[("FAKECLI_KEYS", pressed.to_str().unwrap())]);

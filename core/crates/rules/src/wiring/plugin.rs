@@ -51,7 +51,7 @@ pub(super) fn plugin_description(version: &str) -> String {
 /// every run of this version and Facade home, so that the runs in one folder share it. The server
 /// finds the daemon's socket from its Facade home. The launcher takes the current run's relay
 /// credential from the CLI's environment, so the files are shared by runs with different credentials.
-pub fn plugin_files_v3(program: &str, facade: &str) -> Vec<(String, String)> {
+pub fn plugin_files(program: &str, facade: &str) -> Vec<(String, String)> {
     let (launcher, args) = match SYSTEM {
         System::Windows => windows_launcher(program),
         _ => {
@@ -84,7 +84,7 @@ exec "$1""#,
         ("plugin.json".into(), pretty(manifest)),
         ("mcp_config.json".into(), pretty(servers)),
         ("hooks.json".into(), pretty(hooks)),
-        (SKILL_FILE.into(), facade_base::skill::text_v3()),
+        (SKILL_FILE.into(), facade_base::skill::text()),
     ]
 }
 
@@ -137,7 +137,7 @@ mod tests {
     /// plugin from anyone else's.
     #[test]
     fn the_plugin_s_manifest_names_facade_core_and_its_version() {
-        let manifest = &plugin_files_v3("/opt/facade-mcp", "/opt/facade")[0].1;
+        let manifest = &plugin_files("/opt/facade-mcp", "/opt/facade")[0].1;
         let version: Vec<u64> = facade_base::VERSION
             .split('.')
             .map(|part| part.parse().unwrap())

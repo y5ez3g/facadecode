@@ -407,7 +407,7 @@ fn pi_gets_an_extension_of_the_run_that_registers_the_server_and_its_instruction
 /// not given the tools gets none.
 #[test]
 fn each_cli_given_the_tools_is_given_the_skill_in_its_place() {
-    let skill = facade_base::skill::text_v3();
+    let skill = facade_base::skill::text();
     let file = |launch: &CommandLine, name: &str| {
         launch
             .files
@@ -559,7 +559,7 @@ fn pi_s_extension_gives_the_run_s_skill_unless_the_same_one_is_loaded() {
         std::fs::write(path, text).unwrap();
     }
     let (same, other) = (folder.join("same.md"), folder.join("other.md"));
-    std::fs::write(&same, facade_base::skill::text_v3()).unwrap();
+    std::fs::write(&same, facade_base::skill::text()).unwrap();
     std::fs::write(&other, "---\nname: facade\n---\n").unwrap();
     let script = format!(
         r#"const extension = (await import({module})).default;
@@ -718,7 +718,7 @@ fn muse_code_gets_an_optional_server_by_c_for_the_run_alone_and_a_hook_with_the_
             INSTRUCTIONS_FILE.to_string(),
             "You are Facade agent #a3.".to_string(),
         ),
-        (SKILL_FILE.to_string(), facade_base::skill::text_v3()),
+        (SKILL_FILE.to_string(), facade_base::skill::text()),
     ];
     assert_eq!(
         muse.files, given,
@@ -1341,7 +1341,7 @@ fn antigravity_gets_the_plugin_and_its_tools_allowed_beside_the_person_s_own_rul
     assert!(managed.uses_run_credential && resumed.uses_run_credential);
     assert_eq!(
         managed.plugin,
-        crate::plugin_files_v3(server.program, server.facade)
+        crate::plugin_files(server.program, server.facade)
     );
     assert_eq!(managed.plugin, resumed.plugin);
     for (launch, credential) in [(managed, first), (resumed, second)] {

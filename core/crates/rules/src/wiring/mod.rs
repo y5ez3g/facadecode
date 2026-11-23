@@ -21,14 +21,12 @@ mod settings;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use facade_base::skill::text_v3;
+use facade_base::skill::text;
 use serde_json::Value;
 
 use crate::{ManagedServer, RUN_CREDENTIAL_ARG, Rule};
 
-pub use plugin::{
-    PLUGIN_FOLDER, PLUGIN_MEMBERS, plugin_files_v3, plugin_version, uses_folder_plugin,
-};
+pub use plugin::{PLUGIN_FOLDER, PLUGIN_MEMBERS, plugin_files, plugin_version, uses_folder_plugin};
 pub use session_report::SessionReport;
 pub(crate) use session_report::{Hooked, install_hook};
 
@@ -153,12 +151,12 @@ pub(crate) fn wire_managed(
     let uses_credential = credential.is_some();
     let (wiring, uses_run_credential) = match cli {
         "claude" => (
-            run_tools::claude_run(server, &entry, text_v3()),
+            run_tools::claude_run(server, &entry, text()),
             uses_credential,
         ),
-        "codex" => (run_tools::codex_run(&entry, text_v3())?, uses_credential),
+        "codex" => (run_tools::codex_run(&entry, text())?, uses_credential),
         "opencode" => (
-            run_tools::opencode_run(server, &entry, environment, text_v3())?,
+            run_tools::opencode_run(server, &entry, environment, text())?,
             uses_credential,
         ),
         "pi" => {
@@ -168,7 +166,7 @@ pub(crate) fn wire_managed(
                 servers::SERVER
             };
             (
-                run_tools::pi_run(server, &entry, name, text_v3()),
+                run_tools::pi_run(server, &entry, name, text()),
                 uses_credential,
             )
         }
@@ -176,7 +174,7 @@ pub(crate) fn wire_managed(
             let configured = conflicts::muse_config(server.cwd, environment)?;
             let entry = (!configured).then_some(&entry);
             (
-                run_tools::muse_run(server, entry, text_v3()),
+                run_tools::muse_run(server, entry, text()),
                 uses_credential && !configured,
             )
         }

@@ -113,7 +113,7 @@ To answer a menu, read the screen first, then use `press_keys({agent: "a7@devbox
 /// The skill's `SKILL.md`: the frontmatter with `name` and the quoted description, the sections
 /// with the repeated-message paragraph between them, and last a line naming the version of Facade
 /// core that wrote it.
-pub fn text_v3() -> String {
+pub fn text() -> String {
     render(FIRST_SECTIONS, LAST_SECTIONS)
 }
 
@@ -134,7 +134,7 @@ mod tests {
     /// The skill has YAML frontmatter, a separate repeated-message paragraph and a version.
     #[test]
     fn the_skill_has_its_frontmatter_its_paragraph_and_its_version_last() {
-        let text = text_v3();
+        let text = text();
         let (frontmatter, _) = text
             .strip_prefix("---\n")
             .and_then(|rest| rest.split_once("\n---\n"))

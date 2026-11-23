@@ -106,7 +106,7 @@ fn has_the_skill(test: &TestHome, cli: &str, run: &Value) -> bool {
         .find(|path| path.is_dir())
         .expect("the run's folder");
     let skill = |file: PathBuf| {
-        std::fs::read_to_string(file).is_ok_and(|text| text == facade_base::skill::text_v3())
+        std::fs::read_to_string(file).is_ok_and(|text| text == facade_base::skill::text())
     };
     let command = command_line_of(run["pid"].as_i64().unwrap() as i32);
     // On Windows with the scripts of its encoded PowerShell hooks, each word quoted `'…'`.

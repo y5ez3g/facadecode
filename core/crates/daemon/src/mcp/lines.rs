@@ -293,7 +293,7 @@ mod tests {
     fn the_skill_repeats_no_sentence_of_the_instructions_or_the_tools() {
         use facade_base::instructions::{Creator, ManagedRun, for_connection, for_managed};
 
-        let skill = facade_base::skill::text_v3();
+        let skill = facade_base::skill::text();
         let listed =
             answered(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)["result"]["tools"]
                 .clone();

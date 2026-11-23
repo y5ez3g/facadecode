@@ -158,7 +158,7 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   the running machine.
 - `settings::{read, settings_file, shown, is_space, Settings, SourceLocation}`. The settings path
   is available before the file exists.
-- `instructions::{for_connection, for_managed, ManagedRun, Creator}`, `skill::text_v3()` and
+- `instructions::{for_connection, for_managed, ManagedRun, Creator}`, `skill::text()` and
   `tools::DEFINITIONS` describe Facade API v1's MCP entry point and its eight tools.
 
 **The `facade` program**
@@ -198,7 +198,7 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 
 **Rules**
 - `settings::{Settings, Member, Json, is_space}`: rules reads the CLI entries of `clis`.
-- `skill::text_v3()` and the shared input types in `model::terminal`. Rules uses
+- `skill::text()` and the shared input types in `model::terminal`. Rules uses
   `model::agent::is_session_id` for session identifiers.
 
 **The relay** uses nothing of base; see [relay.md](relay.md).
@@ -312,7 +312,7 @@ What Facade asks of the operating system. `core/crates/base/src/platform/`.
 
 What a model reads at Facade API v1's MCP entry point in `core/crates/base/src/texts/`.
 - **Owns** the instructions the daemon's MCP server returns from `initialize` (`instructions.rs`),
-  the skill (`skill.rs`), and the definitions of the eight tools (`tools.v3.json`).
+  the skill (`skill.rs`), and the definitions of the eight tools (`tools.json`).
 - **Keeps** one skill and one table for `tools/list` and `tools/call`. `for_connection` describes
   the tools before a new connection is associated with an actor. `for_managed` adds the run's
   machine, folder, creator and saved YOLO. Both describe inbox acceptance, optional waits and
@@ -321,7 +321,7 @@ What a model reads at Facade API v1's MCP entry point in `core/crates/base/src/t
 - **Never keeps** a text used only by tests.
 - **Input:** the daemon's MCP server supplies `ManagedRun` from the agent's authenticated run.
 - **Interface:** `instructions::{for_connection, for_managed, Creator, ManagedRun}`,
-  `skill::text_v3()`, `tools::DEFINITIONS`.
+  `skill::text()`, `tools::DEFINITIONS`.
   The [Core MCP contract](../../extension/engineering/MCP.md#7-mcp-through-the-orchestrator)
   describes the tools and their results.
 
