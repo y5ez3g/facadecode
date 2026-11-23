@@ -420,7 +420,11 @@ compares the first parent of the PR merge tree to that tree and includes both pa
 The same shadow checks run on the landed `main` tree after a relevant push. Manual and
 main runs select both pilots. A new PR head cancels the three earlier workflows of that PR.
 The Extension job builds its test stage
-once and uses official VS Code `1.105.1` with isolated profiles and fake CLIs. Core shares one run
+once and uses official VS Code `1.105.1` with isolated profiles and fake CLIs.
+It checks the pinned Linux x64 archive size and SHA-256 before each extraction, including
+cache restores. It stages the verified official bundle in fresh scratch before building the
+fixtures. A listed transient download gets one retry within the 90-second acquisition budget,
+and the download log keeps its first failure. Core shares one run
 per scenario target and compares its exact test names. Extension shares a fixture for compatible
 Mocha selections with the same engine and route. Multi-window and lifetime drivers use separate
 fixtures. Shared Window Component and stdio contracts also use exact compiled Mocha selectors.
@@ -503,6 +507,31 @@ same candidate directory and attempt to recheck the two fixture homes, original 
 result, session, SSH route, delivery replay and post-cleanup marker. Binary replay also takes
 the original `--prior-bin` and `--manifest`.
 
+### Expanded PR evidence review
+
+For a same-repository PR that schedules the complete Core and Extension matrix, run the
+read-only review from a clean, reviewed checkout of the exact head or matching GitHub merge.
+
+```sh
+python3 -B ci/merge_review.py --repo OWNER/REPO --pr NUMBER --head "$head" --base "$base" \
+    --output "$work/review"
+```
+
+Review requires the current `main` base and GitHub test merge, the five first-attempt
+workflows, all 25 jobs on their expected runner labels, and successful execution and
+evidence steps. It checks the registered workflow and matching GitHub Actions check for
+each job. It preserves each base catalog obligation and exact existing binding. Intentional
+catalog changes need separate review. It rehashes the original shadow and native archives,
+reconciles exact shadow case proofs and five typed native case records, and verifies all
+six unsigned native package sets and their paired VSIX bytes. Each of the 12 native editor
+logs must meet the reviewed 61-pass baseline and record completed profile cleanup. These
+native suite counts supplement the exact shadow case list. The verifier checks the current
+PR, base, workflows and local checkout again before reporting success. Drafts can be reviewed.
+
+This command is an operator review of already reviewed sources. Required status and App
+credentials belong to the protected coordinator and isolated execution described above.
+A later attempt requires separate incident and recovery review.
+
 ### Native Core hot takeover QA
 
 The Linux x64 replay takes two digest-pinned pairs of `facade` and `facade-mcp` from builds
@@ -532,6 +561,31 @@ The runner verifies both installed program pairs, their launchers, the two Keepe
 handshakes and owned cleanup. Separate tests exercise same-version, older-version and
 disjoint offers. This is opt-in source QA. Actual incompatible builds and signed release
 artifacts have their own catalog rows.
+
+### Linux x64 packaged Core upgrade QA
+
+Use two compatible archives, with a higher numeric version in the candidate. Obtain an
+independent SHA-256 pin for each archive and keep its original `SHA256SUMS` file. To use
+local QA builds, prepare the version-only pair described above and package both builds
+with `node core/scripts/package-core.mjs --target linux-x64 --bin-dir "$bin" --out-dir "$package"`.
+The fake CLI can come from a locked build of `facade-scenarios --bin facade-fakecli`.
+
+```sh
+python3 -B ci/check_packaged_upgrade.py \
+    --prior-archive "$prior/facade-core-linux-x64.tar.gz" --prior-checksums "$prior/SHA256SUMS" \
+    --prior-sha256 "$prior_sha256" \
+    --candidate-archive "$candidate/facade-core-linux-x64.tar.gz" --candidate-checksums "$candidate/SHA256SUMS" \
+    --candidate-sha256 "$candidate_sha256" --fake-executable "$fake" \
+    --output-dir "$work/packaged-upgrade" --run-id packaged-upgrade-local
+```
+
+The shipped installer installs and activates both verified packages in the same disposable
+home. The candidate replaces the Daemon while the Keeper and fake CLI retain their process
+identities and the CLI retains its reported session. Both launchers resolve to the candidate
+programs. The old screen and receipt remain available, and the same CLI receives exactly one
+fresh submission. Retain each archive's provenance, the console output and `receipt.json`
+with the observed commands and scoped cleanup. This local QA evidence records a compatible
+packaged path. The release upgrade row requires a qualifying pinned prior and release candidate.
 
 ### Native Core incompatible takeover QA
 

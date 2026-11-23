@@ -404,7 +404,12 @@
       "existing_tests": [
         "core/tests/tests/reliability.rs",
         "core/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "an_idless_peer_cancel_withdraws_a_pending_forwarded_send"
+      }
     },
     {
       "id": "core/daemon/machine-notification/changed",

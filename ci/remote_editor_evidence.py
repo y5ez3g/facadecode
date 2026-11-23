@@ -15,34 +15,42 @@ from native_core import ROOT, hash_file, read_markers, source_identity, write_re
 
 OBSERVATION = 'Facade native SSH connect observation '
 FIXTURE = ROOT / 'ci/fixtures/remote-ssh'
+COMPILED = (
+    'out/test/integration/remote.js', 'out/test/integration/editors.js',
+    'out/test/integration/rustMultiWindow.js', 'out/test/integration/rustMultiWindowDriver.js',
+    'extension-it/package.json', 'extension-it/dist/extension.js', 'extension-it/dist/webview/webview.js',
+    'extension-it/bin/facade', 'extension-it/bin/facade-mcp', 'window/package.json', 'window/dist/window.js',
+)
+HARNESS = (
+    'ci/check_remote_editor.sh', 'ci/remote_editor_evidence.py', 'ci/fixtures/remote-ssh/Dockerfile',
+    'extension/src/test/integration/remote.ts', 'extension/src/test/integration/rustMultiWindowDriver.ts',
+)
+
+
+def pinned_assets():
+    official = read_json(FIXTURE / 'official-server-linux-x64.json')
+    tools = read_json(FIXTURE / 'pinned-marketplace.json')
+    assets = {f'vscode-server-linux-x64-{official["name"]}.tar.gz': official['sha256hash']}
+    assets.update({f'{tool["id"]}-{tool["version"]}.vsix': tool['sha256'] for tool in tools})
+    return official['version'], assets
 
 
 def capture_inputs(output, scope, editor):
     if (scope.parent != Path('/tmp') or not re.fullmatch(r'fssh-[A-Za-z0-9]{6}', scope.name)
             or (output / 'scope.path').read_text().splitlines() != [str(scope)]):
         raise AcceptanceError('Remote SSH fixture scope is invalid')
-    official = read_json(FIXTURE / 'official-server-linux-x64.json')
-    tools = read_json(FIXTURE / 'pinned-marketplace.json')
-    assets = {f'vscode-server-linux-x64-{official["name"]}.tar.gz': official['sha256hash']}
-    assets.update({f'{tool["id"]}-{tool["version"]}.vsix': tool['sha256'] for tool in tools})
+    commit, assets = pinned_assets()
     if {name: hash_file(scope / 'assets' / name) for name in assets} != assets:
         raise AcceptanceError('staged Remote SSH assets do not match the pinned inputs')
     build = ROOT / 'extension/build'
-    stage = ('out/test/integration/remote.js', 'out/test/integration/editors.js',
-             'out/test/integration/rustMultiWindow.js', 'out/test/integration/rustMultiWindowDriver.js',
-             'extension-it/package.json', 'extension-it/dist/extension.js', 'extension-it/dist/webview/webview.js',
-             'extension-it/bin/facade', 'extension-it/bin/facade-mcp', 'window/package.json', 'window/dist/window.js')
     return {
         'scope': str(scope), 'source': source_identity(run_identity(None if environ.get('GITHUB_RUN_ID') else scope.name, environ)),
         'guest_id': (output / 'guest.id').read_text().strip(), 'image_id': (output / 'image.id').read_text().strip(),
         'loopback': (output / 'loopback-listener.txt').read_text().strip(),
         'client_key': (output / 'client-fingerprint.txt').read_text().strip(),
-        'editor': {'commit': official['version'], 'sha256': hash_file(editor)},
-        'assets': assets, 'compiled_sha256': {path: hash_file(build / path) for path in stage},
-        'harness_sha256': {path: hash_file(ROOT / path) for path in (
-            'ci/check_remote_editor.sh', 'ci/remote_editor_evidence.py', 'ci/fixtures/remote-ssh/Dockerfile',
-            'extension/src/test/integration/remote.ts', 'extension/src/test/integration/rustMultiWindowDriver.ts',
-        )},
+        'editor': {'commit': commit, 'sha256': hash_file(editor)},
+        'assets': assets, 'compiled_sha256': {path: hash_file(build / path) for path in COMPILED},
+        'harness_sha256': {path: hash_file(ROOT / path) for path in HARNESS},
     }
 
 

@@ -48,7 +48,7 @@ def job_sample(job):
     }
 
 
-def attempt_jobs(endpoint, run, number):
+def attempt_job_records(endpoint, run, number):
     pages = gh_json('--paginate', '--slurp', f'{endpoint}/attempts/{number}/jobs?per_page=100')
     jobs = [job for page in pages for job in page['jobs']]
     if not pages or len(jobs) != pages[0]['total_count'] or len({job['id'] for job in jobs}) != len(jobs):
@@ -56,7 +56,11 @@ def attempt_jobs(endpoint, run, number):
     for job in jobs:
         if (job['run_id'], job['run_attempt'], job['head_sha']) != (run['id'], number, run['head_sha']):
             raise ValueError(f'Job {job["id"]} belongs to another candidate or attempt')
-    return [job_sample(job) for job in jobs]
+    return jobs
+
+
+def attempt_jobs(endpoint, run, number):
+    return [job_sample(job) for job in attempt_job_records(endpoint, run, number)]
 
 
 def sample_workflow(repo, head, run_id):

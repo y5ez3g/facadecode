@@ -41,12 +41,12 @@ def stage_editor(cache, stage, log_path, env):
                 command = [
                     'curl', '--disable', '--fail', '--no-progress-meter', '--show-error', '--location',
                     '--proto', '=https', '--proto-redir', '=https', '--connect-timeout', '15',
-                    '--max-time', '120', '--retry', '1', '--retry-connrefused', '--retry-delay', '2',
+                    '--max-time', '42', '--retry', '1', '--retry-connrefused', '--retry-delay', '2',
                     '--max-filesize', str(ARCHIVE_SIZE), '--output', str(incoming), ARCHIVE_URL,
                 ]
                 try:
                     subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT,
-                                   check=True, timeout=250)
+                                   check=True, timeout=90)
                 except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
                     raise AcceptanceError(f'editor archive fetch failed. See {log_path}') from error
                 if not matches_archive(incoming):

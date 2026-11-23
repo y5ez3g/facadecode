@@ -30,10 +30,12 @@ class HostedEvidence(unittest.TestCase):
                 check_pull_run({'pull_requests': records}, pull, head, base)
 
     def test_requires_this_attempts_product_and_artifact_identity(self):
-        run = {'run_attempt': 2, 'id': 7, 'head_sha': 'a' * 40, 'repository': {'id': 3}}
+        run = {'run_attempt': 2, 'id': 7, 'head_sha': 'a' * 40,
+               'repository': {'id': 3}, 'head_repository': {'id': 3}}
         core = {
             'name': 'shadow-pilot-core-2', 'id': 31, 'expired': False, 'digest': 'sha256:' + 'b' * 64,
-            'workflow_run': {'id': 7, 'head_sha': 'a' * 40, 'repository_id': 3},
+            'size_in_bytes': 100, 'workflow_run': {'id': 7, 'head_sha': 'a' * 40,
+                                                  'repository_id': 3, 'head_repository_id': 3},
         }
         with patch('github_evidence.gh_json') as gh:
             gh.return_value = [{'total_count': 1, 'artifacts': [core]}]

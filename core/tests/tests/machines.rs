@@ -2746,6 +2746,118 @@ fn a_cross_machine_send_replays_its_original_settlement_after_reconnect() {
     );
 }
 
+/// A peer cancel withdraws a forwarded send held behind a draft. The originating client
+/// recovers the receiver's settlement by retrying with the original request ID.
+#[test]
+fn an_idless_peer_cancel_withdraws_a_pending_forwarded_send() {
+    let origin = TestHome::new("cancel-origin");
+    let peer = TestHome::new("cancel-peer");
+    let origin_id = name_machine(&origin, "origin");
+    let peer_id = name_machine(&peer, "peer");
+    let keys = peer.project.join("worker-keys");
+    let worker = peer.start_named_fake("worker", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
+    let target = json!({ "machine_id": peer_id, "agent_id": worker.id });
+    peer.run_facade_ok(&["type", &worker.address, "hold the forwarded message"]);
+    assert!(wait_for_screen_text(
+        &peer,
+        &worker.address,
+        "❯ hold the forwarded message"
+    ));
+    let before = std::fs::read(&keys).unwrap();
+    assert!(!before.is_empty(), "the draft reached the recipient");
+    let bridge = ObservedMachineLink::open(&origin, &peer);
+    wait_for_route(&origin, &peer_id, &[&peer_id]);
+
+    let mut sender = connect(&origin);
+    let text = "withdraw this forwarded message";
+    let args =
+        json!({ "to": target, "text": text, "request_id": "peer-cancel", "wait_for": "delivery" });
+    let send_id = sender.send("call", json!({ "op": "agent.send", "args": args }));
+    let sent = observed_frame(&bridge.from_front, "the pending forwarded send", |frame| {
+        frame["method"] == "forward" && frame["params"]["params"]["op"] == "agent.send"
+    });
+    assert_eq!(sent["params"]["route"], json!([peer_id]), "{sent}");
+    assert_eq!(
+        sent["params"]["caller"],
+        json!({ "kind": "terminal", "machine_id": origin_id }),
+        "{sent}"
+    );
+    assert_eq!(sent["params"]["params"]["args"], args, "{sent}");
+    let peer_request = sent["id"].as_u64().expect("the peer request ID");
+    let admitted = format!("sent m1 to #{}, request peer-cancel", worker.id);
+    assert!(wait_until(secs(10), || peer
+        .daemon_log()
+        .contains(&admitted)));
+    assert_eq!(std::fs::read(&keys).unwrap(), before);
+
+    let acknowledgement = sender.request("cancel", json!({ "id": send_id }));
+    assert_eq!(acknowledgement["result"], json!({}), "{acknowledgement}");
+    let cancel = observed_frame(&bridge.from_front, "the peer cancellation", |frame| {
+        frame["method"] == "cancel"
+    });
+    assert_eq!(
+        cancel,
+        json!({ "jsonrpc": "2.0", "method": "cancel", "params": { "id": peer_request } })
+    );
+    let original = sender
+        .wait_for_response(send_id, LOADED_TIMEOUT)
+        .expect("the cancelled originating request settles");
+    assert_eq!(original["id"], send_id, "{original}");
+    assert_eq!(error_reason(&original), "unavailable", "{original}");
+    assert_eq!(
+        original["error"]["data"]["details"]["execution"], "outcome_unknown",
+        "{original}"
+    );
+    assert_eq!(std::fs::read(&keys).unwrap(), before);
+    assert!(peer.submitted_messages().is_empty());
+
+    let replay = sender.call("agent.send", args);
+    assert_eq!(error_reason(&replay), "cancelled", "{replay}");
+    assert!(
+        replay["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("m1 was withdrawn"),
+        "{replay}"
+    );
+    let retried = observed_frame(
+        &bridge.from_front,
+        "the replay of the forwarded send",
+        |frame| frame["method"] == "forward" && frame["params"]["params"]["op"] == "agent.send",
+    );
+    assert_ne!(retried["id"], peer_request, "{retried}");
+    let result = observed_frame(&bridge.from_peer, "the peer's replay settlement", |frame| {
+        if frame.get("method").is_none() {
+            assert!(
+                frame["id"].is_u64() && frame["id"] != peer_request,
+                "unexpected cancel response: {frame}"
+            );
+        }
+        frame["id"] == retried["id"]
+    });
+    assert_eq!(error_reason(&result), "cancelled", "{result}");
+    assert_eq!(std::fs::read(&keys).unwrap(), before);
+
+    peer.run_facade_ok(&["type", &worker.address, "--key", "Ctrl+C"]);
+    let fresh = "fresh message after peer cancellation";
+    let next = sender.call_ok(
+        "agent.send",
+        json!({ "to": target, "text": fresh, "request_id": "peer-cancel-fresh", "wait_for": "delivery" }),
+    );
+    assert_eq!(next["id"], "m2@peer", "{next}");
+    assert_eq!(next["recipient"]["reference"], target, "{next}");
+    assert_eq!(next["message"]["delivery"]["status"], "success", "{next}");
+    let expected = [format!("📨 Message from the command line · m2\n{fresh}")];
+    assert!(wait_until(secs(10), || peer.submitted_messages() == expected));
+    let input = std::fs::read(&keys).unwrap();
+    assert!(
+        !input
+            .windows(text.len())
+            .any(|part| part == text.as_bytes())
+    );
+    assert_eq!(process_identity(worker.pid), worker.process);
+}
+
 /// Once the peer accepts raw input, a cut link can hide the result while the bytes still arrive.
 #[test]
 #[cfg_attr(not(debug_assertions), ignore = "uses the test gate of debug builds")]

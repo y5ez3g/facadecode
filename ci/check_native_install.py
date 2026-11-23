@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import shutil
 import signal
 import sqlite3
@@ -87,6 +88,49 @@ def corrupted_archive(archive):
     return contents
 
 
+def run_installed_relay(executable, cwd, env, timeout=20):
+    argv = [str(executable)]
+    initialize = {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {
+        'protocolVersion': '2025-06-18', 'capabilities': {}, 'clientInfo': {'name': 'qa', 'version': '1'},
+    }}
+    follow_up = [
+        {'jsonrpc': '2.0', 'method': 'notifications/initialized'},
+        {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'},
+    ]
+    deadline = time.monotonic() + timeout
+    with subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as relay:
+        try:
+            relay.stdin.write((json.dumps(initialize) + '\n').encode())
+            relay.stdin.flush()
+            # Hold the next requests until the relay answers initialize. Read from the
+            # pipe directly so communicate can collect any remaining bytes in order.
+            first = bytearray()
+            while b'\n' not in first:
+                left = deadline - time.monotonic()
+                if left <= 0 or not select.select([relay.stdout], [], [], left)[0]:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                chunk = os.read(relay.stdout.fileno(), 4096)
+                if not chunk:
+                    break
+                first.extend(chunk)
+            response = json.loads(first.partition(b'\n')[0]) if first else {}
+            ready = isinstance(response, dict) and response.get('id') == 1 and 'result' in response
+            payload = ''.join(json.dumps(frame) + '\n' for frame in follow_up).encode() if ready else None
+            stdout, stderr = relay.communicate(payload, timeout=max(0, deadline - time.monotonic()))
+        finally:
+            if relay.poll() is None:
+                relay.kill()
+    return subprocess.CompletedProcess(argv, relay.returncode, (first + stdout).decode(), stderr.decode())
+
+
+def relay_ready(stdout, version):
+    answers = [json.loads(line) for line in stdout.splitlines()]
+    return ([(line['jsonrpc'], line['id']) for line in answers] == [('2.0', 1), ('2.0', 2)]
+            and answers[0]['result']['serverInfo'] == {'name': 'facade', 'version': version}
+            and {'start_agent', 'list_agents'} <= {tool['name'] for tool in answers[1]['result']['tools']})
+
+
 def verify_install_commands(commands, scope, address, version, installer):
     install = scope / 'install'
     shell = str(install / 'bin/facade')
@@ -115,15 +159,12 @@ def verify_install_commands(commands, scope, address, version, installer):
     wait_for_screen('read original screen', 'Native install fixture')
     listing = observed('list the installed candidate agent', [shell, 'list'])['stdout']
     relay = observed('use installed MCP relay', [str(install / 'bin/facade-mcp')])
-    answers = [json.loads(line) for line in relay['stdout'].splitlines()]
     if (f'Installed Facade {version}' not in installed['stdout']
             or version_result['stdout'].strip() != f'facade {version}'
             or started['stdout'] != f'Started installed-agent ({address}) in the background.\n'
             or not any(all(value in line for value in ('installed-agent', address, 'qa-install', project))
                        for line in listing.splitlines())
-            or [(line['jsonrpc'], line['id']) for line in answers] != [('2.0', 1), ('2.0', 2)]
-            or answers[0]['result']['serverInfo'] != {'name': 'facade', 'version': version}
-            or not {'start_agent', 'list_agents'} <= {tool['name'] for tool in answers[1]['result']['tools']}):
+            or not relay_ready(relay['stdout'], version)):
         raise AcceptanceError('native install did not observe the installed Shell and MCP relay')
 
     for label, stage in zip(REFUSALS, ('corrupted', 'wrong-digest')):
@@ -201,11 +242,12 @@ def install_success(receipt, version, programs, archive_sha, corrupt_sha, *, ins
             'evidence_sha256': digest({key: value for key, value in receipt.items() if key != 'success'})}
 
 
-def verified_install(archive, sidecar, receipt_path, output, run, *, producer_checkout=ROOT):
+def verified_install(archive, sidecar, receipt_path, output, run, *, producer_checkout=ROOT, source=None):
     if not producer_checkout.is_absolute():
         raise AcceptanceError('supply the absolute path of the producer checkout')
     receipt = read_json(receipt_path)
-    if not isinstance(receipt, dict) or receipt.get('source') != source_identity(run):
+    expected = source_identity(run) if source is None else source
+    if not isinstance(receipt, dict) or receipt.get('source') != expected or expected['run'] != run:
         raise AcceptanceError('native install receipt does not match this source and attempt')
     if receipt.get('archive_sha256') != hash_file(archive) or receipt.get('sidecar_sha256') != hash_file(sidecar):
         raise AcceptanceError('native install receipt does not match the candidate archive and checksum file')
@@ -281,10 +323,13 @@ def check_installed_programs(archive, sidecar, fake, root, sockets, receipt):
     facade = install / 'bin/facade'
     target = None
 
-    def run(label, argv, *, status=0, input_text=None, timeout=20):
+    def run(label, argv, *, status=0, relay=False, timeout=20):
         command = [str(item) for item in argv]
-        stdin = {'input': input_text} if input_text is not None else {'stdin': subprocess.DEVNULL}
-        result = subprocess.run(command, cwd=project, env=env, text=True, capture_output=True, timeout=timeout, **stdin)
+        if relay:
+            result = run_installed_relay(command[0], project, env, timeout=timeout)
+        else:
+            result = subprocess.run(command, cwd=project, env=env, text=True, capture_output=True,
+                                    timeout=timeout, stdin=subprocess.DEVNULL)
         receipt['commands'].append({'label': label, 'args': command, 'status': result.returncode,
                                     'stdout': result.stdout, 'stderr': result.stderr})
         if status is not None:
@@ -326,18 +371,8 @@ def check_installed_programs(archive, sidecar, fake, root, sockets, receipt):
         listing = run('list the installed candidate agent', [facade, 'list']).stdout
         assert any('installed-agent' in line and target in line and 'qa-install' in line and str(project) in line for line in listing.splitlines()), listing
 
-        # Run the installed relay too, using only MCP stdio and its local default entry point.
-        frames = [
-            {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {
-                'protocolVersion': '2025-06-18', 'capabilities': {}, 'clientInfo': {'name': 'qa', 'version': '1'},
-            }},
-            {'jsonrpc': '2.0', 'method': 'notifications/initialized'},
-            {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'},
-        ]
-        mcp = run('use installed MCP relay', [install / 'bin/facade-mcp'],
-                  input_text=''.join(json.dumps(frame) + '\n' for frame in frames))
-        answers = [json.loads(line) for line in mcp.stdout.splitlines()]
-        assert [answer['id'] for answer in answers] == [1, 2] and answers[1]['result']['tools'], answers
+        mcp = run('use installed MCP relay', [install / 'bin/facade-mcp'], relay=True)
+        assert relay_ready(mcp.stdout, version), mcp
 
         def observe():
             hello, status = query(sockets['daemon'], 'daemon.status', {})

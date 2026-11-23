@@ -61,26 +61,35 @@ def check_jobs(jobs, products):
             raise AcceptanceError(f'{name}: expected one successful job in this attempt')
 
 
-def artifact_manifest(endpoint, run, products):
+def run_artifacts(endpoint, run, expected):
     pages = gh_json('--paginate', '--slurp', f'{endpoint}/artifacts?per_page=100')
     artifacts = [entry for page in pages for entry in page['artifacts']]
-    if not pages or len(artifacts) != pages[0]['total_count']:
-        raise AcceptanceError('GitHub returned an incomplete artifact list')
-    expected = {f'shadow-pilot-{product}-{run["run_attempt"]}': product for product in products}
+    if (not pages or any(page['total_count'] != len(artifacts) for page in pages)
+            or len({artifact['id'] for artifact in artifacts}) != len(artifacts)):
+        raise AcceptanceError('GitHub returned an incomplete or duplicate artifact list')
     selected = {}
     for artifact in artifacts:
         name = artifact['name']
         if name not in expected:
             continue
         associated = artifact['workflow_run']
-        if (name in selected or artifact['expired']
+        if (name in selected or artifact['expired'] is not False
+                or type(artifact['id']) is not int or artifact['id'] <= 0
                 or associated['id'] != run['id'] or associated['head_sha'] != run['head_sha']
                 or associated['repository_id'] != run['repository']['id']
+                or associated['head_repository_id'] != run['head_repository']['id']
+                or type(artifact['size_in_bytes']) is not int or not 0 < artifact['size_in_bytes'] <= 1024**3
                 or not ARCHIVE_SHA.fullmatch(artifact.get('digest', '') or '')):
             raise AcceptanceError(f'{name}: absent, stale, duplicate or unchecksummed artifact')
         selected[name] = artifact
-    if expected.keys() != selected.keys():
-        raise AcceptanceError(f'missing artifacts for this attempt: {sorted(expected.keys() - selected.keys())}')
+    if expected != selected.keys():
+        raise AcceptanceError(f'missing artifacts for this attempt: {sorted(expected - selected.keys())}')
+    return selected
+
+
+def artifact_manifest(endpoint, run, products):
+    expected = {f'shadow-pilot-{product}-{run["run_attempt"]}': product for product in products}
+    selected = run_artifacts(endpoint, run, expected.keys())
     return {product: selected[name] for name, product in expected.items()}
 
 
@@ -91,8 +100,11 @@ def unpack_artifact(archive, directory, expected):
         raise AcceptanceError(f'{archive.name}: downloaded ZIP does not match the GitHub digest')
     directory.mkdir()
     with ZipFile(archive) as package:
+        entries = package.infolist()
+        if len(entries) > 4096 or sum(item.file_size for item in entries) > 2 * 1024**3:
+            raise AcceptanceError(f'{archive.name}: artifact exceeds the review size limit')
         seen = set()
-        for entry in package.infolist():
+        for entry in entries:
             member = PurePosixPath(entry.filename)
             if (not member.parts or member.is_absolute() or '..' in member.parts
                     or any(character in entry.filename for character in ('\\', ':')) or member in seen):
@@ -107,17 +119,25 @@ def unpack_artifact(archive, directory, expected):
                     shutil.copyfileobj(data, output)
 
 
+def download_artifact(repo, artifact, output, name):
+    archive = output / f'{name}.zip'
+    directory = output / name
+    if not 0 < artifact['size_in_bytes'] <= 1024**3:
+        raise AcceptanceError(f'{name}: artifact exceeds the review download limit')
+    with archive.open('xb') as stream:
+        subprocess.run(['gh', 'api', f'repos/{repo}/actions/artifacts/{artifact["id"]}/zip'],
+                       stdout=stream, check=True, timeout=90)
+    if archive.stat().st_size != artifact['size_in_bytes']:
+        raise AcceptanceError(f'{name}: downloaded ZIP size differs from GitHub metadata')
+    unpack_artifact(archive, directory, artifact['digest'])
+    return directory
+
+
 def download_receipts(repo, artifacts, output):
-    receipts = {}
-    for product, artifact in artifacts.items():
-        archive = output / f'{product}.zip'
-        directory = output / product
-        with archive.open('wb') as stream:
-            subprocess.run(['gh', 'api', f'repos/{repo}/actions/artifacts/{artifact["id"]}/zip'],
-                           stdout=stream, check=True, timeout=90)
-        unpack_artifact(archive, directory, artifact['digest'])
-        receipts[product] = directory / 'receipt.json'
-    return receipts
+    return {
+        product: download_artifact(repo, artifact, output, product) / 'receipt.json'
+        for product, artifact in artifacts.items()
+    }
 
 
 def verify_hosted(root, repo, run_id, head, base, output, *, pull=None):
