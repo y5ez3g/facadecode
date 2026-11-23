@@ -16,6 +16,7 @@ import { linesOf } from '../detailLines';
 import { unspun } from '../../base/tabSpinner';
 import { observeAcceptanceEngine } from './acceptanceEngine';
 import { coreSocket } from './editors';
+import { fixturePid, oldStopResult, pidGone, windowsProcessStart } from './journeyProcess';
 import { RESUME_PICKER_STATE, type ResumePickerState } from './resumePickerFixture';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
@@ -40,6 +41,7 @@ const ARGUMENTS: { readonly [cli: string]: readonly string[] } = {
 const RUST = process.env.FACADE_IT_ENGINE === 'rust';
 /** Whether this run's CLI is the suite's program rather than a built-in. */
 const CUSTOM = CLI === 'my-cli';
+const WAIT_MS = 20_000;
 
 /** Native store fixtures: actual vendor interoperability is verified separately with isolated native CLIs. */
 function resumeFixture(cwd: string): { title: string; args: string[] } {
@@ -102,7 +104,7 @@ function fixtureAlias(card: PanelState['cards'][number]): string | undefined {
 	return RUST ? `#${alias}` : alias;
 }
 
-async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = 20_000): Promise<T> {
+async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = WAIT_MS): Promise<T> {
 	const end = Date.now() + ms;
 	for (;;) {
 		const value = await probe();
@@ -178,8 +180,10 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		const alias = fixtureAlias(card);
 		assert.ok(alias, 'the card shows its short ID');
 		const pidFile = `${RECORD}.${alias}`;
-		const pid = await until('the fake CLI to start', async () => fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8').trim()) : undefined);
+		const pid = await until('the fake CLI to start', async () => fixturePid(pidFile));
 		assert.ok(alive(pid));
+		const windowsOld = !RUST && process.platform === 'win32';
+		const creation = windowsOld ? await windowsProcessStart(pid) : undefined;
 		// A built-in's maker avatar; a program's white robot, on its card and its tab (PANEL-1.3, LIFECYCLE-2.2, CONFIGURATION-2.4)
 		if (CUSTOM) {
 			assert.deepStrictEqual(card.avatar, { file: 'robot-pearl-face.svg', eyes: 'robot-eyes.svg' });
@@ -267,7 +271,25 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		if (!RUST) {
 			assert.ok(!(await state()).cards.some(each => each.runId === card.runId), 'Stop Agent removes the card at once');
 		}
-		await until('the process to end in the background', async () => alive(pid) ? undefined : true);
+		const deadline = Date.now() + WAIT_MS;
+		let nextProbe = 0;
+		let lastCreation: string | undefined;
+		try {
+			await until('the process to end in the background', async () => {
+				if (!windowsOld) { return alive(pid) ? undefined : true; }
+				if (pidGone(pid)) { return true; }
+				const now = Date.now();
+				if (now < nextProbe || now >= deadline) { return undefined; }
+				const observedCreation = await windowsProcessStart(pid, Math.min(2_000, deadline - now));
+				lastCreation = observedCreation ?? lastCreation;
+				nextProbe = Date.now() + 1_000;
+				return creation && observedCreation && creation !== observedCreation && Date.now() <= deadline ? true : undefined;
+			});
+		} catch (error) {
+			const identity = windowsOld ? ` Windows creation before Stop ${creation ?? 'unavailable'}, last ${lastCreation ?? 'unavailable'}.` : '';
+			const cleanup = !RUST ? ` Stop result ${oldStopResult(process.env.FACADE_HOME, card.runId) ?? 'unavailable'}.` : '';
+			throw new Error(`${error.message}. Run ${card.runId}, fixture PID ${pid}.${identity}${cleanup}`, { cause: error });
+		}
 		if (RUST) {
 			await until('Stop to retain the ended card', async () => (await state()).cards.find(each => each.runId === card.runId && each.orchestrator?.running === false));
 			await vscode.commands.executeCommand('facade.hideAgent', { run_id: card.runId });
