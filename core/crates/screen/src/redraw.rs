@@ -10,7 +10,7 @@ use alacritty_terminal::vte::ansi::{CharsetIndex, Color, NamedColor, StandardCha
 
 use crate::kept_modes::{ActiveCharset, ModifyOtherKeys};
 use crate::read::{AllRows, cell_text, is_blank, is_spacer};
-use crate::{REDRAW_SCROLLBACK_ROWS, Screen, write_title_body};
+use crate::{REDRAW_SCROLLBACK_ROWS, Screen, title_has_text, write_title_body};
 
 /// Plain pen, ASCII in G0 and G1 with G0 in use, whole-screen scrolling region, origin mode off,
 /// wrap on, insert and newline modes off, and the initial modifyOtherKeys setting.
@@ -98,7 +98,7 @@ impl Screen {
         Redraw::build(self, false, usize::MAX, Layout::SameSize, None)
     }
 
-    /// The viewer's title as a sanitized OSC sequence, or empty bytes before a title is known.
+    /// The viewer's title as a sanitized OSC sequence, or empty bytes without a nonblank title.
     pub fn title_output(&self) -> Vec<u8> {
         let mut out = Vec::new();
         self.write_title(&mut out, self.status_glyph.as_deref());
@@ -106,7 +106,9 @@ impl Screen {
     }
 
     fn write_title(&self, out: &mut Vec<u8>, status_glyph: Option<&str>) {
-        if let Some(title) = &self.terminal.title {
+        if let Some(title) = &self.terminal.title
+            && title_has_text(title)
+        {
             let title = title.replace(char::is_control, "");
             out.extend_from_slice(b"\x1b]2;");
             write_title_body(out, title.as_bytes(), status_glyph);

@@ -1704,6 +1704,70 @@ fn the_console_keeps_its_own_title_until_the_attached_cli_sets_one() {
     }
 }
 
+/// A CLI that sets back the title its console has, as Antigravity does on Windows, sets no title of
+/// its own: its console starts with none, so the host keeps `HOST-TITLE` through the attachment and
+/// after, as when the CLI runs alone.
+#[cfg(windows)]
+#[test]
+fn a_cli_that_sets_back_its_console_s_title_leaves_the_host_s_title_alone() {
+    let home = TestHome::new("attach-consoletitle");
+    let _wire = connect(&home);
+    let env = [
+        ("FAKECLI_TITLE_FROM_CONSOLE", "1"),
+        ("FAKECLI_TURN_MS", "600000"),
+    ];
+    let mut term = host_running(&home, &["start", "--name", "console", "fake"], &env);
+    submit(&term, "work");
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("> work")),
+        "{}",
+        term.text()
+    );
+    std::thread::sleep(secs(3));
+    let titles = titles_set(&term.output_since(0));
+    assert!(
+        titles.iter().all(|set| host_s_own(set)),
+        "the console's title while attached: {titles:?}"
+    );
+    ends_with_the_host_s_title(&mut term, b"\x04", "console");
+    let titles = titles_set(&term.output_since(0));
+    assert!(
+        titles.iter().all(|set| host_s_own(set)),
+        "the console's title through the end: {titles:?}"
+    );
+}
+
+/// An empty title from a CLI that has no title is no title: the host keeps `HOST-TITLE`. Once the
+/// CLI has a title, an empty one is its reset, and the host gets it.
+#[test]
+fn an_empty_title_is_a_reset_only_after_a_title() {
+    let home = TestHome::new("attach-emptytitle");
+    let _wire = connect(&home);
+    let mut term = host_running(
+        &home,
+        &["start", "--name", "resets", "fake"],
+        &[("FAKECLI_TURN_MS", "600000")],
+    );
+    submit(&term, "/fake title");
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("> /fake title")),
+        "{}",
+        term.text()
+    );
+    std::thread::sleep(secs(2));
+    let titles = titles_set(&term.output_since(0));
+    assert!(
+        titles.iter().all(|set| host_s_own(set)),
+        "an empty first title reached the host: {titles:?}"
+    );
+
+    submit(&term, &format!("/fake title {TITLE}"));
+    shows(&term, TITLE, "titled");
+    submit(&term, "/fake title");
+    shows(&term, "", "reset");
+    ends_with_the_host_s_title(&mut term, b"\x04", "reset");
+}
+
 /// Claude Code starts with its own `✳` before its title, reports idle while Facade's tools still
 /// connect, then sets its title without the glyph, in a later read. The console goes from its own
 /// title to `✳ <title>` and stays there: never the title alone after the report, never two glyphs.

@@ -259,7 +259,7 @@ The same keeper, in `src/windows/`; the Unix modules are not built there.
      the first of the three handles behind the `HPCON`;
   3. the CLI, created suspended with `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`, no standard handles of
      the keeper's, its command line from `programs::quoted_command`, exactly the environment and
-     folder `agent.start` gave;
+     folder `agent.start` gave. The CLI's console starts with an empty title.
   4. a job without kill on close; the CLI joins it, then runs;
   5. `ReleasePseudoConsole`, so the pseudo console ends with its last program and the output reaches its
      end, then `ClosePseudoConsole`, which frees the `HPCON` and closes the package's own copies

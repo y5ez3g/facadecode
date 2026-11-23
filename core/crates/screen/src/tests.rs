@@ -363,22 +363,30 @@ fn viewer_titles_use_one_status_glyph_when_the_cli_already_supplies_it() {
 }
 
 #[test]
-fn a_status_glyph_leaves_unknown_empty_blank_and_reset_titles_alone() {
+fn blank_titles_leave_viewers_without_a_cli_title_alone() {
     let mut screen = Screen::new(20, 4, 100);
     assert!(screen.set_status_glyph(Some("✳".into())).is_empty());
     assert!(screen.title_output().is_empty());
     let fed = screen.feed(b"\x1b[22;0t\x1b]0;\x07\x1b]2;\x1b\\");
-    assert_eq!(fed.viewer_output, b"\x1b[22;0t\x1b]0;\x07\x1b]2;\x1b\\");
+    assert_eq!(fed.viewer_output, b"\x1b[22;0t");
     assert_eq!(fed.title_change.as_deref(), Some(""));
-    assert_eq!(screen.title_output(), b"\x1b]2;\x1b\\");
+    assert!(screen.title_output().is_empty());
     assert!(screen.set_status_glyph(Some("◐".into())).is_empty());
 
     let blank = b"\x1b]2;   \x1b\\";
-    assert_eq!(screen.feed(blank).viewer_output, blank);
+    assert!(screen.feed(blank).viewer_output.is_empty());
     // Seeding a saved title keeps its spaces, which the OSC parser would trim.
     screen.restore_title("   ");
-    assert_eq!(screen.title_output(), blank);
-    assert!(screen.redraw(false, false).ends_with(blank));
+    assert!(screen.title_output().is_empty());
+    for redraw in [
+        screen.redraw(false, false),
+        screen.redraw_for_attach(false, false),
+        screen.redraw_in_viewport(false, false),
+        screen.redraw_in_viewport_update(),
+        screen.redraw_with_all_scrollback(),
+    ] {
+        assert!(!redraw.windows(4).any(|bytes| bytes == b"\x1b]2;"));
+    }
     assert!(screen.set_status_glyph(Some("◑".into())).is_empty());
 
     assert_eq!(
@@ -388,8 +396,25 @@ fn a_status_glyph_leaves_unknown_empty_blank_and_reset_titles_alone() {
     let reset = screen.feed(b"\x1b[23;0t");
     assert_eq!(reset.viewer_output, b"\x1b[23;0t");
     assert_eq!(reset.title_change.as_deref(), Some(""));
-    assert_eq!(screen.title_output(), b"\x1b]2;\x1b\\");
+    assert!(screen.title_output().is_empty());
     assert!(screen.set_status_glyph(None).is_empty());
+}
+
+#[test]
+fn a_blank_title_resets_a_live_viewer_after_a_nonblank_title() {
+    let mut screen = Screen::new(20, 4, 100);
+    let title = screen.feed(b"\x1b]0;\x07\x1b]2;topic\x07");
+    assert_eq!(title.viewer_output, b"\x1b]2;topic\x07");
+
+    let reset = screen.feed(b"\x1b]0;\x07\x1b]2;\x1b\\");
+    assert_eq!(reset.viewer_output, b"\x1b]0;\x07");
+    assert_eq!(reset.title_change.as_deref(), Some(""));
+    assert!(screen.title_output().is_empty());
+
+    assert!(screen.set_status_glyph(Some("*".into())).is_empty());
+    let batch = screen.feed(b"\x1b]0;topic\x07\x1b]2;   \x1b\\\x1b]0;\x07");
+    assert_eq!(batch.viewer_output, b"\x1b]0;* topic\x07\x1b]2;   \x1b\\");
+    assert_eq!(batch.title_change.as_deref(), Some(""));
 }
 
 #[test]

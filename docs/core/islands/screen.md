@@ -36,13 +36,18 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 - Viewers get whole characters, sequences and strings only, and never a terminal query or an
   OSC 7501 sequence. With a glyph set, OSC 0 and OSC 2 add the glyph and a space to the front of
   a title unless it is blank or already begins with them. A blank title has only whitespace or
-  control characters. Title resets pass through unchanged.
+  control characters. A blank OSC 0 or OSC 2 reaches live viewers as a reset only if the CLI
+  currently has a nonblank title. The filter starts with the screen's title before `feed` and
+  follows OSC titles in that call in order.
 - A viewer that takes `redraw` and then every later `viewer_output` and glyph update (or a new
   redraw when `redraw_viewers` is set) gets the screen's cells, cursor, title when known, modes,
-  tab stops, modifyOtherKeys and keyboard flags.
+  tab stops, modifyOtherKeys and keyboard flags. After a title reset, a viewer that gets its title
+  from a redraw or `title_output` keeps its last CLI title until the CLI sets another or the
+  attachment ends. This includes Attach on a console larger or smaller than the shared grid and
+  viewers that fell behind.
 - At a clean point (`at_clean_point`: main screen, no unit half-written, no open synchronized
   update), `redraw_with_all_scrollback` fed to an empty screen of the same size and scrollback
-  rebuilds the rows, cursor, pen, native title when known, charsets and modes.
+  rebuilds the rows, cursor, pen, nonblank native title, charsets and modes.
 - Query replies and status events come in the order the CLI wrote what caused them. The reply to
   `OSC 7501 ; ?` and replies to supplied terminal color queries stay among alacritty's own replies.
   Each query of a supplied color gets one reply; an omitted color gets none.
@@ -109,10 +114,10 @@ which replays at most `REDRAW_SCROLLBACK_ROWS` (1,000) scrollback rows. A redraw
   uses the ordinary redraw's buffer handling and scrollback options. Viewport draws place the
   grid at the top left of a terminal with at least as many rows and columns.
 - `redraw_in_viewport_update()` overwrites visible rows in the selected buffer of a larger
-  console, erases stale row tails, and restores the cursor, title and modes. Shell feeds later
+  console, erases stale row tails, and restores the cursor, nonblank title and modes. Shell feeds later
   output to its screen of the shared size before drawing.
 - `title_output()` gives the sanitized title sequence for viewers using the same status glyph rule
-  as viewer output. It is empty until a title is known.
+  as viewer output. It is empty when the CLI has no nonblank title.
 - `reports_mouse()` follows the CLI's active tracking mode. `encode_wheel(col, row, delta, modifiers)`
   uses the current SGR, UTF-8 or legacy encoding. It takes one-based grid coordinates, 120 delta
   units per tick, positive for up, and Shift, Alt and Ctrl bits 4, 8 and 16. It returns `None`
@@ -175,10 +180,11 @@ The files:
 ### feed
 
 1. `sequences::filter` runs the splitter over the bytes. Each complete piece goes to viewers unless
-   it is a query or a status sequence. It adds the current glyph to viewer titles and records
-   mode changes in `KeptModes` at once. Screen switches, full resets, tab-stop changes and status
-   events become marks at the offset just after them. A C0 control inside a sequence goes to
-   viewers at once, because held back it would act again after a redraw that already shows it.
+   it is a query, a status sequence or a blank OSC title over no title. It adds the current glyph
+   to viewer titles and records mode changes in `KeptModes` at once. Screen switches, full resets,
+   tab-stop changes and status events become marks at the offset just after them. A C0 control
+   inside a sequence goes to viewers at once, because held back it would act again after a redraw
+   that already shows it.
 2. alacritty parses up to each mark, then the screen looks at its state there: whether the CLI
    left the alternate screen (viewers then need a redraw), and the cursor's column for a tab stop.
    For a tab stop inside an open synchronized update, the held frame is drawn first and the update
@@ -218,9 +224,9 @@ line; blank cells at a line's end and empty lines at the end are left out.
 no terminal moves into its scrollback, and clears tab stops), the tab stops, the rows with their
 styles and links (a wrapped row is written to the margin so the viewer wraps too), the saved
 cursor, the scrolling region and cursor (writing the margin cell again to restore a pending wrap),
-then modes, keyboard flags, modifyOtherKeys, charsets, pen, and the known title. Viewer redraws
-add the status glyph and a space to a nonblank title unless the title already begins with them.
-A checkpoint redraw writes the CLI's own title so a restored screen can apply the current glyph.
+then modes, keyboard flags, modifyOtherKeys, charsets, pen, and the title if it has text. Viewer
+redraws add the status glyph and a space unless the title already begins with them. A checkpoint
+redraw writes a nonblank title as the CLI set it so a restored screen can apply the current glyph.
 
 For a viewport redraw, each row starts at an explicit position and the cleared space to the right
 and below stays blank. Scrollback replays one canonical row per console row. The redraw puts the

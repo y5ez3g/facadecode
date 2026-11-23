@@ -48,6 +48,8 @@
 //!
 //! Title: `FAKECLI_TITLE=<text>` sets its terminal's title before its first frame, as OpenCode
 //! does, and a message `/fake title <text>` sets another; `/fake title` alone sets an empty title.
+//! On Windows `FAKECLI_TITLE_FROM_CONSOLE=1` makes it set back its console's title, read with
+//! `GetConsoleTitleW`, at start and with each message, as Antigravity does.
 //! With `FAKECLI_OWN_GLYPH=<glyph>` it starts as Claude Code does run alone: its first title is
 //! `<glyph> <text>`; it sends its first idle report with a query and, once the terminal answers it,
 //! sets `<text>` and shows `title without its glyph`, so the report and the title reach the
@@ -393,6 +395,7 @@ impl FakeCli {
         if text.trim().is_empty() {
             return;
         }
+        self.queries.extend(console_title_back());
         let mut lines = text.lines();
         let first = lines.next().unwrap_or_default();
         self.transcript.push(format!("> {first}"));
@@ -812,6 +815,25 @@ impl StandIn {
             StandIn::None => None,
         }
     }
+}
+
+/// With `FAKECLI_TITLE_FROM_CONSOLE=1` on Windows, the title sequence that sets back the title its
+/// console has, as Antigravity does: `OSC 0` with what `GetConsoleTitleW` reads, empty or not.
+fn console_title_back() -> Option<String> {
+    if std::env::var("FAKECLI_TITLE_FROM_CONSOLE").as_deref() != Ok("1") {
+        return None;
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Console::GetConsoleTitleW;
+        let mut title = vec![0u16; 4096];
+        // SAFETY: the buffer holds as many UTF-16 units as the length given.
+        let length = unsafe { GetConsoleTitleW(title.as_mut_ptr(), title.len() as u32) };
+        let title = String::from_utf16_lossy(&title[..length as usize]);
+        Some(format!("\x1b]0;{title}\x07"))
+    }
+    #[cfg(not(windows))]
+    None
 }
 
 /// Runs `command` as Muse Code 1.4.14 runs a hook and Antigravity 1.5.10 its title command on
@@ -1289,7 +1311,10 @@ fn run() -> anyhow::Result<()> {
                 Ok(glyph) => vec![format!("\x1b]2;{glyph} {title}\x07")],
                 Err(_) => vec![format!("\x1b]2;{title}\x07")],
             })
-            .unwrap_or_default(),
+            .unwrap_or_default()
+            .into_iter()
+            .chain(console_title_back())
+            .collect(),
         title_after_answer: std::env::var("FAKECLI_TITLE")
             .ok()
             .filter(|_| std::env::var_os("FAKECLI_OWN_GLYPH").is_some())

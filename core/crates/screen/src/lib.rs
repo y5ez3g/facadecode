@@ -137,7 +137,7 @@ impl Screen {
             self.deferred_status_title = true;
             return Vec::new();
         }
-        self.status_title_output()
+        self.title_output()
     }
 
     fn take_deferred_status_title(&mut self) -> Vec<u8> {
@@ -145,15 +145,7 @@ impl Screen {
             return Vec::new();
         }
         self.deferred_status_title = false;
-        self.status_title_output()
-    }
-
-    fn status_title_output(&self) -> Vec<u8> {
-        if self.terminal.title.as_deref().is_some_and(title_has_text) {
-            self.title_output()
-        } else {
-            Vec::new()
-        }
+        self.title_output()
     }
 
     /// Seeds the native title saved alongside a checkpoint's redraw.
@@ -197,6 +189,7 @@ impl Screen {
             &mut self.modes,
             bytes,
             rows,
+            self.terminal.title.as_deref().is_some_and(title_has_text),
             self.status_glyph.as_deref(),
         );
         let mut status = Vec::new();
@@ -321,7 +314,6 @@ fn title_has_text(title: &str) -> bool {
 
 fn write_title_body(out: &mut Vec<u8>, title: &[u8], status_glyph: Option<&str>) {
     if let Some(glyph) = status_glyph
-        && title_has_text(&String::from_utf8_lossy(title))
         && !title
             .strip_prefix(glyph.as_bytes())
             .is_some_and(|rest| rest.starts_with(b" "))
