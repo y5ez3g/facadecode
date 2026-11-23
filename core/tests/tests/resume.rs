@@ -1711,3 +1711,100 @@ fn claude_and_pi_show_current_native_names_through_resume() {
         list_cell(unnamed, preview);
     }
 }
+
+/// A `Saved` row's REF selects its session alone among every saved session of the folder,
+/// the ones managed agents use included: a prefix one of them shares gives the full ID, and an
+/// unshared one stays eight characters. Either REF, copied into `facade resume -d`, resumes that
+/// session, and no managed session is listed twice.
+#[test]
+fn a_saved_row_s_reference_resumes_its_session_where_managed_sessions_share_its_prefix() {
+    const VISIBLE: &str = "c0ffee00-2bae-4a45-b193-a5664c198261";
+    const ENDED: &str = "c0ffee00-2bae-4a45-b193-a5664c198262";
+    const RUNNING: &str = "c0ffee00-2bae-4a45-b193-a5664c198263";
+    let home = TestHome::new("saved-reference");
+    std::fs::write(
+        home.path.join("facade.json"),
+        json!({ "clis": { "claude": { "type": "claude", "program": test_binaries().fakecli } } })
+            .to_string(),
+    )
+    .unwrap();
+    for (session, prompt) in [
+        (VISIBLE, "the visible conversation"),
+        (ENDED, "the ended agent's conversation"),
+        (RUNNING, "the running agent's conversation"),
+        (FIRST, "the unique conversation"),
+    ] {
+        home.save_claude_session(session, prompt);
+    }
+    let _connection = connect(&home);
+    let resume_in_background = |reference: &str, session: &str, args: &str| {
+        let args = home.folder().join(args);
+        let outcome = home
+            .command(&test_binaries().facade)
+            .env("FAKECLI_ARGS", &args)
+            .args(["resume", "-d", reference])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            outcome.status.success(),
+            "facade resume -d {reference}: {}",
+            stderr(&outcome)
+        );
+        let words = recorded_cli_args(&args);
+        assert!(
+            words.windows(2).any(|pair| pair == ["--resume", session]),
+            "facade resume -d {reference}: {words:?}"
+        );
+    };
+    resume_in_background(ENDED, ENDED, "ended.args");
+    resume_in_background(RUNNING, RUNNING, "running.args");
+    let active = home.list_table();
+    let agent = |label| {
+        let row = active
+            .row("SESSION", label)
+            .unwrap_or_else(|| panic!("{label}: {active:?}"));
+        active.cell(row, "REF").to_string()
+    };
+    let (ended, running) = (
+        agent("the ended agent's conversation"),
+        agent("the running agent's conversation"),
+    );
+    home.run_facade_ok(&["stop", &ended]);
+    assert!(wait_until(LOADED_TIMEOUT, || inspected_agent(
+        &home, &ended
+    )["process"]
+        == "ended"));
+    assert_eq!(inspected_agent(&home, &running)["process"], "running");
+
+    let text = home.run_facade_ok(&["resume", "--local"]);
+    let table = Table::parse(&text);
+    let mut rows: Vec<_> = table
+        .rows
+        .iter()
+        .map(|row| {
+            [
+                table.cell(row, "SESSION"),
+                table.cell(row, "STATE"),
+                table.cell(row, "REF"),
+            ]
+        })
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        [
+            ["the ended agent's conversation", "Ended", ended.as_str()],
+            ["the unique conversation", "Saved", &FIRST[..8]],
+            ["the visible conversation", "Saved", VISIBLE],
+        ],
+        "{text}"
+    );
+    for (label, session, args) in [
+        ("the visible conversation", VISIBLE, "visible.args"),
+        ("the unique conversation", FIRST, "unique.args"),
+    ] {
+        let row = table.row("SESSION", label).unwrap();
+        resume_in_background(table.cell(row, "REF"), session, args);
+    }
+}

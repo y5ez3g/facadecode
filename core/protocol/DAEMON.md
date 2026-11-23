@@ -128,6 +128,10 @@ record folders and does not broaden the saved session directory. Pass the return
 `target` unchanged to `agent.resume` with its runtime `size` and optional environment.
 A full saved-session target includes the machine, CLI, session ID and absolute folder.
 The resume list can also include `session_name` for a managed record or saved session.
+A saved-session candidate can include `session_selector`, which gives the first eight
+characters of its session ID when they select that session alone among the saved sessions
+`agent.resume` searches in that folder, including those of managed agents, and gives the
+full ID otherwise.
 
 `location.list`, `cli.list` and `daemon.status` select one machine and default to local.
 Locations describe known work folders. CLI discovery uses the specified folder and
@@ -1374,6 +1378,7 @@ A start prompt's message ID and what became of it.
 | `title` | `string` | no |  |
 | `at` | `string` | no |  |
 | `session_name` | `string` | no |  |
+| `session_selector` | `string` | no |  |
 
 ### ResumeCandidateTarget
 

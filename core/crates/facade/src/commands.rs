@@ -813,10 +813,6 @@ pub(crate) fn resume_list_text(
     machines: &[MachineQuery],
     now: SystemTime,
 ) -> String {
-    let mut prefixes = HashMap::new();
-    for item in items.iter().filter(|item| item.agent.is_none()) {
-        *prefixes.entry(session_prefix(&item.session)).or_insert(0) += 1;
-    }
     let rows: Vec<_> = items
         .iter()
         .map(|item| {
@@ -827,13 +823,8 @@ pub(crate) fn resume_list_text(
                     .map(|machine| machine.selector.as_str());
                 (agent_address(reference, machine), "Ended", "Managed")
             } else {
-                let prefix = session_prefix(&item.session);
-                let id = if prefixes[prefix] > 1 {
-                    &item.session
-                } else {
-                    prefix
-                };
-                (id.to_owned(), "Saved", "Session")
+                let selector = item.session_selector.as_deref().unwrap_or(&item.session);
+                (selector.to_owned(), "Saved", "Session")
             };
             vec![
                 item.name.as_deref().unwrap_or("-").into(),
@@ -852,11 +843,6 @@ pub(crate) fn resume_list_text(
     let mut columns = ROSTER_COLUMNS;
     columns[6] = "UPDATED";
     roster_table(&columns, &rows)
-}
-
-fn session_prefix(id: &str) -> &str {
-    let end = id.char_indices().nth(8).map_or(id.len(), |(end, _)| end);
-    &id[..end]
 }
 
 pub(crate) fn inspect_text(

@@ -38,7 +38,8 @@ machine and provides references that include its selector. `list --local` and `r
 machine and open zero SSH connections even if they start the local daemon.
 Both tables show the latest native session name or the existing conversation preview in `SESSION`. A missing
 label displays as `-`. The tables use the daemon's session lookup on the agent's machine. `facade status <AGENT>`
-shows the full session ID. A saved session uses its displayed `REF` for resume.
+shows the full session ID. A saved session's `REF` shows the daemon's selector for resuming it from the current
+folder, or the full session ID if the reply has no selector.
 
 `stop <AGENT>...` accepts one or more references. `stop --local`, `stop --machine <MACHINE>` and `stop --all`
 are exclusive alternatives. Scope stops skip connected Guests. A remote scope stop leaves sleeping machines

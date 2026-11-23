@@ -5075,6 +5075,9 @@
         },
         "session_name": {
           "type": "string"
+        },
+        "session_selector": {
+          "type": "string"
         }
       },
       "required": [

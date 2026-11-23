@@ -772,6 +772,8 @@ pub struct ResumeCandidate {
     pub at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_selector: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]

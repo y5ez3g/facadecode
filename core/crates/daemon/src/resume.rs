@@ -52,12 +52,14 @@ struct ResumeRequest {
     rows: u16,
 }
 
+#[derive(Clone)]
 pub(crate) struct ResumeCandidate {
     address: String,
     cli: String,
     folder: String,
     machine_id: String,
     session: String,
+    session_selector: Option<String>,
     agent: Option<AgentRef>,
     name: Option<String>,
     stopped: bool,
@@ -86,6 +88,7 @@ impl ResumeCandidate {
             folder: self.folder,
             machine_id: self.machine_id,
             session: self.session,
+            session_selector: self.session_selector,
             agent,
             name: self.name,
             stopped: self.stopped,
@@ -111,6 +114,7 @@ impl ResumeCandidate {
             folder: candidate.folder,
             machine_id: candidate.machine_id,
             session: candidate.session,
+            session_selector: candidate.session_selector,
             agent: candidate.agent.map(api::agent_ref),
             name: candidate.name,
             stopped: candidate.stopped,
@@ -339,6 +343,7 @@ impl Daemon {
                 folder: info.cwd,
                 machine_id: self.machine_id.clone(),
                 session,
+                session_selector: None,
                 agent: Some(reference),
                 name: Some(info.name),
                 stopped: info.state_detail.as_ref().and_then(|detail| detail.how)
@@ -354,10 +359,11 @@ impl Daemon {
             let (environment, _) = self.login_environment().await?;
             let sessions = self.saved_candidates(folder, environment, None)?;
             let mut listed = BTreeSet::new();
-            for (rule, mut item) in sessions {
-                if !used.contains(&(rule.clone(), item.session.clone()))
-                    && listed.insert((rule, item.session.clone()))
-                {
+            for candidate @ (rule, item) in &sessions {
+                let key = (rule.clone(), item.session.clone());
+                if !used.contains(&key) && listed.insert(key) {
+                    let mut item = item.clone();
+                    item.session_selector = Some(saved_session_selector(candidate, &sessions));
                     if !include_labels {
                         item.session_name = None;
                     }
@@ -608,25 +614,21 @@ impl Daemon {
                     "{folder} is not an available folder"
                 )));
             }
-            let mut candidates = self.saved_candidates(path, env.clone(), *cli)?;
-            let mut matched = BTreeSet::new();
-            candidates.retain(|(rule, item)| {
-                (item.session == *id
-                    || (exact_session.is_none() && matches_session(&item.session, id)))
-                    && matched.insert((rule.clone(), item.session.clone()))
-            });
-            if candidates.len() > 1 {
+            let candidates = self.saved_candidates(path, env.clone(), *cli)?;
+            let matches: Vec<_> =
+                matching_sessions(&candidates, id, exact_session.is_none()).collect();
+            if matches.len() > 1 {
                 let mut error = ErrorBody::new(
                     Reason::AmbiguousReference,
                     format!("{input} names several saved sessions"),
                 );
-                for (_, item) in &candidates {
+                for (_, item) in matches {
                     error.data.candidates.push(item.address.clone());
                     error.data.sessions.push(session_match(item));
                 }
                 return Err(error);
             }
-            (candidates.pop().map(|(_, item)| item), env)
+            (matches.first().map(|(_, item)| item.clone()), env)
         } else {
             (None, BTreeMap::new())
         };
@@ -935,6 +937,7 @@ impl Daemon {
                             cli: entry.name.clone(),
                             machine_id: self.machine_id.clone(),
                             session: session.id,
+                            session_selector: None,
                             folder,
                             agent: None,
                             name: None,
@@ -967,17 +970,49 @@ fn session_selector<'a>(
     {
         return None;
     }
-    facade_rules::parse_session_id(input)
-        .or_else(|| {
-            (input.len() == 8 && is_session_id(input)).then(|| {
-                if input.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                    input.to_ascii_lowercase()
-                } else {
-                    input.to_owned()
-                }
-            })
+    unqualified_session_id(input).map(|id| (None, id))
+}
+
+fn unqualified_session_id(input: &str) -> Option<String> {
+    facade_rules::parse_session_id(input).or_else(|| {
+        (input.len() == 8 && is_session_id(input)).then(|| {
+            if input.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                input.to_ascii_lowercase()
+            } else {
+                input.to_owned()
+            }
         })
-        .map(|id| (None, id))
+    })
+}
+
+fn saved_session_selector(
+    (rule, item): &(String, ResumeCandidate),
+    sessions: &[(String, ResumeCandidate)],
+) -> String {
+    if let Some(prefix) = item.session.get(..8)
+        && let Some(query) = unqualified_session_id(prefix)
+    {
+        let mut matches = matching_sessions(sessions, &query, true);
+        if matches.next().is_some_and(|(matched_rule, matched)| {
+            matched_rule == rule && matched.session == item.session
+        }) && matches.next().is_none()
+        {
+            return prefix.to_owned();
+        }
+    }
+    item.session.clone()
+}
+
+fn matching_sessions<'a>(
+    sessions: &'a [(String, ResumeCandidate)],
+    query: &'a str,
+    allow_prefix: bool,
+) -> impl Iterator<Item = &'a (String, ResumeCandidate)> {
+    let mut matched = BTreeSet::new();
+    sessions.iter().filter(move |(rule, item)| {
+        (item.session == query || (allow_prefix && matches_session(&item.session, query)))
+            && matched.insert((rule.as_str(), item.session.as_str()))
+    })
 }
 
 fn matches_session(session: &str, query: &str) -> bool {

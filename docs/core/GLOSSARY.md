@@ -253,7 +253,8 @@ actions they offer.
 | address | A number qualified by a machine, such as `a3@devbox`, `a3@9a0d44b2` or `m17@devbox`. Facade gives a machine-qualified agent address, including for agents on the local machine. MCP lists an agent's address in `id` | `#a3`, `@name`, `id:` prefix |
 | command-line reply address | An address such as `#c42@devbox`, derived from the original message `m42@devbox`. The waiting Shell command receives the first linked reply from the original recipient | agent reference (for this) |
 | agent reference | The Shell term in prose for a copyable agent address such as `a3@devbox`. Tables use the heading `REF`, and output templates use `{ref}` | — |
-| saved session ID | The CLI's identifier for a session it saved. For a saved session, the `facade resume` table shows an eight-character ID prefix in `REF` when the prefix is unique, or the full ID when prefixes collide | — |
+| session ID | The CLI's full identifier for a session, such as a lowercase UUID or OpenCode's `ses_…` | saved session ID |
+| session selector | The text that selects one saved session for `facade resume` in a folder: the first eight characters of its session ID when they select no other saved session that `agent.resume` searches in that folder, including those of managed agents, which have no `Saved` row; otherwise the full session ID. `agent.resume_list` gives it as `session_selector`, and a `Saved` row's `REF` shows it | short ID, prefix (for this) |
 
 Use a machine name when it resolves to one machine, then its short ID, then its full ID. A bare agent number or name
 searches awake, reachable machines for agents the caller can use for the operation. Send results give a qualified message
