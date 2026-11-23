@@ -32,8 +32,8 @@ Other programs and protocols keep their own words: the standard library's `spawn
 | run | One execution of a managed agent's CLI, from a start or a resume until it ends | process, child, session (for this) |
 | process | An operating system's process: its ID, its group (on Windows, its job), its exit | run (for this) |
 | session | A CLI's own session, the one it can resume | conversation |
-| session name | A name the CLI saved for its session. Shell shows it in the `SESSION` column | terminal title |
-| session preview | Text from the native session history that identifies an unnamed session in `SESSION` | session ID (for this) |
+| session name | A name the CLI saved for its session. Shell shows it in the `SESSION` column and on the `Session` line of `facade status` | terminal title |
+| session preview | Text from the native session history that Shell shows for an unnamed session where it shows a session name | session ID (for this), conversation preview |
 | Guest | An agent created for a single `facade-mcp` connection with its own identity. It has a name and inbox for the life of that connection | MCP member, hook-based guest |
 | CLI | A coding program the Orchestrator runs, such as Claude Code or Codex | tool, client (for this) |
 | rule | A CLI's built-in knowledge file, `core/rules/<cli>.json` | — |
@@ -253,7 +253,7 @@ actions they offer.
 | address | A number qualified by a machine, such as `a3@devbox`, `a3@9a0d44b2` or `m17@devbox`. Facade gives a machine-qualified agent address, including for agents on the local machine. MCP lists an agent's address in `id` | `#a3`, `@name`, `id:` prefix |
 | command-line reply address | An address such as `#c42@devbox`, derived from the original message `m42@devbox`. The waiting Shell command receives the first linked reply from the original recipient | agent reference (for this) |
 | agent reference | The Shell term in prose for a copyable agent address such as `a3@devbox`. Tables use the heading `REF`, and output templates use `{ref}` | — |
-| session ID | The CLI's full identifier for a session, such as a lowercase UUID or OpenCode's `ses_…` | saved session ID |
+| session ID | The CLI's full identifier for a session, such as a lowercase UUID or OpenCode's `ses_…`. `facade status` shows an agent's on its `Session ID` line | saved session ID |
 | session selector | The text that selects one saved session for `facade resume` in a folder: the first eight characters of its session ID when they select no other saved session that `agent.resume` searches in that folder, including those of managed agents, which have no `Saved` row; otherwise the full session ID. `agent.resume_list` gives it as `session_selector`, and a `Saved` row's `REF` shows it | short ID, prefix (for this) |
 
 Use a machine name when it resolves to one machine, then its short ID, then its full ID. A bare agent number or name
@@ -341,7 +341,7 @@ code that mirrors them keeps it too.
 |---|---|
 | `address` in an agent record | The copyable address that Shell calls an agent reference |
 | `reference` of type `AgentRef` | The agent's structured identity, with its full `machine_id` and `agent_id` |
-| `session_name` | The session name or preview for the Shell tables' `SESSION` column |
+| `session_name` | The session name or preview, for the Shell tables' `SESSION` column and the `Session` line of `facade status` |
 | `attach.shell` | A dedicated Shell Attach watch. On the target run's exit, the daemon gives the client time to read the final output and exit result before closing the connection |
 | `clis` and `cli_error` in MCP | The available CLI names in a machine's discovery context, or the reason the lookup failed |
 | `timeout_seconds` in MCP | The total budget when a send or inbox read waits. A value of zero skips the wait |

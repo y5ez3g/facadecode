@@ -351,6 +351,7 @@ export interface InspectResult {
 	readonly started_by?: AgentCreator;
 	readonly attachments?: AttachmentInfo[];
 	readonly launch_command?: string;
+	readonly session_name?: string;
 }
 
 export interface InternalAgentRecordsArgs {

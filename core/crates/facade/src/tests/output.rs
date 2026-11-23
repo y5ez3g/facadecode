@@ -274,6 +274,7 @@ fn inspect_shows_the_agents_process_and_launch_facts() {
     ];
     let machine_names = HashMap::from([("laptop-id".into(), "laptop".into())]);
     inspected.launch_command = Some(r#""C:\Tools\claude.exe" --flag "two words""#.into());
+    inspected.session_name = Some("Greeting".into());
     let text = inspect_text(&inspected, &machine_names);
     assert_eq!(text.lines().next(), Some("Pixel (a3@laptop)"));
     let fields = [
@@ -287,8 +288,8 @@ fn inspect_shows_the_agents_process_and_launch_facts() {
         ),
         ("Type", "Managed"),
         ("Machine", "laptop"),
-        ("Title", "Review Shell output"),
-        ("Session", "86da4482-2bae-4a45-b193-a5664c19826a"),
+        ("Session", "Greeting"),
+        ("Session ID", "86da4482-2bae-4a45-b193-a5664c19826a"),
         ("Started by", "Shell"),
         ("Attached in", "VS Code, Shell (laptop)"),
         ("YOLO", "on"),
@@ -301,10 +302,16 @@ fn inspect_shows_the_agents_process_and_launch_facts() {
         assert_eq!(field(&text, label).as_deref(), Some(expected), "{text}");
     }
     inspected.attachments.clear();
+    inspected.session_name = None;
     let legacy = inspect_text(&inspected, &machine_names);
     assert_eq!(
         field(&legacy, "Attached in").as_deref(),
         Some("temporary workspace, Terminal on original hostname")
+    );
+    assert_eq!(field(&legacy, "Session").as_deref(), Some("-"));
+    assert_eq!(
+        field(&legacy, "Session ID").as_deref(),
+        pixel.session.as_deref()
     );
 }
 
@@ -328,6 +335,7 @@ fn inspect_describes_custom_programs_guests_and_ended_agents() {
     assert_eq!(field(&added, "Started by").as_deref(), Some("a2@devbox"));
     assert_eq!(field(&added, "YOLO").as_deref(), Some("on"));
     assert_eq!(field(&added, "Session").as_deref(), Some("-"));
+    assert_eq!(field(&added, "Session ID").as_deref(), Some("-"));
 
     let custom = shown(
         json!({ "cli": "build tool" }),

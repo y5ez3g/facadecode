@@ -68,6 +68,8 @@ to `internal.agent_records` with `active:true`. If the label is unavailable with
 budget or the holder is older, the field may be absent. `title` still describes the terminal.
 
 `agent.inspect` returns the agent, current input observation, session tracking and viewers.
+For a managed agent and a Terminal caller, it can include `session_name`, the same native
+session name or session preview as in `agent.list`.
 For a managed run it can include the recorded launch command with Facade's run credential
 redacted. `agent.screen` returns the tail of the logical screen and scrollback. Its default
 is 50 lines, and it accepts 1–2,000. Ended records can still be inspected and their final

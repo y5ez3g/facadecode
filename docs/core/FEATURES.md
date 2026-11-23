@@ -72,7 +72,7 @@ gets a name and inbox when it first calls a tool. From that point it can receive
 - `facade list` shows running managed agents and connected Guests, newest start or resume first. It probes saved
   connections on demand without starting a sleeping daemon. `--local` queries this machine with zero SSH, and
   `--machine <MACHINE>` queries the named machine and wakes it if needed. The `SESSION` column shows the latest
-  saved native session name, the conversation preview when unnamed, or `-` when neither is available.
+  saved native session name, the session preview when unnamed, or `-` when neither is available.
   Use `facade status <AGENT>` for the full session ID, working directory and attached viewers.
 - `facade stop <AGENT>...` ends one or more managed agents and keeps their records, screens and inboxes for 30 days.
   Their helpers keep running. Use `--local`, `--machine <MACHINE>` or `--all` to stop running managed agents in one
@@ -87,7 +87,8 @@ gets a name and inbox when it first calls a tool. From that point it can receive
   searches in that directory, including sessions that managed agents use, and its full ID otherwise.
 - `facade status <AGENT>` shows the same Agent State as `list` while the agent runs, with the reason for
   `Waiting for you` and `Error`. For an ended agent it shows `Ended (stopped by Facade)`, `Ended (code N)`,
-  `Ended (signal <SIGNAL>)`, or `Ended` when the way it ended is unknown.
+  `Ended (signal <SIGNAL>)`, or `Ended` when the way it ended is unknown. Its `Session` line shows the same native
+  name or preview as `list`, and `Session ID` the CLI's full session ID.
 - Resuming an `Ended` agent keeps its reference, directory and session. Resuming a `Saved` session creates an agent.
   A session already in use produces the reference of the agent using it. Use `-d` to resume in the background.
 - `facade rename <AGENT> <NAME>` changes the name of a running or ended agent or connected Guest. The reference

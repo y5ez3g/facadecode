@@ -861,7 +861,7 @@ pub(crate) fn inspect_text(
         .address
         .rsplit_once('@')
         .map_or(agent.reference.machine_id.as_str(), |(_, machine)| machine);
-    let (folder, launch_command, session) = if managed {
+    let (folder, launch_command, session_id) = if managed {
         (
             agent.cwd.as_str(),
             inspected.launch_command.as_deref().unwrap_or("-"),
@@ -912,8 +912,8 @@ pub(crate) fn inspect_text(
             &[
                 ("Type", kind_words(agent.kind)),
                 ("Machine", machine),
-                ("Title", agent.title.as_deref().unwrap_or("-")),
-                ("Session", session),
+                ("Session", inspected.session_name.as_deref().unwrap_or("-")),
+                ("Session ID", session_id),
                 ("Started by", started_by),
                 ("Attached in", &viewers),
                 ("YOLO", if agent.yolo { "on" } else { "off" }),

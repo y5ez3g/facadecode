@@ -44,7 +44,8 @@ public `run()` entry point.
 - The launch transaction and a resumed run's commit save the displayed executable and arguments
   formatted by the running machine. Runs redacts the injected credential before the display
   text goes to the store or actor. Inspection reads this value from the same run as its screen
-  facts. A recovered keeper run with no committed launch has no displayed command.
+  facts. For a Terminal caller, inspection also reads the native session name or preview within the roster deadline.
+  A recovered keeper run with no committed launch has no displayed command.
 - On Windows a stop releases the actor's copy of the pseudo console's signal pipe, then the
   keeper link's copy, before it asks the keeper to stop. Batch stop uses that same path and reports
   each selected Agent's outcome. Scope stops report connected Guests as skipped.

@@ -2304,6 +2304,9 @@
         },
         "launch_command": {
           "type": "string"
+        },
+        "session_name": {
+          "type": "string"
         }
       },
       "required": [

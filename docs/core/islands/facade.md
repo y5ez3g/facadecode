@@ -36,10 +36,10 @@ waits for the named machine and can wake it. `resume` shows ended agents with re
 independent CLI sessions from the current folder. A named `resume --machine` lists managed agents on that
 machine and provides references that include its selector. `list --local` and `resume --local` stay on this
 machine and open zero SSH connections even if they start the local daemon.
-Both tables show the latest native session name or the existing conversation preview in `SESSION`. A missing
-label displays as `-`. The tables use the daemon's session lookup on the agent's machine. `facade status <AGENT>`
-shows the full session ID. A saved session's `REF` shows the daemon's selector for resuming it from the current
-folder, or the full session ID if the reply has no selector.
+Both tables show the latest native session name or the existing session preview in `SESSION`. A missing session name
+or preview displays as `-`. `facade status <AGENT>` shows the session name or preview from the same daemon lookup in
+`Session` and the full native session ID in `Session ID`. Each field shows `-` when its value is absent. A saved session's `REF`
+shows the daemon's selector for resuming it from the current folder, or the full session ID if the reply has no selector.
 
 `stop <AGENT>...` accepts one or more references. `stop --local`, `stop --machine <MACHINE>` and `stop --all`
 are exclusive alternatives. Scope stops skip connected Guests. A remote scope stop leaves sleeping machines

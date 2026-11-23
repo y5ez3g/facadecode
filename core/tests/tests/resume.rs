@@ -638,9 +638,11 @@ fn resume_lists_a_stopped_agent_and_reuses_its_launch_choices() {
         .expect("the stopped agent is listed");
     assert_eq!(table.cell(row, "STATE"), "Ended", "{choices}");
     assert_eq!(table.cell(row, "SESSION"), "-", "{choices}");
+    let status = home.run_facade_ok(&["status", address]);
     assert_eq!(
-        status_field(&home.run_facade_ok(&["status", address]), "Session"),
-        Some(FIRST)
+        ["Session", "Session ID"].map(|label| status_field(&status, label)),
+        [Some("-"), Some(FIRST)],
+        "{status}"
     );
     std::fs::write(
         home.path.join("facade.json"),
@@ -1659,6 +1661,15 @@ fn claude_and_pi_show_current_native_names_through_resume() {
             let text = home.run_facade_ok(&["status", reference]);
             assert_eq!(status_field(&text, label), Some(value), "{cli}: {text}");
         };
+        // `Session` names the session as `list` and `resume` do; `Session ID` is the CLI's own ID.
+        let session = |reference, name, id| {
+            let text = home.run_facade_ok(&["status", reference]);
+            assert_eq!(
+                ["Session", "Session ID", "Title"].map(|label| status_field(&text, label)),
+                [Some(name), Some(id), None],
+                "{cli}: {text}"
+            );
+        };
         list_cell(&reference, "First native name");
         assert!(
             wait_for_screen_text(&home, &reference, "❯"),
@@ -1666,7 +1677,7 @@ fn claude_and_pi_show_current_native_names_through_resume() {
             home.screen(&reference)
         );
         assert_eq!(inspected_agent(&home, &reference)["process"], "running");
-        status(&reference, "Session", FIRST);
+        session(&reference, "First native name", FIRST);
         assert!(
             Table::parse(&home.run_facade_ok(&["resume", "--local"]))
                 .row("REF", first_ref)
@@ -1690,11 +1701,11 @@ fn claude_and_pi_show_current_native_names_through_resume() {
         assert!(home.list_table().row("REF", &reference).is_none());
         resume_cell(&reference, ended_state, "Latest native name");
         status(&reference, "State", status_state);
-        status(&reference, "Session", FIRST);
+        session(&reference, "Latest native name", FIRST);
 
         start_session(&reference, FIRST, "ended-args");
         list_cell(&reference, "Latest native name");
-        status(&reference, "Session", FIRST);
+        session(&reference, "Latest native name", FIRST);
 
         start_session(empty_ref, SECOND, "unnamed-args");
         let active = home.list_table();
@@ -1704,11 +1715,12 @@ fn claude_and_pi_show_current_native_names_through_resume() {
             .find(|other| *other != reference)
             .unwrap_or_else(|| panic!("{cli}: {active:?}"));
         list_cell(unnamed, "-");
-        status(unnamed, "Session", SECOND);
+        session(unnamed, "-", SECOND);
         let preview = "First unnamed prompt";
         let record = prompt_record(SECOND, "00000002", Some("00000001"), preview);
         writeln!(unnamed_history, "{record}").unwrap();
         list_cell(unnamed, preview);
+        session(unnamed, preview, SECOND);
     }
 }
 
