@@ -206,8 +206,6 @@ pub(crate) enum AgentCommand {
         pid: u32,
         captures: bool,
         launch_command: Option<String>,
-        /// The CLI's version as its installation names it.
-        version: Option<String>,
         tools: ToolsGiven,
         reply: oneshot::Sender<ManagedAgent>,
     },

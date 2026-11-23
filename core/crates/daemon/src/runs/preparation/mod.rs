@@ -48,8 +48,8 @@ impl Preparation {
         }
     }
 
-    /// Composes tools, command line and environment; writes a start's private files. Waits on
-    /// file work and installation version reads. Failure removes a start's folders.
+    /// Composes tools, command line and environment and writes a start's private files. Failure
+    /// removes a start's folders.
     pub(crate) async fn prepare(
         &self,
         request: RunRequest<'_>,
@@ -84,7 +84,6 @@ impl Preparation {
                 launch,
                 env,
                 captures: false,
-                version: None,
                 tools: ToolsGiven::NotInjected,
                 plugin: None,
                 files: RunFiles::default(),
@@ -210,7 +209,6 @@ impl Preparation {
             let created = files.clone();
             file_work(move || created.create()).await?;
         }
-        let version = installed_version(rule, &launch.program, &env, request.cwd).await;
         let launch = started_directly(Some(rule), launch, &env).await;
         let launch_command = shown_command(&launch, &env, Some(credential));
         let tools = match tools {
@@ -230,7 +228,6 @@ impl Preparation {
             launch_command,
             env,
             captures,
-            version,
             tools,
             plugin,
             files,
@@ -405,30 +402,6 @@ async fn file_work<T: Send + 'static>(
         .await
         .map_err(ErrorBody::internal)?
         .map_err(ErrorBody::internal)
-}
-
-async fn installed_version(
-    rule: &'static Rule,
-    program: &str,
-    env: &BTreeMap<String, String>,
-    cwd: &str,
-) -> Option<String> {
-    rule.version_file.as_ref()?;
-    let (program, path, cwd) = (
-        program.to_owned(),
-        env_var(env, "PATH").map(str::to_owned),
-        PathBuf::from(cwd),
-    );
-    tokio::task::spawn_blocking(move || {
-        if !cwd.is_dir() {
-            return None;
-        }
-        facade_base::programs::on_path(&program, path.as_deref(), &cwd)
-            .and_then(|path| facade_rules::installed_version(rule, &path))
-    })
-    .await
-    .ok()
-    .flatten()
 }
 
 /// Starts a wrapper's program directly where possible, such as npm's shim of a Node script

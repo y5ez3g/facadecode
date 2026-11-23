@@ -887,7 +887,6 @@ impl Harness {
             pid: 4242,
             captures: false,
             launch_command: None,
-            version: None,
             tools,
             reply,
         })
@@ -1488,7 +1487,7 @@ async fn a_server_that_connects_before_the_actor_first_runs_makes_the_tools_avai
     let (tx, rx) = mpsc::channel(MAX_QUEUED_COMMANDS);
     let state = StateStart {
         file: super::state::state_file(&dir),
-        kept: Kept::new_run(None, ToolsGiven::Injected),
+        kept: Kept::new_run(ToolsGiven::Injected),
         started: Instant::now(),
     };
     let start = ActorStart {
@@ -1534,7 +1533,7 @@ async fn a_start_prompt_waits_for_the_tools_and_messages_sent_meanwhile_wait_beh
     let (tx, rx) = mpsc::channel(MAX_QUEUED_COMMANDS);
     let state = StateStart {
         file: super::state::state_file(&dir),
-        kept: Kept::new_run(None, ToolsGiven::Injected),
+        kept: Kept::new_run(ToolsGiven::Injected),
         started: Instant::now(),
     };
     let post = crate::messages::tests::messages().0;
@@ -1668,7 +1667,7 @@ async fn a_recovered_run_waits_for_its_server_from_the_recovery() {
         .expect("a clock that has run two minutes");
     let state = StateStart {
         file: super::state::state_file(&dir),
-        kept: Kept::new_run(None, ToolsGiven::Injected),
+        kept: Kept::new_run(ToolsGiven::Injected),
         started: long_ago,
     };
     let screen = ScreenStart::Recovered {
@@ -1710,7 +1709,7 @@ fn antigravity(home: &Path) -> Harness {
 
 /// An Antigravity run as [`antigravity`] starts one, its run started at `started`.
 fn antigravity_started(home: &Path, started: Instant) -> Harness {
-    let kept = Kept::new_run(None, ToolsGiven::Injected);
+    let kept = Kept::new_run(ToolsGiven::Injected);
     Harness::start_kept(
         home,
         record(ProcessState::Running, None, 80, 24),
@@ -2179,7 +2178,7 @@ async fn a_panel_that_shows_no_ready_tools_is_closed_at_its_wait_only_while_it_s
 #[tokio::test(flavor = "multi_thread")]
 async fn only_a_start_given_the_tools_readies_them() {
     let home = home("readyonly");
-    let kept = Kept::new_run(None, ToolsGiven::Injected);
+    let kept = Kept::new_run(ToolsGiven::Injected);
     let recovered = |dir: PathBuf| ScreenStart::Recovered {
         handed_over_cleanly: false,
         screen: Box::new(Screen::new(80, 24, SCROLLBACK_ROWS)),
@@ -2251,7 +2250,7 @@ async fn a_resumed_run_readies_its_tools_too() {
 
 /// A Claude Code run with Facade's tools and YOLO on, whose CLI has drawn nothing yet.
 fn claude(home: &Path, allow_auto_trust: bool) -> Harness {
-    let kept = Kept::new_run(None, ToolsGiven::Injected);
+    let kept = Kept::new_run(ToolsGiven::Injected);
     Harness::start_kept(
         home,
         record(ProcessState::Running, None, 80, 24),

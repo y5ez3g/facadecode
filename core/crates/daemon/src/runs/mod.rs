@@ -105,8 +105,6 @@ pub(crate) struct PreparedRun {
     pub(crate) env: BTreeMap<String, String>,
     /// The CLI reports its session to its run folder.
     pub(crate) captures: bool,
-    /// The CLI's version, as its installation names it.
-    pub(crate) version: Option<String>,
     pub(crate) tools: ToolsGiven,
     /// Facade's plugin in the folder the CLI starts in, held until the agent is listed.
     pub(crate) plugin: Option<PluginHold>,

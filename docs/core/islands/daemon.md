@@ -292,10 +292,12 @@ The terminal, as a `PtyIo`, and the input waiting for it.
   - One state, by a fixed order: `Ended`; the CLI's own `WaitingForYou` or `Error`; a question in place of the input box (`WaitingForYou`); tools unavailable (`Error`); `JustDone`; `Working`; `Starting`; `Idle`; a failed start (`Error`); else `Unknown`.
   - Work that stops reads `Working` for 1 more second; a turn someone asked for that ends unwatched reads `JustDone` until a terminal shows the agent.
   - Under `background_report`, a `working` report with matching words becomes idle evidence.
+  - Under `background_correction`, a `working` report is narrowed to idle evidence while the screen
+    matches the rule's idle anchors. The rule applies regardless of the CLI's installed version.
   - A start and the tools' connection get 60 seconds each; time the CLI spends asking a question does not count.
   - Only `keep` writes the state file, through a private temporary file and a rename. What the screen shows is read again, never kept.
 - **Never does:** touch the terminal; change the agent's record; publish.
-- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(asking, now)`; run: `ended(exit, stopped)`, `restarted(started, version, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connection(open)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
+- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(asking, now)`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connection(open)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
 
 #### glyph
 
@@ -482,9 +484,9 @@ A run's command line, environment, folder, plugin and session following.
 
 - **Owns:** composing a run's command line from its rule (`facade_rules::start_managed_launch_command`,
   `resume_managed_launch_command`) with a fresh credential for the private relay and the managed
-  instructions. It reads the CLI's installed version and starts the program directly where the
-  program found on the run's `PATH` is a wrapper (`facade_rules::direct_command`). It builds the run's
-  environment, made from the client's by the rule of `env` in
+  instructions. It starts the program directly where the program found on the run's `PATH` is a
+  wrapper (`facade_rules::direct_command`). It builds the run's environment from the client's by the
+  rule of `env` in
   [`StartArgs`](../../../core/protocol/DAEMON.md#startargs) and `FACADE_HOME`. It owns private
   run folders `core/runs/<agent>/<random>/`, with the session
   file, the tool files and a `plugin-folder` note naming the project whose plugin a start placed;

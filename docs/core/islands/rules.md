@@ -49,8 +49,6 @@ files in `core/rules/`. It is a library; it starts no program.
   whether the CLI has Facade's tools or why they could not be given. `uses_run_credential` lets
   the daemon save the credential's digest when the resulting configuration carries it.
   Both use `wire_managed` to configure the CLI's connection to Facade API v1's MCP entry point.
-- `installed_version(rule, program)`: the version the installation names beside its program,
-  read without running it.
 - The `entries` module reads `clis` in `facade.json`. `entries::select` checks one configured entry.
   `Entry::resolve_program` uses its effective environment and working folder. `Entry::launch_options`
   returns the literal arguments to save and replay, with their model and effort when known. Those
@@ -92,8 +90,7 @@ command line together. The children never use each other. They may use the layer
 - `lib.rs`: `Rule` and the type of each section, `parse` and the checks. Each section checks
   itself (`InputRule`, `PasteRule`, `Frame`, `Editor`, `StatusGlyph`, and the state mechanisms
   that read the screen). `Rule` returns the first problem and names the file. Also `find`, `rules`,
-  `installed_version`, the MCP keys and
-  `console_typing`. Every child's public items are re-exported at the crate root.
+  the MCP keys and `console_typing`. Every child's public items are re-exported at the crate root.
 - `wrappers.rs`: `direct_command`, and the two wrappers it reads: Pi's `pi.cmd`, whole as Pi's
   installer writes it, starts its `pi-launcher.js` with the installer's own Node or a Node program
   on `PATH`; Muse Code's wrapper starts `muse-bin-<version>.exe` beside it, for the version and
@@ -137,7 +134,6 @@ Rust regular expressions.
 | `session` | `capture` (`session_start` or `none`) and the `resume` arguments with `${session_id}` |
 | `status` | how Facade reads the CLI's state from its screen or a report's words |
 | `status_glyph` | the CLI's glyph for viewer titles once the CLI has reported its state. The `working` list holds one or more glyph frames, each shown for `frame_ms` milliseconds. The `resting` glyph is for Starting after a report, Idle, Just done, Waiting for you and Error. Every glyph must be nonempty, and `frame_ms` must be positive |
-| `version_file` | the file beside the program that names its version |
 | `ready_tools` | what to type so the CLI starts Facade's tools before its first turn |
 | `mcp` | the session `_meta` or environment key and the CLI's always-load key |
 | `yolo` | YOLO's arguments, run settings, and the trust question to answer |
@@ -240,12 +236,12 @@ Reads a CLI's screen for evidence of its state (`state.rs`). A rule can also hav
 
 - **Owns:** no state. For screen readings it uses `status` (a `StateRule`, which names the mechanism and its patterns) and `input` (where the input is drawn). It also owns the screens recorded from each CLI that the readers are tested against, in `tests/state/<cli>.json`.
 - **Keeps:** a reader recognizes only the layout its CLI was recorded drawing. Any other screen reads as None, so a CLI that draws differently keeps its own reports. A rule reads its screen only around the input kind its mechanism names; any other pairing reads nothing. Readers work on logical lines: rows joined by a soft wrap count as one line, and rows separated by a line break never do. A line that began above the screen is never evidence, and neither is text in the input.
-- **Never does:** keep anything between readings; read the CLI's own reports or decide which version a correction holds for (the daemon does both); type into the CLI or press Enter.
+- **Never does:** keep anything between readings, read the CLI's own reports, type into the CLI, or press Enter.
 - **Interface:**
   - `read_state(rule, view) -> Option<ScreenState>`, where `ScreenState` is `Working`, `Idle`, `Blocked(BlockKind)` or `Error(words)`. The daemon's agent state calls it on each complete frame, but only while the selected evidence calls for a screen reading and never while the CLI is drawing a synchronized update. It is None when the rule has no `status` section, or when the screen shows nothing that section recognizes.
   - The `status` mechanisms:
     - `turn_error` (OpenCode, over its input box): when a turn's model call failed, the error stands just over that turn's summary. It reads as `Error` with the CLI's words. A turn that produced words shows a rate in its summary, so it never reads as an error.
-    - `background_correction` (Codex, around its input prompt): reads `Idle` when, over the prompt, a dim footer counts the commands still running in the background, drawn exactly as the CLI draws it or cut off at the screen's right edge, and over that stands the dim summary of a finished turn. The daemon uses this to correct Codex's `working` report.
+    - `background_correction` (Codex, around its input prompt): reads `Idle` when, over the prompt, a dim footer counts the commands still running in the background, drawn exactly as the CLI draws it or cut off at the screen's right edge, and over that stands the dim summary of a finished turn. The daemon uses this to correct Codex's `working` report regardless of the installed version.
     - `background_report` (Claude Code, in a report's words) gives the daemon a `background` pattern. A `working` report whose words match the pattern reads as `idle`.
     - `frame_transcript` (Muse Code, around its input frame): `Working` while the working line stands over the frame, with at most a usage warning or queued input between them. `Idle` under the CLI's header, a question it answered, or the last line of an earlier conversation. Where no frame is drawn, `Blocked(Auth)` while all of its sign-in choices show, and `Blocked(Permission)` while its question about trusting the workspace shows. Part of a frame on the screen reads as None.
   - To check rule files, the layer reads `COUNT` (`${count}`) and `PLURAL` (`${s}`): a footer must contain `COUNT` exactly once, and no placeholder other than these two.

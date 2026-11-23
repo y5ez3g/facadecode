@@ -18,7 +18,6 @@ mod wiring;
 mod wrappers;
 
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -108,11 +107,6 @@ pub struct Rule {
     /// The status glyph the CLI puts before its terminal title and leaves out when the terminal takes its reports.
     #[serde(default)]
     pub status_glyph: Option<StatusGlyph>,
-    /// The file beside the program that names the installed version, read without running the CLI
-    /// (CLIS-2.1): JSON with a `version` string, in the program's real folder or one of the two
-    /// above it.
-    #[serde(default)]
-    pub version_file: Option<String>,
     /// What a run's start types so that the CLI starts Facade's tools before its first turn, for a
     /// CLI that starts a folder's servers only with its first turn or its panel of MCP servers
     /// (COLLABORATION-2.2).
@@ -433,9 +427,6 @@ pub struct BackgroundCorrection {
     /// That line in full, `${count}` for the count and `${s}` for a plural's ending. The CLI crops
     /// it at the screen's right edge.
     pub footer: String,
-    /// The CLI versions this correction was verified on; other versions keep their own reports
-    /// (CLIS-2.3).
-    pub verified: Vec<String>,
     /// The dim summary of the finished turn, above that line.
     pub worked: Pattern,
 }
@@ -574,25 +565,14 @@ impl Rule {
         }
     }
 
-    /// The input layout and version a screen-based `status` mechanism may need.
+    /// The input layout a screen-based `status` mechanism may need.
     fn state_problem(&self) -> Result<(), String> {
         let Some(state) = &self.status else {
             return Ok(());
         };
         match state {
             StateRule::FrameTranscript(transcript) => transcript.check(&self.input),
-            StateRule::BackgroundCorrection(correction) => {
-                correction.check(&self.input)?;
-                if self.version_file.is_some() {
-                    Ok(())
-                } else {
-                    Err(
-                        "status background_correction holds for a verified version, so the rule \
-                         needs a version_file"
-                            .into(),
-                    )
-                }
-            }
+            StateRule::BackgroundCorrection(correction) => correction.check(&self.input),
             StateRule::BackgroundReport(_) => Ok(()),
             StateRule::TurnError(error) => error.check(&self.input),
         }
@@ -758,17 +738,6 @@ impl Scrolled {
     }
 }
 
-impl StateRule {
-    /// Whether the mechanism applies at `version`. Background correction holds only for the
-    /// versions it was verified on.
-    pub fn applies_to(&self, version: Option<&str>) -> bool {
-        let StateRule::BackgroundCorrection(correction) = self else {
-            return true;
-        };
-        version.is_some_and(|version| correction.verified.iter().any(|v| v == version))
-    }
-}
-
 impl FrameTranscript {
     fn check(&self, input: &InputRule) -> Result<(), String> {
         if !matches!(input, InputRule::Frame(_)) {
@@ -907,20 +876,6 @@ fn find_in<'a>(rules: Result<&'a [Rule], &str>, name: &str) -> Result<Option<&'a
     }
 }
 
-/// The version that the installation of `rule`'s CLI names beside `program`, read without running
-/// it (CLIS-2.1): the rule's `version_file`, in the program's real folder or one of the two above
-/// it, as JSON with a `version` string. None where the rule names no such file or none is found.
-pub fn installed_version(rule: &Rule, program: &Path) -> Option<String> {
-    let file = rule.version_file.as_deref()?;
-    let folder = std::fs::canonicalize(program).ok()?;
-    let version_in = |folder: &Path| -> Option<String> {
-        let text = std::fs::read_to_string(folder.join(file)).ok()?;
-        let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-        Some(json.get("version")?.as_str()?.to_string())
-    };
-    folder.ancestors().skip(1).take(3).find_map(version_in)
-}
-
 /// What the rules say about the CLIs' MCP clients, in the order `facade` lists the CLIs. A
 /// release always reads its rules: one whose rule files cannot be read fails their tests.
 fn mcp_rules() -> impl Iterator<Item = &'static McpRule> {
@@ -1015,51 +970,6 @@ mod tests {
         FILES[0].1.to_string()
     }
 
-    /// Codex's version is read from `codex-package.json` above its real program, and its correction
-    /// holds for the verified versions only.
-    #[test]
-    fn codex_s_correction_holds_for_the_version_its_installation_names_when_verified() {
-        let codex = find("codex").unwrap().unwrap();
-        let base = crate::test_folder::TestFolder::new("rules-version");
-        let release = base.join("lib/codex");
-        std::fs::create_dir_all(release.join("bin")).unwrap();
-        std::fs::write(release.join("bin/codex"), "").unwrap();
-        let program = release.join("bin/codex");
-        assert_eq!(
-            installed_version(codex, &program),
-            None,
-            "no file names a version"
-        );
-        let status = codex.status.as_ref().unwrap();
-        for (version, holds) in [
-            ("0.165.0", false),
-            ("0.166.0", true),
-            ("0.166.1", false),
-            ("0.167.0", true),
-            ("0.167.1", false),
-            ("0.168.0", false),
-        ] {
-            std::fs::write(
-                release.join("codex-package.json"),
-                format!(r#"{{"name":"codex","version":"{version}"}}"#),
-            )
-            .unwrap();
-            let read = installed_version(codex, &program);
-            assert_eq!(read.as_deref(), Some(version));
-            assert_eq!(status.applies_to(read.as_deref()), holds, "{version}");
-        }
-        assert!(
-            !status.applies_to(None),
-            "an unknown version keeps the CLI's own reports"
-        );
-        assert_eq!(
-            installed_version(find("claude").unwrap().unwrap(), &program),
-            None,
-            "a rule without a version file reads none"
-        );
-        std::fs::remove_dir_all(&base).unwrap();
-    }
-
     fn refusal(name: &str, text: &str) -> String {
         Rule::parse(name, text).expect_err("the rule must be refused")
     }
@@ -1071,7 +981,6 @@ mod tests {
         let StateRule::BackgroundReport(report) = status else {
             panic!("Claude Code's status must use background_report");
         };
-        assert!(status.applies_to(None));
         assert!(report.background.is_match("2 tasks still running"));
         assert!(!report.background.is_match("Still working"));
         assert!(

@@ -656,7 +656,6 @@ impl Actor {
                 pid,
                 captures,
                 launch_command,
-                version,
                 tools,
                 reply,
             } => {
@@ -680,7 +679,7 @@ impl Actor {
                 self.undrawn = Some("the CLI has not written since it resumed");
                 self.links.settled.send_replace(false);
                 let _ = self.links.exit.send(None);
-                self.state.restarted(Instant::now(), version, tools);
+                self.state.restarted(Instant::now(), tools);
                 self.glyph.restart();
                 self.glyph_at = None;
                 self.set_status_glyph(None);

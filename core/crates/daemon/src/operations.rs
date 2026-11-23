@@ -704,7 +704,7 @@ impl Daemon {
             deliveries: self.messages.delivery_handle(),
             state: StateStart {
                 file: agent::state_file(&screen),
-                kept: Kept::new_run(prepared.version.clone(), prepared.tools),
+                kept: Kept::new_run(prepared.tools),
                 started: tokio::time::Instant::now(),
             },
         };
@@ -1229,7 +1229,6 @@ impl Daemon {
             pid: started.pid,
             captures: prepared.captures,
             launch_command: prepared.launch_command.take(),
-            version: prepared.version.clone(),
             tools: prepared.tools,
             reply,
         };
