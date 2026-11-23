@@ -5,7 +5,8 @@
 //! Environment: `FAKECLI_LOG` sets the JSON-lines log path; `FAKECLI_SYNC=0` disables synchronized
 //! drawing; `FAKECLI_NAME` sets the header name; `FAKECLI_FDS` names a file to which it writes, at
 //! start, the descriptors above 2 it was given; `FAKECLI_ARGS` names a file to which it writes, at
-//! start, its arguments as a JSON list; `FAKECLI_IGNORE_INPUT=1` makes it read no input at all, so
+//! start, its arguments as a JSON list; `FAKECLI_ENV` names a JSON output file for the variables
+//! listed in `FAKECLI_ENV_KEYS` (comma-separated); `FAKECLI_IGNORE_INPUT=1` makes it read no input, so
 //! its terminal's input fills up; `FAKECLI_IGNORE_ENTER=1` makes it keep its draft on Enter, as a
 //! CLI does that does not take it. `FAKECLI_HOOKS=1` makes it run hooks given as arguments
 //! instead, as Antigravity runs them (`run_hooks`). On Windows `FAKECLI_IGNORE_CLOSE=<file>` makes
@@ -1209,6 +1210,17 @@ fn run() -> anyhow::Result<()> {
                     .map(|word| word.to_string_lossy().into_owned())
                     .collect::<Vec<_>>(),
             )?,
+        )?;
+    }
+    if let Some(path) = std::env::var_os("FAKECLI_ENV") {
+        let keys = std::env::var("FAKECLI_ENV_KEYS")?;
+        let values: std::collections::BTreeMap<_, _> = keys
+            .split(',')
+            .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)))
+            .collect();
+        write_whole(
+            std::path::Path::new(&path),
+            &serde_json::to_string(&values)?,
         )?;
     }
     let log = std::env::var_os("FAKECLI_LOG").and_then(|path| {

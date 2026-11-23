@@ -54,6 +54,12 @@ Facade Code
 
 ## Product principles
 
+- **YOLO controls native work prompts.** Facade handles the prompts it causes in either mode. YOLO bypasses
+  native work approvals where supported, and clears supported startup prompts for agent starts. Person starts
+  keep the CLI's native startup prompts.
+- **The initiating operation determines the start policy.** Only MCP `start_agent` is an agent start. Shell,
+  VS Code and resume use person policy, including Shell commands typed by agents. Agent starts disable native
+  automatic updates and person starts honor the CLI's update settings.
 - **A Facade home is one installation.** Its programs, data and services belong to that home. Select a home with
   `FACADE_HOME` and manage its installation independently.
 - **Newer builds replace older builds.** Compare the numeric version first, then the source commit time.
@@ -287,9 +293,9 @@ to the agent that started it.
   run uses the target login environment.
 - **Models, effort and prompts.** Pass supported native options after the CLI name. The target machine's
   settings can supply defaults. A managed resume reuses the recorded launch choices.
-- **Folder trust and setup.** People who start Claude Code see its native folder trust question. For an
-  agent-initiated start, Facade can confirm the expected trust option when YOLO is on at the target home.
-  Facade configures `facade-mcp` and hooks per run and leaves global CLI settings alone.
+- **Folder trust and setup.** Person starts and resumes keep the CLI's initial trust and risk prompts.
+  An MCP start with YOLO on at the target home uses that CLI's supported startup trust and notice settings.
+  Facade configures its MCP tools and hooks per run, including their own approvals. The CLI handles login.
 - **Ending and resuming.** A CLI exit, crash or machine reboot ends the run. Use `resume` to continue it.
   VS Code can resume pinned agents when their workspace reopens.
 - **Errors.** Start reports the failing step, such as a connection, folder, worktree, missing program or

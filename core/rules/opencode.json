@@ -2,7 +2,7 @@
 	"cli": "opencode",
 	"display_name": "OpenCode",
 	"program": "opencode",
-	"launch": { "args": ["--standalone"] },
+	"launch": { "args": ["--standalone"], "agent_env": { "OPENCODE_DISABLE_AUTOUPDATE": "1" } },
 	"arguments": {"reserved": ["--auto", "--yolo", "--dangerously-skip-permissions", "--session", "-s", "--continue", "-c", "--fork", "--standalone", "--server", "--prompt"], "attached": ["-s"], "clusters": ["-s"]},
 	"input": {
 		"mechanism": "box",
@@ -21,5 +21,5 @@
 		"error": "^ {5}Error: (.+)$",
 		"summary": "^ {5}\\S.*? · .+ · (?:\\d+ms|\\d+\\.\\ds|\\d+m \\d+s|\\d+h \\d+m|\\d+d \\d+h)$"
 	},
-	"yolo": { "args": ["--auto"] }
+	"yolo": { "work": { "args": ["--auto"] } }
 }

@@ -28,7 +28,10 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 
 pub use command_line::{Choices, TrustQuestion, YoloRule, entries};
-pub use compose::{CommandLine, resume_managed_launch_command, start_managed_launch_command};
+pub use compose::{
+    CommandLine, LaunchOrigin, LaunchPolicy, resume_managed_launch_command,
+    start_managed_launch_command,
+};
 pub use formats::shell_word;
 pub use input::{
     BoxReading, InputLine, LineCell, ProbeVerdict, is_own_draft, is_same_draft, read_box,
@@ -115,7 +118,7 @@ pub struct Rule {
     /// What the CLI's MCP client does that Facade's MCP server answers to.
     #[serde(default)]
     pub mcp: McpRule,
-    /// What YOLO on adds: running without asking and without the sandbox, and the folder trusted.
+    /// The CLI's work options for YOLO and its startup options for agent starts with YOLO.
     #[serde(default)]
     pub yolo: YoloRule,
     /// What typing into the CLI needs where it reads console input records, as Codex and Muse Code
@@ -266,6 +269,9 @@ pub struct CommandLineRule {
     /// Arguments right after the program.
     #[serde(default)]
     pub args: Vec<String>,
+    /// The nonpersistent updater switches for agent starts.
+    #[serde(default)]
+    pub agent_env: BTreeMap<String, String>,
 }
 
 /// How the CLI's session is reported and resumed.
@@ -892,6 +898,21 @@ pub fn rules() -> Result<&'static [Rule], &'static str> {
     RULES.as_deref().map_err(String::as_str)
 }
 
+/// Whether a launch rule can set this exact variable and value.
+pub fn is_launch_env_value(name: &str, value: &str) -> bool {
+    rules().is_ok_and(|rules| {
+        rules.iter().any(|rule| {
+            [
+                &rule.launch.agent_env,
+                &rule.yolo.work.env,
+                &rule.yolo.startup.env,
+            ]
+            .iter()
+            .any(|env| env.get(name).is_some_and(|generated| generated == value))
+        })
+    })
+}
+
 /// The rule `name` selects: a rule's exact CLI name, such as `claude`. Any other word, a path
 /// included, selects none. A rule's name fails while the rule files cannot be read, so that name
 /// never runs as a program without its rule.
@@ -1215,11 +1236,9 @@ mod tests {
             .contains("file name")
         );
         let launch = |launch: &str| {
-            claude().replacen(
-                "\"program\": \"claude\",",
-                &format!("\"program\": \"claude\", \"launch\": {{ {launch} }},"),
-                1,
-            )
+            let mut rule: serde_json::Value = serde_json::from_str(&claude()).unwrap();
+            rule["launch"] = serde_json::from_str(&format!("{{ {launch} }}")).unwrap();
+            rule.to_string()
         };
         assert!(refusal("claude", &launch("\"args\": [\"a\\u0000b\"]")).contains("without NUL"));
         assert!(

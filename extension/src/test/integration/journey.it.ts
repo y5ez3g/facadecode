@@ -32,9 +32,9 @@ const AGENTS_HOME = process.env.FACADE_IT_AGENTS_HOME;
  */
 const ARGUMENTS: { readonly [cli: string]: readonly string[] } = {
 	agy: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
-	muse: ['--disable-approval', '--disable-sandbox', '--trust-workspace'],
+	muse: ['--disable-approval', '--disable-sandbox'],
 	opencode: ['--auto'],
-	pi: ['--approve'],
+	pi: [],
 	'my-cli': ['--from-custom', 'two words']
 };
 /** Whether the windows run on the Rust engine: core starts each CLI with its own wiring rather than the extension's run files. */
@@ -199,7 +199,8 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			assert.strictEqual(fs.existsSync(`${RECORD}.mcp.${alias}`), false, 'no MCP server is started for a program');
 		} else if (CLI === 'codex') {
 			assert.ok(launch.args.includes('--dangerously-bypass-approvals-and-sandbox'), launch.args.join(' '));
-			assert.ok(launch.args.some(arg => arg.startsWith('projects={ ') && arg.includes('trust_level = "trusted"')));
+			const folderTrusted = launch.args.some(arg => arg.startsWith('projects={ ') && arg.includes('trust_level = "trusted"'));
+			assert.strictEqual(folderTrusted, !RUST, 'folder trust for a person starting Codex');
 		} else if (CLI === 'claude' && RUST) {
 			// Core's own wiring: its tools and its SessionStart hook come inline, in one `--settings`, and its plugin and MCP files are its run's
 			const settingsAt = launch.args.indexOf('--settings');
@@ -226,14 +227,20 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		} else {
 			for (const arg of ARGUMENTS[CLI]) { assert.ok(launch.args.includes(arg), `missing native argument ${arg}`); }
 		}
-		// Antigravity's trust in the folder, in its settings in the home its terminal sees: the suite's, never the person's (CLIS-3.3)
+		if (CLI === 'muse') {
+			assert.strictEqual(launch.args.includes('--trust-workspace'), !RUST, 'folder trust for a person starting Muse');
+		} else if (CLI === 'pi') {
+			assert.strictEqual(launch.args.includes('--approve'), !RUST, 'startup approvals for a person starting Pi');
+		}
+		// Check the folder trust in Antigravity's isolated settings (CLIS-3.3).
 		if (CLI === 'agy') {
 			// Core gives the run's settings by file, or inline in earlier builds; the old engine updates the CLI's settings file.
 			const argument = launch.args[launch.args.indexOf('--settings') + 1];
 			const text = RUST ? (fs.existsSync(argument) ? fs.readFileSync(argument, 'utf8') : argument)
 				: fs.readFileSync(path.join(AGENTS_HOME!, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8');
-			const settings = JSON.parse(text) as { trustedWorkspaces: string[] };
-			assert.ok(settings.trustedWorkspaces.some(folder => sameFolder(folder, launch.cwd)), JSON.stringify(settings));
+			const settings = JSON.parse(text) as { trustedWorkspaces?: string[] };
+			const folderTrusted = settings.trustedWorkspaces?.some(folder => sameFolder(folder, launch.cwd)) ?? false;
+			assert.strictEqual(folderTrusted, !RUST, 'folder trust for a person starting Antigravity');
 		}
 		// The CLI asked whether its terminal takes reports, was answered by ptyd and reported idle - or, Muse Code reporting nothing,
 		// its screen showed its empty input: the card says not working, without a dot (CLIS-2.3). Until then it was

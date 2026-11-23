@@ -71,11 +71,12 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
         None,
         None,
         &BTreeMap::new(),
-        None,
+        PERSON,
     );
     let launched = CommandLine {
         command: words(&["codex", "--no-daemon", "--model", "gpt-6", "fix it"]),
         env: Vec::new(),
+        launch_env: BTreeMap::new(),
         captures: false,
         files: Vec::new(),
         plugin: Vec::new(),
@@ -89,7 +90,7 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
         Some(&report()),
         None,
         &BTreeMap::new(),
-        None,
+        PERSON,
     );
     assert_eq!(launch.command, words(&["facade-fakecli", "--resume-like"]));
     assert_eq!(
@@ -111,7 +112,7 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
         Some(&report()),
         None,
         &BTreeMap::new(),
-        None,
+        PERSON,
     );
     let hooks = json!({
         "SessionStart": [{ "hooks": [{ "type": "command", "command": hook("muse"), "timeout": 5 }] }],
@@ -126,7 +127,7 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
         Some(&report()),
         None,
         &BTreeMap::new(),
-        None,
+        PERSON,
     );
     let title = by_system(
         "'/opt/facade' hook title '/home/.facade/core/runs/a3/1f/session'",
@@ -155,7 +156,7 @@ fn a_resume_names_the_session_first_and_keeps_no_words_of_the_earlier_start() {
         Some(&report()),
         None,
         &BTreeMap::new(),
-        None,
+        PERSON,
     )
     .unwrap();
     assert_eq!(
@@ -177,7 +178,7 @@ fn a_resume_names_the_session_first_and_keeps_no_words_of_the_earlier_start() {
         Some(&report()),
         None,
         &BTreeMap::new(),
-        None,
+        PERSON,
     )
     .unwrap();
     assert_eq!(
@@ -195,7 +196,7 @@ fn a_resume_names_the_session_first_and_keeps_no_words_of_the_earlier_start() {
         Some(&report()),
         None,
         &BTreeMap::new(),
-        None,
+        PERSON,
     )
     .unwrap();
     assert_eq!(
@@ -217,7 +218,7 @@ fn a_resume_names_the_session_first_and_keeps_no_words_of_the_earlier_start() {
         Some(&report()),
         None,
         &home,
-        None,
+        PERSON,
     )
     .unwrap();
     assert_eq!(
@@ -230,41 +231,21 @@ fn a_resume_names_the_session_first_and_keeps_no_words_of_the_earlier_start() {
 /// A launch's folder that holds dots, as every `.worktrees` folder does, and quotes.
 const YOLO_FOLDER: &str = "/work/app.worktrees/it's \"quoted\"";
 
-/// What each CLI's rule adds with YOLO on: the arguments that run it without asking and without
-/// its sandbox, and, for Claude Code and Antigravity, run settings, which turn their sandboxes
-/// off. Codex trusts the folder by an argument, Antigravity by a setting, Muse Code and Pi by a
-/// flag; OpenCode asks nothing, and Claude Code's question is answered on its screen.
+/// Each CLI's work arguments and settings when the person launches with YOLO on.
 fn yolo_of(cli: &str) -> (Vec<String>, Option<Value>) {
-    let toml = crate::formats::toml_string(YOLO_FOLDER);
     match cli {
         "claude" => (
             words(&["--dangerously-skip-permissions"]),
-            Some(json!({
-                "skipDangerousModePermissionPrompt": true, "sandbox": { "enabled": false },
-            })),
+            Some(json!({ "sandbox": { "enabled": false } })),
         ),
-        "codex" => (
-            vec![
-                "--dangerously-bypass-approvals-and-sandbox".into(),
-                "-c".into(),
-                format!("projects={{ {toml} = {{ trust_level = \"trusted\" }} }}"),
-            ],
-            None,
-        ),
+        "codex" => (words(&["--dangerously-bypass-approvals-and-sandbox"]), None),
         "agy" => (
             words(&["--mode", "accept-edits", "--dangerously-skip-permissions"]),
-            Some(json!({ "trustedWorkspaces": [YOLO_FOLDER], "enableTerminalSandbox": false })),
+            Some(json!({ "enableTerminalSandbox": false })),
         ),
-        "muse" => (
-            words(&[
-                "--disable-approval",
-                "--disable-sandbox",
-                "--trust-workspace",
-            ]),
-            None,
-        ),
+        "muse" => (words(&["--disable-approval", "--disable-sandbox"]), None),
         "opencode" => (words(&["--auto"]), None),
-        _ => (words(&["--approve"]), None),
+        _ => (Vec::new(), None),
     }
 }
 
@@ -297,26 +278,32 @@ fn without_yolo(
     on
 }
 
-/// A launch with YOLO on adds what each of the six CLIs' rule says, its arguments after the
-/// rule's launch arguments and its settings in the run's, the launch's folder filled in however
-/// many dots and quotes it holds; a launch with YOLO off adds nothing. A resume adds the same
-/// as a start (RULES-4.2, 4.3).
+/// A person start or resume with YOLO adds the rule's work arguments and settings.
 #[test]
-fn yolo_on_adds_each_cli_s_arguments_and_settings_and_yolo_off_adds_nothing() {
+fn person_yolo_adds_each_cli_s_work_arguments_and_settings() {
     let folder = Path::new(YOLO_FOLDER);
     let session = "019a2b3c-4d5e-4f60-8172-839405a6b7c8";
     for cli in ["claude", "codex", "agy", "muse", "opencode", "pi"] {
         let rule = rule(cli);
         let at = 1 + rule.launch.args.len();
-        let off =
-            start_managed_launch_command(rule, &[], Some(&report()), None, &BTreeMap::new(), None);
+        let off = start_managed_launch_command(
+            rule,
+            &[],
+            Some(&report()),
+            None,
+            &BTreeMap::new(),
+            PERSON,
+        );
         let on = start_managed_launch_command(
             rule,
             &[],
             Some(&report()),
             None,
             &BTreeMap::new(),
-            Some(folder),
+            LaunchPolicy {
+                yolo: Some(folder),
+                ..PERSON
+            },
         );
         assert_eq!(without_yolo(on, at, &off, yolo_of(cli)), off, "{cli}");
         let at = 1 + rule.resume_args(session).unwrap().len() + rule.launch.args.len();
@@ -327,7 +314,7 @@ fn yolo_on_adds_each_cli_s_arguments_and_settings_and_yolo_off_adds_nothing() {
             Some(&report()),
             None,
             &BTreeMap::new(),
-            None,
+            PERSON,
         )
         .unwrap();
         let on = resume_managed_launch_command(
@@ -337,7 +324,10 @@ fn yolo_on_adds_each_cli_s_arguments_and_settings_and_yolo_off_adds_nothing() {
             Some(&report()),
             None,
             &BTreeMap::new(),
-            Some(folder),
+            LaunchPolicy {
+                yolo: Some(folder),
+                ..PERSON
+            },
         )
         .unwrap();
         assert_eq!(
@@ -365,7 +355,10 @@ fn yolo_s_run_settings_join_the_person_s_own() {
         Some(&report()),
         None,
         &BTreeMap::new(),
-        Some(folder),
+        LaunchPolicy {
+            origin: LaunchOrigin::Agent,
+            yolo: Some(folder),
+        },
     );
     let given = settings(&claude);
     assert_eq!(
@@ -391,7 +384,10 @@ fn yolo_s_run_settings_join_the_person_s_own() {
         Some(&report()),
         None,
         &home_environment(&home, &[]),
-        Some(folder),
+        LaunchPolicy {
+            origin: LaunchOrigin::Agent,
+            yolo: Some(folder),
+        },
     );
     assert_eq!(
         settings(&agy)["trustedWorkspaces"],
@@ -444,7 +440,7 @@ fn opencode_reports_its_session_through_a_plugin_after_the_person_s_own() {
             Some(&report()),
             None,
             environment,
-            None,
+            PERSON,
         );
         opencode_overlay(&launch).map(|overlay| {
             (
@@ -516,7 +512,7 @@ fn opencode_reports_its_session_through_a_plugin_after_the_person_s_own() {
         Some(&report()),
         None,
         &variable,
-        None,
+        PERSON,
     );
     assert_eq!(
         opencode_overlay(&launch),
@@ -561,7 +557,7 @@ fn opencode_reports_its_session_through_a_plugin_after_the_person_s_own() {
             Some(&report()),
             None,
             &home_environment(&home, &[]),
-            None,
+            PERSON,
         );
         assert!(
             !launch.captures && opencode_overlay(&launch).is_none(),
@@ -578,7 +574,7 @@ fn pi_reports_its_session_through_an_extension_of_the_run() {
         Some(&report()),
         None,
         &BTreeMap::new(),
-        None,
+        PERSON,
     );
     assert_eq!(
         launch.command,
@@ -601,7 +597,7 @@ fn claude_gets_a_session_start_hook_beside_the_person_s_own_settings() {
         Some(&report()),
         None,
         &BTreeMap::new(),
-        None,
+        PERSON,
     );
     assert_eq!(
         launch.command[..3],
@@ -629,7 +625,7 @@ fn claude_gets_a_session_start_hook_beside_the_person_s_own_settings() {
             Some(&report()),
             None,
             &BTreeMap::new(),
-            None,
+            PERSON,
         );
         let merged = settings(&launch);
         assert_eq!(merged["model"], "opus");
@@ -667,7 +663,7 @@ fn claude_settings_facade_cannot_read_start_unchanged_without_a_hook() {
             Some(&report()),
             None,
             &BTreeMap::new(),
-            None,
+            PERSON,
         );
         assert!(!launch.captures, "{given:?}");
         assert_eq!(
@@ -683,7 +679,7 @@ fn claude_settings_facade_cannot_read_start_unchanged_without_a_hook() {
         Some(&report()),
         None,
         &BTreeMap::new(),
-        None,
+        PERSON,
     );
     assert!(
         launch.captures && launch.command.ends_with(&after_options),
@@ -728,7 +724,7 @@ fn codex_trusts_its_session_start_hook_by_the_hash_at_its_group_s_place() {
         Some(&report()),
         None,
         &BTreeMap::new(),
-        None,
+        PERSON,
     );
     assert_eq!(launch.command[..2], words(&["codex", "--no-daemon"]));
     assert_eq!(launch.command[4..], words(&["--model", "gpt-6"]));
@@ -779,7 +775,7 @@ fn codex_merges_the_person_s_hook_overrides_and_keeps_every_other_word_in_order(
         Some(&report()),
         None,
         &BTreeMap::new(),
-        None,
+        PERSON,
     );
     assert!(
         !launch.captures,
@@ -796,7 +792,7 @@ fn codex_merges_the_person_s_hook_overrides_and_keeps_every_other_word_in_order(
         Some(&report()),
         None,
         &BTreeMap::new(),
-        None,
+        PERSON,
     );
     assert!(launch.captures);
     assert_eq!(
@@ -863,7 +859,7 @@ fn codex_hook_settings_facade_cannot_read_start_unchanged_without_a_hook() {
             Some(&report()),
             None,
             &BTreeMap::new(),
-            None,
+            PERSON,
         );
         assert!(!launch.captures, "{given:?}");
         assert_eq!(
@@ -892,7 +888,7 @@ fn a_hook_command_s_text_stays_one_word_and_one_toml_string() {
         Some(&report),
         None,
         &BTreeMap::new(),
-        None,
+        PERSON,
     ));
     assert_eq!(
         hooks["SessionStart"][0]["hooks"][0]["command"].as_str(),

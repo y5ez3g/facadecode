@@ -12,14 +12,37 @@ use crate::formats::merge_settings;
 use crate::wiring::{self, Hooked, MergedSettings, SessionReport, Tools, Wiring};
 use crate::{ManagedServer, Rule};
 
+/// Who requested this launch, including a launch that reopens a native session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaunchOrigin {
+    Person,
+    Agent,
+}
+
+/// The initiating origin and the destination's YOLO setting for this run.
+#[derive(Clone, Copy, Debug)]
+pub struct LaunchPolicy<'a> {
+    pub origin: LaunchOrigin,
+    /// The launch folder when YOLO is enabled.
+    pub yolo: Option<&'a Path>,
+}
+
+impl<'a> LaunchPolicy<'a> {
+    /// The folder when Facade may handle startup trust and notices for this run.
+    pub fn startup_folder(self) -> Option<&'a Path> {
+        self.yolo.filter(|_| self.origin == LaunchOrigin::Agent)
+    }
+}
+
 /// The command line of a run's CLI.
 #[derive(PartialEq, Eq)]
 pub struct CommandLine {
     /// The program, then its arguments.
     pub command: Vec<String>,
-    /// The variables the session-start hook and Facade's tools need, set after the rule's own
-    /// changes to the environment.
+    /// Variables for session reporting and Facade's tools.
     pub env: Vec<(String, String)>,
+    /// Run-local updater and startup settings. Their changes are undone on inheritance.
+    pub launch_env: BTreeMap<String, String>,
     /// The CLI reports its session to the run's session file.
     pub captures: bool,
     /// The files the run's folder holds for the CLI: each name and its text.
@@ -55,7 +78,7 @@ impl fmt::Debug for CommandLine {
 ///
 /// `session` is where the CLI reports its session. `None` skips session reporting.
 /// `server` is the managed MCP server for the run. `None` starts without the tools.
-/// `yolo` is the folder of a run with YOLO on. `None` leaves YOLO off.
+/// `policy` gives the launch origin and whether the destination has YOLO on.
 /// `environment` is the CLI's own environment.
 pub fn start_managed_launch_command(
     rule: &Rule,
@@ -63,19 +86,28 @@ pub fn start_managed_launch_command(
     session: Option<&SessionReport<'_>>,
     server: Option<&ManagedServer<'_>>,
     environment: &BTreeMap<String, String>,
-    yolo: Option<&Path>,
+    policy: LaunchPolicy<'_>,
 ) -> CommandLine {
-    let (mut wiring, tools, uses_run_credential) = wire(rule, server, environment, yolo);
+    let (mut wiring, launch_env, tools, uses_run_credential) =
+        wire(rule, server, environment, policy);
     let reports = session
         .is_some_and(|session| wiring::report_session(&rule.cli, &mut wiring, session, server));
     let hooked = hook(rule, words, session, &wiring, environment);
-    let mut command = rule_args(rule, yolo);
+    let mut command = rule_args(rule, policy.yolo);
     let (hook_args, rest) = (hooked.args, hooked.rest);
     let MergedSettings {
         args: merged,
         files: settings_files,
         mut rest,
-    } = merge(rule, &wiring, rest, server, session, yolo, environment);
+    } = merge(
+        rule,
+        &wiring,
+        rest,
+        server,
+        session,
+        policy.yolo,
+        environment,
+    );
     // A CLI that reports its session through its settings reports it only where they merged.
     let captures = hooked.reported || (reports && !merged.is_empty());
     let after_words = wiring.takes_values_to_next_option && hook_args.is_empty();
@@ -88,10 +120,12 @@ pub fn start_managed_launch_command(
     );
     command.extend(merged);
     command.extend(hook_args);
+    place_startup_args(rule, &mut rest, policy);
     command.extend(rest);
     CommandLine {
         command,
         env: [hooked.env, wiring.env].concat(),
+        launch_env,
         captures,
         files: [wiring.files, hooked.files, settings_files].concat(),
         plugin: wiring.plugin,
@@ -104,7 +138,7 @@ pub fn start_managed_launch_command(
 /// arguments, the rule's arguments, YOLO's, the arguments that have the CLI report its session,
 /// those that give Facade's tools and carry what the tools and YOLO add to its settings, then the
 /// person's saved `words`, which join Facade's hooks and settings as a start's do.
-/// See [`start_managed_launch_command`] for `session`, `server`, `environment` and `yolo`.
+/// See [`start_managed_launch_command`] for `session`, `server`, `environment` and `policy`.
 /// Returns `None` for a rule that does not resume sessions.
 pub fn resume_managed_launch_command(
     rule: &Rule,
@@ -113,15 +147,16 @@ pub fn resume_managed_launch_command(
     session: Option<&SessionReport<'_>>,
     server: Option<&ManagedServer<'_>>,
     environment: &BTreeMap<String, String>,
-    yolo: Option<&Path>,
+    policy: LaunchPolicy<'_>,
 ) -> Option<CommandLine> {
     let resume = rule.resume_args(id)?;
-    let (mut wiring, tools, uses_run_credential) = wire(rule, server, environment, yolo);
+    let (mut wiring, launch_env, tools, uses_run_credential) =
+        wire(rule, server, environment, policy);
     let reports = session
         .is_some_and(|session| wiring::report_session(&rule.cli, &mut wiring, session, server));
     let mut command = vec![rule.program.clone()];
     command.extend(resume);
-    command.extend(rule_args(rule, yolo).into_iter().skip(1));
+    command.extend(rule_args(rule, policy.yolo).into_iter().skip(1));
     let hooked = hook(rule, words, session, &wiring, environment);
     command.extend(hooked.args);
     let MergedSettings {
@@ -134,17 +169,19 @@ pub fn resume_managed_launch_command(
         hooked.rest,
         server,
         session,
-        yolo,
+        policy.yolo,
         environment,
     );
     let captures = hooked.reported || (reports && !merged.is_empty());
     let after_words = wiring.takes_values_to_next_option && merged.is_empty();
     place_tool_args(rule, &mut command, &mut rest, &mut wiring, after_words);
     command.extend(merged);
+    place_startup_args(rule, &mut rest, policy);
     command.extend(rest);
     Some(CommandLine {
         command,
         env: [hooked.env, wiring.env].concat(),
+        launch_env,
         captures,
         files: [wiring.files, hooked.files, settings_files].concat(),
         plugin: wiring.plugin,
@@ -159,8 +196,8 @@ fn wire(
     rule: &Rule,
     server: Option<&ManagedServer<'_>>,
     environment: &BTreeMap<String, String>,
-    yolo: Option<&Path>,
-) -> (Wiring, Tools, bool) {
+    policy: LaunchPolicy<'_>,
+) -> (Wiring, BTreeMap<String, String>, Tools, bool) {
     let given = match server {
         Some(server) => wiring::wire_managed(&rule.cli, server, environment),
         None => Ok(None),
@@ -170,10 +207,23 @@ fn wire(
         Err(reason) => (Wiring::default(), Tools::NotGiven(reason), false),
         Ok(None) => (Wiring::default(), Tools::NotInjected, false),
     };
-    if let Some(settings) = yolo.and_then(|folder| rule.yolo.settings(folder)) {
-        merge_settings(wiring.settings.get_or_insert_with(|| json!({})), &settings);
+    let mut launch_env = if policy.origin == LaunchOrigin::Agent {
+        rule.launch.agent_env.clone()
+    } else {
+        BTreeMap::new()
+    };
+    for (change, folder) in [
+        (&rule.yolo.work, policy.yolo),
+        (&rule.yolo.startup, policy.startup_folder()),
+    ] {
+        if let Some(folder) = folder {
+            launch_env.extend(change.env.clone());
+            if let Some(settings) = change.settings(folder) {
+                merge_settings(wiring.settings.get_or_insert_with(|| json!({})), &settings);
+            }
+        }
     }
-    (wiring, tools, uses_run_credential)
+    (wiring, launch_env, tools, uses_run_credential)
 }
 
 /// What having the CLI report its session through a hook, plugin or extension adds, and the
@@ -223,10 +273,21 @@ fn rule_args(rule: &Rule, yolo: Option<&Path>) -> Vec<String> {
     let mut command = vec![rule.program.clone()];
     command.extend(rule.launch.args.iter().cloned());
     command.extend(
-        yolo.map(|folder| rule.yolo.args(folder))
+        yolo.map(|folder| rule.yolo.work.args(folder))
             .unwrap_or_default(),
     );
     command
+}
+
+/// Startup overrides go after the person's options so the run's last value takes precedence.
+fn place_startup_args(rule: &Rule, rest: &mut Vec<String>, policy: LaunchPolicy<'_>) {
+    if let Some(folder) = policy
+        .startup_folder()
+        .filter(|_| !rule.yolo.startup.args.is_empty())
+    {
+        let end = rule.arguments.end_of_options(rest);
+        rest.splice(end..end, rule.yolo.startup.args(folder));
+    }
 }
 
 /// The arguments that carry the tools' and YOLO's settings merged with the person's, the files they
@@ -291,6 +352,12 @@ fn passed_settings(launch: &CommandLine) -> serde_json::Value {
         .find(|(name, _)| Path::new(given).ends_with(name));
     serde_json::from_str(file.map_or(given.as_str(), |(_, text)| text.as_str())).unwrap()
 }
+
+#[cfg(test)]
+const PERSON: LaunchPolicy<'static> = LaunchPolicy {
+    origin: LaunchOrigin::Person,
+    yolo: None,
+};
 
 #[cfg(test)]
 mod session_tests;

@@ -238,6 +238,7 @@ pub(crate) fn creator_environment(
     if let Some(rule) = rule {
         rule.remove_wiring_environment(&mut env);
     }
+    crate::runs::restore_launch_environment(&mut env);
     Ok(env)
 }
 
@@ -270,16 +271,16 @@ impl Daemon {
         folder: Option<String>,
         environment: BTreeMap<String, String>,
     ) -> Result<(BTreeMap<String, String>, String), ErrorBody> {
-        if let Some(folder) = folder.as_ref().filter(|_| !environment.is_empty()) {
-            return Ok((environment, folder.clone()));
-        }
-        let (login, home) = self.login_environment().await?;
-        let environment = if environment.is_empty() {
-            login
-        } else {
-            environment
+        let (mut environment, folder) = match (folder, environment.is_empty()) {
+            (Some(folder), false) => (environment, folder),
+            (folder, empty) => {
+                let (login, home) = self.login_environment().await?;
+                let environment = if empty { login } else { environment };
+                (environment, folder.unwrap_or(home))
+            }
         };
-        Ok((environment, folder.unwrap_or(home)))
+        crate::runs::restore_launch_environment(&mut environment);
+        Ok((environment, folder))
     }
 
     pub(crate) async fn login_environment(

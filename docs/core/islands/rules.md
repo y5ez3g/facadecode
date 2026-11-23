@@ -42,13 +42,14 @@ files in `core/rules/`. It is a library; it starts no program.
 **daemon**
 - `find(name) -> Result<Option<&'static Rule>, String>`, `rules()`: the rule a CLI name selects.
 - `Rule`: the rule file as typed fields; `Rule::resume_args`, `Rule::remove_wiring_environment`.
-- `start_managed_launch_command(rule, words, session, server, environment, yolo) -> CommandLine`
+- `start_managed_launch_command(rule, words, session, server, environment, policy) -> CommandLine`
   builds the run's command line, environment, files and plugin files.
-  `resume_managed_launch_command(rule, id, words, session, server, environment, yolo)` also
+  `resume_managed_launch_command(rule, id, words, session, server, environment, policy)` also
   names the session to resume and returns `None` for a CLI without session resume. `Tools` records
   whether the CLI has Facade's tools or why they could not be given. `uses_run_credential` lets
   the daemon save the credential's digest when the resulting configuration carries it.
   Both use `wire_managed` to configure the CLI's connection to Facade API v1's MCP entry point.
+  `LaunchPolicy` carries the authenticated launch origin and the folder when YOLO is on.
 - The `entries` module reads `clis` in `facade.json`. `entries::select` checks one configured entry.
   `Entry::resolve_program` uses its effective environment and working folder. `Entry::launch_options`
   returns the literal arguments to save and replay, with their model and effort when known. Those
@@ -136,7 +137,7 @@ Rust regular expressions.
 | `status_glyph` | the CLI's glyph for viewer titles once the CLI has reported its state. The `working` list holds one or more glyph frames, each shown for `frame_ms` milliseconds. The `resting` glyph is for Starting after a report, Idle, Just done, Waiting for you and Error. Every glyph must be nonempty, and `frame_ms` must be positive |
 | `ready_tools` | what to type so the CLI starts Facade's tools before its first turn |
 | `mcp` | the session `_meta` or environment key and the CLI's always-load key |
-| `yolo` | YOLO's arguments, run settings, and the trust question to answer |
+| `yolo` | `work` controls for native permissions, `startup` controls for YOLO agent starts, and the trust question to answer |
 | `console` | on Windows, for a CLI that reads console input records: `per_char_ms`, the wait before Enter for each UTF-16 code unit, and `records_above_bmp` |
 
 **Adding a CLI.** Write `core/rules/<cli>.json` and add it to `FILES` in `lib.rs`; its place there
@@ -159,8 +160,12 @@ adds, the model and effort, the session a resume names, and the `clis` entries o
 - **Keeps:**
   - A rule's `session.resume` names `${session_id}` exactly once and nothing else to fill in, so a
     resume puts the session ID in one place.
-  - YOLO off adds nothing; YOLO on fills only `${folder}` and `${folder_toml}`. On Windows
-    `${folder_toml}` is the folder with `A`–`Z` in lower case, as Codex keys a project there.
+  - YOLO enables `work` controls. `startup` controls require both YOLO and an agent start.
+    Rule options interpolate `${folder}` and `${folder_toml}`. The TOML value uses the
+    resolved working folder, lowercased on Windows as Codex keys a project there.
+  - The rule's agent-start updater environment applies to agent starts in either YOLO mode.
+    Reusing a run's environment restores the inputs its launch controls replaced, before the destination's
+    entry settings apply. Later changes in the invoking shell take precedence.
   - `${env:NAME}` in an entry is read through `env_var`.
   - Each choice in `choices` holds exactly one `${value}`, `${value_toml}` or `${value_json}`.
     When the person's own words already pick a model or an effort, the entry's choice is not

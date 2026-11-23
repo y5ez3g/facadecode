@@ -2,6 +2,7 @@
 	"cli": "agy",
 	"display_name": "Antigravity",
 	"program": "agy",
+	"launch": { "agent_env": { "AGY_CLI_DISABLE_AUTO_UPDATE": "true" } },
 	"arguments": {"reserved": ["--dangerously-skip-permissions", "--mode", "--sandbox", "--conversation", "--continue", "-c", "--remote-agent", "--print", "-p", "--prompt", "--prompt-interactive", "-i", "--model", "--effort"], "single_dash": true, "required": ["--add-dir", "--agent", "--conversation", "--effort", "--input-format", "--json-schema", "--log-file", "--mode", "--model", "--output-format", "--print-timeout", "--project", "--settings"]},
 	"choices": {"model": ["--model", "${value}"], "effort": ["--effort", "${value}"], "spelling": {"model": ["--model"], "effort": ["--effort"]}},
 	"input": {
@@ -33,7 +34,7 @@
 	"mcp": { "session_meta_key": "antigravity.google/root_conversation_id", "always_load_key": "antigravity/alwaysLoad" },
 	"ready_tools": { "text": "/mcp", "typed": "^> /mcp\\s*$", "ready": "✓\\s+facade_facade\\b", "opened": "^MCP Servers\\s*$|\\besc Exit\\b", "close": "Escape" },
 	"yolo": {
-		"args": ["--mode", "accept-edits", "--dangerously-skip-permissions"],
-		"settings": { "trustedWorkspaces": ["${folder}"], "enableTerminalSandbox": false }
+		"work": { "args": ["--mode", "accept-edits", "--dangerously-skip-permissions"], "settings": { "enableTerminalSandbox": false } },
+		"startup": { "settings": { "trustedWorkspaces": ["${folder}"] } }
 	}
 }

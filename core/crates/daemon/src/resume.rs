@@ -20,7 +20,7 @@ use facade_base::{
     model::error::{ErrorBody, Reason},
 };
 use facade_base::{model::agent::AgentRef, model::machine::MachineQueryStatus};
-use facade_rules::entries;
+use facade_rules::{LaunchOrigin, entries};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 
@@ -647,7 +647,7 @@ impl Daemon {
                 let origin = StartOrigin {
                     caller: caller.clone(),
                     sender: sender_from(caller, None),
-                    by_model: false,
+                    launch: LaunchOrigin::Person,
                 };
                 let started = self
                     .start_saved_session(

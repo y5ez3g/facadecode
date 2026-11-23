@@ -30,6 +30,7 @@ use facade_base::{
     model::agent::ManagedAgentState,
     model::terminal::{InputInfo, InputState, ScreenBuffer},
 };
+use facade_rules::LaunchOrigin;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::io::BufReader;
@@ -752,7 +753,11 @@ impl Daemon {
         let origin = StartOrigin {
             caller: caller.clone(),
             sender: sender_from(caller, name),
-            by_model,
+            launch: if by_model {
+                LaunchOrigin::Agent
+            } else {
+                LaunchOrigin::Person
+            },
         };
         // Once a start has a run, let it install even if its call is cancelled.
         if cancel.is_requested() {

@@ -19,6 +19,7 @@ use facade_base::{
     model::machine::location_id,
     model::message::Message,
 };
+use facade_rules::{LaunchOrigin, LaunchPolicy};
 use std::path::Path;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -97,7 +98,7 @@ impl Drop for SessionClaim<'_> {
 pub(crate) struct StartOrigin {
     pub(crate) caller: Caller,
     pub(crate) sender: Sender,
-    pub(crate) by_model: bool,
+    pub(crate) launch: LaunchOrigin,
 }
 
 impl StartOrigin {
@@ -373,8 +374,9 @@ impl Daemon {
         session: Option<String>,
     ) -> Result<Started, ErrorBody> {
         gate_for_test("before-start-run");
-        let (settings, mut configured, destination) =
-            self.check_local_start(&args, origin.by_model).await?;
+        let (settings, mut configured, destination) = self
+            .check_local_start(&args, origin.launch == LaunchOrigin::Agent)
+            .await?;
         if let Some(session) = session.as_deref() {
             command_line::check_session(&configured, session)?;
         }
@@ -472,12 +474,24 @@ impl Daemon {
         let folder = destination.cwd;
         let location = destination.location_id;
         let yolo = settings.yolo;
+        let policy = LaunchPolicy {
+            origin: origin.launch,
+            yolo: yolo.then_some(Path::new(&folder)),
+        };
+        let allow_auto_trust = policy.startup_folder().is_some();
         let rule = configured.rule;
         let reservation = self.runs.reserve_start();
         let id = self.records.next_id().await?;
         let _session = rule
             .zip(session.as_deref())
-            .map(|(rule, session)| self.claim_session(&id, &rule.cli, session, !origin.by_model))
+            .map(|(rule, session)| {
+                self.claim_session(
+                    &id,
+                    &rule.cli,
+                    session,
+                    policy.origin == LaunchOrigin::Person,
+                )
+            })
             .transpose()?;
         let (creator, root) = match &origin.caller {
             Caller::Agent { agent, root, .. } => (
@@ -520,7 +534,7 @@ impl Daemon {
             plain_program: &args.cli,
             inherited: configured.env.clone(),
             cwd: &folder,
-            yolo,
+            policy,
             session: session.as_deref(),
             kind: RunKind::Start,
         };
@@ -708,7 +722,6 @@ impl Daemon {
                 started: tokio::time::Instant::now(),
             },
         };
-        let allow_auto_trust = yolo && matches!(origin.caller, Caller::Agent { .. });
         let handle =
             match agent::spawn_with_trust(actor, rx, tx, self.changes.clone(), allow_auto_trust) {
                 Ok(handle) => handle,
@@ -1145,7 +1158,10 @@ impl Daemon {
             plain_program: &rule.cli,
             inherited: resumed.env.clone(),
             cwd: &info.cwd,
-            yolo,
+            policy: LaunchPolicy {
+                origin: LaunchOrigin::Person,
+                yolo: yolo.then_some(Path::new(&info.cwd)),
+            },
             session: Some(&session),
             kind: RunKind::Resume,
         };
@@ -1274,7 +1290,7 @@ impl Daemon {
         let projection = self.run_instructions(
             request.id,
             request.cwd,
-            request.yolo,
+            request.policy.yolo.is_some(),
             source,
             creator,
             creator_name,

@@ -1,10 +1,6 @@
-//! YOLO (RULES-4.3, CLIS-1.3, CLIS-3.3). When a start asks for it, the rule's `yolo` section is
-//! added to the command line: the CLI then skips its approvals, leaves its sandbox if it has one,
-//! and trusts the folder it starts in. Every CLI is told to trust the folder in the way it accepts:
-//! an argument, a run setting, or, failing both, Facade's answer to the trust question on its
-//! screen, given once and remembered by the CLI. Without YOLO the command line gets nothing extra.
-//! Facade writes none of the CLI's own files for any of this.
+//! YOLO's work options and the startup options for an agent start with YOLO on.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -50,22 +46,51 @@ pub struct TrustQuestion {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct YoloRule {
-    /// Appended after the rule's own arguments, with the folder filled in: `${folder}` as a plain
-    /// path, `${folder_toml}` quoted for TOML.
-    pub args: Vec<String>,
-    /// An object merged over the person's run settings, for the CLIs Facade passes run settings
-    /// to, such as Claude Code and Antigravity with `--settings`. Its keys win; its lists add to
-    /// the person's. The folder is filled into its strings.
-    pub settings: Option<Value>,
+    pub(crate) work: RunOptions,
+    pub(crate) startup: RunOptions,
     /// Present only for a CLI that cannot be told to trust the folder any other way.
     pub question: Option<TrustQuestion>,
 }
 
 impl YoloRule {
+    pub(crate) fn check(&self) -> Result<(), String> {
+        self.work.check("yolo.work")?;
+        self.startup.check("yolo.startup")?;
+        let empty_key = self.question.as_ref().is_some_and(|question| {
+            question.confirm.is_empty() || question.keys.iter().any(String::is_empty)
+        });
+        if empty_key {
+            return Err("yolo.question names an empty key".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RunOptions {
+    /// Arguments with the folder filled in: `${folder}` as a plain path, `${folder_toml}`
+    /// quoted for TOML.
+    pub args: Vec<String>,
+    /// An object merged over the person's run settings, for the CLIs Facade passes run settings
+    /// to, such as Claude Code and Antigravity with `--settings`. Its keys win; its lists add to
+    /// the person's. The folder is filled into its strings.
+    pub settings: Option<Value>,
+    pub env: BTreeMap<String, String>,
+}
+
+impl RunOptions {
     /// The extra arguments for a start in `folder`.
     pub(crate) fn args(&self, folder: &Path) -> Vec<String> {
         let path = folder.to_string_lossy();
-        let quoted = toml_string(&toml_folder(&path));
+        let resolved = self
+            .args
+            .iter()
+            .any(|arg| arg.contains("${folder_toml}"))
+            .then(|| facade_base::files::real_path(folder).ok())
+            .flatten();
+        let resolved = resolved.as_deref().unwrap_or(folder).to_string_lossy();
+        let quoted = toml_string(&toml_folder(&resolved));
         let fill = |arg: &String| with_folder(arg, &path, &quoted);
         self.args.iter().map(fill).collect()
     }
@@ -81,23 +106,17 @@ impl YoloRule {
     }
 
     /// Rejects a section the rest of this module could not use as written.
-    pub(crate) fn check(&self) -> Result<(), String> {
+    fn check(&self, section: &str) -> Result<(), String> {
         let open_placeholder =
             |arg: &&String| arg.contains('\0') || FOLDER.replace_all(arg, "").contains("${");
         if let Some(arg) = self.args.iter().find(open_placeholder) {
             return Err(format!(
-                "yolo argument {arg:?} must be literal text without NUL, with only ${{folder}} \
+                "{section} argument {arg:?} must be literal text without NUL, with only ${{folder}} \
                  or ${{folder_toml}} to fill in"
             ));
         }
         if matches!(&self.settings, Some(settings) if !settings.is_object()) {
-            return Err("yolo.settings must be an object".into());
-        }
-        let empty_key = self.question.as_ref().is_some_and(|question| {
-            question.confirm.is_empty() || question.keys.iter().any(String::is_empty)
-        });
-        if empty_key {
-            return Err("yolo.question names an empty key".into());
+            return Err(format!("{section}.settings must be an object"));
         }
         Ok(())
     }
@@ -137,7 +156,7 @@ mod tests {
     /// a control character.
     const FOLDER_TEXT: &str = "/work/app.worktrees/it's \"quoted\" \\ here\u{7f}";
 
-    fn rule(text: Value) -> YoloRule {
+    fn rule(text: Value) -> RunOptions {
         serde_json::from_value(text).unwrap()
     }
 
@@ -207,7 +226,7 @@ mod tests {
     /// YOLO arguments fill in nothing but the folder, and the settings are an object.
     #[test]
     fn yolo_fills_in_only_the_folder_and_its_settings_are_an_object() {
-        let check = |text: Value| rule(text).check();
+        let check = |text: Value| rule(text).check("yolo");
         assert!(
             check(json!({ "args": ["${session_id}"] }))
                 .unwrap_err()

@@ -33,7 +33,7 @@ use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::programs::Held;
 use facade_base::start::StartCommand;
 use facade_base::terminal::PtyMaster;
-use facade_rules::Rule;
+use facade_rules::{LaunchPolicy, Rule};
 use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -43,7 +43,7 @@ use keeper_link::{KeeperLink, RecordedExit};
 use preparation::Preparation;
 
 pub(crate) use keeper_link::{KeeperOnly, StartReservation};
-pub(crate) use preparation::{FirstRead, PluginHold, RunFiles};
+pub(crate) use preparation::{FirstRead, PluginHold, RunFiles, restore_launch_environment};
 
 /// Where a run's exit goes: set up by the daemon at launch, it hands the exit to the agent's actor.
 /// Called with no lock held.
@@ -88,7 +88,7 @@ pub(crate) struct RunRequest<'a> {
     /// The environment the settings give the CLI; Facade's variables go on top.
     pub(crate) inherited: BTreeMap<String, String>,
     pub(crate) cwd: &'a str,
-    pub(crate) yolo: bool,
+    pub(crate) policy: LaunchPolicy<'a>,
     /// The session the command line continues: a resume's, or a start's that continues one. None
     /// for a start of a new session.
     pub(crate) session: Option<&'a str>,

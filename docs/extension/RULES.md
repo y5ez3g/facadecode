@@ -553,11 +553,11 @@ relay environment. A start on another machine uses its SSH login environment. Re
 location, model, effort and CLI arguments, and uses the machine's current settings, including YOLO.
 
 YOLO defaults to on. A managed agent reads it at start or resume. A Guest reads it when it joins. With YOLO off,
-a caller's MCP reach is its creation tree and the CLI keeps its native sandbox and permissions. Both settings bypass
-the Facade tool confirmation. With YOLO on, the Orchestrator also handles CLI permission and folder trust
-questions and disables the CLI sandbox where available. People who start Claude Code answer its native folder
-trust question. For agent-initiated starts, the Orchestrator can confirm the expected trust option under the
-target home's YOLO setting. CLI questions for the person appear in the terminal.
+a caller's MCP reach is its creation tree and the CLI keeps its native sandbox and permissions. Every managed run
+gets the approvals for Facade's tools and its Codex hook. YOLO enables the CLI's native approval and sandbox bypass
+where available. Person starts keep the CLI's own startup prompts. Only MCP `start_agent` counts as an agent start.
+Shell, editor and resume use person policy. Agent starts disable native automatic updates. With YOLO on an agent
+start also clears supported startup prompts. Login remains a CLI interaction. See CLIS-6.3.
 The [product's CLI table](../PRODUCT.md#cli-differences) owns the summary of differences.
 
 ### 6.7 Messages, machines and tools

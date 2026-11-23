@@ -5,6 +5,18 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use facade_base::system::{SYSTEM, System, env_var};
+use serde::{Deserialize, Serialize};
+
+/// Travels with a run's environment so a Shell command inside the run can restore its inputs.
+const LAUNCH_ENV: &str = "FACADE_LAUNCH_ENV";
+
+#[derive(Serialize, Deserialize)]
+struct LaunchValue {
+    generated: String,
+    previous: Option<String>,
+}
+
 const FACADE_VARIABLES: &[&str] = &[
     "FACADE_AGENT",
     "FACADE_CODE_SESSION_FILE",
@@ -63,6 +75,7 @@ pub(super) fn build(
     id: &str,
 ) -> BTreeMap<String, String> {
     inherited.retain(|name, _| keep(name));
+    remove(&mut inherited, LAUNCH_ENV);
     for (name, value) in [
         ("TERM", "xterm-256color"),
         ("COLORTERM", "truecolor"),
@@ -73,6 +86,64 @@ pub(super) fn build(
         inherited.insert(name.to_owned(), value.to_owned());
     }
     inherited
+}
+
+/// Installs generated variables and records the launch settings this run actually changed.
+pub(super) fn apply(
+    env: &mut BTreeMap<String, String>,
+    added: Vec<(String, String)>,
+    launch_env: BTreeMap<String, String>,
+) {
+    for (name, value) in added {
+        set(env, name, value);
+    }
+    let mut changed = BTreeMap::new();
+    for (name, generated) in launch_env {
+        let previous = env_var(env, &name);
+        if previous != Some(&generated) {
+            let value = LaunchValue {
+                generated: generated.clone(),
+                previous: previous.map(str::to_owned),
+            };
+            set(env, name.clone(), generated);
+            changed.insert(name, value);
+        }
+    }
+    if !changed.is_empty() {
+        let changes = serde_json::to_string(&changed).expect("launch environment values are JSON");
+        env.insert(LAUNCH_ENV.to_owned(), changes);
+    }
+}
+
+/// Restores inputs before the destination applies its entry. A later change from the invoking
+/// shell, including unsetting a variable, takes precedence over the recorded value.
+pub(crate) fn restore_launch_environment(env: &mut BTreeMap<String, String>) {
+    let changed = env_var(env, LAUNCH_ENV)
+        .and_then(|text| serde_json::from_str::<BTreeMap<String, LaunchValue>>(text).ok());
+    remove(env, LAUNCH_ENV);
+    for (name, value) in changed.into_iter().flatten() {
+        if env_var(env, &name) == Some(&value.generated)
+            && facade_rules::is_launch_env_value(&name, &value.generated)
+        {
+            remove(env, &name);
+            if let Some(previous) = value.previous {
+                env.insert(name, previous);
+            }
+        }
+    }
+}
+
+fn set(env: &mut BTreeMap<String, String>, name: String, value: String) {
+    remove(env, &name);
+    env.insert(name, value);
+}
+
+fn remove(env: &mut BTreeMap<String, String>, name: &str) {
+    if SYSTEM == System::Windows {
+        env.retain(|key, _| !key.eq_ignore_ascii_case(name));
+    } else {
+        env.remove(name);
+    }
 }
 
 #[cfg(test)]

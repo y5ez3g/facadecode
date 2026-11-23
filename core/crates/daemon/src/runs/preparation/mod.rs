@@ -21,6 +21,7 @@ use tokio::time::Instant;
 use super::{PreparedRun, RunEvent, RunKind, RunRequest, credential_digest};
 use crate::ToolsGiven;
 
+pub(crate) use environment::restore_launch_environment;
 pub(crate) use folder::RunFiles;
 pub(crate) use plugin::PluginHold;
 pub(crate) use session::FirstRead;
@@ -126,7 +127,6 @@ impl Preparation {
             args: &credential_args,
         };
         let compose = |give_tools: bool| {
-            let trusted = request.yolo.then_some(Path::new(request.cwd));
             let server = give_tools.then_some(&managed_server);
             match request.session {
                 Some(session) => facade_rules::resume_managed_launch_command(
@@ -136,7 +136,7 @@ impl Preparation {
                     report,
                     server,
                     &env,
-                    trusted,
+                    request.policy,
                 ),
                 None => Some(facade_rules::start_managed_launch_command(
                     rule,
@@ -144,7 +144,7 @@ impl Preparation {
                     report,
                     server,
                     &env,
-                    trusted,
+                    request.policy,
                 )),
             }
         };
@@ -188,12 +188,13 @@ impl Preparation {
         let CommandLine {
             command,
             env: added,
+            launch_env,
             captures,
             files: contents,
             tools,
             ..
         } = command_line;
-        env.extend(added);
+        environment::apply(&mut env, added, launch_env);
         let mut launch = StartCommand::from_words(command, request.cwd.to_owned());
         if let Some(program) = request.program {
             launch.program = program.to_owned();

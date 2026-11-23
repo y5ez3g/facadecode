@@ -2,6 +2,7 @@
 	"cli": "claude",
 	"display_name": "Claude Code",
 	"program": "claude",
+	"launch": { "agent_env": { "DISABLE_AUTOUPDATER": "1" } },
 	"arguments": {"reserved": ["--dangerously-skip-permissions", "--allow-dangerously-skip-permissions", "--permission-mode", "--session-id", "--resume", "-r", "--continue", "-c", "--fork-session", "--resume-session-at", "--no-session-persistence", "--from-pr", "--worktree", "-w", "--tmux", "--environment", "--cloud", "--teleport", "--desktop", "--bg", "--background", "--print", "-p", "--model", "--effort", "--bare", "--safe-mode", "--restricted"], "attached": ["-r", "-w"], "variadic": ["--add-dir", "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools", "--tools", "--mcp-config", "--betas", "--file"], "clusters": ["-d", "-n", "-r", "-w"], "required": ["--add-dir", "--agent", "--agents", "--allowedTools", "--allowed-tools", "--append-system-prompt", "--autocompact", "--betas", "--debug-file", "--disallowedTools", "--disallowed-tools", "--effort", "--environment", "--fallback-model", "--file", "--input-format", "--json-schema", "--max-budget-usd", "--mcp-config", "--model", "-n", "--name", "--output-format", "--permission-mode", "--permission-prompts", "--plugin-dir", "--plugin-url", "--remote-control-session-name-prefix", "--session-id", "--setting-sources", "--settings", "--system-prompt", "--system-prompt-snapshot", "--tools"]},
 	"choices": {"model": ["--model", "${value}"], "effort": ["--effort", "${value}"], "spelling": {"model": ["--model"], "effort": ["--effort"]}},
 	"input": {
@@ -27,8 +28,8 @@
 	"status_glyph": { "working": ["◐", "◑"], "resting": "✳", "frame_ms": 960 },
 	"mcp": { "always_load_key": "anthropic/alwaysLoad" },
 	"yolo": {
-		"args": ["--dangerously-skip-permissions"],
-		"settings": { "skipDangerousModePermissionPrompt": true, "sandbox": { "enabled": false } },
+		"work": { "args": ["--dangerously-skip-permissions"], "settings": { "sandbox": { "enabled": false } } },
+		"startup": { "settings": { "skipDangerousModePermissionPrompt": true } },
 		"question": {
 			"shown": "^ *Quick safety check: Is this a project you created",
 			"answer": "^ *(?:❯ +)?Yes, I trust this folder$",

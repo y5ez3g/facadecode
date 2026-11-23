@@ -107,7 +107,7 @@ fn launch_in(cwd: &Path, cli: &str, given: &[&str], environment: &[(&str, &str)]
             args: &words(&[RUN_CREDENTIAL_ARG, RUN_TOKEN]),
         }),
         &environment,
-        None,
+        PERSON,
     )
 }
 
@@ -525,7 +525,7 @@ fn each_cli_given_the_tools_is_given_the_skill_in_its_place() {
             Some(&report()),
             None,
             &BTreeMap::new(),
-            None,
+            PERSON,
         )
     };
     assert!(
@@ -645,7 +645,7 @@ fn the_test_cli_runs_the_server_itself() {
         Some(&report()),
         None,
         &BTreeMap::new(),
-        None,
+        PERSON,
     );
     assert!(
         without.tools == Tools::NotInjected
@@ -1153,7 +1153,7 @@ fn a_pi_run_beside_the_guest_extension_is_given_the_tools() {
             args: &relay_args,
         }),
         &environment,
-        None,
+        PERSON,
     );
     assert_eq!(managed.tools, Tools::Injected);
     assert!(managed.uses_run_credential);
@@ -1316,7 +1316,7 @@ fn antigravity_gets_the_plugin_and_its_tools_allowed_beside_the_person_s_own_rul
             args: &words(&[crate::RUN_CREDENTIAL_ARG, &first]),
         }),
         &environment,
-        None,
+        PERSON,
     );
     let resumed = resume_managed_launch_command(
         rule,
@@ -1328,7 +1328,7 @@ fn antigravity_gets_the_plugin_and_its_tools_allowed_beside_the_person_s_own_rul
             args: &words(&[crate::RUN_CREDENTIAL_ARG, &second]),
         }),
         &environment,
-        None,
+        PERSON,
     )
     .unwrap();
     assert!(managed.uses_run_credential && resumed.uses_run_credential);
