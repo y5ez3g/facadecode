@@ -7,10 +7,12 @@ on:
       - 'core/**'
       - 'docs/extension/**'
       - '.github/workflows/extension-check.yml'
+      - '.github/workflows/extension-release.yml'
       - 'ci/acceptance.py'
       - 'ci/catalog.py'
       - 'ci/check_native_install.py'
       - 'ci/evidence.py'
+      - 'ci/editor_archive.py'
       - 'ci/native_core.py'
       - 'ci/run_native_extension.py'
   workflow_dispatch:

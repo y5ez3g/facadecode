@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from urllib.parse import quote
 from zipfile import BadZipFile, ZipFile
 
 from acceptance import affected_products, changed_paths
@@ -38,6 +39,12 @@ def current_pull_merge(repo, pull, head, base):
     if ((candidate['number'], candidate['state'], candidate['head']['sha'], candidate['base']['sha'])
             != (pull, 'open', head, base)):
         raise AcceptanceError(f'PR #{pull} no longer matches the reviewed open candidate')
+    base_ref = candidate['base']['ref']
+    if candidate['base']['repo']['full_name'].lower() != repo.lower():
+        raise AcceptanceError(f'PR #{pull} targets a different repository')
+    live = gh_json(f'repos/{repo}/git/ref/heads/{quote(base_ref, safe="/")}')
+    if live['ref'] != f'refs/heads/{base_ref}' or live['object']['sha'] != base:
+        raise AcceptanceError(f'PR #{pull} is based on an older revision of {base_ref}')
     merge = candidate.get('merge_commit_sha')
     if not isinstance(merge, str) or not SHA.fullmatch(merge):
         raise AcceptanceError(f'PR #{pull} has no current GitHub merge revision')

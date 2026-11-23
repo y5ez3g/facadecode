@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -9,8 +10,8 @@ import sys
 from tempfile import TemporaryDirectory
 from zipfile import BadZipFile
 
-from catalog import AcceptanceError, PRODUCTS, load
-from evidence import git, make_plan, verify_receipts
+from catalog import AcceptanceError, PRODUCTS
+from evidence import git, verify_receipts
 from github_evidence import SHA, WORKFLOW, artifact_manifest, download_receipts
 from github_timing import attempt_job_records, gh_json
 from merge_review import SHADOW, listed, require_checkout, verify_jobs
@@ -87,8 +88,14 @@ def inspect_main(root, repo, head, output):
         tree = commit['tree']['sha']
         require_checkout(root, head, {'tree': tree, 'merge': head})
         verify_jobs(repo, SHADOW, run)
-        _, _, _, pilots = load(root)
-        plan = make_plan(root, pilots, f'github/{run["id"]}/1')
+        # Reconstruct the run under the reviewed main checkout's own case policy.
+        # The reviewer may already require cases that this main revision predates.
+        plan = json.loads(subprocess.check_output(
+            [sys.executable, '-B', 'ci/acceptance.py', 'plan'], cwd=root, text=True, timeout=30,
+            env={'PATH': os.defpath, 'GITHUB_RUN_ID': str(run['id']), 'GITHUB_RUN_ATTEMPT': '1'},
+        ))
+        if (plan['revision'], plan['tree'], plan['run']) != (head, tree, f'github/{run["id"]}/1'):
+            raise AcceptanceError('the reviewed main checkout returned a different shadow plan')
         receipts = download_receipts(repo, artifact_manifest(endpoint, run, PRODUCTS), output)
         result.update(tree=tree, plan=plan['id'], verified_cases=verify_receipts(plan, receipts.values()))
         require_checkout(root, head, {'tree': tree, 'merge': head})

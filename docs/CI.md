@@ -717,8 +717,8 @@ For an independent verification of a hosted PR shadow run, check out the reviewe
 its tree matches the tested merge tree, or use the exact merge checkout. The command requires
 each selected job to have passed in the current attempt. It checks the GitHub ZIP digests and
 the merge parents, then reconciles the original selected cases with their logged evidence.
-Supply `--pr` to also confirm the workflow belongs to the open PR and verify its current head,
-base and GitHub merge revision at both ends of the audit.
+Supply `--pr` to also confirm the workflow belongs to the open PR. The audit checks the
+head, live base branch and GitHub merge revision before and after replay.
 Use `--output` with a new local directory to keep the original downloads.
 [GitHub Actions artifacts API](https://docs.github.com/en/rest/actions/artifacts)
 
