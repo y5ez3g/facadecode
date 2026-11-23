@@ -1,6 +1,6 @@
 import copy
 import hashlib
-from io import BytesIO
+from io import BytesIO, StringIO
 import json
 import os
 import shutil
@@ -11,11 +11,13 @@ import tempfile
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, replace
 from pathlib import Path
 from threading import Event
 from unittest.mock import patch
 
-from catalog import AcceptanceError, NATIVE_BINDINGS, load, read_cases, read_json, reconcile, validate_binding
+import acceptance
+from catalog import AcceptanceError, Case, NATIVE_BINDINGS, load, read_cases, read_json, reconcile, validate_binding
 from evidence import (
     EDITOR, EDITOR_PASS, binding_paths, binding_product, clean_scope, command_for, completion_record, execute, execution_groups,
     download_prior_vsix, observed_mocha_tests, observed_pass, reclaim_scope_processes, run_identity, verify_receipts,
@@ -183,6 +185,61 @@ class CatalogTests(unittest.TestCase):
                     validate_binding(self.cases[EDITOR_CASE].test, case_id)
                 with self.assertRaisesRegex(AcceptanceError, 'invalid Extension editor binding'):
                     validate_binding(binding, EDITOR_CASE)
+
+
+class CatalogPendingTests(unittest.TestCase):
+    pending = Case('core/daemon/local-client-request/pending-old', 'pr', 'Reports a result', (), None)
+    replacement = replace(pending, id='core/daemon/local-client-request/pending-replacement')
+    binding = {'runner': 'core-scenario', 'target': 'protocol',
+               'name': 'hello_selects_api_version_and_advertises_the_session_catalog'}
+    bound = replace(pending, id=CORE, test=binding)
+
+    @staticmethod
+    def baseline(*cases):
+        return [{key: value for key, value in asdict(case).items() if value is not None}
+                for case in cases]
+
+    def run_catalog(self, previous, current):
+        cases = {case.id: case for case in current}
+        with (
+            patch.object(acceptance, 'load', return_value=(cases, {}, set(), {})),
+            patch.object(acceptance, 'baseline_cases', return_value=self.baseline(*previous)),
+            patch.object(sys, 'argv', ['acceptance.py', 'catalog', '--base', 'catalog-base']),
+            patch.object(sys, 'stdout', new_callable=StringIO) as output,
+            patch.object(sys, 'stderr', new_callable=StringIO) as errors,
+        ):
+            status = acceptance.main()
+        return status, output.getvalue(), errors.getvalue()
+
+    def test_catalog_rejects_a_pending_count_increase(self):
+        status, summary, errors = self.run_catalog((self.bound,), (self.bound, self.pending))
+        self.assertEqual(status, 1, errors)
+        self.assertIn(self.pending.id, summary)
+
+    def test_catalog_accepts_fewer_pending_and_reports_the_newly_bound_id(self):
+        newly_bound = replace(self.pending, test=self.binding)
+        status, summary, errors = self.run_catalog((self.bound, self.pending), (self.bound, newly_bound))
+        self.assertEqual(status, 0, errors)
+        self.assertIn(self.pending.id, summary)
+
+    def test_catalog_accepts_an_equal_count_pending_rename_and_reports_both_ids(self):
+        status, summary, errors = self.run_catalog((self.pending,), (self.replacement,))
+        self.assertEqual(status, 0, errors)
+        self.assertIn(self.pending.id, summary)
+        self.assertIn(self.replacement.id, summary)
+
+    def test_catalog_rejects_losing_an_existing_binding_even_with_fewer_pending(self):
+        unbound = replace(self.bound, test=None)
+        status, _, errors = self.run_catalog((self.bound, self.pending, self.replacement), (unbound,))
+        self.assertEqual(status, 1)
+        self.assertIn(self.bound.id, errors)
+
+    def test_require_new_bindings_still_rejects_an_unbound_replacement(self):
+        with self.assertRaises(AcceptanceError) as error:
+            acceptance.require_new_bindings(
+                {self.replacement.id: self.replacement}, self.baseline(self.pending),
+            )
+        self.assertIn(self.replacement.id, str(error.exception))
 
 
 class PriorPackageTests(unittest.TestCase):

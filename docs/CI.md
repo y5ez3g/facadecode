@@ -511,6 +511,10 @@ the original `--prior-bin` and `--manifest`.
 
 ### Expanded PR evidence review
 
+The shadow catalog job compares pending totals with the base on PR and main push runs.
+It reports the IDs added to and removed from its pending obligations. An increase in that
+count or the loss of a binding for an existing ID fails the job.
+
 For a same-repository PR that schedules the complete Core and Extension matrix, run the
 read-only review from a clean, reviewed checkout of the exact head or matching GitHub merge.
 
@@ -522,9 +526,8 @@ python3 -B ci/merge_review.py --repo OWNER/REPO --pr NUMBER --head "$head" --bas
 Review requires the current `main` base and GitHub test merge, the five first-attempt
 workflows, all 25 jobs on their expected runner labels, and successful execution and
 evidence steps. It checks the registered workflow and matching GitHub Actions check for
-each job. It preserves each base catalog obligation and exact existing binding. The catalog check
-also requires an executable binding for every new obligation against the base. Intentional
-catalog changes need separate review. It rehashes the original shadow and native archives,
+each job. The expanded review preserves each base catalog obligation and exact existing binding.
+It requires a binding for every new obligation and sends intentional catalog changes for separate review. It rehashes the original shadow and native archives,
 reconciles exact shadow case proofs, five typed native case records and two release fixture
 case records, and verifies all six unsigned native package sets and their paired VSIX bytes. Each of the 12 native editor
 logs must meet the reviewed 61-pass baseline and record completed profile cleanup. These

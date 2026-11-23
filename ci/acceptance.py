@@ -69,9 +69,13 @@ def require_new_bindings(cases, baseline):
 
 
 def review_bound_cases(cases, baseline):
-    require_new_bindings(cases, baseline)
+    if not baseline:
+        return
+    previous_pending = {row['id'] for row in baseline if not row.get('test')}
+    pending = {case.id for case in cases.values() if case.test is None}
     lost = []
-    changed = []
+    changed = [(case_id, 'added to pending obligations') for case_id in pending - previous_pending]
+    changed += [(case_id, 'removed from pending obligations') for case_id in previous_pending - pending]
     for old in baseline:
         if not old.get('test'):
             continue
@@ -87,6 +91,8 @@ def review_bound_cases(cases, baseline):
         print(f'Acceptance review for {case_id}: {reason}')
     if lost:
         raise AcceptanceError('existing obligations lost their executable binding:\n  ' + '\n  '.join(sorted(lost)))
+    if len(pending) > len(previous_pending):
+        raise AcceptanceError(f'pending acceptance obligations increased from {len(previous_pending)} to {len(pending)}')
 
 
 def argument_parser():
