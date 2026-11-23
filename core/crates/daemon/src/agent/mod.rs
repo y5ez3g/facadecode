@@ -1,5 +1,5 @@
-//! An agent: one actor task that owns its terminal, screen, state, typist, viewers and the start of
-//! each run, and the handle the rest of the daemon reaches it through.
+//! An agent: one actor task that owns its terminal, screen, state, status glyph, typist, viewers
+//! and the start of each run, and the handle the rest of the daemon reaches it through.
 //!
 //! The actor answers commands before it reads more output, and reads at most 64 KiB at a time.
 //! Output goes into the screen log before the screen parses it. Each run of the CLI has a number:
@@ -9,6 +9,7 @@
 //! The parts the actor owns never call one another; `actor.rs` passes what one learns to the next.
 
 mod actor;
+mod glyph;
 mod person;
 mod readiness;
 mod screen;

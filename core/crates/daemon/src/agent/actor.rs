@@ -1,6 +1,6 @@
-//! The actor task: it owns the terminal, the logged screen, the state, the typist, the viewers and
-//! the start of each run, and passes what one of them learns to the others. None of them calls
-//! another.
+//! The actor task: it owns the terminal, the logged screen, the state, the status glyph, the
+//! typist, the viewers and the start of each run, and passes what one of them learns to the others.
+//! None of them calls another.
 //!
 //! The record is shared with the handles under a leaf lock. Only the actor changes it once it runs,
 //! and only here are changes published: at once for a start, an exit, a rename, a membership change
@@ -25,6 +25,7 @@ use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
+use super::glyph::Glyph;
 use super::person::{ENTER_DRAWN_AFTER, ENTER_READ_AGAIN, PersonKeys, Submitting};
 use super::readiness::{Press, Readiness, StartView};
 use super::screen::LoggedScreen;
@@ -138,11 +139,13 @@ pub(super) fn spawn(
         screen: None,
         screen_start: Some(screen),
         state: tracker,
+        glyph: Glyph::new(rule.and_then(|rule| rule.status_glyph.as_ref())),
+        glyph_at: None,
         facts: state.file,
         kept: None,
         keeping: None,
         state_changed: false,
-        state_at: Some(Instant::now()),
+        state_at: None,
         screen_status_at: None,
         typist: Typist::new(
             &info.agent_id,
@@ -187,8 +190,6 @@ pub(super) fn spawn(
     };
     // The record shows the state from the start.
     actor.record_state();
-    // Read once more as the task begins.
-    actor.state_at = Some(Instant::now());
     tokio::spawn(actor.run(commands, recovered, allow_auto_trust, colors));
     Ok(())
 }
@@ -202,6 +203,9 @@ struct Actor {
     /// What the screen starts from, taken as the task begins.
     screen_start: Option<ScreenStart>,
     state: StateTracker,
+    glyph: Glyph,
+    /// When the next working glyph frame is due.
+    glyph_at: Option<Instant>,
     /// The file beside the screen that keeps the state's facts.
     facts: PathBuf,
     /// Hands changed facts to the task that keeps them; None while quiet or once removed.
@@ -328,6 +332,8 @@ impl Actor {
         colors: TerminalColors,
     ) {
         self.begin(recovered, allow_auto_trust, colors).await;
+        // A recovered run's first viewer needs the glyph from its restored evidence.
+        self.publish_state();
         loop {
             if !self.typist.pasting()
                 && !self.holds_input_for_probe
@@ -360,6 +366,8 @@ impl Actor {
                         break;
                     }
                 }
+                // Continuous terminal output must not hold back a glyph frame.
+                _ = sleep_until(self.glyph_at), if self.glyph_at.is_some() => self.advance_glyph(),
                 event = self.terminal.ready(wait) => self.take_terminal(event),
                 Ok(()) = self.links.tools_connections.changed() => {
                     let open = *self.links.tools_connections.borrow_and_update() > 0;
@@ -404,14 +412,18 @@ impl Actor {
             self.release_ordered_input();
         }
         if self.state_changed {
-            match self.record_state() {
-                Some(true) => self.publish_now(),
-                Some(false) => self.publish_soon(),
-                None => {}
-            }
+            self.publish_state();
         }
         if self.viewers.take_removed() {
             self.take_size(SizeRequest::Shared);
+        }
+        if self.viewers.is_watched()
+            && let Some(interval) = self.glyph.frame_interval()
+        {
+            self.glyph_at
+                .get_or_insert_with(|| Instant::now() + interval);
+        } else {
+            self.glyph_at = None;
         }
         if self.prompt_ready.is_some()
             && self.links.shared.record.lock().unwrap().info.tools_state != ToolsState::Connecting
@@ -449,6 +461,7 @@ impl Actor {
         };
         screen.set_colors(colors);
         self.screen = Some(screen);
+        self.set_status_glyph(None);
         // The screen folder exists now; the facts are kept there.
         self.start_keeping();
         self.undrawn = match (recovered, handed_over) {
@@ -668,6 +681,9 @@ impl Actor {
                 self.links.settled.send_replace(false);
                 let _ = self.links.exit.send(None);
                 self.state.restarted(Instant::now(), version, tools);
+                self.glyph.restart();
+                self.glyph_at = None;
+                self.set_status_glyph(None);
                 self.typist.clear_probes();
                 self.untouched_input = false;
                 self.holds_input_for_probe = false;
@@ -975,9 +991,7 @@ impl Actor {
         self.viewers.show(&fed);
         self.take_parsed(fed);
         self.admit_viewers();
-        if self.catch_up_at.is_none() && self.viewers.is_behind() {
-            self.catch_up_at = Some(Instant::now());
-        }
+        self.wake_behind_viewers();
         self.screen_mut().checkpoint_if_due();
         // A quiet agent starts and types nothing more: the next daemon does.
         if self.quiet {
@@ -1093,6 +1107,27 @@ impl Actor {
         self.catch_up_at = behind.then(|| Instant::now() + CATCH_UP_INTERVAL);
     }
 
+    fn wake_behind_viewers(&mut self) {
+        if self.viewers.is_behind() {
+            self.catch_up_at.get_or_insert_with(Instant::now);
+        }
+    }
+
+    fn set_status_glyph(&mut self, glyph: Option<String>) {
+        let viewer_output = self.screen_mut().set_status_glyph(glyph);
+        self.viewers.show(&ParsedOutput {
+            viewer_output,
+            ..ParsedOutput::default()
+        });
+        self.wake_behind_viewers();
+    }
+
+    fn advance_glyph(&mut self) {
+        self.glyph_at = None;
+        let glyph = self.glyph.advance();
+        self.set_status_glyph(glyph);
+    }
+
     /// The CLI did not end its synchronized update in time: the log ends it at the same point.
     fn end_sync(&mut self) {
         self.screen_mut().checkpoint_if_due();
@@ -1100,10 +1135,8 @@ impl Actor {
         if fed.title_change.is_some() {
             self.record_title();
         }
+        self.viewers.show(&fed);
         self.queue_replies(fed.query_replies);
-        if fed.redraw_viewers {
-            self.viewers.redraw_all();
-        }
         self.admit_viewers();
         self.catch_up_at = Some(Instant::now());
         self.screen_mut().checkpoint_if_due();
@@ -1674,6 +1707,13 @@ impl Actor {
             reading.state,
             ManagedAgentState::Starting | ManagedAgentState::Working
         ));
+        if self.screen.is_some()
+            && let Some(glyph) = self
+                .glyph
+                .update(&reading.state, self.state.has_report_evidence())
+        {
+            self.set_status_glyph(glyph);
+        }
         self.state_at = reading.wake;
         if let Some(kept) = self.kept.as_ref() {
             let facts = self.state.kept();
@@ -1700,6 +1740,14 @@ impl Actor {
             info.state,
             ManagedAgentState::WaitingForYou | ManagedAgentState::Error
         ))
+    }
+
+    fn publish_state(&mut self) {
+        match self.record_state() {
+            Some(true) => self.publish_now(),
+            Some(false) => self.publish_soon(),
+            None => {}
+        }
     }
 }
 

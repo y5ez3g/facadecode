@@ -1,8 +1,8 @@
 # Rules
 
 What Facade knows about each CLI it starts by name: the program and its arguments, how the CLI
-keeps, reports and resumes sessions, how its screen draws its input and state, and how Facade's
-tools and hooks enter it. The daemon and `facade` ask Rules for CLI-specific details. Crate
+keeps, reports and resumes sessions, how it draws its input, how it shows or reports its state,
+and how Facade's tools and hooks enter it. The daemon and `facade` ask Rules for CLI-specific details. Crate
 `facade-rules`, folder `core/crates/rules/`, rule
 files in `core/rules/`. It is a library; it starts no program.
 
@@ -90,8 +90,9 @@ command line together. The children never use each other. They may use the layer
 `args`, `formats`, `find`, `rules` and `FILES`, read only.
 
 - `lib.rs`: `Rule` and the type of each section, `parse` and the checks. Each section checks
-  itself (`InputRule`, `PasteRule`, `Frame`, `Editor`, the three state mechanisms); `Rule` returns
-  the first problem, naming the file. Also `find`, `rules`, `installed_version`, the MCP keys and
+  itself (`InputRule`, `PasteRule`, `Frame`, `Editor`, `StatusGlyph`, and the state mechanisms
+  that read the screen). `Rule` returns the first problem and names the file. Also `find`, `rules`,
+  `installed_version`, the MCP keys and
   `console_typing`. Every child's public items are re-exported at the crate root.
 - `wrappers.rs`: `direct_command`, and the two wrappers it reads: Pi's `pi.cmd`, whole as Pi's
   installer writes it, starts its `pi-launcher.js` with the installer's own Node or a Node program
@@ -134,7 +135,8 @@ Rust regular expressions.
 | `input` | the layout of the input box: `frame`, `prompt`, `editor`, `box` or `prompt_row` |
 | `paste` | how long a paste shows before Enter, and the placeholders the CLI draws for it |
 | `session` | `capture` (`session_start` or `none`) and the `resume` arguments with `${session_id}` |
-| `status` | screen evidence of the state, for a CLI whose own reports fall short |
+| `status` | how Facade reads the CLI's state from its screen or a report's words |
+| `status_glyph` | the CLI's glyph for viewer titles once the CLI has reported its state. The `working` list holds one or more glyph frames, each shown for `frame_ms` milliseconds. The `resting` glyph is for Starting after a report, Idle, Just done, Waiting for you and Error. Every glyph must be nonempty, and `frame_ms` must be positive |
 | `version_file` | the file beside the program that names its version |
 | `ready_tools` | what to type so the CLI starts Facade's tools before its first turn |
 | `mcp` | the session `_meta` or environment key and the CLI's always-load key |
@@ -234,16 +236,17 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
 
 ### state
 
-Reads what a CLI's screen shows of its state, for the CLIs whose own reports leave it out (`state.rs`).
+Reads a CLI's screen for evidence of its state (`state.rs`). A rule can also have the daemon read a report's words.
 
-- **Owns:** no state. It reads two sections of a `Rule`: `status` (a `StateRule`, which names the mechanism and its patterns) and `input` (where the input is drawn). It also owns the screens recorded from each CLI that the readers are tested against, in `tests/state/<cli>.json`.
+- **Owns:** no state. For screen readings it uses `status` (a `StateRule`, which names the mechanism and its patterns) and `input` (where the input is drawn). It also owns the screens recorded from each CLI that the readers are tested against, in `tests/state/<cli>.json`.
 - **Keeps:** a reader recognizes only the layout its CLI was recorded drawing. Any other screen reads as None, so a CLI that draws differently keeps its own reports. A rule reads its screen only around the input kind its mechanism names; any other pairing reads nothing. Readers work on logical lines: rows joined by a soft wrap count as one line, and rows separated by a line break never do. A line that began above the screen is never evidence, and neither is text in the input.
 - **Never does:** keep anything between readings; read the CLI's own reports or decide which version a correction holds for (the daemon does both); type into the CLI or press Enter.
 - **Interface:**
   - `read_state(rule, view) -> Option<ScreenState>`, where `ScreenState` is `Working`, `Idle`, `Blocked(BlockKind)` or `Error(words)`. The daemon's agent state calls it on each complete frame, but only while the selected evidence calls for a screen reading and never while the CLI is drawing a synchronized update. It is None when the rule has no `status` section, or when the screen shows nothing that section recognizes.
-  - The three mechanisms:
+  - The `status` mechanisms:
     - `turn_error` (OpenCode, over its input box): when a turn's model call failed, the error stands just over that turn's summary. It reads as `Error` with the CLI's words. A turn that produced words shows a rate in its summary, so it never reads as an error.
     - `background_correction` (Codex, around its input prompt): reads `Idle` when, over the prompt, a dim footer counts the commands still running in the background, drawn exactly as the CLI draws it or cut off at the screen's right edge, and over that stands the dim summary of a finished turn. The daemon uses this to correct Codex's `working` report.
+    - `background_report` (Claude Code, in a report's words) gives the daemon a `background` pattern. A `working` report whose words match the pattern reads as `idle`.
     - `frame_transcript` (Muse Code, around its input frame): `Working` while the working line stands over the frame, with at most a usage warning or queued input between them. `Idle` under the CLI's header, a question it answered, or the last line of an earlier conversation. Where no frame is drawn, `Blocked(Auth)` while all of its sign-in choices show, and `Blocked(Permission)` while its question about trusting the workspace shows. Part of a frame on the screen reads as None.
   - To check rule files, the layer reads `COUNT` (`${count}`) and `PLURAL` (`${s}`): a footer must contain `COUNT` exactly once, and no placeholder other than these two.
 

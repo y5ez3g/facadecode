@@ -7,6 +7,7 @@
 use crate::kept_modes::{ActiveCharset, KeptModes, KeyboardChange, ModifyOtherKeys};
 use crate::program_status::{self, StatusEvent};
 use crate::units::{Piece, Splitter};
+use crate::write_title_body;
 
 /// A place in the output where the screen must look at its state, just after the piece.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,23 +38,36 @@ pub(crate) struct Filtered {
 }
 
 /// Splits `bytes` into what viewers get and where the screen must look, and follows the modes in
-/// `modes`. `rows` is the screen's height, which bounds a scrolling region.
+/// `modes`. Adds the status glyph to viewer titles. `rows` bounds the scrolling region.
 pub(crate) fn filter(
     splitter: &mut Splitter,
     modes: &mut KeptModes,
     bytes: &[u8],
     rows: u16,
+    status_glyph: Option<&str>,
 ) -> Filtered {
     let mut filtered = Filtered {
         viewer_output: Vec::with_capacity(bytes.len()),
         ..Filtered::default()
     };
     splitter.split(bytes, |offset, piece| {
-        let (bytes, mark) = read_piece(&piece, modes, rows);
-        filtered.viewer_output.extend_from_slice(bytes);
-        if matches!(piece, Piece::String(_)) && bytes.starts_with(b"\x1b]9;4;") {
-            filtered.native_activity.extend_from_slice(bytes);
+        let (mut bytes, mark) = read_piece(&piece, modes, rows);
+        if matches!(piece, Piece::String(_)) {
+            if bytes.starts_with(b"\x1b]9;4;") {
+                filtered.native_activity.extend_from_slice(bytes);
+            }
+            if let Some(glyph) = status_glyph
+                && let [b'\x1b', b']', b'0' | b'2', b';', body @ ..] = bytes
+                && let Some(title) = body
+                    .strip_suffix(b"\x07")
+                    .or_else(|| body.strip_suffix(b"\x1b\\"))
+            {
+                filtered.viewer_output.extend_from_slice(&bytes[..4]);
+                write_title_body(&mut filtered.viewer_output, title, Some(glyph));
+                bytes = &body[title.len()..];
+            }
         }
+        filtered.viewer_output.extend_from_slice(bytes);
         if let Some(mark) = mark {
             filtered.marks.push((offset, mark));
         }
@@ -306,7 +320,7 @@ mod tests {
         let (mut splitter, mut modes) = (Splitter::default(), KeptModes::default());
         let mut out = Vec::new();
         for chunk in chunks {
-            out.extend(filter(&mut splitter, &mut modes, chunk, 24).viewer_output);
+            out.extend(filter(&mut splitter, &mut modes, chunk, 24, None).viewer_output);
         }
         out
     }
@@ -330,12 +344,12 @@ mod tests {
         let whole = filtered(&[stream]);
         for split in 0..=stream.len() {
             let (mut splitter, mut modes) = (Splitter::default(), KeptModes::default());
-            let first = filter(&mut splitter, &mut modes, &stream[..split], 24);
+            let first = filter(&mut splitter, &mut modes, &stream[..split], 24, None);
             let complete = whole.starts_with(&first.viewer_output)
                 && std::str::from_utf8(&first.viewer_output).is_ok()
                 && !first.viewer_output.ends_with(b"\x1b");
             assert!(complete, "split at {split}: {first:?}");
-            let rest = filter(&mut splitter, &mut modes, &stream[split..], 24);
+            let rest = filter(&mut splitter, &mut modes, &stream[split..], 24, None);
             assert_eq!(
                 [first.viewer_output, rest.viewer_output].concat(),
                 whole,
@@ -352,17 +366,17 @@ mod tests {
     #[test]
     fn the_scrolling_region_and_the_character_set_are_noted() {
         let (mut splitter, mut modes) = (Splitter::default(), KeptModes::default());
-        filter(&mut splitter, &mut modes, b"\x1b[2;10r\x0e", 24);
+        filter(&mut splitter, &mut modes, b"\x1b[2;10r\x0e", 24, None);
         assert_eq!(
             (modes.scroll_region, modes.active_charset),
             (Some((2, 10)), ActiveCharset::G1)
         );
-        filter(&mut splitter, &mut modes, b"\x1b[r\x0f", 24);
+        filter(&mut splitter, &mut modes, b"\x1b[r\x0f", 24, None);
         assert_eq!(
             (modes.scroll_region, modes.active_charset),
             (None, ActiveCharset::G0)
         );
-        filter(&mut splitter, &mut modes, b"\x1b[5;3r", 24);
+        filter(&mut splitter, &mut modes, b"\x1b[5;3r", 24, None);
         assert_eq!(
             modes.scroll_region, None,
             "an invalid scrolling region leaves the region as it is"

@@ -107,7 +107,10 @@ wake it when needed.
   and prints one receipt; nothing the agent showed stays, including what a CLI prints as it exits. While attached,
   the CLI's own screens, title and mouse mode control the view, and the terminal app keeps no history of the agent's
   output: `facade screen -n <lines> <agent>` reads it. The Facade Code editor labels the terminal with the CLI's
-  title while it is attached, and the terminal's own title returns when the attachment ends.
+  title while it is attached, and the terminal's own title returns when the attachment ends. Claude Code's title
+  keeps the status glyph it shows when run alone, which it leaves out once Facade takes its state reports: `◐` and `◑`
+  in turn while it works, `✳` while it is idle, done, waiting for you or in error. A Claude Code agent whose turn
+  ended while background work still runs is `Idle`, as a Codex agent is.
 - `facade screen [-n <lines>] <agent>` reads the last lines of the screen and scrollback as text. It also reads the
   last screen of an ended agent.
 - `facade type <agent> "hello" -k Enter "again" -k Enter` pastes text and presses keys in the given order.

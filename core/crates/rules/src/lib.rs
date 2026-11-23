@@ -102,9 +102,12 @@ pub struct Rule {
     #[serde(default)]
     pub paste: PasteRule,
     pub session: SessionRule,
-    /// What the screen shows of the CLI's state, for a CLI whose own reports do not say it.
+    /// How Facade reads the CLI's state from its screen or a report's words.
     #[serde(default)]
     pub status: Option<StateRule>,
+    /// The status glyph the CLI puts before its terminal title and leaves out when the terminal takes its reports.
+    #[serde(default)]
+    pub status_glyph: Option<StatusGlyph>,
     /// The file beside the program that names the installed version, read without running the CLI
     /// (CLIS-2.1): JSON with a `version` string, in the program's real folder or one of the two
     /// above it.
@@ -363,8 +366,8 @@ pub struct BoxInput {
     pub menus: Vec<Menu>,
 }
 
-/// What the screen shows of the CLI's state, read around the input its `input` rule describes.
-/// Patterns match a whole logical line (the rows a soft wrap joins), without its trailing spaces.
+/// How Facade reads the CLI's state from its screen or a report's words.
+/// Screen patterns match a whole logical line (the rows a soft wrap joins), without its trailing spaces.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "mechanism", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StateRule {
@@ -375,6 +378,9 @@ pub enum StateRule {
     /// For a CLI that reports `working` while commands it left in the background outlive its turn:
     /// a finished turn above its input prompt narrows that report to idle.
     BackgroundCorrection(Box<BackgroundCorrection>),
+    /// For a CLI that reports `working` while work it left in the background outlives its turn, and names that work
+    /// in the report's words: such a report reads as `idle`.
+    BackgroundReport(Box<BackgroundReport>),
     /// For a CLI that reports a turn whose model call failed as a turn that ended: the error drawn
     /// right above the turn's summary, at the end of the conversation over the input box, turns
     /// the report into an error with the error's words. The patterns guard every version: a
@@ -432,6 +438,24 @@ pub struct BackgroundCorrection {
     pub verified: Vec<String>,
     /// The dim summary of the finished turn, above that line.
     pub worked: Pattern,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackgroundReport {
+    /// The words of a `working` report sent while only background work runs.
+    pub background: Pattern,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatusGlyph {
+    /// The glyph frames shown in turn while the CLI works.
+    pub working: Vec<String>,
+    /// The glyph shown while it is idle, just done, waits for the person or is in error.
+    pub resting: String,
+    /// How long each working glyph frame shows.
+    pub frame_ms: u64,
 }
 
 /// The rows that mark a draft scrolled out of the input; each pattern's one capture counts the
@@ -515,6 +539,9 @@ impl Rule {
             self.choices.check().err(),
             self.paste.check().err(),
             self.state_problem().err(),
+            self.status_glyph
+                .as_ref()
+                .and_then(|glyph| glyph.check().err()),
             self.session_problem().err(),
         ];
         sections.into_iter().flatten().next()
@@ -547,7 +574,7 @@ impl Rule {
         }
     }
 
-    /// The `status` section, read around the input, and the version it may need.
+    /// The input layout and version a screen-based `status` mechanism may need.
     fn state_problem(&self) -> Result<(), String> {
         let Some(state) = &self.status else {
             return Ok(());
@@ -566,6 +593,7 @@ impl Rule {
                     )
                 }
             }
+            StateRule::BackgroundReport(_) => Ok(()),
             StateRule::TurnError(error) => error.check(&self.input),
         }
     }
@@ -731,8 +759,8 @@ impl Scrolled {
 }
 
 impl StateRule {
-    /// Whether the screen's evidence holds for the CLI at `version`: a correction holds only for
-    /// the versions it was verified on.
+    /// Whether the mechanism applies at `version`. Background correction holds only for the
+    /// versions it was verified on.
     pub fn applies_to(&self, version: Option<&str>) -> bool {
         let StateRule::BackgroundCorrection(correction) = self else {
             return true;
@@ -788,6 +816,23 @@ impl TurnError {
             return Err(
                 "status error must have exactly one capture, the start of the error's words".into(),
             );
+        }
+        Ok(())
+    }
+}
+
+impl StatusGlyph {
+    fn check(&self) -> Result<(), String> {
+        if self.working.is_empty() || self.working.iter().any(String::is_empty) {
+            return Err(
+                "status_glyph.working must list at least one glyph frame, each nonempty".into(),
+            );
+        }
+        if self.resting.is_empty() {
+            return Err("status_glyph.resting must be a nonempty glyph".into());
+        }
+        if self.frame_ms == 0 {
+            return Err("status_glyph.frame_ms must be positive".into());
         }
         Ok(())
     }
@@ -1017,6 +1062,45 @@ mod tests {
 
     fn refusal(name: &str, text: &str) -> String {
         Rule::parse(name, text).expect_err("the rule must be refused")
+    }
+
+    #[test]
+    fn claude_s_rule_reads_background_reports_and_status_glyph() {
+        let claude = find("claude").unwrap().unwrap();
+        let status = claude.status.as_ref().unwrap();
+        let StateRule::BackgroundReport(report) = status else {
+            panic!("Claude Code's status must use background_report");
+        };
+        assert!(status.applies_to(None));
+        assert!(report.background.is_match("2 tasks still running"));
+        assert!(!report.background.is_match("Still working"));
+        assert!(
+            !report
+                .background
+                .is_match("2 tasks still running in parallel")
+        );
+
+        let glyph = claude.status_glyph.as_ref().unwrap();
+        assert_eq!(glyph.working, ["◐", "◑"]);
+        assert_eq!(glyph.resting, "✳");
+        assert_eq!(glyph.frame_ms, 960);
+    }
+
+    #[test]
+    fn a_rule_file_with_an_empty_status_glyph_or_zero_interval_is_refused() {
+        for (field, replacement, problem) in [
+            (r#"["◐", "◑"]"#, "[]", "status_glyph.working"),
+            (r#"["◐", "◑"]"#, r#"["", "◑"]"#, "status_glyph.working"),
+            (r#""✳""#, r#""""#, "status_glyph.resting"),
+            (
+                r#""frame_ms": 960"#,
+                r#""frame_ms": 0"#,
+                "status_glyph.frame_ms",
+            ),
+        ] {
+            let malformed = claude().replacen(field, replacement, 1);
+            assert!(refusal("claude", &malformed).contains(problem));
+        }
     }
 
     #[test]

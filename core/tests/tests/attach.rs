@@ -1237,6 +1237,458 @@ fn shown_title(output: &[u8]) -> String {
     title
 }
 
+/// Every title `output` sets with OSC 0 or 2, in order.
+fn titles_set(output: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(output);
+    text.split("\x1b]")
+        .skip(1)
+        .filter_map(|osc| {
+            let end = osc.find(['\x07', '\x1b']).unwrap_or(osc.len());
+            let osc = &osc[..end];
+            osc.strip_prefix("0;")
+                .or_else(|| osc.strip_prefix("2;"))
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// The status glyphs of Claude Code's rule: the resting one, and the working frames.
+const RESTING: &str = "✳ ";
+const WORKING: [&str; 2] = ["◐ ", "◑ "];
+/// The title the reporting test CLI sets.
+const TITLE: &str = "OC | Greeting";
+
+/// Whether `title` starts with a status glyph.
+fn has_glyph(title: &str) -> bool {
+    [RESTING, WORKING[0], WORKING[1]]
+        .iter()
+        .any(|glyph| title.starts_with(glyph))
+}
+
+/// `TITLE` with `glyph` before it.
+fn glyphed(glyph: &str) -> String {
+    format!("{glyph}{TITLE}")
+}
+
+/// Whether `title` is the host's own title, or none.
+fn host_s_own(title: &str) -> bool {
+    title == "HOST-TITLE" || title.is_empty()
+}
+
+/// The environment of a test CLI titled `TITLE` that reports its state, first after `delay_ms`;
+/// each message it takes is a turn that lasts until it reports something else.
+fn reporting(delay_ms: &'static str) -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("FAKECLI_TITLE", TITLE),
+        ("FAKECLI_STATUS", "1"),
+        ("FAKECLI_STATUS_DELAY_MS", delay_ms),
+        ("FAKECLI_TURN_MS", "600000"),
+    ]
+}
+
+/// Writes the settings that run the test CLI as `claude`, under Claude Code's rule, and connects to
+/// the services.
+fn claude_is_the_test_cli(home: &TestHome) -> DaemonTestClient {
+    std::fs::write(
+        home.path.join("facade.json"),
+        json!({ "clis": { "claude": { "type": "claude", "program": test_binaries().fakecli } } })
+            .to_string(),
+    )
+    .unwrap();
+    connect(home)
+}
+
+/// Runs `facade <args>` in the background with `env`, and returns its output.
+fn facade_with(home: &TestHome, args: &[&str], env: &[(&str, &str)]) -> String {
+    let output = home
+        .command(&test_binaries().facade)
+        .args(args)
+        .envs(env.iter().copied())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{args:?}: {}", stderr(&output));
+    stdout(&output)
+}
+
+/// The Agent State `facade status` gives `agent`.
+fn state_of(home: &TestHome, agent: &str) -> String {
+    let status = home.run_facade_ok(&["status", agent]);
+    status_field(&status, "State")
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The Agent State `facade list` gives the agent named `name`.
+fn listed_state(home: &TestHome, name: &str) -> String {
+    let list = home.run_facade_ok(&["list"]);
+    let table = Table::parse(&list);
+    let row = table
+        .row("NAME", name)
+        .unwrap_or_else(|| panic!("{name} is not listed: {list}"));
+    table.cell(row, "STATE").to_string()
+}
+
+/// A host shell that sets its own title, then runs `facade <args>` in the foreground with `env`,
+/// and says HOST-RETURN when it ends. Returned once the CLI's input box shows.
+fn host_running(home: &TestHome, args: &[&str], env: &[(&str, &str)]) -> TestTerminal {
+    let mut host = home.command(shell());
+    host.args([
+        "-c",
+        "printf '\\033]2;HOST-TITLE\\007HOST-PROMPT\\n'; facade \"$@\"; printf 'HOST-RETURN\\n'",
+        "host",
+    ])
+    .args(args)
+    .envs(env.iter().copied());
+    let term = TestTerminal::spawn(&mut host, 100, 24);
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("❯")) && term.on_alternate_screen(),
+        "{args:?}: {}",
+        term.text_with_scrollback()
+    );
+    term
+}
+
+/// Types `text` into the attached CLI and submits it.
+fn submit(term: &TestTerminal, text: &str) {
+    term.send(text.as_bytes());
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains(text)),
+        "{text}: {}",
+        term.text()
+    );
+    term.send(b"\r");
+}
+
+/// The title the host shows now.
+fn shown(term: &TestTerminal) -> String {
+    shown_title(&term.output_since(0))
+}
+
+/// Waits until the host shows `title`.
+fn shows(term: &TestTerminal, title: &str, case: &str) {
+    assert!(
+        wait_until(LOADED_TIMEOUT, || shown(term) == title),
+        "{case}: {title:?} not shown; titles {:?}",
+        titles_set(&term.output_since(0))
+    );
+}
+
+/// Asserts that the host showed the plain title before the first glyph: no glyph before the CLI's
+/// first report.
+fn plain_before_the_first_glyph(term: &TestTerminal, case: &str) {
+    let titles = titles_set(&term.output_since(0));
+    let plain = titles.iter().position(|title| title == TITLE);
+    let glyph = titles.iter().position(|title| has_glyph(title));
+    assert!(
+        plain.is_some() && plain < glyph,
+        "{case}: no plain title before the first report: {titles:?}"
+    );
+}
+
+/// Whether `output` shows both working frames.
+fn animates(output: &[u8]) -> bool {
+    let titles = titles_set(output);
+    WORKING.iter().all(|glyph| titles.contains(&glyphed(glyph)))
+}
+
+/// Waits until the host has shown both working frames since `mark`.
+fn animates_since(term: &TestTerminal, mark: usize, case: &str) {
+    assert!(
+        wait_until(secs(10), || animates(&term.output_since(mark))),
+        "{case}: working shows both frames; titles {:?}",
+        titles_set(&term.output_since(mark))
+    );
+}
+
+/// Asserts that the host shows `title` and gets no working frame in the next 3 seconds.
+fn rests_on(term: &TestTerminal, title: &str, case: &str) {
+    shows(term, title, case);
+    let mark = term.output_since(0).len();
+    std::thread::sleep(secs(3));
+    let after = titles_set(&term.output_since(mark));
+    assert!(
+        !after
+            .iter()
+            .any(|title| WORKING.iter().any(|glyph| title.starts_with(glyph))),
+        "{case}: working frames after {title:?}: {after:?}"
+    );
+}
+
+/// Ends the attachment with `key`, then asserts that the host's own title is back and that no
+/// title follows in the next 3 seconds.
+fn ends_with_the_host_s_title(term: &mut TestTerminal, key: &[u8], case: &str) {
+    term.send(key);
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT).is_some(),
+        "{case}: {}",
+        term.text_with_scrollback()
+    );
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("HOST-RETURN")),
+        "{case}: {}",
+        term.text_with_scrollback()
+    );
+    assert!(host_s_own(&shown(term)), "{case}: {:?}", shown(term));
+    let end = term.output_since(0).len();
+    std::thread::sleep(secs(3));
+    let after = titles_set(&term.output_since(end));
+    assert!(
+        after.is_empty() && host_s_own(&shown(term)),
+        "{case}: titles after the end: {after:?}"
+    );
+}
+
+/// Attached to Claude Code, which reports its state through the Program Status Protocol, the host
+/// shows its title with the status glyph of its Agent State: none before the first report, `✳`
+/// while idle or done, `◐` and `◑` in turn while working, `✳` for a turn whose background work
+/// still runs (which `list` and `status` give as Idle), none while the title is empty or once the
+/// report is taken back. The glyph stops at the end and the host's own title comes back, whether
+/// the agent exits or the person detaches while it works.
+#[test]
+fn the_host_shows_the_status_glyph_of_the_attached_claude_code() {
+    let home = TestHome::new("attach-glyph");
+    let _wire = claude_is_the_test_cli(&home);
+    for detach_while_working in [false, true] {
+        let name = format!("glyph-{detach_while_working}");
+        let case = format!("detach while working: {detach_while_working}");
+        let mut term = host_running(
+            &home,
+            &["start", "--name", &name, "claude"],
+            &reporting("5000"),
+        );
+        shows(&term, &glyphed(RESTING), &case);
+        plain_before_the_first_glyph(&term, &case);
+
+        let mark = term.output_since(0).len();
+        submit(&term, "work");
+        animates_since(&term, mark, &case);
+        if detach_while_working {
+            ends_with_the_host_s_title(&mut term, b"\x1d", &case);
+            continue;
+        }
+
+        submit(&term, "/fake status done");
+        rests_on(&term, &glyphed(RESTING), &case);
+
+        submit(&term, "/fake title");
+        shows(&term, "", &case);
+        submit(&term, &format!("/fake title {TITLE}"));
+        shows(&term, &glyphed(RESTING), &case);
+
+        let mark = term.output_since(0).len();
+        submit(&term, "work");
+        animates_since(&term, mark, &case);
+        submit(&term, "/fake status working 1 shell still running");
+        rests_on(&term, &glyphed(RESTING), &case);
+        assert_eq!(
+            [listed_state(&home, &name), state_of(&home, &name)],
+            ["Idle", "Idle"],
+            "{case}: a turn whose background work still runs"
+        );
+
+        submit(&term, "/fake clear");
+        shows(&term, TITLE, &case);
+        ends_with_the_host_s_title(&mut term, b"\x04", &case);
+    }
+}
+
+/// No glyph where one of its conditions is missing: Claude Code that never reports keeps its own
+/// title, so does Claude Code without a title of its own, and a CLI that reports without a
+/// `status_glyph` in its rule (the test CLI under its own rule) keeps its titles byte for byte.
+#[test]
+fn the_host_shows_no_glyph_without_the_rule_a_report_or_a_title() {
+    let home = TestHome::new("attach-noglyph");
+    let _wire = claude_is_the_test_cli(&home);
+    let silent = [("FAKECLI_TITLE", TITLE), ("FAKECLI_TURN_MS", "600000")];
+    let reports = reporting("0");
+    let untitled: Vec<_> = reports
+        .iter()
+        .copied()
+        .filter(|(variable, _)| *variable != "FAKECLI_TITLE")
+        .collect();
+    for (name, cli, env, title, reported) in [
+        ("silent", "claude", &silent[..], Some(TITLE), false),
+        ("untitled", "claude", &untitled[..], None, true),
+        ("own-rule", "fake", &reports[..], Some(TITLE), true),
+    ] {
+        let mut term = host_running(&home, &["start", "--name", name, cli], env);
+        submit(&term, "work");
+        assert!(
+            term.wait_for(LOADED_TIMEOUT, |view| view.contains("> work")),
+            "{name}: {}",
+            term.text()
+        );
+        if reported {
+            assert!(
+                wait_until(LOADED_TIMEOUT, || listed_state(&home, name) == "Working"),
+                "{name} reports working: {}",
+                home.run_facade_ok(&["list"])
+            );
+        }
+        std::thread::sleep(secs(3));
+        let titles = titles_set(&term.output_since(0));
+        match title {
+            Some(title) => {
+                assert!(
+                    titles.iter().all(|set| host_s_own(set) || set == title),
+                    "{name}: {titles:?}"
+                );
+                assert_eq!(shown(&term), title, "{name}: {titles:?}");
+            }
+            None => assert!(
+                titles.iter().all(|set| host_s_own(set)),
+                "{name}: {titles:?}"
+            ),
+        }
+        ends_with_the_host_s_title(&mut term, b"\x04", name);
+    }
+}
+
+/// A resumed Claude Code shows no glyph until its new run reports, then the glyph of what it
+/// reports.
+#[test]
+fn a_resumed_claude_code_shows_no_glyph_until_it_reports_again() {
+    const SESSION: &str = "3333cccc-2bae-4a45-b193-a5664c198263";
+    let home = TestHome::new("attach-glyph-resume");
+    let _wire = claude_is_the_test_cli(&home);
+    home.save_claude_session(SESSION, "a reporting conversation");
+    let env = reporting("5000");
+    let receipt = facade_with(&home, &["resume", "-d", &SESSION[..8]], &env);
+    let address = receipt
+        .split_once(" (")
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(address, _)| address.to_string())
+        .unwrap_or_else(|| panic!("no address in the receipt: {receipt:?}"));
+    assert!(
+        wait_until(LOADED_TIMEOUT, || state_of(&home, &address) == "Idle"),
+        "{}",
+        home.run_facade_ok(&["status", &address])
+    );
+    home.run_facade_ok(&["stop", &address]);
+    assert!(
+        wait_until(LOADED_TIMEOUT, || state_of(&home, &address)
+            .starts_with("Ended")),
+        "{}",
+        home.run_facade_ok(&["status", &address])
+    );
+    let mut term = host_running(&home, &["resume", &address], &env);
+    shows(&term, &glyphed(RESTING), "resume");
+    plain_before_the_first_glyph(&term, "resume");
+    ends_with_the_host_s_title(&mut term, b"\x04", "resume");
+}
+
+/// Claude Code that already reported shows its glyph to each viewer from the start: `facade attach`
+/// and an editor watching the `attach` topic get it in the snapshot's title, and both see the
+/// working frames and the resting glyph that follow.
+#[test]
+fn every_viewer_of_claude_code_that_already_reported_gets_its_glyph() {
+    let home = TestHome::new("attach-glyph-viewers");
+    let _wire = claude_is_the_test_cli(&home);
+    facade_with(
+        &home,
+        &["start", "-d", "--name", "early", "claude"],
+        &reporting("0"),
+    );
+    assert!(
+        wait_until(LOADED_TIMEOUT, || state_of(&home, "early") == "Idle"),
+        "{}",
+        home.run_facade_ok(&["status", "early"])
+    );
+    let mut editor = DaemonTestClient::open(&home);
+    editor.hello("ide", DAEMON_API_VERSIONS, json!({}));
+    let watching = editor.request(
+        "watch",
+        json!({ "topic": "attach", "args": { "target": "early" } }),
+    );
+    let watch = watching["result"]["watch"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("no watch: {watching}"));
+    let snapshot = watching["result"]["snapshot"]["redraw"]
+        .as_str()
+        .and_then(|redraw| facade_base::base64::decode(redraw).ok())
+        .unwrap_or_else(|| panic!("no redraw: {watching}"));
+    assert_eq!(
+        shown_title(&snapshot),
+        glyphed(RESTING),
+        "the editor's snapshot"
+    );
+    let editor_sees = || {
+        let mut bytes = snapshot.clone();
+        for change in editor.changes(watch) {
+            if let Some(data) = change["change"]["data"].as_str() {
+                bytes.extend(facade_base::base64::decode(data).unwrap_or_default());
+            }
+        }
+        bytes
+    };
+
+    let mut term = host_running(&home, &["attach", "early"], &[]);
+    shows(&term, &glyphed(RESTING), "attach");
+    let titles = titles_set(&term.output_since(0));
+    assert!(
+        !titles.iter().any(|title| title == TITLE),
+        "attach showed the title without its glyph: {titles:?}"
+    );
+
+    let (mark, editor_mark) = (term.output_since(0).len(), editor_sees().len());
+    submit(&term, "work");
+    animates_since(&term, mark, "attach");
+    assert!(
+        wait_until(secs(10), || animates(&editor_sees()[editor_mark..])),
+        "the editor sees both frames; titles {:?}",
+        titles_set(&editor_sees()[editor_mark..])
+    );
+    submit(&term, "/fake status done");
+    shows(&term, &glyphed(RESTING), "attach");
+    assert!(
+        wait_until(LOADED_TIMEOUT, || shown_title(&editor_sees())
+            == glyphed(RESTING)),
+        "the editor: {:?}",
+        shown_title(&editor_sees())
+    );
+    ends_with_the_host_s_title(&mut term, b"\x1d", "attach");
+}
+
+/// Claude Code starts with its own `✳` before its title, reports idle while Facade's tools still
+/// connect, then sets its title without the glyph, in a later read. The console goes from its own
+/// title to `✳ <title>` and stays there: never the title alone after the report, never two glyphs.
+#[test]
+fn claude_code_s_own_glyph_at_start_gives_way_to_facade_s_without_a_flicker() {
+    let home = TestHome::new("attach-glyphstart");
+    let _wire = claude_is_the_test_cli(&home);
+    let mut env = reporting("0");
+    env.extend([("FAKECLI_OWN_GLYPH", "✳"), ("FAKECLI_MCP_DELAY_MS", "3000")]);
+    let mut term = host_running(&home, &["start", "--name", "starting", "claude"], &env);
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view
+            .contains("title without its glyph")),
+        "{}",
+        term.text()
+    );
+    assert_eq!(
+        state_of(&home, "starting"),
+        "Starting",
+        "the title came while Facade's tools still connect"
+    );
+    assert!(
+        wait_until(LOADED_TIMEOUT, || state_of(&home, "starting") == "Idle"),
+        "{}",
+        home.run_facade_ok(&["status", "starting"])
+    );
+    shows(&term, &glyphed(RESTING), "start");
+    std::thread::sleep(secs(1));
+    let titles = titles_set(&term.output_since(0));
+    let from_the_cli: Vec<_> = titles.iter().filter(|set| !set.is_empty()).collect();
+    assert!(
+        from_the_cli
+            .iter()
+            .all(|set| host_s_own(set) || **set == glyphed(RESTING)),
+        "the console's titles at start: {titles:?}"
+    );
+    ends_with_the_host_s_title(&mut term, b"\x04", "start");
+}
+
 /// While attached, the host terminal shows the CLI's own title: the one it has when the
 /// attachment begins, then each one it sets. With an untitled CLI the host shows no title, or its
 /// own, and labels the terminal by its own rule. When the agent exits or the person detaches, the

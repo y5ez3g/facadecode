@@ -41,12 +41,17 @@
 //! native progress for each turn. A message starting with `/fake`
 //! drives the rest: `/fake block <kind> <words>` waits for the person (`permission`, `question`, or
 //! `auth`) and `/fake error <words>` reports an error, each until the next message; `/fake clear`
-//! takes its report back; `/fake exit <code>` ends it with that code. `/fake menu <question>` asks
+//! takes its report back; `/fake status <state> [<words>]` reports `<state>`, such as `done`, with
+//! those words, and ends the turn; `/fake exit <code>` ends it with that code. `/fake menu <question>` asks
 //! from its screen, as a CLI's permission question does: the question and a menu in place of its
 //! input, the cursor hidden, until Enter or Escape.
 //!
 //! Title: `FAKECLI_TITLE=<text>` sets its terminal's title before its first frame, as OpenCode
-//! does, and a message `/fake title <text>` sets another.
+//! does, and a message `/fake title <text>` sets another; `/fake title` alone sets an empty title.
+//! With `FAKECLI_OWN_GLYPH=<glyph>` it starts as Claude Code does run alone: its first title is
+//! `<glyph> <text>`; it sends its first idle report with a query and, once the terminal answers it,
+//! sets `<text>` and shows `title without its glyph`, so the report and the title reach the
+//! terminal in separate reads.
 //!
 //! `FAKECLI_LOOK=muse` shows a long paste as Muse 1.4.20 does, `[Pasted Content <n> chars]`.
 //!
@@ -265,6 +270,9 @@ struct FakeCli {
     drawn: bool,
     /// Terminal queries the next frame sends, before it draws.
     queries: Vec<String>,
+    /// `FAKECLI_OWN_GLYPH`: the title without its glyph, written once the terminal answers the query
+    /// sent with the first idle report; and whether that query went out.
+    title_after_answer: Option<(String, bool)>,
     /// `FAKECLI_HINT`: drawn in color where an empty input starts.
     hint: Option<String>,
     /// `FAKECLI_DRAFT_AT_START`: the draft after the cursor, drawn in color.
@@ -416,8 +424,13 @@ impl FakeCli {
             }
             self.run_plugin_hook();
         }
-        if let Some(title) = first.trim().strip_prefix("/fake title ") {
-            self.queries.push(format!("\x1b]2;{title}\x07"));
+        if let Some(title) = first
+            .trim()
+            .strip_prefix("/fake title")
+            .filter(|rest| rest.is_empty() || rest.starts_with(' '))
+        {
+            self.queries
+                .push(format!("\x1b]2;{}\x07", title.trim_start()));
             return;
         }
         if first.trim() == "/fake colors" {
@@ -452,6 +465,10 @@ impl FakeCli {
             }
             (Some("/fake"), Some("clear"), _, _) => {
                 status.reports.push(report("clear", None, None))
+            }
+            (Some("/fake"), Some("status"), Some(state), words) => {
+                status.turn_ends = None;
+                status.reports.push(report(state, None, words))
             }
             (Some("/fake"), Some("exit"), code, _) => {
                 self.exit = Some(code.and_then(|code| code.parse().ok()).unwrap_or(0))
@@ -580,6 +597,10 @@ impl FakeCli {
         // A turn that began before it was ready reports for itself.
         if (ready && status.turn_ends.is_none()) || turn_ended {
             status.reports.push(report("idle", None, None));
+            if let Some((_, asked @ false)) = self.title_after_answer.as_mut() {
+                status.reports.push("\x1b]7501;?\x1b\\".into());
+                *asked = true;
+            }
             return true;
         }
         false
@@ -1264,8 +1285,15 @@ fn run() -> anyhow::Result<()> {
         panel_drawn_ready: false,
         drawn: false,
         queries: std::env::var("FAKECLI_TITLE")
-            .map(|title| vec![format!("\x1b]2;{title}\x07")])
+            .map(|title| match std::env::var("FAKECLI_OWN_GLYPH") {
+                Ok(glyph) => vec![format!("\x1b]2;{glyph} {title}\x07")],
+                Err(_) => vec![format!("\x1b]2;{title}\x07")],
+            })
             .unwrap_or_default(),
+        title_after_answer: std::env::var("FAKECLI_TITLE")
+            .ok()
+            .filter(|_| std::env::var_os("FAKECLI_OWN_GLYPH").is_some())
+            .map(|title| (title, false)),
         hint: std::env::var("FAKECLI_HINT").ok(),
         after_cursor: std::env::var("FAKECLI_DRAFT_AT_START").unwrap_or_default(),
         no_leading_space: std::env::var("FAKECLI_NO_LEADING_SPACE").is_ok_and(|v| v == "1"),
@@ -1436,6 +1464,13 @@ fn run() -> anyhow::Result<()> {
                     }
                     if rest.starts_with(b"7501;?") {
                         app.transcript.push("status reports taken".into());
+                        if let Some((title, true)) =
+                            app.title_after_answer.take_if(|(_, asked)| *asked)
+                        {
+                            app.queries.push(format!("\x1b]2;{title}\x07"));
+                            app.transcript.push("title without its glyph".into());
+                            dirty = true;
+                        }
                     }
                     if [&b"10;"[..], b"11;", b"12;"]
                         .iter()

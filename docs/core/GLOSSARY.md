@@ -107,6 +107,8 @@ the identity of that run or matches the agent's own CLI session. Each other conn
 | output | The bytes a terminal writes | — |
 | scrollback | The lines that scrolled off the top of a screen | history |
 | terminal title | A title the CLI sets through its terminal output and the terminal app displays | session name (for this) |
+| Program Status Protocol | OSC 7501, an outside protocol: a CLI whose `OSC 7501 ; ?` the terminal answers reports its state, such as `working` or `idle`, through its terminal output | status protocol, PSP |
+| status glyph | The mark a CLI puts before its terminal title to show its state, such as Claude Code's ✳ or ◐. A CLI that leaves it out because the terminal takes its Program Status Protocol reports gets it from Facade, by its rule | spinner, status icon, title prefix |
 | redraw | Draw the shared grid again for a viewer. A full redraw restores the frame. A viewport update writes rows in place | repaint, refresh |
 | screen log | An agent's screen changes, logged on disk before the screen takes them | — |
 | checkpoint | A saved screen in the screen log, which a recovery replays from | snapshot (for this) |

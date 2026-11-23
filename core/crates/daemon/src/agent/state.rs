@@ -250,6 +250,17 @@ impl StateTracker {
         self.evidence.reads_screen()
     }
 
+    /// Whether the current evidence comes from a report that is still in effect.
+    pub(crate) fn has_report_evidence(&self) -> bool {
+        matches!(self.evidence.source, Source::Reports)
+            && self.evidence.correction.is_none()
+            && self
+                .evidence
+                .base
+                .as_ref()
+                .is_some_and(EvidenceState::active)
+    }
+
     /// Reads a completed frame using the CLI's rule; synchronized drawing is left alone.
     pub(crate) fn observe(&mut self, screen: &Screen) {
         if !self.reads_screen() || screen.synchronized_update_deadline().is_some() {
@@ -568,7 +579,7 @@ impl Evidence {
             Some(StateRule::TurnError(_)) => {
                 matches!(self.base, Some(EvidenceState::Idle | EvidenceState::Done))
             }
-            None => false,
+            Some(StateRule::BackgroundReport(_)) | None => false,
         }
     }
 
@@ -608,8 +619,17 @@ impl Evidence {
 
     fn event(&mut self, event: StatusEvent) {
         match event {
-            StatusEvent::Report(report) => {
+            StatusEvent::Report(mut report) => {
                 self.source = Source::Reports;
+                if report.state == Some(ReportedState::Working)
+                    && let Some(StateRule::BackgroundReport(rule)) = self.rule
+                    && report
+                        .text
+                        .as_deref()
+                        .is_some_and(|words| rule.background.is_match(words))
+                {
+                    report.state = Some(ReportedState::Idle);
+                }
                 match reported(report) {
                     Some(next) => self.replace(next),
                     None => self.revoke(),
@@ -787,6 +807,28 @@ mod tests {
             how,
             reason,
         })
+    }
+
+    #[test]
+    fn background_words_make_a_working_report_read_as_idle() {
+        let now = Instant::now();
+        let mut agent = tracker(Some("claude"), now);
+        assert!(!agent.has_report_evidence());
+        agent.take(vec![StatusEvent::Asked]);
+        assert!(!agent.has_report_evidence());
+
+        // "2 tasks still running" and "Finishing a turn", respectively.
+        agent.take(vec![report(
+            "state=working:msg=MiB0YXNrcyBzdGlsbCBydW5uaW5n",
+        )]);
+        assert_eq!(state(&mut agent, now), (ManagedAgentState::Idle, None));
+        assert!(agent.has_report_evidence());
+        assert!(!agent.reads_screen());
+        agent.take(vec![report("state=working:msg=RmluaXNoaW5nIGEgdHVybg==")]);
+        assert_eq!(state(&mut agent, now), (ManagedAgentState::Working, None));
+
+        agent.take(vec![report("state=clear")]);
+        assert!(!agent.has_report_evidence());
     }
 
     #[test]
@@ -1174,6 +1216,7 @@ mod tests {
         assert!(muse.reads_screen());
         muse.evidence
             .observe(Some(ScreenState::Blocked(BlockKind::Auth)));
+        assert!(!muse.has_report_evidence());
         assert_eq!(
             state(&mut muse, now),
             (

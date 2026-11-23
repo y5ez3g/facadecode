@@ -254,7 +254,14 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
   - `Screens`: `new(folder)`, `folder(id)`, `remove(id)`, `delete_without_records(kept)`.
   - For recovery: `recover`, `recover_after_clean_end`, `saved_size`, `screen_writes`, `state_file`, `read_kept`, `instant_of`.
 
-The agent layer is `agent/mod.rs` (the interface above), `agent/actor.rs` (the task's loop) and `agent/person.rs` (the person's keys). The six child islands are plain values the actor owns: no task, no lock, and none calls another. The actor's loop waits on its commands, the terminal, the tools connections and its timers, and passes what one child learns to the next: output goes from the terminal into the screen, then to the viewers, the state, readiness and the typist; what the typist and readiness write goes back into the terminal's queue. Readiness hands the keys it wants pressed to a closure the actor gives it, which turns them into typist calls. Only the actor publishes the record.
+The agent layer is `agent/mod.rs` (the interface above), `agent/actor.rs` (the task's loop) and
+`agent/person.rs` (the person's keys). The seven child islands are plain values the actor owns.
+They have no task or lock. The actor passes what each child learns to the next. Its loop waits on
+commands, the terminal, tools connections and timers. Output goes from the terminal into the screen, then to
+viewers, state, readiness and the typist. Readiness hands the keys it wants pressed to a closure
+that turns them into typist calls. The typist's output goes into the terminal's input queue.
+The actor feeds each state reading to the status glyph and sends any title update through viewers.
+Only the actor publishes the record.
 
 #### terminal
 
@@ -273,6 +280,8 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 - **Keeps:** Every change is logged before the screen takes it. After 4 MiB of output a checkpoint is taken at a clean point; at the log's 64 MiB cap one is forced, and the log says what a recovery from it loses. A full log reads no output until its checkpoint is written; a failed checkpoint is tried again later. A checkpoint is synced before `current` names it, and the folder is synced before older generations are deleted. Recovery starts from the published checkpoint or a valid older one. Folders and files are private through base (0700 and 0600 on Unix); a folder is synced through base, which needs nothing on Windows.
 - **Never does:** touch the terminal; read CLI rules; know viewers; delete the agent's folder.
 - **Interface:** `create(folder, id, cols, rows)` (async), `recovered(folder, id, screen, log)`, `released(folder, id)`; changes: `feed(bytes) -> ParsedOutput`, `resize(cols, rows)`, `end_synchronized_update()`, `set_colors(TerminalColors)` (for the screen it holds and every screen it holds later); reads: `screen() -> &Screen`, `is_held()`; checkpoints: `checkpoint_if_due()`, `is_full()`, `checkpoint_running()`, `checkpoint_written()` (async), `finish_checkpoint(written)`; memory: `let_go()`, `hold()`, `hold_with_log()`, `finish()` (async). Recovery uses `recover`, `recover_after_clean_end` and `saved_size`; the daemon's lifecycle waits for `screen_writes()` to reach 0 before it exits or a newer build takes over.
+- `set_status_glyph(Option<String>) -> Vec<u8>` forwards to the held screen and returns the title
+  bytes for viewers. The screen log and checkpoints keep the CLI's own title.
 
 #### state
 
@@ -282,10 +291,28 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 - **Keeps:**
   - One state, by a fixed order: `Ended`; the CLI's own `WaitingForYou` or `Error`; a question in place of the input box (`WaitingForYou`); tools unavailable (`Error`); `JustDone`; `Working`; `Starting`; `Idle`; a failed start (`Error`); else `Unknown`.
   - Work that stops reads `Working` for 1 more second; a turn someone asked for that ends unwatched reads `JustDone` until a terminal shows the agent.
+  - Under `background_report`, a `working` report with matching words becomes idle evidence.
   - A start and the tools' connection get 60 seconds each; time the CLI spends asking a question does not count.
   - Only `keep` writes the state file, through a private temporary file and a rename. What the screen shows is read again, never kept.
 - **Never does:** touch the terminal; change the agent's record; publish.
-- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `observe(&Screen)`, `asks(asking, now)`; run: `ended(exit, stopped)`, `restarted(started, version, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connection(open)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
+- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(asking, now)`; run: `ended(exit, stopped)`, `restarted(started, version, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connection(open)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
+
+#### glyph
+
+`Glyph` selects the status glyph from the run's rule and reported state. Each run starts with no
+glyph. `Working` starts with the last working glyph frame shown, or the first frame when work
+begins for the first time. Only the glyph timer advances the frame. With report evidence,
+`Starting`, `Idle`, `JustDone`, `WaitingForYou` and `Error` share the resting glyph. Other states,
+reports taken back, and screen evidence leave the glyph hidden.
+
+The actor arms the glyph timer `frame_ms` ahead while the glyph is working and a viewer is watching
+or waiting for a redraw. Output leaves the armed deadline in place. The timer disarms when it fires
+or either condition stops holding. The actor sends title changes through `Viewers::show` and the
+current glyph also appears in the next viewer redraw. When the actor ends a synchronized update
+at its deadline, it sends any title bytes returned by the screen.
+
+The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_interval()` and
+`advance()`. The screen composes the viewer's title.
 
 #### typist
 

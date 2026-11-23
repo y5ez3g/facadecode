@@ -321,13 +321,11 @@ mod tests {
     #[test]
     fn a_rule_reads_state_only_around_the_input_its_mechanism_names() {
         let codex = FILES[1].1;
-        let framed = FILES[0].1.replacen(
-            "\"session\":",
-            &format!("\"status\": {},\n\t\"session\":", state_section(codex)),
-            1,
-        );
+        let codex_rule: serde_json::Value = serde_json::from_str(codex).unwrap();
+        let mut framed: serde_json::Value = serde_json::from_str(FILES[0].1).unwrap();
+        framed["status"] = codex_rule["status"].clone();
         let error = |cli: &str, file: &str| Rule::parse(cli, file).unwrap_err();
-        assert!(error("claude", &framed).contains("above an input prompt"));
+        assert!(error("claude", &framed.to_string()).contains("above an input prompt"));
         let swapped = FILES[3].1.replace(
             "\"mechanism\": \"frame_transcript\"",
             "\"mechanism\": \"background_correction\"",
@@ -340,12 +338,6 @@ mod tests {
             "^ {2}[1-9]\\\\d* background",
         );
         assert!(error("codex", &uncounted).contains("one capture"));
-    }
-
-    /// A rule file's state section (its `status` key), as text.
-    fn state_section(file: &str) -> String {
-        let value: serde_json::Value = serde_json::from_str(file).unwrap();
-        value["status"].to_string()
     }
 
     /// OpenCode's screen with `turn` as its conversation's last turn, over its input box.

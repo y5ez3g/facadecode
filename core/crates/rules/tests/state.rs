@@ -5,7 +5,7 @@
 
 mod recorded;
 
-use facade_rules::{ScreenState, find, read_state, rules};
+use facade_rules::{ScreenState, StateRule, find, read_state, rules};
 
 /// How a recording writes `state`.
 fn written(state: Option<ScreenState>) -> String {
@@ -76,7 +76,14 @@ fn only_codex_muse_and_opencode_read_their_screens_for_state() {
     let reading: Vec<&str> = rules()
         .unwrap()
         .iter()
-        .filter(|rule| rule.status.is_some())
+        .filter(|rule| match &rule.status {
+            Some(
+                StateRule::BackgroundCorrection(_)
+                | StateRule::FrameTranscript(_)
+                | StateRule::TurnError(_),
+            ) => true,
+            Some(StateRule::BackgroundReport(_)) | None => false,
+        })
         .map(|rule| rule.cli.as_str())
         .collect();
     assert_eq!(reading, ["codex", "muse", "opencode"]);

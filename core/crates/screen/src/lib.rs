@@ -73,7 +73,8 @@ pub struct ParsedOutput {
     pub query_replies: Vec<u8>,
     /// The title the CLI set, if it set one; empty when it reset the title.
     pub title_change: Option<String>,
-    /// The output for viewers: whole characters and sequences, no queries.
+    /// The output for viewers: whole characters and sequences, with the status glyph in titles
+    /// and queries taken out.
     pub viewer_output: Vec<u8>,
     /// The complete OSC 9;4 activity sequences in this batch's viewer output, in order.
     pub native_activity: Vec<u8>,
@@ -88,6 +89,8 @@ pub struct ParsedOutput {
 /// alacritty puts on a synchronized update.
 pub struct Screen {
     terminal: Terminal,
+    status_glyph: Option<String>,
+    deferred_status_title: bool,
     splitter: Splitter,
     modes: KeptModes,
     tab_stops: TabStops,
@@ -104,6 +107,8 @@ impl Screen {
     fn with_scrollback(size: Size, scrollback: Scrollback) -> Self {
         Screen {
             terminal: Terminal::new(size, scrollback.in_alacritty, scrollback.feed()),
+            status_glyph: None,
+            deferred_status_title: false,
             splitter: Splitter::default(),
             modes: KeptModes::default(),
             tab_stops: TabStops::new(size.cols),
@@ -114,6 +119,41 @@ impl Screen {
     /// Sets the colors used to reply to subsequent OSC 10, 11 and 12 queries.
     pub fn set_colors(&mut self, colors: TerminalColors) {
         self.terminal.colors = colors;
+    }
+
+    /// Sets or clears the status glyph. When the glyph changes and the CLI has a nonblank title,
+    /// returns the title sequence viewers need now. This may repeat the title viewers already see.
+    /// During a synchronized update the title sequence follows the output that closes it.
+    pub fn set_status_glyph(&mut self, glyph: Option<String>) -> Vec<u8> {
+        let glyph = glyph.and_then(|mut glyph| {
+            glyph.retain(|ch| !ch.is_control());
+            (!glyph.is_empty()).then_some(glyph)
+        });
+        if self.status_glyph == glyph {
+            return Vec::new();
+        }
+        self.status_glyph = glyph;
+        if self.synchronized_update_deadline().is_some() {
+            self.deferred_status_title = true;
+            return Vec::new();
+        }
+        self.status_title_output()
+    }
+
+    fn take_deferred_status_title(&mut self) -> Vec<u8> {
+        if !self.deferred_status_title || self.synchronized_update_deadline().is_some() {
+            return Vec::new();
+        }
+        self.deferred_status_title = false;
+        self.status_title_output()
+    }
+
+    fn status_title_output(&self) -> Vec<u8> {
+        if self.terminal.title.as_deref().is_some_and(title_has_text) {
+            self.title_output()
+        } else {
+            Vec::new()
+        }
     }
 
     /// Seeds the native title saved alongside a checkpoint's redraw.
@@ -152,7 +192,13 @@ impl Screen {
     /// Takes output the CLI wrote.
     pub fn feed(&mut self, bytes: &[u8]) -> ParsedOutput {
         let rows = self.rows();
-        let filtered = sequences::filter(&mut self.splitter, &mut self.modes, bytes, rows);
+        let filtered = sequences::filter(
+            &mut self.splitter,
+            &mut self.modes,
+            bytes,
+            rows,
+            self.status_glyph.as_deref(),
+        );
         let mut status = Vec::new();
         let mut left_alternate = false;
         let mut parsed_to = 0;
@@ -194,10 +240,12 @@ impl Screen {
         self.terminal.parse(&bytes[parsed_to..]);
         left_alternate |= on_alternate && !self.on_alternate_screen();
         let requests = self.terminal.take_requests();
+        let mut viewer_output = filtered.viewer_output;
+        viewer_output.extend(self.take_deferred_status_title());
         ParsedOutput {
             query_replies: requests.replies,
             title_change: requests.title,
-            viewer_output: filtered.viewer_output,
+            viewer_output,
             native_activity: filtered.native_activity,
             redraw_viewers: left_alternate,
             status,
@@ -217,6 +265,7 @@ impl Screen {
         ParsedOutput {
             query_replies: requests.replies,
             title_change: requests.title,
+            viewer_output: self.take_deferred_status_title(),
             redraw_viewers: on_alternate && !self.on_alternate_screen(),
             ..ParsedOutput::default()
         }
@@ -262,4 +311,23 @@ impl Screen {
         let row = point.line.0.max(0);
         (point.column.0 as u16, row as u16)
     }
+}
+
+fn title_has_text(title: &str) -> bool {
+    title
+        .chars()
+        .any(|ch| !ch.is_control() && !ch.is_whitespace())
+}
+
+fn write_title_body(out: &mut Vec<u8>, title: &[u8], status_glyph: Option<&str>) {
+    if let Some(glyph) = status_glyph
+        && title_has_text(&String::from_utf8_lossy(title))
+        && !title
+            .strip_prefix(glyph.as_bytes())
+            .is_some_and(|rest| rest.starts_with(b" "))
+    {
+        out.extend_from_slice(glyph.as_bytes());
+        out.push(b' ');
+    }
+    out.extend_from_slice(title);
 }
