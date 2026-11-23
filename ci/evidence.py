@@ -19,10 +19,10 @@ from threading import Event
 from urllib.request import urlopen
 
 from catalog import AcceptanceError, MOCHA_JOURNEYS, json_object, read_json, require_same_ids
+from editor_archive import EDITOR, stage_editor
 
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 PLATFORM = 'linux-x64'
-EDITOR = {'version': '1.105.1', 'commit': '7d842fb85a0275a4a8e4d7e040d2625abbf7f084'}
 HARNESS_FILES = (
     'core/scripts/leftovers.sh',
     'core/scripts/test-all.sh',
@@ -330,21 +330,6 @@ def build_extension(root, env, output_dir, package_update=False):
     return 'pass'
 
 
-def download_editor(root, env, output_dir):
-    path_file = output_dir / 'editor-path.txt'
-    script = """
-    const fs = require('node:fs');
-    require('@vscode/test-electron').downloadAndUnzipVSCode(process.argv[1]).then(
-        path => fs.writeFileSync(process.argv[2], path)
-    ).catch(error => { console.error(error); process.exitCode = 1; });
-    """
-    with (output_dir / 'editor-download.log').open('w') as log:
-        status = execute(['node', '-e', script, EDITOR['version'], str(path_file)], root / 'extension', env, log)
-    if status == 'pass':
-        return Path(path_file.read_text()).resolve()
-    raise AcceptanceError(f'editor download {status}. See {output_dir / "editor-download.log"}')
-
-
 def editor_identity(vscode):
     if not vscode.is_absolute() or not vscode.is_file() or not os.access(vscode, os.X_OK):
         raise AcceptanceError('--vscode must be an absolute, executable path to the pinned official VS Code')
@@ -516,7 +501,7 @@ def binding_product(binding):
     return 'extension' if binding['runner'] in ('extension-editor', 'extension-unit') else 'core'
 
 
-def run_pilots(root, plan, product, output_dir, vscode=None, *, editor_workers=2):
+def run_pilots(root, plan, product, output_dir, vscode, *, editor_stage, editor_workers=2):
     host = runtime()
     selected = {key: binding for key, binding in plan['cases'].items() if binding_product(binding) == product}
     if not selected:
@@ -542,6 +527,11 @@ def run_pilots(root, plan, product, output_dir, vscode=None, *, editor_workers=2
             raise AcceptanceError(f'expected Node {plan["node_major"]}, observed {node}')
         (output_dir / 'node-version.txt').write_text(node + '\n')
     started = time.monotonic()
+    if product == 'extension' and vscode is None:
+        print(f'Staging official VS Code {EDITOR["version"]}', flush=True)
+        vscode = stage_editor(root / 'extension/.vscode-test', editor_stage,
+                              output_dir / 'editor-download.log', env)
+        editor = editor_identity(vscode)
     package_stages = sorted({
         stage for binding in selected.values() for stage in PACKAGE_INPUTS.get(binding.get('journey'), ())
     })
@@ -558,10 +548,6 @@ def run_pilots(root, plan, product, output_dir, vscode=None, *, editor_workers=2
                 raise AcceptanceError(f'invalid candidate update package name {name}')
             shutil.copyfile(root / 'extension' / 'build' / 'vsix' / name, candidate_packages / name)
         staged_digests = update_package_digests(plan, output_dir, package_stages)
-    if product == 'extension' and prepared == 'pass' and vscode is None:
-        print(f'Downloading official VS Code {EDITOR["version"]}', flush=True)
-        vscode = download_editor(root, env, output_dir)
-        editor = editor_identity(vscode)
     preparation_ms = round((time.monotonic() - started) * 1000)
     cancelled = Event() if product == 'extension' and prepared == 'pass' else None
 

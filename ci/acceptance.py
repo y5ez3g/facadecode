@@ -7,6 +7,7 @@ import sys
 from collections import Counter
 from os import environ, fsdecode
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from catalog import AcceptanceError, PRODUCTS, discover_apis, json_object, load
 from evidence import git, make_plan, run_identity, run_pilots, verify_receipts
@@ -219,8 +220,9 @@ def main():
                 raise AcceptanceError('--vscode applies to the Extension pilot')
             if args.editor_workers is not None and args.product != 'extension':
                 raise AcceptanceError('--editor-workers applies to the Extension pilot')
-            receipts = [run_pilots(ROOT, plan, args.product, args.output.resolve(), args.vscode,
-                                   editor_workers=args.editor_workers or 2)]
+            with TemporaryDirectory(prefix='fci-editor-') as scratch:
+                receipts = [run_pilots(ROOT, plan, args.product, args.output.resolve(), args.vscode,
+                                       editor_stage=Path(scratch), editor_workers=args.editor_workers or 2)]
         else:
             receipts = args.receipts
         passed = verify_receipts(plan, receipts, args.product)
