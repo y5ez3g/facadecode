@@ -205,10 +205,10 @@ recipient's inbox. Use '-w' to wait until Facade submits the message
 in a managed agent's terminal or a guest reads it. Use '-r' to wait
 for a reply. Set the timeout in seconds with '-t'.
 Messages can be up to 8,000 characters and 540 lines."#,
-        usage: r#"Usage: facade send <RECIPIENT> <TEXT> [OPTIONS]"#,
+        usage: r#"Usage: facade send [OPTIONS] <RECIPIENT> <TEXT>"#,
         examples: r#"  facade send Nova "Check the build"
-  facade send Nova "Check the build" -w
-  facade send a5@laptop "Run the tests and reply" -r -t 120"#,
+  facade send -w Nova "Check the build"
+  facade send -r -t 120 a5@laptop "Run the tests and reply""#,
         details: r#"Arguments
   <RECIPIENT>  Active agent or guest reference, agent ID, or unique name
   <TEXT>       Message text
