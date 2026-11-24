@@ -215,20 +215,33 @@ mod tests {
 
     /// A relay whose actor is verified, so that its calls get as far as their arguments, and whose
     /// tools must not reach the daemon.
-    fn rejecting_relay() -> Relay {
+    fn rejecting_relay(receives_terminal_messages: bool) -> Relay {
         let mut relay = Relay::for_test();
         let services = &mut relay.verified.services;
-        services.authenticate = Box::new(|_, _, _| {
+        services.authenticate = Box::new(move |_, _, _| {
             Ok(ActorIdentity {
                 reference: AgentRef {
                     machine_id: "00000000-0000-4000-8000-000000000001".into(),
                     agent_id: "a7".into(),
                 },
                 kind: AgentKind::Managed,
+                receives_terminal_messages,
             })
         });
         services.connect = Box::new(|_, _| panic!("a rejected tool call must not connect"));
         relay
+    }
+
+    #[test]
+    fn a_timed_read_is_refused_only_with_terminal_message_delivery() {
+        let request = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_messages","arguments":{"timeout_seconds":1}}}"#;
+        let arrived = Instant::now() - std::time::Duration::from_secs(2);
+        for (terminal_delivery, expected) in [(true, "unsupported"), (false, "timeout")] {
+            let answer = rejecting_relay(terminal_delivery)
+                .respond_verified(request, arrived)
+                .expect("a tool answer");
+            assert_eq!(answer["result"]["structuredContent"]["reason"], expected);
+        }
     }
 
     #[test]
@@ -306,7 +319,7 @@ mod tests {
     /// content.
     #[test]
     fn a_tool_result_is_its_envelope_as_text_and_as_structured_content() {
-        let relay = rejecting_relay();
+        let relay = rejecting_relay(true);
         let answer = relay
             .respond_verified(
                 br##"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"send_message","arguments":{"to":"#a2"}}}"##,
@@ -342,7 +355,7 @@ mod tests {
 
     #[test]
     fn read_screen_refuses_last_before_connecting_to_the_daemon() {
-        let relay = rejecting_relay();
+        let relay = rejecting_relay(true);
         for arguments in [
             json!({ "agent": "#a7", "last": 4 }),
             json!({ "agent": "#a7", "last": 4, "lines": 4 }),

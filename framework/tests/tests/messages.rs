@@ -401,7 +401,16 @@ fn a_read_delivers_a_waiting_message_so_it_is_never_typed() {
         delivered(&home, &other.id, "m1")
     );
     let send = begin_send(&home, "worker", "read me", None);
-    let read = read_messages(&mut tools, json!({ "timeout_seconds": 30 }));
+    wait_pending(&home, 2);
+    let refused = tools.call("read_messages", json!({ "timeout_seconds": 30 }));
+    assert_eq!(refused["status"], "failure", "{refused}");
+    assert_eq!(refused["reason"], "unsupported", "{refused}");
+    assert_eq!(
+        refused["message"],
+        "read_messages cannot wait in this managed run. This call did not check your inbox. \
+         End this turn so Facade can deliver incoming messages to your input."
+    );
+    let read = read_messages(&mut tools, json!({}));
     assert_eq!(
         read,
         [json!({ "id": "m2", "from": "command_line", "at": read[0]["at"], "text": "read me" })]
@@ -1133,10 +1142,8 @@ fn messages_and_what_became_of_them_outlive_their_daemon() {
     type_draft(&home, "worker", "my draft");
     let mut tools = tools_of(&home, &worker.id);
     let read = begin_send(&home, "worker", "read me", None);
-    assert_eq!(
-        ids(&read_messages(&mut tools, json!({ "timeout_seconds": 30 }))),
-        ["m1"]
-    );
+    wait_pending(&home, 1);
+    assert_eq!(ids(&read_messages(&mut tools, json!({}))), ["m1"]);
     assert_eq!(delivery_of(&read.receipt()).3, "read");
     home.run_facade_ok(&["type", "worker", "--key", "Ctrl+C"]);
     assert_eq!(
@@ -1389,12 +1396,13 @@ fn a_message_read_when_its_daemon_crashes_is_never_typed_by_the_next() {
     let worker = home.start_named_fake("worker", &[]);
     type_draft(&home, "worker", "my draft");
     let send = begin_send(&home, "worker", "read me", Some("r1"));
+    wait_pending(&home, 1);
     // Keep the read on the connection that is about to die. The relay program would reopen an
     // unanswered read on the next daemon.
     let mut reader = McpTestClient::relay_configured(&home, &worker.id);
     reader.send(
         "tools/call",
-        json!({ "name": "read_messages", "arguments": { "timeout_seconds": 30 } }),
+        json!({ "name": "read_messages", "arguments": {} }),
     );
     crash_at(&home, "after-read-commit");
     drop((send, reader));

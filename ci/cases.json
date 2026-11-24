@@ -1266,7 +1266,8 @@
         "framework/tests/tests/guests.rs:175",
         "framework/tests/tests/mcp.rs:2035",
         "framework/tests/tests/mcp.rs:2346",
-        "framework/tests/tests/guests.rs:166"
+        "framework/tests/tests/guests.rs:166",
+        "framework/crates/daemon/src/mcp/lines.rs:236"
       ],
       "test": {
         "runner": "framework-scenario",

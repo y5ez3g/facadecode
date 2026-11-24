@@ -515,13 +515,12 @@
       }
     }
   },
-  "read_messages waiting for a reply": {
+  "read_messages of a linked reply": {
     "call": {
       "method": "tools/call",
       "params": {
         "name": "read_messages",
         "arguments": {
-          "timeout_seconds": 30,
           "reply_to": "m1@golden-host"
         }
       }

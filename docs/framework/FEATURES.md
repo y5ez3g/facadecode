@@ -152,7 +152,7 @@ message history for 30 days.
 | `start_agent` | Starts a CLI with machine, folder, worktree, model, effort and first prompt options |
 | `stop_agent` | Stops one managed agent while its helpers keep running |
 | `send_message` | Saves one message, with optional waiting for delivery or a linked reply |
-| `read_messages` | Reads the caller's inbox, with optional waiting for new messages or a linked reply |
+| `read_messages` | Reads the caller's inbox. Guests and agents without terminal message delivery can wait for new messages or a linked reply |
 | `read_screen` | Reads the text on a managed agent's terminal |
 | `type_text` | Types text into a running managed agent's terminal |
 | `press_keys` | Presses keys in a running managed agent's terminal |
@@ -167,8 +167,10 @@ this is the configuration when using `facade-mcp` on PATH.
 
 Pass `FACADE_HOME` in that server's environment to use a different home. For both message tools, `timeout_seconds`
 defaults to 0 and accepts up to 30 seconds. A send with a positive timeout requires `wait_for` set to `delivery`
-or `result`. After `reply_timeout`, an agent can call `read_messages` with the original full message address in
-`reply_to` and a positive timeout. Read pages with `after` or `last`. Tool results carry complete message text inline.
+or `result`. After `reply_timeout`, use the original full message address in `read_messages`' `reply_to` filter.
+A managed agent with terminal message delivery can read immediately or end its turn to receive messages in its input.
+A positive read timeout for that agent is refused before touching its inbox. Read pages with `after` or `last`.
+Tool results carry complete message text inline.
 Managed agents receive replies and background failures in their terminals. A terminal notice begins with `🔔`.
 Its record number is available in the inbox. A first prompt's failure and its startup problem share one notice.
 The live agent creator also receives one notice per incident when its agent waits

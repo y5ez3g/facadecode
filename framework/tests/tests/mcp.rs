@@ -54,10 +54,10 @@ fn mcp_zero_wait_sends_are_kept_and_invalid_waits_send_nothing() {
         assert_eq!(empty["data"]["messages"], json!([]), "{empty}");
         assert!(empty["data"].get("next").is_none(), "{empty}");
     }
-    let expired = recipient_mcp.call("read_messages", json!({ "timeout_seconds": 1 }));
-    assert_eq!(expired["status"], "failure", "{expired}");
-    assert_eq!(expired["reason"], "timeout", "{expired}");
-    assert!(expired["data"].get("next").is_none(), "{expired}");
+    let refused = recipient_mcp.call("read_messages", json!({ "timeout_seconds": 1 }));
+    assert_eq!(refused["status"], "failure", "{refused}");
+    assert_eq!(refused["reason"], "unsupported", "{refused}");
+    assert!(refused["data"].get("next").is_none(), "{refused}");
 
     let expected: Vec<_> = [
         ("omitted", json!({})),
@@ -2643,13 +2643,12 @@ fn each_tool_responds_as_recorded(through: Through) {
         "read_messages",
         json!({}),
     );
-    // Ada waits for Bob's reply while a draft holds terminal delivery.
+    // Bob waits for delivery while a draft holds Ada's terminal. Ada takes the pending reply.
     type_draft(&home, "ada", "my draft");
     let waiting = json!({
         "name": "read_messages",
-        "arguments": { "timeout_seconds": 30, "reply_to": sent["data"]["id"] },
+        "arguments": { "reply_to": sent["data"]["id"] },
     });
-    let awaiting = ada.send("tools/call", waiting.clone());
     let reply = json!({
         "name": "send_message",
         "arguments": {
@@ -2658,6 +2657,10 @@ fn each_tool_responds_as_recorded(through: Through) {
         },
     });
     let replying = bob.send("tools/call", reply.clone());
+    assert!(wait_until(secs(10), || home
+        .daemon_log()
+        .contains("#a2 sent m2 to #a1")));
+    let awaiting = ada.send("tools/call", waiting.clone());
     let read = ada
         .answer(awaiting, secs(40))
         .expect("Ada's read is answered");
@@ -2666,7 +2669,7 @@ fn each_tool_responds_as_recorded(through: Through) {
         "{read}"
     );
     golden.record(
-        "read_messages waiting for a reply",
+        "read_messages of a linked reply",
         json!({ "method": "tools/call", "params": waiting }),
         &read,
     );

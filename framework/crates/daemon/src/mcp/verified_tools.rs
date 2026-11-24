@@ -333,6 +333,13 @@ fn read(
         Err(error) => return Some(envelope::refusal(&error)),
     };
     let positive = args.timeout_seconds > 0;
+    if positive && actor.receives_terminal_messages {
+        return Some(envelope::failure(
+            "unsupported",
+            "read_messages cannot wait in this managed run. This call did not check your inbox. \
+             End this turn so Facade can deliver incoming messages to your input.",
+        ));
+    }
     let budget = if positive {
         Duration::from_secs(args.timeout_seconds)
     } else {

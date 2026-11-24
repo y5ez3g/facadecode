@@ -45,7 +45,7 @@ impl BoundActor {
         }
     }
 
-    fn identity(&self) -> ActorIdentity {
+    fn identity(&self, handle: &AgentHandle) -> ActorIdentity {
         ActorIdentity {
             reference: self.reference.clone(),
             kind: if self.run.is_some() {
@@ -53,6 +53,11 @@ impl BoundActor {
             } else {
                 AgentKind::Guest
             },
+            receives_terminal_messages: self.run.is_some()
+                && handle
+                    .rule()
+                    .and_then(|name| facade_rules::find(name).ok().flatten())
+                    .is_some(),
         }
     }
 
@@ -152,8 +157,8 @@ impl Daemon {
                             }
                         }
                     };
-                    actor.current(&daemon, &evidence.process)?;
-                    let identity = actor.identity();
+                    let handle = actor.current(&daemon, &evidence.process)?;
+                    let identity = actor.identity(&handle);
                     bound.set(actor).ok();
                     Ok(identity)
                 },

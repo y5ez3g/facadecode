@@ -721,7 +721,9 @@ Local Managed discovery uses the verified run environment and working directory.
 discovery use the target login context. Local Guest start still validates its authenticated relay environment.
 
 `read_messages` filters its page before delivery and commits only complete returned messages. `reply_to`
-includes retained, delivered replies. A positive `timeout_seconds` waits for matches under the call's deadline.
+includes retained, delivered replies. Guests and agents without terminal message delivery can wait for matches
+under the call's deadline. A positive `timeout_seconds` for a managed agent with terminal message delivery is
+refused before its inbox is read.
 `send_message` saves by default. A result wait uses confirmed delivery and the first matching reply in the
 sender's own inbox, under the same budget. On timeout the reply can still be read through `read_messages`
 with the original send ID. An unconfirmed managed submission names the recipient's full address
