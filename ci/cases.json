@@ -1173,7 +1173,8 @@
         "framework/tests/tests/mcp.rs:2029",
         "framework/tests/tests/mcp.rs:167",
         "framework/tests/tests/mcp.rs:2035",
-        "framework/crates/base/src/texts/instructions.rs:144"
+        "framework/crates/base/src/texts/instructions.rs:144",
+        "framework/crates/base/tests/model_text_limits.rs:7"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -1218,7 +1219,8 @@
         "framework/tests/tests/mcp.rs:2029",
         "framework/tests/tests/mcp.rs:167",
         "framework/tests/tests/mcp.rs:2035",
-        "framework/tests/tests/mcp.rs:2346"
+        "framework/tests/tests/mcp.rs:2346",
+        "framework/crates/base/tests/model_text_limits.rs:7"
       ],
       "test": {
         "runner": "framework-scenario",
