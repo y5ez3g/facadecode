@@ -101,55 +101,75 @@ impl Tape {
         tape
     }
 
-    /// [`Tape::held_ms`], and besides, from each of a person's keys until the input shows what it
-    /// left: the first change of the input after the last key of a run of them, or 2.5 s after the last
-    /// key and the last change, whichever comes first (a58's rule, director m310: a person's keys on
-    /// their way hold the input).
+    /// [`Tape::held_ms`], and besides, from each of a person's keys until the input shows, in order,
+    /// what that key left: its line so far after a character or a Backspace, an empty input after an
+    /// Enter, any change after a paste. A key the input never shows holds it until 2.5 s after that key
+    /// or after the input's last change, whichever is later (a58's rule, director m310; the product's
+    /// own `Unshown`).
     pub fn held_with_keys_ms(&self, from: u64, to: u64) -> u64 {
         const SLOWEST_DRAW: u64 = 2_500_000;
-        let mut spans: Vec<(u64, u64)> = Vec::new();
-        // The person's keys, as the CLI read them: typed characters, their pastes, and the Enters and
-        // Backspaces that follow either.
-        let mut theirs = false;
-        let mut keys: Vec<u64> = Vec::new();
+        // The person's keys as the CLI read them, each with what the input shows once it has them.
+        let mut keys: Vec<(u64, Option<String>)> = Vec::new();
+        let (mut line, mut theirs) = (String::new(), false);
         for (us, token) in &self.tokens {
-            let mine = match token {
-                Token::Char(_) => true,
-                Token::Paste(text) => !is_facades(text),
-                Token::Control(byte) => theirs && matches!(byte, b'\r' | 0x7f | 0x08),
-                _ => false,
-            };
-            theirs = match token {
-                Token::Char(_) => true,
-                Token::Paste(text) => !is_facades(text),
-                Token::Control(b'\r') => false,
-                _ => theirs,
-            };
-            if mine {
-                keys.push(*us);
+            match token {
+                Token::Char(ch) => {
+                    line.push(*ch);
+                    theirs = true;
+                    keys.push((*us, Some(line.clone())));
+                }
+                Token::Paste(text) if !is_facades(text) => {
+                    theirs = true;
+                    line.clear();
+                    keys.push((*us, None));
+                }
+                Token::Control(0x7f | 0x08) if theirs => {
+                    line.pop();
+                    keys.push((*us, Some(line.clone())));
+                }
+                Token::Control(b'\r') if theirs => {
+                    line.clear();
+                    theirs = false;
+                    keys.push((*us, Some(String::new())));
+                }
+                Token::Paste(_) | Token::Control(b'\r') => {
+                    line.clear();
+                    theirs = false;
+                }
+                _ => {}
             }
         }
-        let mut at = 0;
-        while at < keys.len() {
-            // A run of keys, each within the slowest draw of the one before.
-            let first = keys[at];
-            let mut last = first;
-            while at + 1 < keys.len() && keys[at + 1] <= last + SLOWEST_DRAW {
-                at += 1;
-                last = keys[at];
+        let mut spans: Vec<(u64, u64)> = Vec::new();
+        let mut next_box = 0;
+        for (at, (us, shows)) in keys.iter().enumerate() {
+            // The input's changes after this key, in order, from where the key before left off.
+            while next_box < self.boxes.len() && self.boxes[next_box].0 <= *us {
+                next_box += 1;
             }
-            at += 1;
-            let shown = self.boxes.iter().map(|(us, _)| *us).find(|us| *us > last);
-            let latest_change = self
-                .boxes
+            let seen = self.boxes[next_box..]
                 .iter()
-                .map(|(us, _)| *us)
-                .filter(|us| *us <= last + SLOWEST_DRAW)
-                .max()
-                .unwrap_or(last)
-                .max(last);
-            let until = shown.unwrap_or(u64::MAX).min(latest_change + SLOWEST_DRAW);
-            spans.push((first, until));
+                .position(|(_, shown)| match shows {
+                    Some(expected) => shown.trim_end() == expected.trim_end(),
+                    None => true,
+                });
+            let until = match seen {
+                Some(found) => {
+                    next_box += found;
+                    self.boxes[next_box].0
+                }
+                None => {
+                    let later = keys.get(at + 1).map_or(0, |(us, _)| *us);
+                    let changed = self
+                        .boxes
+                        .iter()
+                        .map(|(us, _)| *us)
+                        .filter(|change| *change >= *us && *change <= us + SLOWEST_DRAW)
+                        .max()
+                        .unwrap_or(*us);
+                    (changed.max(*us) + SLOWEST_DRAW).min(later.max(us + SLOWEST_DRAW))
+                }
+            };
+            spans.push((*us, until));
         }
         let mut held = self.held_spans();
         held.extend(spans);
