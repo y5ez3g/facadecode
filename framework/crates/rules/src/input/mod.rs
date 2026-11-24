@@ -46,6 +46,16 @@ pub struct BoxReading {
     pub unsure: bool,
 }
 
+impl BoxReading {
+    /// The draft's rows out of sight, for telling a message's own draft: those its CLI marks, as
+    /// `info.hidden` gives them, or, where the screen cut the input above its first row without a
+    /// mark, one row above at least.
+    pub fn draft_hidden(&self) -> Option<HiddenRows> {
+        let cut = self.line.as_ref().is_some_and(|line| line.cut);
+        (self.info.hidden).or(cut.then_some(HiddenRows { above: 1, below: 0 }))
+    }
+}
+
 /// An input's first row from the column its input starts at to its last cell that draws
 /// something, and the cursor.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,6 +65,9 @@ pub struct InputLine {
     pub cells: Vec<LineCell>,
     /// A row of the input under the first draws something.
     pub rest: bool,
+    /// The screen cut the input above this row without a mark of its CLI's: the input's first rows
+    /// may be out of sight.
+    pub cut: bool,
     /// Column and row.
     pub cursor: (usize, usize),
 }
@@ -120,6 +133,14 @@ impl Reading {
             ..self
         }
     }
+
+    /// The reading of an input the screen cut above its first row without a mark.
+    fn cut(mut self) -> Reading {
+        if let Some(line) = &mut self.line {
+            line.cut = true;
+        }
+        self
+    }
 }
 
 fn reading(state: InputState, evidence: impl Into<String>) -> Reading {
@@ -151,6 +172,7 @@ fn line_of(
         row,
         start,
         rest,
+        cut: false,
         cursor,
         cells: from[..end]
             .iter()
@@ -231,6 +253,15 @@ fn hint_like(cells: &Cells) -> bool {
             .all(|cell| cell.dim || colored(cell))
 }
 
+fn styled(cell: &VisibleCell) -> bool {
+    cell.dim || cell.colored
+}
+
+/// Text, all of it dim or colored, as a CLI that draws its input plain writes around it.
+fn styled_only(cells: &Cells) -> bool {
+    cells.iter().any(draws) && cells.iter().all(|cell| !draws(cell) || styled(cell))
+}
+
 /// `row 7` or `rows 5-7`, counted from 1.
 fn row_span(first: usize, last: usize) -> String {
     match first == last {
@@ -239,10 +270,12 @@ fn row_span(first: usize, last: usize) -> String {
     }
 }
 
-/// The number the one capture of `pattern` holds in `line`.
+/// The number the one capture of `pattern` holds in `line`, 1 where it matches without one.
 fn counted(pattern: &Regex, line: &str) -> Option<u32> {
     let found = pattern.captures(line)?;
-    found[1].parse().ok()
+    found
+        .get(1)
+        .map_or(Some(1), |number| number.as_str().parse().ok())
 }
 
 /// The screen as the readers look at it.
@@ -466,6 +499,26 @@ impl<'a> Screen<'a> {
         drafted(&place, marks, lines).with_line(line_of(lines[0], first, 2, rest, self.cursor))
     }
 
+    /// What shows of an input whose other rows do not, `lines` from row `first`: `draft` where the last
+    /// of them is the cursor's row with the cursor behind its text, as a paste leaves it, and no menu
+    /// shows; otherwise `none`.
+    fn as_pasted(
+        &self,
+        none: Reading,
+        first: usize,
+        lines: &[&Cells],
+        draft: impl FnOnce() -> Reading,
+    ) -> Reading {
+        let (column, cursor_row) = self.cursor;
+        let behind_text =
+            (self.row(cursor_row).iter()).all(|cell| cell.column < column || !draws(cell));
+        let pasted = first + lines.len() == cursor_row + 1 && behind_text && holds_writing(lines);
+        match none.state {
+            InputState::Unknown if pasted => draft(),
+            _ => none,
+        }
+    }
+
     /// `frame`: input between two rules, with a prompt row unless it scrolled out.
     fn in_frame(&self, frame: &Frame, untouched_input: bool) -> Reading {
         let cursor_row = self.cursor.1;
@@ -658,10 +711,11 @@ impl<'a> Screen<'a> {
             .zip(lower)
             .filter(|(upper, lower)| (1..=tallest).contains(&(lower - upper - 1)));
         let Some((upper, lower)) = rules else {
-            return self.elsewhere(format!(
+            let none = self.elsewhere(format!(
                 "no editor between two rules around the cursor at row {}",
                 cursor_row + 1
             ));
+            return self.cut_editor(rule, upper, lower, none);
         };
         let place = format!("the editor at {}", row_span(upper + 2, lower));
         if cursor_row == lower || !self.own_cursor(cursor_row, column) {
@@ -675,6 +729,52 @@ impl<'a> Screen<'a> {
         let line = line_of(lines[0], upper + 1, 0, rest, self.cursor);
         self.editor_reading(rule, upper, lower, &lines, &place)
             .with_line(line)
+    }
+
+    /// A draft in an editor the screen has no room for, otherwise `none`. The CLI keeps the cursor's
+    /// row: it leaves out the rows after it, the lower rule with them, then the rows before it, the
+    /// upper rule with them, or the editor's first rows lie above the screen's top. Only the rows that
+    /// are the editor's however much was left out are read, and never as an empty input: an empty
+    /// editor always has its room.
+    fn cut_editor(
+        &self,
+        rule: &Editor,
+        upper: Option<usize>,
+        lower: Option<usize>,
+        none: Reading,
+    ) -> Reading {
+        let (column, cursor_row) = self.cursor;
+        let under = cursor_row + 1;
+        // The editor ends with the cursor's row: over its lower rule, the CLI's footer or the
+        // screen's end.
+        let ends = match lower {
+            Some(lower) => lower == under && upper.is_none(),
+            None => under == self.height() || styled_only(self.row(under)),
+        };
+        let kept = under.saturating_sub(rule.least_rows);
+        let upper = upper.filter(|&upper| upper >= kept);
+        let first = upper.map_or(kept, |upper| upper + 1);
+        let lines: Vec<&Cells> = (first..under).map(|y| self.row(y)).collect();
+        let plain = lines
+            .iter()
+            .all(|line| !line.iter().any(|cell| draws(cell) && styled(cell)));
+        if !ends || !plain || !self.own_cursor(cursor_row, column) {
+            return none;
+        }
+        self.as_pasted(none, first, &lines, || {
+            let above = match (upper, &rule.scrolled) {
+                (Some(upper), Scrolled::Rules(marks)) => counted(&marks.above, &self.lines[upper]),
+                _ => None,
+            };
+            let place = format!("the cut editor at {}", row_span(first + 1, under));
+            let rest = lines[1..].iter().any(|line| !all_space(line));
+            let line = line_of(lines[0], first, 0, rest, self.cursor);
+            let draft = drafted(&place, (above, None), &lines).with_line(line);
+            match upper {
+                Some(_) => draft,
+                None => draft.cut(),
+            }
+        })
     }
 
     fn editor_reading(

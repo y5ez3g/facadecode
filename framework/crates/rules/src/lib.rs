@@ -353,6 +353,10 @@ pub struct Editor {
     /// The editor is at most this many rows tall, or this share of the screen where that is more.
     pub most_rows: usize,
     pub most_share: f64,
+    /// The rows the CLI keeps of its editor, rules included, where the screen has no room for it
+    /// all. Pi 1.4.0's full-screen layout keeps three: `minSize` of the editor at line 16 of
+    /// pi-coding-agent's `dist/modes/interactive/chat-viewport.js`.
+    pub(crate) least_rows: usize,
     pub menus: Vec<Menu>,
 }
 
@@ -473,7 +477,8 @@ pub enum Scrolled {
     LastColumn { above: String, below: String },
 }
 
-/// Each pattern's one capture counts the hidden rows on that side.
+/// Each pattern's one capture counts the hidden rows on that side. A mark without a number, the
+/// capture left out, counts as one.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CountedScroll {
@@ -767,6 +772,9 @@ impl Editor {
         marks.check()?;
         if self.most_rows == 0 {
             return Err("most_rows must be positive".into());
+        }
+        if self.least_rows < 3 {
+            return Err("least_rows must hold a row between two rules".into());
         }
         if (0.0..=1.0).contains(&self.most_share) && self.most_share != 0.0 {
             Ok(())
@@ -1292,6 +1300,13 @@ mod tests {
                 &pi.replacen("\"most_share\": 0.3", "\"most_share\": 1.5", 1)
             )
             .contains("most_share")
+        );
+        assert!(
+            refusal(
+                "pi",
+                &pi.replacen("\"least_rows\": 3", "\"least_rows\": 2", 1)
+            )
+            .contains("least_rows")
         );
         assert!(
             refusal("pi", &pi.replacen("\"within\": 40", "\"within\": 0", 1)).contains("positive")

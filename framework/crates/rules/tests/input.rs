@@ -6,6 +6,8 @@
 
 mod recorded;
 
+use std::ops::Range;
+
 use facade_base::model::terminal::{HiddenRows, InputState};
 use facade_rules::{
     ProbeVerdict, find, is_own_draft, read_box, read_box_for_typing, read_draft, read_input,
@@ -58,12 +60,12 @@ fn reads_as_recorded(cli: &str) {
     );
     states.sort();
     states.dedup();
-    // Codex's recordings also show its search and selection screens, which read unknown, and
-    // Muse's its drafts with the cursor where the input starts, which read unknown as unsure.
-    let shown: &[&str] = if cli == "codex" || cli == "muse" {
-        &["draft", "interaction", "unknown", "usable"]
-    } else {
-        &["draft", "interaction", "usable"]
+    // Codex's recordings also show its search and selection screens, which read unknown, Muse's its
+    // drafts with the cursor where the input starts, which read unknown as unsure, and Pi's its
+    // dialogs in a small window.
+    let shown: &[&str] = match cli {
+        "codex" | "muse" | "pi" => &["draft", "interaction", "unknown", "usable"],
+        _ => &["draft", "interaction", "usable"],
     };
     assert_eq!(states, shown, "the recordings of {cli} show every state");
 }
@@ -135,6 +137,283 @@ fn pi_screens_read_as_recorded() {
     reads_as_recorded("pi");
 }
 
+/// The screen `label` recorded from `cli`.
+fn screen_of(cli: &str, label: &str) -> serde_json::Value {
+    recorded(cli)
+        .into_iter()
+        .find(|screen| screen["label"] == label)
+        .unwrap_or_else(|| panic!("no screen {label}"))
+}
+
+/// Whether `view` shows `text` as its own draft to `cli`'s rule, with what was read.
+fn shows_own(cli: &str, view: &ScreenView, text: &str) -> (bool, String) {
+    let rule = find(cli).unwrap().unwrap();
+    let read = read_box(&rule.input, view);
+    let hidden = read.draft_hidden();
+    let own = read.info.state == InputState::Draft
+        && (read.draft.as_deref())
+            .is_some_and(|draft| is_own_draft(&rule.paste, draft, text, hidden));
+    let shown = format!(
+        "{} ({}) {:?} {hidden:?}",
+        read.info.state.as_str(),
+        read.info.evidence,
+        read.draft
+    );
+    (own, shown)
+}
+
+/// Where Pi has no room for its whole editor, it leaves out the rows after the cursor's, the lower
+/// rule with them, then those before it, the upper rule with them: queued messages take the room,
+/// or the window is small.
+const CUT_PI_SCREENS: [&str; 7] = [
+    "pi-1.4.0-30rows/queue-30-pasted-2-lines",
+    "pi-1.4.0-30rows/queue-30-pasted-3-lines",
+    "pi-1.4.0-15rows/queue-10-pasted-2-lines",
+    "pi-1.4.0-15rows/queue-10-pasted-9-lines",
+    "pi-1.4.0-10rows/queue-10-pasted-9-lines",
+    "pi-1.4.0-5rows/pasted-2-lines",
+    "pi-1.4.0-5rows/pasted-placeholder",
+];
+
+/// While Pi works, its upper rule carries its status before the count of the rows above, or only
+/// its spinner where both do not fit. A message taller than the editor scrolls under it.
+const WORKING_PI_SCREENS: [&str; 5] = [
+    "pi-1.4.0-30rows/working-pasted-10-lines",
+    "pi-1.4.0-30rows/working-pasted-10-rows",
+    "pi-1.4.0-30rows-60cols/working-pasted-10-lines",
+    "pi-1.4.0-16rows-20cols/working-pasted-6-lines",
+    "pi-1.4.0-16rows-20cols/working-pasted-10-rows",
+];
+
+#[test]
+fn a_message_is_its_own_draft_in_an_editor_pi_cuts_short() {
+    own_drafts(&CUT_PI_SCREENS);
+}
+
+#[test]
+fn a_message_is_its_own_draft_under_pi_s_status() {
+    own_drafts(&WORKING_PI_SCREENS);
+    // The count after the status is the count of the rows above.
+    let mut screen = screen_of("pi", WORKING_PI_SCREENS[0]);
+    let rule = screen["rows"][17]["cells"].as_str().unwrap();
+    assert!(
+        rule.contains("Working") && rule.contains("↑ 1 more"),
+        "{rule}"
+    );
+    screen["rows"][17]["cells"] = serde_json::json!(rule.replace("↑ 1 more", "↑ 7 more"));
+    let read = read_input(&find("pi").unwrap().unwrap().input, &view_of(&screen));
+    assert_eq!(read.hidden, Some(HiddenRows { above: 7, below: 0 }));
+}
+
+/// The message of each of `labels`, Pi's screens, is its draft's own, and none with a line more or
+/// less.
+fn own_drafts(labels: &[&str]) {
+    let mut wrong = Vec::new();
+    for &label in labels {
+        let screen = screen_of("pi", label);
+        let text = screen["paste"].as_str().unwrap();
+        let (own, read) = shows_own("pi", &view_of(&screen), text);
+        if !own {
+            wrong.push(format!("{label}: reads {read}"));
+        }
+        let (shorter, _) = text.rsplit_once('\n').unwrap();
+        for other in [format!("{text}\nagain"), shorter.to_string()] {
+            let (own, read) = shows_own("pi", &view_of(&screen), &other);
+            assert!(!own, "{label}: another message's draft, {read}");
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// `screen` as Pi's full-screen layout cuts it where it has room for only `kept` of the rows `whole`,
+/// in which it draws its editor or a dialog in its place, and for `footer` rows of its footer: the
+/// rows after the first `kept` go, or, so that the cursor's stays, those before and after it. The
+/// transcript keeps one row over them, and queued messages fill the rows between.
+fn cut_to(
+    screen: &serde_json::Value,
+    whole: Range<usize>,
+    kept: usize,
+    footer: usize,
+) -> serde_json::Value {
+    let rows = screen["rows"].as_array().unwrap();
+    cut_over(
+        screen,
+        whole.clone(),
+        kept,
+        &rows[whole.end..whole.end + footer],
+    )
+}
+
+/// `screen` cut as [`cut_to`] cuts it, with `under` under the rows kept: its footer's rows, or an
+/// extension's.
+fn cut_over(
+    screen: &serde_json::Value,
+    whole: Range<usize>,
+    kept: usize,
+    under: &[serde_json::Value],
+) -> serde_json::Value {
+    let rows = screen["rows"].as_array().unwrap();
+    let cursor = screen["cursor"]["y"].as_u64().unwrap() as usize;
+    let first = whole.start.max((cursor + 1).saturating_sub(kept));
+    let queued = rows.len() - 1 - kept - under.len();
+    let message = serde_json::json!({ "cells": " Steering: Reply with ok.", "dim": [[1, 25]] });
+    let mut shown = vec![rows[0].clone()];
+    shown.resize(1 + queued, message);
+    shown.extend_from_slice(&rows[first..first + kept]);
+    shown.extend_from_slice(under);
+    let mut cut = screen.clone();
+    cut["cursor"]["y"] = serde_json::json!(1 + queued + cursor - first);
+    cut["rows"] = serde_json::Value::Array(shown);
+    cut
+}
+
+/// Each cut Pi's layout can make of its editor shows the message that the whole editor shows as its
+/// own draft, and not a message with another line after it.
+#[test]
+fn a_message_is_its_own_draft_in_every_cut_of_pi_s_editor() {
+    let pi = find("pi").unwrap().unwrap();
+    for (label, whole) in [
+        ("pi-1.4.0/pasted", 33..38),
+        ("pi-1.4.0-24rows/cjk-pasted", 16..22),
+        ("pi-1.4.0-24rows/medium-pasted", 13..22),
+    ] {
+        let screen = screen_of("pi", label);
+        let text = read_draft(&pi.input, &view_of(&screen)).1.unwrap();
+        for kept in 3..=whole.len() {
+            for footer in 0..=2 {
+                let cut = view_of(&cut_to(&screen, whole.clone(), kept, footer));
+                let shown = format!("{label}, {kept} rows, {footer} of the footer");
+                let (own, read) = shows_own("pi", &cut, &text);
+                assert!(own, "{shown}: {read}");
+                let (own, read) = shows_own("pi", &cut, &format!("{text}\nagain"));
+                assert!(!own, "{shown}, another message: {read}");
+            }
+        }
+    }
+}
+
+/// No cut of the dialogs Pi draws in its editor's place, its search and text inputs among them, is an
+/// empty input, or the draft of a message.
+#[test]
+fn no_cut_of_a_dialog_is_an_editor_to_type_in() {
+    let pi = find("pi").unwrap().unwrap();
+    let messages: Vec<String> = recorded("pi")
+        .iter()
+        .filter_map(|screen| screen["paste"].as_str().map(str::to_string))
+        .collect();
+    for (label, whole) in [
+        ("pi-1.4.0/model-picker", 14..38),
+        ("pi-1.4.0-30rows/thinking-picker", 14..28),
+        ("pi-1.4.0-30rows/resume-picker", 17..28),
+        ("pi-1.4.0-30rows/one-line-question", 19..28),
+        ("pi-1.4.0-30rows/one-line-question-answered", 19..28),
+    ] {
+        let screen = screen_of("pi", label);
+        for kept in 3..=whole.len() {
+            for footer in 0..=2 {
+                let view = view_of(&cut_to(&screen, whole.clone(), kept, footer));
+                let read = read_box(&pi.input, &view);
+                let hidden = read.draft_hidden();
+                let typed_in = match read.info.state {
+                    InputState::Usable => true,
+                    InputState::Draft => read.draft.as_deref().is_some_and(|draft| {
+                        (messages.iter()).any(|text| is_own_draft(&pi.paste, draft, text, hidden))
+                    }),
+                    _ => false,
+                };
+                assert!(
+                    !typed_in,
+                    "{label}, {kept} rows, {footer} of the footer: {} ({})",
+                    read.info.state.as_str(),
+                    read.info.evidence
+                );
+            }
+        }
+    }
+}
+
+/// Where Pi cut its editor short of the upper rule, nothing on the screen marks the rows out of
+/// sight: the reading leaves `hidden` out, as its CLI marks nothing, and keeps one row above for
+/// telling a message's own draft.
+#[test]
+fn a_cut_editor_keeps_its_unmarked_rows_to_its_reader() {
+    let pi = find("pi").unwrap().unwrap();
+    for label in [
+        "pi-1.4.0-15rows/queue-10-pasted-9-lines",
+        "pi-1.4.0-10rows/queue-10-pasted-9-lines",
+        "pi-1.4.0-30rows/queue-30-pasted-3-lines",
+        "pi-1.4.0-5rows/pasted-2-lines",
+    ] {
+        let read = read_box(&pi.input, &view_of(&screen_of("pi", label)));
+        assert_eq!(read.info.hidden, None, "{label}");
+        let above = HiddenRows { above: 1, below: 0 };
+        assert_eq!(read.draft_hidden(), Some(above), "{label}");
+    }
+}
+
+/// In an editor cut short, only text up to a cursor at its end, right over Pi's footer, is a
+/// draft. Rows under the cursor may go on a person's draft, and other rows are no editor's.
+#[test]
+fn an_editor_pi_cuts_short_reads_as_nothing_else() {
+    let label = "pi-1.4.0-15rows/queue-10-pasted-2-lines";
+    let screen = screen_of("pi", label);
+    let last = 12;
+    let mut changed = Vec::new();
+    let mut change = |what: &str, change: &dyn Fn(&mut serde_json::Value)| {
+        let mut screen = screen.clone();
+        change(&mut screen);
+        changed.push((what.to_string(), view_of(&screen)));
+    };
+    change("the cursor a row up", &|screen| {
+        screen["cursor"] = serde_json::json!({ "x": 0, "y": last - 1 });
+        screen["rows"][last]["inverse"] = serde_json::json!([]);
+        screen["rows"][last - 1]["inverse"] = serde_json::json!([[0, 1]]);
+    });
+    change("the cursor within its row", &|screen| {
+        screen["cursor"] = serde_json::json!({ "x": 5, "y": last });
+        screen["rows"][last]["inverse"] = serde_json::json!([[5, 6]]);
+    });
+    change("no cursor of Pi's own", &|screen| {
+        screen["rows"][last]["inverse"] = serde_json::json!([]);
+    });
+    change("plain text under the cursor", &|screen| {
+        screen["rows"][last + 1] = serde_json::json!({ "cells": "a third row" });
+    });
+    change("a blank row under the cursor", &|screen| {
+        screen["rows"][last + 1] = serde_json::json!({ "cells": "" });
+    });
+    change("a dialog's dim words over its input", &|screen| {
+        screen["rows"][last - 1]["dim"] = serde_json::json!([[0, 41]]);
+    });
+    change("no text", &|screen| {
+        screen["rows"][last - 1] = serde_json::json!({ "cells": "" });
+        screen["rows"][last] = serde_json::json!({ "cells": " ", "inverse": [[0, 1]] });
+        screen["cursor"] = serde_json::json!({ "x": 0, "y": last });
+    });
+    for (what, view) in changed {
+        let read = read_input(&find("pi").unwrap().unwrap().input, &view);
+        assert_eq!(read.state, InputState::Unknown, "{what}: {}", read.evidence);
+    }
+}
+
+/// No other CLI's screen is Pi's editor, whole or cut short.
+#[test]
+fn no_other_cli_s_screen_is_an_editor() {
+    let pi = find("pi").unwrap().unwrap();
+    for cli in ["claude", "codex", "agy", "muse", "opencode"] {
+        for screen in recorded(cli) {
+            let read = read_input(&pi.input, &view_of(&screen));
+            assert!(
+                !matches!(read.state, InputState::Usable | InputState::Draft),
+                "{}: {} ({})",
+                screen["label"],
+                read.state.as_str(),
+                read.evidence
+            );
+        }
+    }
+}
+
 #[test]
 fn a_scrolled_draft_counts_the_rows_its_cli_marks_hidden() {
     let mut scrolled = Vec::new();
@@ -176,7 +455,14 @@ fn a_scrolled_draft_counts_the_rows_its_cli_marks_hidden() {
             (
                 "pi-1.4.0-24rows/medium-pasted".to_string(),
                 HiddenRows { above: 2, below: 0 }
-            )
+            ),
+            // Pi's status before the count of the rows above, or its spinner alone, which counts as
+            // one.
+            marked("pi-1.4.0-30rows/working-pasted-10-lines", 1, 0),
+            marked("pi-1.4.0-30rows/working-pasted-10-rows", 1, 0),
+            marked("pi-1.4.0-30rows-60cols/working-pasted-10-lines", 1, 0),
+            marked("pi-1.4.0-16rows-20cols/working-pasted-6-lines", 1, 0),
+            marked("pi-1.4.0-16rows-20cols/working-pasted-10-rows", 1, 0),
         ]
     );
 }
@@ -546,10 +832,7 @@ fn a_draft_reads_as_its_rows_draw_it_and_a_long_paste_as_its_placeholder() {
 /// reads none.
 fn recorded_paste(cli: &str, label: &str) -> (String, Result<String, String>) {
     let rule = find(cli).unwrap().unwrap();
-    let screen = recorded(cli)
-        .into_iter()
-        .find(|screen| screen["label"] == label)
-        .unwrap_or_else(|| panic!("no screen {label}"));
+    let screen = screen_of(cli, label);
     let text = screen["paste"].as_str().unwrap().to_string();
     let (info, draft) = read_draft(&rule.input, &view_of(&screen));
     let draft = match draft {

@@ -216,7 +216,16 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     For `rows` (Muse Code and Antigravity), one capture in each pattern counts the hidden rows
     from separate marker rows inside the frame. For `rules` (Claude Code and Pi), the patterns
     capture counts from the upper and lower border rules. A frame with a marked upper rule can
-    start on a continuation row.
+    start on a continuation row. A mark without a number counts as one: Pi draws its status on the
+    upper rule, before the count, and leaves the count out where both do not fit.
+  - Where the screen has no room for Pi's whole `editor`, as queued messages take it or the window is
+    small, Pi cuts the editor short: it keeps the cursor's row and leaves out the lower rule first,
+    then the upper rule and the rows under it. The reader then takes the rows up to the cursor that
+    are the editor's however much was cut (`least_rows`, a rule among them included) as a draft, and
+    nothing as empty. The cursor has to be Pi's own, behind the text, over Pi's footer, the lower
+    rule or the screen's end, and no menu shows. Without the upper rule among those rows, rows may
+    be out of sight above: `InputLine::cut` says so, and `BoxReading::draft_hidden` counts one row
+    there for telling a message's own draft. `hidden` stays empty, as Pi marks nothing.
   - Codex's `prompt` input accepts `›` and its `alternate_prompt`, `»` at Ultra effort.
     A wrapped footer can end with a shortcuts row that may include aligned status, the
     `tab to queue message` hint, or a standalone warning count ending in `f2 to view` with at least
@@ -242,6 +251,9 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - `read_box(&InputRule, &ScreenView) -> BoxReading` gives the reading, the draft's text,
     the input's first row and whether the reading is unsure. The `InputLine` includes the
     input's starting column and cursor, its cells and styling, and whether the box has more rows.
+    `BoxReading::draft_hidden() -> Option<HiddenRows>` gives the draft's rows out of sight for
+    telling a message's own draft: the marked ones of `info.hidden`, or one row above where the
+    screen cut the input without a mark (`InputLine::cut`).
   - `read_box_for_typing(&InputRule, &ScreenView, bool) -> BoxReading` lets automatic delivery
     consider an unstyled probe when the daemon reports untouched input and the CLI's rule allows it.
   - `read_draft(&InputRule, &ScreenView) -> (InputInfo, Option<String>)` gives the input state,

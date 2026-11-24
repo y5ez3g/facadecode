@@ -354,7 +354,7 @@ impl PasteDraft {
     fn matches(&self, rule: &PasteRule, reading: &BoxReading, legacy_split: bool) -> bool {
         reading.info.state == InputState::Draft
             && reading.draft.as_deref().is_some_and(|shown| {
-                facade_rules::is_own_draft(rule, shown, &self.text, reading.info.hidden)
+                facade_rules::is_own_draft(rule, shown, &self.text, reading.draft_hidden())
                     || (legacy_split && self.matches_split_paste(rule, shown))
             })
     }
@@ -1030,7 +1030,7 @@ impl Typist {
         };
         draft.observed |= own.is_some();
         let same = |observed: &str, shown: &str| {
-            facade_rules::is_same_draft(observed, shown, &draft.paste.text, reading.info.hidden)
+            facade_rules::is_same_draft(observed, shown, &draft.paste.text, reading.draft_hidden())
         };
         if now >= deadline {
             let known_length = draft
