@@ -274,7 +274,7 @@ fn many_agents(agents: usize) -> anyhow::Result<Value> {
         )
     };
     let lists = timed("list_agents", json!({}));
-    let screens = timed("read_screen", json!({ "target": all[1].address }));
+    let screens = timed("read_screen", json!({ "agent": all[1].address }));
 
     // T3, C2: everyone sends to one at one moment.
     let boss = all[0].clone();

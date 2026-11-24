@@ -30,6 +30,8 @@ pub struct Sent {
     pub said: String,
     /// The whole answer where it was not a success.
     pub failure: Option<String>,
+    /// How long it had to be delivered, where its caller gave it less.
+    pub limit_us: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -134,6 +136,27 @@ pub struct Window {
     pub strangers: usize,
     /// When the storm ended it, if it did.
     pub ended_us: Option<u64>,
+    /// For a CLI without a tape, what its input read as over time, and its state.
+    pub timeline: Option<Vec<(u64, String, String)>>,
+    /// Nothing says what it submitted.
+    pub unsaved: bool,
+}
+
+impl Window {
+    /// How long its input read as one of `states` between two times, in milliseconds.
+    fn read_as_ms(&self, states: &[&str], from: u64, to: u64) -> u64 {
+        let Some(timeline) = &self.timeline else {
+            return 0;
+        };
+        let mut total = 0;
+        for (at, (us, input, _)) in timeline.iter().enumerate() {
+            let until = timeline.get(at + 1).map_or(to, |next| next.0);
+            if states.contains(&input.as_str()) {
+                total += until.min(to).saturating_sub((*us).max(from));
+            }
+        }
+        total / 1000
+    }
 }
 
 /// One `read_messages` call of an agent's or guest's.
@@ -171,7 +194,7 @@ pub struct Verdict {
 }
 
 /// How long a message has to be delivered.
-const LIMIT_US: u64 = 29_500_000;
+pub const LIMIT_US: u64 = 29_500_000;
 /// How long a message's own text may stay in an input beyond what its CLI takes to draw it.
 const STAYS_MS: u64 = 1000;
 /// What the typist takes by itself: the paste's delay and the fake CLI's settle time.
@@ -272,7 +295,7 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                 row.status.as_str()
             }
         });
-        let read = row.is_some_and(|row| row.delivered_via.as_deref() == Some("read_by_recipient"));
+        let read = row.is_some_and(|row| row.delivered_via.as_deref() == Some("read"));
         let who = format!("m{number} ({} to {})", sent.from, sent.to);
         if here.len() > 1 {
             say(
@@ -325,14 +348,28 @@ pub fn judge(case: &Case<'_>) -> Verdict {
             }
             "success" => {
                 delivered += 1;
+                let unsaved = case
+                    .windows
+                    .iter()
+                    .any(|window| window.agent == sent.to && window.unsaved);
                 match here {
+                    [] if unsaved => {}
                     [] => say(
                         "I1",
                         format!("{who} is recorded as delivered and was never submitted"),
                         None,
                     ),
-                    [(_, us, body), ..] => {
-                        if *body != plain(&sent.text) && body != "<mixed>" {
+                    [(agent, us, body), ..] => {
+                        // A saved session drops the line end a message ends in.
+                        let saved = case
+                            .windows
+                            .iter()
+                            .any(|window| window.agent == *agent && window.timeline.is_some());
+                        let same = match saved {
+                            true => body.trim_end() == plain(&sent.text).trim_end(),
+                            false => *body == plain(&sent.text),
+                        };
+                        if !same && body != "<mixed>" {
                             say(
                                 "I1",
                                 format!(
@@ -375,11 +412,17 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                 // was left could not take this message and those before it (L1, L2).
                 let window = case.windows.iter().find(|window| window.agent == sent.to);
                 let held = window.map_or(0, |window| {
-                    window
-                        .tape
-                        .held_ms(sent.called_us, sent.called_us + LIMIT_US)
+                    let (from, to) = (sent.called_us, sent.called_us + sent.limit_us);
+                    match &window.timeline {
+                        // Nobody else types there: a draft is Facade's own.
+                        Some(_) if window.person.is_none() => {
+                            window.read_as_ms(&["interaction"], from, to)
+                        }
+                        Some(_) => window.read_as_ms(&["interaction", "draft"], from, to),
+                        None => window.tape.held_ms(from, to),
+                    }
                 });
-                let free = (LIMIT_US / 1000).saturating_sub(held);
+                let free = (sent.limit_us / 1000).saturating_sub(held);
                 let ahead = case
                     .sent
                     .iter()
@@ -396,10 +439,10 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                     && !case.reads.iter().any(|read| {
                         read.agent == sent.to
                             && !read.filtered
-                            && read.began_us < sent.called_us + LIMIT_US
+                            && read.began_us < sent.called_us + sent.limit_us
                             && read.ended_us > sent.called_us
                     });
-                if ended.is_some_and(|us| us < sent.called_us + LIMIT_US + 1_000_000) {
+                if ended.is_some_and(|us| us < sent.called_us + sent.limit_us + 1_000_000) {
                     *reasonable.entry("L4").or_default() += 1;
                 } else if unread {
                     *reasonable.entry("L3").or_default() += 1;
@@ -449,7 +492,28 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                     .count()
             });
             let expected = usize::from(!matches!(status, "success" | "pending"));
-            if named != expected {
+            // A notice that failed for a reason of its own is judged with the notices.
+            let failed_notice = case.rows.values().any(|row| {
+                row.from == "facade"
+                    && row.to == sent.from
+                    && (row.withdrawn || row.status == "failure")
+            });
+            // Where the person's draft held the sender's own input all the while, the notice has no
+            // way in either (L1).
+            let unreachable = expected == 1
+                && named == 0
+                && case
+                    .windows
+                    .iter()
+                    .find(|window| window.agent == sent.from)
+                    .is_some_and(|window| {
+                        let from = sent.called_us + sent.limit_us;
+                        let held = window.tape.held_ms(from, from + LIMIT_US);
+                        (LIMIT_US / 1000).saturating_sub(held) < window.service_ms * 12 / 10
+                    });
+            if unreachable {
+                *reasonable.entry("L1 notice").or_default() += 1;
+            } else if named != expected && !failed_notice {
                 say(
                     "I8",
                     format!("{who} ended as {status}; its sender got {named} notices"),
@@ -462,6 +526,21 @@ pub fn judge(case: &Case<'_>) -> Verdict {
     // A notice of a failure is a message too.
     for row in case.rows.values().filter(|row| row.from == "facade") {
         if row.withdrawn || row.status == "failure" {
+            // Reasonable where the one it tells held their input, or ended (L1, L4).
+            let window = case.windows.iter().find(|window| window.agent == row.to);
+            if window.is_some_and(|window| window.ended_us.is_some()) {
+                *reasonable.entry("L4").or_default() += 1;
+                continue;
+            }
+            if window.is_some_and(|window| {
+                let from = row.at_ms * 1000;
+                let free =
+                    (LIMIT_US / 1000).saturating_sub(window.tape.held_ms(from, from + LIMIT_US));
+                free < window.service_ms * 12 / 10
+            }) {
+                *reasonable.entry("L1").or_default() += 1;
+                continue;
+            }
             say(
                 "I8",
                 format!(
@@ -477,8 +556,49 @@ pub fn judge(case: &Case<'_>) -> Verdict {
             );
         }
     }
-    // Submissions no send accounts for.
+    // Messages the storm did not send through a call it kept, such as a start's first.
     let known: BTreeSet<u64> = case.sent.iter().filter_map(|sent| sent.number).collect();
+    for row in case.rows.values() {
+        let Some(window) = case
+            .windows
+            .iter()
+            .find(|window| window.agent == row.to && window.ended_us.is_none())
+        else {
+            continue;
+        };
+        if known.contains(&row.number) || row.from == "facade" || window.unsaved {
+            continue;
+        }
+        let times = arrived.get(&row.number).map_or(0, Vec::len);
+        let typed = row.delivered_via.as_deref() != Some("read");
+        match (row.status.as_str(), times) {
+            ("success", 1) => {}
+            ("success", 0) if !typed => {}
+            ("success", 0) => say(
+                "I1",
+                format!(
+                    "m{} ({} to {}) is recorded as delivered and was never submitted",
+                    row.number, row.from, row.to
+                ),
+                None,
+            ),
+            ("success", _) => say(
+                "I2",
+                format!("m{} was submitted {times} times", row.number),
+                None,
+            ),
+            (_, 0) => {}
+            _ => say(
+                "I3",
+                format!(
+                    "m{} ({} to {}) is recorded as {} and was submitted",
+                    row.number, row.from, row.to, row.status
+                ),
+                None,
+            ),
+        }
+    }
+    // Submissions no send accounts for.
     for number in arrived.keys().filter(|number| !known.contains(number)) {
         let expected = case.rows.contains_key(number);
         if !expected {
@@ -502,6 +622,25 @@ pub fn judge(case: &Case<'_>) -> Verdict {
         say("I12", format!("the log: {line}"), None);
     }
 
+    // How long each recipient took between one delivery and the next.
+    let mut gaps: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+    for row in case.rows.values().filter(|row| row.status == "success") {
+        if let Some(ms) = row.delivered_ms {
+            gaps.entry(row.to.clone()).or_default().push(ms);
+        }
+    }
+    let gaps: BTreeMap<String, Value> = gaps
+        .into_iter()
+        .filter(|(_, at)| at.len() > 1)
+        .map(|(to, mut at)| {
+            at.sort_unstable();
+            let between = at
+                .windows(2)
+                .map(|pair| (pair[1] - pair[0]) as f64)
+                .collect();
+            (to, summary(between))
+        })
+        .collect();
     verdict.reasonable = reasonable.clone();
     verdict.strangers = case
         .windows
@@ -516,6 +655,7 @@ pub fn judge(case: &Case<'_>) -> Verdict {
         "called_to_submitted_ms": summary(waits),
         "send_call_ms": summary(case.sent.iter().map(|sent| sent.took_ms).collect()),
         "reasonable": reasonable,
+        "between_deliveries_ms": gaps,
         "notices": notices.values().map(Vec::len).sum::<usize>(),
         "windows": people.into_iter().filter(|window| {
             window["longest_stay_ms"].as_u64().is_some_and(|stay| stay > 0)
@@ -531,7 +671,11 @@ fn removed_by_person(window: &Window, number: u64) -> bool {
     let Some(person) = &window.person else {
         return false;
     };
-    if !person.controls.contains(&0x7f) {
+    if !person
+        .controls
+        .iter()
+        .any(|byte| matches!(byte, 0x7f | 0x03 | 0x1b))
+    {
         return false;
     }
     let pasted = window.tape.tokens.iter().position(
@@ -541,7 +685,7 @@ fn removed_by_person(window: &Window, number: u64) -> bool {
         window.tape.tokens[at + 1..]
             .iter()
             .take_while(|(_, token)| !matches!(token, Token::Paste(_)))
-            .any(|(_, token)| matches!(token, Token::Control(0x7f | 0x08)))
+            .any(|(_, token)| matches!(token, Token::Control(0x7f | 0x08 | 0x03)))
     })
 }
 
@@ -556,7 +700,7 @@ fn still_waiting(
         .and_then(|number| arrived.get(&number))
         .and_then(|here| here.first())
         .map(|(_, at, _)| *at);
-    other.called_us + LIMIT_US > us && submitted.is_none_or(|at| at > us)
+    other.called_us + other.limit_us > us && submitted.is_none_or(|at| at > us)
 }
 
 /// I5: messages of one sender to one recipient, each called after the last was answered, arrive in
@@ -614,6 +758,39 @@ fn leftovers(
 ) -> (u64, bool) {
     let mut longest = 0;
     let mut kept = false;
+    if let Some(timeline) = &window.timeline {
+        // Nobody else types there: each stretch of a draft is one message's of Facade's.
+        let allowed = STAYS_MS + 2 * window.service_ms + 200;
+        let end = window.ended_us.unwrap_or(case.ended_us);
+        for (at, (us, input, _)) in timeline.iter().enumerate() {
+            if input != "draft" || window.person.is_some() {
+                continue;
+            }
+            let stay = timeline
+                .get(at + 1)
+                .map_or(end, |next| next.0)
+                .saturating_sub(*us)
+                / 1000;
+            longest = longest.max(stay);
+            if stay > allowed {
+                kept = true;
+                say(
+                    "I7",
+                    format!("{}: a draft stayed in the input {stay} ms", window.agent),
+                    None,
+                );
+            }
+        }
+        if window.ended_us.is_none() && window.end_state == "draft" && window.person.is_none() {
+            kept = true;
+            say(
+                "I6",
+                format!("{}'s input ends with a draft", window.agent),
+                None,
+            );
+        }
+        return (longest, kept);
+    }
     let allowed = STAYS_MS + TYPIST_MS + 4 * window.draw_ms;
     for (us, token) in &window.tape.tokens {
         let Token::Paste(text) = token else { continue };
@@ -634,7 +811,18 @@ fn leftovers(
                     })
             })
             .map(|submission| submission.us);
-        let end = window.ended_us.unwrap_or(case.ended_us);
+        // Until it was submitted, or taken away again.
+        let removed = window
+            .tape
+            .boxes
+            .iter()
+            .skip_while(|(at, _)| at <= us)
+            .skip_while(|(_, shown)| shown.is_empty())
+            .find(|(_, shown)| shown.is_empty())
+            .map(|(at, _)| *at);
+        let end = removed
+            .unwrap_or(u64::MAX)
+            .min(window.ended_us.unwrap_or(case.ended_us));
         if submitted.is_none() && *us > end {
             continue;
         }
@@ -676,7 +864,7 @@ fn leftovers(
             ),
             None,
         );
-        kept |= headers(last).len() + last.matches("[Pasted text").count() > 0;
+        kept |= headers(last).len() + last.matches("[Pasted ").count() > 0;
     }
     (longest, kept)
 }
@@ -789,7 +977,12 @@ fn keys(window: &Window, say: &mut dyn FnMut(&'static str, String, Option<&'stat
         }
     }
     // Keys that type nothing reached the CLI too.
-    for (byte, name) in [(0x7f, "Backspace"), (b'\t', "Tab"), (0x1b, "Escape")] {
+    for (byte, name) in [
+        (0x7f, "Backspace"),
+        (b'\t', "Tab"),
+        (0x1b, "Escape"),
+        (0x03, "Ctrl+C"),
+    ] {
         let pressed = person.controls.iter().filter(|each| **each == byte).count();
         let read = window
             .tape

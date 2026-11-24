@@ -17,6 +17,8 @@ pub struct Lab {
     pub home: TestHome,
     pub wire: Rpc,
     pub tapes: PathBuf,
+    /// Its agents have the person's own environment: their home, logins and programs.
+    pub person: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -40,6 +42,10 @@ pub struct Row {
     pub text_written: String,
     pub enter_written: Option<bool>,
     pub delivered_via: Option<String>,
+    /// When it was kept, in milliseconds since 1970.
+    pub at_ms: u64,
+    /// When it was delivered, in milliseconds since 1970.
+    pub delivered_ms: Option<u64>,
     pub withdrawn: bool,
 }
 
@@ -51,26 +57,80 @@ impl Lab {
         let wire = client::terminal(&home.daemon_socket())?;
         let tapes = home.folder().join("tapes");
         std::fs::create_dir_all(&tapes)?;
-        Ok(Lab { home, wire, tapes })
+        Ok(Lab {
+            home,
+            wire,
+            tapes,
+            person: false,
+        })
     }
 
     /// Starts a fake CLI with `env`, without waiting for it to draw.
     pub fn start_fake(&self, name: &str, env: &[(&str, &str)]) -> anyhow::Result<Agent> {
-        let mut command = self.home.command("x");
-        command
-            .env("FAKECLI_TAPE", &self.tapes)
-            .env("PATH", self.home.path_with_test_programs())
-            .envs(env.iter().copied());
-        let env: BTreeMap<String, String> = command
-            .get_envs()
-            .filter_map(|(name, value)| {
-                Some((name.to_str()?.to_string(), value?.to_str()?.to_string()))
-            })
-            .collect();
+        self.start_as("fake", name, env)
+    }
+
+    /// Starts a fake CLI that stands in for `cli`, read by `cli`'s own rule.
+    pub fn start_as(&self, cli: &str, name: &str, env: &[(&str, &str)]) -> anyhow::Result<Agent> {
+        let mut env = env.to_vec();
+        let path;
+        if cli != "fake" {
+            let programs = self.home.folder().join("programs");
+            std::fs::create_dir_all(&programs)?;
+            if !programs.join(program_name(cli)).exists() {
+                install_program(&programs, cli, &test_binaries().fakecli);
+            }
+            path = format!(
+                "{}{PATH_SEPARATOR}{}",
+                programs.display(),
+                self.home.path_with_test_programs()
+            );
+            env.push(("PATH", &path));
+            env.push(("FAKECLI_LOOK", cli));
+        }
+        let env = env.as_slice();
+        let mut env: BTreeMap<String, String> = match self.person {
+            true => {
+                // The programs under test, then the person's own.
+                let mut given = crate::real::person_env();
+                let path = given
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case("PATH"))
+                    .map(|(_, path)| path.clone())
+                    .unwrap_or_default();
+                given.retain(|name, _| !name.eq_ignore_ascii_case("PATH"));
+                let programs = test_binaries()
+                    .fakecli
+                    .parent()
+                    .expect("a folder")
+                    .to_owned();
+                given.insert(
+                    "PATH".into(),
+                    format!("{}{PATH_SEPARATOR}{path}", programs.display()),
+                );
+                given
+            }
+            false => self
+                .home
+                .command("x")
+                .get_envs()
+                .filter_map(|(name, value)| {
+                    Some((name.to_str()?.to_string(), value?.to_str()?.to_string()))
+                })
+                .chain([("PATH".to_string(), self.home.path_with_test_programs())])
+                .collect(),
+        }
+        .into_iter()
+        .chain(
+            env.iter()
+                .map(|(name, value)| (name.to_string(), value.to_string())),
+        )
+        .collect();
+        env.insert("FAKECLI_TAPE".into(), self.tapes.display().to_string());
         let started = self.wire.call(
             "agent.start",
             json!({
-                "name": name, "cli": "fake", "folder": self.home.project, "env": env,
+                "name": name, "cli": cli, "folder": self.home.project, "env": env,
                 "size": { "cols": COLS, "rows": ROWS },
             }),
         )?;
@@ -211,7 +271,10 @@ pub fn read_rows(database: &Path) -> anyhow::Result<BTreeMap<u64, Row>> {
     let connection = open(database)?;
     let mut statement = connection.prepare(
         "SELECT number, \"from\", \"to\", text, status, reason, text_written, enter_written, \
-         delivered_via, withdrawn FROM messages ORDER BY number",
+         delivered_via, withdrawn, \
+         CAST(round((julianday(delivered_at) - 2440587.5) * 86400000) AS INTEGER), \
+         CAST(round((julianday(at) - 2440587.5) * 86400000) AS INTEGER) \
+         FROM messages ORDER BY number",
     )?;
     let rows = statement.query_map([], |row| {
         Ok(Row {
@@ -225,6 +288,8 @@ pub fn read_rows(database: &Path) -> anyhow::Result<BTreeMap<u64, Row>> {
             enter_written: row.get::<_, Option<i64>>(7)?.map(|written| written != 0),
             delivered_via: row.get(8)?,
             withdrawn: row.get::<_, i64>(9)? != 0,
+            delivered_ms: row.get::<_, Option<i64>>(10)?.map(|ms| ms as u64),
+            at_ms: row.get::<_, Option<i64>>(11)?.unwrap_or_default() as u64,
         })
     })?;
     let mut out = BTreeMap::new();

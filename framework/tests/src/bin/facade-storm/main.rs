@@ -17,6 +17,7 @@ mod client;
 mod demo;
 mod judge;
 mod lab;
+mod more;
 mod perf;
 mod person;
 mod real;
@@ -160,6 +161,9 @@ fn main() {
         }
         return;
     }
+    if options.set == "real" {
+        real_storms(&options);
+    }
     if options.set == "perf" {
         let report = perf::run(options.senders.unwrap_or(50)).unwrap_or_else(|err| {
             eprintln!("the measures could not run: {err:#}");
@@ -226,6 +230,36 @@ fn write_report(options: &Options, outcomes: &[Value]) {
     });
     let text = serde_json::to_string_pretty(&report).expect("JSON");
     std::fs::write(options.out.join("report.json"), text).expect("the report");
+}
+
+/// Runs the storms of real CLIs, and exits.
+fn real_storms(options: &Options) -> ! {
+    let root = PathBuf::from(std::env::var_os("FACADE_STORM_ROOT").unwrap_or_default());
+    let specs = real::specs(options.only.as_deref(), options.senders, options.each);
+    let mut outcomes = Vec::new();
+    let mut broken = false;
+    for round in 1..=options.repeat {
+        for spec in &specs {
+            let name = match options.repeat {
+                1 => spec.name.clone(),
+                _ => format!("{} r{round}", spec.name),
+            };
+            println!("== {name}");
+            match real::run(spec, &name, &root, &options.out) {
+                Ok(outcome) => {
+                    print(&outcome);
+                    broken |= !outcome.verdict.violations.is_empty();
+                    outcomes.push(outcome.to_json());
+                }
+                Err(err) => {
+                    println!("   could not run: {err:#}");
+                    outcomes.push(json!({ "name": name, "could_not_run": format!("{err:#}") }));
+                }
+            }
+            write_report(options, &outcomes);
+        }
+    }
+    std::process::exit(i32::from(broken));
 }
 
 /// The outcome for a person to read: how many rules broke, and the first of each.

@@ -27,7 +27,12 @@ pub fn run(folder: &Path) -> anyhow::Result<()> {
     let wire = client::terminal(&home.daemon_socket())?;
     let tapes = folder.join("tapes");
     std::fs::create_dir_all(&tapes)?;
-    let lab = Lab { home, wire, tapes };
+    let lab = Lab {
+        home,
+        wire,
+        tapes,
+        person: false,
+    };
 
     let boss = lab.start_fake("boss", &[("FAKECLI_MOUSE", "1"), ("FAKECLI_NAME", "boss")])?;
     let names: Vec<String> = (1..=SENDERS).map(|n| format!("s{n:02}")).collect();

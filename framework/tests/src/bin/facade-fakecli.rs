@@ -96,6 +96,8 @@
 //! submission (`Tape`). `FAKECLI_MOUSE=1` asks its terminal for mouse and focus reports, as Claude
 //! Code does. `FAKECLI_DRAW_MS` is how long it takes to draw what it read. `FAKECLI_BUSY_MS` is how
 //! long it prints lines after each message it takes, one each `FAKECLI_BUSY_EVERY_MS` (50).
+//! `FAKECLI_ECHO_MS` is how long after reading its input it takes it, drawing the old input meanwhile.
+//! `FAKECLI_OPEN_UPDATES=1` leaves a synchronized update open between the lines it prints.
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -335,6 +337,8 @@ struct FakeCli {
     /// `FAKECLI_BUSY_MS`: how long it prints after each message it takes, and until when it does.
     busy: Duration,
     busy_until: Option<Instant>,
+    /// `FAKECLI_OPEN_UPDATES`.
+    open_updates: bool,
 }
 
 impl FakeCli {
@@ -730,7 +734,7 @@ impl FakeCli {
             if self.wrap_transcript {
                 frame.push_str(line);
             } else {
-                frame.push_str(&truncate_chars(line, cols));
+                frame.push_str(&truncate_cells(line, cols));
             }
             frame.push_str("\r\n");
         }
@@ -838,6 +842,9 @@ impl FakeCli {
         if self.sync {
             frame.push_str("\x1b[?2026l");
         }
+        if self.open_updates && self.busy_until.is_some_and(|until| Instant::now() < until) {
+            frame.push_str("\x1b[?2026h");
+        }
         let _ = out.write_all(frame.as_bytes());
         let _ = out.flush();
     }
@@ -845,6 +852,17 @@ impl FakeCli {
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
+}
+
+/// As much of `text` as fits in `cells`, where a wide character takes two.
+fn truncate_cells(text: &str, cells: usize) -> String {
+    let mut taken = 0;
+    text.chars()
+        .take_while(|ch| {
+            taken += if *ch >= '\u{1100}' { 2 } else { 1 };
+            taken <= cells
+        })
+        .collect()
 }
 
 /// A submitted message with its Unix timestamp in milliseconds.
@@ -1454,6 +1472,7 @@ fn run() -> anyhow::Result<()> {
         taped_menu: false,
         busy: milliseconds("FAKECLI_BUSY_MS").unwrap_or_default(),
         busy_until: None,
+        open_updates: std::env::var("FAKECLI_OPEN_UPDATES").is_ok_and(|v| v == "1"),
     };
     let resumed = arguments
         .iter()
@@ -1546,6 +1565,9 @@ fn run() -> anyhow::Result<()> {
     });
 
     let mut pending: Vec<u8> = Vec::new();
+    // Input read and not yet taken.
+    let echo_takes = milliseconds("FAKECLI_ECHO_MS").unwrap_or_default();
+    let mut delayed: std::collections::VecDeque<(Instant, Vec<u8>)> = Default::default();
     let mut pasting: Option<Vec<u8>> = None;
     let mut size_log = std::env::var_os("FAKECLI_SIZE_LOG")
         .map(std::fs::File::create)
@@ -1567,17 +1589,24 @@ fn run() -> anyhow::Result<()> {
             true => busy_every,
             false => Duration::from_millis(50),
         };
+        let tick = match delayed.front() {
+            Some((due, _)) => tick.min(due.saturating_duration_since(Instant::now())),
+            None => tick,
+        };
         match rx.recv_timeout(tick) {
             Ok(bytes) => {
                 if let Some(keys) = keys.as_mut() {
                     let _ = keys.write_all(&bytes);
                 }
-                pending.extend(bytes);
-                dirty = true;
-                typed = true;
+                delayed.push_back((Instant::now() + echo_takes, bytes));
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => quiet = true,
+            Err(mpsc::RecvTimeoutError::Timeout) => quiet = delayed.is_empty(),
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        while let Some((_, bytes)) = delayed.pop_front_if(|(due, _)| *due <= Instant::now()) {
+            pending.extend(bytes);
+            dirty = true;
+            typed = true;
         }
         let mut i = 0;
         while i < pending.len() {

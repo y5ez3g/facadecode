@@ -52,15 +52,20 @@ pub fn is_facades(text: &str) -> bool {
 }
 
 impl Tape {
-    pub fn read(file: &Path) -> Tape {
-        let mut tape = Tape {
-            submissions: Vec::new(),
+    /// What a CLI without a tape submitted.
+    pub fn of(submissions: Vec<Submission>) -> Tape {
+        Tape {
+            submissions,
             boxes: Vec::new(),
             tokens: Vec::new(),
             reads: Vec::new(),
             menus: Vec::new(),
             drawn: None,
-        };
+        }
+    }
+
+    pub fn read(file: &Path) -> Tape {
+        let mut tape = Tape::of(Vec::new());
         let text = std::fs::read_to_string(file).unwrap_or_default();
         for line in text.lines() {
             let Ok(entry) = serde_json::from_str::<Value>(line) else {
@@ -117,6 +122,7 @@ impl Tape {
                 && !facades
                     .iter()
                     .any(|number| shown.contains(&format!("[Pasted text #{number} ")))
+                && !shown.contains("[Pasted Content ")
                 && !is_facades(shown)
         };
         let mut changes: Vec<(u64, Option<bool>, Option<bool>)> = self

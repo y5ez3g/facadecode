@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context;
 use facade_base::base64;
@@ -16,6 +16,8 @@ use crate::client::{Mcp, envelope};
 use crate::judge::{self, Case, Kind, Read, Sent, Verdict, Violation, Window};
 use crate::lab::{Agent, Lab, Row};
 use crate::person::{Did, Habit, Person, Way, now_us};
+use crate::real::{Cli, Timeline};
+use crate::tape::Tape;
 
 /// When a sender sends its next message.
 #[derive(Clone, Copy, Debug)]
@@ -33,14 +35,22 @@ pub enum Shape {
     Lines(usize),
     Wide(usize),
     Chinese(usize),
+    /// A question a model answers in one word.
+    Ask,
 }
 
 impl Shape {
     pub fn text(self, name: &str) -> String {
         match self {
             Shape::Short => format!("{name} says hello"),
+            Shape::Ask => {
+                format!("{name}: reply with the single word ok and nothing else. Use no tools.")
+            }
             Shape::Lines(lines) => (0..lines)
-                .map(|line| format!("{name} line {line:03}"))
+                .map(|line| match line {
+                    0 => format!("{name} line 000"),
+                    _ => format!("line {line:03}"),
+                })
                 .collect::<Vec<_>>()
                 .join("\n"),
             Shape::Wide(chars) => format!("{name} ")
@@ -73,6 +83,8 @@ pub struct Spec {
     pub person: Option<(Habit, Way)>,
     /// People who type nothing.
     pub others: Vec<(Habit, Way)>,
+    /// The CLI the recipient stands in for, or `fake`.
+    pub cli: &'static str,
     /// The recipient's extra variables.
     pub env: Vec<(&'static str, String)>,
     pub draw_ms: u64,
@@ -93,6 +105,7 @@ impl Spec {
             wait: "inbox",
             person: None,
             others: Vec::new(),
+            cli: "fake",
             env: Vec::new(),
             draw_ms: 0,
             hogs: 0,
@@ -201,6 +214,7 @@ pub fn send_as(
         succeeded: false,
         said: "no answer".into(),
         failure: None,
+        limit_us: judge::LIMIT_US,
     };
     let Ok((at, answer)) = answer else {
         sent.took_ms = began.elapsed().as_secs_f64() * 1000.0;
@@ -221,11 +235,7 @@ pub fn send_as(
             .unwrap_or_default()
             .to_string();
     } else {
-        sent.said = envelope["error"]["reason"]
-            .as_str()
-            .or_else(|| envelope["error"].as_str())
-            .unwrap_or("failure")
-            .to_string();
+        sent.said = envelope["reason"].as_str().unwrap_or("failure").to_string();
         sent.failure = Some(envelope.to_string());
     }
     sent
@@ -338,13 +348,26 @@ pub struct Field {
     reads: Mutex<Vec<Read>>,
     expected_warnings: Mutex<Vec<&'static str>>,
     notes: Mutex<BTreeMap<String, Value>>,
+    reals: Mutex<Vec<RealAgent>>,
+}
+
+/// A real CLI in a field, and what its saved session and its input's readings are found by.
+pub struct RealAgent {
+    pub agent: Agent,
+    pub cli: &'static Cli,
+    pub since: SystemTime,
+    pub timeline: Timeline,
 }
 
 impl Field {
     pub fn new(name: &str, shape: String) -> anyhow::Result<Field> {
-        let lab = Lab::fake(&file_name(name))?;
+        Self::over(name, shape, Lab::fake(&file_name(name))?)
+    }
+
+    pub fn over(name: &str, shape: String, lab: Lab) -> anyhow::Result<Field> {
         println!("   home {}", lab.home.path.display());
         Ok(Field {
+            reals: Mutex::default(),
             name: name.into(),
             lab,
             shape,
@@ -367,6 +390,12 @@ impl Field {
     pub fn watch(&self, agent: &Agent, draw_ms: u64) {
         self.agents.lock().unwrap().push(agent.clone());
         self.draws.lock().unwrap().insert(agent.id.clone(), draw_ms);
+    }
+
+    /// Takes a real CLI into the judgement.
+    pub fn watch_real(&self, real: RealAgent) {
+        self.agents.lock().unwrap().push(real.agent.clone());
+        self.reals.lock().unwrap().push(real);
     }
 
     /// Starts a fake CLI and waits until its input is empty.
@@ -421,6 +450,19 @@ impl Field {
     ) -> Sent {
         let (seq, name) = self.name_next(from);
         self.note_sent(send(mcp, from, to, seq, shape.text(&name), wait))
+    }
+
+    /// [`Field::send`], which the caller keeps.
+    pub fn send_unkept(
+        &self,
+        mcp: &Mcp,
+        from: &str,
+        to: &Agent,
+        shape: Shape,
+        wait: &'static str,
+    ) -> Sent {
+        let (seq, name) = self.name_next(from);
+        send(mcp, from, to, seq, shape.text(&name), wait)
     }
 
     /// Keeps a send made another way.
@@ -509,11 +551,38 @@ impl Field {
         let strangers = self.strangers.lock().unwrap().clone();
         let mut sent = self.sent.lock().unwrap().clone();
         sent.sort_by_key(|sent| sent.seq);
+        let mut reals: HashMap<String, (&'static Cli, Option<Vec<_>>, Vec<_>)> = HashMap::new();
+        for real in self.reals.lock().unwrap().drain(..) {
+            let submissions = crate::real::submissions(&self.lab, &real)?;
+            reals.insert(
+                real.agent.id.clone(),
+                (real.cli, submissions, real.timeline.end()),
+            );
+        }
         let windows: Vec<Window> = agents
             .iter()
             .map(|agent| {
                 let draw_ms = draws.get(&agent.id).copied().unwrap_or_default();
+                if let Some((cli, submissions, timeline)) = reals.remove(&agent.id) {
+                    return Window {
+                        agent: agent.id.clone(),
+                        unsaved: submissions.is_none(),
+                        tape: Tape::of(submissions.unwrap_or_default()),
+                        person: people.get(&agent.id).cloned(),
+                        end_state: match ended.contains_key(&agent.id) {
+                            true => "ended".into(),
+                            false => self.lab.input_state(agent),
+                        },
+                        draw_ms: 0,
+                        service_ms: cli.service_ms,
+                        strangers: strangers.get(&agent.id).copied().unwrap_or_default(),
+                        ended_us: ended.get(&agent.id).copied(),
+                        timeline: Some(timeline),
+                    };
+                }
                 Window {
+                    unsaved: false,
+                    timeline: None,
                     agent: agent.id.clone(),
                     tape: self.lab.tape(&agent.id),
                     person: people.get(&agent.id).cloned(),
@@ -522,7 +591,8 @@ impl Field {
                         false => self.lab.input_state(agent),
                     },
                     draw_ms,
-                    service_ms: FAKE_SERVICE_MS + draw_ms,
+                    // Its CLI draws the draft, then the input emptied.
+                    service_ms: FAKE_SERVICE_MS + 2 * draw_ms,
                     strangers: strangers.get(&agent.id).copied().unwrap_or_default(),
                     ended_us: ended.get(&agent.id).copied(),
                 }
@@ -616,7 +686,7 @@ pub fn run(spec: &Spec, out: &Path) -> anyhow::Result<Outcome> {
             let (boss, window) = field.lab.start_in_window("boss", &env)?;
             (boss, Some(window))
         }
-        _ => (field.lab.start_fake("boss", &env)?, None),
+        _ => (field.lab.start_as(spec.cli, "boss", &env)?, None),
     };
     field.watch(&boss, spec.draw_ms);
     let senders = field.start_all("s", spec.senders, &[])?;

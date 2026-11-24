@@ -51,6 +51,8 @@ pub enum Habit {
         left_ms: u64,
         pause_ms: u64,
     },
+    /// Enter and at once another control key, such as Ctrl+C.
+    EnterThen { byte: u8, every_ms: u64 },
     /// Enter alone, as a person who sees text in the input may press it.
     Enter { every_ms: u64 },
     /// The window dragged through sizes.
@@ -473,6 +475,15 @@ fn live(
                 std::thread::sleep(Duration::from_millis(left_ms));
                 enter(keyboard);
                 pause(pause_ms);
+            }
+            Habit::EnterThen { byte, every_ms } => {
+                {
+                    let mut did = did.lock().unwrap();
+                    did.enters += 1;
+                    did.controls.push(byte);
+                }
+                send(keyboard, &[b'\r', byte]);
+                pause(every_ms);
             }
             Habit::Enter { every_ms } => {
                 enter(keyboard);

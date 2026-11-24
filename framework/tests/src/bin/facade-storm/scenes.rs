@@ -10,12 +10,15 @@ use crate::storm::{self, Outcome, Pace, Shape, Spec};
 pub enum Storm {
     /// Senders to one recipient.
     Spec(Box<Spec>),
+    /// A course of its own.
+    Course(&'static str, fn(&str, &Path) -> anyhow::Result<Outcome>),
 }
 
 impl Storm {
     pub fn name(&self) -> &str {
         match self {
             Storm::Spec(spec) => &spec.name,
+            Storm::Course(name, _) => name,
         }
     }
 
@@ -29,17 +32,27 @@ impl Storm {
                 },
                 out,
             ),
+            Storm::Course(_, run) => run(name, out),
         }
     }
 }
 
 /// The storms of `set`, with `senders` and `each` in place of their own counts.
 pub fn set(name: &str, senders: Option<usize>, each: Option<usize>) -> Option<Vec<Storm>> {
+    if let Some(courses) = crate::more::set(name) {
+        return Some(
+            courses
+                .into_iter()
+                .map(|(name, run)| Storm::Course(name, run))
+                .collect(),
+        );
+    }
     let mut specs = match name {
         "r0" => r0(),
         "h" => h(),
         "n" => n(),
         "busy" => busy(),
+        "looks" => looks(),
         _ => return None,
     };
     for spec in &mut specs {
@@ -204,6 +217,45 @@ fn h() -> Vec<Spec> {
     specs
 }
 
+/// Ten messages to stand-ins read by a real CLI's rule, idle and printing at each interval.
+fn looks() -> Vec<Spec> {
+    let mut specs = Vec::new();
+    for cli in ["muse", "agy"] {
+        specs.push(Spec {
+            cli,
+            senders: 10,
+            ..Spec::new(&format!("{cli} idle"))
+        });
+        for every in [50u64, 90, 120, 160, 200, 250, 300, 400] {
+            specs.push(Spec {
+                cli,
+                senders: 10,
+                env: vec![
+                    ("FAKECLI_STATUS", "1".to_string()),
+                    ("FAKECLI_TURN_MS", "60000".to_string()),
+                    ("FAKECLI_BUSY_MS", "60000".to_string()),
+                    ("FAKECLI_BUSY_EVERY_MS", every.to_string()),
+                ],
+                ..Spec::new(&format!("{cli} busy every {every} ms"))
+            });
+        }
+        // More lines, a longer wait for the key.
+        specs.push(Spec {
+            cli,
+            senders: 5,
+            shape: Shape::Lines(40),
+            env: vec![
+                ("FAKECLI_STATUS", "1".to_string()),
+                ("FAKECLI_TURN_MS", "60000".to_string()),
+                ("FAKECLI_BUSY_MS", "60000".to_string()),
+                ("FAKECLI_BUSY_EVERY_MS", "500".to_string()),
+            ],
+            ..Spec::new(&format!("{cli} 40 lines busy every 500 ms"))
+        });
+    }
+    specs
+}
+
 /// Ten messages to a CLI that prints a line at each interval while it works.
 fn busy() -> Vec<Spec> {
     [10u64, 20, 35, 50, 70, 90, 120, 160, 250, 400]
@@ -313,6 +365,21 @@ fn with(name: &str, habit: Habit, way: Way) -> Spec {
     }
 }
 
+/// A recipient that prints every 110 ms and takes its input `echo_ms` after it read it.
+fn slow_echo(name: &str, echo_ms: u64, habit: Habit) -> Spec {
+    Spec {
+        senders: 20,
+        env: vec![
+            ("FAKECLI_STATUS", "1".to_string()),
+            ("FAKECLI_BUSY_MS", "60000".to_string()),
+            ("FAKECLI_BUSY_EVERY_MS", "110".to_string()),
+            ("FAKECLI_ECHO_MS", echo_ms.to_string()),
+        ],
+        draw_ms: echo_ms,
+        ..with(name, habit, Way::Raw)
+    }
+}
+
 /// Fifty messages at one moment to one recipient, with each way a person's bytes come in.
 fn r0() -> Vec<Spec> {
     vec![
@@ -366,5 +433,76 @@ fn r0() -> Vec<Spec> {
             Habit::Resize { every_ms: 600 },
             Way::Editor,
         ),
+        // The person's keys reach a CLI that is drawing something else, the input still the old one.
+        slow_echo(
+            "B1 typing, echo 200 ms",
+            200,
+            Habit::Lines {
+                key_ms: 60,
+                chars: 12,
+                pause_ms: 900,
+            },
+        ),
+        slow_echo(
+            "B1 typing, echo 1000 ms",
+            1000,
+            Habit::Lines {
+                key_ms: 60,
+                chars: 12,
+                pause_ms: 2500,
+            },
+        ),
+        slow_echo(
+            "B1 paste in chunks, echo 200 ms",
+            200,
+            Habit::Paste {
+                chars: 900,
+                chunk: 200,
+                gap_ms: 40,
+                pause_ms: 1500,
+            },
+        ),
+        // Enter, and at once a key that clears or interrupts.
+        with(
+            "B2 enter and ctrl-c",
+            Habit::EnterThen {
+                byte: 0x03,
+                every_ms: 430,
+            },
+            Way::Raw,
+        ),
+        with(
+            "B2 enter and escape",
+            Habit::EnterThen {
+                byte: 0x1b,
+                every_ms: 430,
+            },
+            Way::Raw,
+        ),
+        // The window dragged while a synchronized update stays open.
+        Spec {
+            env: vec![
+                ("FAKECLI_STATUS", "1".to_string()),
+                ("FAKECLI_BUSY_MS", "60000".to_string()),
+                ("FAKECLI_BUSY_EVERY_MS", "110".to_string()),
+                ("FAKECLI_OPEN_UPDATES", "1".to_string()),
+            ],
+            others: vec![(Habit::Resize { every_ms: 150 }, Way::Attach)],
+            ..with(
+                "B3 dragging, open updates",
+                Habit::Resize { every_ms: 180 },
+                Way::Editor,
+            )
+        },
+        Spec {
+            env: vec![
+                ("FAKECLI_STATUS", "1".to_string()),
+                ("FAKECLI_BUSY_MS", "60000".to_string()),
+                ("FAKECLI_BUSY_EVERY_MS", "110".to_string()),
+                ("FAKECLI_OPEN_UPDATES", "1".to_string()),
+            ],
+            senders: 10,
+            ..Spec::new("B3 open updates alone")
+        },
     ]
 }
