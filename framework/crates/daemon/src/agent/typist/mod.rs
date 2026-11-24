@@ -446,7 +446,8 @@ pub(crate) struct Typist {
     current: Option<Typing>,
     inbox: VecDeque<MessageTyping>,
     batch: Option<Batch>,
-    /// A timed-out paste the terminal took before the CLI drew its draft.
+    /// A timed-out paste that may still be in the input, or come into it: the CLI had not drawn its
+    /// draft, or the input could not be read.
     late_draft: Option<DraftCheck>,
     receipt: Option<Receipt>,
     submitted: Option<Submission>,
@@ -943,17 +944,19 @@ impl Typist {
         let info = self.recall(reading.clone()).info;
         // An empty box can be the last frame before the CLI took the paste. Wait for
         // its draft before trusting the box again, and erase it only if it is still ours.
-        if let Some(draft) = &self.late_draft {
-            if draft.typed == Some(typed) && draft.paste.matches(rule, &reading, false) {
+        if let Some(draft) = &mut self.late_draft {
+            let untouched = draft.typed == Some(typed);
+            if untouched && draft.matches(rule, &reading, false) {
                 let write = draft.paste.backspaces();
                 self.late_draft = None;
                 self.record_write(offset, write.len(), Duration::ZERO);
                 return Step { write, wake: None };
             }
-            if draft.typed != Some(typed)
-                && info.state == InputState::Draft
-                && reading.draft.is_some()
-            {
+            // A draft that showed is gone once the input shows anything else.
+            let gone =
+                draft.observed && !reading.is_unread() && info.state != InputState::Interaction;
+            let theirs = !untouched && info.state == InputState::Draft && reading.draft.is_some();
+            if gone || theirs {
                 self.late_draft = None;
             }
         }
@@ -1056,6 +1059,17 @@ impl Typist {
         let same = |observed: &str, shown: &str| {
             facade_rules::is_same_draft(observed, shown, &draft.paste.text, reading.draft_hidden())
         };
+        // In the middle of a frame nobody knows whether the draft the input showed is still there:
+        // the frame says it.
+        let mid_frame = untouched && draft.stable.is_some() && reading.is_unread();
+        let frame_by = deadline + RESPONSE_GRACE;
+        if mid_frame && (deadline..frame_by).contains(&now) {
+            self.batch = Some(Batch {
+                messages,
+                phase: DeliveryPhase::Draft(draft),
+            });
+            return Step::wait(Some(frame_by));
+        }
         if now >= deadline {
             let known_length = draft
                 .previous
@@ -1088,18 +1102,21 @@ impl Typist {
             } else {
                 Self::uncleared()
             };
-            if !draft.recovered
+            let not_drawn = !draft.recovered
                 && untouched
                 && !draft.observed
-                && self.recall(reading).info.state == InputState::Usable
-            {
+                && self.recall(reading).info.state == InputState::Usable;
+            if not_drawn || (mid_frame && known_length) {
                 self.late_draft = Some(draft);
             }
             return self.settle_delivery(&messages, outcome);
         }
         let wake = match own {
             None => {
-                draft.stable = None;
+                // In the middle of a frame the draft it showed counts on.
+                if !reading.is_unread() {
+                    draft.stable = None;
+                }
                 now + READ_INTERVAL
             }
             Some(observed) => {
@@ -1328,6 +1345,8 @@ fn write_text(text: &str, records: bool, bytes: &mut Vec<u8>) {
 mod tests {
     use facade_base::key_input::NAMED_KEYS;
     use facade_base::model::message::{DeliveredVia, DeliveryStatus, MessagesWatchArgs};
+    use facade_base::model::terminal::HiddenRows;
+    use facade_rules::{InputLine, LineCell};
 
     use super::*;
     use crate::messages::Messages;
@@ -1361,6 +1380,8 @@ mod tests {
         queued: Vec<u8>,
         written: usize,
         reading: BoxReading,
+        /// The person's writes.
+        typed: u64,
     }
 
     impl Default for Terminal {
@@ -1369,6 +1390,7 @@ mod tests {
                 queued: Vec::new(),
                 written: 0,
                 reading: input(InputState::Unknown, None),
+                typed: 0,
             }
         }
     }
@@ -1396,7 +1418,7 @@ mod tests {
                 self.written as u64,
                 self.queued.len() as u64,
                 modes,
-                0,
+                self.typed,
                 &|| reading.clone(),
                 &|| reading.clone(),
             );
@@ -2221,6 +2243,420 @@ mod tests {
         terminal.step(&mut typist, shown + Duration::from_millis(300), ANY);
         assert_eq!(became(&post, number), TYPED);
         assert!(!typist.busy() && typist.held_bytes() == 0);
+    }
+
+    /// An input the screen does not show, as in the middle of a frame.
+    fn unread() -> BoxReading {
+        input(InputState::Unknown, None)
+    }
+
+    /// The draft of a paste of "first line\nsecond line", as its text, as the CLI's placeholder and
+    /// with its first row scrolled out of the input.
+    fn drafts_of_two_lines() -> [BoxReading; 3] {
+        let mut scrolled = input(InputState::Draft, Some("second line"));
+        scrolled.info.hidden = Some(HiddenRows { above: 1, below: 0 });
+        [
+            input(InputState::Draft, Some("first line\n  second line")),
+            input(InputState::Draft, Some("[Pasted text #1 +1 lines]")),
+            scrolled,
+        ]
+    }
+
+    /// A typist with a message of `text` pasted into `terminal` at `start`, its number and what
+    /// its send is told.
+    fn pasted(
+        post: &Arc<Messages>,
+        terminal: &mut Terminal,
+        text: &str,
+        (start, deadline): (Instant, Instant),
+    ) -> (Typist, u64, Told) {
+        let mut typist = typist_for("fake", post);
+        let (typing, number, told) = message_told(post, text, deadline);
+        typist.deliver(typing);
+        terminal.reading = input(InputState::Usable, None);
+        terminal.step(&mut typist, start, ANY);
+        assert!(terminal.write_all().starts_with(b"\x1b[200~"));
+        terminal.step(&mut typist, start, ANY);
+        (typist, number, told)
+    }
+
+    /// A CLI that redraws without a pause is read in the middle of a frame time and again, which
+    /// says nothing of the draft it drew: the Enter goes once that has shown for the CLI's settle
+    /// time, over a whole frame that shows it.
+    #[test]
+    fn a_message_gets_its_enter_while_its_cli_redraws_without_a_pause() {
+        for own in drafts_of_two_lines() {
+            let post = test_messages();
+            let mut terminal = Terminal::default();
+            let start = Instant::now();
+            let times = (start, start + Duration::from_secs(30));
+            let (mut typist, number, _) =
+                pasted(&post, &mut terminal, "first line\nsecond line", times);
+            // Each frame comes in two pieces, and the next 20 ms after it.
+            let shown = start + Duration::from_millis(200);
+            let frames = [20, 40, 60, 80].map(Duration::from_millis);
+            terminal.reading = own.clone();
+            terminal.step(&mut typist, shown, ANY);
+            for frame in frames {
+                assert!(terminal.write_all().is_empty(), "{own:?} at {frame:?}");
+                terminal.reading = unread();
+                terminal.step(&mut typist, shown + frame, ANY);
+                assert!(
+                    terminal.write_all().is_empty(),
+                    "no Enter goes while {own:?} is not read"
+                );
+                terminal.reading = own.clone();
+                terminal.step(&mut typist, shown + frame + Duration::from_millis(1), ANY);
+            }
+            assert_eq!(terminal.write_all(), b"\r", "{own:?}");
+            terminal.reading = input(InputState::Usable, None);
+            terminal.step(&mut typist, shown + Duration::from_millis(90), ANY);
+            assert_eq!(became(&post, number), TYPED);
+        }
+    }
+
+    /// Anything else the input shows ends what its draft showed until then, also between two frames
+    /// that are not read: its settle time starts again.
+    #[test]
+    fn another_draft_an_empty_input_or_a_question_restarts_a_message_s_settle_time() {
+        for other in [
+            input(InputState::Draft, Some("hello there!")),
+            input(InputState::Draft, None),
+            input(InputState::Usable, None),
+            input(InputState::Interaction, None),
+        ] {
+            let post = test_messages();
+            let mut terminal = Terminal::default();
+            let start = Instant::now();
+            let times = (start, start + Duration::from_secs(30));
+            let (mut typist, ..) = pasted(&post, &mut terminal, "hello there", times);
+            let shown = start + Duration::from_millis(200);
+            let own = input(InputState::Draft, Some("hello there"));
+            for (at, reading) in [
+                (0, own.clone()),
+                (20, unread()),
+                (40, other.clone()),
+                (60, unread()),
+                (70, own.clone()),
+                (80, own.clone()),
+                (149, own.clone()),
+            ] {
+                terminal.reading = reading;
+                terminal.step(&mut typist, shown + Duration::from_millis(at), ANY);
+                assert!(terminal.write_all().is_empty(), "{other:?} at {at} ms");
+            }
+            terminal.step(&mut typist, shown + Duration::from_millis(150), ANY);
+            assert_eq!(terminal.write_all(), b"\r", "{other:?}");
+        }
+    }
+
+    /// A deadline in the middle of a frame waits for the frame, which shows whether the message is
+    /// still in the input: it is erased there and withdrawn.
+    #[test]
+    fn a_deadline_in_the_middle_of_a_frame_waits_for_the_frame() {
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(10);
+        for own in drafts_of_two_lines() {
+            let post = test_messages();
+            let mut terminal = Terminal::default();
+            let (mut typist, number, told) = pasted(
+                &post,
+                &mut terminal,
+                "first line\nsecond line",
+                (start, deadline),
+            );
+            terminal.reading = own.clone();
+            terminal.step(&mut typist, deadline - Duration::from_millis(10), ANY);
+            terminal.reading = unread();
+            assert_eq!(
+                terminal.step(&mut typist, deadline, ANY),
+                Some(deadline + RESPONSE_GRACE)
+            );
+            assert_eq!(became(&post, number), PENDING, "{own:?}");
+            terminal.reading = own.clone();
+            terminal.step(&mut typist, deadline + Duration::from_millis(5), ANY);
+            assert_eq!(
+                terminal.write_all(),
+                b"\x7f".repeat("first line\nsecond line".len()),
+                "{own:?}"
+            );
+            terminal.reading = input(InputState::Usable, None);
+            terminal.step(&mut typist, deadline + Duration::from_millis(30), ANY);
+            assert_eq!(
+                withdrawn(&post, number, &told),
+                failed(DeliveryFailure::Timeout, TextWritten::Full, false)
+            );
+        }
+    }
+
+    /// A message past its deadline, and what its send is told.
+    struct Overdue {
+        post: Arc<Messages>,
+        typist: Typist,
+        terminal: Terminal,
+        number: u64,
+        told: Told,
+        deadline: Instant,
+    }
+
+    /// A message of `text` whose draft shows until its deadline, with another one behind it.
+    fn overdue(text: &str) -> Overdue {
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(10);
+        let post = test_messages();
+        let mut terminal = Terminal::default();
+        let (mut typist, number, told) = pasted(&post, &mut terminal, text, (start, deadline));
+        let (next, _) = message(&post, "the next", deadline + Duration::from_secs(30));
+        typist.deliver(next);
+        terminal.reading = input(InputState::Draft, Some(text));
+        terminal.step(&mut typist, deadline - Duration::from_millis(10), ANY);
+        Overdue {
+            post,
+            typist,
+            terminal,
+            number,
+            told,
+            deadline,
+        }
+    }
+
+    impl Overdue {
+        /// The input reads `reading` at `after` milliseconds past the deadline. Returns what goes
+        /// into it then.
+        fn at(&mut self, after: u64, reading: BoxReading) -> Vec<u8> {
+            let at = self.deadline + Duration::from_millis(after);
+            self.terminal.reading = reading;
+            self.terminal.step(&mut self.typist, at, ANY);
+            self.terminal.write_all()
+        }
+
+        /// A key of the person's goes into the input.
+        fn person_types(&mut self) {
+            self.terminal.typed += 1;
+        }
+
+        /// How its send was told it ended, if it was.
+        fn receipt(&self) -> Option<Became> {
+            let message = match self.told.borrow().clone()? {
+                crate::messages::Settled::Kept(message)
+                | crate::messages::Settled::Withdrawn(message) => message,
+                other => panic!("{other:?}"),
+            };
+            let delivery = message.delivery;
+            Some((
+                delivery.status,
+                delivery.reason,
+                delivery.text_written,
+                delivery.enter_written,
+                delivery.delivered_via,
+            ))
+        }
+    }
+
+    const UNCLEARED: Became = (
+        DeliveryStatus::Failure,
+        Some(DeliveryFailure::SubmissionUnconfirmed),
+        TextWritten::Full,
+        Some(false),
+        None,
+    );
+
+    /// A frame that comes after the receipt still has the message erased, and the one behind it
+    /// goes into the empty input. Its receipt says once what was known by then.
+    #[test]
+    fn a_message_is_erased_by_a_frame_that_comes_after_its_receipt() {
+        let own = || input(InputState::Draft, Some("hello"));
+        // The typist looked while nothing showed, and the post had to end the delivery itself.
+        for post_ends_it in [false, true] {
+            let mut overdue = overdue("hello");
+            assert!(overdue.at(0, unread()).is_empty());
+            assert_eq!(overdue.receipt(), None);
+            if post_ends_it {
+                let post = overdue.post.clone();
+                post.settle(&[overdue.number], Outcome::UNCONFIRMED);
+                assert_eq!(overdue.receipt(), Some(NOT_KNOWN));
+            } else {
+                assert!(overdue.at(250, unread()).is_empty());
+                assert_eq!(overdue.receipt(), Some(UNCLEARED));
+                assert!(overdue.at(500, unread()).is_empty());
+            }
+            assert_eq!(overdue.at(501, own()), b"\x7f".repeat("hello".len()));
+            assert!(overdue.at(510, own()).is_empty(), "it is erased once");
+            assert!(overdue.at(520, unread()).is_empty());
+            let empty = || input(InputState::Usable, None);
+            let mut written = overdue.at(530, empty());
+            written.extend(overdue.at(530, empty()));
+            assert_eq!(written, b"\x1b[200~the next\x1b[201~");
+            let told = if post_ends_it { NOT_KNOWN } else { UNCLEARED };
+            assert_eq!(overdue.receipt(), Some(told), "its receipt stays");
+        }
+    }
+
+    /// Nothing is erased that the person typed into, or that the input no longer shows as the
+    /// message alone; the message behind it waits for the empty input.
+    #[test]
+    fn a_frame_after_the_deadline_erases_the_message_alone() {
+        let own = || input(InputState::Draft, Some("hello"));
+        let paste = b"\x1b[200~the next\x1b[201~";
+        for looked in [&[0_u64][..], &[0, 250], &[0, 250, 500]] {
+            // The person typed after the deadline.
+            let mut overdue = overdue("hello");
+            assert!(overdue.at(0, unread()).is_empty());
+            overdue.person_types();
+            for after in &looked[1..] {
+                assert!(overdue.at(*after, unread()).is_empty());
+            }
+            assert!(overdue.at(501, own()).is_empty(), "{looked:?}");
+            assert_eq!(overdue.receipt(), Some(UNCLEARED), "{looked:?}");
+            let empty = input(InputState::Usable, None);
+            let mut written = overdue.at(600, input(InputState::Draft, Some("hello!")));
+            written.extend(overdue.at(700, empty.clone()));
+            written.extend(overdue.at(701, empty));
+            assert_eq!(written, paste, "{looked:?}");
+        }
+        for other in [
+            input(InputState::Draft, Some("hello, and mine")),
+            input(InputState::Usable, None),
+        ] {
+            for looked in [&[0_u64][..], &[0, 250], &[0, 250, 500]] {
+                let mut overdue = overdue("hello");
+                for after in looked {
+                    assert!(overdue.at(*after, unread()).is_empty());
+                }
+                let mut written = overdue.at(501, other.clone());
+                written.extend(overdue.at(502, input(InputState::Usable, None)));
+                written.extend(overdue.at(503, input(InputState::Usable, None)));
+                assert_eq!(written, paste, "{other:?} after {looked:?}");
+                assert_eq!(overdue.receipt(), Some(UNCLEARED), "{other:?} {looked:?}");
+            }
+        }
+        // A question in place of the input shows neither.
+        let mut overdue = overdue("hello");
+        assert!(overdue.at(0, unread()).is_empty());
+        assert!(overdue.at(250, unread()).is_empty());
+        assert!(
+            overdue
+                .at(501, input(InputState::Interaction, None))
+                .is_empty()
+        );
+        assert_eq!(overdue.at(900, own()), b"\x7f".repeat("hello".len()));
+    }
+
+    /// A deadline in the middle of a frame waits for none once the person typed: the message is
+    /// theirs to submit or erase.
+    #[test]
+    fn a_deadline_waits_for_no_frame_once_the_person_typed() {
+        let mut overdue = overdue("hello");
+        overdue.person_types();
+        assert!(overdue.at(0, unread()).is_empty());
+        assert_eq!(overdue.receipt(), Some(UNCLEARED));
+    }
+
+    /// An input whose first row shows `text` with the cursor at `column`: a hint or a draft where
+    /// it is `unsure`.
+    fn row(text: &str, column: usize, unsure: bool) -> BoxReading {
+        BoxReading {
+            line: Some(InputLine {
+                row: 1,
+                start: 2,
+                cells: text
+                    .chars()
+                    .map(|c| LineCell {
+                        text: c.into(),
+                        dim: false,
+                        colored: false,
+                    })
+                    .collect(),
+                rest: false,
+                cut: false,
+                cursor: (column, 1),
+            }),
+            unsure,
+            ..unread()
+        }
+    }
+
+    /// A typist that typed the space of its probe at `start`, where the input shows "Try it".
+    fn probing(post: &Arc<Messages>, terminal: &mut Terminal, start: Instant) -> Typist {
+        let mut typist = typist_for("claude", post);
+        let (typing, _) = message(post, "hello", start + Duration::from_secs(30));
+        typist.deliver(typing);
+        terminal.reading = row("Try it", 2, true);
+        terminal.step(&mut typist, start, ANY);
+        assert_eq!(terminal.write_all(), b" ");
+        typist
+    }
+
+    /// A probe compares whole frames alone: one that the CLI is still drawing takes no part in it.
+    #[test]
+    fn a_probe_of_a_cli_that_redraws_without_a_pause_takes_its_space_back() {
+        let post = test_messages();
+        let mut terminal = Terminal::default();
+        let start = Instant::now();
+        let mut typist = probing(&post, &mut terminal, start);
+        let mut wake = Some(start + probe::PROBE_READ);
+        // Every other look falls into the middle of a frame.
+        for (whole, key) in [
+            (row(" ", 3, false), &b"\x7f"[..]),
+            (row("Try it", 2, true), b"\x1b[200~hello\x1b[201~"),
+        ] {
+            let mut written = Vec::new();
+            for look in 0..20 {
+                terminal.reading = if look % 2 == 0 {
+                    unread()
+                } else {
+                    whole.clone()
+                };
+                wake = terminal.step(&mut typist, wake.expect("it looks again"), ANY);
+                written = terminal.write_all();
+                if !written.is_empty() {
+                    break;
+                }
+            }
+            assert_eq!(
+                String::from_utf8_lossy(&written),
+                String::from_utf8_lossy(key)
+            );
+        }
+    }
+
+    /// A probe whose time is over in the middle of a frame presses its Backspace over the frame, if
+    /// that comes soon and shows its space; nothing an earlier frame showed has it pressed.
+    #[test]
+    fn a_probe_presses_no_key_over_what_an_earlier_frame_showed() {
+        let space = || row(" ", 3, false);
+        let menu = input(InputState::Interaction, None);
+        let gone = row("other", 7, false);
+        let over = Duration::from_secs(1);
+        let soon = over + Duration::from_millis(40);
+        for (last, key) in [
+            (Some((soon, space())), &b"\x7f"[..]),
+            (Some((soon, menu)), b""),
+            (Some((soon, gone)), b""),
+            (Some((over + RESPONSE_GRACE, unread())), b""),
+        ] {
+            let post = test_messages();
+            let mut terminal = Terminal::default();
+            let start = Instant::now();
+            let mut typist = probing(&post, &mut terminal, start);
+            let mut looks = vec![(Duration::from_millis(900), space()), (over, unread())];
+            looks.extend(last.clone());
+            let mut written = Vec::new();
+            for (at, reading) in looks {
+                assert!(written.is_empty(), "nothing goes before the last look");
+                terminal.reading = reading;
+                let wake = terminal.step(&mut typist, start + at, ANY);
+                if at == over {
+                    assert!(
+                        wake.is_some_and(|wake| wake <= start + over + RESPONSE_GRACE),
+                        "it looks again in time"
+                    );
+                }
+                written = terminal.write_all();
+            }
+            assert_eq!(written, key, "{last:?}");
+            assert_eq!(typist.probing(), !key.is_empty(), "{last:?}");
+        }
     }
 
     /// A run's start prompt goes first, ahead of every waiting message.

@@ -10,6 +10,8 @@ use facade_rules::{
 };
 use tokio::time::Instant;
 
+use crate::messages::RESPONSE_GRACE;
+
 /// How often a probe reads the input while it waits for it to be drawn still.
 pub(super) const PROBE_READ: Duration = Duration::from_millis(100);
 /// How long a probe waits for the input to be drawn still after each key.
@@ -65,7 +67,9 @@ impl Probe {
 
     /// One step at `now`. The input is read every [`PROBE_READ`] until two readings in a row show
     /// the same row and cursor, for at most [`PROBE_STILL`]: a draft read half drawn after the
-    /// space could pass for a hint, so a verdict waits for the input to be still.
+    /// space could pass for a hint, so a verdict waits for the input to be still. A reading in the
+    /// middle of a frame, which shows no input, takes no part: the next frame decides, and where none
+    /// comes, no key goes by what an earlier one showed.
     pub(super) fn next(
         &mut self,
         agent: &str,
@@ -78,8 +82,10 @@ impl Probe {
             return Next::Wait(due);
         }
         let reading = read_screen();
-        // A reading with no row, as one taken inside a synchronized update, is never still: the
-        // probe waits for the whole frame.
+        let frame_by = self.since + PROBE_STILL + RESPONSE_GRACE;
+        if reading.is_unread() && now < frame_by {
+            return Next::Wait((now + PROBE_READ).min(frame_by));
+        }
         let still = reading.line.is_some()
             && self.last.as_ref().is_some_and(|(_, last)| {
                 last.info.state == reading.info.state && last.line == reading.line

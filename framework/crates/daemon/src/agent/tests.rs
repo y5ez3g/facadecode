@@ -2541,6 +2541,49 @@ async fn a_quiet_agent_presses_no_key_of_its_start() {
     std::fs::remove_dir_all(&home).unwrap();
 }
 
+/// A CLI at work draws frame after frame, each in two pieces: the message it shows gets its Enter
+/// all the same, and no Backspace.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_gets_its_enter_while_its_cli_draws_frame_after_frame() {
+    for (name, opens, closes) in [
+        ("busysync", "\x1b[?2026h", "\x1b[?2026l"),
+        ("busyplain", "", ""),
+    ] {
+        let home = home(name);
+        let mut harness = claude(&home, false);
+        harness.plain_claude_input("", "");
+        let message = harness
+            .queue_probe_message("a message", Duration::from_secs(20))
+            .await;
+        let paste = b"\x1b[200~a message\x1b[201~";
+        assert_eq!(harness.cli_reads(paste.len()), paste);
+        let border = "─".repeat(80);
+        let until = Instant::now() + Duration::from_secs(3);
+        let mut read = Vec::new();
+        let mut frames = 0;
+        while read.is_empty() && Instant::now() < until {
+            frames += 1;
+            let first = format!("{opens}\x1b[2J\x1b[Hworking {frames}");
+            harness.cli.write_all(first.as_bytes()).unwrap();
+            read.extend(harness.cli_reads_within(1, Duration::from_millis(10)));
+            let rest = format!("\r\n{border}\r\n❯\u{a0}a message\r\n{border}\x1b[3;12H{closes}");
+            harness.cli.write_all(rest.as_bytes()).unwrap();
+            read.extend(harness.cli_reads_within(1, Duration::from_millis(20)));
+        }
+        assert_eq!(read, b"\r", "{name}: {frames} frames drawn");
+        harness.plain_claude_input("", "");
+        let crate::messages::Settled::Kept(message) = probe_message_settled(message).await else {
+            panic!("the message is kept");
+        };
+        assert_eq!(
+            message.delivery.status,
+            facade_base::model::message::DeliveryStatus::Success
+        );
+        harness.stop().await;
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+}
+
 const CLAUDE_PLAIN_HINT: &str = r#"Try "refactor <filepath>""#;
 
 impl Harness {

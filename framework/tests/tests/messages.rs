@@ -385,6 +385,50 @@ fn a_message_waits_while_a_draft_holds_the_input_and_never_types_over_it() {
     );
 }
 
+/// A CLI at work redraws frame after frame, and a frame reaches Facade in pieces. Messages go in one
+/// after the other all the same. The test CLI redraws whenever it reads something; the question in
+/// its name, which its terminal answers, has it redraw without a pause.
+#[test]
+fn messages_go_into_a_cli_that_redraws_without_a_pause() {
+    for sync in ["0", "1"] {
+        let home = TestHome::new("busyredraw");
+        let keys = home.folder().join("keys");
+        std::fs::write(&keys, []).unwrap();
+        let worker = home.start_fake_with(
+            "worker",
+            &[
+                ("FAKECLI_NAME", "worker\u{1b}[c"),
+                ("FAKECLI_SYNC", sync),
+                ("FAKECLI_KEYS", keys.to_str().unwrap()),
+            ],
+        );
+        let answers = || {
+            let read = std::fs::read(&keys).unwrap();
+            read.windows(3).filter(|bytes| bytes == b"\x1b[?").count()
+        };
+        let drawn = answers();
+        let sends: Vec<Sending> = (1..=5)
+            .map(|number| begin_send(&home, &worker.id, &format!("{number}\nof five"), None))
+            .collect();
+        for send in sends {
+            let receipt = send.receipt();
+            assert_eq!(delivery_of(&receipt), typed_in(), "sync {sync}: {receipt}");
+        }
+        let drawn = answers() - drawn;
+        assert!(drawn > 20, "sync {sync}: it drew {drawn} frames");
+        // A send is answered once its message's Enter is written, and the CLI reads that next.
+        wait_until(secs(10), || home.submitted_messages().len() >= 5);
+        let submitted = home.submitted_messages();
+        let mut texts: Vec<&str> = submitted
+            .iter()
+            .filter_map(|message| Some(message.split_once('\n')?.1))
+            .collect();
+        texts.sort();
+        let expected: Vec<String> = (1..=5).map(|number| format!("{number}\nof five")).collect();
+        assert_eq!(texts, expected, "sync {sync}: {submitted:?}");
+    }
+}
+
 /// Reading a message that waits for the input delivers it: its sender learns it was read, and it is
 /// never typed.
 #[test]

@@ -273,6 +273,8 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     `BoxReading::draft_hidden() -> Option<HiddenRows>` gives the draft's rows out of sight for
     telling a message's own draft: the marked ones of `info.hidden`, or one row above where the
     screen cut the input without a mark (`InputLine::cut`).
+    `BoxReading::is_unread() -> bool` reports an `Unknown` reading with no first row, as in the
+    middle of a frame. An unsure reading has its first row, which a probe compares.
   - `read_box_for_typing(&InputRule, &ScreenView, bool) -> BoxReading` considers an unstyled
     row ambiguous when the daemon reports untouched input and the CLI's rule allows a probe.
     Inspection reports the ambiguity, and delivery can probe the row.

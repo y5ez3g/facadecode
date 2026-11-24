@@ -1005,6 +1005,7 @@ fn claude_plain_hint_and_same_text_draft_need_the_probe() {
     assert!(restored(verdict, before, &read(text, 3)));
 
     assert!(initial.unsure, "{}", initial.info.evidence);
+    assert!(!initial.is_unread(), "it read a row");
     assert_eq!(initial.info.state, InputState::Unknown);
 
     let ordinary = read_box(claude, &frame(text, 3));
@@ -1068,20 +1069,20 @@ fn a_hidden_terminal_cursor_reads_unknown_unless_the_cli_draws_its_own_there() {
 #[test]
 fn an_open_synchronized_update_reads_unknown() {
     let fake = &find("fake").unwrap().unwrap().input;
-    assert_eq!(
-        read_input(fake, &screen_after("────\r\n❯ \r\n────".as_bytes())).state,
-        InputState::Usable
-    );
-    let read = read_input(
+    let whole = read_box(fake, &screen_after("────\r\n❯ \r\n────".as_bytes()));
+    assert_eq!(whole.info.state, InputState::Usable);
+    assert!(!whole.is_unread());
+    let half = read_box(
         fake,
         &screen_after("────\r\n❯ \r\n────\x1b[?2026h\x1b[2;3Hhalf".as_bytes()),
     );
-    assert_eq!(read.state, InputState::Unknown);
+    assert_eq!(half.info.state, InputState::Unknown);
     assert!(
-        read.evidence.contains("synchronized update"),
+        half.info.evidence.contains("synchronized update"),
         "{}",
-        read.evidence
+        half.info.evidence
     );
+    assert!(half.is_unread());
 }
 
 #[test]

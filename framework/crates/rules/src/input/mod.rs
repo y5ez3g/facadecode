@@ -59,6 +59,12 @@ impl BoxReading {
         let cut = self.line.as_ref().is_some_and(|line| line.cut);
         (self.info.hidden).or(cut.then_some(HiddenRows { above: 1, below: 0 }))
     }
+
+    /// Whether nothing of the input was read, as in the middle of a frame. It says nothing about what
+    /// the input holds.
+    pub fn is_unread(&self) -> bool {
+        self.info.state == InputState::Unknown && self.line.is_none()
+    }
 }
 
 /// An input's first row from the column its input starts at to its last cell that draws
