@@ -105,9 +105,10 @@ wake it when needed.
 - `facade attach a3@devbox` opens a running managed agent's terminal. Ctrl+] detaches with exit code 0 and leaves
   the agent running. A CLI exit returns its actual exit status. The attached view uses the terminal app's alternate
   screen, as any full-screen program does. Every end returns to the shell page and scrollback from before the attach
-  and prints one receipt; nothing the agent showed stays, including what a CLI prints as it exits. While attached,
-  the CLI's own screens, title and mouse mode control the view, and the terminal app keeps no history of the agent's
-  output: `facade screen -n <lines> <agent>` reads it. The Facade Code editor labels the terminal with the CLI's title
+  and prints one receipt. While attached, the wheel browses the CLI's main-screen scrollback when mouse reporting
+  is off. Drag to select text in the live view or its scrollback and press Ctrl+C to copy it through the terminal.
+  Scrolling back down or typing returns to the live screen. A CLI that enables mouse reporting receives the
+  mouse itself. The Facade Code editor labels the terminal with the CLI's title
   while it is attached, and the terminal's own title returns when the attachment ends. Until the CLI sets a title, and
   for a CLI that never sets one, the terminal keeps its own title, as when the CLI runs alone. Claude Code's title
   keeps the status glyph it shows when run alone, which it leaves out once Facade takes its state reports: `◐` and `◑`

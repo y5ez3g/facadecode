@@ -164,24 +164,30 @@ fn foreground_alternate_first_start_hands_the_same_shell_page_back() {
     assert!(term.canonical_input_and_echo_enabled());
 }
 
-/// Starts `cli -c script` in the foreground as `name`, below a shell page with history above it.
-fn start_below_a_shell_page(home: &TestHome, name: &str, script: &str) -> TestTerminal {
-    let term = TestTerminal::spawn(
-        home.command(shell()).args([
-            "-c",
-            "printf 'HOST-HISTORY\\n'; \
-             i=0; while [ \"$i\" -lt 24 ]; do printf 'shell line %s\\n' \"$i\"; i=$((i + 1)); done; \
-             printf 'HOST-PAGE\\nHOST-PROMPT\\n'; \
-             name=$1; shift; facade start --name \"$name\" \"$@\"; result=$?; \
-             printf 'HOST-RETURN\\n'; exit \"$result\"",
-            "host",
-            name,
-            home.shell_cli(),
-            "-c",
-            script,
-        ]),
+/// Runs a Shell command below a shell page with history above it.
+fn run_below_a_shell_page(home: &TestHome, args: &[&str]) -> TestTerminal {
+    TestTerminal::spawn(
+        home.command(shell())
+            .args([
+                "-c",
+                "printf 'HOST-HISTORY\\n'; \
+                 i=0; while [ \"$i\" -lt 24 ]; do printf 'shell line %s\\n' \"$i\"; i=$((i + 1)); done; \
+                 printf 'HOST-PAGE\\nHOST-PROMPT\\n'; \
+                 facade \"$@\"; result=$?; \
+                 printf 'HOST-RETURN\\n'; exit \"$result\"",
+                "host",
+            ])
+            .args(args),
         100,
         24,
+    )
+}
+
+/// Starts `cli -c script` in the foreground as `name`, below the host shell page.
+fn start_below_a_shell_page(home: &TestHome, name: &str, script: &str) -> TestTerminal {
+    let term = run_below_a_shell_page(
+        home,
+        &["start", "--name", name, home.shell_cli(), "-c", script],
     );
     assert!(
         term.wait_for_output(LOADED_TIMEOUT, &format!("Started {name} (")),
@@ -933,6 +939,674 @@ fn attach_forwards_input_and_ctrl_bracket_detaches() {
         "the agent keeps running after a detach"
     );
     assert!(home.agent_from_watch("w1").expect("w1 is recorded")["process"] == "running");
+}
+
+#[test]
+fn attach_wheel_browses_main_screen_history_without_typing_into_the_cli() {
+    let home = TestHome::new("attach-wheel");
+    let transcript = home.folder().join("wheel-transcript");
+    let keys = home.folder().join("wheel-input");
+    // The CLI uses the main screen, enables alternate scroll, and leaves mouse reporting off.
+    // The transcript is present before the viewer opens its watch.
+    let mut history = String::from("\x1b[?1007h");
+    for row in 1..=80 {
+        use std::fmt::Write as _;
+        writeln!(history, "\x1b[31mWHEEL-HISTORY-{row:02}\x1b[0m").unwrap();
+    }
+    std::fs::write(&transcript, history).unwrap();
+    let name = "Wheel";
+    let agent = home.start_fake_with(
+        name,
+        &[
+            ("FAKECLI_SCREEN_FILE", transcript.to_str().unwrap()),
+            ("FAKECLI_KEYS", keys.to_str().unwrap()),
+            ("FAKECLI_NAME", "WHEEL-LIVE"),
+        ],
+    );
+    let mut term = run_below_a_shell_page(&home, &["attach", &agent.address]);
+    let shows_live = |text: &str| text.contains("WHEEL-LIVE") && text.contains("❯");
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            shows_live(&term.text()) && term.on_alternate_screen()
+        }),
+        "{}",
+        term.text()
+    );
+    assert!(!term.text().contains("WHEEL-HISTORY-"), "{}", term.text());
+    assert!(wait_until(LOADED_TIMEOUT, || keys.is_file()));
+    let read_keys = || std::fs::read(&keys).unwrap();
+    let before = read_keys();
+
+    let wheel_up = b"\x1b[<64;6;8M".repeat(8);
+    let wheel_down = b"\x1b[<65;6;8M".repeat(8);
+    let shows_history = || {
+        let view = term.view();
+        !view.cursor_visible
+            && view.rows.iter().any(|row| {
+                row.first().is_some_and(|cell| cell.colored)
+                    && row
+                        .iter()
+                        .map(|cell| cell.text.as_str())
+                        .collect::<String>()
+                        .starts_with("WHEEL-HISTORY-")
+            })
+    };
+    term.send(&wheel_up);
+    assert!(
+        wait_until(secs(5), shows_history),
+        "wheel up never showed the colored history; CLI bytes: {:?}; viewport:\n{}",
+        read_keys(),
+        term.text()
+    );
+    assert_eq!(read_keys(), before, "wheel up reached the CLI");
+
+    term.send(&wheel_down);
+    assert!(
+        wait_until(secs(5), || {
+            shows_live(&term.text()) && term.view().cursor_visible
+        }),
+        "{}",
+        term.text()
+    );
+    assert_eq!(read_keys(), before, "wheel down reached the CLI");
+    term.send(&wheel_up);
+    assert!(wait_until(secs(5), shows_history), "{}", term.text());
+    term.send(b"z");
+    assert!(
+        wait_until(secs(5), || {
+            term.text().contains("❯ z") && term.view().cursor_visible
+        }),
+        "{}",
+        term.text()
+    );
+
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert_detach_receipt(&term, name, &agent.address);
+    assert_shell_page_returned(
+        &term,
+        &format!(
+            "Attached to {name} ({}). Press Ctrl+] to detach.",
+            agent.address
+        ),
+        &format!(
+            "Detached from {name} ({}). The agent is still running.",
+            agent.address
+        ),
+        &["WHEEL-HISTORY-", "WHEEL-LIVE"],
+    );
+    assert_eq!(read_keys(), [before, b"z".to_vec()].concat());
+    assert!(alive(&agent.process));
+}
+
+const SELECTION_WORD: &str = "é界";
+
+fn attach_selection_fixture(
+    home: &TestHome,
+    keyboard: &str,
+) -> (TestAgent, TestTerminal, std::path::PathBuf) {
+    let transcript = home.folder().join("selection-transcript");
+    let keys = home.folder().join("selection-input");
+    let mut history = format!("\x1b[?1007h{keyboard}");
+    for line in 1..=80 {
+        use std::fmt::Write as _;
+        writeln!(
+            history,
+            "\x1b[31mSEL-HISTORY-{line:02} A{SELECTION_WORD}Z\x1b[0m"
+        )
+        .unwrap();
+    }
+    std::fs::write(&transcript, history).unwrap();
+    let agent = home.start_fake_with(
+        "Selection",
+        &[
+            ("FAKECLI_SCREEN_FILE", transcript.to_str().unwrap()),
+            ("FAKECLI_KEYS", keys.to_str().unwrap()),
+            ("FAKECLI_NAME", "SEL-LIVE Aé界Z"),
+        ],
+    );
+    let term = run_below_a_shell_page(home, &["attach", &agent.address]);
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            term.on_alternate_screen()
+                && term.text().contains("SEL-LIVE")
+                && term.text().contains("❯")
+                && keys.is_file()
+        }),
+        "{}",
+        term.text()
+    );
+    (agent, term, keys)
+}
+
+struct SelectionSpan {
+    row: usize,
+    cells: [facade_screen::VisibleCell; 4],
+}
+
+impl SelectionSpan {
+    fn visible(term: &TestTerminal, prefix: &str) -> Self {
+        for (number, row) in term.view().rows.into_iter().enumerate() {
+            let text: String = row.iter().map(|cell| cell.text.as_str()).collect();
+            if text.starts_with(prefix)
+                && let Some(cells) = row.windows(4).find(|cells| {
+                    cells
+                        .iter()
+                        .map(|cell| cell.text.as_str())
+                        .eq(["A", "é", "界", "Z"])
+                })
+            {
+                return Self {
+                    row: number,
+                    cells: std::array::from_fn(|index| cells[index].clone()),
+                };
+            }
+        }
+        panic!("no selectable span on {prefix:?} in:\n{}", term.text());
+    }
+
+    fn report(&self, term: &TestTerminal, button: u8, index: usize, release: bool) {
+        let col = self.cells[index].column + 1;
+        let row = self.row + 1;
+        let end = if release { 'm' } else { 'M' };
+        term.send(format!("\x1b[<{button};{col};{row}{end}").as_bytes());
+    }
+
+    fn displayed(&self, term: &TestTerminal, highlighted: bool) -> bool {
+        let view = term.view();
+        view.rows.get(self.row).is_some_and(|row| {
+            self.cells.iter().enumerate().all(|(index, cell)| {
+                let mut expected = cell.clone();
+                if highlighted && matches!(index, 1 | 2) {
+                    expected.inverse = !expected.inverse;
+                }
+                row.iter().find(|visible| visible.column == cell.column) == Some(&expected)
+            })
+        })
+    }
+
+    fn drag(&self, term: &TestTerminal, from: usize, to: usize) {
+        self.report(term, 0, from, false);
+        self.report(term, 32, to, false);
+        assert!(
+            wait_until(secs(5), || self.displayed(term, true)),
+            "plain left drag did not highlight only {SELECTION_WORD:?}:\n{}",
+            term.text()
+        );
+        self.report(term, 0, to, true);
+    }
+}
+
+fn clipboard_writes(output: &[u8]) -> Vec<Vec<u8>> {
+    let prefix = b"\x1b]52;";
+    let mut output = output;
+    let mut writes = Vec::new();
+    while let Some(start) = output.windows(prefix.len()).position(|part| part == prefix) {
+        let record = &output[start + prefix.len()..];
+        let Some(end) = record.iter().position(|&byte| matches!(byte, 0x07 | 0x1b)) else {
+            break;
+        };
+        let terminator = if record[end] == 0x07 {
+            1
+        } else if record.get(end + 1) == Some(&b'\\') {
+            2
+        } else {
+            break;
+        };
+        let record_text = std::str::from_utf8(&record[..end]).unwrap();
+        let (destination, payload) = record_text.split_once(';').unwrap();
+        assert!(
+            destination == "c" || destination.is_empty(),
+            "unexpected OSC 52 destination {destination:?}"
+        );
+        writes.push(facade_base::base64::decode(payload).expect("OSC 52 contains base64"));
+        output = &record[end + terminator..];
+    }
+    writes
+}
+
+fn assert_selection_copy(term: &TestTerminal, from: usize, count: usize) {
+    let expected = vec![SELECTION_WORD.as_bytes().to_vec(); count];
+    assert!(
+        wait_until(secs(5), || clipboard_writes(&term.output_since(from))
+            == expected),
+        "expected {count} OSC 52 writes of {SELECTION_WORD:?}, got {:?}",
+        clipboard_writes(&term.output_since(from))
+    );
+}
+
+fn detach_from_selection(term: &mut TestTerminal, agent: &TestAgent) {
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert_detach_receipt(term, "Selection", &agent.address);
+    assert_shell_page_returned(
+        term,
+        &format!(
+            "Attached to Selection ({}). Press Ctrl+] to detach.",
+            agent.address
+        ),
+        &format!(
+            "Detached from Selection ({}). The agent is still running.",
+            agent.address
+        ),
+        &["SEL-HISTORY-", "SEL-LIVE"],
+    );
+}
+
+#[test]
+fn attach_drag_selects_and_copies_live_text() {
+    let home = TestHome::new("attach-selection-live");
+    let (agent, mut term, keys) = attach_selection_fixture(&home, "");
+    let read_keys = || std::fs::read(&keys).unwrap();
+    let mut expected = read_keys();
+    let span = SelectionSpan::visible(&term, "SEL-LIVE ");
+    assert!(span.cells[1].bold);
+
+    span.drag(&term, 1, 2);
+    let copy = term.output_len();
+    term.send(b"\x03");
+    assert_selection_copy(&term, copy, 1);
+    assert!(
+        span.displayed(&term, true),
+        "copy cleared the live selection"
+    );
+
+    #[cfg(windows)]
+    {
+        // A copy press, auto-repeat and its key-up share one input batch.
+        let from = term.output_len();
+        let copy_press = b"\x1b[67;46;3;1;8;1_";
+        let copy_release = b"\x1b[67;46;0;0;8;1_";
+        term.send(&[copy_press.as_slice(), copy_press, copy_release].concat());
+        assert_selection_copy(&term, from, 2);
+        assert!(
+            span.displayed(&term, true),
+            "Win32 copy cleared the selection"
+        );
+    }
+
+    // Ordinary typing clears the highlight before the later Ctrl+C in the same batch.
+    let after_copy = term.output_len();
+    term.send(b"z\x03");
+    expected.extend_from_slice(b"z\x03");
+    assert!(wait_until(secs(5), || read_keys() == expected));
+    assert!(wait_until(secs(5), || span.displayed(&term, false)));
+    assert!(clipboard_writes(&term.output_since(after_copy)).is_empty());
+    term.send(b"k");
+    expected.push(b'k');
+    assert!(term.wait_for(secs(5), |text| text.contains("❯ k")));
+    detach_from_selection(&mut term, &agent);
+    assert_eq!(read_keys(), expected);
+}
+
+#[test]
+fn attach_kitty_ctrl_c_copies_only_a_completed_selection() {
+    let home = TestHome::new("attach-selection-kitty");
+    // Antigravity requests these Kitty flags and queries them at startup.
+    let (agent, mut term, keys) = attach_selection_fixture(&home, "\x1b[>5u\x1b[?u");
+    assert!(term.wait_for_bytes(0, b"\x1b[=5;1u", LOADED_TIMEOUT));
+    let read_keys = || std::fs::read(&keys).unwrap();
+    let mut expected = read_keys();
+    let ctrl_c = b"\x1b[99;5u";
+
+    let unselected = term.output_len();
+    term.send(ctrl_c);
+    expected.extend_from_slice(ctrl_c);
+    assert!(
+        wait_until(secs(5), || read_keys() == expected),
+        "{:?}",
+        read_keys()
+    );
+    assert!(clipboard_writes(&term.output_since(unselected)).is_empty());
+
+    let span = SelectionSpan::visible(&term, "SEL-LIVE ");
+    span.drag(&term, 1, 2);
+    let selected = term.output_len();
+    term.send(ctrl_c);
+    assert!(
+        wait_until(secs(5), || {
+            !clipboard_writes(&term.output_since(selected)).is_empty() || read_keys() != expected
+        }),
+        "no selection copy or CLI input"
+    );
+    assert_eq!(
+        clipboard_writes(&term.output_since(selected)),
+        [SELECTION_WORD.as_bytes().to_vec()],
+        "selected Kitty Ctrl+C reached ordinary input: {:?}",
+        read_keys()
+    );
+    assert_eq!(read_keys(), expected);
+    assert!(span.displayed(&term, true), "copy cleared the selection");
+
+    let modified = term.output_len();
+    let shift_ctrl_c = b"\x1b[99;6u";
+    term.send(shift_ctrl_c);
+    expected.extend_from_slice(shift_ctrl_c);
+    assert!(
+        wait_until(secs(5), || read_keys() == expected),
+        "{:?}",
+        read_keys()
+    );
+    assert!(clipboard_writes(&term.output_since(modified)).is_empty());
+    assert!(wait_until(secs(5), || span.displayed(&term, false)));
+    detach_from_selection(&mut term, &agent);
+    assert_eq!(read_keys(), expected);
+}
+
+#[test]
+fn attach_kitty_ctrl_c_owns_the_completed_selection_key_lifecycle() {
+    let home = TestHome::new("attach-selection-kitty-events");
+    let (agent, mut term, keys) = attach_selection_fixture(&home, "\x1b[>7u\x1b[?u");
+    assert!(term.wait_for_bytes(0, b"\x1b[=7;1u", LOADED_TIMEOUT));
+    let read_keys = || std::fs::read(&keys).unwrap();
+    let mut expected = read_keys();
+    let press = b"\x1b[99;5u";
+    let explicit_press = b"\x1b[99;5:1u";
+    let repeat = b"\x1b[99;5:2u";
+    let release = b"\x1b[99;5:3u";
+
+    let from = term.output_len();
+    let ordinary = [explicit_press.as_slice(), repeat, release].concat();
+    term.send(&ordinary);
+    expected.extend_from_slice(&ordinary);
+    assert!(
+        wait_until(secs(5), || read_keys() == expected),
+        "unselected Kitty key reports changed: {:?}",
+        read_keys()
+    );
+    assert!(clipboard_writes(&term.output_since(from)).is_empty());
+
+    let span = SelectionSpan::visible(&term, "SEL-LIVE ");
+    span.drag(&term, 1, 2);
+    let selected = term.output_len();
+    term.send(press);
+    assert_selection_copy(&term, selected, 1);
+    term.send(repeat);
+    assert!(
+        wait_until(secs(5), || {
+            clipboard_writes(&term.output_since(selected)).len() >= 2 || read_keys() != expected
+        }),
+        "no Kitty repeat copy or CLI input"
+    );
+    assert_eq!(
+        clipboard_writes(&term.output_since(selected)),
+        vec![SELECTION_WORD.as_bytes().to_vec(); 2],
+        "selected Kitty repeat reached the CLI: {:?}",
+        read_keys()
+    );
+    assert_eq!(read_keys(), expected);
+    assert!(span.displayed(&term, true), "repeat cleared the selection");
+
+    term.send(release);
+    let next_press = term.output_len();
+    term.send(explicit_press);
+    assert_selection_copy(&term, next_press, 1);
+    assert!(span.displayed(&term, true), "release cleared the selection");
+    assert_eq!(read_keys(), expected);
+
+    term.send(b"z");
+    expected.push(b'z');
+    assert!(wait_until(secs(5), || read_keys() == expected
+        && span.displayed(&term, false)));
+    // A matching C key-up belongs to the copy even after typing and releasing Control.
+    term.send(b"\x1b[99;1:3uq");
+    expected.push(b'q');
+    assert!(
+        wait_until(secs(5), || read_keys() == expected),
+        "{:?}",
+        read_keys()
+    );
+    assert_eq!(
+        clipboard_writes(&term.output_since(selected)),
+        vec![SELECTION_WORD.as_bytes().to_vec(); 3]
+    );
+    detach_from_selection(&mut term, &agent);
+    assert_eq!(read_keys(), expected);
+}
+
+#[test]
+fn attach_drag_selects_and_copies_scrollback() {
+    let home = TestHome::new("attach-selection-history");
+    let (agent, mut term, keys) = attach_selection_fixture(&home, "");
+    let read_keys = || std::fs::read(&keys).unwrap();
+    let mut expected = read_keys();
+
+    term.send(&b"\x1b[<64;6;8M".repeat(8));
+    assert!(
+        wait_until(secs(5), || {
+            !term.view().cursor_visible && term.rows()[0].starts_with("SEL-HISTORY-62 ")
+        }),
+        "{}",
+        term.text()
+    );
+    let span = SelectionSpan::visible(&term, "SEL-HISTORY-");
+    assert!(span.cells[1].colored);
+
+    span.drag(&term, 2, 1);
+    let copy = term.output_len();
+    span.report(&term, 2, 1, false);
+    assert_selection_copy(&term, copy, 1);
+    assert!(
+        span.displayed(&term, true),
+        "copy cleared the history selection"
+    );
+
+    span.report(&term, 0, 1, false);
+    span.report(&term, 0, 1, true);
+    assert!(wait_until(secs(5), || span.displayed(&term, false)));
+    assert!(!term.view().cursor_visible, "click left the history view");
+    term.send(&b"\x1b[<65;6;8M".repeat(8));
+    assert!(
+        wait_until(secs(5), || {
+            term.view().cursor_visible && term.text().contains("❯")
+        }),
+        "{}",
+        term.text()
+    );
+    assert_eq!(read_keys(), expected);
+    term.send(b"z");
+    expected.push(b'z');
+    assert!(term.wait_for(secs(5), |text| text.contains("❯ z")));
+    detach_from_selection(&mut term, &agent);
+    assert_eq!(read_keys(), expected);
+}
+
+#[test]
+fn attach_wheel_keeps_its_place_when_full_history_receives_output() {
+    let home = TestHome::new("attach-wheel-cap");
+    let started = home.run_facade_ok(&[
+        "start",
+        "-d",
+        "--name",
+        "Wheel-cap",
+        home.shell_cli(),
+        "-c",
+        "printf '\\033[?1007h'; \
+         i=1; while [ \"$i\" -le 1050 ]; do printf 'CAP-%04d\\n' \"$i\"; i=$((i + 1)); done; \
+         while [ ! -f append ]; do sleep 0.05; done; \
+         while [ \"$i\" -le 1062 ]; do printf 'CAP-%04d\\n' \"$i\"; i=$((i + 1)); done; \
+         printf '\\033]2;Cap appended\\007'; sleep 60",
+    ]);
+    let address = started_ref(&started);
+    assert!(wait_for_screen_text(&home, address, "CAP-1050"));
+
+    let mut term = run_below_a_shell_page(&home, &["attach", address]);
+    assert!(term.wait_for(LOADED_TIMEOUT, |text| text.contains("CAP-1050")));
+    let first_row = || {
+        term.rows()[0]
+            .strip_prefix("CAP-")
+            .and_then(|line| line.trim_end().parse::<u32>().ok())
+    };
+    let live = first_row().expect("the live viewport has numbered rows");
+    let held = live - 24;
+    let wheel_up = b"\x1b[<64;6;8M";
+    term.send(&wheel_up.repeat(8));
+    assert!(
+        wait_until(LOADED_TIMEOUT, || first_row() == Some(held)),
+        "could not browse back to {held}: {:?}",
+        first_row()
+    );
+
+    let from = term.output_len();
+    std::fs::write(home.project.join("append"), b"").unwrap();
+    wait_for_title(&term, from, "Cap appended");
+    assert_eq!(first_row(), Some(held), "output moved the held viewport");
+    term.send(wheel_up);
+    assert!(
+        wait_until(secs(5), || first_row() == Some(held - 3)),
+        "expected three older rows from {held}, got {:?}",
+        first_row()
+    );
+
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn attach_win32_modifiers_do_not_leave_held_history() {
+    let home = TestHome::new("attach-wheel-native-shift");
+    let started = home.run_facade_ok(&[
+        "start",
+        "-d",
+        "--name",
+        "Wheel-shift",
+        home.shell_cli(),
+        "-c",
+        "trap '' INT; \
+         i=1; while [ \"$i\" -le 80 ]; do printf 'SHIFT-%02d\\n' \"$i\"; i=$((i + 1)); done; \
+         printf '\\033[?1007h'; \
+         while [ ! -f win32 ]; do sleep 0.05; done; \
+         printf '\\033[?9001h\\033]2;Win32 input active\\007'; \
+         while :; do sleep 0.05; done",
+    ]);
+    let address = started_ref(&started);
+    assert!(wait_for_screen_text(&home, address, "SHIFT-80"));
+    let mut term = run_below_a_shell_page(&home, &["attach", address]);
+    assert!(term.wait_for(LOADED_TIMEOUT, |text| text.contains("SHIFT-80")));
+    let first_row = || {
+        term.rows()[0]
+            .strip_prefix("SHIFT-")
+            .and_then(|line| line.trim_end().parse::<u32>().ok())
+    };
+    let live = first_row().expect("live rows are numbered");
+    let held = live - 24;
+    let wheel_up = b"\x1b[<64;6;8M";
+    term.send(&wheel_up.repeat(8));
+    assert!(
+        wait_until(LOADED_TIMEOUT, || first_row() == Some(held)
+            && !term.view().cursor_visible),
+        "did not reach held row {held}: {:?}",
+        first_row()
+    );
+
+    let from = term.output_len();
+    std::fs::write(home.project.join("win32"), b"").unwrap();
+    wait_for_title(&term, from, "Win32 input active");
+    assert!(term.wait_for_bytes(from, b"\x1b[?9001h", LOADED_TIMEOUT));
+    assert_eq!(first_row(), Some(held));
+    term.send(b"\x1b[16;42;0;1;16;1_\x1b[16;42;0;0;0;1_");
+    term.send(wheel_up);
+    assert!(
+        wait_until(secs(5), || first_row() == Some(held - 3)
+            && !term.view().cursor_visible),
+        "after native Shift and one wheel-up from row {held}, expected {}, got {:?}",
+        held - 3,
+        first_row()
+    );
+    eprintln!(
+        "win32 input advertised; held row {held} advanced to {} after Shift and one wheel-up",
+        held - 3
+    );
+
+    term.send(b"\x1b[88;45;120;1;0;1_\x1b[88;45;120;0;0;1_");
+    assert!(
+        wait_until(secs(5), || first_row() == Some(live)
+            && term.view().cursor_visible),
+        "a native printable key did not return to live"
+    );
+    term.send(b"\x1b[<0;1;1M\x1b[<32;5;1M\x1b[<0;5;1m");
+    assert!(wait_until(secs(5), || {
+        let view = term.view();
+        !view.cursor_visible && view.rows[0][..5].iter().all(|cell| cell.inverse)
+    }));
+    let copy = term.output_len();
+    term.send(b"\x1b[67;46;3;1;8;1_\x1b[67;46;0;0;8;1_");
+    assert!(wait_until(secs(5), || {
+        clipboard_writes(&term.output_since(copy)) == [b"SHIFT".to_vec()]
+    }));
+    let from = term.output_len();
+    term.send(b"\x1b[67;46;3;1;24;1_");
+    assert!(wait_until(secs(5), || {
+        term.view().cursor_visible || !clipboard_writes(&term.output_since(from)).is_empty()
+    }));
+    let copies = clipboard_writes(&term.output_since(from));
+    assert!(
+        copies.is_empty(),
+        "Shift+Ctrl+C copied the selection in Win32 input mode: {copies:?}"
+    );
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert_detach_receipt(&term, "Wheel-shift", address);
+}
+
+#[test]
+fn attach_keeps_the_host_page_until_a_blank_main_screen_draws() {
+    let home = TestHome::new("attach-blank-history");
+    let name = "Blank-history";
+    let started = home.run_facade_ok(&[
+        "start",
+        "-d",
+        "--name",
+        name,
+        home.shell_cli(),
+        "-c",
+        "i=1; while [ \"$i\" -le 80 ]; do printf 'EMPTY-HISTORY-%02d\\n' \"$i\"; i=$((i + 1)); done; \
+         printf '\\033[H\\033[2J\\033]2;Blank frame ready\\007'; \
+         : > blank; while [ ! -f draw ]; do sleep 0.05; done; \
+         printf 'FIRST-VISIBLE\\n'; sleep 60",
+    ]);
+    let address = started_ref(&started);
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .project
+        .join("blank")
+        .is_file()));
+    assert!(wait_for_screen_text(&home, address, "EMPTY-HISTORY-80"));
+
+    let mut term = run_below_a_shell_page(&home, &["attach", address]);
+    wait_for_title(&term, 0, "Blank frame ready");
+    assert!(
+        !term.on_alternate_screen() && term.text().contains("HOST-PAGE\nHOST-PROMPT"),
+        "blank main frame displaced the host page:\n{}",
+        term.text()
+    );
+
+    std::fs::write(home.project.join("draw"), b"").unwrap();
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            term.on_alternate_screen() && term.text().contains("FIRST-VISIBLE")
+        }),
+        "{}",
+        term.text()
+    );
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert_detach_receipt(&term, name, address);
 }
 
 #[test]

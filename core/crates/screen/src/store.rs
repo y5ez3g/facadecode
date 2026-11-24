@@ -27,6 +27,8 @@ pub(crate) struct Store {
     blocks: VecDeque<Block>,
     /// Rows at the front of the first block that were let go of.
     gone_in_first: usize,
+    /// Rows let go of at the front since the scrollback was last cleared.
+    discarded: usize,
     rows: usize,
     max_rows: usize,
     max_bytes: usize,
@@ -43,6 +45,7 @@ impl Store {
         Store {
             blocks: VecDeque::new(),
             gone_in_first: 0,
+            discarded: 0,
             rows: 0,
             max_rows,
             max_bytes,
@@ -54,6 +57,10 @@ impl Store {
 
     pub(crate) fn len(&self) -> usize {
         self.rows
+    }
+
+    pub(crate) fn discarded(&self) -> usize {
+        self.discarded
     }
 
     /// What the store takes: its blocks, by capacity, and the queue of them.
@@ -119,10 +126,12 @@ impl Store {
     pub(crate) fn clear(&mut self) {
         self.let_go_of_all();
         self.trimmed = false;
+        self.discarded = 0;
     }
 
     fn let_go_of_all(&mut self) {
         *self = Store {
+            discarded: self.discarded,
             trimmed: self.trimmed,
             dropping: self.dropping,
             ..Store::new(self.max_rows, self.max_bytes)
@@ -136,6 +145,7 @@ impl Store {
         };
         self.rows -= extra;
         self.gone_in_first += extra;
+        self.discarded += extra;
         while self
             .blocks
             .front()
@@ -156,7 +166,9 @@ impl Store {
             let Some(first) = self.blocks.pop_front() else {
                 break;
             };
-            self.rows -= first.len() - std::mem::take(&mut self.gone_in_first);
+            let discarded = first.len() - std::mem::take(&mut self.gone_in_first);
+            self.rows -= discarded;
+            self.discarded += discarded;
             self.block_bytes -= first.bytes();
             self.trimmed = true;
         }

@@ -124,6 +124,19 @@ which replays at most `REDRAW_SCROLLBACK_ROWS` (1,000) scrollback rows. A redraw
 - `redraw_in_viewport_update()` overwrites visible rows in the selected buffer of a larger
   console, erases stale row tails, and restores the cursor, nonblank title and modes. Shell feeds later
   output to its screen of the shared size before drawing.
+- `redraw_scrollback_view(offset)` draws one viewport in the selected host buffer, starting
+  `offset` rows above the live view. It clamps the offset to the active grid's readable scrollback.
+  The application alternate grid has no scrollback. The draw clears unused host margins, hides
+  the cursor and preserves input modes. The host must be at least as large as the shared grid.
+- `scrollback_range()` gives the active grid's readable row positions, ending at the top of
+  the live viewport. It excludes the extra retained row used to detect trimmed reads. The compact
+  store counts dropped rows so Shell can keep a row selected across feeds at the same size. Shell
+  resets the selection on a redraw or explicit scrollback clear.
+- `selection_view(offset) -> SelectionView` captures one viewport of styled cells at the same
+  offset as `redraw_scrollback_view`. `SelectionView::redraw(selected)` paints that capture with
+  optional selection endpoints. `SelectionView::text(anchor, end)` copies the highlighted cells,
+  including selected spaces. The one-based `(column, row)` endpoints are inclusive and can be in
+  either order. The selection includes whole wide characters and joins soft wraps in copied text.
 - `title_output()` gives the sanitized title sequence for viewers using the same status glyph rule
   as viewer output. It is empty when the CLI has no nonblank title.
 - `reports_mouse()` follows the CLI's active tracking mode. `encode_wheel(col, row, delta, modifiers)`
@@ -247,6 +260,15 @@ cursor at its grid position and applies the screen's scrolling region within the
 Steady viewport updates use that same explicit row placement. They write each row's content and
 erase its remaining tail with the default pen. They finish with the cursor, modes and known title.
 
+A scrollback view ends any synchronized update on the host and clears the selected buffer's
+visible area. It uses the same explicit row placement and cell drawing, starting in the active
+grid's scrollback or visible rows. Shell keeps feeding output to its live screen while displaying
+the selected rows.
+
+A selection view keeps the captured rows while the live screen changes. It uses the same
+positioned draw and reverses the selected cells' colours while preserving their other styles.
+Copying reads from those rows, adding a line feed between rows at a hard line break.
+
 ### The store
 
 A block keeps its rows' characters in one string, the cells as runs that share a style from the
@@ -254,6 +276,7 @@ block's palette, combining characters apart, and per row its marks: wrapped, sho
 carries into the next row on reflow. Reads use the marks without building rows. A full block is
 sealed: its style map goes and its vectors shrink. `scrollback_bytes` counts alacritty's rows and
 the 32 it reserves ahead as full cells, plus the store's blocks by capacity.
+The store counts the oldest rows removed by the row and byte limits until scrollback is cleared.
 
 ## Reading the code
 

@@ -193,9 +193,10 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 - `console::{VtModes, ConsoleReader, ConsoleSignals}`: what Attach needs of the person's
   console beside crossterm's size and raw mode. On Windows, Attach can consume an exact
   queued release from its detach chord. A native wheel record gives one-based viewport
-  coordinates, a signed delta and terminal modifier bits. Attach sets capture according to the
-  viewed screen's tracking mode. `VtModes` restores the console's input and output modes on
-  handback.
+  coordinates, a signed delta and terminal modifier bits. Native pointer records carry left press,
+  drag and release, and right press at those coordinates. A release can finish a drag that leaves
+  the viewport. Attach enables capture when the CLI tracks the mouse or the Shell owns scrolling
+  and selection. `VtModes` restores the console's input and output modes on handback.
 
 **Rules**
 - `settings::{Settings, Member, Json, is_space}`: rules reads the CLI entries of `clis`.

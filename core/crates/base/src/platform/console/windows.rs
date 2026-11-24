@@ -6,17 +6,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Console::{
-    CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO, COORD, DISABLE_NEWLINE_AUTO_RETURN,
+    CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO, COORD, DISABLE_NEWLINE_AUTO_RETURN, DOUBLE_CLICK,
     ENABLE_ECHO_INPUT, ENABLE_EXTENDED_FLAGS, ENABLE_LINE_INPUT, ENABLE_MOUSE_INPUT,
     ENABLE_PROCESSED_INPUT, ENABLE_QUICK_EDIT_MODE, ENABLE_VIRTUAL_TERMINAL_INPUT,
-    ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT, GetConsoleMode,
-    GetConsoleScreenBufferInfo, GetStdHandle, INPUT_RECORD, KEY_EVENT, LEFT_ALT_PRESSED,
-    LEFT_CTRL_PRESSED, MOUSE_EVENT, MOUSE_EVENT_RECORD, MOUSE_WHEELED, PeekConsoleInputW,
-    RIGHT_ALT_PRESSED, RIGHT_CTRL_PRESSED, ReadConsoleInputW, SHIFT_PRESSED, STD_HANDLE,
-    STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT, FROM_LEFT_1ST_BUTTON_PRESSED,
+    GetConsoleMode, GetConsoleScreenBufferInfo, GetStdHandle, INPUT_RECORD, KEY_EVENT,
+    LEFT_ALT_PRESSED, LEFT_CTRL_PRESSED, MOUSE_EVENT, MOUSE_EVENT_RECORD, MOUSE_MOVED,
+    MOUSE_WHEELED, PeekConsoleInputW, RIGHT_ALT_PRESSED, RIGHT_CTRL_PRESSED,
+    RIGHTMOST_BUTTON_PRESSED, ReadConsoleInputW, SHIFT_PRESSED, STD_HANDLE, STD_INPUT_HANDLE,
+    STD_OUTPUT_HANDLE, SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
 };
 
-use super::{ConsoleRead, ConsoleSignal};
+use super::{ConsoleRead, ConsoleSignal, PointerAction};
 
 /// The modes the console had before, which `restore` puts back. Only the values are kept, so that
 /// attach may keep this in a static: the handles are taken again when restoring.
@@ -121,6 +122,7 @@ enum PendingInput {
 
 pub(super) struct ConsoleReader {
     pending: VecDeque<PendingInput>,
+    buttons: u32,
     /// The first half of a character above U+FFFF, until its second half comes.
     high: Option<u16>,
 }
@@ -130,6 +132,7 @@ impl ConsoleReader {
         std_handle(STD_INPUT_HANDLE)?;
         Ok(ConsoleReader {
             pending: VecDeque::new(),
+            buttons: 0,
             high: None,
         })
     }
@@ -195,7 +198,7 @@ impl ConsoleReader {
         Ok(read == count)
     }
 
-    /// Batches consecutive key bytes. Wheel events stay between their surrounding key batches,
+    /// Batches consecutive key bytes. Mouse events stay between their surrounding key batches,
     /// and size changes still coalesce into one event after the batch.
     fn read_records(&mut self) -> io::Result<()> {
         // SAFETY: an all-zero INPUT_RECORD is valid.
@@ -232,12 +235,12 @@ impl ConsoleReader {
                 MOUSE_EVENT => {
                     // SAFETY: a MOUSE_EVENT record holds a mouse event.
                     let mouse = unsafe { record.Event.MouseEvent };
-                    if let Some(wheel) = vertical_wheel(mouse) {
+                    if let Some(event) = vertical_wheel(mouse).or_else(|| self.pointer(mouse)) {
                         if !keys.is_empty() {
                             self.pending
                                 .push_back(PendingInput::Keys(std::mem::take(&mut keys)));
                         }
-                        self.pending.push_back(PendingInput::Event(wheel));
+                        self.pending.push_back(PendingInput::Event(event));
                     }
                 }
                 WINDOW_BUFFER_SIZE_EVENT => resized = true,
@@ -252,6 +255,33 @@ impl ConsoleReader {
                 .push_back(PendingInput::Event(ConsoleRead::Resized));
         }
         Ok(())
+    }
+
+    fn pointer(&mut self, mouse: MOUSE_EVENT_RECORD) -> Option<ConsoleRead> {
+        let flags = mouse.dwEventFlags;
+        if !matches!(flags, 0 | DOUBLE_CLICK | MOUSE_MOVED) {
+            return None;
+        }
+        let buttons = mouse.dwButtonState;
+        let changed = std::mem::replace(&mut self.buttons, buttons) ^ buttons;
+        let left_held = buttons & FROM_LEFT_1ST_BUTTON_PRESSED != 0;
+        let action = match flags {
+            MOUSE_MOVED if left_held => PointerAction::LeftDrag,
+            MOUSE_MOVED => return None,
+            _ if changed & FROM_LEFT_1ST_BUTTON_PRESSED != 0 && left_held => {
+                PointerAction::LeftDown
+            }
+            _ if changed & FROM_LEFT_1ST_BUTTON_PRESSED != 0 => PointerAction::LeftUp,
+            _ if changed & buttons & RIGHTMOST_BUTTON_PRESSED != 0 => PointerAction::RightDown,
+            _ => return None,
+        };
+        // Finish an active drag even when Shift was pressed after button-down.
+        let released = action == PointerAction::LeftUp;
+        if !released && mouse.dwControlKeyState & SHIFT_PRESSED != 0 {
+            return None;
+        }
+        let (col, row) = viewport_position(mouse.dwMousePosition, released)?;
+        Some(ConsoleRead::Pointer { col, row, action })
     }
 
     /// Adds one UTF-16 unit of a key's character, as UTF-8.
@@ -276,22 +306,33 @@ fn vertical_wheel(mouse: MOUSE_EVENT_RECORD) -> Option<ConsoleRead> {
     if mouse.dwEventFlags != MOUSE_WHEELED {
         return None;
     }
-    let output = std_handle(STD_OUTPUT_HANDLE).ok()?;
-    let window = screen_buffer_info(output)?.srWindow;
-    let COORD { X: x, Y: y } = mouse.dwMousePosition;
-    if !(window.Left..=window.Right).contains(&x) || !(window.Top..=window.Bottom).contains(&y) {
-        return None;
-    }
+    let (col, row) = viewport_position(mouse.dwMousePosition, false)?;
     let state = mouse.dwControlKeyState;
     let modifiers = (u8::from(state & SHIFT_PRESSED != 0) << 2)
         | (u8::from(state & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED) != 0) << 3)
         | (u8::from(state & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED) != 0) << 4);
     Some(ConsoleRead::Wheel {
-        col: u16::try_from(i32::from(x) - i32::from(window.Left) + 1).ok()?,
-        row: u16::try_from(i32::from(y) - i32::from(window.Top) + 1).ok()?,
+        col,
+        row,
         delta: (mouse.dwButtonState >> 16) as i16,
         modifiers,
     })
+}
+
+fn viewport_position(position: COORD, clamp: bool) -> Option<(u16, u16)> {
+    let output = std_handle(STD_OUTPUT_HANDLE).ok()?;
+    let window = screen_buffer_info(output)?.srWindow;
+    let COORD { X: mut x, Y: mut y } = position;
+    if clamp {
+        x = x.clamp(window.Left, window.Right);
+        y = y.clamp(window.Top, window.Bottom);
+    }
+    if !(window.Left..=window.Right).contains(&x) || !(window.Top..=window.Bottom).contains(&y) {
+        return None;
+    }
+    let col = u16::try_from(i32::from(x) - i32::from(window.Left) + 1).ok()?;
+    let row = u16::try_from(i32::from(y) - i32::from(window.Top) + 1).ok()?;
+    Some((col, row))
 }
 
 /// No signals reach a console program on Windows that attach follows.

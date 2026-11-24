@@ -41,6 +41,15 @@ impl Drop for VtModes {
     }
 }
 
+/// A native mouse button action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointerAction {
+    LeftDown,
+    LeftDrag,
+    LeftUp,
+    RightDown,
+}
+
 /// What one read of the console brought.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConsoleRead {
@@ -56,11 +65,17 @@ pub enum ConsoleRead {
         delta: i16,
         modifiers: u8,
     },
+    /// A native pointer action at a one-based position in the visible viewport.
+    Pointer {
+        col: u16,
+        row: u16,
+        action: PointerAction,
+    },
 }
 
 /// Reads standard input bytes on Unix. On Windows, reads console input records, yielding
-/// key-down characters (including host VT sequences) as bytes, size changes and native vertical
-/// wheel events.
+/// key-down characters (including host VT sequences) as bytes, size changes, and native wheel
+/// and pointer events.
 pub struct ConsoleReader(imp::ConsoleReader);
 
 impl ConsoleReader {
@@ -68,7 +83,7 @@ impl ConsoleReader {
         imp::ConsoleReader::new().map(ConsoleReader)
     }
 
-    /// Waits for keys, a size change or a native vertical wheel event.
+    /// Waits for keys, a size change or a native mouse event.
     pub fn read(&mut self, buf: &mut [u8]) -> io::Result<ConsoleRead> {
         self.0.read(buf)
     }

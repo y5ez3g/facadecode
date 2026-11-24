@@ -1,6 +1,7 @@
 //! Redraws: output that turns any viewer's terminal into a copy of the agent's screen.
 
 use std::io::Write;
+use std::ops::Range;
 
 use alacritty_terminal::grid::{Charsets, Cursor, Dimensions, Row};
 use alacritty_terminal::index::Column;
@@ -19,15 +20,26 @@ use crate::{REDRAW_SCROLLBACK_ROWS, Screen, title_has_text, write_title_body};
 const DRAW_SETTINGS: &[u8] = b"\x1b[0m\x1b]8;;\x1b\\\x1b(B\x1b)B\x0f\x1b[r\
     \x1b[?6l\x1b[?7h\x1b[4l\x1b[20l\x1b[>4m";
 
+/// End host synchronization, hide the cursor, and clear the visible area using absolute positions.
+pub(crate) const HELD_VIEW_START: &[u8] =
+    b"\x1b[?2026l\x1b[?25l\x1b[0m\x1b]8;;\x1b\\\x1b(B\x0f\x1b[?6l\x1b[H\x1b[J";
+pub(crate) const RESET_PEN: &[u8] = b"\x1b[0m\x1b]8;;\x1b\\";
+
 /// DEC private modes a redraw sets as the CLI left them, on or off.
-const DEC_MODES: [(u16, TermMode); 10] = [
+const DEC_MODES: [(u16, TermMode); 4] = [
     (25, TermMode::SHOW_CURSOR),
     (1, TermMode::APP_CURSOR),
     (2004, TermMode::BRACKETED_PASTE),
     (1004, TermMode::FOCUS_IN_OUT),
+];
+
+const MOUSE_TRACKING_MODES: [(u16, TermMode); 3] = [
     (1000, TermMode::MOUSE_REPORT_CLICK),
     (1002, TermMode::MOUSE_DRAG),
     (1003, TermMode::MOUSE_MOTION),
+];
+
+const MOUSE_OPTIONS: [(u16, TermMode); 3] = [
     (1006, TermMode::SGR_MOUSE),
     (1005, TermMode::UTF8_MOUSE),
     (1007, TermMode::ALTERNATE_SCROLL),
@@ -88,6 +100,17 @@ impl Screen {
         redraw.cursor(Layout::Viewport);
         redraw.modes();
         redraw.with_viewer_title()
+    }
+
+    /// Draws one viewport starting `offset` rows above the live view, clamped to the active
+    /// grid's readable scrollback. Uses the selected host buffer and hides its cursor, leaving
+    /// input modes in place. The host must be at least as large as the grid.
+    pub fn redraw_scrollback_view(&self, offset: usize) -> Vec<u8> {
+        let mut redraw = Redraw::new(self);
+        let rows = self.readable_rows();
+        redraw.put(HELD_VIEW_START);
+        write_positioned_rows(&mut redraw.out, &rows, rows.viewport_start(offset), false);
+        redraw.out
     }
 
     /// A redraw with the whole scrollback, for a checkpoint. Taken at a clean point
@@ -254,7 +277,7 @@ impl<'a> Redraw<'a> {
         }
         let cell = &row[Column(margin)];
         write!(self.out, "\x1b[{line};{}H", margin + 1).unwrap();
-        self.put(sgr(cell).as_bytes());
+        self.put(sgr(cell, false).as_bytes());
         self.put(cell_text(cell).as_bytes());
     }
 
@@ -272,7 +295,10 @@ impl<'a> Redraw<'a> {
         if terminal.has(TermMode::LINE_FEED_NEW_LINE) {
             self.put(b"\x1b[20h");
         }
-        for (number, mode) in DEC_MODES {
+        // Some terminals clear all tracking when any of the three modes is reset.
+        let mut tracking = MOUSE_TRACKING_MODES;
+        tracking.sort_by_key(|&(_, mode)| terminal.has(mode));
+        for (number, mode) in DEC_MODES.into_iter().chain(tracking).chain(MOUSE_OPTIONS) {
             let on_off = if terminal.has(mode) { 'h' } else { 'l' };
             write!(self.out, "\x1b[?{number}{on_off}").unwrap();
         }
@@ -311,36 +337,57 @@ fn write_rows(out: &mut Vec<u8>, rows: &AllRows<'_>) {
         // A row the one above wrapped into starts with a character, even a space, to make the wrap.
         let to_margin = wraps || wrapped_into;
         rows.with_row(y, |row| {
-            write_row(out, row, cols, to_margin, Layout::SameSize)
+            write_row(out, row, cols, to_margin, Layout::SameSize, 0..0)
         });
         if !wraps && y + 1 < rows.len() {
             out.extend_from_slice(b"\x1b[0m\x1b]8;;\x1b\\\r\n");
         }
         wrapped_into = wraps;
     }
-    out.extend_from_slice(b"\x1b[0m\x1b]8;;\x1b\\");
+    out.extend_from_slice(RESET_PEN);
 }
 
-/// Place each visible row explicitly so the larger terminal's line endings never decide where
-/// the grid wraps. Write scrollback rows at the top and scroll them out from the physical bottom.
+/// Write scrollback rows at the top and scroll them out from the physical bottom, then draw the
+/// viewport.
 fn write_viewport_rows(out: &mut Vec<u8>, rows: &AllRows<'_>, erase_tail: bool) {
     let cols = rows.grid.columns();
     let scrollback = rows.scrollback();
     for y in 0..scrollback {
         out.extend_from_slice(b"\x1b[H");
-        rows.with_row(y, |row| write_row(out, row, cols, false, Layout::Viewport));
+        rows.with_row(y, |row| {
+            write_row(out, row, cols, false, Layout::Viewport, 0..0)
+        });
         // CUP clamps the row to the physical bottom, where Index scrolls the full screen.
         out.extend_from_slice(b"\x1b[0m\x1b[65535;1H\x1bD");
     }
-    for y in scrollback..rows.len() {
-        write!(out, "\x1b[{};1H", y - scrollback + 1).unwrap();
-        let end = rows.with_row(y, |row| write_row(out, row, cols, false, Layout::Viewport));
+    write_positioned_rows(out, rows, scrollback, erase_tail);
+}
+
+/// Place one viewport explicitly so the host terminal's line endings never decide where the
+/// grid wraps.
+fn write_positioned_rows(out: &mut Vec<u8>, rows: &AllRows<'_>, first: usize, erase_tail: bool) {
+    let cols = rows.grid.columns();
+    for line in 0..rows.grid.screen_lines() {
+        let end = rows.with_row(first + line, |row| {
+            write_positioned_row(out, line, row, cols, 0..0)
+        });
         // A full row on an equally wide terminal leaves the cursor on its last cell.
         if erase_tail && end < cols {
             out.extend_from_slice(b"\x1b[0m\x1b[K");
         }
     }
-    out.extend_from_slice(b"\x1b[0m\x1b]8;;\x1b\\");
+    out.extend_from_slice(RESET_PEN);
+}
+
+pub(crate) fn write_positioned_row(
+    out: &mut Vec<u8>,
+    line: usize,
+    row: &Row<Cell>,
+    cols: usize,
+    highlighted: Range<usize>,
+) -> usize {
+    write!(out, "\x1b[{};1H", line + 1).unwrap();
+    write_row(out, row, cols, false, Layout::Viewport, highlighted)
 }
 
 /// One row, with pen and link changes only where they change: to the margin, or to its last
@@ -351,11 +398,12 @@ fn write_row(
     cols: usize,
     to_margin: bool,
     layout: Layout,
+    highlighted: Range<usize>,
 ) -> usize {
     let end = match to_margin {
         true => cols,
         false => (0..cols)
-            .rposition(|x| !is_blank(&row[Column(x)]))
+            .rposition(|x| highlighted.contains(&x) || !is_blank(&row[Column(x)]))
             .map_or(0, |x| x + 1),
     };
     let mut pen = String::new();
@@ -363,10 +411,12 @@ fn write_row(
     let mut written = 0;
     for x in 0..end {
         let cell = &row[Column(x)];
-        if is_spacer(cell) {
+        let selected = highlighted.contains(&x);
+        // A leading wide spacer is an empty position at the right margin that can be highlighted.
+        if is_spacer(cell) && !(selected && cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)) {
             continue;
         }
-        let cell_pen = sgr(cell);
+        let cell_pen = sgr(cell, selected);
         if cell_pen != pen {
             out.extend_from_slice(cell_pen.as_bytes());
             pen = cell_pen;
@@ -417,7 +467,7 @@ fn write_link(out: &mut Vec<u8>, link: Option<&Hyperlink>) {
 
 /// The pen of `template`: SGR and hyperlink.
 fn write_pen(out: &mut Vec<u8>, template: &Cell) {
-    out.extend_from_slice(sgr(template).as_bytes());
+    out.extend_from_slice(sgr(template, false).as_bytes());
     write_link(out, template.hyperlink().as_ref());
 }
 
@@ -437,9 +487,12 @@ fn write_charsets(out: &mut Vec<u8>, charsets: &Charsets) {
     }
 }
 
-/// The SGR sequence for a cell's look, from a reset pen.
-fn sgr(cell: &Cell) -> String {
-    let flags = cell.flags;
+/// The SGR sequence for a cell's look, from a reset pen. Selection reverses its colours.
+fn sgr(cell: &Cell, selected: bool) -> String {
+    let mut flags = cell.flags;
+    if selected {
+        flags.toggle(Flags::INVERSE);
+    }
     let underline = [
         (Flags::UNDERLINE, "4"),
         (Flags::DOUBLE_UNDERLINE, "4:2"),

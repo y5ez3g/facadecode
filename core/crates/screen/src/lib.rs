@@ -27,6 +27,7 @@ mod redraw;
 mod resize;
 mod restart;
 mod scrollback;
+mod selection;
 mod sequences;
 mod store;
 mod terminal;
@@ -40,6 +41,7 @@ mod tests;
 
 pub use program_status::{BlockKind, ReportedState, StatusEvent, StatusReport};
 pub use read::Reading;
+pub use selection::SelectionView;
 pub use store::SCROLLBACK_BUDGET;
 pub use view::{ScreenView, VisibleCell};
 

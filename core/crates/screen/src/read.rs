@@ -1,6 +1,7 @@
 //! Reading lines of text from the screen and its scrollback. Rows that wrap make one line.
 
 use std::cell::RefCell;
+use std::ops::Range;
 use std::sync::MutexGuard;
 
 use alacritty_terminal::grid::{Dimensions, Grid, Row};
@@ -101,6 +102,15 @@ fn write_marked(text: &mut String, glyphs: &[Glyph]) {
 }
 
 impl Screen {
+    /// The active grid's readable scrollback positions, ending at the top of the live viewport.
+    /// The compact store counts the rows dropped at its front, keeping positions usable across
+    /// feeds at the same size until history is cleared. The alternate grid has an empty range.
+    pub fn scrollback_range(&self) -> Range<usize> {
+        let rows = self.readable_rows();
+        let start = rows.store.as_deref().map_or(0, Store::discarded) + rows.left_out;
+        start..start + rows.scrollback()
+    }
+
     /// Every row, oldest first: the store's, alacritty's scrollback, the screen. The alternate
     /// screen has no scrollback.
     pub(crate) fn all_rows(&self) -> AllRows<'_> {
@@ -117,11 +127,17 @@ impl Screen {
         }
     }
 
+    /// The visible rows and the scrollback within the configured readable limit.
+    pub(crate) fn readable_rows(&self) -> AllRows<'_> {
+        let mut rows = self.all_rows();
+        rows.keep_newest_scrollback(self.scrollback.readable);
+        rows
+    }
+
     /// The last `count` lines as glyphs, with whether anything shows above them. Blank glyphs end
     /// no line, and empty lines end no reading.
     fn last_lines(&self, count: usize) -> (Vec<Vec<Glyph>>, bool) {
-        let mut rows = self.all_rows();
-        rows.keep_newest_scrollback(self.scrollback.readable);
+        let rows = self.readable_rows();
         let cols = rows.grid.columns();
         let empty_row = |row: &Row<Cell>| glyphs(row, cols).iter().all(Glyph::is_blank);
         let first = rows.start_of_last_lines(count, empty_row);
@@ -202,6 +218,11 @@ impl AllRows<'_> {
     /// The scrollback rows included.
     pub(crate) fn scrollback(&self) -> usize {
         self.stored + self.held - self.left_out
+    }
+
+    /// The first row of a viewport `offset` rows above the live grid.
+    pub(crate) fn viewport_start(&self, offset: usize) -> usize {
+        self.scrollback().saturating_sub(offset)
     }
 
     /// Leaves out all but the newest `rows` rows of scrollback.
