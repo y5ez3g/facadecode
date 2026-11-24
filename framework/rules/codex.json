@@ -41,5 +41,5 @@
 			]
 		}
 	},
-	"console": { "per_char_ms": 3, "records_above_bmp": true }
+	"console": { "per_char_ms": 3, "records_above_bmp": true, "line_break": "shift_enter" }
 }

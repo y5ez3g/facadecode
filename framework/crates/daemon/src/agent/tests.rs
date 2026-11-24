@@ -613,6 +613,110 @@ fn the_pastes_before_an_enter_go_with_it_within_the_input_limit() {
     );
 }
 
+/// Input is counted as the CLI's terminal takes it. Codex on Windows takes each line break as a
+/// press of Shift+Enter, two records of 18 bytes, so a text of 28,339 lines of one character,
+/// 1,048,555 bytes in its paste brackets, fits the 1 MiB that may wait, and one more line never
+/// does: it is refused, not queued. The same text goes to a CLI that takes it as it is.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread")]
+async fn input_that_takes_more_of_a_console_than_all_the_room_is_refused() {
+    let lines = |count: usize| Typing::text("a\n".repeat(count), false, Sender::person()).unwrap();
+    let home = home("consoleroom");
+    let codex = Harness::start_by_rule(
+        &home,
+        record(ProcessState::Running, None, 80, 24),
+        b"",
+        Some("codex"),
+        ScreenStart::New,
+    );
+    for (count, bytes) in [(30_000, 1_110_012), (28_340, 1_048_592)] {
+        let refused = codex.type_call(lines(count)).await.err();
+        assert!(
+            matches!(refused, Some(InputRejection::TooLarge(taken)) if taken == bytes),
+            "{count} lines: {refused:?}"
+        );
+    }
+    assert!(codex.type_call(lines(28_339)).await.is_ok());
+    codex.stop().await;
+
+    let home = self::home("plainroom");
+    let plain = Harness::start(
+        &home,
+        record(ProcessState::Running, None, 80, 24),
+        ScreenStart::New,
+    );
+    assert!(plain.type_call(lines(30_000)).await.is_ok());
+    plain.stop().await;
+}
+
+/// The first prompt's terminal bytes take room before ordinary messages wait behind it.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread")]
+async fn the_start_prompt_reserves_encoded_input_room_before_other_messages() {
+    let home = home("startpromptroom");
+    let harness = Harness::start_by_rule(
+        &home,
+        record(ProcessState::Running, None, 80, 24),
+        b"",
+        Some("codex"),
+        ScreenStart::New,
+    );
+    let text = format!("{}{}end", "😀".repeat(7_000), "\n".repeat(539));
+    facade_base::model::message::check_message_text(&text).unwrap();
+    let (ready, _started) = oneshot::channel();
+    harness
+        .send(AgentCommand::AwaitPrompt {
+            text: text.clone(),
+            ready,
+        })
+        .await;
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let send = async |input| {
+        let (reply, taken) = oneshot::channel();
+        harness
+            .send(AgentCommand::WriteInput {
+                input,
+                run: FIRST_RUN,
+                reply,
+            })
+            .await;
+        taken.await.unwrap()
+    };
+    let message = || {
+        let number = crate::messages::number(
+            &crate::messages::tests::post_new(
+                &harness.messages,
+                crate::messages::tests::message(0, "a1"),
+            )
+            .0,
+        );
+        Input::Message(MessageTyping::new(
+            text.clone(),
+            number,
+            deadline,
+            Submission {
+                text: text.clone(),
+                sender: Sender::person(),
+            },
+        ))
+    };
+    assert!(send(message()).await.is_ok());
+    assert!(send(message()).await.is_ok());
+    let Err(InputRejection::Backpressured(waiting)) = send(message()).await else {
+        panic!("a third waiting message and the first prompt exceed 1 MiB");
+    };
+
+    harness
+        .send(AgentCommand::StartPrompt {
+            run: FIRST_RUN,
+            prompt: None,
+        })
+        .await;
+    assert!(send(waiting).await.is_ok(), "the prompt gave back its room");
+    harness.stop().await;
+}
+
 /// Text goes in as a terminal pastes it in the CLI's modes, its Enter after a pause; keys go in
 /// the CLI's cursor mode, and the key after an Escape after a pause. Each call is answered once
 /// all of it reached the terminal.
@@ -1565,7 +1669,10 @@ async fn a_start_prompt_waits_for_the_tools_and_messages_sent_meanwhile_wait_beh
     let (ready, mut settled) = oneshot::channel();
     handle
         .mailbox()
-        .send(AgentCommand::AwaitPrompt { ready })
+        .send(AgentCommand::AwaitPrompt {
+            text: "fix it".into(),
+            ready,
+        })
         .await
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -2733,7 +2840,12 @@ async fn an_ended_run_is_in_its_record_before_its_waiting_prompt_learns_it_ended
     let home = home("endedorder");
     let harness = claude(&home, false);
     let (ready, mut started) = oneshot::channel();
-    harness.send(AgentCommand::AwaitPrompt { ready }).await;
+    harness
+        .send(AgentCommand::AwaitPrompt {
+            text: "fix it".into(),
+            ready,
+        })
+        .await;
     // The actor has taken the command and its start's work is done: it waits for the next one,
     // the record free.
     let (reply, inspected) = oneshot::channel();

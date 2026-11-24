@@ -24,6 +24,7 @@ use std::time::Duration;
 use facade_base::key_input::Key;
 use facade_base::model::terminal::InputMechanism;
 use facade_base::system::{SYSTEM, System};
+use facade_base::terminal::KeyRecord;
 use regex::Regex;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
@@ -175,6 +176,25 @@ pub struct ConsoleRule {
     /// Characters above U+FFFF go as win32-input-mode key-down records: the CLI loses them
     /// otherwise.
     pub records_above_bmp: bool,
+    /// The key that puts a line break in the CLI's input. A message's line breaks go as that key
+    /// where the CLI submits on Enter and tells a pasted Enter from a typed one only by time.
+    #[serde(default)]
+    line_break: Option<LineBreakKey>,
+}
+
+/// A key that puts a line break in a CLI's input.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum LineBreakKey {
+    ShiftEnter,
+}
+
+impl LineBreakKey {
+    fn record(self) -> KeyRecord {
+        match self {
+            Self::ShiftEnter => KeyRecord::SHIFT_ENTER,
+        }
+    }
 }
 
 /// How the typist types into a CLI where it reads console input records.
@@ -185,6 +205,8 @@ pub struct ConsoleTyping {
     /// Characters above U+FFFF go as key-down records
     /// ([`facade_base::terminal::key_down_records`]).
     pub records_above_bmp: bool,
+    /// The key a line break goes as, pressed, for a CLI whose Enter submits.
+    pub line_break: Option<KeyRecord>,
 }
 
 /// How to type into `rule`'s CLI where it reads console input records: Some only on Windows, for a
@@ -198,6 +220,7 @@ pub fn console_typing(rule: &Rule) -> Option<ConsoleTyping> {
     Some(ConsoleTyping {
         per_char: Duration::from_millis(console.per_char_ms),
         records_above_bmp: console.records_above_bmp,
+        line_break: console.line_break.map(LineBreakKey::record),
     })
 }
 
@@ -1126,6 +1149,42 @@ mod tests {
             let malformed = claude().replacen(field, replacement, 1);
             assert!(refusal("claude", &malformed).contains(problem));
         }
+    }
+
+    #[test]
+    fn a_console_cli_s_line_breaks_go_as_the_key_its_rule_names() {
+        for cli in ["codex", "muse"] {
+            let rule = find(cli).unwrap().unwrap();
+            let named = rule.console.as_ref().unwrap().line_break;
+            assert_eq!(named, Some(LineBreakKey::ShiftEnter), "{cli}");
+            let typing = console_typing(rule);
+            if SYSTEM == System::Windows {
+                assert_eq!(
+                    typing.unwrap().line_break,
+                    Some(KeyRecord::SHIFT_ENTER),
+                    "{cli}"
+                );
+            } else {
+                assert_eq!(
+                    typing, None,
+                    "{cli}: elsewhere it reads the terminal's bytes"
+                );
+            }
+        }
+        // A rule that names none keeps the terminal's carriage return.
+        let codex = FILES[1].1;
+        let without = Rule::parse(
+            "codex",
+            &codex.replacen(", \"line_break\": \"shift_enter\"", "", 1),
+        )
+        .unwrap();
+        assert_eq!(without.console.as_ref().unwrap().line_break, None);
+        assert!(console_typing(&without).is_none_or(|typing| typing.line_break.is_none()));
+        let refused = refusal(
+            "codex",
+            &codex.replacen("\"shift_enter\"", "\"meta_enter\"", 1),
+        );
+        assert!(refused.contains("unknown variant"), "{refused}");
     }
 
     #[test]

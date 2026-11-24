@@ -59,8 +59,8 @@ files in `framework/rules/`. It is a library; it starts no program.
   the file a start's command resolved to. On Windows, Pi's and Muse Code's installers' wrappers
   start the CLI's own program; everything else is as base's `programs::direct_command` has it.
 - `console_typing(rule) -> Option<ConsoleTyping>`, for the typist: on Windows, for a CLI that reads
-  console input records, the wait before submission for each UTF-16 code unit typed and whether
-  characters above U+FFFF go as key-down records.
+  console input records, the wait before submission for each UTF-16 code unit typed, whether
+  characters above U+FFFF go as key-down records and the key a line break goes as.
 - The input, state, sessions and wiring functions listed under each child below.
 - `session_meta_keys`: the keys in which CLI tool calls name their sessions.
 - `managed_instructions_from_hook(cli)` identifies the rules whose managed runs get their
@@ -142,7 +142,7 @@ Rust regular expressions.
 | `ready_tools` | what to type so the CLI starts Facade's tools before its first turn |
 | `mcp` | the session key in MCP metadata or the relay environment, and whether a run gets its instructions from a hook or extension |
 | `yolo` | `work` controls for native permissions, `startup` controls for YOLO agent starts, and the trust question to answer |
-| `console` | on Windows, for a CLI that reads console input records: `per_char_ms`, the wait before submission for each UTF-16 code unit, and `records_above_bmp` |
+| `console` | on Windows, for a CLI that reads console input records: `per_char_ms`, the wait before submission for each UTF-16 code unit, `records_above_bmp`, and `line_break`, the key that puts a line break in the CLI's input, for a CLI whose Enter submits |
 
 **Adding a CLI.** Write `framework/rules/<cli>.json` and add it to `FILES` in `lib.rs`; its place there
 is its place in `facade`'s lists. With a rule file alone, Facade starts the CLI and reads its

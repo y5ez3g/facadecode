@@ -97,12 +97,13 @@ impl Input {
         matches!(self, Self::Typed(typing) if typing.is_sequence())
     }
 
-    /// The most bytes this input writes into the terminal.
-    pub(crate) fn most_bytes(&self) -> usize {
+    /// The most bytes this input writes into the terminal, as the `console` takes them where the
+    /// CLI reads console input records.
+    pub(crate) fn most_bytes(&self, console: Option<facade_rules::ConsoleTyping>) -> usize {
         match self {
             Input::Raw(keys) => keys.len(),
-            Input::Typed(typing) => typing.most_bytes(),
-            Input::Message(message) => message.most_bytes(),
+            Input::Typed(typing) => typing.most_bytes(console),
+            Input::Message(message) => message.most_bytes(console),
             // What is left of a begun paste is its Enter.
             Input::BegunPaste { .. } => 1,
         }
@@ -132,6 +133,9 @@ pub(crate) enum InputRejection {
     /// The waiting input is full, or a resize waits to take effect: the input comes back, to send
     /// again once [`AgentHandle::input_room_changed`] fires.
     Backpressured(Input),
+    /// The input takes more of the terminal than all the room there is, these many bytes: it never
+    /// fits.
+    TooLarge(usize),
 }
 
 /// What the actor is asked to do.
@@ -226,9 +230,11 @@ pub(crate) enum AgentCommand {
     Remove {
         reply: oneshot::Sender<()>,
     },
-    /// Holds the messages of a run's start behind its prompt until [`AgentCommand::StartPrompt`].
+    /// Holds the messages of a run's start behind its prompt until [`AgentCommand::StartPrompt`]
+    /// and reserves room for the prompt's rendered `text`.
     /// `ready` is told once the start settled: its CLI's tools connected or will not.
     AwaitPrompt {
+        text: String,
         ready: oneshot::Sender<()>,
     },
     /// The start prompt of run `run`, typed before every waiting message, or None where none comes.

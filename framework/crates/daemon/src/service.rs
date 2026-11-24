@@ -1293,7 +1293,8 @@ impl Daemon {
         crate::gate_for_test("before-type-input");
         let typing_bytes = input.typing_bytes();
         let (input, typed) = input_of(input, sender)?;
-        if typing_bytes.unwrap_or_else(|| input.most_bytes()) > MAX_INPUT_BYTES {
+        // As the published preflight counts it; the agent counts the bytes its terminal takes.
+        if typing_bytes.unwrap_or_else(|| input.most_bytes(None)) > MAX_INPUT_BYTES {
             return Err(ErrorBody::new(
                 Reason::CapacityExceeded,
                 "input is limited to 1 MiB a call",

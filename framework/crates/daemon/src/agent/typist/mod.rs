@@ -7,9 +7,9 @@ use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
 use facade_base::api_v1::daemon::InputStep;
-use facade_base::key_input::{Key, MAX_INPUT_BYTES, MAX_KEYS, PASTE_END, PASTE_START, paste_bytes};
+use facade_base::key_input::{Key, MAX_INPUT_BYTES, MAX_KEYS, PASTE_END, PASTE_START};
 use facade_base::model::error::{ErrorBody, Reason};
-use facade_base::terminal::key_down_records;
+use facade_base::terminal::{key_down_records, key_down_records_len};
 use facade_base::{
     model::message::{DeliveryFailure, TextWritten},
     model::terminal::{InputInfo, InputState, first_control},
@@ -167,7 +167,9 @@ impl Typing {
             ));
         }
         let (call, reply) = Self::new(strokes, CallKind::Sequence(total));
-        let bytes = call.most_bytes();
+        // As the published preflight counts it, whatever the agent's terminal: the actor counts the
+        // bytes its terminal takes against the room there is.
+        let bytes = call.most_bytes(None);
         if bytes > MAX_INPUT_BYTES {
             return Err(format!(
                 "sequence uses {bytes} input bytes; the limit is {MAX_INPUT_BYTES}"
@@ -203,9 +205,13 @@ impl Typing {
         )
     }
 
-    /// Maximum queued bytes in either terminal mode; no I/O or locks.
-    pub(crate) fn most_bytes(&self) -> usize {
-        self.strokes.iter().map(Stroke::most_bytes).sum()
+    /// Maximum queued bytes in either terminal mode, as the `console` takes them where the CLI
+    /// reads console input records; no I/O or locks.
+    pub(crate) fn most_bytes(&self, console: Option<ConsoleTyping>) -> usize {
+        self.strokes
+            .iter()
+            .map(|stroke| stroke.most_bytes(console))
+            .sum()
     }
 
     fn interruption(&self, why: &str, partial: bool) -> ErrorBody {
@@ -288,9 +294,15 @@ impl MessageTyping {
         prompt
     }
 
-    /// Maximum bytes for the text, paste brackets and the one-byte submission key.
-    pub(crate) fn most_bytes(&self) -> usize {
-        paste_bytes(&self.text) + Key::Enter.most_bytes()
+    /// Maximum bytes for the text and its paste brackets, as the `console` takes them where the
+    /// CLI reads console input records, and the one-byte submission key.
+    pub(crate) fn most_bytes(&self, console: Option<ConsoleTyping>) -> usize {
+        Self::bytes_for(&self.text, console)
+    }
+
+    /// The input to reserve for a message or a start prompt while it waits.
+    pub(super) fn bytes_for(text: &str, console: Option<ConsoleTyping>) -> usize {
+        paste_size(text, console) + Key::Enter.most_bytes()
     }
 }
 
@@ -714,10 +726,10 @@ impl Typist {
         self.inbox.push_front(prompt);
     }
 
-    /// Settles a prompt for a run already ended; persistence may block, no typist lock.
-    pub(crate) fn fail_ended(&self, prompt: MessageTyping) {
+    /// Settles a prompt the run cannot take; persistence may block, no typist lock.
+    pub(super) fn fail_prompt(&self, prompt: MessageTyping, reason: DeliveryFailure) {
         self.deliveries
-            .settle(&[prompt.number], Outcome::untyped(DeliveryFailure::Ended));
+            .settle(&[prompt.number], Outcome::untyped(reason));
     }
 
     /// Queues one program call synchronously; no I/O or locks.
@@ -736,14 +748,26 @@ impl Typist {
     pub(crate) fn paste_rule(&self) -> Option<&'static PasteRule> {
         self.rule.map(|rule| &rule.paste)
     }
-    /// Reads queued input's maximum size, excluding bytes already emitted; no I/O or locks.
+    /// How the CLI takes typing where it reads console input records.
+    pub(crate) fn console(&self) -> Option<ConsoleTyping> {
+        self.console
+    }
+    /// Reads queued input's maximum size as the CLI's terminal takes it, excluding bytes already
+    /// emitted; no I/O or locks.
     pub(crate) fn held_bytes(&self) -> usize {
-        self.calls.iter().map(Typing::most_bytes).sum::<usize>()
-            + self.current.as_ref().map_or(0, Typing::most_bytes)
+        let console = self.console;
+        self.calls
+            .iter()
+            .map(|call| call.most_bytes(console))
+            .sum::<usize>()
+            + self
+                .current
+                .as_ref()
+                .map_or(0, |call| call.most_bytes(console))
             + self
                 .inbox
                 .iter()
-                .map(MessageTyping::most_bytes)
+                .map(|message| message.most_bytes(console))
                 .sum::<usize>()
             + self.batch.as_ref().map_or(0, Batch::held)
     }
@@ -801,7 +825,7 @@ impl Typist {
         };
         let mut result = Step::default();
         while let Some(stroke) = call.strokes.pop_front() {
-            stroke.write(modes, records_above_bmp(self.console), &mut result.write);
+            stroke.write(modes, self.console, &mut result.write);
             self.entered |= matches!(stroke, Stroke::Key(Key::Enter));
             receipt.boundaries.push(offset + result.write.len() as u64);
             receipt.delay = stroke.delay(paste_rule, self.console);
@@ -978,7 +1002,7 @@ impl Typist {
                 write_paste(
                     &draft.paste.text,
                     modes.bracketed_paste,
-                    records_above_bmp(self.console),
+                    self.console,
                     &mut write,
                 );
                 let wake = (now + READ_INTERVAL).min(next.deadline);
@@ -1185,20 +1209,28 @@ enum Stroke {
 }
 
 impl Stroke {
-    /// Its bytes; with `records`, characters above U+FFFF as key-down records.
-    fn write(&self, modes: Modes, records: bool, bytes: &mut Vec<u8>) {
+    /// Its bytes, as the `console` takes them where the CLI reads console input records.
+    fn write(&self, modes: Modes, console: Option<ConsoleTyping>, bytes: &mut Vec<u8>) {
         match self {
-            Self::Key(Key::Character(c)) if records => {
-                write_text(c.encode_utf8(&mut [0; 4]), true, bytes);
+            Self::Key(Key::Character(c)) => {
+                write_text(
+                    c.encode_utf8(&mut [0; 4]),
+                    records_above_bmp(console),
+                    bytes,
+                );
             }
             Self::Key(key) => key.write(modes.application_cursor_keys, bytes),
-            Self::Paste(text) => write_paste(text, modes.bracketed_paste, records, bytes),
+            Self::Paste(text) => write_paste(text, modes.bracketed_paste, console, bytes),
         }
     }
 
-    fn most_bytes(&self) -> usize {
+    /// The most bytes [`Stroke::write`] writes in either terminal mode for the `console`.
+    fn most_bytes(&self, console: Option<ConsoleTyping>) -> usize {
         match self {
-            Self::Paste(text) => paste_bytes(text),
+            Self::Paste(text) => paste_size(text, console),
+            Self::Key(Key::Character(c)) => {
+                text_size(c.encode_utf8(&mut [0; 4]), records_above_bmp(console))
+            }
             Self::Key(key) => key.most_bytes(),
         }
     }
@@ -1216,15 +1248,62 @@ impl Stroke {
     }
 }
 
-fn write_paste(text: &str, bracketed: bool, records: bool, bytes: &mut Vec<u8>) {
+/// A paste of `text`, between the paste brackets where the CLI asked for them. Its line breaks go
+/// as the `console`'s line break key where it has one. Otherwise they go as returns between the
+/// brackets, and as they are without brackets.
+fn write_paste(text: &str, bracketed: bool, console: Option<ConsoleTyping>, bytes: &mut Vec<u8>) {
+    let records = records_above_bmp(console);
+    let line_break = console.and_then(|console| console.line_break);
+    if !bracketed && line_break.is_none() {
+        write_text(text, records, bytes);
+        return;
+    }
     if bracketed {
         bytes.extend(PASTE_START);
-        let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
-        write_text(&normalized, records, bytes);
-        bytes.extend(PASTE_END);
-    } else {
-        write_text(text, records, bytes);
     }
+    for (index, line) in text.replace("\r\n", "\n").split(['\n', '\r']).enumerate() {
+        if index > 0 {
+            match line_break {
+                Some(key) => key.write_press(bytes),
+                None => bytes.push(b'\r'),
+            }
+        }
+        write_text(line, records, bytes);
+    }
+    if bracketed {
+        bytes.extend(PASTE_END);
+    }
+}
+
+/// The most bytes [`write_paste`] writes for `text`, with the paste brackets or without, as the
+/// `console` takes it.
+fn paste_size(text: &str, console: Option<ConsoleTyping>) -> usize {
+    let brackets = PASTE_START.len() + PASTE_END.len();
+    let size = brackets + text_size(text, records_above_bmp(console));
+    let Some(key) = console.and_then(|console| console.line_break) else {
+        // A line break goes as it is, or as one return between the brackets.
+        return size;
+    };
+    // Each line break, a return, a line feed or the two together, goes as a press of the key.
+    let ends = text
+        .bytes()
+        .filter(|byte| matches!(byte, b'\r' | b'\n'))
+        .count();
+    let breaks = ends - text.matches("\r\n").count();
+    size - ends + breaks * key.press_len()
+}
+
+/// How many bytes [`write_text`] writes for `text`.
+fn text_size(text: &str, records: bool) -> usize {
+    if !records {
+        return text.len();
+    }
+    text.chars()
+        .map(|c| match c.len_utf8() {
+            4 => key_down_records_len(c.encode_utf8(&mut [0; 4])),
+            len => len,
+        })
+        .sum()
 }
 
 /// `text` as typed: with `records`, each character above U+FFFF as key-down records, which a
@@ -1400,7 +1479,7 @@ mod tests {
     fn a_paste_is_bracketed_with_carriage_returns_only_when_the_cli_asked_for_bracketed_paste() {
         let pasted = |bracketed: bool| {
             let mut out = Vec::new();
-            write_paste("one\ntwo\r\nthree\rfour\tend", bracketed, false, &mut out);
+            write_paste("one\ntwo\r\nthree\rfour\tend", bracketed, None, &mut out);
             out
         };
         assert_eq!(
@@ -1413,10 +1492,169 @@ mod tests {
         typing
             .strokes
             .iter()
-            .for_each(|stroke| stroke.write(ANY, false, &mut out));
+            .for_each(|stroke| stroke.write(ANY, None, &mut out));
         assert!(
-            out.len() <= typing.most_bytes(),
+            out.len() <= typing.most_bytes(None),
             "the most bytes cover what is written"
+        );
+    }
+
+    /// A CLI that reads console input records, whose Enter submits and which puts a line break in
+    /// its input for Shift+Enter.
+    const CONSOLE: ConsoleTyping = ConsoleTyping {
+        per_char: Duration::from_millis(3),
+        records_above_bmp: true,
+        line_break: Some(facade_base::terminal::KeyRecord::SHIFT_ENTER),
+    };
+    /// Shift+Enter pressed: going down, then up.
+    const SHIFT_ENTER: &[u8] = b"\x1b[13;28;13;1;16;1_\x1b[13;28;13;0;16;1_";
+
+    #[test]
+    fn a_line_break_of_a_paste_goes_as_the_console_s_line_break_key_and_never_as_a_return() {
+        let text = "📨 Message m1 from s01\none\r\ntwo\rthree\n\nfour";
+        let lines = [
+            [key_down_records("📨"), b" Message m1 from s01".to_vec()].concat(),
+            b"one".to_vec(),
+            b"two".to_vec(),
+            b"three".to_vec(),
+            Vec::new(),
+            b"four".to_vec(),
+        ];
+        for bracketed in [true, false] {
+            let mut out = Vec::new();
+            write_paste(text, bracketed, Some(CONSOLE), &mut out);
+            let mut expected = lines.join(SHIFT_ENTER);
+            if bracketed {
+                expected = [PASTE_START, &expected, PASTE_END].concat();
+            }
+            assert_eq!(out, expected, "bracketed: {bracketed}");
+            assert!(!out.contains(&b'\r') && !out.contains(&b'\n'));
+        }
+        // A CLI without the key has its line breaks as before.
+        let without = ConsoleTyping {
+            line_break: None,
+            ..CONSOLE
+        };
+        for (bracketed, expected) in [
+            (true, &b"\x1b[200~one\rtwo\x1b[201~"[..]),
+            (false, b"one\r\ntwo"),
+        ] {
+            let mut out = Vec::new();
+            write_paste("one\r\ntwo", bracketed, Some(without), &mut out);
+            assert_eq!(out, expected, "bracketed: {bracketed}");
+        }
+    }
+
+    #[test]
+    fn a_message_with_lines_is_pasted_with_the_console_s_line_break_key() {
+        let post = test_messages();
+        let start = Instant::now();
+        let (typing, _) = message(&post, "one\ntwo", start + Duration::from_secs(30));
+        let mut typist = Typist::new(
+            "a1",
+            Some(facade_rules::find("codex").unwrap().unwrap()),
+            Some(CONSOLE),
+            post.delivery_handle(),
+        );
+        let mut terminal = Terminal {
+            reading: input(InputState::Usable, None),
+            ..Terminal::default()
+        };
+        typist.deliver(typing);
+        terminal.step(&mut typist, start, ANY);
+        assert_eq!(
+            terminal.write_all(),
+            [PASTE_START, b"one", SHIFT_ENTER, b"two", PASTE_END].concat()
+        );
+    }
+
+    /// The bytes a paste is counted are never fewer than it writes, with the paste brackets or
+    /// without, for a CLI that reads console input records or not: line breaks alone, of each
+    /// kind and together, blank lines, characters above U+FFFF alone and among the rest. Where a
+    /// key breaks the lines, the count is what a bracketed paste writes.
+    #[test]
+    fn a_paste_is_counted_as_its_bytes_in_the_terminal_at_most() {
+        let records_only = ConsoleTyping {
+            line_break: None,
+            ..CONSOLE
+        };
+        let key_only = ConsoleTyping {
+            records_above_bmp: false,
+            ..CONSOLE
+        };
+        let texts = [
+            String::new(),
+            "plain".into(),
+            "\n".repeat(1000),
+            "\r\n".repeat(1000),
+            "\r".repeat(1000),
+            "\n\r\n\r\r\n\n\n\r\r".repeat(100),
+            "😀".repeat(1000),
+            "a😀\r\n\n😀b\r😀\u{ffff}\u{10ffff}\r\n".repeat(100),
+        ];
+        for text in &texts {
+            for console in [None, Some(CONSOLE), Some(records_only), Some(key_only)] {
+                let counted = paste_size(text, console);
+                for bracketed in [true, false] {
+                    let mut out = Vec::new();
+                    write_paste(text, bracketed, console, &mut out);
+                    assert!(
+                        out.len() <= counted,
+                        "{} > {counted}: {console:?}, bracketed: {bracketed}, {:?}",
+                        out.len(),
+                        &text[..text.len().min(20)]
+                    );
+                    if bracketed && console.is_some_and(|console| console.line_break.is_some()) {
+                        assert_eq!(out.len(), counted, "{console:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// A call, a sequence and a message are counted as the CLI's terminal takes them: for Codex
+    /// on Windows, 30,000 lines of a text of 60,012 bytes as written take 1,110,012 bytes.
+    #[test]
+    fn a_call_a_sequence_and_a_message_are_counted_as_the_console_takes_them() {
+        let text = "a\n".repeat(30_000);
+        let (typing, _) = Typing::text(text.clone(), false, Sender::person()).unwrap();
+        assert_eq!(
+            typing.most_bytes(None),
+            60_012,
+            "as the published preflight counts"
+        );
+        let mut out = Vec::new();
+        for stroke in &typing.strokes {
+            stroke.write(ANY, Some(CONSOLE), &mut out);
+        }
+        assert_eq!(out.len(), 1_110_012);
+        assert_eq!(typing.most_bytes(Some(CONSOLE)), out.len());
+        assert!(typing.most_bytes(Some(CONSOLE)) > MAX_INPUT_BYTES);
+
+        let steps = vec![
+            InputStep::Text {
+                text: "one\r\n\r\ntwo😀".into(),
+            },
+            InputStep::Key { key: "😀".into() },
+            InputStep::Key {
+                key: "Enter".into(),
+            },
+        ];
+        let (sequence, _) = Typing::sequence(steps).unwrap();
+        let mut out = Vec::new();
+        for stroke in &sequence.strokes {
+            stroke.write(ANY, Some(CONSOLE), &mut out);
+        }
+        assert_eq!(sequence.most_bytes(Some(CONSOLE)), out.len());
+        assert!(sequence.most_bytes(None) < out.len());
+
+        let post = test_messages();
+        let (message, _) = message(&post, &text[..2_000], Instant::now());
+        let mut out = Vec::new();
+        write_paste(&message.text, true, Some(CONSOLE), &mut out);
+        assert_eq!(
+            message.most_bytes(Some(CONSOLE)),
+            out.len() + Key::Enter.most_bytes()
         );
     }
 

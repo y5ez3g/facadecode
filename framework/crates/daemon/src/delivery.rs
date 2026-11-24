@@ -40,7 +40,7 @@ use crate::records::{OperationTarget, Reach};
 use crate::service::{Forwarded, sender_from};
 use crate::store::SendRoute;
 use crate::{
-    Cancel, Daemon, HUMAN, MAX_TERMINAL_SEND, Sender, delivery_limit, gate_for_test, log,
+    Cancel, Daemon, MAX_TERMINAL_SEND, Sender, delivery_limit, gate_for_test, log,
     send_route_cutoff,
 };
 
@@ -310,6 +310,15 @@ impl Daemon {
                     return Err(ErrorBody::new(Reason::Ended, format!("{id} ended")));
                 }
                 Err(InputRejection::Backpressured(back)) => input = back,
+                Err(InputRejection::TooLarge(bytes)) => {
+                    return Err(ErrorBody::new(
+                        Reason::CapacityExceeded,
+                        format!(
+                            "input is limited to 1 MiB a call; in agent {id}'s terminal this \
+                             input takes {bytes} bytes"
+                        ),
+                    ));
+                }
             }
             match (&wait, cancel.as_mut()) {
                 (InputWait::Refuse, _) => {
@@ -1325,6 +1334,7 @@ impl Daemon {
         self: Arc<Self>,
         agent: AgentHandle,
         prompt: Message,
+        text: String,
         mut settled: watch::Receiver<Option<Settled>>,
         started: oneshot::Receiver<()>,
     ) {
@@ -1337,25 +1347,11 @@ impl Daemon {
         if started {
             gate_for_test("before-prompt-delivery");
             let due = Due::now();
-            // The creator's name as it is now: a start from an agent's terminal can come before
-            // that agent is listed.
-            let from_name = match prompt.from.as_str() {
-                HUMAN => None,
-                creator if prompt.from_machine_id.is_none() => {
-                    self.get_agent(creator).map(|creator| creator.info().name)
-                }
-                _ => None,
-            };
             let typing = self
                 .messages
-                .begin_prompt(number, &due.at, from_name)
+                .begin_prompt(number, &due.at, prompt.from_name)
                 .map(|begun| {
-                    MessageTyping::start_prompt(
-                        self.message_text(&begun),
-                        number,
-                        due.instant,
-                        submission_of(&begun),
-                    )
+                    MessageTyping::start_prompt(text, number, due.instant, submission_of(&begun))
                 });
             let prompt_command = AgentCommand::StartPrompt {
                 run: agent::FIRST_RUN,

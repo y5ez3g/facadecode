@@ -32,7 +32,7 @@ use super::readiness::{Press, Readiness, StartView};
 use super::screen::LoggedScreen;
 use super::state::{Kept, StateTracker, Viewing, keep};
 use super::terminal::{Terminal, TerminalEvent, TerminalWait};
-use super::typist::{Modes, Typing, Typist};
+use super::typist::{MessageTyping, Modes, Typing, Typist};
 use super::viewers::{ViewKind, ViewerRequest, Viewers};
 use super::{
     ActorStart, AgentCommand, FIRST_RUN, Input, InputRejection, Inspection, MAX_INPUT_BYTES,
@@ -187,7 +187,7 @@ pub(super) fn spawn(
         early_exit: None,
         pending_size: None,
         pending_restart: None,
-        awaits_prompt: false,
+        start_prompt_bytes: None,
         prompt_ready: None,
         quiet: false,
         quieting: None,
@@ -267,8 +267,8 @@ struct Actor {
     pending_size: Option<SizeRequest>,
     /// The preparation reply waiting for a full log's checkpoint writer.
     pending_restart: Option<oneshot::Sender<()>>,
-    /// Messages wait behind the run's start prompt until it comes.
-    awaits_prompt: bool,
+    /// Bytes reserved for the first prompt while later messages wait behind it.
+    start_prompt_bytes: Option<usize>,
     prompt_ready: Option<oneshot::Sender<()>>,
     /// A newer Facade takes over: no reading, no typing.
     quiet: bool,
@@ -811,21 +811,27 @@ impl Actor {
                 let _ = reply.send(self.links.shared.record.lock().unwrap().info.clone());
             }
             // A run that ended takes no prompt: dropping `ready` says so.
-            AgentCommand::AwaitPrompt { ready } => {
+            AgentCommand::AwaitPrompt { text, ready } => {
                 if !self.ended() {
-                    (self.awaits_prompt, self.prompt_ready) = (true, Some(ready));
+                    self.start_prompt_bytes =
+                        Some(MessageTyping::bytes_for(&text, self.typist.console()));
+                    self.prompt_ready = Some(ready);
                 }
             }
             AgentCommand::StartPrompt { run, prompt } => {
-                self.awaits_prompt = false;
+                self.start_prompt_bytes = None;
                 if let Some(prompt) = prompt {
                     if run != self.run || self.exit.is_some() || !self.terminal.is_open() {
-                        self.typist.fail_ended(prompt);
+                        self.typist.fail_prompt(prompt, DeliveryFailure::Ended);
+                    } else if prompt.most_bytes(self.typist.console()) > MAX_INPUT_BYTES {
+                        self.typist.fail_prompt(prompt, DeliveryFailure::Timeout);
                     } else {
+                        // The prompt takes the room held by its reservation.
                         self.typist.deliver_first(prompt);
                     }
                 }
                 self.type_next();
+                self.links.room.notify_waiters();
             }
         }
         true
@@ -836,8 +842,12 @@ impl Actor {
         if run != self.run || self.exit.is_some() || !self.terminal.is_open() {
             return Err(InputRejection::AgentExited);
         }
+        let bytes = input.most_bytes(self.typist.console());
+        if bytes > MAX_INPUT_BYTES {
+            return Err(InputRejection::TooLarge(bytes));
+        }
         // Input sent after a resize must not reach the CLI before the new size.
-        if self.pending_size.is_some() || input.most_bytes() > self.room() {
+        if self.pending_size.is_some() || bytes > self.room() {
             facade_base::service::mark_for_test("input-without-room");
             return Err(InputRejection::Backpressured(input));
         }
@@ -877,12 +887,20 @@ impl Actor {
         }
     }
 
-    /// The room left for input: the terminal's queue, and what the typist, the person's Enter and
-    /// the start hold.
+    /// The room left for input, after queued input and the first prompt's reservation.
     fn room(&self) -> usize {
         let enter = self.submitting.as_ref().map_or(0, Submitting::held_bytes);
-        let held: usize = self.held.iter().map(Input::most_bytes).sum();
-        let used = self.terminal.queued() + self.typist.held_bytes() + enter + held;
+        let console = self.typist.console();
+        let held: usize = self
+            .held
+            .iter()
+            .map(|input| input.most_bytes(console))
+            .sum();
+        let used = self.terminal.queued()
+            + self.typist.held_bytes()
+            + enter
+            + held
+            + self.start_prompt_bytes.unwrap_or(0);
         MAX_INPUT_BYTES.saturating_sub(used)
     }
 
@@ -1273,7 +1291,7 @@ impl Actor {
         self.stop_input(&format!("{} ended", self.id));
         self.readiness.end();
         self.ready_at = None;
-        (self.awaits_prompt, self.prompt_ready) = (false, None);
+        (self.start_prompt_bytes, self.prompt_ready) = (None, None);
         self.links.room.notify_waiters();
         let _ = self.links.exit.send(Some(exit));
         if self.terminal.is_closed() {
@@ -1395,7 +1413,7 @@ impl Actor {
         // Messages wait behind what the run's start does first, as behind a draft.
         let first = if self.readiness.readies_tools() {
             Some("the run's start readies its tools first")
-        } else if self.awaits_prompt {
+        } else if self.start_prompt_bytes.is_some() {
             Some("the run's start prompt goes first")
         } else if self.holds_input_for_probe && !self.held.is_empty() {
             Some("input is waiting for the hint probe to finish")
@@ -1557,7 +1575,7 @@ impl Actor {
             }
             // Let the first prompt arrive unless the native CLI is asking for input.
             if next.is_sequence()
-                && self.awaits_prompt
+                && self.start_prompt_bytes.is_some()
                 && self.read_screen_input().info.state != InputState::Interaction
             {
                 return;

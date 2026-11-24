@@ -753,7 +753,7 @@ impl Daemon {
         // ahead of it.
         let mut watch_prompt = None;
         let prompt = match kept {
-            Some((prompt, owed)) => {
+            Some((mut prompt, owed)) => {
                 let owes = owed.clone().map(|reference| {
                     let agent = handle.clone();
                     let started_prompt = PromptWatch::new(messages::number(&prompt));
@@ -764,8 +764,18 @@ impl Daemon {
                 });
                 let settled = self.messages.deliver_prompt(prompt.clone(), owes);
                 let (ready, started) = oneshot::channel();
-                handle.send(AgentCommand::AwaitPrompt { ready }).await;
-                Some((prompt, owed, settled, started))
+                if prompt.from_name.is_none() && prompt.from_machine_id.is_none() {
+                    prompt.from_name = self.get_agent(&prompt.from).map(|agent| agent.info().name);
+                }
+                // The text the actor charges is the text it will paste once the start settles.
+                let text = self.message_text(&prompt);
+                handle
+                    .send(AgentCommand::AwaitPrompt {
+                        text: text.clone(),
+                        ready,
+                    })
+                    .await;
+                Some((prompt, owed, settled, started, text))
             }
             None => None,
         };
@@ -789,10 +799,11 @@ impl Daemon {
             );
         }
         let (prompt, result) = match prompt {
-            Some((prompt, owed, settled, started)) => {
+            Some((prompt, owed, settled, started, text)) => {
                 tokio::spawn(self.clone().send_start_prompt(
                     handle.clone(),
                     prompt.clone(),
+                    text,
                     settled,
                     started,
                 ));

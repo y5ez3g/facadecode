@@ -158,15 +158,100 @@ impl PtyIo {
     }
 }
 
-/// Each character of `text` as a win32-input-mode key-down record, the form in which a Windows
-/// console takes text it would otherwise split: one record for each UTF-16 unit, without releases.
-/// The same on every system.
-pub fn key_down_records(text: &str) -> Vec<u8> {
-    let mut records = String::new();
-    for unit in text.encode_utf16() {
-        records.push_str(&format!("\x1b[0;0;{unit};1;0;1_"));
+/// A key with the keys held, as win32-input-mode's key records give it, `CSI Vk;Sc;Uc;Kd;Cs;1_`:
+/// the form in which a Windows console takes a key, whatever the machine's keyboard layout. The
+/// same on every system.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeyRecord {
+    virtual_key: u16,
+    scan_code: u16,
+    /// The UTF-16 unit the key gives.
+    unit: u16,
+    /// The control keys held, as a console key event's `dwControlKeyState` has them.
+    held: u32,
+}
+
+impl KeyRecord {
+    /// Shift and Enter together.
+    pub const SHIFT_ENTER: KeyRecord = KeyRecord {
+        virtual_key: 0x0d,
+        scan_code: 0x1c,
+        unit: 0x0d,
+        held: 0x10,
+    };
+
+    /// A character of the text typed, as one UTF-16 unit, which no key gives.
+    fn of_unit(unit: u16) -> KeyRecord {
+        KeyRecord {
+            virtual_key: 0,
+            scan_code: 0,
+            unit,
+            held: 0,
+        }
     }
-    records.into_bytes()
+
+    /// Appends the key going down.
+    pub fn write_down(self, bytes: &mut Vec<u8>) {
+        self.write(true, bytes);
+    }
+
+    /// Appends the key going down and then up, as a key pressed. A console merges a key-down into
+    /// the same key-down before it, unread, so two presses of a key in a row need the key-up between.
+    pub fn write_press(self, bytes: &mut Vec<u8>) {
+        self.write(true, bytes);
+        self.write(false, bytes);
+    }
+
+    /// How many bytes [`KeyRecord::write_press`] appends.
+    pub fn press_len(self) -> usize {
+        2 * self.record_len()
+    }
+
+    /// How many bytes one record of the key takes, going down or up alike.
+    fn record_len(self) -> usize {
+        let digits = |number: u32| number.checked_ilog10().map_or(1, |log| log as usize + 1);
+        let Self {
+            virtual_key,
+            scan_code,
+            unit,
+            held,
+        } = self;
+        // `ESC [`, the five semicolons, the down digit, and `1_`.
+        10 + digits(virtual_key.into())
+            + digits(scan_code.into())
+            + digits(unit.into())
+            + digits(held)
+    }
+
+    fn write(self, down: bool, bytes: &mut Vec<u8>) {
+        let Self {
+            virtual_key,
+            scan_code,
+            unit,
+            held,
+        } = self;
+        let down = u8::from(down);
+        bytes
+            .extend(format!("\x1b[{virtual_key};{scan_code};{unit};{down};{held};1_").into_bytes());
+    }
+}
+
+/// Each character of `text` as key-down records, the form in which a Windows console takes text it
+/// would otherwise split: one record for each UTF-16 unit, without releases. The same on every
+/// system.
+pub fn key_down_records(text: &str) -> Vec<u8> {
+    let mut records = Vec::new();
+    for unit in text.encode_utf16() {
+        KeyRecord::of_unit(unit).write_down(&mut records);
+    }
+    records
+}
+
+/// How many bytes [`key_down_records`] gives for `text`, without making them.
+pub fn key_down_records_len(text: &str) -> usize {
+    text.encode_utf16()
+        .map(|unit| KeyRecord::of_unit(unit).record_len())
+        .sum()
 }
 
 /// A terminal whose CLI side a unit test plays: its Facade side, and the CLI's. Unix: a PTY whose
@@ -198,5 +283,59 @@ impl TestCli {
     /// The terminal's columns and rows as the CLI sees them.
     pub fn size(&self) -> (u16, u16) {
         self.0.size()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_key_record_names_the_key_its_character_the_keys_held_and_whether_it_goes_down() {
+        let mut down = Vec::new();
+        KeyRecord::SHIFT_ENTER.write_down(&mut down);
+        assert_eq!(down, b"\x1b[13;28;13;1;16;1_");
+        let mut press = Vec::new();
+        KeyRecord::SHIFT_ENTER.write_press(&mut press);
+        assert_eq!(press, b"\x1b[13;28;13;1;16;1_\x1b[13;28;13;0;16;1_");
+    }
+
+    #[test]
+    fn each_utf_16_unit_of_a_text_is_a_key_down_record_of_no_key() {
+        assert_eq!(
+            key_down_records("a📨"),
+            b"\x1b[0;0;97;1;0;1_\x1b[0;0;55357;1;0;1_\x1b[0;0;56552;1;0;1_"
+        );
+    }
+
+    #[test]
+    fn the_length_of_records_is_counted_without_making_them() {
+        for text in [
+            "",
+            "a",
+            "\t",
+            "é",
+            "€",
+            "a📨",
+            "😀😀",
+            "\u{ffff}\u{10000}\u{10ffff}",
+        ] {
+            assert_eq!(
+                key_down_records_len(text),
+                key_down_records(text).len(),
+                "{text:?}"
+            );
+        }
+        let held = KeyRecord {
+            virtual_key: 0xffff,
+            scan_code: 1,
+            unit: 0,
+            held: u32::MAX,
+        };
+        for key in [KeyRecord::SHIFT_ENTER, held] {
+            let mut press = Vec::new();
+            key.write_press(&mut press);
+            assert_eq!(key.press_len(), press.len(), "{key:?}");
+        }
     }
 }

@@ -217,7 +217,9 @@ No notification or message is scheduled for replay on the next opening.
 
 **Serialize automated input per terminal so two operations cannot splice their contents together.**
 
-An ordinary message is one full paste plus Enter, not one Enter per line. Direct text/keys use the same serialization.
+An ordinary message is one full paste plus Enter, not one Enter per line: none of its line breaks acts as the
+CLI's own Enter (CLIS-2.1). Codex on Windows can take a tab in it for its own Tab key (CLIS-2.1). Direct text/keys use
+the same serialization.
 While another delivery's text may still be in that input - written, neither confirmed nor ended - or its run's
 post-start creation prompt, its preparation included, is neither delivered nor given up (COLLABORATION-2.2), no message
 is pasted into it: that input is held for it, as by a draft. Waiting in that sequence does not renew deadlines. Stop is

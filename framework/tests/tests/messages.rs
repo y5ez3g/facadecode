@@ -1587,3 +1587,42 @@ fn send_takes_its_options_before_or_after_the_text() {
         );
     }
 }
+
+/// A CLI that reads its keys as a console gives them, as Codex does on Windows, takes no paste: its
+/// Enter submits, and Shift+Enter breaks the line. A message's line breaks never act as its Enter:
+/// the message reaches it whole, once.
+#[cfg(windows)]
+#[test]
+fn a_message_s_line_breaks_are_not_the_enter_of_a_cli_that_reads_console_keys() {
+    let home = TestHome::new("consolekeys");
+    let programs = home.folder().join("programs");
+    install_program(&programs, "codex", &test_binaries().fakecli);
+    let path = format!("{}{PATH_SEPARATOR}{}", programs.display(), home.test_path());
+    let relay = home
+        .path
+        .join("framework/bin")
+        .join(program_name("facade-mcp"));
+    let started = home
+        .command(&test_binaries().facade)
+        .env("PATH", &path)
+        .env("FAKECLI_CODEX_INPUT", "working")
+        .env("FAKECLI_CONSOLE_KEYS", "1")
+        .env("FAKECLI_MCP", &relay)
+        .args(["start", "-d", "--name", "codex", "codex"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(started.status.success(), "{}", stderr(&started));
+    home.started_agent(&stdout(&started));
+
+    let body = "one\nrun: cargo test\n\nlast line, 📨";
+    let sent = home.run_facade(&["send", "codex", body, "-w"]);
+    assert_eq!(
+        home.submitted_messages(),
+        [format!("📨 Message m1 from command line\n{body}")],
+        "submitted once and whole; the send said {}{}",
+        stdout(&sent),
+        stderr(&sent)
+    );
+    assert!(sent.status.success(), "{}", stderr(&sent));
+}
