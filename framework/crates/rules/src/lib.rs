@@ -35,9 +35,9 @@ pub use compose::{
 };
 pub use formats::shell_word;
 pub use input::{
-    BoxReading, InputLine, LineCell, ProbeVerdict, is_own_draft, is_same_draft, read_box,
-    read_box_for_typing, read_draft, read_input, restored, settle_time, shape_of, space_taken,
-    verdict_of, with_paste_text,
+    BoxReading, InputLine, LineCell, ProbeVerdict, is_legacy_split_paste, is_own_draft,
+    is_same_draft, read_box, read_box_for_typing, read_draft, read_input, restored, settle_time,
+    shape_of, space_taken, verdict_of, with_paste_text,
 };
 pub use sessions::{
     Reported, SESSION_FILE, SESSION_VARIABLES, SavedSession, SessionFile, WriteFailure,
@@ -206,10 +206,6 @@ pub fn console_typing(rule: &Rule) -> Option<ConsoleTyping> {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PasteRule {
-    /// The CLI takes a paste alone as material rather than a request, so a message's first header
-    /// words, `📨 Message `, are typed before its paste.
-    #[serde(default)]
-    pub lead: bool,
     /// How long a message shows as the input's own draft before submission, in milliseconds.
     #[serde(default)]
     pub enter_ms: u64,

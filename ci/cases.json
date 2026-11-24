@@ -1514,7 +1514,8 @@
       "existing_tests": [
         "framework/tests/tests/probes.rs:269",
         "framework/tests/tests/probes.rs",
-        "framework/crates/rules/tests/input/codex.json"
+        "framework/crates/rules/tests/input/codex.json",
+        "framework/crates/daemon/src/agent/typist/mod.rs:2270"
       ],
       "test": {
         "runner": "framework-scenario",
@@ -1815,7 +1816,10 @@
         "framework/tests/tests/reliability.rs:343",
         "framework/tests/tests/recovery.rs",
         "framework/crates/daemon/src/agent/typist/mod.rs:2869",
-        "framework/crates/daemon/src/agent/typist/mod.rs:2897"
+        "framework/crates/daemon/src/agent/typist/mod.rs:2897",
+        "framework/crates/daemon/src/agent/typist/mod.rs:2810",
+        "framework/crates/daemon/src/agent/typist/mod.rs:2844",
+        "framework/crates/rules/src/input/paste.rs:235"
       ],
       "test": {
         "runner": "framework-scenario",

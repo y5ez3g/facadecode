@@ -463,7 +463,7 @@ fn a_draft_reads_as_its_rows_draw_it_and_a_long_paste_as_its_placeholder() {
         ("pi", "pi-1.4.0-24rows/wide-pasted", "y".repeat(1284)),
     ] {
         assert!(
-            is_own_draft(paste(cli), &draft(cli, label), &text, None, None),
+            is_own_draft(paste(cli), &draft(cli, label), &text, None),
             "{label}"
         );
     }
@@ -472,7 +472,6 @@ fn a_draft_reads_as_its_rows_draw_it_and_a_long_paste_as_its_placeholder() {
             paste("claude"),
             &draft("claude", "claude-2.1.312/long-pasted"),
             &lines(32),
-            None,
             None
         ),
         "a paste of another size"
@@ -565,7 +564,7 @@ fn the_installed_clis_placeholders_are_the_drafts_of_their_pastes() {
     ] {
         let paste = &find(cli).unwrap().unwrap().paste;
         match recorded_paste(cli, label) {
-            (text, Ok(draft)) if is_own_draft(paste, &draft, &text, None, None) => {}
+            (text, Ok(draft)) if is_own_draft(paste, &draft, &text, None) => {}
             (_, Ok(draft)) => wrong.push(format!("{label}: {draft:?} is not its paste's draft")),
             (_, Err(read)) => wrong.push(format!("{label}: reads {read}")),
         }
@@ -584,7 +583,6 @@ fn a_placeholder_is_no_other_message_s_draft() {
         &find("claude").unwrap().unwrap().paste,
         &draft,
         &broken,
-        None,
         None
     ));
     let (text, draft) = recorded_paste("agy", "agy-1.5.14/one-line-paste-1100-chars");
@@ -593,7 +591,6 @@ fn a_placeholder_is_no_other_message_s_draft() {
         &find("agy").unwrap().unwrap().paste,
         &draft,
         &text[..1099],
-        None,
         None
     ));
 }

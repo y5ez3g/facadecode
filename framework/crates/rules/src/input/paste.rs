@@ -9,34 +9,36 @@ use facade_base::model::terminal::HiddenRows;
 
 use crate::{PasteCount, PastePlaceholder, PasteRule};
 
-/// Whether `draft` is `text` alone in the input box, after `lead` where one was typed before the
-/// paste, or the CLI's placeholder for a paste of `text`. `hidden` counts the draft's rows scrolled
-/// out of the input box. Never waits.
+/// Whether `draft` is `text` alone in the input box, or the CLI's placeholder for a paste of
+/// `text`. `hidden` counts the draft's rows scrolled out of the input box. Never waits.
 pub fn is_own_draft(
     paste: &PasteRule,
     draft: &str,
     text: &str,
-    lead: Option<&str>,
     hidden: Option<HiddenRows>,
 ) -> bool {
-    draws_text(draft, text, lead, hidden)
+    draws_text(draft, text, hidden)
         || paste
             .placeholders
             .iter()
-            .any(|placeholder| draws_placeholder(placeholder, draft, lead, text))
+            .any(|placeholder| draws_placeholder(placeholder, draft, None, text))
+}
+
+/// For recovery, whether the visible draft shows the old typed prefix followed by the CLI's
+/// placeholder for the separately pasted text.
+pub fn is_legacy_split_paste(paste: &PasteRule, draft: &str, prefix: &str, pasted: &str) -> bool {
+    !prefix.trim().is_empty()
+        && paste
+            .placeholders
+            .iter()
+            .any(|placeholder| draws_placeholder(placeholder, draft, Some(prefix), pasted))
 }
 
 /// Whether `draft` is still `seen`, the draft an earlier reading took for the paste of `text`: the
 /// same placeholder, paste number included, as a later paste of the same size gets another number;
 /// or `text` itself. Never waits.
-pub fn is_same_draft(
-    draft: &str,
-    seen: &str,
-    text: &str,
-    lead: Option<&str>,
-    hidden: Option<HiddenRows>,
-) -> bool {
-    without_space(draft) == without_space(seen) || draws_text(draft, text, lead, hidden)
+pub fn is_same_draft(draft: &str, seen: &str, text: &str, hidden: Option<HiddenRows>) -> bool {
+    without_space(draft) == without_space(seen) || draws_text(draft, text, hidden)
 }
 
 /// `draft` with the placeholders the CLI draws for pastes of `texts` given back as their text. Each
@@ -131,67 +133,55 @@ fn single_spaced(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// `draft` written by `spacing`: whole, and the rest after `lead` where it starts with one.
-fn readings(draft: &str, lead: Option<&str>, spacing: fn(&str) -> String) -> Vec<String> {
-    let whole = spacing(draft);
-    let lead = lead.map(spacing).unwrap_or_default();
-    let rest = match whole.strip_prefix(lead.as_str()) {
-        Some(rest) if !lead.is_empty() => Some(rest.trim().to_owned()),
-        _ => None,
-    };
-    [Some(whole.clone()), rest].into_iter().flatten().collect()
-}
-
-/// Whether `draft` shows `text` after `lead` where one was typed: all of it, or its end while
-/// rows are scrolled out above only.
-fn draws_text(draft: &str, text: &str, lead: Option<&str>, hidden: Option<HiddenRows>) -> bool {
+/// Whether `draft` shows `text` in full, or its end while rows are scrolled out above only.
+fn draws_text(draft: &str, text: &str, hidden: Option<HiddenRows>) -> bool {
+    let shown = without_space(draft);
     let text = without_space(text);
     let scrolled = hidden.filter(|hidden| hidden.above > 0 || hidden.below > 0);
-    readings(draft, lead, without_space)
-        .iter()
-        .any(|shown| match scrolled {
-            None => *shown == text,
-            Some(hidden) => {
-                hidden.below == 0 && !shown.is_empty() && text.ends_with(shown.as_str())
-            }
-        })
+    match scrolled {
+        None => shown == text,
+        Some(hidden) => hidden.below == 0 && !shown.is_empty() && text.ends_with(shown.as_str()),
+    }
 }
 
-/// Whether `draft` is the placeholder `placeholder` draws for a paste of `text`, after `lead` where
-/// one was typed.
+/// Whether `draft` shows the placeholder for a paste of `text`, with a visible prefix required
+/// during recovery of an old split paste.
 fn draws_placeholder(
     placeholder: &PastePlaceholder,
     draft: &str,
-    lead: Option<&str>,
+    legacy_prefix: Option<&str>,
     text: &str,
 ) -> bool {
-    let matches = |shown: &str, pasted: &str| {
-        let Some(found) = placeholder.pattern.captures(shown) else {
-            return false;
-        };
-        let number = found.get(1).and_then(|size| size.as_str().parse().ok());
-        matches_count(placeholder.count, number, pasted)
+    let spacing = if placeholder.spaced && !placeholder.after_first_character {
+        single_spaced
+    } else {
+        without_space
     };
-    if placeholder.after_first_character {
+    let draft = spacing(draft);
+    let prefix = legacy_prefix.map(spacing).unwrap_or_default();
+    let Some(shown) = draft.strip_prefix(prefix.as_str()) else {
+        return false;
+    };
+    let shown = shown.trim_start();
+    let (shown, text) = if placeholder.after_first_character {
         // The CLI types a first character that is not ASCII itself, then a placeholder for the
         // rest.
         let mut chars = text.chars();
         let Some(first) = chars.next().filter(|c| !c.is_ascii() && !c.is_whitespace()) else {
             return false;
         };
-        let rest = chars.as_str();
-        return readings(draft, lead, without_space)
-            .iter()
-            .filter_map(|shown| shown.strip_prefix(first))
-            .any(|shown| matches(shown, rest));
-    }
-    let spacing = match placeholder.spaced {
-        true => single_spaced,
-        false => without_space,
+        let Some(shown) = shown.strip_prefix(first) else {
+            return false;
+        };
+        (shown, chars.as_str())
+    } else {
+        (shown, text)
     };
-    readings(draft, lead, spacing)
-        .iter()
-        .any(|shown| matches(shown, text))
+    let Some(found) = placeholder.pattern.captures(shown) else {
+        return false;
+    };
+    let number = found.get(1).and_then(|size| size.as_str().parse().ok());
+    matches_count(placeholder.count, number, text)
 }
 
 #[cfg(test)]
@@ -205,65 +195,68 @@ mod tests {
     #[test]
     fn a_draft_is_its_message_s_own_when_it_shows_its_text_or_the_placeholder_for_its_size() {
         let fake = rule("fake");
-        assert!(is_own_draft(fake, "hello there", "hello there", None, None));
+        assert!(is_own_draft(fake, "hello there", "hello there", None));
         assert!(
-            is_own_draft(fake, "hello\n  there", "hello there", None, None),
+            is_own_draft(fake, "hello\n  there", "hello there", None),
             "wrapped and indented rows show the same text"
         );
         assert!(
-            !is_own_draft(fake, "hello there!", "hello there", None, None),
+            !is_own_draft(fake, "hello there!", "hello there", None),
             "a person's addition makes it another draft"
         );
         assert!(is_own_draft(
             fake,
             "[Pasted text #3 +2 lines]",
             "a\nb\nc",
-            None,
             None
         ));
         assert!(
-            !is_own_draft(fake, "[Pasted text #3 +1 lines]", "a\nb\nc", None, None),
+            !is_own_draft(fake, "[Pasted text #3 +1 lines]", "a\nb\nc", None),
             "a paste of another size"
         );
         assert!(
-            !is_own_draft(fake, "hold[Pasted text #3 +2 lines]", "a\nb\nc", None, None),
+            !is_own_draft(fake, "hold[Pasted text #3 +2 lines]", "a\nb\nc", None),
             "a person's text before the paste"
         );
-        let claude = rule("claude");
-        assert!(claude.lead);
-        let lead = Some("📨 Message ");
-        assert!(is_own_draft(
-            claude,
-            "📨 Message [Pasted text #1 +1 lines]",
-            "m5 from command line\nhi",
-            lead,
-            None
-        ));
-        assert!(is_own_draft(
-            claude,
-            "📨 Message m5 from command line",
-            "m5 from command line",
-            lead,
-            None
-        ));
         let scrolled = Some(HiddenRows { above: 3, below: 0 });
         assert!(
-            is_own_draft(
-                fake,
-                "end of it",
-                "the start\nand the end of it",
-                None,
-                scrolled
-            ),
+            is_own_draft(fake, "end of it", "the start\nand the end of it", scrolled),
             "only its end shows"
         );
         assert!(!is_own_draft(
             fake,
             "end of it",
             "the start\nand the end of it",
-            None,
             Some(HiddenRows { above: 0, below: 1 })
         ));
+    }
+
+    #[test]
+    fn an_old_split_paste_requires_its_visible_prefix_and_placeholder() {
+        let claude = rule("claude");
+        let prefix = "📨 Message ";
+        let pasted = "m5 from command line\nhi";
+        let draft = "📨 Message\n  [Pasted text #1 +1 lines]";
+        assert!(is_legacy_split_paste(claude, draft, prefix, pasted));
+        assert!(!is_legacy_split_paste(
+            claude,
+            "[Pasted text #1 +1 lines]",
+            prefix,
+            pasted
+        ));
+        assert!(!is_legacy_split_paste(
+            claude,
+            draft,
+            prefix,
+            "m5 from command line\nhi\nbye"
+        ));
+        assert!(!is_legacy_split_paste(
+            claude,
+            "📨 Message m5 from command line\nhi",
+            prefix,
+            pasted
+        ));
+        assert!(!is_own_draft(claude, draft, pasted, None));
     }
 
     #[test]
@@ -273,7 +266,6 @@ mod tests {
             codex,
             "[Pasted Content 1004 chars]",
             &"x".repeat(1004),
-            None,
             None
         ));
         assert!(
@@ -281,45 +273,32 @@ mod tests {
                 codex,
                 "📨[Pasted Content 1004 chars]",
                 &format!("📨{}", "x".repeat(1004)),
-                None,
                 None
             ),
             "after its first character"
         );
         let pi = rule("pi");
         assert!(
-            is_own_draft(pi, "[paste #2 10 chars]", "a\tb\u{1}cdef", None, None),
+            is_own_draft(pi, "[paste #2 10 chars]", "a\tb\u{1}cdef", None),
             "a tab counts four, a control character none"
         );
         let agy = rule("agy");
         assert!(
-            is_own_draft(agy, "[Pasted text #1 +3 lines]", "a\nb\nc", None, None),
+            is_own_draft(agy, "[Pasted text #1 +3 lines]", "a\nb\nc", None),
             "every line, the first included"
         );
         let marker = "[Pasted text #12 4 chars]";
-        assert!(is_own_draft(agy, marker, "a\r\n📨b", None, None));
-        assert!(!is_own_draft(agy, marker, "a📨b", None, None));
+        assert!(is_own_draft(agy, marker, "a\r\n📨b", None));
+        assert!(!is_own_draft(agy, marker, "a📨b", None));
         let claude = rule("claude");
         let marker = "[Pasted text #1]";
         let text = "x".repeat(1222);
-        assert!(is_own_draft(claude, marker, &text, None, None));
-        assert!(!is_own_draft(claude, marker, &(text + "\n"), None, None));
+        assert!(is_own_draft(claude, marker, &text, None));
+        assert!(!is_own_draft(claude, marker, &(text + "\n"), None));
         let opencode = rule("opencode");
         let text = " \r\nfirst\r\nsecond\nthird\r\n ";
-        assert!(is_own_draft(
-            opencode,
-            "[Pasted ~3 lines]",
-            text,
-            None,
-            None
-        ));
-        assert!(!is_own_draft(
-            opencode,
-            "[Pasted ~5 lines]",
-            text,
-            None,
-            None
-        ));
+        assert!(is_own_draft(opencode, "[Pasted ~3 lines]", text, None));
+        assert!(!is_own_draft(opencode, "[Pasted ~5 lines]", text, None));
         assert_eq!(
             settle_time(agy, "a\nb\nc"),
             Duration::from_millis(80 + 3 * 45)
@@ -410,7 +389,6 @@ mod tests {
             "[Pasted text #3 +2 lines]",
             "[Pasted text #3 +2 lines]",
             "a\nb\nc",
-            None,
             None
         ));
         assert!(
@@ -418,13 +396,12 @@ mod tests {
                 "[Pasted text #4 +2 lines]",
                 "[Pasted text #3 +2 lines]",
                 "a\nb\nc",
-                None,
                 None
             ),
             "a later paste of its size"
         );
         assert!(
-            is_same_draft("hello", "[Pasted text #3 +0 lines]", "hello", None, None),
+            is_same_draft("hello", "[Pasted text #3 +0 lines]", "hello", None),
             "its text itself"
         );
     }

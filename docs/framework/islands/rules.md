@@ -231,7 +231,7 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - Colored text alone where the input starts could be a hint or a draft. Claude can also draw hints without styling. For automatic delivery to a fresh input that has received no external edits, the reader marks a single unstyled row at the input start as `unknown` and unsure. Ordinary input reads identify that writing as a draft. A dim hint, or a mode placeholder shown above its footer, counts as empty only while the cursor is where the input starts.
   - A probe is judged from two readings, before its key and after, never from the time between them: whether its space went in by the cursor and the text, what the row was by the text alone, and whether Backspace put the box back by every cell and the cursor.
   - The evidence names the rows, never the draft's text. The draft's text leaves `read_draft` only as its second value and is never saved.
-  - A message's own draft is its text alone, after the message's lead when one was typed. Whitespace is ignored, because wrapping and indentation draw it differently. The draft may also be the CLI's placeholder for a paste of that size, counted the way that CLI counts. A draft scrolled out above only has to show the text's end.
+  - A message's own draft is its full text or the CLI's placeholder for a paste of that size. Whitespace is ignored because wrapping and indentation draw it differently. A draft scrolled out above only has to show the text's end.
   - OpenCode's `[Pasted ~N lines]` counts the lines after trimming whitespace from both ends of the paste.
     Claude Code's `[Pasted text #N]` matches a paste with no line break.
     Antigravity's `[Pasted text #N M chars]` counts Unicode scalar values, including line breaks.
@@ -250,9 +250,10 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     tracking when the CLI takes a person's draft.
   - `with_paste_text(&PasteRule, draft, pastes) -> String`: the agent actor uses it to give back the pasted text behind each placeholder in a draft the person submits.
   - For the typist:
-    - `is_own_draft(&PasteRule, draft, text, lead, hidden) -> bool` matches the message in the input box before submission.
+    - `is_own_draft(&PasteRule, draft, text, hidden) -> bool` matches the message in the input box before submission.
+    - `is_legacy_split_paste(&PasteRule, draft, prefix, pasted) -> bool` matches an older daemon's visible typed prefix and the paste placeholder during recovery.
     - `settle_time(&PasteRule, text) -> Duration` gives the base wait plus the wait for each line.
-    - `is_same_draft(draft, seen, text, lead, hidden) -> bool` compares the observed drafts, including the placeholder's paste number.
+    - `is_same_draft(draft, seen, text, hidden) -> bool` compares the observed drafts, including the placeholder's paste number.
     - `PasteRule::submission_key(working) -> Key` selects Tab for Codex while Working and Enter otherwise.
   - For the typist's probe, each from the row before its key and the reading after:
     - `space_taken(&InputLine, &BoxReading) -> bool`: whether its space went in: the cursor one column on, the row its space ahead of the text it held, or its space alone.

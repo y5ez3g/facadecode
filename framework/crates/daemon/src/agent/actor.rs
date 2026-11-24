@@ -163,7 +163,7 @@ pub(super) fn spawn(
         screen_status_at: None,
         typist: Typist::new(
             &info.agent_id,
-            rule.map(|rule| &rule.paste),
+            rule,
             rule.and_then(facade_rules::console_typing),
             deliveries,
         ),

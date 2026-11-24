@@ -40,8 +40,8 @@ use crate::records::{OperationTarget, Reach};
 use crate::service::{Forwarded, sender_from};
 use crate::store::SendRoute;
 use crate::{
-    Cancel, Daemon, HUMAN, MAX_TERMINAL_SEND, MESSAGE_LEAD, PREVIOUS_MESSAGE_LEAD, Sender,
-    delivery_limit, gate_for_test, log, send_route_cutoff,
+    Cancel, Daemon, HUMAN, MAX_TERMINAL_SEND, Sender, delivery_limit, gate_for_test, log,
+    send_route_cutoff,
 };
 
 struct SendOrigin<'a> {
@@ -264,12 +264,12 @@ impl Daemon {
             .unwrap_or_default();
         if previous {
             return format!(
-                "{PREVIOUS_MESSAGE_LEAD}{sender} · {}{reply}\n{}",
+                "📨 Message from {sender} · {}{reply}\n{}",
                 message.message_id, message.text
             );
         }
         format!(
-            "{MESSAGE_LEAD}{} from {sender}{reply}\n{}",
+            "📨 Message {} from {sender}{reply}\n{}",
             message.message_id, message.text
         )
     }

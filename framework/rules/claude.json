@@ -16,7 +16,6 @@
 		"menus": [{ "selected": "^ ❯ \\S", "next": "^ {3}\\S" }]
 	},
 	"paste": {
-		"lead": true,
 		"enter_ms": 80,
 		"placeholders": [
 			{ "pattern": "^\\[Pastedtext#\\d+\\+(\\d+)lines?\\]$", "count": "lines_after_first" },

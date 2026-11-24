@@ -60,11 +60,10 @@ A message from another window's agent adds ` · From Design`, that window's name
 names use the short ID alone. Bodies are data: control bytes and terminal escapes are rejected by MCP validation;
 ordinary Unicode, blank lines and newlines are preserved without truncation. There is no closing label, JSON wrapper,
 generic read_messages instruction or fetch-body notice. Each ordinary message is one paste and one submission.
-Claude Code takes a paste alone as pasted material rather than as a request, so for Claude Code alone the header's first
-words, `📨 Message from `, are typed in the same write ahead of a bracketed paste of the rest of the header and the body
-(CLIS-2.1); every other CLI gets the whole text as one paste, and a Facade result has no typed lead. This adds no
-message or model turn. Input already started keeps its original rendered text through reload, and a message keeps the
-window name its header was first made with; formatting changes never trigger a second paste.
+The Orchestrator puts the complete header and body in the same paste for all supported CLIs (CLIS-2.1). This puts the
+complete request inside Claude Code's long-paste wrapper. Input already started keeps its original rendered text
+through reload. The legacy renderer keeps the window name its header was first made with. A formatting change never
+triggers a second paste.
 The header's message ID stays the same through the message's whole delivery (RULES-1.1); MCP-6.2 teaches the receiving
 model to recognize a repeat by it. Oversized content fails before writing with the supported limit (MCP-4.1); a caller
 can explicitly send a file-reference message. A path in such a message is just text; Facade never assumes a remote path
@@ -234,7 +233,7 @@ line. The editor presents its own operation errors and shows the agent's termina
 | Rules | Acceptance |
 | --- | --- |
 | 1.1–1.2 | Local/remote reach under RULES-4.3 across this computer's windows, direct text/keys with drafts and multiline content |
-| 2.1–2.4 | Full CLI acceptance, Claude Code's typed lead, repeated message IDs, native and post-start prompt, truthful result author, `#human` notification, no human message fallback |
+| 2.1–2.4 | Full CLI acceptance, complete message in one paste, repeated message IDs, native and post-start prompt, truthful result author, `#human` notification, no human message fallback |
 | 3.1–3.3 | Own inbox only, one delivery state, reading cancels unstarted pastes and reports delivery, owned-draft completion under RULES-1.5, window-local records, a message to the person opened from its notification, thirty-day automatic cleanup |
 | 4.1–4.2 | Recipient-owned record with a sender copy, natural sender-close handling, no replay, complete readable cross-environment files and expiry |
 

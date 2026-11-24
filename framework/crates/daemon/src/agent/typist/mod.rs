@@ -14,7 +14,7 @@ use facade_base::{
     model::message::{DeliveryFailure, TextWritten},
     model::terminal::{InputInfo, InputState, first_control},
 };
-use facade_rules::{BoxReading, ConsoleTyping, LineCell, PasteRule, ProbeVerdict};
+use facade_rules::{BoxReading, ConsoleTyping, LineCell, PasteRule, ProbeVerdict, Rule};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -249,9 +249,6 @@ impl Typing {
     }
 }
 
-/// Message header typed outside the paste when the CLI's rule requires it.
-const LEAD: &str = crate::MESSAGE_LEAD;
-
 /// A delivery and its submission, owned by the actor's typist.
 #[derive(Debug)]
 pub(crate) struct MessageTyping {
@@ -350,42 +347,30 @@ struct DraftCheck {
 }
 
 struct PasteDraft {
-    prefix: &'static str,
     text: String,
 }
 
 impl PasteDraft {
-    fn new(rule: &PasteRule, text: String, lead: &'static str) -> Self {
-        let prefix = if rule.lead && text.starts_with(lead) {
-            lead
-        } else {
-            ""
-        };
-        Self {
-            text: text[prefix.len()..].to_owned(),
-            prefix,
-        }
-    }
-
-    fn prefix(&self) -> Option<&str> {
-        (!self.prefix.is_empty()).then_some(self.prefix)
-    }
-
-    fn matches(&self, rule: &PasteRule, reading: &BoxReading) -> bool {
+    fn matches(&self, rule: &PasteRule, reading: &BoxReading, legacy_split: bool) -> bool {
         reading.info.state == InputState::Draft
-            && reading.draft.as_deref().is_some_and(|text| {
-                facade_rules::is_own_draft(
-                    rule,
-                    text,
-                    &self.text,
-                    self.prefix(),
-                    reading.info.hidden,
-                )
+            && reading.draft.as_deref().is_some_and(|shown| {
+                facade_rules::is_own_draft(rule, shown, &self.text, reading.info.hidden)
+                    || (legacy_split && self.matches_split_paste(rule, shown))
             })
     }
 
+    /// Before full-message pastes, Claude displayed part of the header before its paste marker.
+    fn matches_split_paste(&self, rule: &PasteRule, shown: &str) -> bool {
+        for prefix in ["📨 Message from ", "📨 Message "] {
+            if let Some(pasted) = self.text.strip_prefix(prefix) {
+                return facade_rules::is_legacy_split_paste(rule, shown, prefix, pasted);
+            }
+        }
+        false
+    }
+
     fn char_count(&self) -> usize {
-        self.prefix.chars().count() + self.text.chars().count()
+        self.text.chars().count()
     }
 
     fn backspaces(&self) -> Vec<u8> {
@@ -394,9 +379,9 @@ impl PasteDraft {
 }
 
 impl DraftCheck {
-    fn new(rule: &PasteRule, text: String, typed: Option<u64>) -> Self {
+    fn new(text: String, typed: Option<u64>) -> Self {
         Self {
-            paste: PasteDraft::new(rule, text, LEAD),
+            paste: PasteDraft { text },
             previous: None,
             stable: None,
             observed: false,
@@ -407,12 +392,12 @@ impl DraftCheck {
 
     /// A recovered paste can match either header until the draft distinguishes them. A placeholder
     /// that matches both can settle while it still shows neither header.
-    fn matches(&mut self, rule: &PasteRule, reading: &BoxReading) -> bool {
-        let current = self.paste.matches(rule, reading);
+    fn matches(&mut self, rule: &PasteRule, reading: &BoxReading, legacy_split: bool) -> bool {
+        let current = self.paste.matches(rule, reading, legacy_split);
         if self
             .previous
             .as_ref()
-            .is_some_and(|paste| paste.matches(rule, reading))
+            .is_some_and(|paste| paste.matches(rule, reading, legacy_split))
         {
             if !current {
                 self.paste = self.previous.take().expect("the previous draft matched");
@@ -442,7 +427,7 @@ impl Batch {
 /// Serial input state. The actor calls it exclusively; it never writes a PTY or takes a lock.
 pub(crate) struct Typist {
     deliveries: DeliveryHandle,
-    paste: Option<&'static PasteRule>,
+    rule: Option<&'static Rule>,
     /// How the CLI takes typing where it reads console input records.
     console: Option<ConsoleTyping>,
     calls: VecDeque<Typing>,
@@ -469,13 +454,13 @@ impl Typist {
     /// Uses the supplied delivery handle; later message operations may synchronously persist data.
     pub(crate) fn new(
         agent: &str,
-        paste: Option<&'static PasteRule>,
+        rule: Option<&'static Rule>,
         console: Option<ConsoleTyping>,
         deliveries: DeliveryHandle,
     ) -> Typist {
         Self {
             deliveries,
-            paste,
+            rule,
             console,
             calls: VecDeque::new(),
             current: None,
@@ -709,11 +694,10 @@ impl Typist {
         messages: Vec<MessageTyping>,
         previous_text: Option<String>,
     ) {
-        match (self.paste, self.batch.is_none()) {
-            (Some(rule), true) => {
-                let mut draft = DraftCheck::new(rule, joined(&messages), None);
-                draft.previous = previous_text
-                    .map(|text| PasteDraft::new(rule, text, crate::PREVIOUS_MESSAGE_LEAD));
+        match (self.rule, self.batch.is_none()) {
+            (Some(_), true) => {
+                let mut draft = DraftCheck::new(joined(&messages), None);
+                draft.previous = previous_text.map(|text| PasteDraft { text });
                 self.batch = Some(Batch {
                     messages,
                     phase: DeliveryPhase::Draft(draft),
@@ -750,7 +734,7 @@ impl Typist {
     }
     /// Reads the rule supplied at construction; no I/O or locks.
     pub(crate) fn paste_rule(&self) -> Option<&'static PasteRule> {
-        self.paste
+        self.rule.map(|rule| &rule.paste)
     }
     /// Reads queued input's maximum size, excluding bytes already emitted; no I/O or locks.
     pub(crate) fn held_bytes(&self) -> usize {
@@ -807,6 +791,7 @@ impl Typist {
     }
 
     fn emit_call(&mut self, offset: u64, modes: Modes) -> Step {
+        let paste_rule = self.paste_rule();
         let call = self.current.as_mut().expect("active call");
         let mut receipt = Receipt {
             offset,
@@ -819,7 +804,7 @@ impl Typist {
             stroke.write(modes, records_above_bmp(self.console), &mut result.write);
             self.entered |= matches!(stroke, Stroke::Key(Key::Enter));
             receipt.boundaries.push(offset + result.write.len() as u64);
-            receipt.delay = stroke.delay(self.paste, self.console);
+            receipt.delay = stroke.delay(paste_rule, self.console);
             if call.is_sequence() || receipt.delay != Duration::ZERO {
                 break;
             }
@@ -902,7 +887,7 @@ impl Typist {
         read: &dyn Fn() -> BoxReading,
         paused: Option<Instant>,
     ) -> Step {
-        let Some(rule) = self.paste else {
+        let Some(rule) = self.paste_rule() else {
             let messages: Vec<_> = self.inbox.drain(..).collect();
             self.deliveries.settle(
                 &numbers(&messages),
@@ -935,7 +920,7 @@ impl Typist {
         // An empty box can be the last frame before the CLI took the paste. Wait for
         // its draft before trusting the box again, and erase it only if it is still ours.
         if let Some(draft) = &self.late_draft {
-            if draft.typed == Some(typed) && draft.paste.matches(rule, &reading) {
+            if draft.typed == Some(typed) && draft.paste.matches(rule, &reading, false) {
                 let write = draft.paste.backspaces();
                 self.late_draft = None;
                 self.record_write(offset, write.len(), Duration::ZERO);
@@ -988,8 +973,8 @@ impl Typist {
                 if granted.is_empty() {
                     return Step::wait((!self.inbox.is_empty()).then_some(now));
                 }
-                let draft = DraftCheck::new(rule, next.text.clone(), Some(typed));
-                let mut write = draft.paste.prefix.as_bytes().to_vec();
+                let draft = DraftCheck::new(next.text.clone(), Some(typed));
+                let mut write = Vec::new();
                 write_paste(
                     &draft.paste.text,
                     modes.bracketed_paste,
@@ -1037,20 +1022,15 @@ impl Typist {
             .min()
             .expect("started paste");
         let untouched = *draft.typed.get_or_insert(typed) == typed;
-        let own = if untouched && draft.matches(rule, &reading) {
+        let legacy_split = draft.recovered && self.rule.is_some_and(|rule| rule.cli == "claude");
+        let own = if untouched && draft.matches(rule, &reading, legacy_split) {
             reading.draft.as_deref()
         } else {
             None
         };
         draft.observed |= own.is_some();
         let same = |observed: &str, shown: &str| {
-            facade_rules::is_same_draft(
-                observed,
-                shown,
-                &draft.paste.text,
-                draft.paste.prefix(),
-                reading.info.hidden,
-            )
+            facade_rules::is_same_draft(observed, shown, &draft.paste.text, reading.info.hidden)
         };
         if now >= deadline {
             let known_length = draft
@@ -1835,7 +1815,7 @@ mod tests {
     fn typist_for(cli: &str, post: &Arc<Messages>) -> Typist {
         Typist::new(
             "a1",
-            Some(&facade_rules::find(cli).unwrap().unwrap().paste),
+            Some(facade_rules::find(cli).unwrap().unwrap()),
             None,
             post.delivery_handle(),
         )
@@ -2286,10 +2266,8 @@ mod tests {
         assert_eq!(terminal.write_all(), b"\x1b[200~first\x1b[201~");
     }
 
-    /// Claude takes a paste alone as material, so a message's first header words are typed before
-    /// its paste.
     #[test]
-    fn a_cli_that_takes_a_paste_alone_as_material_gets_the_header_s_first_words_typed() {
+    fn claude_gets_the_header_and_body_in_one_paste() {
         let post = test_messages();
         let mut typist = typist_for("claude", &post);
         let mut terminal = Terminal {
@@ -2306,13 +2284,10 @@ mod tests {
         terminal.step(&mut typist, start, ANY);
         assert_eq!(
             terminal.write_all(),
-            "📨 Message \x1b[200~m5 from command line\rhi\x1b[201~".as_bytes()
+            "\x1b[200~📨 Message m5 from command line\rhi\x1b[201~".as_bytes()
         );
         terminal.step(&mut typist, start + Duration::from_millis(10), ANY);
-        terminal.reading = input(
-            InputState::Draft,
-            Some("📨 Message [Pasted text #1 +1 lines]"),
-        );
+        terminal.reading = input(InputState::Draft, Some("[Pasted text #1 +1 lines]"));
         let wake = terminal
             .step(&mut typist, start + Duration::from_secs(1), ANY)
             .unwrap();
@@ -2321,41 +2296,6 @@ mod tests {
         terminal.reading = input(InputState::Usable, None);
         terminal.step(&mut typist, start + Duration::from_secs(2), ANY);
         assert_eq!(became(&post, number), TYPED);
-    }
-
-    /// A result goes in without a lead, even into a CLI configured to type one before a message.
-    #[test]
-    fn a_result_is_pasted_without_a_lead() {
-        let post = test_messages();
-        let mut typist = typist_for("claude", &post);
-        let mut terminal = Terminal {
-            reading: input(InputState::Draft, Some("held")),
-            ..Terminal::default()
-        };
-        let start = Instant::now();
-        let (result, result_number) = message(
-            &post,
-            "🔔 Nova (a2@devbox) has started.\nYour prompt m4@devbox has been passed on.",
-            start + Duration::from_secs(30),
-        );
-        let (later, later_number) = message(
-            &post,
-            "📨 Message m7 from command line\nhi",
-            start + Duration::from_secs(30),
-        );
-        typist.deliver(result);
-        typist.deliver(later);
-        terminal.step(&mut typist, start, ANY);
-        terminal.reading = input(InputState::Usable, None);
-        terminal.step(&mut typist, start + Duration::from_secs(1), ANY);
-        let pasted = "\x1b[200~🔔 Nova (a2@devbox) has started.\rYour prompt m4@devbox has been \
-                      passed on.\x1b[201~";
-        assert_eq!(String::from_utf8(terminal.write_all()).unwrap(), pasted);
-        assert_eq!(
-            (became(&post, result_number), became(&post, later_number)),
-            (PENDING, PENDING),
-            "the result is still to be submitted and the next message waits"
-        );
     }
 
     /// A paste that never shows its draft fails. Once Enter is written, the delivery settles.
@@ -2867,34 +2807,61 @@ mod tests {
     }
 
     #[test]
-    fn a_paste_with_the_previous_header_gets_its_enter_after_recovery() {
+    fn a_claude_paste_with_an_old_typed_prefix_gets_its_enter_after_recovery() {
+        for shown in [
+            "📨 Message from [Pasted text #1 +1 lines]",
+            "📨 Message [Pasted text #1 +1 lines]",
+        ] {
+            let post = test_messages();
+            let mut typist = typist_for("claude", &post);
+            let mut terminal = Terminal {
+                reading: input(InputState::Draft, Some(shown)),
+                ..Terminal::default()
+            };
+            let start = Instant::now();
+            let (typing, number) = message(
+                &post,
+                "📨 Message m1 from command line\nhello",
+                start + Duration::from_secs(20),
+            );
+            post.delivery_handle().begin_paste(&[number]);
+            typist.finish_paste(
+                vec![typing],
+                Some("📨 Message from the command line · m1\nhello".to_owned()),
+            );
+            let wake = terminal.step(&mut typist, start, ANY).unwrap();
+            assert!(terminal.write_all().is_empty());
+            terminal.step(&mut typist, wake, ANY);
+            assert_eq!(terminal.write_all(), b"\r", "{shown}");
+            terminal.reading = input(InputState::Usable, None);
+            terminal.step(&mut typist, start + Duration::from_secs(1), ANY);
+            assert_eq!(became(&post, number), TYPED);
+            assert!(!typist.busy());
+        }
+    }
+
+    #[test]
+    fn a_split_paste_placeholder_is_owned_only_by_a_recovered_claude_paste() {
         let post = test_messages();
-        let mut typist = typist_for("claude", &post);
+        let mut typist = typist_for("opencode", &post);
         let mut terminal = Terminal {
-            reading: input(
-                InputState::Draft,
-                Some("📨 Message from [Pasted text #1 +1 lines]"),
-            ),
+            reading: input(InputState::Draft, Some("📨 Message [Pasted ~3 lines]")),
             ..Terminal::default()
         };
         let start = Instant::now();
+        let deadline = start + Duration::from_secs(20);
         let (typing, number) = message(
             &post,
-            "📨 Message m1 from command line\nhello",
-            start + Duration::from_secs(20),
+            "📨 Message m1 from command line\nhello\nworld",
+            deadline,
         );
         post.delivery_handle().begin_paste(&[number]);
-        typist.finish_paste(
-            vec![typing],
-            Some("📨 Message from the command line · m1\nhello".to_owned()),
-        );
+        typist.finish_paste(vec![typing], None);
         let wake = terminal.step(&mut typist, start, ANY).unwrap();
-        assert!(terminal.write_all().is_empty());
         terminal.step(&mut typist, wake, ANY);
-        assert_eq!(terminal.write_all(), b"\r");
-        terminal.reading = input(InputState::Usable, None);
-        terminal.step(&mut typist, start + Duration::from_secs(1), ANY);
-        assert_eq!(became(&post, number), TYPED);
+        terminal.step(&mut typist, deadline, ANY);
+        assert!(terminal.write_all().is_empty());
+        assert_eq!(became(&post, number), NOT_KNOWN);
         assert!(!typist.busy());
     }
 

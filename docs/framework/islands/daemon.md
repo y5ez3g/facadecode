@@ -337,7 +337,7 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   Backspace to finish.
 - **Keeps:**
   - Each call goes in whole and in order; a pause counts from when its bytes reached the terminal.
-  - A message's bytes are written only after `DeliveryHandle::begin_paste` recorded the paste.
+  - `DeliveryHandle::begin_paste` records the paste before the typist writes the complete message in one paste.
   - The submission key goes once the input box shows this paste alone and stays still for the CLI's settle time.
     Codex queues an ordinary message with Tab while Working. The start prompt and recovered pastes use Enter.
   - A message is delivered once its submission key reaches the terminal. When the deadline expires before
@@ -346,7 +346,7 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   - The wait before submission counts the paste rate from `PASTE_BYTES_PER_MS`. With console typing, characters above U+FFFF go as key-down records and the wait adds `per_char` for each UTF-16 code unit.
   - An input whose row may be a hint or a draft (it reads unsure) is probed once a run, by its child `probe`: a space where the input starts, then, once the input is drawn still, Backspace, and a check that the input is as it was. Nothing else is typed meanwhile. The input is read every 100 ms; still means two equal readings in a row that show the row, for at most a second after each key. Backspace goes only where the space went in, no menu or question shows, and the person typed nothing since the probe read the input; after a failed check nothing more is pressed. What a probe finds, a hint, a draft or neither for sure, is kept for the row until the CLI's next run, so a row is never probed twice in a run.
 - **Never does:** write the terminal (it hands its bytes to the actor); read the screen except through the reading the actor gives it; take the person's keys; touch the database.
-- **Interface:** the daemon builds `Typing::text(text, enter, sender)`, `Typing::keys(names)` and `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses `new(agent, paste_rule, console_typing, DeliveryHandle)`, `push`, `deliver`, `deliver_first`, `finish_paste`, `fail_ended`, `fail_all(written, why)`, `hold_pastes()`, and `step(now, written, queued, modes, typed, read, read_screen) -> Step { write, wake }`, where `typed` counts the person's writes and `read_screen` reads the input as the screen shows it; for probes, `recall(reading)` (a row a probe found a hint reads as an empty input, a draft as a draft), `want_probe()` (the start waits on an unsure input) and `clear_probes()` (a new run starts); it reads `take_submitted()`, `take_entered()`, `held_bytes()`, `paste_rule()`, `busy()`, `pasting()`, `types_calls()`, `reads_input()`, `probing()`. Through `DeliveryHandle` it asks `still_to_type(number)`, records `begin_paste(numbers)` and `settle(numbers, outcome)`.
+- **Interface:** the daemon builds `Typing::text(text, enter, sender)`, `Typing::keys(names)` and `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses `new(agent, rule, console_typing, DeliveryHandle)`, `push`, `deliver`, `deliver_first`, `finish_paste`, `fail_ended`, `fail_all(written, why)`, `hold_pastes()`, and `step(now, written, queued, modes, typed, read, read_screen) -> Step { write, wake }`, where `typed` counts the person's writes and `read_screen` reads the input as the screen shows it; for probes, `recall(reading)` (a row a probe found a hint reads as an empty input, a draft as a draft), `want_probe()` (the start waits on an unsure input) and `clear_probes()` (a new run starts); it reads `take_submitted()`, `take_entered()`, `held_bytes()`, `paste_rule()`, `busy()`, `pasting()`, `types_calls()`, `reads_input()`, `probing()`. Through `DeliveryHandle` it asks `still_to_type(number)`, records `begin_paste(numbers)` and `settle(numbers, outcome)`.
 
 #### viewers
 
@@ -381,8 +381,9 @@ sender has a `#c` address only while waiting for a reply. A notice begins with `
 text. Its record number is available in the inbox.
 
 When a daemon recovers an already begun paste, it checks the draft against the message formats
-before and after the header change. The matching format determines the paste lead and settling
-time. Recovery keeps the original deadline and submits the existing draft once. If both formats
+before and after the header change. An older Claude draft may show part of the header before its
+paste placeholder. Recovery recognizes that visible prefix with the matching placeholder. It keeps
+the original deadline and submits the existing draft once. If both formats
 still match at the deadline and their lengths differ, recovery leaves the text in the input and
 reports unconfirmed submission.
 

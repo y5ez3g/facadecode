@@ -209,8 +209,8 @@ recorded screens of real CLI versions; a changed box becomes a new recorded case
 input where it does not find its box.
 
 `scripts/capture-inputs.mjs` records a built-in's input box for each case - empty, typed and pasted text, messages, a
-Facade result alone and several in one paste, Chinese and emoji, a seven-line message, a message of a few long lines, a
-hundred-line message and Claude Code's lead - without submitting anything, at 40 rows or the `--rows` given, and checks
+Facade result alone and several in one paste, Chinese and emoji, a seven-line message, a message of a few long lines and a
+hundred-line message - without submitting anything, at 40 rows or the `--rows` given, and checks
 each reader and its own-draft recognition against what it drew; it is run against each built-in's newest version before
 a release and whenever a CLI updates, and the screens it saves, each paste's text kept with its screen, become recorded
 cases. In a terminal 24 rows high, as an editor's panel may be, Antigravity and Pi scroll a draft taller than their
@@ -241,11 +241,9 @@ prove the input empty; its captures may later establish its hint's color under t
 Each reader also reports a draft as it is drawn, so that a delivery knows its own (RULES-1.6): its rows' text, or the
 placeholder its CLI draws for a long paste - Claude Code's `[Pasted text #1 +N lines]` counting the lines after the
 first, Antigravity's `[Pasted text #1 +N lines]` and Pi's `[paste #1 +N lines]` counting every line, Codex's and Muse
-Code's `[Pasted Content N chars]`, OpenCode's `[Pasted ~N lines]` from three lines on. That text is compared, never
-logged. A message's lead - the start of its header, typed for Claude Code, which takes a paste alone as pasted material
-rather than a request (COLLABORATION-2.1) - goes ahead of the paste in the same write; the other CLIs take the paste
-alone, as Codex drops typed text that shares a paste's write. The draft is the message's own with the lead, or without
-it where the run's older ptyd types none (ARCHITECTURE-2.4). Use complete paste plus Enter for ordinary messages. In
+Code's `[Pasted Content N chars]`, OpenCode's `[Pasted ~N lines]` from three lines on. The reader compares the text
+without logging it. The Orchestrator pastes the complete header and body together for each supported CLI.
+Claude Code wraps a long paste, including its complete header, in `<pasted_content>` tags. In
 Windows win32 input mode a character outside the Basic Multilingual Plane goes as its two UTF-16 halves in two key-down
 records together, with no key release for either half: Codex and Muse Code pair a half with a release and lose the
 character, and releases added after the pair duplicate it; this holds for the person's input, direct text and keys and
