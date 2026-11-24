@@ -57,8 +57,8 @@ fn in_run(name: &str) -> String {
 }
 use crate::find;
 use crate::{
-    INSTRUCTIONS_FILE, PLUGIN_MEMBERS, RUN_CREDENTIAL_ARG, SKILL_FILE, Server,
-    guest_entry_serves_run, runs_start_guest_entry,
+    INSTRUCTIONS_FILE, RUN_CREDENTIAL_ARG, SKILL_FILE, Server, guest_entry_serves_run,
+    runs_start_guest_entry,
 };
 
 const RUN_TOKEN: &str = "3333333333333333333333333333333333333333333333333333333333333333";
@@ -146,6 +146,7 @@ fn claude_gets_a_server_file_of_the_run_its_tools_allowed_and_no_project_facade_
     assert_eq!(launch.tools, Tools::Injected);
     assert_eq!(after(&launch, "--mcp-config"), in_run("mcp.json"));
     assert_eq!(after(&launch, "--allowedTools"), "mcp__facade");
+    assert!(!launch.command.iter().any(|word| word == "--plugin-dir"));
     assert_eq!(
         launch.command[launch.command.len() - 2..],
         words(&["--model", "opus"]),
@@ -390,7 +391,7 @@ fn pi_gets_an_extension_of_the_run_that_registers_the_server_and_its_instruction
             "command": "/opt/facade-mcp",
             "args": [RUN_CREDENTIAL_ARG, RUN_TOKEN],
             "env": { "FACADE_HOME": "/home/.facade" },
-            "exposure": "direct",
+            "exposure": "deferred",
             "timeout": 3660,
         })
     );
@@ -402,53 +403,22 @@ fn pi_gets_an_extension_of_the_run_that_registers_the_server_and_its_instruction
     );
 }
 
-/// Each CLI given Facade's tools is given its skill too, one text, in its place (MCP-6.2):
-/// Claude Code a plugin of the run's by `--plugin-dir`, OpenCode a file of the run's last in
-/// its `instructions`, Pi a file of the run's its extension's resource-discovery hook gives,
-/// Antigravity a member of its plugin, Codex a file of the run's its session-start hook gives,
-/// and Muse Code a file of the run's its instructions hook gives after the instructions. A run
-/// not given the tools gets none.
+/// OpenCode keeps the person's instructions and removes Facade's old run skill from inherited
+/// configuration.
 #[test]
-fn each_cli_given_the_tools_is_given_the_skill_in_its_place() {
-    let skill = facade_base::skill::text();
-    let file = |launch: &CommandLine, name: &str| {
-        launch
-            .files
-            .iter()
-            .find(|(file, _)| file == name)
-            .map(|(_, text)| text.clone())
-    };
-    let claude = launch("claude", &["fix it"], &[]);
-    assert_eq!(after(&claude, "--plugin-dir"), in_run("plugin"));
-    assert_eq!(
-        file(&claude, "plugin/skills/facade/SKILL.md").as_ref(),
-        Some(&skill)
-    );
-    let manifest: Value =
-        serde_json::from_str(&file(&claude, "plugin/.claude-plugin/plugin.json").unwrap()).unwrap();
-    assert_eq!(manifest["name"], "facade");
+fn opencode_keeps_the_person_s_instructions_and_unwires_the_old_skill() {
     let opencode = launch(
         "opencode",
         &[],
         &[("OPENCODE_CONFIG_CONTENT", r#"{"instructions":["mine.md"]}"#)],
     );
-    let config: Value = serde_json::from_str(
-        &opencode
-            .env
-            .iter()
-            .find(|(name, _)| name == "OPENCODE_CONFIG_CONTENT")
-            .unwrap()
-            .1,
-    )
-    .unwrap();
-    assert_eq!(
-        config["instructions"],
-        json!(["mine.md", in_run("skills/facade/SKILL.md")]),
-        "after the person's own"
-    );
-    assert_eq!(file(&opencode, SKILL_FILE).as_ref(), Some(&skill));
     let mut child: BTreeMap<String, String> =
         opencode.env.into_iter().chain(run_variables()).collect();
+    let inline = &child["OPENCODE_CONFIG_CONTENT"];
+    let mut config: Value = serde_json::from_str(inline).unwrap();
+    assert_eq!(config["instructions"], json!(["mine.md"]));
+    config["instructions"] = json!(["mine.md", in_run(SKILL_FILE)]);
+    child.insert("OPENCODE_CONFIG_CONTENT".into(), config.to_string());
     find("opencode")
         .unwrap()
         .unwrap()
@@ -457,32 +427,10 @@ fn each_cli_given_the_tools_is_given_the_skill_in_its_place() {
         child["OPENCODE_CONFIG_CONTENT"], r#"{"instructions":["mine.md"]}"#,
         "an agent it starts gets the person's alone"
     );
-    let unreadable = launch(
-        "opencode",
-        &[],
-        &[("OPENCODE_CONFIG_CONTENT", r#"{"instructions":"mine.md"}"#)],
-    );
-    assert!(
-        matches!(unreadable.tools, Tools::NotGiven(ref why) if why.contains("instructions")),
-        "{:?}",
-        unreadable.tools
-    );
-    let pi = launch("pi", &[], &[]);
-    assert_eq!(file(&pi, SKILL_FILE).as_ref(), Some(&skill));
-    let extension = file(&pi, "facade-pi.mjs").unwrap();
-    assert!(
-        extension.contains("pi.on('resources_discover'")
-            && extension.contains(r#"new URL("./skills/facade/SKILL.md", import.meta.url)"#),
-        "{extension}"
-    );
-    let agy = launch("agy", &[], &[("HOME", "/nowhere/home")]);
-    assert_eq!(
-        agy.plugin
-            .iter()
-            .find(|(name, _)| name == SKILL_FILE)
-            .map(|(_, text)| text),
-        Some(&skill)
-    );
+}
+
+#[test]
+fn codex_s_session_hook_only_reports_the_session() {
     let hooks = |launch: &CommandLine| {
         let setting = launch
             .command
@@ -499,93 +447,22 @@ fn each_cli_given_the_tools_is_given_the_skill_in_its_place() {
             .unwrap()
     };
     let codex = launch("codex", &["fix it"], &[]);
-    assert!(
-        hooks(&codex)
-            == words(&[
-                "/opt/facade",
-                "hook",
-                "session-start",
-                "/home/.facade/framework/runs/a3/1f/session",
-                "--skill"
-            ]),
-        "{:?}",
-        hooks(&codex)
+    let without_tools = start_managed_launch_command(
+        find("codex").unwrap().unwrap(),
+        &words(&["fix it"]),
+        Some(&report()),
+        None,
+        &BTreeMap::new(),
+        PERSON,
     );
-    assert_eq!(
-        file(&codex, SKILL_FILE).as_ref(),
-        Some(&skill),
-        "the skill the hook gives, beside the session file"
-    );
-    let muse = launch("muse", &[], &[("HOME", "/nowhere/home")]);
-    assert_eq!(file(&muse, SKILL_FILE).as_ref(), Some(&skill));
-    let without = |cli: &str| {
-        start_managed_launch_command(
-            find(cli).unwrap().unwrap(),
-            &words(&["fix it"]),
-            Some(&report()),
-            None,
-            &BTreeMap::new(),
-            PERSON,
-        )
-    };
-    assert!(
-        !hooks(&without("codex")).contains(&"--skill".to_string())
-            && hooks(&without("codex")).contains(&"session-start".to_string())
-    );
-    for cli in ["claude", "opencode", "pi", "agy"] {
-        let plain = without(cli);
-        assert!(
-            plain
-                .files
-                .iter()
-                .chain(&plain.plugin)
-                .all(|(name, _)| !name.ends_with("SKILL.md")),
-            "{cli}: {:?}",
-            plain.files
-        );
-        assert!(
-            !plain.command.iter().any(|word| word == "--plugin-dir"),
-            "{cli}"
-        );
-    }
-}
-
-/// Pi's extension gives Pi the run's skill as its resource-discovery hook runs (CLIS-2.2),
-/// unless a `facade` skill Pi loaded already holds the same text, which then serves; a loaded
-/// one that differs leaves Pi both, and its own diagnostic.
-#[test]
-fn pi_s_extension_gives_the_run_s_skill_unless_the_same_one_is_loaded() {
-    let folder = crate::test_folder::TestFolder::new("rules-piskill");
-    for (name, text) in &launch("pi", &[], &[]).files {
-        let path = folder.join(name);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
-    }
-    let (same, other) = (folder.join("same.md"), folder.join("other.md"));
-    std::fs::write(&same, facade_base::skill::text()).unwrap();
-    std::fs::write(&other, "---\nname: facade\n---\n").unwrap();
-    let script = format!(
-        r#"const extension = (await import({module})).default;
-			let discover;
-			let commands = [];
-			extension({{ registerMcpServer: () => {{}}, on: (event, handler) => {{ if (event === 'resources_discover') discover = handler; }}, getCommands: () => commands }});
-			const loaded = (path) => [{{ source: 'skill', name: 'skill:facade', sourceInfo: {{ path }} }}];
-			const own = JSON.stringify({{ skillPaths: [{own}] }});
-			if (JSON.stringify(discover()) !== own) throw new Error('none loaded: ' + JSON.stringify(discover()));
-			commands = loaded({other});
-			if (JSON.stringify(discover()) !== own) throw new Error('another loaded: ' + JSON.stringify(discover()));
-			commands = loaded({same});
-			if (discover() !== undefined) throw new Error('the same loaded: ' + JSON.stringify(discover()));"#,
-        module = json!(format!("file://{}", folder.join("facade-pi.mjs").display())),
-        // Node names the module by its real path.
-        own = json!(SKILL_FILE.split('/').fold(
-            facade_base::files::real_path(&folder).unwrap(),
-            |path, part| path.join(part)
-        )),
-        other = json!(other),
-        same = json!(same),
-    );
-    crate::test_folder::run_with_node(&script);
+    let session_start = words(&[
+        "/opt/facade",
+        "hook",
+        "session-start",
+        "/home/.facade/framework/runs/a3/1f/session",
+    ]);
+    assert_eq!(hooks(&codex), session_start);
+    assert_eq!(hooks(&without_tools), session_start);
 }
 
 /// What a launch added to its CLI's environment comes out again, and what the person set stays:
@@ -593,7 +470,7 @@ fn pi_s_extension_gives_the_run_s_skill_unless_the_same_one_is_loaded() {
 /// server in the person's own OpenCode configuration.
 #[test]
 fn what_a_launch_added_to_the_environment_comes_out_again() {
-    let mine = r#"{"permission":{"*":"ask"},"mcp":{"mine":{"type":"local"}}}"#;
+    let mine = r#"{"permission":{"*":"ask"},"mcp":{"mine":{"type":"local"}},"instructions":[]}"#;
     for (cli, person, adds) in [
         ("claude", vec![("PATH", "/bin")], false),
         ("codex", vec![("PATH", "/bin")], false),
@@ -706,16 +583,13 @@ fn muse_code_gets_an_optional_server_for_the_run_and_hooks_with_its_environment(
         ["--model", "m"],
         "the person's words come last"
     );
-    let given = [
-        (
-            INSTRUCTIONS_FILE.to_string(),
-            "You are Facade agent #a3.".to_string(),
-        ),
-        (SKILL_FILE.to_string(), facade_base::skill::text()),
-    ];
+    let given = [(
+        INSTRUCTIONS_FILE.to_string(),
+        "You are Facade agent #a3.".to_string(),
+    )];
     assert_eq!(
         muse.files, given,
-        "the run's instructions and skill, which the hook gives"
+        "the run's instructions, which the hook gives"
     );
     assert!(
         muse.env.is_empty() && muse.plugin.is_empty(),
@@ -1206,8 +1080,7 @@ fn antigravity_gets_the_plugin_and_its_tools_allowed_beside_the_person_s_own_rul
             .iter()
             .map(|(name, _)| name.as_str())
             .collect::<Vec<_>>(),
-        PLUGIN_MEMBERS,
-        "every member, the skill too"
+        ["plugin.json", "mcp_config.json", "hooks.json"]
     );
     let title = json!({ "type": "command", "enabled": true, "command": title_hook() });
     assert_eq!(

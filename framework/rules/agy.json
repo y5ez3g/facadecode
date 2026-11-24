@@ -31,7 +31,7 @@
 		]
 	},
 	"session": { "capture": "session_start", "resume": ["--conversation", "${session_id}"] },
-	"mcp": { "session_meta_key": "antigravity.google/root_conversation_id", "always_load_key": "antigravity/alwaysLoad", "managed_instructions_from_hook": true },
+	"mcp": { "session_meta_key": "antigravity.google/root_conversation_id", "managed_instructions_from_hook": true },
 	"ready_tools": { "text": "/mcp", "typed": "^> /mcp\\s*$", "ready": "✓\\s+facade_facade\\b", "opened": "^MCP Servers\\s*$|\\besc Exit\\b", "close": "Escape" },
 	"yolo": {
 		"work": { "args": ["--mode", "accept-edits", "--dangerously-skip-permissions"], "settings": { "enableTerminalSandbox": false } },

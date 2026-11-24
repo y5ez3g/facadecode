@@ -26,7 +26,6 @@
 	"session": { "capture": "session_start", "resume": ["--resume", "${session_id}"] },
 	"status": { "mechanism": "background_report", "background": " still running$" },
 	"status_glyph": { "working": ["◐", "◑"], "resting": "✳", "frame_ms": 960 },
-	"mcp": { "always_load_key": "anthropic/alwaysLoad" },
 	"yolo": {
 		"work": { "args": ["--dangerously-skip-permissions"], "settings": { "sandbox": { "enabled": false } } },
 		"startup": { "settings": { "skipDangerousModePermissionPrompt": true } },

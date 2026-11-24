@@ -133,11 +133,11 @@ pub(super) fn agy_entry(entry: &Entry) -> Value {
     json!({ "command": entry.program, "args": entry.args, "env": env_object(entry) })
 }
 
-/// Pi's entry, its tools given to the model directly.
+/// Pi's Facade entry, with tools available on demand.
 pub(super) fn pi_entry(entry: &Entry) -> Value {
     json!({
         "command": entry.program, "args": entry.args, "env": env_object(entry),
-        "exposure": "direct", "timeout": CALL_SECONDS, "description": DESCRIPTION,
+        "exposure": "deferred", "timeout": CALL_SECONDS, "description": DESCRIPTION,
     })
 }
 

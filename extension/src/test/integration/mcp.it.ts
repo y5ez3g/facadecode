@@ -273,8 +273,8 @@ function argsOf(alias: string): { readonly cwd: string; readonly args: string[];
 const after = (args: readonly string[], option: string) => args[args.indexOf(option) + 1];
 
 /**
- * How the agent `alias` was given its Facade server and skill, as its CLI takes them (CLIS-2.2), and what keeps its tools from asking
- * with YOLO off (CLIS-1.3): checked by the files and arguments its launch had.
+ * Check the Facade server and approval settings the agent received at launch, including the legacy skill plugin.
+ * See CLIS-1.3 and CLIS-2.2.
  */
 function assertTools(alias: string): void {
 	const { cwd, args, env } = argsOf(alias);
@@ -296,11 +296,12 @@ function assertTools(alias: string): void {
 				assert.ok(path.isAbsolute(server.command));
 				assert.ok(server.args[0] === '--run-credential' && typeof server.args[1] === 'string' && server.args[1].length > 0,
 					'framework wrote the actual run credential into the private MCP configuration');
+				assert.ok(!args.includes('--plugin-dir'), 'framework launches without the Facade skill plugin');
 			} else {
 				assert.deepStrictEqual(Object.keys(server.env).sort(), ['ELECTRON_RUN_AS_NODE', 'FACADE_AGENT', 'FACADE_LAUNCH_CONTEXT', 'FACADE_PTYD', 'FACADE_RUN']);
 				assert.strictEqual(`#${server.env.FACADE_AGENT.replace(/^#/, '')}`, alias, 'the MCP child receives its own short ID explicitly');
+				assert.ok(fs.existsSync(path.join(after(args, '--plugin-dir'), 'skills', 'facade', 'SKILL.md')), 'its own skill plugin');
 			}
-			assert.ok(fs.existsSync(path.join(after(args, '--plugin-dir'), 'skills', 'facade', 'SKILL.md')), 'its own skill plugin');
 			assert.strictEqual(after(args, '--allowedTools'), 'mcp__facade', 'Facade\'s own tools never ask for approval (CLIS-2.2)');
 			break;
 		}
