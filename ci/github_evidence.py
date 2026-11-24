@@ -68,8 +68,15 @@ def check_jobs(jobs, products):
             raise AcceptanceError(f'{name}: expected one successful job in this attempt')
 
 
+def artifact_pages(endpoint):
+    return gh_json('--paginate', '--slurp', f'{endpoint}/artifacts?per_page=100')
+
+
 def run_artifacts(endpoint, run, expected):
-    pages = gh_json('--paginate', '--slurp', f'{endpoint}/artifacts?per_page=100')
+    return require_run_artifacts(artifact_pages(endpoint), run, expected)
+
+
+def require_run_artifacts(pages, run, expected):
     artifacts = [entry for page in pages for entry in page['artifacts']]
     if (not pages or any(page['total_count'] != len(artifacts) for page in pages)
             or len({artifact['id'] for artifact in artifacts}) != len(artifacts)):
@@ -100,11 +107,15 @@ def artifact_manifest(endpoint, run, products):
     return {product: selected[name] for name, product in expected.items()}
 
 
-def unpack_artifact(archive, directory, expected):
+def check_archive_digest(archive, expected):
     with archive.open('rb') as stream:
         actual = f'sha256:{file_digest(stream, "sha256").hexdigest()}'
     if actual != expected:
         raise AcceptanceError(f'{archive.name}: downloaded ZIP does not match the GitHub digest')
+
+
+def unpack_artifact(archive, directory, expected):
+    check_archive_digest(archive, expected)
     directory.mkdir()
     with ZipFile(archive) as package:
         entries = package.infolist()
@@ -126,9 +137,8 @@ def unpack_artifact(archive, directory, expected):
                     shutil.copyfileobj(data, output)
 
 
-def download_artifact(repo, artifact, output, name):
+def download_archive(repo, artifact, output, name):
     archive = output / f'{name}.zip'
-    directory = output / name
     if not 0 < artifact['size_in_bytes'] <= 1024**3:
         raise AcceptanceError(f'{name}: artifact exceeds the review download limit')
     with archive.open('xb') as stream:
@@ -136,6 +146,12 @@ def download_artifact(repo, artifact, output, name):
                        stdout=stream, check=True, timeout=90)
     if archive.stat().st_size != artifact['size_in_bytes']:
         raise AcceptanceError(f'{name}: downloaded ZIP size differs from GitHub metadata')
+    return archive
+
+
+def download_artifact(repo, artifact, output, name):
+    archive = download_archive(repo, artifact, output, name)
+    directory = output / name
     unpack_artifact(archive, directory, artifact['digest'])
     return directory
 

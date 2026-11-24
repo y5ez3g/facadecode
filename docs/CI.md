@@ -468,7 +468,9 @@ The Linux x64 Core job starts a separate loopback OpenSSH peer with disposable k
 It checks the selected machine, compares the same agent and process through the peer and the
 forwarded route, and verifies that only the intended peer receives the exact input bytes.
 The job reconciles the original log and scoped cleanup with the three tested binaries and the
-GitHub run attempt.
+GitHub run attempt. The same job uses locked Cargo commands to revalidate its debug build and runs
+the exact Keeper recovery scenario from an isolated copy. Review checks the process and Attach
+observations, scoped teardown and matching program digests in the Keeper and real SSH receipts.
 
 ### Native Core cold cutover
 
@@ -509,6 +511,97 @@ same candidate directory and attempt to recheck the two fixture homes, original 
 result, session, SSH route, delivery replay and post-cleanup marker. Binary replay also takes
 the original `--prior-bin` and `--manifest`.
 
+### Local CI Gate decision
+
+Evaluate a same-repository PR against a local observation snapshot. Use a clean checkout of the
+exact test merge or the reviewed head with the same tree. Make the test merge object available locally.
+The head must include the observed main base.
+
+```sh
+python3 -B ci/gate_shadow.py --repo OWNER/REPO --pr NUMBER --head "$head" --base "$base" \
+    --merge "$merge" --checkout "$checkout" --observations "$work/observations.json"
+```
+
+The decision records the exact candidate, plan digest, changed paths, bound pilot cases, and required
+workflows, jobs, runner labels, steps and artifacts. An IDE-only change gets an explicit empty product
+plan. Changes to product documentation that trigger CI acceptance still require the catalog job. Core
+changes select both pilots because the Extension runs Core. Core compatibility changes add the cold
+migration lane. Package and remote-sensitive paths select their applicable native checks. Shared policy
+and unclassified paths select the complete matrix. Each required workflow must have a supported
+`pull_request` path filter that matches the diff. The decision names absent, unsupported or unmatched
+triggers as failures.
+
+Supply observations from an independent, reviewed source. The snapshot's `candidate` contains the
+recorded GitHub PR, main ref and test merge commit objects under `pull`, `main` and `merge`. Its
+`workflows` map is keyed by planned workflow filename. Each entry contains the GitHub `registration`,
+`run`, `jobs` and `checks` records, along with paginated `artifacts` where planned. The entry's
+`source` records `repo`, `pull`, `head`, `base`, `merge`, `tree`, the gate `plan` digest and the
+`run` identity in the form `github/RUN/ATTEMPT`.
+
+Place the original `shadow-pilot-PRODUCT-1.zip` files in a `shadow/` directory beside the snapshot.
+The result's `shadow_replay` records rehashed pilot archives and exact case results, bindings and cleanup
+for the selected attempt. The `job_metadata` and `artifact_manifest` fields record native job and
+artifact manifest evidence. To include the full native archive replay, attach the JSON produced by
+the expanded reviewer below under `expanded_review`. The decision matches that report to the candidate,
+workflow jobs and attempts, artifacts and replayed shadow evidence.
+
+The command prints JSON and returns 0 for success, 1 for pending and 2 for failure. Omit
+`--observations` to print the plan with a pending decision. The local policy suite includes fixtures
+for all four routes and blocked observations. [CI Gate fixtures](../ci/test_gate_shadow.py)
+
+### Collect a CI Gate snapshot
+
+Use a trusted GitHub CLI context with read access to the selected repository. Supply a clean,
+reviewed checkout with the current test merge object available and a new output directory outside
+that checkout. Add `--head` and `--base` to pin the expected current positions.
+
+```sh
+python3 -B ci/gate_collect.py --repo OWNER/REPO --pr NUMBER --checkout "$checkout" \
+    --output "$work/gate"
+```
+
+The collector uses GitHub GET requests for the current PR and main ref, the planned workflow runs,
+and the jobs, checks and artifact manifests for successful first attempts. It performs one collection
+pass and rechecks the PR, base, test merge and selected workflow positions before saving. Metadata
+requests have a 30-second timeout. ZIP downloads use the existing 90-second timeout and 1 GiB size
+check per artifact. The saved observation file is capped at 4 MiB.
+
+The local checkout supplies the gate plan. GitHub run and check records supply workflow association
+and conclusions. The snapshot's `source.plan` joins those observations to the local plan. The
+pilot ZIPs supply the replayed case evidence and its run-specific plan digest. For each planned
+native workflow, the collector checks the run, merge and tree recorded in one original receipt.
+Native results report job and artifact manifest metadata and the source receipt's artifact ID
+and digest. Use the expanded reviewer for complete native archive replay.
+
+The JSON result gives the exact candidate, plan and named blockers. A planning refusal preserves
+the observed PR, head, base, merge and tree for diagnosis. A stable collection saves
+`observations.json` and any collected shadow ZIPs, including when evidence is missing or stale.
+Pass that file to `gate_shadow.py --observations` to replay it offline. A change to the candidate
+or selected attempts during collection returns pending before the snapshot is saved. The collector
+uses the local decision's success, pending and failure exit codes. [Collector fixtures](../ci/test_gate_collect.py)
+
+### GitHub shadow review
+
+Dispatch **CI Gate shadow review** from `main` with a same-repository PR number. The job checks out
+the pinned workflow revision and requires it to match the current `main` base. It fetches the
+repository's PR test merge into a separate disposable Git checkout and verifies its commit, parents
+and tree against GitHub. The checkout uses an empty Git template and ignores global and system Git
+configuration. A new or changed symlink or submodule blocks inspection.
+[Workflow](../.github/workflows/ci-gate-shadow.yml) · [GitHub workflow variables](https://docs.github.com/en/actions/reference/workflows-and-actions/variables)
+
+The runner executes the reviewer and collector from `main` and treats the candidate checkout and
+artifacts as data. The repository token has read access to Actions, checks, contents and pull
+requests. The existing PR workflows supply the evidence. Protected test isolation and a required
+merge conclusion each have their own rollout proof.
+[GitHub workflow permissions](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions)
+
+The job summary records the policy revision, candidate head, base, test merge, tree and plan digest.
+Its table shows the exact PR runs and attempts seen for the existing matrix, including workflows outside
+the Gate plan. Use the linked runs to compare the same candidate. The result distinguishes replayed
+pilot cases from native source and job metadata. Read the diagnostic result and blockers in the
+summary when the job completes. A rejected catalog identifies the observed candidate and the
+catalog error before any matrix evidence is considered.
+
 ### Expanded PR evidence review
 
 For a same-repository PR that schedules the complete Core and Extension matrix, run the
@@ -525,10 +618,12 @@ evidence steps. It checks the registered workflow and matching GitHub Actions ch
 each job. It preserves each base catalog obligation and exact existing binding. The catalog check
 also requires an executable binding for every new obligation against the base. Intentional
 catalog changes need separate review. It rehashes the original shadow and native archives,
-reconciles exact shadow case proofs, five typed native case records and two release fixture
-case records, and verifies all six unsigned native package sets and their paired VSIX bytes. Each of the 12 native editor
-logs must meet the reviewed 61-pass baseline and record completed profile cleanup. These
-native suite counts supplement the exact shadow case list. The verifier checks the current
+reconciles exact shadow case proofs, seven typed runtime case records and two release fixture
+case records, and verifies all six unsigned native package sets and their paired VSIX bytes.
+The Linux x64 old-engine editor log must show the same process on immediate reopen and the
+same session in a new process after the production close-last grace. Each of the 12 native
+editor logs must meet the reviewed 61-pass baseline and record completed profile cleanup.
+The verifier checks the current
 PR, base, workflows and local checkout again before reporting success. Drafts can be reviewed.
 
 This command is an operator review of already reviewed sources. Required status and App
@@ -549,8 +644,66 @@ remain separate deployment steps.
 The Linux x64 old-engine PR job archives the complete release-script suite with its exact
 test names and the producing source and attempt. Its disposable GitHub and website
 transports prove corrupt and stale candidates cannot switch stable, and an interrupted
-promotion can finish with the same verified pointer and manifest. The independent signed
-candidate lane supplies production signing evidence.
+promotion can finish with the same verified pointer and manifest.
+
+### Signed Extension candidate evidence
+
+Replay an exact tagged release and its retained native test evidence with the read-only
+`verify` command. Use an independent digest of `native-test-evidence.json` from the reviewed
+producer. Keep the Git tag locally so the verifier can resolve its commit, tree and installers.
+Omit `--release-dir` to read the GitHub Release.
+
+```sh
+cd extension
+node scripts/release.mjs verify --tag "$tag" --release-dir "$release_assets" \
+    --evidence-dir "$native_evidence" --evidence-digest "$reviewed_evidence_sha256"
+```
+
+The evidence directory keeps the original `extension-<target>` package artifacts under
+`packages/` and UTF-8 logs under `tests/<target>/`. The version 1 `native-test-evidence.json`
+contains `schemaVersion`, `tag`, `source` (the release candidate's `revision`, `tree`, `run`
+and `attempt`), the digest of the release `SHA256SUMS` as `manifestSha256`, and `targets`.
+Each target supplies `target`, `packageEvidenceSha256` for its original
+`native-package-evidence.json` and a `logs` map keyed by the check name. Each log record names
+`source`, `target`, `inputs` (file names and SHA-256 values), `exitCode` and the log's `sha256`.
+The editor records also name the official VS Code `editor` identity (`version`, `commit`,
+archive `sha256`). The upgrade record names the reviewed `prior` pair (`tag` and a `files`
+map from name to SHA-256).
+
+| Check and log name | Inputs and observations |
+| --- | --- |
+| `core-install.log` | Run the tagged installer on the accepted Core archive in an isolated install root. Keep the installer's output followed by the installed Shell's `facade --version` output. |
+| `install-pair.log` | Give `install-pair` the released native and Window Component VSIX files through `FACADE_IT_CURRENT`. Check activation and one New Agent effect in the clean profile. |
+| `upgrade-pair.log` | Give `upgrade-pair` the same candidate pair and the pinned prior pair through `FACADE_IT_RELEASED`. Check the workspace, Pins, Window Component and original sessions. |
+
+Run the existing installed-pair drivers with `FACADE_IT_ENGINE=old`,
+`FACADE_IT_BUILT_IN=claude` and the same check name in `FACADE_IT_ONLY` and
+`FACADE_IT_EXPECT_DRIVER`. Their final lines report isolated profile cleanup and the exact
+driver result. Hash staged inputs before and after testing, record the actual exit status
+and retain the original logs alongside the package digests.
+
+Core transcript replay checks the install report and reported Shell version. For evidence
+of installed program digests, a live fake Agent and installer refusal behavior on Linux x64,
+use the existing `ci/acceptance.py verify-native-install` with its typed receipt, original log,
+and exact tested archive and checksum sidecar. [Native install verifier](../ci/check_native_install.py)
+
+Replay checks the release manifest and six package sets, including both Windows signature
+records and the exact universal VSIX selected for publication. It matches the test logs to
+those bytes, source, target and attempt before emitting a JSON receipt. The receipt records
+local replay of the supplied evidence. Plain `verify --tag` checks the release files and
+remains available for historical inspection. Disposable fixtures exercise replay and
+refusal without supplying production signing evidence.
+
+The remaining production rehearsal requires an owner-approved candidate on protected main
+and the signing approval described above. Retain the Windows x64 and ARM64 timestamped
+signature checks from the approved workflow, with the expected publisher and Microsoft
+ConPTY signer identities. In that candidate run and attempt, install and test the final
+archives and exact published VSIX pairs on all six native targets. Stage the same published
+Window Component for every target. Retain the pinned prior packages, native install and editor
+logs, and the protected workflow's attestation for the final manifest and evidence digests.
+Replay the record and check the approved producer and attestation before using it for the
+`signed-artifacts` case. Previous releases provide historical evidence only. The approval
+to publish and switch stable is a separate decision.
 
 ### Native Core hot takeover QA
 
@@ -581,6 +734,20 @@ The runner verifies both installed program pairs, their launchers, the two Keepe
 handshakes and owned cleanup. Separate tests exercise same-version, older-version and
 disjoint offers. This is opt-in source QA. Actual incompatible builds and signed release
 artifacts have their own catalog rows.
+
+### Native Core Keeper recovery
+
+Run the exact native Keeper recovery scenario on Linux x64 from a committed Core tree. Give each
+attempt its own output directory and run identity.
+
+```sh
+python3 -B ci/check_keeper_recovery.py --run-id "$attempt" --output-dir "$output"
+```
+
+The runner records the locked build, test executable digests, original libtest result and cleanup
+in the receipt. The scenario replaces the Keeper while the original Daemon and CLI remain live and
+checks exit on the original Attach watch. This is an opt-in local replay. The native acceptance row
+also requires matching evidence from the selected hosted lane when a candidate uses that lane.
 
 ### Linux x64 packaged Core upgrade QA
 
@@ -656,7 +823,10 @@ records one startup. The receipt includes the staged program and editor digests,
 authenticated SSH observation and the verified removal of the exact guest and scratch
 scope. Pull requests that change these inputs select a separate Linux x64 connect job.
 The reconnect case stays pending because the official workbench failed to reconnect after
-a real carrier drop even when SSH transport recovered. [Remote SSH workflow](../.github/workflows/extension-remote.yml)
+a real carrier drop even when SSH transport recovered. A native reconnect run must restore
+the actual workbench session, verify the original remote Agent identity and restored window
+ownership, and settle an in-flight message exactly once before cleanup. This evidence is
+independent of the signed candidate replay. [Remote SSH workflow](../.github/workflows/extension-remote.yml)
 
 Each successful native PR package job records the VSIX pair, Core archive and checksum file
 digests with the checked-out revision, tree and GitHub attempt. Run
@@ -665,6 +835,24 @@ artifacts to require an exact set of targets and recheck their bytes. The CI can
 missing target, a wrong-version VSIX, a stale tree or attempt, and a changed archive even when
 its checksum file has also changed. It reads the Core archive's version and checks its executable
 members byte for byte against the paired VSIX. This verification reads the unsigned PR artifacts.
+
+A clean checkout with a bundled editor can stage Core from a verified native package on the same
+source tree and host target. Supply the reviewed package directory and its pinned evidence digest.
+
+```sh
+(cd extension && node scripts/build-it.mjs --core-package "$package_dir" \
+  --core-package-evidence-sha256 "$evidence_sha256")
+```
+
+The builder checks the digest of `native-package-evidence.json` and matches the Core archive and
+VSIX program bytes before staging the fixture. For hosted reuse, verify the artifact against the
+intended producer run and attempt before passing its digest. This option has been replayed on Linux x64.
+
+The manual [Intel macOS handoff canary](../.github/workflows/extension-intel-core-canary.yml) compares
+a Cargo control with the same Rust editor suite using a verified same-attempt package. Run both on
+one revision once the workflow is registered on the default branch. Compare the ordered editor
+cases and cleanup, then compare full wall time including producer queue, packaging, handoff wait,
+artifact import and editor execution. [GitHub manual workflow events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)
 
 The Linux x64 Rust PR matrix closes every editor and removes the exact managed agents before
 starting its next independent fixture. Only the previous fixture's daemon and Keeper idle waits
@@ -712,6 +900,39 @@ steady-state SLO are defined above. [GitHub Actions jobs API](https://docs.githu
 ```sh
 python3 -B ci/github_timing.py --repo y5ez3g/facadecode --head "$head" "$shadow_run" "$core_run" "$extension_run"
 ```
+
+To retain a current candidate observation, supply the exact head and live `main` base of an open,
+mergeable, same-repository PR. Repeat `--workflow` for each required workflow path from its policy.
+The command verifies the PR, base and test merge twice and records readiness and the observation time.
+It works before any job results exist. The observation leaves `eligible_at` unknown. A timing roster
+requires independent evidence for the eligibility time.
+
+```sh
+python3 -B ci/github_candidate_observation.py --repo y5ez3g/facadecode --pr "$pull" --head "$head" --base "$base" \
+    --workflow "$required_workflow" > candidate-observation.json
+```
+
+For a first-attempt summary, save the timing JSON for each candidate and pass an explicit roster to
+`python3 -B ci/github_candidate_summary.py roster.json`. The roster contains `observed_at` and a
+`candidates` array. Each entry supplies `repository`, `pull`, `head`, `base`, `eligible_at`,
+`expected_workflow_paths` and `timing`. List at least one exact required path, use timezone-aware
+timestamps, and give a timing file path relative to the roster or `"timing": null` when no workflow was observed.
+The roster supplies eligibility, the PR and base association, and the required workflow scope. The
+summary checks each timing record's repository, head and event, uses each run ID once per repository,
+and retains an optional `eligibility_evidence` reference.
+
+The latest eligible row per PR supplies the service counts. A canceled row is superseded only by a
+later eligible row recorded for that PR. The report lists observed and missing paths. A missing required
+path makes the result `missing`. Missing, canceled and timed-out results for the latest candidate count
+as service failures and latency breaches. Completed results distinguish success across all required
+workflows, an explicit workflow failure and other conclusions. The summary uses the declared paths and
+retains all raw timing records. First feedback measures the wait from eligibility to the first completed
+actionable job in attempt one, with zero wait if the result was already available. An evaluated attempt
+has a completed actionable job. Its first failure stays unresolved unless `first_failure_triage` supplies a
+`classification` of `confirmed_false_red` or `confirmed_product_failure` and an `evidence` reference.
+The summary counts confirmed false reds and first failures still unresolved after 48 hours, and shows
+unknown durations and failure ages. Its counts describe the supplied sample. A population or P95 claim
+requires the comparable rolling cohort and eligibility evidence described in measured acceptance.
 
 For an independent verification of a hosted PR shadow run, check out the reviewed head when
 its tree matches the tested merge tree, or use the exact merge checkout. The command requires

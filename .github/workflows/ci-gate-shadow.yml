@@ -1,0 +1,37 @@
+name: CI Gate shadow review
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Same-repository pull request number
+        required: true
+        type: number
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  review:
+    name: Diagnostic shadow review
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Compare the current PR with the existing matrix
+        shell: bash
+        env:
+          CI_GATE_PR: ${{ inputs.pr }}
+          GH_TOKEN: ${{ github.token }}
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: '1'
+          GIT_OPTIONAL_LOCKS: '0'
+          GIT_TERMINAL_PROMPT: '0'
+        run: python3 -B -E ci/gate_hosted.py

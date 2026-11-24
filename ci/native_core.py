@@ -1,16 +1,17 @@
 """Shared process and evidence helpers for Linux native Core checks."""
 
-from hashlib import file_digest
+from hashlib import file_digest, sha256
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import socket
 import stat
 import time
 
 from catalog import AcceptanceError, json_object
-from evidence import clean_scope, git
+from evidence import clean_scope, execute, git
 
 
 SYSTEM_PATH = '/usr/bin:/bin'
@@ -24,6 +25,48 @@ def hash_file(path):
 
 def source_identity(run):
     return {'run': run, 'revision': git(ROOT, 'rev-parse', 'HEAD'), 'tree': git(ROOT, 'rev-parse', 'HEAD^{tree}')}
+
+
+def logged_command(command, cwd, env, log, receipt, *, timeout=900):
+    argv = list(map(str, command))
+    with log.open('w') as stream:
+        print('$ ' + shlex.join(argv), file=stream, flush=True)
+        status = execute(argv, cwd, env, stream, timeout=timeout)
+    receipt['commands'].append({'argv': argv, 'status': status, 'log': log.name, 'sha256': hash_file(log)})
+    if status != 'pass':
+        raise AcceptanceError(f'{status} running {argv[0]} ({log})')
+
+
+def cargo_artifact(log, name, *, test):
+    matches = []
+    for line in log.read_text().splitlines():
+        if not line.startswith('{'):
+            continue
+        record = json.loads(line)
+        if (record.get('reason') == 'compiler-artifact' and record['target']['name'] == name
+                and record['profile']['test'] is test and record.get('executable')):
+            matches.append(Path(record['executable']))
+    if len(matches) != 1 or not matches[0].is_file() or not os.access(matches[0], os.X_OK):
+        raise AcceptanceError(f'Cargo did not report exactly one executable for {name} ({log})')
+    return matches[0]
+
+
+def owned_homes(log, test_tmp):
+    homes = []
+    if log.is_file():
+        for line in log.read_text().splitlines():
+            home = Path(line)
+            if not home.is_absolute() or not home.resolve().is_relative_to(test_tmp):
+                raise AcceptanceError(f'scenario reported an unowned home {home}')
+            homes.append(home)
+    return homes
+
+
+def scenario_sockets(home_log, test_tmp):
+    return {
+        (home, role): Path(f'/tmp/facade-core-{os.getuid()}/{role}-{sha256(os.fsencode(home)).hexdigest()[:10]}.sock')
+        for home in owned_homes(home_log, test_tmp) for role in ('daemon', 'keeper')
+    }
 
 
 def wait_for(description, condition, seconds=20):

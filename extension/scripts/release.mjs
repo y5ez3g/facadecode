@@ -5,6 +5,7 @@
 //   node scripts/release.mjs github --backfill                              every version in archive/catalog.json
 //   node scripts/release.mjs build-needed --tag extension/<v>               whether the complete candidate is already uploaded
 //   node scripts/release.mjs verify --tag extension/<v>                     verify an existing GitHub candidate
+//   node scripts/release.mjs verify --tag extension/<v> --evidence-dir <dir> --evidence-digest <sha256> [--release-dir <dir>]
 //   node scripts/release.mjs mirror --tag extension/<v>                     copy the exact candidate to the versioned mirror
 //   node scripts/release.mjs stores --tag extension/<v> --manifest-digest <sha256>  publish the verified mirror bytes
 //   node scripts/release.mjs promote --tag extension/<v> --manifest-digest <sha256> [--resume] switch the stable origins
@@ -15,6 +16,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
 import { coreArchive, coreInstallers, coreVersionFile } from '../../core/scripts/package-core.mjs';
 import { CORE, withWorkspaceVersion } from './core.mjs';
 import { signingRecord, validateSource, verifyArchivePrograms, verifyNativePackages } from './native-package-evidence.mjs';
@@ -22,6 +24,7 @@ import {
 	SUMS, checksumsText, compareVersions, fileFor, nativeTargets, parseChecksums, sha256, targetsFor, verifyVsix,
 } from './release-assets.mjs';
 import { publishMirror, pruneMirror } from './release-mirror.mjs';
+import { readNativeTestEvidence, verifyNativeTestEvidence } from './release-native-evidence.mjs';
 
 export { SUMS, checksumsText, compareVersions, fileFor, parseChecksums, sha256, targetsFor, verifyVsix } from './release-assets.mjs';
 
@@ -154,14 +157,27 @@ export function candidateNeedsBuild(version, release) {
 	return false;
 }
 
-/** Downloads the requested Release assets and checks each against SHA256SUMS and any VSIX manifests. */
-function downloadRelease(tag, version, dir, coreFiles = []) {
+/** Stages the requested Release assets and checks each against SHA256SUMS and any VSIX manifests. */
+function stageRelease(tag, version, dir, coreFiles = [], { archiveDir, manifestDigest } = {}) {
 	fs.mkdirSync(dir, { recursive: true });
 	const files = targetsFor(version).map(target => ({ target, file: fileFor(version, target) }));
 	files.push(...coreFiles.map(file => ({ file })));
-	const patterns = [SUMS, ...files.map(asset => asset.file)].flatMap(file => ['--pattern', file]);
-	gh(['release', 'download', tag, '--repo', repository, '--dir', dir, '--clobber', ...patterns]);
-	const sums = parseChecksums(fs.readFileSync(path.join(dir, SUMS), 'utf8'));
+	const names = [SUMS, ...files.map(asset => asset.file)];
+	if (archiveDir) {
+		for (const file of names) {
+			const original = path.join(archiveDir, file);
+			assert.ok(fs.lstatSync(original, { throwIfNoEntry: false })?.isFile(), `${file} is not a regular archived release file`);
+			fs.copyFileSync(original, path.join(dir, file));
+		}
+	} else {
+		const patterns = names.flatMap(file => ['--pattern', file]);
+		gh(['release', 'download', tag, '--repo', repository, '--dir', dir, '--clobber', ...patterns]);
+	}
+	const manifest = fs.readFileSync(path.join(dir, SUMS));
+	if (manifestDigest) {
+		assert.equal(sha256(manifest), manifestDigest, `${tag} ${SUMS} differs from the native test evidence`);
+	}
+	const sums = parseChecksums(manifest.toString('utf8'));
 	return files.map(({ target, file }) => {
 		assert.ok(sums.has(file), `${SUMS} on ${tag} does not list ${file}`);
 		const local = path.join(dir, file);
@@ -208,7 +224,7 @@ export function publishGithubRelease({ tag, version, commit, artifacts, core = [
 		console.log(`${tag}: Release already there; ${missing.length} missing file(s) added, the rest match byte for byte.`);
 	}
 	const verify = fs.mkdtempSync(path.join(work, `${version}-check-`));
-	const checked = downloadRelease(tag, version, verify, core.map(asset => asset.file));
+	const checked = stageRelease(tag, version, verify, core.map(asset => asset.file));
 	assert.deepEqual(checked.map(a => [a.file, a.sha256]), assets.map(a => [a.file, a.sha256]), `${tag} differs from the released files`);
 	assert.equal(sha256(fs.readFileSync(path.join(verify, SUMS))), sha256(fs.readFileSync(path.join(stage, SUMS))),
 		`${tag} serves a different ${SUMS}`);
@@ -277,11 +293,7 @@ async function backfill(work) {
 	}
 }
 
-async function releaseRun(tag, inputDir, work, packageAttempt = process.env.GITHUB_RUN_ATTEMPT) {
-	const version = versionOfTag(tag);
-	assert.ok(coreFilesFor(version).length, `${tag} uses the historical archive catalog`);
-	const source = { ...taggedSource(tag, version), run: process.env.GITHUB_RUN_ID, attempt: packageAttempt };
-	const packages = verifyNativePackages(inputDir, version, source, { requireSigning: true });
+function nativeReleaseAssets(inputDir, version, packages) {
 	const packaged = (record, folder, file, target) => {
 		const relative = folder + '/' + file;
 		return { target, file, path: path.join(inputDir, 'extension-' + record.target, relative), sha256: record.files[relative].sha256 };
@@ -289,10 +301,17 @@ async function releaseRun(tag, inputDir, work, packageAttempt = process.env.GITH
 	const artifacts = packages.map(record => packaged(record, 'vsix', fileFor(version, record.target), record.target));
 	const linux = packages.find(record => record.target === 'linux-x64');
 	artifacts.push(packaged(linux, 'vsix', fileFor(version, 'universal'), 'universal'));
-	const core = [
-		...packages.map(record => packaged(record, 'core', coreArchive(record.target))),
-		...taggedInstallers(version, work, source.revision),
-	];
+	const archives = packages.map(record => packaged(record, 'core', coreArchive(record.target)));
+	return { artifacts, archives };
+}
+
+async function releaseRun(tag, inputDir, work, packageAttempt = process.env.GITHUB_RUN_ATTEMPT) {
+	const version = versionOfTag(tag);
+	assert.ok(coreFilesFor(version).length, `${tag} uses the historical archive catalog`);
+	const source = { ...taggedSource(tag, version), run: process.env.GITHUB_RUN_ID, attempt: packageAttempt };
+	const packages = verifyNativePackages(inputDir, version, source, { requireSigning: true });
+	const { artifacts, archives } = nativeReleaseAssets(inputDir, version, packages);
+	const core = [...archives, ...taggedInstallers(version, work, source.revision)];
 	const candidate = {
 		schemaVersion: 1,
 		tag,
@@ -353,9 +372,11 @@ function verifyCandidate(tag, version, assets, candidate) {
 	assert.deepStrictEqual(candidate.windowsSignatures, windowsSignatures, `${tag} signing evidence differs from the packaged programs`);
 }
 
-function verifyRelease(tag, work, { prepare = false, requireCandidate = false } = {}) {
+function verifyRelease(tag, work, { prepare = false, requireCandidate = false, archiveDir, manifestDigest } = {}) {
 	const version = versionOfTag(tag);
-	const release = existingRelease(tag);
+	const release = archiveDir
+		? { tagName: tag, assets: fs.readdirSync(archiveDir).map(name => ({ name })) }
+		: existingRelease(tag);
 	assert.ok(release, `${tag} has no GitHub Release. Prepare a candidate first.`);
 	assert.equal(release.tagName, tag, 'GitHub returned another Release');
 	assert.ok(prepare || !release.isDraft, `${tag} is still a draft. Prepare a Pre-release first.`);
@@ -370,21 +391,63 @@ function verifyRelease(tag, work, { prepare = false, requireCandidate = false } 
 		coreFiles.push(candidateFile);
 		requireReleaseAssets(release, [...requiredReleaseFiles(version), candidateFile]);
 	}
-	const assets = downloadRelease(tag, version, work, coreFiles);
+	const assets = stageRelease(tag, version, work, coreFiles, { archiveDir, manifestDigest });
 	if (standalone) {
 		assert.equal(fs.readFileSync(path.join(work, coreVersionFile), 'utf8'), version + '\n',
 			`${tag} has a version marker for another release`);
 	}
 	const sums = path.join(work, SUMS);
+	let candidate;
 	if (hasCandidate) {
 		const digests = parseChecksums(fs.readFileSync(sums, 'utf8'));
 		assert.deepStrictEqual([...digests.keys()].sort(), assets.map(asset => asset.file).sort(), `${tag} has an unexpected ${SUMS} file set`);
-		verifyCandidate(tag, version, assets, JSON.parse(fs.readFileSync(path.join(work, candidateFile), 'utf8')));
+		candidate = JSON.parse(fs.readFileSync(path.join(work, candidateFile), 'utf8'));
+		verifyCandidate(tag, version, assets, candidate);
 	}
 	assets.push({ file: SUMS, path: sums, sha256: sha256(fs.readFileSync(sums)) });
 	if (prepare && release.isDraft) publishCandidateDraft(tag);
-	console.log(`${tag}: verified ${assets.length} Release files.`);
-	return { version, assets };
+	if (!manifestDigest) console.log(`${tag}: verified ${assets.length} Release files.`);
+	return { version, assets, candidate };
+}
+
+function verifyRun(args, work) {
+	const { values } = parseArgs({ args, options: {
+		tag: { type: 'string' }, prepare: { type: 'boolean' }, 'release-dir': { type: 'string' },
+		'evidence-dir': { type: 'string' }, 'evidence-digest': { type: 'string' },
+	} });
+	const { tag, prepare, 'release-dir': archiveDir, 'evidence-dir': evidenceDir, 'evidence-digest': evidenceDigest } = values;
+	if (archiveDir === undefined && evidenceDir === undefined && evidenceDigest === undefined) {
+		verifyRelease(tag, work, { prepare });
+		return;
+	}
+	assert.ok(!prepare, 'Native evidence replay cannot prepare a draft');
+	assert.ok(evidenceDir, 'Supply the native test evidence directory');
+	assert.ok(archiveDir === undefined || archiveDir, 'Supply the archived release directory');
+	const evidence = readNativeTestEvidence(evidenceDir, evidenceDigest);
+	const { version, assets, candidate } = verifyRelease(tag, work, {
+		archiveDir, manifestDigest: evidence.manifestSha256, requireCandidate: true,
+	});
+	const targets = verifyNativeTestEvidence(evidenceDir, evidence, tag, version, candidate.source, assets);
+	const inputDir = path.join(evidenceDir, 'packages');
+	const evidenceDigests = new Map(targets.map(({ target, packageEvidenceSha256 }) => [target, packageEvidenceSha256]));
+	const packages = verifyNativePackages(inputDir, version, candidate.source, { requireSigning: true, evidenceDigests });
+	const { artifacts, archives } = nativeReleaseAssets(inputDir, version, packages);
+	const releaseDigests = new Map(assets.map(asset => [asset.file, asset.sha256]));
+	for (const { file, sha256 } of [...artifacts, ...archives]) {
+		assert.equal(sha256, releaseDigests.get(file), `${file} differs from the retained native package`);
+	}
+	console.log(JSON.stringify({
+		schemaVersion: 1,
+		kind: 'release-evidence-replay',
+		tag,
+		source: candidate.source,
+		candidateSha256: releaseDigests.get(candidateFile),
+		manifestSha256: evidence.manifestSha256,
+		evidenceSha256: evidenceDigest,
+		assets: candidate.assets,
+		windowsSignatures: candidate.windowsSignatures,
+		targets,
+	}));
 }
 
 async function checkPromotion(version) {
@@ -535,7 +598,7 @@ async function main() {
 			const tag = option('--tag');
 			console.log(candidateNeedsBuild(versionOfTag(tag), existingRelease(tag)));
 		}
-		else if (command === 'verify') verifyRelease(option('--tag'), work, { prepare: args.includes('--prepare') });
+		else if (command === 'verify') verifyRun(args, work);
 		else if (command === 'mirror') await mirrorRun(option('--tag'), work);
 		else if (command === 'promote') await promoteRun(option('--tag'), work, option('--manifest-digest'), args.includes('--resume'));
 		else if (command === 'stores') await stores(option('--tag'), work, option('--manifest-digest'));

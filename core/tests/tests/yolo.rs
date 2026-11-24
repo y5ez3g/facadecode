@@ -609,6 +609,105 @@ fn a_resume_reads_yolo_from_the_settings_file_as_a_start_does() {
     );
 }
 
+/// Settings are sampled for each managed launch and at the Guest's first tool call.
+#[test]
+fn yolo_is_captured_at_each_launch_and_at_the_guests_first_tool_call() {
+    const SESSION: &str = "065e033f-12fe-4bac-9870-dc4e3d4971af";
+    let home = TestHome::new("yolo-capture");
+    settings(&home, r#"{"yolo": false}"#);
+    let existing = home.start_named_fake("existing", &[]);
+    let captured = record(&home, "existing");
+    assert_eq!(captured["yolo"], false, "{captured}");
+    let daemon = home.lock_record("daemon").expect("the running daemon");
+    let mut existing_tools = McpTestClient::open_configured(&home, &existing.id);
+    let mut guest = McpTestClient::spawn(&home, home.command(&test_binaries().mcp));
+    let initialized = home.agents();
+    assert_eq!(initialized.len(), 1, "{initialized:?}");
+    assert_eq!(initialized[0]["reference"], captured["reference"]);
+
+    settings(&home, r#"{"yolo": true}"#);
+    let worker = home.start_named_fake("worker", &[("FAKECLI_SESSION", SESSION)]);
+    assert!(wait_until(
+        LOADED_TIMEOUT,
+        || record(&home, "worker")["session"] == SESSION
+    ));
+    let started = record(&home, "worker");
+    assert_eq!(started["yolo"], true, "{started}");
+    assert_eq!(started["reference"]["agent_id"], worker.id, "{started}");
+    assert_ne!(started["root"], captured["root"], "{started}");
+    let still_running = record(&home, "existing");
+    assert_eq!(still_running["yolo"], false, "{still_running}");
+    assert_eq!(still_running["reference"], captured["reference"]);
+    let screen = |client: &mut McpTestClient, target: &str| {
+        client.call("read_screen", json!({ "agent": target }))
+    };
+    let denied = screen(&mut existing_tools, &worker.address);
+    assert_eq!(denied["reason"], "refused", "{denied}");
+    let allowed = screen(
+        &mut McpTestClient::open_configured(&home, &worker.id),
+        &existing.address,
+    );
+    assert_eq!(allowed["status"], "success", "{allowed}");
+    assert_eq!(allowed["data"]["agent_id"], existing.id, "{allowed}");
+
+    let first_tool = screen(&mut guest, &existing.address);
+    assert_eq!(first_tool["status"], "success", "{first_tool}");
+    assert_eq!(first_tool["data"]["agent_id"], existing.id, "{first_tool}");
+    let joined = home
+        .agents()
+        .into_iter()
+        .find(|agent| agent["type"] == "guest")
+        .expect("the first tool call registered the Guest");
+    assert_eq!(joined["root"], joined["reference"], "{joined}");
+    assert_eq!(joined["yolo"], true, "{joined}");
+
+    settings(&home, r#"{"yolo": false}"#);
+    let worker_ref = &started["reference"];
+    let mut wire = connect(&home);
+    let stopped = wire.call_ok(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [worker_ref] } }),
+    );
+    assert_eq!(stopped["items"][0]["status"], "stopped", "{stopped}");
+    assert!(wait_until(LOADED_TIMEOUT, || !alive(&worker.process)));
+    let resumed = wire.call_ok(
+        "agent.resume",
+        json!({ "target": { "kind": "agent", "reference": worker_ref },
+                "size": { "cols": 80, "rows": 24 } }),
+    );
+    let continued = &resumed["agent"];
+    assert_eq!(continued["reference"], *worker_ref, "{resumed}");
+    assert_eq!(continued["yolo"], false, "{resumed}");
+    assert_eq!(continued["session"], SESSION, "{resumed}");
+    let resumed_pid = continued["pid"].as_i64().expect("the resumed CLI's PID") as i32;
+    assert_ne!(process_identity(resumed_pid), worker.process);
+    assert!(wait_for_screen_text(
+        &home,
+        &worker.address,
+        &format!("session {SESSION}")
+    ));
+    let after_resume = screen(
+        &mut McpTestClient::open_configured(&home, &worker.id),
+        &existing.address,
+    );
+    assert_eq!(after_resume["reason"], "refused", "{after_resume}");
+
+    let guest_id = joined["reference"]["agent_id"].as_str().unwrap();
+    assert_eq!(home.agent_record(guest_id).unwrap()["yolo"], true);
+    let guest_kept_access = screen(&mut guest, &existing.address);
+    assert_eq!(
+        guest_kept_access["status"], "success",
+        "{guest_kept_access}"
+    );
+    assert_eq!(guest_kept_access["data"]["agent_id"], existing.id);
+    assert_eq!(process_identity(existing.pid), existing.process);
+    assert_eq!(home.lock_record("daemon"), Some(daemon));
+    println!(
+        "Existing {} retained YOLO off. Worker {worker_ref} started with YOLO on and resumed session {SESSION} with YOLO off. Guest {} captured YOLO on at its first call and kept it.",
+        captured["reference"], joined["reference"]
+    );
+}
+
 #[cfg(unix)]
 /// A stand-in for Claude Code 2.1.322 in `bin`: it asks its question about trusting the folder as
 /// Claude Code does, behind a hidden cursor. It draws the question, its selection on the answer

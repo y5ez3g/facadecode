@@ -12,6 +12,7 @@ from zipfile import BadZipFile
 
 from acceptance import affected_products, baseline_cases, changed_paths, require_new_bindings
 from catalog import AcceptanceError, load
+from check_keeper_recovery import ARTIFACT as KEEPER_ARTIFACT
 from evidence import git
 from github_evidence import SHA, check_pull_run, run_artifacts, verify_hosted
 from github_timing import attempt_job_records, gh_json
@@ -19,6 +20,7 @@ from merge_review_native import replay_native
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REVIEW_MODE = 'read-only expanded CI review'
 ACTIONS_APP = 15368
 TARGETS = {
     'linux-x64': ('Linux', 'ubuntu-latest'), 'linux-arm64': ('Linux', 'ubuntu-24.04-arm'),
@@ -62,7 +64,8 @@ REQUIRED = {
                                                         'Keep Remote SSH runtime and cleanup evidence')},
 }
 REQUIRED[CORE]['Core on linux-x64'] += ('Format', 'Agents outlive an SSH login', 'Route a Core agent over real SSH',
-                                       'Keep the real SSH route evidence')
+                                       'Keep the real SSH route evidence', 'Run and verify the exact Keeper recovery',
+                                       'Keep the Keeper recovery evidence')
 REQUIRED[EXTENSION]['Extension on linux-x64, old engine'] += (
     'Verify the installed Linux x64 candidate', 'Keep the Linux x64 candidate install evidence',
     'Keep the checked-out source tree', 'Release script tests', 'Record the release fixture results',
@@ -85,24 +88,44 @@ def listed(label, pages, field):
     return records
 
 
-def current_candidate(repo, pull, head, base):
-    entry = gh_json(f'repos/{repo}/pulls/{pull}')
+def candidate_position(repo, pull, head, base, entry, ref):
     origin = entry['base']['repo']
-    ref = gh_json(f'repos/{repo}/git/ref/heads/main')
-    if (entry['number'], entry['state'], entry['head']['sha'], entry['base']['sha'],
-        entry['base']['ref'], origin['full_name'].lower(), ref['object']['sha']) != (
-            pull, 'open', head, base, 'main', repo.lower(), base):
-        raise AcceptanceError(f'PR #{pull} or main no longer matches the reviewed candidate')
+    if (entry['number'], entry['state'], entry['base']['ref'], origin['full_name'].lower()) != (
+            pull, 'open', 'main', repo.lower()):
+        raise AcceptanceError(f'expected open PR #{pull} against {repo} main')
+    if entry['head']['sha'] != head:
+        raise AcceptanceError(f'PR #{pull} head changed to {entry["head"]["sha"]}')
+    if entry['base']['sha'] != base or ref['object']['sha'] != base:
+        raise AcceptanceError(f'PR #{pull} base is {entry["base"]["sha"]} and main is {ref["object"]["sha"]}, '
+                              f'expected {base}')
     if entry['head']['repo']['id'] != origin['id']:
-        raise AcceptanceError('expanded review currently requires a same-repository pull request')
+        raise AcceptanceError('review currently requires a same-repository pull request')
     merge = entry['merge_commit_sha']
     if entry['mergeable'] is not True or not isinstance(merge, str) or not SHA.fullmatch(merge):
         raise AcceptanceError(f'PR #{pull} has no mergeable GitHub test revision')
-    commit = gh_json(f'repos/{repo}/git/commits/{merge}')
+    return {'repo_id': origin['id'], 'branch': entry['head']['ref'], 'draft': entry['draft'], 'merge': merge}
+
+
+def require_merge_tree(commit, merge, head, base):
     if commit['sha'] != merge or [parent['sha'] for parent in commit['parents']] != [base, head]:
         raise AcceptanceError('GitHub test revision does not have the reviewed base and head')
-    return {'repo_id': origin['id'], 'branch': entry['head']['ref'], 'draft': entry['draft'],
-            'merge': merge, 'tree': commit['tree']['sha']}
+    return commit['tree']['sha']
+
+
+def read_candidate(repo, pull, head=None, base=None):
+    entry = gh_json(f'repos/{repo}/pulls/{pull}')
+    head = entry['head']['sha'] if head is None else head
+    base = entry['base']['sha'] if base is None else base
+    ref = gh_json(f'repos/{repo}/git/ref/heads/main')
+    position = candidate_position(repo, pull, head, base, entry, ref)
+    merge = position['merge']
+    commit = gh_json(f'repos/{repo}/git/commits/{merge}')
+    observation = {'pull': entry, 'main': ref, 'merge': commit}
+    return observation, {**position, 'tree': require_merge_tree(commit, merge, head, base)}
+
+
+def current_candidate(repo, pull, head, base):
+    return read_candidate(repo, pull, head, base)[1]
 
 
 def require_catalog_minimum(cases, baseline):
@@ -119,9 +142,13 @@ def require_catalog_minimum(cases, baseline):
         raise AcceptanceError('previous acceptance obligations need explicit review: ' + ', '.join(sorted(differences)))
 
 
-def registered_workflows(repo):
+def workflow_registrations(repo):
     pages = gh_json('--paginate', '--slurp', f'repos/{repo}/actions/workflows?per_page=100')
-    registrations = listed('registered workflows', pages, 'workflows')
+    return listed('registered workflows', pages, 'workflows')
+
+
+def registered_workflows(repo):
+    registrations = workflow_registrations(repo)
     result = {}
     for name in REQUIRED:
         workflows = [item for item in registrations if item['path'] == f'.github/workflows/{name}']
@@ -131,26 +158,46 @@ def registered_workflows(repo):
     return result
 
 
-def current_runs(repo, pull, head, base, candidate, workflows):
+def require_run_identity(run, pull, head, base, candidate, workflow, workflow_id):
+    check_pull_run(run, pull, head, base)
+    identity = (run['repository']['id'], run['head_repository']['id'], run['head_branch'],
+                run['head_sha'], run['event'], run['path'], run['workflow_id'])
+    if identity != (candidate['repo_id'], candidate['repo_id'], candidate['branch'], head, 'pull_request',
+                    f'.github/workflows/{workflow}', workflow_id):
+        raise AcceptanceError(f'{workflow}: workflow run belongs to another candidate or workflow')
+
+
+def head_runs(repo, head):
     pages = gh_json('--paginate', '--slurp',
                     f'repos/{repo}/actions/runs?event=pull_request&head_sha={head}&per_page=100')
-    runs = {}
-    for run in listed('workflow runs', pages, 'workflow_runs'):
-        path = run['path']
-        workflow = path.removeprefix('.github/workflows/')
-        if path != f'.github/workflows/{workflow}' or workflow not in REQUIRED:
+    return listed('workflow runs', pages, 'workflow_runs')
+
+
+def find_candidate_run(runs, workflow, pull, head, base, candidate, workflow_id):
+    selected = None
+    stale_bases = set()
+    for run in runs:
+        if run['path'] != f'.github/workflows/{workflow}':
             continue
         if not run['pull_requests']:
             raise AcceptanceError(f'{workflow}: a run for this head has no identifiable pull request')
-        if any(link['number'] == pull and link['base']['sha'] == base for link in run['pull_requests']):
-            check_pull_run(run, pull, head, base)
-            identity = (run['repository']['id'], run['head_repository']['id'], run['head_branch'],
-                        run['head_sha'], run['event'])
-            if (identity != (candidate['repo_id'], candidate['repo_id'], candidate['branch'], head, 'pull_request')
-                    or run['workflow_id'] != workflows[workflow]):
-                raise AcceptanceError(f'{workflow}: workflow run belongs to another candidate')
-            if workflow in runs:
+        bases = {link['base']['sha'] for link in run['pull_requests'] if link['number'] == pull}
+        if base in bases:
+            require_run_identity(run, pull, head, base, candidate, workflow, workflow_id)
+            if selected is not None:
                 raise AcceptanceError(f'{workflow}: more than one run claims this candidate')
+            selected = run
+        else:
+            stale_bases.update(bases)
+    return selected, stale_bases
+
+
+def current_runs(repo, pull, head, base, candidate, workflows):
+    records = head_runs(repo, head)
+    runs = {}
+    for workflow in REQUIRED:
+        run, _ = find_candidate_run(records, workflow, pull, head, base, candidate, workflows[workflow])
+        if run is not None:
             runs[workflow] = run
     if missing := REQUIRED.keys() - runs.keys():
         raise AcceptanceError('no current run for ' + ', '.join(sorted(missing)))
@@ -162,8 +209,9 @@ def current_runs(repo, pull, head, base, candidate, workflows):
     return runs
 
 
-def require_jobs(repo, workflow, run, jobs, checks):
-    expected = REQUIRED[workflow]
+def require_jobs(repo, workflow, run, jobs, checks, *, expected=None):
+    if expected is None:
+        expected = REQUIRED[workflow]
     by_name = {job['name']: job for job in jobs}
     if len(jobs) != len(by_name) or expected.keys() != by_name.keys():
         raise AcceptanceError(f'{workflow}: missing, unexpected or duplicate jobs for the expanded matrix')
@@ -171,9 +219,11 @@ def require_jobs(repo, workflow, run, jobs, checks):
     for name, steps in expected.items():
         job = by_name[name]
         url = f'https://github.com/{repo}/actions/runs/{run["id"]}/job/{job["id"]}'
-        if ((job['status'], job['conclusion']) != ('completed', 'success') or not job['runner_id']
-                or job['labels'] != [RUNNERS[name]] or job['html_url'] != url):
-            raise AcceptanceError(f'{name}: the job did not complete successfully on a runner')
+        if (job['status'], job['conclusion']) != ('completed', 'success'):
+            raise AcceptanceError(f'{name}: job status {job["status"]}, conclusion {job["conclusion"]}')
+        if not job['runner_id'] or job['labels'] != [RUNNERS[name]] or job['html_url'] != url:
+            raise AcceptanceError(f'{name}: expected the exact job on runner label {RUNNERS[name]}, '
+                                  f'observed {job["labels"]}')
         check = by_id.get(job['id'], {})
         if (check.get('name'), check.get('details_url'), check.get('head_sha'), check.get('status'),
             check.get('conclusion'), check.get('app', {}).get('id'), check.get('app', {}).get('slug'),
@@ -187,18 +237,22 @@ def require_jobs(repo, workflow, run, jobs, checks):
     return {name: by_name[name]['id'] for name in sorted(expected)}
 
 
-def verify_jobs(repo, workflow, run):
+def attempt_evidence(repo, run):
     endpoint = f'repos/{repo}/actions/runs/{run["id"]}'
     jobs = attempt_job_records(endpoint, run, run['run_attempt'])
     pages = gh_json('--paginate', '--slurp',
                     f'repos/{repo}/check-suites/{run["check_suite_id"]}/check-runs?filter=all&per_page=100')
-    return require_jobs(repo, workflow, run, jobs, listed('check runs', pages, 'check_runs'))
+    return jobs, listed('check runs', pages, 'check_runs')
 
 
-def required_artifacts(repo, workflow, run):
-    attempt = run['run_attempt']
-    names = {
-        CORE: {f'core-ssh-route-{attempt}'},
+def verify_jobs(repo, workflow, run):
+    jobs, checks = attempt_evidence(repo, run)
+    return require_jobs(repo, workflow, run, jobs, checks)
+
+
+def required_artifact_names(workflow, attempt):
+    return {
+        CORE: {f'core-ssh-route-{attempt}', f'{KEEPER_ARTIFACT}-{attempt}'},
         COLD: {f'core-cold-migration-{attempt}'},
         REMOTE: {f'extension-remote-ssh-{attempt}'},
         EXTENSION: {
@@ -206,8 +260,12 @@ def required_artifacts(repo, workflow, run):
             *(f'extension-{target}' for target in TARGETS),
             *(f'editor-tests-{target}-{engine}' for target in TARGETS for engine in ('old', 'rust')),
         },
-    }
-    return run_artifacts(f'repos/{repo}/actions/runs/{run["id"]}', run, names[workflow])
+    }[workflow]
+
+
+def required_artifacts(repo, workflow, run):
+    names = required_artifact_names(workflow, run['run_attempt'])
+    return run_artifacts(f'repos/{repo}/actions/runs/{run["id"]}', run, names)
 
 
 def require_checkout(root, head, candidate):
@@ -250,7 +308,7 @@ def review(root, repo, pull, head, base, output):
         raise AcceptanceError('the candidate or its current workflow runs changed during review')
     require_checkout(root, head, candidate)
     return {
-        'mode': 'read-only expanded CI review', 'repo': repo, 'pull': pull, 'head': head, 'base': base, **candidate,
+        'mode': REVIEW_MODE, 'repo': repo, 'pull': pull, 'head': head, 'base': base, **candidate,
         'workflows': {workflow: {'run': run['id'], 'attempt': run['run_attempt'], 'jobs': job_ids[workflow]}
                       for workflow, run in sorted(runs.items())},
         'shadow': shadow, 'native': native,

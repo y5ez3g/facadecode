@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -9,7 +10,9 @@ from github_main_health import first_attempt_state
 from merge_review import (
     ACTIONS_APP, REMOTE, REQUIRED, RUNNERS, current_candidate, current_runs, listed, require_catalog_minimum, require_jobs,
 )
-from merge_review_native import editor_passes
+from merge_review_native import (
+    OLD_EXPIRED_REOPEN, OLD_IMMEDIATE_REOPEN, OLD_WINDOW_GRACE_CASE, check_old_window_grace, editor_passes,
+)
 
 
 REPO, PULL = 'owner/repo', 11
@@ -148,3 +151,27 @@ class ExpandedReview(unittest.TestCase):
                 path.write_text(output)
                 with self.subTest(output=output), self.assertRaises(AcceptanceError):
                     editor_passes(path)
+
+    def test_old_window_grace_requires_both_reopens_the_natural_exit_and_cleanup(self):
+        before = {'phase': 'folder', 'runId': 'run-' + '1' * 32, 'pid': 40, 'session': 'native-session'}
+        closed = {'phase': 'closed', 'host': 38}
+        after = {**before, 'phase': 'reopened', 'terminals': 1}
+        reopened = {**after, 'runId': 'run-' + '2' * 32, 'pid': 41}
+        early = OLD_IMMEDIATE_REOPEN + json.dumps([before, closed, after])
+        timing = "✔ claude: the closed window's process ended after 89605 ms, using the production grace period"
+        late = OLD_EXPIRED_REOPEN + json.dumps([before, closed, reopened])
+        cleanup = 'Isolated editor profile cleanup finished.'
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'integration.log'
+            path.write_text('\n'.join((early, timing, late, cleanup)))
+            self.assertEqual(check_old_window_grace(path), OLD_WINDOW_GRACE_CASE)
+            for observation in ((early, late, cleanup), (late, timing, early, cleanup), (early, timing, late),
+                                (early, timing.replace('89605', '1200'), late, cleanup),
+                                (early, timing, late.replace('"pid": 41', '"pid": 40'), cleanup),
+                                (early, timing, late.replace('"terminals": 1', '"terminals": 2'), cleanup),
+                                (early, timing, late.replace('"phase": "reopened"', '"phase": "other"'), cleanup),
+                                (early, timing, late.replace('"session": "native-session", "terminals"',
+                                                             '"session": "other-session", "terminals"'), cleanup)):
+                path.write_text('\n'.join(observation))
+                with self.subTest(observation=observation), self.assertRaises(AcceptanceError):
+                    check_old_window_grace(path)

@@ -512,8 +512,26 @@ interface Step {
 	readonly untilAbsent?: string;
 	readonly wait?: number;
 	readonly timed?: boolean;
+	readonly cancelWhenPending?: true;
 }
 
+/** Observe admission without taking the message from the recipient's inbox. */
+async function pendingSend(home: string, target: string, text: string): Promise<number> {
+	const store = new DatabaseSync(path.join(home, 'core', 'facade.db'), { readOnly: true });
+	try {
+		const find = store.prepare(`SELECT number FROM messages
+			WHERE "from" = ? AND "to" = ? AND text = ? AND status = 'pending' AND paste IS NULL`);
+		const deadline = performance.now() + 10_000;
+		while (performance.now() < deadline) {
+			const number = find.get(agent.slice(1), target.split('@')[0], text)?.number;
+			if (typeof number === 'number') { return number; }
+			await new Promise(resolve => setTimeout(resolve, 100));
+		}
+		throw new Error('The send never became pending before cancellation');
+	} finally {
+		store.close();
+	}
+}
 
 async function drive(server: { command: string; args: string[]; env: { [name: string]: string } }): Promise<void> {
 	const shim = spawn(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ['pipe', 'pipe', 'ignore'] });
@@ -551,7 +569,21 @@ async function drive(server: { command: string; args: string[]; env: { [name: st
 		const steps = JSON.parse(fs.readFileSync(taken, 'utf8')) as Step[];
 		for (const step of steps) {
 			const began = step.timed ? performance.now() : undefined;
-			let answer = await request('tools/call', { name: step.tool, arguments: filled(step.arguments) });
+			const args = filled(step.arguments) as Step['arguments'];
+			const reply = request('tools/call', { name: step.tool, arguments: args });
+			let cancellation: { requestId: number; messageNumber: number; relay: string } | undefined;
+			if (step.cancelWhenPending) {
+				const requestId = id;
+				const { to, text } = args;
+				const home = server.env.FACADE_HOME;
+				if (step.tool !== 'send_message' || typeof to !== 'string' || typeof text !== 'string' || !home) {
+					throw new Error('Cancellation requires a Rust send in the isolated fixture');
+				}
+				const messageNumber = await pendingSend(home, to, text);
+				shim.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId } })}\n`);
+				cancellation = { requestId, messageNumber, relay: path.basename(server.command) };
+			}
+			let answer = await reply;
 			const elapsedMs = began === undefined ? undefined : performance.now() - began;
 			const end = Date.now() + (step.wait ?? 10_000);
 			const waitingForScreen = () => (step.until && !JSON.stringify(answer).includes(step.until))
@@ -564,7 +596,7 @@ async function drive(server: { command: string; args: string[]; env: { [name: st
 			for (const [name, at] of Object.entries(step.save ?? {})) {
 				saved[name] = at.split('.').reduce<unknown>((value, key) => (value as { [key: string]: unknown } | undefined)?.[key], structured);
 			}
-			out({ step: step.tool, phase, answer, elapsedMs });
+			out({ step: step.tool, phase, answer, elapsedMs, cancellation });
 		}
 		out({ step: 'done', phase });
 	}

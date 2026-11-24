@@ -741,6 +741,23 @@ fn programs_installed_again_while_the_keeper_runs_them_are_replaced_by_copy_and_
     );
 }
 
+#[cfg(unix)]
+fn launch_installed_copy<T>(mut launch: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    // A concurrent spawn can briefly inherit the fixture's writable descriptor before its exec.
+    let deadline = std::time::Instant::now() + secs(1);
+    loop {
+        match launch() {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            result => return result,
+        }
+    }
+}
+
 /// Facade started from a copy of its programs, as a release build is, runs from copies in its
 /// build's folder that only this user can use: a daemon `--detach` starts, and the keeper that a
 /// daemon started as the copy starts. Once that copy is gone, a run's hook still writes its
@@ -768,7 +785,7 @@ fn facade_started_from_a_copy_runs_on_once_that_copy_is_gone() {
             .stdin(std::process::Stdio::null());
         command
     };
-    let detached = as_copy(&["daemon", "--detach"]).output().unwrap();
+    let detached = launch_installed_copy(|| as_copy(&["daemon", "--detach"]).output()).unwrap();
     assert!(detached.status.success(), "{}", stderr(&detached));
     let bin = home.path.join("core").join("bin");
     let build = bin.join(
@@ -796,11 +813,11 @@ fn facade_started_from_a_copy_runs_on_once_that_copy_is_gone() {
     );
     // A daemon run as the copy itself starts the keeper from its build's folder.
     let said = home.folder().join("foreground.log");
-    let mut foreground = as_copy(&["daemon"])
+    let mut command = as_copy(&["daemon"]);
+    command
         .stdout(std::process::Stdio::null())
-        .stderr(std::fs::File::create(&said).unwrap())
-        .spawn()
-        .unwrap();
+        .stderr(std::fs::File::create(&said).unwrap());
+    let mut foreground = launch_installed_copy(|| command.spawn()).unwrap();
     let log = || std::fs::read_to_string(&said).unwrap_or_default();
     // It compares its program with the installed one byte by byte before it serves, which a loaded
     // machine reads slowly.

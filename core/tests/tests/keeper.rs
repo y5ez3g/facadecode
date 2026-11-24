@@ -512,8 +512,11 @@ fn a_dead_keeper_is_replaced_and_the_daemon_keeps_every_terminal() {
         "the original Attach watch stopped receiving output: {:?}",
         connection.changes(watch)
     );
-    assert!(wait_until(LOADED_TIMEOUT, || home.submitted_messages()
-        == ["still here"]));
+    let mut submissions = Vec::new();
+    assert!(wait_until(LOADED_TIMEOUT, || {
+        submissions = home.submitted_messages();
+        submissions == ["still here"]
+    }));
 
     connection.write(&typed(b"/fake exit 42\r"));
     let mut exit = None;
@@ -547,10 +550,6 @@ fn a_dead_keeper_is_replaced_and_the_daemon_keeps_every_terminal() {
         wait_until(LOADED_TIMEOUT, || !alive(&stopped.process)),
         "the replacement keeper stopped the other adopted CLI"
     );
-    println!(
-        "daemon {daemon:?}, keeper {keeper:?} -> {replacement:?}, CLI {:?}, watch {watch}, exit {exit}",
-        agent.process
-    );
     let inspected = home.run_facade_ok(&["status", "w2"]);
     assert!(
         inspected
@@ -558,6 +557,17 @@ fn a_dead_keeper_is_replaced_and_the_daemon_keeps_every_terminal() {
             .any(|line| line.starts_with("State ")
                 && line[5..].trim() == "Ended (stopped by Facade)"),
         "the record retains the stop: {inspected}"
+    );
+    println!(
+        "Facade Keeper recovery observation {}",
+        json!({
+            "daemon": { "pid": daemon.0, "birth": daemon.1 },
+            "keeper_before": { "pid": keeper.0, "birth": keeper.1 },
+            "keeper_after": { "pid": replacement.0, "birth": replacement.1 },
+            "reference": reference, "api_version": welcome["result"]["api_version"],
+            "cli": agent.process, "stopped_cli": stopped.process,
+            "watch": watch, "submissions": submissions, "exit": exit,
+        })
     );
 }
 

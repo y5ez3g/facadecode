@@ -541,6 +541,104 @@ fn a_guarded_removal_matches_the_exact_saved_id_even_when_a_name_matches() {
     assert_eq!(ssh_attempts(&remote), attempts);
 }
 
+/// Both removal entry points select a saved route by ID while another peer has the same name.
+#[test]
+fn daemon_and_shell_remove_only_the_selected_saved_route() {
+    let local = TestHome::new("exact-remove-local");
+    let selected = TestHome::new("exact-remove-selected");
+    let decoy = TestHome::new("exact-remove-decoy");
+    install_machine_ssh(
+        &[
+            ("laptop", &local),
+            ("selected", &selected),
+            ("decoy", &decoy),
+        ],
+        &test_binaries().facade,
+    );
+    let local_id = name_machine(&local, "laptop");
+    let selected_id = name_machine(&selected, "devbox");
+    let decoy_id = name_machine(&decoy, "devbox");
+    assert_ne!(selected_id, decoy_id);
+    let kept = decoy.start_fake("kept");
+    add_saved(&local, "decoy", &decoy);
+    wait_for_route(&local, &decoy_id, &[&decoy_id]);
+
+    let save_selected = || {
+        add_saved(&local, "selected", &selected);
+        wait_for_route(&local, &selected_id, &[&selected_id]);
+        let listed = machines_json(&local);
+        for id in [&selected_id, &decoy_id] {
+            let peer = machine_in(&listed, id).expect("both saved peers are listed");
+            assert_eq!(peer["name"], "devbox", "{peer}");
+        }
+        machine_in(&listed, &local_id).expect("the route owner's roster row")
+    };
+    let both = save_selected();
+    let selected_route = saved_ssh(&both, &local_id, &selected_id);
+    let decoy_route = saved_ssh(&both, &local_id, &decoy_id);
+    let attempts = || (ssh_attempts(&selected), ssh_attempts(&decoy));
+    let retained_route = || {
+        let listed = machines_json(&local);
+        let owner = machine_in(&listed, &local_id).expect("the route owner's roster row");
+        assert!(
+            !owner["connections"].as_array().unwrap().iter().any(|link| {
+                link["kind"] == "saved"
+                    && link["initiator_machine_id"] == local_id
+                    && link["machine_id"] == selected_id
+            }),
+            "the selected route is still saved: {listed}"
+        );
+        assert!(
+            machine_in(&listed, &selected_id).is_none_or(|peer| peer.get("route").is_none()),
+            "the selected peer still has a route: {listed}"
+        );
+        let survivor = machine_in(&listed, &decoy_id).expect("the same-named peer stays listed");
+        assert_eq!(survivor["name"], "devbox", "{survivor}");
+        saved_ssh(&owner, &local_id, &decoy_id)
+    };
+
+    let before = attempts();
+    let removed = connect(&local).call_ok(
+        "machine.remove",
+        json!({ "machine": "devbox", "expected_machine_id": selected_id }),
+    );
+    assert_eq!(
+        removed,
+        json!({ "machine_id": selected_id, "name": "devbox", "reachable": false,
+            "transport": selected_route["transport"] }),
+    );
+    assert_eq!(retained_route(), decoy_route);
+    assert_eq!(attempts(), before);
+
+    let restored = save_selected();
+    assert_eq!(
+        saved_ssh(&restored, &local_id, &selected_id),
+        selected_route
+    );
+    let before = attempts();
+    let shell = local.run_facade(&["machine", "remove", &selected_id]);
+    assert_eq!(shell.status.code(), Some(0), "{}", stderr(&shell));
+    assert_eq!(stdout(&shell), "Removed the saved connection to devbox.\n");
+    assert_eq!(retained_route(), decoy_route);
+    assert_eq!(attempts(), before);
+
+    // A cold read checks what was saved, then an exact agent query uses the surviving route.
+    local.kill_home_processes();
+    assert_eq!(retained_route()["transport"], decoy_route["transport"]);
+    assert_eq!(attempts(), before);
+    let reference = json!({ "machine_id": decoy_id, "agent_id": kept.id });
+    let inspected = connect(&local).call_ok("agent.inspect", json!({ "target": reference }));
+    assert_eq!(inspected["agent"]["reference"], reference, "{inspected}");
+    assert_eq!(inspected["agent"]["pid"], kept.pid, "{inspected}");
+    assert_eq!(process_identity(kept.pid), kept.process);
+    assert_eq!(ssh_attempts(&selected), before.0);
+    assert_ne!(ssh_attempts(&decoy), before.1);
+    println!(
+        "Daemon and Shell removed {selected_id}. The cold saved route to the other devbox {decoy_id} reached {reference} with PID {}.",
+        kept.pid
+    );
+}
+
 /// A saved destination must introduce its original machine before it can serve any agent.
 #[test]
 fn a_saved_destination_refuses_a_different_peer_and_keeps_exact_agent_refs() {
@@ -3389,6 +3487,163 @@ fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
     assert!(alive(&process));
     println!(
         "Start outcome {receipt_id} for {address} with PID {pid}. Foreign outcome refusal {refused}"
+    );
+}
+
+/// The waiting child's machine sends one permission notice to its remote creator. A different
+/// authenticated machine is refused before posting a notice for the same child.
+#[test]
+fn a_remote_childs_wait_notice_reaches_its_creator_once() {
+    let origin = TestHome::new("wait-notice-origin");
+    let holder = TestHome::new("wait-notice-holder");
+    std::fs::write(
+        holder.path.join("facade.json"),
+        json!({ "clis": { "fake": { "command": test_binaries().fakecli, "env": {
+            "FAKECLI_STATUS": "1", "FAKECLI_LOG": holder.fake_log,
+        } } } })
+        .to_string(),
+    )
+    .unwrap();
+    let origin_id = name_machine(&origin, "origin");
+    let holder_id = name_machine(&holder, "holder");
+    let creator = origin.start_fake("creator");
+    let creator_ref = json!({ "machine_id": origin_id, "agent_id": creator.id });
+    let bridge = ObservedMachineLink::open(&origin, &holder);
+    wait_for_route(&origin, &holder_id, &[&holder_id]);
+    wait_for_route(&holder, &origin_id, &[&origin_id]);
+
+    let mut caller = McpTestClient::open_configured(&origin, &creator.id);
+    let started = caller.call(
+        "start_agent",
+        json!({ "cli": "fake", "name": "child", "machine": holder_id, "folder": holder.project }),
+    );
+    assert_eq!(started["status"], "success", "{started}");
+    assert_eq!(started["data"]["machine_id"], holder_id, "{started}");
+    // The child and creator have the same agent number on distinct machines.
+    let address = format!("{}@holder", creator.id);
+    assert_eq!(started["data"]["id"], address, "{started}");
+    let child_ref = json!({ "machine_id": holder_id, "agent_id": creator.id });
+    let mut person = connect(&holder);
+    let inspect = |wire: &mut DaemonTestClient| {
+        wire.call_ok("agent.inspect", json!({ "target": child_ref }))["agent"].clone()
+    };
+    let mut child = Value::Null;
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            child = inspect(&mut person);
+            child["state"] == "idle"
+        }),
+        "the child did not become ready: {child}"
+    );
+    assert_eq!(child["reference"], child_ref, "{child}");
+    assert_eq!(child["creator"], creator_ref, "{child}");
+    let child_pid = child["pid"].as_i64().expect("the running child's PID") as i32;
+    let child_process = process_identity(child_pid);
+    let question = "May I run the fixture?";
+    person.call_ok(
+        "agent.type",
+        json!({ "target": child_ref, "input": {
+            "kind": "text", "text": format!("/fake block permission {question}"), "enter": true,
+        } }),
+    );
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            child = inspect(&mut person);
+            child["state"] == "waiting_for_you"
+        }),
+        "the child did not wait for the person: {child}"
+    );
+    let detail = json!({ "kind": "permission", "text": question });
+    assert_eq!(child["state_detail"], detail, "{child}");
+
+    let is_notice = |frame: &Value| {
+        frame["method"] == "forward"
+            && frame["params"]["params"]["op"] == "internal.deliver_wait_notice"
+    };
+    let notice = observed_frame(&bridge.from_peer, "the held-input notice", is_notice);
+    let params = &notice["params"];
+    assert_eq!(params["route"], json!([origin_id]), "{notice}");
+    assert_eq!(
+        params["caller"],
+        json!({ "kind": "terminal", "machine_id": holder_id }),
+        "{notice}"
+    );
+    assert_eq!(
+        params["params"]["args"],
+        json!({
+            "recipient": creator_ref, "waiting": child_ref, "name": "child", "kind": "permission",
+        }),
+        "{notice}"
+    );
+    let accepted = observed_frame(&bridge.from_front, "the notice acknowledgement", |frame| {
+        frame["id"] == notice["id"] && frame.get("method").is_none()
+    });
+    assert_eq!(accepted["result"], json!({}), "{accepted}");
+
+    let read = caller.call("read_messages", json!({ "last": 10 }));
+    assert_eq!(read["status"], "success", "{read}");
+    let [row] = read["data"]["messages"].as_array().unwrap().as_slice() else {
+        panic!("expected exactly one wait notice: {read}");
+    };
+    let notice_id = row["id"].as_str().expect("the notice message ID");
+    let title = format!("child ({address}), which you started, waits for the person's permission.");
+    let detail_text = "It has waited 20 seconds. Only the person can give it.";
+    assert_eq!(row["from"], "facade", "{row}");
+    assert_eq!(row["text"], format!("{title}\n{detail_text}"), "{row}");
+    let submitted = [format!("🔔 {title} · {notice_id}\n{detail_text}")];
+    assert!(
+        wait_until(LOADED_TIMEOUT, || origin.submitted_messages() == submitted),
+        "creator terminal submissions: {:?}",
+        origin.submitted_messages()
+    );
+
+    let other = TestHome::new("wait-notice-other");
+    let other_id = name_machine(&other, "other");
+    let other_link = ObservedMachineLink::open(&origin, &other);
+    wait_for_route(&origin, &other_id, &[&other_id]);
+    let probe_id = 9_000_001;
+    let mut wrong_origin = notice.clone();
+    wrong_origin["id"] = json!(probe_id);
+    wrong_origin["params"]["caller"]["machine_id"] = json!(other_id);
+    (&other_link.front_socket)
+        .write_all(format!("{wrong_origin}\n").as_bytes())
+        .unwrap();
+    let refused = observed_frame(
+        &other_link.from_front,
+        "the wrong-origin refusal",
+        |frame| frame["id"] == probe_id && frame.get("method").is_none(),
+    );
+    assert_eq!(error_reason(&refused), "refused", "{refused}");
+    assert!(refused.get("result").is_none(), "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "the wait notice does not match the sending or receiving machine",
+        "{refused}"
+    );
+
+    // Leave the same permission prompt open for another reporting interval.
+    let deadline = Instant::now() + secs(21);
+    loop {
+        match bridge
+            .from_peer
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            Ok(frame) => assert!(!is_notice(&frame), "repeated notice: {frame}"),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+            Err(error) => panic!("the holder link closed during the wait: {error}"),
+        }
+    }
+    assert_eq!(caller.call("read_messages", json!({ "last": 10 })), read);
+    assert_eq!(origin.submitted_messages(), submitted);
+    let held = inspect(&mut person);
+    assert_eq!(held["state"], "waiting_for_you", "{held}");
+    assert_eq!(held["state_detail"], detail, "{held}");
+    assert_eq!(held["pid"], child_pid, "{held}");
+    assert_eq!(process_identity(child_pid), child_process);
+    assert!(alive(&child_process) && alive(&creator.process));
+    println!(
+        "One permission notice {notice_id} from {child_ref} to {creator_ref} (peer call {}). Wrong origin {other_id} refused: {refused}",
+        notice["id"]
     );
 }
 

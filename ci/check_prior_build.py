@@ -18,10 +18,10 @@ import time
 import tomllib
 
 from catalog import AcceptanceError, NATIVE_HOT_CASE, NATIVE_PRIOR_CASE, read_json
-from evidence import digest, execute, git, observed_core_tests, run_identity
+from evidence import digest, git, observed_core_tests, run_identity
 from native_core import (
-    ROOT, SYSTEM_PATH, clean_native_scope, hash_file, interrupted, read_markers,
-    source_identity, verify_native_cleanup, write_receipt,
+    ROOT, SYSTEM_PATH, cargo_artifact, clean_native_scope, hash_file, interrupted, logged_command,
+    owned_homes, read_markers, scenario_sockets, source_identity, verify_native_cleanup, write_receipt,
 )
 
 
@@ -55,17 +55,6 @@ def harness_hashes(target='machines'):
         'ci/check_prior_build.py', 'ci/native_core.py', 'ci/evidence.py',
         f'core/tests/tests/{target}.rs', 'core/tests/src/bin/facade-fakecli.rs',
     )}
-
-
-def owned_homes(log, test_tmp):
-    homes = []
-    if log.is_file():
-        for line in log.read_text().splitlines():
-            home = Path(line)
-            if not home.is_absolute() or not home.resolve().is_relative_to(test_tmp):
-                raise AcceptanceError(f'scenario reported an unowned home {home}')
-            homes.append(home)
-    return homes
 
 
 def cold_observation(output, scope):
@@ -253,16 +242,6 @@ def require_linux_programs(directory):
             raise AcceptanceError(f'{directory / name} is not a Linux x64 ELF executable')
 
 
-def logged_command(command, cwd, env, log, receipt, *, timeout=900):
-    argv = list(map(str, command))
-    with log.open('w') as stream:
-        print('$ ' + shlex.join(argv), file=stream, flush=True)
-        status = execute(argv, cwd, env, stream, timeout=timeout)
-    receipt['commands'].append({'argv': argv, 'status': status, 'log': log.name, 'sha256': hash_file(log)})
-    if status != 'pass':
-        raise AcceptanceError(f'{status} running {argv[0]} ({log})')
-
-
 def compile_prior(scope, cargo, env, output, receipt):
     prior = scope / 'prior-source'
     prior.mkdir(mode=0o700)
@@ -292,20 +271,6 @@ def compile_prior(scope, cargo, env, output, receipt):
     return programs
 
 
-def cargo_artifact(log, name, *, test):
-    matches = []
-    for line in log.read_text().splitlines():
-        if not line.startswith('{'):
-            continue
-        record = json.loads(line)
-        if (record.get('reason') == 'compiler-artifact' and record['target']['name'] == name
-                and record['profile']['test'] is test and record.get('executable')):
-            matches.append(Path(record['executable']))
-    if len(matches) != 1 or not matches[0].is_file() or not os.access(matches[0], os.X_OK):
-        raise AcceptanceError(f'Cargo did not report exactly one executable for {name} ({log})')
-    return matches[0]
-
-
 def compile_candidate(cargo, env, output, receipt, target):
     commands = (
         ('facade-fakecli', False, ['build', '--bin', 'facade-fakecli']),
@@ -318,13 +283,6 @@ def compile_candidate(cargo, env, output, receipt, target):
                        ROOT / 'core', env, log, receipt)
         artifacts.append(cargo_artifact(log, name, test=test))
     return artifacts
-
-
-def scenario_sockets(home_log, test_tmp):
-    return {
-        (home, role): Path(f'/tmp/facade-core-{os.getuid()}/{role}-{sha256(os.fsencode(home)).hexdigest()[:10]}.sock')
-        for home in owned_homes(home_log, test_tmp) for role in ('daemon', 'keeper')
-    }
 
 
 def observe_hot_takeover(output, home_log, test_tmp, receipt):

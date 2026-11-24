@@ -8,6 +8,7 @@ on:
       - '.github/workflows/core-check.yml'
       - 'ci/acceptance.py'
       - 'ci/catalog.py'
+      - 'ci/check_keeper_recovery.py'
       - 'ci/check_real_ssh_route.py'
       - 'ci/evidence.py'
       - 'ci/native_core.py'
@@ -74,6 +75,8 @@ jobs:
         run: scripts\test-all.ps1
       - name: Agents outlive an SSH login
         if: ${{ !cancelled() && matrix.target == 'linux-x64' }}
+        env:
+          CARGO_INCREMENTAL: '0'
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q openssh-server
@@ -101,6 +104,19 @@ jobs:
           name: core-ssh-route-${{ github.run_attempt }}
           path: ${{ runner.temp }}/facade-ssh-route/
           if-no-files-found: ignore
+      - name: Run and verify the exact Keeper recovery
+        if: ${{ !cancelled() && matrix.target == 'linux-x64' }}
+        run: |
+          python3 -B ../ci/check_keeper_recovery.py --reuse-workspace-build \
+            --ssh-receipt "$RUNNER_TEMP/facade-ssh-route/receipt.json" \
+            --output-dir "$RUNNER_TEMP/facade-keeper-recovery"
+      - name: Keep the Keeper recovery evidence
+        if: ${{ always() && matrix.target == 'linux-x64' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-keeper-recovery-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/facade-keeper-recovery/
+          if-no-files-found: error
       - name: Collect the failed Windows run
         if: ${{ failure() && runner.os == 'Windows' }}
         shell: powershell
