@@ -256,13 +256,15 @@ struct SyncState<T: Timeout> {
 
     /// Bytes read during the synchronized update.
     buffer: Vec<u8>,
+    /// Length of the new update's retained opening marker. A resumed partial frame has no floor.
+    start_marker_len: Option<usize>,
 }
 
 impl<T: Timeout> Default for SyncState<T> {
     fn default() -> Self {
         // Facade (memory): was `Vec::with_capacity(SYNC_BUFFER_SIZE)`, 2 MiB for every terminal
         // from its start. The buffer takes memory only while an update holds output back.
-        Self { buffer: Vec::new(), timeout: Default::default() }
+        Self { buffer: Vec::new(), timeout: Default::default(), start_marker_len: Some(0) }
     }
 }
 
@@ -321,6 +323,22 @@ impl<T: Timeout> Processor<T> {
         self.stop_sync_internal(handler, None);
     }
 
+    /// Reopens an update after its output had to be applied before the frame was complete.
+    pub fn resume_sync<H>(&mut self, handler: &mut H)
+    where
+        H: Handler,
+    {
+        self.advance(handler, &BSU_CSI);
+        self.state.sync_state.start_marker_len = None;
+    }
+
+    /// Whether an open update has output to apply or continues a partial frame.
+    pub fn sync_holds_output(&self) -> bool {
+        let sync = &self.state.sync_state;
+        sync.timeout.pending_timeout()
+            && sync.start_marker_len.map_or(true, |len| sync.buffer.len() > len)
+    }
+
     /// End a synchronized update.
     ///
     /// The `bsu_offset` parameter should be passed if the sync buffer contains
@@ -349,11 +367,13 @@ impl<T: Timeout> Processor<T> {
                 let new_len = self.state.sync_state.buffer.len() - bsu_offset;
                 self.state.sync_state.buffer.copy_within(bsu_offset.., 0);
                 self.state.sync_state.buffer.truncate(new_len);
+                self.state.sync_state.start_marker_len = Some(SYNC_ESCAPE_LEN);
             },
             // Report mode and clear state if no new BSU is present.
             None => {
                 handler.unset_private_mode(NamedPrivateMode::SyncUpdate.into());
                 self.state.sync_state.timeout.clear_timeout();
+                self.state.sync_state.start_marker_len = Some(0);
                 // Facade (memory): was `buffer.clear()`, which kept the memory for the next update.
                 self.state.sync_state.buffer = Vec::new();
             },

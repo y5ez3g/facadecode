@@ -168,6 +168,30 @@ fn a_full_reset_and_a_shell_prompt_end_reports_in_the_order_they_come() {
 }
 
 #[test]
+fn only_applied_cell_writes_count_on_the_cursor_row() {
+    let mut screen = Screen::new(80, 24, 0);
+    assert!(
+        !screen
+            .feed(b"\x1b]2;first title\x07")
+            .cursor_row_cells_written
+    );
+    assert!(screen.feed(b"input").cursor_row_cells_written);
+    assert!(!screen.feed(b"\x1b[1;6H").cursor_row_cells_written);
+    assert!(
+        !screen
+            .feed(b"\x1b7\x1b[7;1Hprogress\x1b8")
+            .cursor_row_cells_written
+    );
+    assert!(!screen.feed(b"\x1b]2;next").cursor_row_cells_written);
+    assert!(!screen.feed(b" title\x07").cursor_row_cells_written);
+    assert!(!screen.feed(b"\x1b[?2026h\x1b[2K").cursor_row_cells_written);
+    assert!(screen.feed(b"\x1b[?2026l").cursor_row_cells_written);
+    assert!(screen.feed(b"\x1b[2K").cursor_row_cells_written);
+    assert!(!screen.feed(b"\x1b[?2026hframe").cursor_row_cells_written);
+    assert!(screen.end_synchronized_update().cursor_row_cells_written);
+}
+
+#[test]
 fn a_synchronized_update_is_one_frame() {
     let mut screen = Screen::new(20, 5, 0);
     screen.feed(b"\x1b[?2026hhalf");
@@ -180,6 +204,79 @@ fn a_synchronized_update_is_one_frame() {
     screen.feed(b" frame\x1b[?2026l");
     assert!(screen.synchronized_update_deadline().is_none());
     assert_eq!(screen.text(5), vec!["half frame"]);
+}
+
+/// An update that begins across reads, behind the end of another, holds no frame back while
+/// nothing is in it.
+#[test]
+fn an_empty_update_that_begins_across_reads_holds_no_frame_back() {
+    let mut screen = Screen::new(20, 5, 0);
+    screen.feed(b"one\x1b[?2026h\x1b[Htwo");
+    screen.feed(b"\x1b[?2026l\x1b[?202");
+    screen.feed(b"6h");
+    assert_eq!(screen.text(5), vec!["two"]);
+    assert!(screen.synchronized_update_deadline().is_some());
+    assert!(!screen.is_drawing(), "the new update holds nothing yet");
+}
+
+#[test]
+fn a_compound_start_holds_output_through_a_later_start() {
+    let output = b"\x1b[?25;2026h\x1b[Htwo\x1b[?2026h";
+    for cut in 0..=output.len() {
+        let mut screen = Screen::new(20, 5, 0);
+        screen.feed(b"one");
+        screen.feed(&output[..cut]);
+        screen.feed(&output[cut..]);
+        assert_eq!(screen.text(5), vec!["one"], "cut at {cut}");
+        assert!(screen.is_drawing(), "cut at {cut}");
+    }
+}
+
+/// However a CLI's output comes in pieces, an update that holds nothing yet holds no frame back,
+/// and one that holds output does.
+#[test]
+fn an_update_holds_a_frame_back_however_its_output_comes_in_pieces() {
+    let empty = b"one\x1b[?2026h\x1b[Htwo\x1b[?2026l\x1b[?2026h".as_slice();
+    let held = b"one\x1b[?2026h\x1b[Htwo\x1b[?2026l\x1b[?2026h\x1b[Hthree".as_slice();
+    for (output, drawing) in [(empty, false), (held, true)] {
+        for cut in 0..=output.len() {
+            let mut screen = Screen::new(20, 5, 0);
+            screen.feed(&output[..cut]);
+            screen.feed(&output[cut..]);
+            assert_eq!(screen.text(5), vec!["two"], "cut at {cut}");
+            assert!(
+                screen.synchronized_update_deadline().is_some(),
+                "cut at {cut}"
+            );
+            assert_eq!(screen.is_drawing(), drawing, "cut at {cut}");
+        }
+    }
+}
+
+/// A CLI may open its next update as it ends one: the frame it drew shows until output comes.
+#[test]
+fn an_update_with_nothing_in_it_holds_no_frame_back() {
+    let mut screen = Screen::new(20, 5, 0);
+    screen.feed(b"one\x1b[?2026h");
+    assert!(screen.synchronized_update_deadline().is_some());
+    assert!(!screen.is_drawing() && !screen.view().synchronized_update);
+    screen.feed(b"");
+    assert!(!screen.is_drawing());
+    screen.feed(b"\x1b[Htwo");
+    assert!(screen.is_drawing() && screen.view().synchronized_update);
+    assert_eq!(screen.text(5), vec!["one"]);
+    screen.feed(b"!\x1b[?2026l\x1b[?2026h");
+    assert!(screen.synchronized_update_deadline().is_some() && !screen.is_drawing());
+    assert_eq!(screen.text(5), vec!["two!"]);
+    // Another start behind output that is held back opens none anew.
+    screen.feed(b"\x1b[Hthree\x1b[?2026h");
+    assert!(screen.is_drawing());
+    screen.feed(b"\x1b[?2026l");
+    assert!(!screen.is_drawing());
+    assert_eq!(screen.text(5), vec!["three"]);
+    // A tab stop shows the frame up to it: the update opened again goes on with that frame.
+    screen.feed(b"\x1b[?2026h\x1b[Hfour\x1bH");
+    assert!(screen.synchronized_update_deadline().is_some() && screen.is_drawing());
 }
 
 #[test]

@@ -221,6 +221,9 @@ struct TermDamageState {
     /// Information about damage on terminal lines.
     lines: Vec<LineDamageBounds>,
 
+    /// Rows on which output wrote or erased cells since the last reset.
+    cell_writes: Vec<bool>,
+
     /// Old terminal cursor point.
     last_cursor: Point,
 }
@@ -230,7 +233,12 @@ impl TermDamageState {
         let lines =
             (0..num_lines).map(|line| LineDamageBounds::undamaged(line, num_cols)).collect();
 
-        Self { full: true, lines, last_cursor: Default::default() }
+        Self {
+            full: true,
+            lines,
+            cell_writes: vec![false; num_lines],
+            last_cursor: Default::default(),
+        }
     }
 
     #[inline]
@@ -244,6 +252,8 @@ impl TermDamageState {
         for line in 0..num_lines {
             self.lines.push(LineDamageBounds::undamaged(line, num_cols));
         }
+        self.cell_writes.resize(num_lines, false);
+        self.cell_writes.fill(false);
     }
 
     /// Damage point inside of the viewport.
@@ -258,10 +268,17 @@ impl TermDamageState {
         self.lines[line].expand(left, right);
     }
 
+    #[inline]
+    fn wrote_cells(&mut self, line: usize, left: usize, right: usize) {
+        self.cell_writes[line] = true;
+        self.damage_line(line, left, right);
+    }
+
     /// Reset information about terminal damage.
     fn reset(&mut self, num_cols: usize) {
         self.full = false;
         self.lines.iter_mut().for_each(|line| line.reset(num_cols));
+        self.cell_writes.fill(false);
     }
 }
 
@@ -488,6 +505,11 @@ impl<T> Term<T> {
     /// Resets the terminal damage information.
     pub fn reset_damage(&mut self) {
         self.damage.reset(self.columns());
+    }
+
+    /// Whether output wrote or erased cells on the cursor's row since the last damage reset.
+    pub fn cursor_row_cells_written(&self) -> bool {
+        self.damage.cell_writes[self.grid.cursor.point.line.0 as usize]
     }
 
     #[inline]
@@ -741,6 +763,7 @@ impl<T> Term<T> {
         mem::swap(&mut self.grid, &mut self.inactive_grid);
         self.mode ^= TermMode::ALT_SCREEN;
         self.selection = None;
+        self.damage.cell_writes.fill(false);
         self.mark_fully_damaged();
     }
 
@@ -769,6 +792,7 @@ impl<T> Term<T> {
 
         // Scroll between origin and bottom
         self.grid.scroll_down(&region, lines);
+        self.damage.cell_writes[region.start.0 as usize..region.end.0 as usize].fill(false);
         self.mark_fully_damaged();
     }
 
@@ -788,6 +812,7 @@ impl<T> Term<T> {
         self.selection = self.selection.take().and_then(|s| s.rotate(self, &region, lines as i32));
 
         self.grid.scroll_up(&region, lines);
+        self.damage.cell_writes[region.start.0 as usize..region.end.0 as usize].fill(false);
 
         // Scroll vi mode cursor.
         let viewport_top = Line(-(self.grid.display_offset() as i32));
@@ -1025,6 +1050,8 @@ impl<T> Term<T> {
         cursor_cell.bg = bg;
         cursor_cell.flags = flags;
         cursor_cell.extra = extra;
+        let point = self.grid.cursor.point;
+        self.damage.wrote_cells(point.line.0 as usize, point.column.0, point.column.0);
     }
 
     #[inline]
@@ -1091,6 +1118,7 @@ impl<T: EventListener> Handler for Term<T> {
             }
 
             self.grid[line][column].push_zerowidth(c);
+            self.damage.wrote_cells(line.0 as usize, column.0, column.0);
             return;
         }
 
@@ -1206,7 +1234,7 @@ impl<T: EventListener> Handler for Term<T> {
         let num_cells = self.columns() - destination;
 
         let line = cursor.point.line;
-        self.damage.damage_line(line.0 as usize, 0, self.columns() - 1);
+        self.damage.wrote_cells(line.0 as usize, 0, self.columns() - 1);
 
         let row = &mut self.grid[line][..];
 
@@ -1537,7 +1565,7 @@ impl<T: EventListener> Handler for Term<T> {
         // Cleared cells have current background color set.
         let bg = self.grid.cursor.template.bg;
         let line = cursor.point.line;
-        self.damage.damage_line(line.0 as usize, start.0, end.0);
+        self.damage.wrote_cells(line.0 as usize, start.0, end.0);
         let row = &mut self.grid[line];
         for cell in &mut row[start..end] {
             *cell = bg.into();
@@ -1558,7 +1586,7 @@ impl<T: EventListener> Handler for Term<T> {
         let num_cells = columns - end;
 
         let line = cursor.point.line;
-        self.damage.damage_line(line.0 as usize, 0, self.columns() - 1);
+        self.damage.wrote_cells(line.0 as usize, 0, self.columns() - 1);
         let row = &mut self.grid[line][..];
 
         for offset in 0..num_cells {
@@ -1656,7 +1684,7 @@ impl<T: EventListener> Handler for Term<T> {
             ansi::LineClearMode::All => (Column(0), Column(self.columns())),
         };
 
-        self.damage.damage_line(point.line.0 as usize, left.0, right.0 - 1);
+        self.damage.wrote_cells(point.line.0 as usize, left.0, right.0 - 1);
 
         let row = &mut self.grid[point.line];
         for cell in &mut row[left..right] {
@@ -1771,6 +1799,7 @@ impl<T: EventListener> Handler for Term<T> {
                 if cursor.line > 1 {
                     // Fully clear all lines before the current line.
                     self.grid.reset_region(..cursor.line);
+                    self.damage.cell_writes[..cursor.line.0 as usize].fill(true);
                 }
 
                 // Clear up to the current column in the current line.
@@ -1778,6 +1807,7 @@ impl<T: EventListener> Handler for Term<T> {
                 for cell in &mut self.grid[cursor.line][..end] {
                     *cell = bg.into();
                 }
+                self.damage.cell_writes[cursor.line.0 as usize] = true;
 
                 let range = Line(0)..=cursor.line;
                 self.selection = self.selection.take().filter(|s| !s.intersects_range(range));
@@ -1791,6 +1821,7 @@ impl<T: EventListener> Handler for Term<T> {
                 if (cursor.line.0 as usize) < screen_lines - 1 {
                     self.grid.reset_region((cursor.line + 1)..);
                 }
+                self.damage.cell_writes[cursor.line.0 as usize..].fill(true);
 
                 let range = cursor.line..Line(screen_lines as i32);
                 self.selection = self.selection.take().filter(|s| !s.intersects_range(range));
@@ -1811,6 +1842,7 @@ impl<T: EventListener> Handler for Term<T> {
                 }
 
                 self.selection = None;
+                self.damage.cell_writes.fill(true);
             },
             ansi::ClearMode::Saved if self.history_size() > 0 => {
                 self.grid.clear_history();

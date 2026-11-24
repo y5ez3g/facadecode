@@ -37,7 +37,7 @@ pub struct ScreenView {
     pub cursor: (usize, usize),
     /// Whether the cursor is shown.
     pub cursor_visible: bool,
-    /// Whether a synchronized update is open, so that the rows are still the previous frame.
+    /// Whether a synchronized update holds a frame back, so that the rows are still the one before.
     pub synchronized_update: bool,
 }
 
@@ -80,7 +80,7 @@ impl Screen {
             continues,
             cursor: (column.into(), row.into()),
             cursor_visible: self.terminal.has(TermMode::SHOW_CURSOR),
-            synchronized_update: self.synchronized_update_deadline().is_some(),
+            synchronized_update: self.is_drawing(),
         }
     }
 }

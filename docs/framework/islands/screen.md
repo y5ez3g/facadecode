@@ -79,6 +79,9 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 
 - `Screen::new(cols, rows, scrollback) -> Screen`; the daemon uses 10,000 rows.
 - `feed(&mut self, &[u8]) -> ParsedOutput`, `resize(&mut self, cols, rows)`.
+- `feed_observing` lets its reader inspect complete frames in order, including each applied
+  synchronized update when several finish in one read. `CursorRowWrites` says whether the frame
+  wrote or erased cells on the cursor row and whether it began before the marked boundary.
 - `set_colors(&mut self, colors: TerminalColors)` replaces the colors used for subsequent queries.
   `TerminalColors { foreground, background, cursor }` has three `Option<[u8; 3]>` fields; its
   default leaves all three `None`. OSC 10, 11 and 12 replies use `rgb:rrrr/gggg/bbbb`, each 8-bit
@@ -89,14 +92,23 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
   replaying later output. It preserves title eligibility from the redraw and produces no title
   change for viewers.
 - `synchronized_update_deadline() -> Option<Instant>`, `end_synchronized_update() -> ParsedOutput`.
+- `is_drawing() -> bool` reports whether an open synchronized update holds back a frame, as does
+  `ScreenView::synchronized_update`. An update opened after a frame holds nothing back until it
+  receives output. The parsed start and end of each update have the same effect across reads.
+  An update reopened after a tab-stop change still holds back the rest of its frame.
 
 **Daemon, agent actor** (`daemon/src/agent/actor.rs`):
 
-- `ParsedOutput { query_replies, title_change, viewer_output, native_activity, redraw_viewers,
-  status }`: replies are written to the run's terminal, viewer output goes to viewers, and
+- `ParsedOutput { query_replies, title_change, cursor_row_cells_written, viewer_output, native_activity,
+  redraw_viewers, status }`: replies are written to the run's terminal, viewer output goes to viewers, and
   status goes to the state. `title_change` carries the CLI's own title. `native_activity`
   carries the batch's complete OSC 9;4 sequences in order, so a viewer replacing the batch with a
   redraw can still receive them.
+- `cursor_row_cells_written` reports cell writes and erasures on the cursor's current row from
+  output applied in this call. Cursor moves affect the repaint and leave this evidence clear.
+- `mark_pending_frame_earlier()` carries the older origin of an unfinished unit or synchronized
+  update. A later feed applies it and starts counting cell writes at its completion boundary,
+  including a new frame that follows the boundary within the same read.
 - `set_status_glyph(&mut self, glyph: Option<String>) -> Vec<u8>` sets or clears the glyph.
   When the glyph changes and the title is eligible, it returns a title sequence. It may
   repeat the title viewers already see if the CLI's title begins with the glyph and a space.
@@ -167,11 +179,13 @@ limits it sets.
 
 - `alacritty_terminal` 0.26.0 from `framework/vendor/`, whose changes let a grid hand the rows its
   scrollback lets go of to a `HistoryKeeper` and take rows back (`vendor/README.md`).
+  The Screen queries the cursor row's damage as applied by the terminal parser.
 - `vte` 0.15.0, alacritty's parser, from `framework/vendor/`. Upstream sets up the 2 MiB that a
   synchronized update may hold back with each parser and keeps them, as a private field. Its changes,
   marked `Facade (memory)`, allocate the 2 MiB once when an update first holds output back. The
   buffer stays with the next update if one write ends an update and begins another. It is freed
-  when no update is open.
+  when no update is open. The parser reports whether that buffer holds output after the new
+  update's opening marker. It also tracks a partial frame resumed after a tab-stop change.
 - `base64`, for the words in status reports.
 - No Facade crate.
 

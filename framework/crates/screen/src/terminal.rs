@@ -100,6 +100,14 @@ impl Terminal {
         self.parser.advance(&mut self.term, bytes);
     }
 
+    pub(crate) fn reset_damage(&mut self) {
+        self.term.reset_damage();
+    }
+
+    pub(crate) fn cursor_row_cells_written(&self) -> bool {
+        self.term.cursor_row_cells_written()
+    }
+
     pub(crate) fn restore_title(&mut self, title: &str) {
         // Seed alacritty too, so a subsequent native title-stack push sees the restored title.
         self.term.set_title(Some(title.to_owned()));
@@ -113,6 +121,17 @@ impl Terminal {
 
     pub(crate) fn update_deadline(&self) -> Option<Instant> {
         self.parser.sync_timeout().sync_timeout()
+    }
+
+    /// Opens a synchronized update again behind a frame it was made to show before its end: what
+    /// follows belongs to that frame.
+    pub(crate) fn reopen_update(&mut self) {
+        self.parser.resume_sync(&mut self.term);
+    }
+
+    /// Whether an open synchronized update holds output back.
+    pub(crate) fn holds_output_back(&self) -> bool {
+        self.parser.sync_holds_output()
     }
 
     pub(crate) fn has(&self, mode: TermMode) -> bool {

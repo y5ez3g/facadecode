@@ -25,6 +25,8 @@ pub(crate) enum TitleNegotiation {
 /// A place in the output where the screen must look at its state, just after the piece.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Mark {
+    /// The end of a synchronized frame, where a reader can inspect the applied screen.
+    EndSync,
     /// The CLI switched between the main and the alternate screen.
     SwitchScreen,
     /// `ESC c`: a full reset.
@@ -48,11 +50,16 @@ pub(crate) struct Filtered {
     pub(crate) native_activity: Vec<u8>,
     /// Each mark, with the offset in the output just after it.
     pub(crate) marks: Vec<(usize, Mark)>,
+    /// Where the first complete ESU ended, including one begun in a previous call.
+    pub(crate) sync_ended_at: Option<usize>,
+    /// Where a carried character or control sequence ended.
+    pub(crate) carried_unit_ended_at: Option<usize>,
 }
 
 /// Splits `bytes` into what viewers get and where the screen must look, and follows the modes in
 /// `modes`. Adds the glyph to eligible titles and omits a blank title over no title.
 /// `rows` bounds the scrolling region.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn filter(
     splitter: &mut Splitter,
     modes: &mut KeptModes,
@@ -61,12 +68,19 @@ pub(crate) fn filter(
     mut cli_has_title: bool,
     title_negotiation: &mut TitleNegotiation,
     status_glyph: Option<&str>,
+    watch_frames: bool,
 ) -> Filtered {
     let mut filtered = Filtered {
         viewer_output: Vec::with_capacity(bytes.len()),
         ..Filtered::default()
     };
-    splitter.split(bytes, |offset, piece| {
+    let carried_unit_ended_at = splitter.split(bytes, |offset, piece| {
+        if matches!(piece, Piece::Csi(sequence) if sequence == b"\x1b[?2026l") {
+            filtered.sync_ended_at.get_or_insert(offset);
+            if watch_frames {
+                filtered.marks.push((offset, Mark::EndSync));
+            }
+        }
         if matches!(piece, Piece::String(bytes) if bytes == TITLE_NEGOTIATION_RESET) {
             *title_negotiation = TitleNegotiation::Unasked;
             return;
@@ -112,6 +126,7 @@ pub(crate) fn filter(
             filtered.marks.push((offset, mark));
         }
     });
+    filtered.carried_unit_ended_at = carried_unit_ended_at;
     filtered
 }
 
