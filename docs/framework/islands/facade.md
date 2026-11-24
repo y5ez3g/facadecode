@@ -167,9 +167,10 @@ post-exit grace period. A removal or lost connection uses the corresponding Shel
 ### hooks
 
 `hooks.rs` handles the CLI's four managed hooks. `session-start <file> [--skill]` and `title <file> [command]`
-write the session report only to the current run's private session file. `title` also passes the same input to the
-configured title command. `instructions <cli>` reads the managed run's instructions through its local run hint.
-`approve <cli>` uses the rule for approval of Facade tools. Rules owns the CLI-specific input and output.
+write the session report only to the current run's private session file. `session-start` accepts and ignores the
+old `--skill` flag. `title` also passes the same input to the configured title command. `instructions <cli>` uses
+the local run hint to read only the managed instructions file. `approve <cli>` uses the rule for approval of
+Facade tools. Rules owns the CLI-specific input and output.
 
 Hooks read up to 1 MiB of input and wait up to one second for it. Hooks always exit 0. They read local run artifacts
 and write only the run's own session file. The inherited run hint is separate from the Orchestrator's MCP identity.

@@ -5,12 +5,12 @@
 //! Hooks of a run Facade started:
 //!
 //! - `session-start <session-file>` saves the session the input names in the run's session file,
-//!   unless the run's environment says the session is not the run's own. With `--skill`, it first
-//!   prints the skill in the run's folder as the context the session starts with.
+//!   unless the run's environment says the session is not the run's own. The old `--skill` flag
+//!   is accepted and ignored.
 //! - `title <session-file> [<command>]` saves the session the title input names in the same way,
 //!   then hands the same input to `command`, the person's own title command, whose output alone
 //!   reaches the CLI.
-//! - `instructions <cli>` prints the instructions and skill that the run's start wrote in the
+//! - `instructions <cli>` prints the managed instructions that the run's start wrote in the
 //!   folder of the run's agent, where the CLI wants them at that hook.
 //! - `approve <cli>` prints an approval for a call of one of Facade's own tools, and decides
 //!   nothing about any other tool.
@@ -35,13 +35,12 @@ const INPUT_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(clap::Subcommand)]
 pub(crate) enum HookEvent {
-    /// Record the session the CLI selected. With --skill, print the skill in the run's folder as
-    /// the context the session starts with. Reads the hook's input from standard input and exits 0
+    /// Record the session the CLI selected. Reads the hook's input from standard input and exits 0
     /// whatever happens.
     SessionStart {
         /// The run's session file, an absolute path in the private run folder.
         file: PathBuf,
-        /// Print the skill in the run's folder for a CLI that reads no skill file of its own.
+        /// Accepted and ignored for older run hooks.
         #[arg(long)]
         skill: bool,
     },
@@ -74,25 +73,21 @@ pub(crate) enum HookEvent {
 /// is the run's `FACADE_AGENT`, whose folder holds the run's instructions.
 pub(crate) fn run(event: HookEvent, agent: Option<&str>) {
     match event {
-        HookEvent::SessionStart { file, skill } => start_run_session(&file, skill),
+        HookEvent::SessionStart { file, .. } => start_run_session(&file),
         HookEvent::Title { file, command } => retitle(&file, command.as_deref()),
         HookEvent::Instructions { cli } => print_run_start(&cli, agent),
         HookEvent::Approve { cli } => print_approval(&cli),
     }
 }
 
-/// `session-start <file>`: prints the run's skill first where `skill` asks for it, then saves the
-/// run's own session the input names in `file`.
-fn start_run_session(file: &Path, skill: bool) {
+/// `session-start <file>`: saves the run's own session the input names in `file`.
+fn start_run_session(file: &Path) {
     if in_background_job() {
         return;
     }
     let Some(folder) = session_folder(file) else {
         return;
     };
-    if skill && let Ok(text) = std::fs::read_to_string(folder.join(facade_rules::SKILL_FILE)) {
-        print_or_end!("{}", hook::skill_output(&text));
-    }
     let Some(input) = read_input() else { return };
     let Some(reported) = facade_rules::session_from_hook(&input) else {
         return;
@@ -174,26 +169,22 @@ fn pipe_to_shell(command: &str, input: &[u8]) {
     }
 }
 
-/// `instructions <cli>`: prints what the run of `agent` gives `cli`'s model at this hook, from the
-/// files its start wrote in the run's folder.
+/// `instructions <cli>`: prints the managed instructions from the run's folder in the CLI's hook
+/// format.
 fn print_run_start(cli: &str, agent: Option<&str>) {
     let input = read_json();
-    let folder = runs_root()
+    let instructions = runs_root()
         .zip(agent)
-        .and_then(|(runs, agent)| private_run_folder(&runs, agent));
-    let in_folder = |name: &str| {
-        let folder = folder.as_ref()?;
-        std::fs::read_to_string(folder.join(name)).ok()
-    };
-    let instructions = in_folder(facade_rules::INSTRUCTIONS_FILE);
-    let skill = in_folder(facade_rules::SKILL_FILE);
+        .and_then(|(runs, agent)| private_run_folder(&runs, agent))
+        .and_then(|folder| {
+            std::fs::read_to_string(folder.join(facade_rules::INSTRUCTIONS_FILE)).ok()
+        });
     let own_session = facade_rules::session_variable(cli).and_then(|name| std::env::var(name).ok());
-    let start = hook::RunStart {
-        input: input.as_ref(),
-        own_session: own_session.as_deref(),
-        instructions: instructions.as_deref(),
-        skill: skill.as_deref(),
-    };
+    let start = hook::RunStart::new(
+        input.as_ref(),
+        own_session.as_deref(),
+        instructions.as_deref(),
+    );
     if let Some(output) = hook::run_start_output(cli, &start) {
         print_or_end!("{output}");
     }
