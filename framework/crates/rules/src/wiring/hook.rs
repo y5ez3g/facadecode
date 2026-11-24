@@ -29,11 +29,25 @@ pub struct RunStart<'a> {
     pub skill: Option<&'a str>,
 }
 
+impl<'a> RunStart<'a> {
+    pub fn new(
+        input: Option<&'a Value>,
+        own_session: Option<&'a str>,
+        instructions: Option<&'a str>,
+    ) -> Self {
+        Self {
+            input,
+            own_session,
+            instructions,
+            skill: None,
+        }
+    }
+}
+
 /// What `facade hook instructions <cli>` prints, for a CLI that shows its model no MCP server's
 /// instructions. Antigravity gets the instructions for each invocation alone, so that nothing piles
-/// up in its conversation, and an empty object without them. Muse Code gets the instructions and
-/// the skill as the run's own session starts, not one a subagent of it starts. None where the hook
-/// prints nothing.
+/// up in its conversation, and an empty object without them. Muse Code gets the instructions as
+/// the run's own session starts, with the skill when supplied. None where the hook prints nothing.
 pub fn run_start_output(cli: &str, start: &RunStart<'_>) -> Option<String> {
     match cli {
         "agy" => Some(match start.instructions {
@@ -51,8 +65,11 @@ pub fn run_start_output(cli: &str, start: &RunStart<'_>) -> Option<String> {
             if !starts || !own {
                 return None;
             }
-            let context = format!("{}\n\n{}", start.instructions?, start.skill?);
-            Some(session_start_context(&context))
+            let instructions = start.instructions?;
+            Some(match start.skill {
+                Some(skill) => session_start_context(&format!("{instructions}\n\n{skill}")),
+                None => session_start_context(instructions),
+            })
         }
         _ => None,
     }

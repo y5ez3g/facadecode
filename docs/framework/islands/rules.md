@@ -54,6 +54,7 @@ files in `framework/rules/`. It is a library; it starts no program.
   `Entry::resolve_program` uses its effective environment and working folder. `Entry::launch_options`
   returns the literal arguments to save and replay, with their model and effort when known. Those
   values are separate from what a run adds for YOLO, session reporting and MCP.
+  `Entry::choice_refusal` names every unsupported choice in MCP or command-line wording.
 - `direct_command(rule: Option<&Rule>, program, env, cwd) -> Vec<String>`: what starts `program`,
   the file a start's command resolved to. On Windows, Pi's and Muse Code's installers' wrappers
   start the CLI's own program; everything else is as base's `programs::direct_command` has it.
@@ -63,10 +64,14 @@ files in `framework/rules/`. It is a library; it starts no program.
 - The input, state, sessions and wiring functions listed under each child below.
 - `session_meta_keys`, `always_load_keys`, `instructions_from_server`: what each CLI's MCP client
   does that the daemon's MCP server responds to.
+- `managed_instructions_from_hook(cli)` identifies the rules whose managed runs get their
+  instructions from a hook or extension.
 
 **facade** (`facade hook …`, and finding the agent of a command's terminal)
 - `hook`: what each CLI's hooks print and the keys their input uses, and `hook::title_command`,
   which runs the person's title command with the shell of the CLI that runs title hooks.
+  `hook::RunStart::new` supplies the start hook's input, own session and instructions to
+  `hook::run_start_output`.
 - `session_from_hook`, `session_from_title`, `write_session_file`, `run_folder`, `SKILL_FILE`,
   `INSTRUCTIONS_FILE`, `session_variable`, `SESSION_VARIABLES`.
 

@@ -328,6 +328,41 @@ impl Entry {
         }
     }
 
+    /// Explains all the choices this start cannot use, in MCP or command-line wording.
+    pub fn choice_refusal(
+        &self,
+        model: Option<&str>,
+        effort: Option<&str>,
+        by_model: bool,
+    ) -> Option<String> {
+        let cli = self.display_name();
+        let (choice, what) = match (
+            model.is_some() && !self.takes("model"),
+            effort.is_some() && !self.takes("effort"),
+        ) {
+            (false, false) => return None,
+            (true, false) => ("model", "a model"),
+            (false, true) => ("effort", "an effort"),
+            (true, true) if by_model => {
+                return Some(format!(
+                    "{cli} takes no explicit model or effort; leave `model` and `effort` out to use its defaults."
+                ));
+            }
+            (true, true) => {
+                return Some(format!(
+                    "{cli} has no supported way to set a model or an effort; omit model and effort to use its own defaults"
+                ));
+            }
+        };
+        Some(if by_model {
+            format!("{cli} takes no explicit {choice}; leave `{choice}` out to use its default.")
+        } else {
+            format!(
+                "{cli} has no supported way to set {what}; omit {choice} to use its own default"
+            )
+        })
+    }
+
     /// The arguments that pass its model and effort (CONFIGURATION-3.3). For each one the start's
     /// choice wins, then the entry's; but when the start's own `words` already pick it, the words
     /// carry it and only the start's choice is added.
@@ -361,14 +396,8 @@ impl Entry {
         effort: Option<&str>,
         args: &[String],
     ) -> Result<LaunchOptions, ErrorBody> {
-        if let Some(asked) = self.refused_choice(model, effort) {
-            return Err(self.error(
-                Reason::Unsupported,
-                format!(
-                    "{} takes no explicit {asked}; leave `{asked}` out to use its default.",
-                    self.display_name()
-                ),
-            ));
+        if let Some(message) = self.choice_refusal(model, effort, true) {
+            return Err(self.error(Reason::Unsupported, message));
         }
         let mut words = self.choices(model, effort, args);
         words.extend_from_slice(&self.args);

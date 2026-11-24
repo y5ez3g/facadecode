@@ -146,6 +146,9 @@ pub struct McpRule {
     /// neither, so each guest's model is told once.
     #[serde(default)]
     pub instructions_from_server: bool,
+    /// The CLI gets a managed run's instructions from its hook or extension.
+    #[serde(default)]
+    pub managed_instructions_from_hook: bool,
     /// The `_meta` key that has the CLI load a tool from the start rather than on demand.
     #[serde(default)]
     pub always_load_key: Option<String>,
@@ -957,6 +960,11 @@ pub fn session_meta_keys() -> impl Iterator<Item = &'static str> {
 /// [`McpRule::instructions_from_server`]).
 pub fn instructions_from_server(cli: &str) -> bool {
     matches!(find(cli), Ok(Some(rule)) if rule.mcp.instructions_from_server)
+}
+
+/// Whether this CLI gets a managed run's instructions from its hook or extension.
+pub fn managed_instructions_from_hook(cli: &str) -> bool {
+    matches!(find(cli), Ok(Some(rule)) if rule.mcp.managed_instructions_from_hook)
 }
 
 /// The `_meta` keys that have the CLIs load a tool from the start.
