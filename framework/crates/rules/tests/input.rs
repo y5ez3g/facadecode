@@ -98,6 +98,28 @@ fn antigravity_s_command_list_behind_a_hidden_cursor_reads_as_no_menu() {
     assert_eq!(read.state, InputState::Unknown, "{}", read.evidence);
 }
 
+/// Antigravity moves along a draft's row by tabs to erase its end. A tab over a blank cell leaves
+/// it blank, so the row stays the draft's.
+#[test]
+fn a_draft_row_antigravity_moves_along_by_tabs_reads_on() {
+    let rule = find("agy").unwrap().unwrap();
+    let border = "─".repeat(40);
+    let first = "\x1b[94m>\x1b[m Message m2 from example-helper";
+    let drawn = format!("{border}\r\n{first}\r\n  Line 2 of the message\r\n{border}\x1b[3;24H");
+    // What Antigravity 1.5.16 writes as the draft's last word goes.
+    let erased = format!(
+        "{drawn}\x1b[?2026h\x1b[?7l\r\x1bM\x1b[K{first}\x1b[?7h\x1b[33G\r\n\t\t\x1b[K\x08\x1b[?2026l"
+    );
+    for (output, last) in [(drawn, "Line 2 of the message"), (erased, "Line 2 of the")] {
+        let (info, draft) = read_draft(&rule.input, &screen_after(output.as_bytes()));
+        assert_eq!(info.state, InputState::Draft, "{}", info.evidence);
+        assert_eq!(
+            draft,
+            Some(format!("Message m2 from example-helper\n{last}"))
+        );
+    }
+}
+
 #[test]
 fn muse_screens_read_as_recorded() {
     reads_as_recorded("muse");

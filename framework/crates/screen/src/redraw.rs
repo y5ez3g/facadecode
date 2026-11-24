@@ -336,9 +336,7 @@ fn write_rows(out: &mut Vec<u8>, rows: &AllRows<'_>) {
         let wraps = rows.wraps(y);
         // A row the one above wrapped into starts with a character, even a space, to make the wrap.
         let to_margin = wraps || wrapped_into;
-        rows.with_row(y, |row| {
-            write_row(out, row, cols, to_margin, Layout::SameSize, 0..0)
-        });
+        rows.with_row(y, |row| write_row(out, row, cols, to_margin, 0..0));
         if !wraps && y + 1 < rows.len() {
             out.extend_from_slice(b"\x1b[0m\x1b]8;;\x1b\\\r\n");
         }
@@ -354,9 +352,7 @@ fn write_viewport_rows(out: &mut Vec<u8>, rows: &AllRows<'_>, erase_tail: bool) 
     let scrollback = rows.scrollback();
     for y in 0..scrollback {
         out.extend_from_slice(b"\x1b[H");
-        rows.with_row(y, |row| {
-            write_row(out, row, cols, false, Layout::Viewport, 0..0)
-        });
+        rows.with_row(y, |row| write_row(out, row, cols, false, 0..0));
         // CUP clamps the row to the physical bottom, where Index scrolls the full screen.
         out.extend_from_slice(b"\x1b[0m\x1b[65535;1H\x1bD");
     }
@@ -387,7 +383,7 @@ pub(crate) fn write_positioned_row(
     highlighted: Range<usize>,
 ) -> usize {
     write!(out, "\x1b[{};1H", line + 1).unwrap();
-    write_row(out, row, cols, false, Layout::Viewport, highlighted)
+    write_row(out, row, cols, false, highlighted)
 }
 
 /// One row, with pen and link changes only where they change: to the margin, or to its last
@@ -397,7 +393,6 @@ fn write_row(
     row: &Row<Cell>,
     cols: usize,
     to_margin: bool,
-    layout: Layout,
     highlighted: Range<usize>,
 ) -> usize {
     let end = match to_margin {
@@ -426,16 +421,7 @@ fn write_row(
             write_link(out, cell_link.as_ref());
             link = cell_link;
         }
-        // A tab holds the cell it started at; the viewer's tab stops may be elsewhere, so the next
-        // cell is placed by column. A viewport draws a space to overwrite the old cell.
-        if layout == Layout::Viewport && cell.c == '\t' {
-            out.push(b' ');
-        } else {
-            out.extend_from_slice(cell_text(cell).as_bytes());
-            if cell.c == '\t' {
-                write!(out, "\x1b[{}G", x + 2).unwrap();
-            }
-        }
+        out.extend_from_slice(cell_text(cell).as_bytes());
         written = x + 1 + usize::from(cell.flags.contains(Flags::WIDE_CHAR));
     }
     if link.is_some() {

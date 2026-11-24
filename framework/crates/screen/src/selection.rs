@@ -60,11 +60,7 @@ impl SelectionView {
                 if is_spacer(cell) {
                     continue;
                 }
-                if cell.c == '\t' {
-                    text.push(' ');
-                } else {
-                    text.push_str(&cell_text(cell));
-                }
+                text.push_str(&cell_text(cell));
             }
             if line < selection.end.0 && !wraps(row, self.cols) {
                 text.push('\n');

@@ -864,3 +864,68 @@ fn a_redraw_inside_an_unfinished_sequence_continues_correctly() {
         assert_redraw_continuation(&prefix, suffix, 40, 8, b"\x1b[?1049h\x1b[33mold");
     }
 }
+
+/// A tab only moves the cursor, so readers and viewers get what the screen shows without it. The
+/// terminal itself keeps the tab in the blank cell it started at.
+#[test]
+fn a_tab_kept_in_a_cell_draws_nothing() {
+    let cases: [(&[u8], &[u8]); 6] = [
+        (b"a\tb", b"a\x1b[9Gb"),
+        // To a row's end, as Antigravity moves there to erase it.
+        (
+            b"  Line 2 of the message\r\t\t\x1b[K\x08",
+            b"  Line 2 of the message\x1b[17G\x1b[K\x08",
+        ),
+        // From cells that draw without a character.
+        (
+            b"\x1b[7m          \x1b[0m\r\tX",
+            b"\x1b[7m          \x1b[0m\x1b[9GX",
+        ),
+        (
+            b"\x1b[44;4m          \x1b[0m\r\tX",
+            b"\x1b[44;4m          \x1b[0m\x1b[9GX",
+        ),
+        // Past a row's last drawn cell.
+        (b"end\t\t", b"end\x1b[17G"),
+        // In rows that scrolled out of the screen.
+        (
+            b"\ta\r\n\tb\r\n\tc\r\n\td\r\n\te\r\n\tf",
+            b"\x1b[9Ga\r\n\x1b[9Gb\r\n\x1b[9Gc\r\n\x1b[9Gd\r\n\x1b[9Ge\r\n\x1b[9Gf",
+        ),
+    ];
+    for (tabbed, moved) in cases {
+        let shown = String::from_utf8_lossy(tabbed).into_owned();
+        let screen_after = |output: &[u8]| {
+            let mut screen = Screen::new(24, 4, 100);
+            screen.feed(output);
+            screen
+        };
+        let (tabbed, moved) = (screen_after(tabbed), screen_after(moved));
+        assert_eq!(tabbed.view(), moved.view(), "{shown:?}");
+        assert_eq!(tabbed.text(50), moved.text(50), "{shown:?}");
+        assert_eq!(tabbed.read(50), moved.read(50), "{shown:?}");
+        assert_eq!(
+            tabbed.selection_view(0).text((1, 1), (24, 4)),
+            moved.selection_view(0).text((1, 1), (24, 4)),
+            "{shown:?}"
+        );
+        let redraws = |screen: &Screen| {
+            [
+                screen.redraw(false, true),
+                screen.redraw_in_viewport(false, true),
+                screen.redraw_in_viewport_update(),
+                screen.redraw_for_attach(false, true),
+                screen.redraw_for_attach(true, true),
+                screen.redraw_scrollback_view(0),
+                screen.redraw_with_all_scrollback(),
+            ]
+        };
+        let given = redraws(&tabbed);
+        assert_eq!(given, redraws(&moved), "{shown:?}");
+        for redraw in [&given[0], &given[6]] {
+            let copy = screen_after(redraw);
+            assert_eq!(copy.view(), tabbed.view(), "{shown:?}");
+            assert_eq!(copy.text(50), tabbed.text(50), "{shown:?}");
+        }
+    }
+}

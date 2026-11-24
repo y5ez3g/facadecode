@@ -61,6 +61,28 @@ fn muse_state_screens_read_as_recorded() {
     );
 }
 
+/// A CLI may move its cursor by tabs. One over a blank cell leaves it blank, and the screen reads as
+/// it did.
+#[test]
+fn a_tab_over_blank_cells_changes_no_state() {
+    let rule = find("muse").unwrap().unwrap();
+    let border = "─".repeat(60);
+    let state = |moved: &str| {
+        let mut screen = facade_screen::Screen::new(60, 10, 0);
+        screen.feed(
+            format!(
+                "\r\n  Muse Code 1.4.25\r\n\r\n{border}\r\n❯ \r\n{border}\r\n  \
+                 muse-example-1.0 · /work/probe · Launch overrides\
+                 \x1b[2;1H{moved}\x1b[7;1H{moved}\x1b[5;3H"
+            )
+            .as_bytes(),
+        );
+        read_state(rule, &screen.view())
+    };
+    assert_eq!(state(""), Some(ScreenState::Idle));
+    assert_eq!(state("\t"), Some(ScreenState::Idle));
+}
+
 #[test]
 fn codex_state_screens_read_as_recorded() {
     reads_as_recorded("codex", &["idle", "none"]);

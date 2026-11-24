@@ -237,7 +237,8 @@ screen.
 each row continues the one above. `read` and `text` walk `AllRows`: the store's rows, alacritty's
 scrollback, then the visible screen (the alternate screen has no scrollback). A store row is built
 back a block at a time and cached while the walk stays in that block. Rows that wrap join into one
-line; blank cells at a line's end and empty lines at the end are left out.
+line; blank cells at a line's end and empty lines at the end are left out. A tab moves the cursor
+and draws nothing: the cell alacritty keeps it in is a space in views, reads, copies and redraws.
 
 ### redraw
 

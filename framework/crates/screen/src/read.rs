@@ -44,10 +44,21 @@ impl Glyph {
     }
 }
 
+/// The character a cell draws. A tab draws nothing: it moved the cursor on from the blank cell that
+/// keeps it.
+fn drawn(cell: &Cell) -> char {
+    match cell.c {
+        '\t' => ' ',
+        c => c,
+    }
+}
+
 /// The text a cell draws: its character and any combining ones.
 pub(crate) fn cell_text(cell: &Cell) -> String {
     let combining = cell.zerowidth().unwrap_or_default();
-    std::iter::once(&cell.c).chain(combining).collect()
+    std::iter::once(drawn(cell))
+        .chain(combining.iter().copied())
+        .collect()
 }
 
 /// Whether `cell` only holds room for the wide character before or after it.
@@ -60,7 +71,7 @@ pub(crate) fn is_spacer(cell: &Cell) -> bool {
 /// inverse, underline, strikeout or hyperlink.
 pub(crate) fn is_blank(cell: &Cell) -> bool {
     let drawing = Flags::INVERSE | Flags::ALL_UNDERLINES | Flags::STRIKEOUT;
-    let plain = cell.c == ' ' && cell.zerowidth().is_none() && cell.hyperlink().is_none();
+    let plain = drawn(cell) == ' ' && cell.zerowidth().is_none() && cell.hyperlink().is_none();
     plain && !cell.flags.intersects(drawing) && cell.bg == Color::Named(NamedColor::Background)
 }
 
