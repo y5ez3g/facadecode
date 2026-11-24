@@ -451,7 +451,7 @@ runs, each run's terminal and exit, its files and plugin, and the session its CL
     `prepared.let_go_of_plugin()`.
   - Stop and end: `stop(id) -> Result<bool, ErrorBody>` (true: it was running and the keeper was
     asked); `record_exit(id, exit) -> ExitRecorded { known, committed }`, called with the agent list
-    locked; `keep_exit_task(id, task)`; `release(id)`; `abandon(id)`; `remove(id)`;
+    locked; `keep_exit_task(id, task, listed)`; `release(id)`; `abandon(id)`; `remove(id)`;
     `remove_folders(id)`.
   - Sessions: `follow_session(id, run, committed, output, FirstRead::{Now, AfterOutput})`,
     `end_session_following(id)`, `read_session(id)`, `has_unsaved_session(id)`, `captures(id)`.
@@ -467,7 +467,9 @@ the run uses the plugin of its folder. `record_exit` records the exit in keeper_
 preparation the run ended, so its session is read once more. A run let go of by `release`,
 `remove` or its exit as a cleanup run is let go of as a plugin user too. `previous_run_ended` waits,
 under one deadline, for the exit-saving task, the last session read, and keeper_link letting go of
-the run.
+the run. The daemon holds the agent list lock while `keep_exit_task` checks the list and keeps
+the exit-saving task. Removal first takes the agent off the list, then `remove` releases any
+task already kept for it. The task can still finish saving the exit.
 
 #### keeper_link
 

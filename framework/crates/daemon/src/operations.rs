@@ -976,7 +976,9 @@ impl Daemon {
             daemon.runs.release(&id);
             drop(saving);
         });
-        self.runs.keep_exit_task(&writer, task);
+        let agents = self.agents.lock().unwrap();
+        self.runs
+            .keep_exit_task(&writer, task, || agents.contains_key(&writer));
     }
 
     /// Removes an agent: stops it first, then deletes its record with its inbox in one transaction,

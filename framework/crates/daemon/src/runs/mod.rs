@@ -347,9 +347,18 @@ impl Runs {
         }
     }
 
-    /// Keeps the task saving agent `id`'s exit, which a resume waits for.
-    pub(crate) fn keep_exit_task(&self, id: &str, task: JoinHandle<()>) {
-        self.exit_tasks.lock().unwrap().insert(id.to_string(), task);
+    /// Keeps the task saving agent `id`'s exit, which a resume waits for. The caller holds the agent
+    /// list lock and checks `listed` under it. Removal takes the agent off the list before it
+    /// calls `remove`; a task received after that goes on without anyone waiting for it.
+    pub(crate) fn keep_exit_task(
+        &self,
+        id: &str,
+        task: JoinHandle<()>,
+        listed: impl FnOnce() -> bool,
+    ) {
+        if listed() {
+            self.exit_tasks.lock().unwrap().insert(id.to_string(), task);
+        }
     }
 
     /// Waits up to `timeout` for agent `id`'s ended run to be done with: its exit saved, its
@@ -389,8 +398,10 @@ impl Runs {
         self.link.abandon(id);
     }
 
-    /// Agent `id` was removed: its run is let go of now if it ended, else when it ends.
+    /// Agent `id` was removed: its run is let go of now if it ended, else when it ends. Nothing
+    /// waits for the task saving its exit any more.
     pub(crate) fn remove(&self, id: &str) {
+        self.exit_tasks.lock().unwrap().remove(id);
         if self.link.remove(id) {
             self.preparation.plugin_released(id);
         }
@@ -529,4 +540,45 @@ impl Runs {
 
 fn credential_digest(credential: &str) -> [u8; 32] {
     Sha256::digest(credential.as_bytes()).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn runs(test: &str) -> (Runs, crate::test_folder::TestFolder) {
+        let home = crate::test_folder::TestFolder::new(test);
+        let source = home.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("facade"), "facade").unwrap();
+        let held = Arc::new(Held::open(&source.join("facade"), "test").unwrap());
+        let runs = Runs::new(&home.join("framework"), held, mpsc::unbounded_channel().0);
+        (runs, home)
+    }
+
+    /// A removed agent leaves nothing of its runs: not the task that saved its exit either.
+    #[tokio::test]
+    async fn a_removed_agent_s_exit_task_goes_with_it() {
+        let (runs, _home) = runs("runs-remove");
+        runs.keep_exit_task("a1", tokio::spawn(async {}), || true);
+        runs.remove("a1");
+        assert!(runs.exit_tasks.lock().unwrap().is_empty());
+    }
+
+    /// An exit that comes in after its agent was taken off the list leaves no task behind.
+    #[tokio::test]
+    async fn an_exit_task_after_its_agent_s_removal_is_not_kept() {
+        let (runs, _home) = runs("runs-late-exit");
+        let mut agents = std::collections::HashSet::from(["a1"]);
+        let ended = *agents.get("a1").unwrap();
+        agents.remove(ended);
+        runs.remove(ended);
+        let (saved, finished) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            saved.send(()).unwrap();
+        });
+        runs.keep_exit_task(ended, task, || agents.contains(ended));
+        assert!(runs.exit_tasks.lock().unwrap().is_empty());
+        finished.await.expect("the exit was still saved");
+    }
 }
