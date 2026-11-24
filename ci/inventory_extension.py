@@ -19,12 +19,12 @@ PTYD = "extension/src/ptyd/protocol.ts"
 PANEL_HOST = "extension/src/ui/panel.ts"
 PANEL_PAGE = "extension/src/webview/panel.ts"
 SETTINGS_SCHEMA = "extension/media/settings.schema.json"
-CORE_SETTINGS = "core/crates/base/src/settings.rs"
-CORE_CLI_ENTRIES = "core/crates/rules/src/command_line/entries.rs"
-OLD_MCP = "extension/src/transport/mcpServer.ts"
-OLD_TOOLS = "extension/src/schema/tools.ts"
-RUST_MCP = "core/crates/daemon/src/mcp/lines.rs"
-RUST_TOOLS = "core/crates/base/src/texts/tools.json"
+FRAMEWORK_SETTINGS = "framework/crates/base/src/settings.rs"
+FRAMEWORK_CLI_ENTRIES = "framework/crates/rules/src/command_line/entries.rs"
+LEGACY_MCP = "extension/src/transport/mcpServer.ts"
+LEGACY_TOOLS = "extension/src/schema/tools.ts"
+FRAMEWORK_MCP = "framework/crates/daemon/src/mcp/lines.rs"
+FRAMEWORK_TOOLS = "framework/crates/base/src/texts/tools.json"
 
 SEGMENT = re.compile(r"[A-Za-z0-9._-]+")
 
@@ -105,7 +105,7 @@ def _function(root: Path, path: str, name: str) -> str:
     return _section(_read(root, path), rf"^(?:export )?(?:async )?function {name}\(", r"^}$", path)
 
 
-def _serving_registrations(path: str, source: str, engine: str) -> list[str]:
+def _serving_registrations(path: str, source: str, implementation: str) -> list[str]:
     # Normalize literal member access before masking strings. Keep offsets for diagnostics.
     member = r"""(?P<member>\[\s*(?P<quote>['"])registerCommand(?P=quote)\s*\])"""
     non_code = r"""//[^\n]*|/\*[\s\S]*?\*/|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`"""
@@ -124,7 +124,7 @@ def _serving_registrations(path: str, source: str, engine: str) -> list[str]:
             code,
         ))
         if len(forwards) != 1:
-            raise ValueError(f"{path}: cannot resolve {engine} command helper on")
+            raise ValueError(f"{path}: cannot resolve {implementation} command helper on")
         forwarding = forwards[0].start("callee")
 
     calls = re.finditer(r"(\bregisterCommand|(?<![\w$.])on)\s*(\(|(?=[<?]))", code)
@@ -137,7 +137,7 @@ def _serving_registrations(path: str, source: str, engine: str) -> list[str]:
         name = command.match(code, call.end()) if supported else None
         if not name:
             excerpt = source[call.start():].strip().splitlines()[0][:100]
-            raise ValueError(f"{path}: unrecognized {engine} serving command registration {excerpt!r}")
+            raise ValueError(f"{path}: unrecognized {implementation} serving command registration {excerpt!r}")
         names.append(name[1])
     return names
 
@@ -153,7 +153,7 @@ def _commands(root: Path, rows: dict[str, str]) -> None:
     # The test-only TEST_COMMANDS live in the separate registerTestUi function.
     # Activation-error stubs also live outside the serving scopes listed here.
     handlers = {
-        "old": [
+        "legacy": [
             (UI, _function(root, UI, "registerUi")),
             (AGENT_UI, _function(root, AGENT_UI, "registerAgentCommands")),
             ("extension/src/ui/commands/worktree.ts", _read(root, "extension/src/ui/commands/worktree.ts")),
@@ -161,22 +161,22 @@ def _commands(root: Path, rows: dict[str, str]) -> None:
             ("extension/src/host/agentsLog.ts", _read(root, "extension/src/host/agentsLog.ts")),
             ("extension/src/host/service.ts", _function(root, "extension/src/host/service.ts", "registerOpenSettingsFile")),
         ],
-        "rust": [
+        "framework": [
             (UI, _function(root, UI, "registerOrchestratorUi")),
-            (AGENT_UI, _function(root, AGENT_UI, "registerRustAgentCommands")),
-            ("extension/src/host/rust/settings.ts", _read(root, "extension/src/host/rust/settings.ts")),
-            ("extension/src/host/orchestrator/index.ts", _read(root, "extension/src/host/orchestrator/index.ts")),
+            (AGENT_UI, _function(root, AGENT_UI, "registerFrameworkAgentCommands")),
+            ("extension/src/host/framework/settings.ts", _read(root, "extension/src/host/framework/settings.ts")),
+            ("extension/src/host/framework/index.ts", _read(root, "extension/src/host/framework/index.ts")),
         ],
     }
     registered = set()
-    for engine, sources in handlers.items():
+    for implementation, sources in handlers.items():
         seen = set()
         for path, source in sources:
-            names = _serving_registrations(path, source, engine)
+            names = _serving_registrations(path, source, implementation)
             if not names or set(names) - symbols.keys() or seen.intersection(names):
-                raise ValueError(f"{path}: invalid {engine} command registration {names!r}")
+                raise ValueError(f"{path}: invalid {implementation} command registration {names!r}")
             seen.update(names)
-            _add(rows, f"vscode-{engine}", "command", [symbols[name] for name in names], path)
+            _add(rows, f"vscode-{implementation}", "command", [symbols[name] for name in names], path)
         registered.update(symbols[name] for name in seen)
     if registered != declared:
         raise ValueError(f"{MANIFEST}: contributed commands without a serving handler: {sorted(declared - registered)}")
@@ -191,28 +191,28 @@ def _window(root: Path, rows: dict[str, str]) -> None:
         ))
     registered = _names(registrations, WINDOW, "combined Window Component command registrations")
     declarations = set()
-    rust = "extension/src/host/windowComponent.ts"
-    rust_calls = set()
+    window_component = "extension/src/host/windowComponent.ts"
+    framework_calls = set()
     for function in ("optionalTerminalOwner", "legacyWindowInstance"):
-        rust_calls.update(_names(
-            re.findall(r"\bexecuteCommand\(([A-Z_]+_COMMAND),", _function(root, rust, function)),
-            rust, f"{function} command calls",
+        framework_calls.update(_names(
+            re.findall(r"\bexecuteCommand\(([A-Z_]+_COMMAND),", _function(root, window_component, function)),
+            window_component, f"{function} command calls",
         ))
     for path in (WINDOW_IDENTITY, WINDOW_NETWORK):
         pairs = re.findall(r"^export const ([A-Z_]+_COMMAND) = '(facade\.[\w.]+)';$", _read(root, path), re.MULTILINE)
         declarations.update(_names((symbol for symbol, _ in pairs), path, "Window Component command declarations"))
         commands = dict(pairs)
-        for engine in ("old", "rust"):
+        for implementation in ("legacy", "framework"):
             names = [
                 name for symbol, name in commands.items()
-                if (symbol in rust_calls) == (engine == "rust") or symbol == "WINDOW_TERMINALS_COMMAND"
+                if (symbol in framework_calls) == (implementation == "framework") or symbol == "WINDOW_TERMINALS_COMMAND"
             ]
             if names:
-                _add(rows, f"window-component-{engine}", "command", names, path)
+                _add(rows, f"window-component-{implementation}", "command", names, path)
     if declarations != registered:
         raise ValueError(f"{WINDOW}: Window Component declarations and registrations differ: {sorted(declarations ^ registered)}")
-    if rust_calls - declarations:
-        raise ValueError(f"{rust}: undeclared Window Component command calls: {sorted(rust_calls - declarations)}")
+    if framework_calls - declarations:
+        raise ValueError(f"{window_component}: undeclared Window Component command calls: {sorted(framework_calls - declarations)}")
     registration = _section(_read(root, WINDOW_IDENTITY), r"^export type TerminalRegistration = ", r"^\);", WINDOW_IDENTITY)
     kinds = []
     for values in re.findall(r"\breadonly kind: ((?:'[\w]+'(?: \| )?)+)", registration):
@@ -221,8 +221,8 @@ def _window(root: Path, rows: dict[str, str]) -> None:
     terminal_kinds = re.findall(r"\bkind: '([\w-]+)'", _read(root, terminals))
     if set(kinds) != set(terminal_kinds):
         raise ValueError(f"{WINDOW_IDENTITY}: terminal registration kinds differ from {terminals}")
-    for engine in ("old", "rust"):
-        _add(rows, f"window-component-{engine}", "registration", kinds, WINDOW_IDENTITY)
+    for implementation in ("legacy", "framework"):
+        _add(rows, f"window-component-{implementation}", "registration", kinds, WINDOW_IDENTITY)
 
 
 def _window_socket(root: Path, rows: dict[str, str]) -> None:
@@ -243,16 +243,16 @@ def _window_socket(root: Path, rows: dict[str, str]) -> None:
         ),
     }.items():
         _require(source, WINDOW_SOCKET, *patterns)
-        _add(rows, "window-socket-old", "frame", [name], WINDOW_SOCKET)
+        _add(rows, "window-socket-legacy", "frame", [name], WINDOW_SOCKET)
     reasons = _section(network, r"^export type RouteFailure = ", r";", WINDOW_NETWORK)
-    _add(rows, "window-socket-old", "outcome", _literals(reasons), WINDOW_NETWORK)
+    _add(rows, "window-socket-legacy", "outcome", _literals(reasons), WINDOW_NETWORK)
     routes = _section(_read(root, WINDOW_ROUTES), r"^export type RouteOp =\n", r";", WINDOW_ROUTES)
     operations = _literals(re.sub(r"/\*.*?\*/", "", routes, flags=re.DOTALL))
     handler = "extension/src/contract/tools.ts"
     dispatch = _section(_read(root, handler), r"switch \(route.op\) {", r"^\t\t}", handler)
     if set(operations) != set(re.findall(r"case '([\w-]+)':", dispatch)):
         raise ValueError(f"{WINDOW_ROUTES}: RouteOp differs from {handler} dispatch")
-    _add(rows, "window-socket-old", "operation", operations, WINDOW_ROUTES)
+    _add(rows, "window-socket-legacy", "operation", operations, WINDOW_ROUTES)
 
 
 def _ptyd(root: Path, rows: dict[str, str]) -> None:
@@ -263,16 +263,16 @@ def _ptyd(root: Path, rows: dict[str, str]) -> None:
     dispatch = _section(_read(root, handler), r"switch \(request.method\) {", r"^\t\t}", handler)
     if methods != set(re.findall(r"case '([\w-]+)':", dispatch)):
         raise ValueError(f"{PTYD}: supervisor requests differ from {handler} dispatch")
-    _add(rows, "ptyd-old", "request", methods, PTYD)
+    _add(rows, "ptyd-legacy", "request", methods, PTYD)
     events = _section(source, r"^export interface OwnerEvent", r"^export function isPtydEvent", PTYD)
     kinds = re.findall(r"readonly event: '([\w-]+)'", events)
     validator = _function(root, PTYD, "isPtydEvent")
     validated = re.findall(r"(?:case |value\.event === )'([\w-]+)'", validator)
     if set(kinds) != set(validated):
         raise ValueError(f"{PTYD}: supervisor event declarations and validator differ")
-    _add(rows, "ptyd-old", "event", kinds, PTYD)
+    _add(rows, "ptyd-legacy", "event", kinds, PTYD)
     response = _section(source, r"^export type Response =", r"^\s*};", PTYD)
-    _add(rows, "ptyd-old", "response", re.findall(r"readonly id: number; readonly (result|error):", response), PTYD)
+    _add(rows, "ptyd-legacy", "response", re.findall(r"readonly id: number; readonly (result|error):", response), PTYD)
 
 
 def _panel(root: Path, rows: dict[str, str]) -> None:
@@ -282,8 +282,8 @@ def _panel(root: Path, rows: dict[str, str]) -> None:
     ]:
         messages = _section(_read(root, path), rf"^const {table}: [^\n]+ = {{\n", r"^};", path)
         names = _keys(messages, path, "Webview frames")
-        for engine in ("old", "rust"):
-            _add(rows, f"webview-{engine}", direction, names, path)
+        for implementation in ("legacy", "framework"):
+            _add(rows, f"webview-{implementation}", direction, names, path)
     actions = _section(_read(root, PANEL_HOST), r"^const ACTS: [^\n]+ = {\n", r"^};", PANEL_HOST)
     actions = _keys(actions, PANEL_HOST, "Webview actions")
     protocol = "extension/src/webview/protocol.ts"
@@ -292,40 +292,40 @@ def _panel(root: Path, rows: dict[str, str]) -> None:
     direct = set(_literals(_section(command_source, r"^export type PageAct = Act \| ", r";", protocol)))
     if actions != shared | direct:
         raise ValueError(f"{PANEL_HOST}: Webview dispatch differs from {protocol}")
-    _add(rows, "webview-old", "action", shared, PANEL_HOST)
-    _add(rows, "webview-rust", "action", actions, PANEL_HOST)
+    _add(rows, "webview-legacy", "action", shared, PANEL_HOST)
+    _add(rows, "webview-framework", "action", actions, PANEL_HOST)
 
 
 def _mcp(root: Path, rows: dict[str, str]) -> None:
-    old_tools = _read(root, OLD_TOOLS)
-    catalog = _section(old_tools, r"^export const TOOLS: [^\n]+ = \[\n", r"^\];", OLD_TOOLS)
-    names = _names(re.findall(r"^\s*name: '([a-z_]+)',", catalog, re.MULTILINE), OLD_TOOLS, "advertised tools")
-    declared = _section(old_tools, r"^export type ToolName = ", r";", OLD_TOOLS)
+    legacy_tools = _read(root, LEGACY_TOOLS)
+    catalog = _section(legacy_tools, r"^export const TOOLS: [^\n]+ = \[\n", r"^\];", LEGACY_TOOLS)
+    names = _names(re.findall(r"^\s*name: '([a-z_]+)',", catalog, re.MULTILINE), LEGACY_TOOLS, "advertised tools")
+    declared = _section(legacy_tools, r"^export type ToolName = ", r";", LEGACY_TOOLS)
     if names != set(_literals(declared)):
-        raise ValueError(f"{OLD_TOOLS}: ToolName and advertised tool catalog differ")
+        raise ValueError(f"{LEGACY_TOOLS}: ToolName and advertised tool catalog differ")
     service = "extension/src/contract/tools.ts"
     handlers = _section(_read(root, service), r"^\tprivate readonly handlers: [^\n]+ = {\n", r"^\t};", service)
     if names != _keys(handlers, service, "MCP tool dispatch"):
-        raise ValueError(f"{OLD_TOOLS}: advertised tools differ from {service} dispatch")
-    _add(rows, "mcp-old", "tool", names, OLD_TOOLS)
-    _add(rows, "mcp-rust", "tool", [entry["name"] for entry in _json(root, RUST_TOOLS)], RUST_TOOLS)
+        raise ValueError(f"{LEGACY_TOOLS}: advertised tools differ from {service} dispatch")
+    _add(rows, "mcp-legacy", "tool", names, LEGACY_TOOLS)
+    _add(rows, "mcp-framework", "tool", [entry["name"] for entry in _json(root, FRAMEWORK_TOOLS)], FRAMEWORK_TOOLS)
 
-    source = _read(root, OLD_MCP)
-    dispatch = _section(source, r"\bswitch \(method\) {", r"^\t\t}", OLD_MCP)
-    _add(rows, "mcp-old", "request", [name.replace("/", ".") for name in re.findall(r"^\s*case '([\w./-]+)':", dispatch, re.MULTILINE)], OLD_MCP)
-    _require(source, OLD_MCP, r"if \(id === undefined\)", r"A notification - initialized, cancelled")
-    _add(rows, "mcp-old", "notification", ["notifications.initialized"], OLD_MCP)
+    source = _read(root, LEGACY_MCP)
+    dispatch = _section(source, r"\bswitch \(method\) {", r"^\t\t}", LEGACY_MCP)
+    _add(rows, "mcp-legacy", "request", [name.replace("/", ".") for name in re.findall(r"^\s*case '([\w./-]+)':", dispatch, re.MULTILINE)], LEGACY_MCP)
+    _require(source, LEGACY_MCP, r"if \(id === undefined\)", r"A notification - initialized, cancelled")
+    _add(rows, "mcp-legacy", "notification", ["notifications.initialized"], LEGACY_MCP)
 
-    source = _read(root, RUST_MCP)
-    dispatch = _section(source, r"\bmatch method {", r"^    };", RUST_MCP)
-    _add(rows, "mcp-rust", "request", [name.replace("/", ".") for name in re.findall(r'^\s*"([\w./-]+)" =>', dispatch, re.MULTILINE)], RUST_MCP)
-    notify = _section(source, r"^fn notice_message\(", r"^}", RUST_MCP)
+    source = _read(root, FRAMEWORK_MCP)
+    dispatch = _section(source, r"\bmatch method {", r"^    };", FRAMEWORK_MCP)
+    _add(rows, "mcp-framework", "request", [name.replace("/", ".") for name in re.findall(r'^\s*"([\w./-]+)" =>', dispatch, re.MULTILINE)], FRAMEWORK_MCP)
+    notify = _section(source, r"^fn notice_message\(", r"^}", FRAMEWORK_MCP)
     methods = re.findall(r'Some\("(notifications/[\w./-]+)"\)', notify)
     # Initialization is a standard no-response notification, handled by the generic guard.
-    _require(source, RUST_MCP, r"if !message.contains_key\(\"id\"\)", r"`notifications/initialized`")
-    _add(rows, "mcp-rust", "notification", ["notifications.initialized", *(method.replace("/", ".") for method in methods)], RUST_MCP)
+    _require(source, FRAMEWORK_MCP, r"if !message.contains_key\(\"id\"\)", r"`notifications/initialized`")
+    _add(rows, "mcp-framework", "notification", ["notifications.initialized", *(method.replace("/", ".") for method in methods)], FRAMEWORK_MCP)
     if not methods:
-        raise ValueError(f"{RUST_MCP}: no explicit notification dispatch found")
+        raise ValueError(f"{FRAMEWORK_MCP}: no explicit notification dispatch found")
 
 
 def _settings(root: Path, rows: dict[str, str]) -> None:
@@ -333,23 +333,23 @@ def _settings(root: Path, rows: dict[str, str]) -> None:
     settings = _names(
         (key for section in contributions["configuration"] for key in section["properties"]), MANIFEST, "VS Code settings",
     )
-    # Facade: Home is applied by the old engine. The selector is read before the
-    # engine branches. Keep other manifest settings visible for catalog review.
-    _add(rows, "configuration-old", "vscode", settings & {"facade.home"}, MANIFEST)
+    # Facade: Home is applied by the legacy implementation. The selector is read before the
+    # implementation branches. Keep other manifest settings visible for catalog review.
+    _add(rows, "configuration-legacy", "vscode", settings & {"facade.home"}, MANIFEST)
     _add(rows, "configuration", "vscode", settings - {"facade.home"}, MANIFEST)
     schema = _json(root, SETTINGS_SCHEMA)
     properties = schema["properties"]
-    core = _section(_read(root, CORE_SETTINGS), r"^const SETTINGS: [^\n]+ = \[\n", r"^\];", CORE_SETTINGS)
-    core_fields = set(re.findall(r'^\s*\("([\w$]+)",', core, re.MULTILINE))
-    if core_fields != set(properties):
-        raise ValueError(f"{SETTINGS_SCHEMA}: facade.json keys differ from {CORE_SETTINGS}")
-    old = "extension/src/clis/settingsFile.ts"
+    framework = _section(_read(root, FRAMEWORK_SETTINGS), r"^const SETTINGS: [^\n]+ = \[\n", r"^\];", FRAMEWORK_SETTINGS)
+    framework_fields = set(re.findall(r'^\s*\("([\w$]+)",', framework, re.MULTILINE))
+    if framework_fields != set(properties):
+        raise ValueError(f"{SETTINGS_SCHEMA}: facade.json keys differ from {FRAMEWORK_SETTINGS}")
+    legacy = "extension/src/clis/settingsFile.ts"
     file_pattern = r"""^export const SETTINGS_FILE = '([\w.]+)';$"""
-    old_settings = _read(root, old)
-    files = _names(re.findall(file_pattern, old_settings, re.MULTILINE), old, "settings filename")
-    core_files = _names(re.findall(r'^pub const SETTINGS_FILE: &str = "([\w.]+)";$', _read(root, CORE_SETTINGS), re.MULTILINE), CORE_SETTINGS, "settings filename")
-    if files != core_files:
-        raise ValueError(f"{old}: settings filename differs from {CORE_SETTINGS}")
+    legacy_settings = _read(root, legacy)
+    files = _names(re.findall(file_pattern, legacy_settings, re.MULTILINE), legacy, "settings filename")
+    framework_files = _names(re.findall(r'^pub const SETTINGS_FILE: &str = "([\w.]+)";$', _read(root, FRAMEWORK_SETTINGS), re.MULTILINE), FRAMEWORK_SETTINGS, "settings filename")
+    if files != framework_files:
+        raise ValueError(f"{legacy}: settings filename differs from {FRAMEWORK_SETTINGS}")
     schema_path = "./" + SETTINGS_SCHEMA.removeprefix("extension/")
     associations = {
         pattern
@@ -358,9 +358,9 @@ def _settings(root: Path, rows: dict[str, str]) -> None:
     }
     if associations != {f"**/{file}" for file in files}:
         raise ValueError(f"{MANIFEST}: facade.json validation does not point to {SETTINGS_SCHEMA}")
-    old_fields = set(re.findall(r"\bkey === '([\w$]+)'", _function(root, old, "parseSettings")))
-    if old_fields != set(properties):
-        raise ValueError(f"{SETTINGS_SCHEMA}: facade.json keys differ from {old}")
+    legacy_fields = set(re.findall(r"\bkey === '([\w$]+)'", _function(root, legacy, "parseSettings")))
+    if legacy_fields != set(properties):
+        raise ValueError(f"{SETTINGS_SCHEMA}: facade.json keys differ from {legacy}")
     clis = properties["clis"]
     definitions = schema["definitions"]
     built_ins = clis["properties"]
@@ -374,13 +374,13 @@ def _settings(root: Path, rows: dict[str, str]) -> None:
         for rule in added["allOf"] if "then" in rule
     )
     cli_fields = {key for variant in variants for key in variant["properties"]}
-    core_entries = _read(root, CORE_CLI_ENTRIES)
-    core_cli_fields = set(_literals(_section(core_entries, r"^const FIELDS: [^\n]+ = \[\n", r"^\];", CORE_CLI_ENTRIES)))
-    core_cli_fields.update(re.findall(r'field.key != "(\w+)" && !FIELDS', core_entries))
-    if cli_fields != core_cli_fields:
-        raise ValueError(f"{SETTINGS_SCHEMA}: CLI fields differ from {CORE_CLI_ENTRIES}")
-    for engine, path in (("old", old), ("rust", CORE_SETTINGS)):
-        boundary = f"configuration-{engine}"
+    framework_entries = _read(root, FRAMEWORK_CLI_ENTRIES)
+    framework_cli_fields = set(_literals(_section(framework_entries, r"^const FIELDS: [^\n]+ = \[\n", r"^\];", FRAMEWORK_CLI_ENTRIES)))
+    framework_cli_fields.update(re.findall(r'field.key != "(\w+)" && !FIELDS', framework_entries))
+    if cli_fields != framework_cli_fields:
+        raise ValueError(f"{SETTINGS_SCHEMA}: CLI fields differ from {FRAMEWORK_CLI_ENTRIES}")
+    for implementation, path in (("legacy", legacy), ("framework", FRAMEWORK_SETTINGS)):
+        boundary = f"configuration-{implementation}"
         _add(rows, boundary, "document", files, path)
         _add(rows, boundary, "field", [key.lstrip("$") for key in properties], path)
         _add(rows, boundary, "built-in", built_ins, SETTINGS_SCHEMA)
@@ -389,8 +389,8 @@ def _settings(root: Path, rows: dict[str, str]) -> None:
 
     paths = "extension/src/record/paths.ts"
     environment = re.findall(r"^export const FACADE_HOME_VARIABLE = '([A-Z_]+)';$", _read(root, paths), re.MULTILINE)
-    for engine in ("old", "rust"):
-        _add(rows, f"configuration-{engine}", "environment", environment, paths)
+    for implementation in ("legacy", "framework"):
+        _add(rows, f"configuration-{implementation}", "environment", environment, paths)
 
 
 def discover(root: Path) -> dict[str, str]:

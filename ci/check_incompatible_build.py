@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay a refused Core takeover with digest-pinned Linux x64 QA builds."""
+"""Replay a refused Framework takeover with digest-pinned Linux x64 QA builds."""
 
 import argparse
 from contextlib import closing
@@ -19,17 +19,17 @@ import tempfile
 import time
 
 from catalog import AcceptanceError, NATIVE_INCOMPATIBLE_CASE
-from check_native_install import ASSET, PROGRAMS, install_tree, validate_inputs
+from check_native_install import ASSET, PROGRAMS, install_tree, installer_args, validate_inputs
 from check_real_ssh_route import SSHD, machine, ssh_configs
 from evidence import digest, run_identity
-from native_core import (
+from native_framework import (
     ROOT, SYSTEM_PATH, clean_native_scope, hash_file, interrupted, process_identity, query,
     source_identity, verify_native_cleanup, wait_for, write_receipt,
 )
 
 
-ABI_PATCH = ROOT / "ci/fixtures/core-keeper-api2.patch"
-INSTALLER = ROOT / "core/install.sh"
+ABI_PATCH = ROOT / "ci/fixtures/framework-keeper-api2.patch"
+INSTALLER = ROOT / "framework/install.sh"
 SUCCESS = "Facade native incompatible build test "
 REQUEST = "qa-incompatible-original"
 SESSION = "0ad87ed7-4a37-4a9a-89bd-6bd8a1debae2"
@@ -45,7 +45,7 @@ def fixture(scope, label, sockets, bin_dir):
         folder.mkdir(mode=0o700)
     key = sha256(os.fsencode(state)).hexdigest()[:10]
     for role in ("daemon", "keeper"):
-        endpoint = Path(f"/tmp/facade-core-{os.getuid()}/{role}-{key}.sock")
+        endpoint = Path(f"/tmp/facade-framework-{os.getuid()}/{role}-{key}.sock")
         assert not os.path.lexists(endpoint), endpoint
         sockets[f"{label}-{role}"] = endpoint
     env = {
@@ -56,12 +56,13 @@ def fixture(scope, label, sockets, bin_dir):
         "FAKECLI_LOG": str(project / "fake.log"), "FAKECLI_KEYS": str(project / "keys"),
         "FAKECLI_STARTS": str(project / "starts"),
     }
-    return env, state, project, root / "install"
+    return env, state, project
 
 
 def verified_archive(archive, manifest, fake):
-    version, digests, expected, sidecar = validate_inputs(archive, manifest, fake)
-    return {"archive": str(archive), "manifest": str(manifest), "version": version, "program_sha256": digests,
+    build, digests, expected, sidecar = validate_inputs(archive, manifest, fake, local=True)
+    return {"archive": str(archive), "manifest": str(manifest), "build": build,
+            "version": build.split("+", 1)[0], "program_sha256": digests,
             "archive_sha256": expected, "manifest_sha256": sidecar}
 
 
@@ -81,14 +82,8 @@ def launcher_snapshot(location):
             for name in PROGRAMS if (path := location / name).exists()}
 
 
-def installation(root, state):
-    return {"current": str((root / "share/facade/current").readlink()),
-            "external": launcher_snapshot(root / "bin"),
-            "runtime": launcher_snapshot(state / "core/bin")}
-
-
 def durable_state(state):
-    with closing(sqlite3.connect((state / "core/facade.db").as_uri() + "?mode=ro", uri=True)) as database:
+    with closing(sqlite3.connect((state / "framework/facade.db").as_uri() + "?mode=ro", uri=True)) as database:
         database.row_factory = sqlite3.Row
         tables = {
             "agents": 'SELECT agent_id, name, cli, cwd, pid, created_at, exit_at FROM agents',
@@ -103,7 +98,7 @@ def durable_state(state):
 
 def exercise(scope, output_dir, fake, sockets, processes, receipt):
     lower, higher = (receipt[role] for role in ("lower", "higher"))
-    lower_version, higher_version = lower["version"], higher["version"]
+    lower_build, higher_build = lower["build"], higher["build"]
     older_archive = stage_archive(scope / "lower-package", lower)
     higher_archive = stage_archive(scope / "higher-package", higher)
 
@@ -116,36 +111,33 @@ def exercise(scope, output_dir, fake, sockets, processes, receipt):
         assert result.returncode == status, (label, result)
         return result
 
-    def install(label, archive, version, env, cwd, root, status=0):
-        return command(label, ["sh", INSTALLER, "--version", version,
-                               "--package", archive, "--install-root", root, "--no-path"],
-                       env, cwd, status=status)
+    def install(label, archive, build, env, cwd, status=0):
+        return command(label, installer_args(INSTALLER, archive, build), env, cwd, status=status)
 
-    control, control_state, control_work, control_install = fixture(scope, "higher-only", sockets, fake.parent)
-    install("install higher pair in an empty independent home", higher_archive, higher_version,
-            control, control_work, control_install)
-    higher_shell = control_install / "bin/facade"
+    control, control_state, control_work = fixture(scope, "higher-only", sockets, fake.parent)
+    install("install higher pair in an empty independent home", higher_archive, higher_build,
+            control, control_work)
+    higher_shell = control_state / "framework/bin/facade"
     command("launch the genuine higher Daemon and Keeper", [higher_shell, "daemon", "--detach"],
             control, control_work)
     hello, info = query(sockets["higher-only-daemon"], "daemon.status", {})
-    assert hello["build"] == hello["keeper"]["build"] == higher_version, hello
-    log = (control_state / "core/logs/daemon.log").read_text()
+    assert hello["build"] == hello["keeper"]["build"] == higher_build, hello
+    log = (control_state / "framework/logs/daemon.log").read_text()
     keeper = info["keeper_pid"]
-    signature = f'daemon[{hello["pid"]}] info: connected to keeper {keeper} (Keeper API 2, build {higher_version})'
+    signature = f'daemon[{hello["pid"]}] info: connected to keeper {keeper} (Keeper API 2, build {higher_build})'
     assert signature in log, log
-    higher_control = installation(control_install, control_state)
-    assert all(higher_control[surface][name]["sha256"] == higher["program_sha256"][name]
-               for surface in ("external", "runtime") for name in PROGRAMS)
+    higher_control = launcher_snapshot(control_state / "framework/bin")
+    assert {name: value["sha256"] for name, value in higher_control.items()} == higher["program_sha256"]
     receipt["higher_control"] = {"hello": hello, "keeper_handshake": signature, "launchers": higher_control}
     (output_dir / "higher-only-daemon.log").write_text(log)
 
-    origin, state, work, install_root = fixture(scope, "origin", sockets, fake.parent)
-    install("install older pair with normal default activation", older_archive, lower_version,
-            origin, work, install_root)
-    facade = install_root / "bin/facade"
+    origin, state, work = fixture(scope, "origin", sockets, fake.parent)
+    install("install older pair with normal default activation", older_archive, lower_build, origin, work)
+    bin_dir = state / "framework/bin"
+    facade = bin_dir / "facade"
     receipt["runtime_baseline"] = command("read installed older Shell version", [facade, "--version"],
                                           origin, work).stdout.strip()
-    assert receipt["runtime_baseline"] == f"facade {lower_version}"
+    assert receipt["runtime_baseline"] == f"facade {lower_build}"
     endpoint = sockets["origin-daemon"]
     command("launch the installed older services", [facade, "daemon", "--detach"], origin, work)
     origin_hello, _ = query(endpoint, "daemon.status", {})
@@ -162,7 +154,7 @@ def exercise(scope, output_dir, fake, sockets, processes, receipt):
     # Use the established private OpenSSH harness to prove that an actual saved transport
     # remains present together with the request's durable recipient route.
     peer, peer_work, _ = machine(scope, "peer", {
-        "facade": facade, "facade-mcp": install_root / "bin/facade-mcp",
+        "facade": facade, "facade-mcp": bin_dir / "facade-mcp",
         "facade-fakecli": fake,
     }, sockets)
     with socket.socket() as reservation:
@@ -177,13 +169,13 @@ def exercise(scope, output_dir, fake, sockets, processes, receipt):
     wait_for("private OpenSSH fixture startup", lambda: "Server listening" in ssh_log.read_text(), seconds=5)
     launched = command("start the old peer through isolated OpenSSH", [
         "/usr/bin/ssh", "-F", client_config, "fixture-peer",
-        'printf "%s\\n%s\\n" "$HOME" "$FACADE_HOME"; exec "$HOME/.local/bin/facade" daemon --detach',
+        'printf "%s\\n%s\\n" "$HOME" "$FACADE_HOME"; exec "$FACADE_HOME/framework/bin/facade" daemon --detach',
     ], origin, work)
     assert launched.stdout.splitlines()[:2] == [peer["HOME"], peer["FACADE_HOME"]], launched
     peer_hello, _ = query(sockets["peer-daemon"], "daemon.status", {})
-    assert peer_hello["build"] == lower_version, peer_hello
+    assert peer_hello["build"] == lower_build, peer_hello
     command("give the old peer a distinct machine name", [
-        Path(peer["HOME"]) / ".local/bin/facade", "machine", "rename",
+        Path(peer["FACADE_HOME"]) / "framework/bin/facade", "machine", "rename",
         peer_hello["machine_id"].replace("-", ""), "qa-peer",
     ], peer, peer_work)
     command("save the actual old peer transport", [facade, "machine", "add", "--home", peer["FACADE_HOME"],
@@ -220,20 +212,19 @@ def exercise(scope, output_dir, fake, sockets, processes, receipt):
         _, inspected = query(endpoint, "agent.inspect", {"target": reference})
         agent = inspected["agent"]
         assert agent["session"] == SESSION and agent["pid"] == agent_pid and agent["process"] == "running", agent
-        assert hello["build"] == hello["keeper"]["build"] == lower_version, hello
+        assert hello["build"] == hello["keeper"]["build"] == lower_build, hello
         assert (work / "starts").read_text().splitlines() == [str(agent_pid)]
         return {"processes": {role: process_identity(pid) for role, pid in (
             ("daemon", info["daemon_pid"]), ("keeper", info["keeper_pid"]), ("cli", agent["pid"]))},
             "record": agent, "saved_transport": saved_route(), "durable": durable_state(state),
-            "launchers": installation(install_root, state)}
+                    "launchers": launcher_snapshot(bin_dir)}
 
     before = state_now()
     assert before["saved_transport"]["peer"]["route"] == [peer_id], before
     assert before["durable"]["send_route"][0]["machine_id"] == reference["machine_id"], before
     assert before["durable"]["send_route"][0]["agent_id"] == reference["agent_id"], before
-    for surface in ("external", "runtime"):
-        assert {name: value["sha256"] for name, value in before["launchers"][surface].items()} == lower["program_sha256"]
-    initial_external, initial_runtime = install_tree(install_root), install_tree(state / "core/bin")
+    assert {name: value["sha256"] for name, value in before["launchers"].items()} == lower["program_sha256"]
+    initial_runtime = install_tree(bin_dir)
     keys = work / "keys"
     old_keys = keys.read_bytes()
     old_submissions = (work / "fake.log").read_bytes()
@@ -241,8 +232,8 @@ def exercise(scope, output_dir, fake, sockets, processes, receipt):
     receipt["before"] = before
 
     def confirm_refusal(result):
-        assert f"could not upgrade Orchestrator {lower_version} to {higher_version}" in result.stderr, result
-        assert (f"{higher_version} supports keeper API versions [2], and the running keeper negotiated version 1"
+        assert f"could not upgrade Orchestrator {lower_build} to {higher_build}" in result.stderr, result
+        assert (f"{higher_build} supports keeper API versions [2], and the running keeper negotiated version 1"
                 in result.stderr
                 and f"Stop the running agents {address} and try again" in result.stderr), result
         marker = "facade-upgrade-blockers "
@@ -251,7 +242,7 @@ def exercise(scope, output_dir, fake, sockets, processes, receipt):
         assert len(blockers) == 1 and len(blockers[0]) == 1, result
         assert blockers[0][0]["reference"] == reference and blockers[0][0]["address"] == address, result
         assert state_now() == before, "older state changed on refusal"
-        assert install_tree(state / "core/bin") == initial_runtime
+        assert install_tree(bin_dir) == initial_runtime
         assert keys.read_bytes() == old_keys and (work / "fake.log").read_bytes() == old_submissions
         return blockers[0]
 
@@ -260,21 +251,11 @@ def exercise(scope, output_dir, fake, sockets, processes, receipt):
     direct = command("refuse the actual higher Shell takeover command",
                      [incoming, "daemon", "--takeover"], report, work, status=1)
     direct_blockers = confirm_refusal(direct)
-    assert install_tree(install_root) == initial_external
     receipt["direct_offer"] = {"blockers": direct_blockers, "programs_and_state_unchanged": True}
 
-    failed = install("refuse activation through shipped installer", higher_archive, higher_version,
-                     report, work, install_root, status=1)
+    failed = install("refuse activation through shipped installer", higher_archive, higher_build, report, work, status=1)
     installer_blockers = confirm_refusal(failed)
-    external = install_tree(install_root)
-    added = sorted(external.keys() - initial_external.keys())
-    assert all(external[name] == value for name, value in initial_external.items())
-    cached = f"share/facade/versions/{higher_version}"
-    if added:
-        expected_cache = sorted([cached, *(f"{cached}/{name}" for name in (*PROGRAMS, "LICENSE.txt", "VERSION"))])
-        assert added == expected_cache, added
-        assert {name: hash_file(install_root / cached / name) for name in PROGRAMS} == higher["program_sha256"]
-    receipt["installer_observation"] = {"blockers": installer_blockers, "inactive_cache_paths": added}
+    receipt["installer_observation"] = {"blockers": installer_blockers, "programs_and_state_unchanged": True}
     receipt["after_refusal"] = state_now()
 
     _, repeated = query(endpoint, "agent.send", send)
@@ -296,7 +277,7 @@ def exercise(scope, output_dir, fake, sockets, processes, receipt):
     receipt["input"] = {"before_sha256": sha256(old_keys).hexdigest(),
                         "fresh_suffix_sha256": sha256(final_keys[len(old_keys):]).hexdigest()}
     receipt["repeated_receipt"], receipt["fresh_receipt"], receipt["submissions"] = repeated, sent, complete
-    (output_dir / "older-daemon.log").write_bytes((state / "core/logs/daemon.log").read_bytes())
+    (output_dir / "older-daemon.log").write_bytes((state / "framework/logs/daemon.log").read_bytes())
 
 
 def main():

@@ -4,11 +4,11 @@ Facade Code runs coding CLIs such as Claude Code and Codex across your machines.
 messages, read terminal output and enter text. You can start and work with them from Shell, VS Code or an application
 that supports MCP.
 
-Use the [standalone Shell installation](core/FEATURES.md#install-the-standalone-shell) for `facade` and
-`facade-mcp`. For the editor entry point, use VS Code 1.105 or later and a
-[Facade Code extension package](../extension/GUIDE.md#install-for-your-workspace-host) with the Orchestrator-backed
-engine for the workspace host. To share an agent, point Shell and the editor at the same Orchestrator home on
-the execution host. Install and sign in to your coding CLI on the machine where it will run.
+Facade Code Framework provides Shell, the Orchestrator and the MCP relay. Install its `facade` and `facade-mcp`
+commands using the [standalone Shell installation](framework/FEATURES.md#install-the-standalone-shell).
+[Facade Code Extension](../extension/GUIDE.md#install-for-your-workspace-host) connects VS Code 1.105 or later to the
+Framework on the workspace host. To share an agent, point Shell and the editor at the same Facade home on the execution
+host. Install and sign in to your coding CLI on the machine where it will run.
 
 ![Two Orchestrators connect over SSH. VS Code and Shell attach to agent terminals, and an external app joins as a Guest over MCP.](0-facade.svg)
 
@@ -51,6 +51,30 @@ Facade Code
 | An external application's processes and interface | The application |
 | Commits, merges, reviews and worktree removal | Your Git tools. Facade can create a worktree when starting an agent. |
 | SSH configuration and account access | You. Connect the machines you control. |
+
+## Product principles
+
+- **People and agents have the same actions.** Agents can inspect waiting terminals and respond with
+  `press_keys` or `type_text`.
+- **Background failures earn a 🔔 notice.** Calls return after their synchronous work. A background failure
+  tells the calling agent what happened and how to continue. Successful background work is silent. An explicit wait
+  reports its outcome in the return value.
+- **The watchdog reports one notice for each observed incident.** The serving daemon measures a continuous
+  30-second wait or Error state and tells the live creator. A replacement daemon starts a fresh interval.
+  The creator also receives an immediate notice when the agent ends without that creator stopping it.
+- **YOLO controls native work prompts.** Facade handles the prompts it causes in either mode. YOLO bypasses
+  native work approvals where supported, and clears supported startup prompts for agent starts. Person starts
+  keep the CLI's native startup prompts.
+- **The initiating operation determines the start policy.** Only MCP `start_agent` is an agent start. Shell,
+  VS Code and resume use person policy, including Shell commands typed by agents. Agent starts disable native
+  automatic updates and person starts honor the CLI's update settings.
+- **A Facade home is one installation.** Its programs, data and services belong to that home. Select a home with
+  `FACADE_HOME` and manage its installation independently.
+- **Newer builds replace older builds.** Compare the numeric version first, then the source commit time.
+  Equal ranks keep the selected build. Install, upgrade, VS Code and SSH share this order. When the remote
+  home ranks higher, SSH reports that the local installation needs an upgrade.
+- **Product waits use 30 seconds.** This applies to startup, stop, resume, messages and the watchdog.
+  Shell defaults to 30 seconds for `facade send --timeout` and lets you choose up to 300 seconds.
 
 ## Agents
 
@@ -230,10 +254,10 @@ facade machine rename devbox build-box
   authorization for the peer with zero SSH. With `--bidirectional`, it verifies the peer's identity and tries
   to remove the return connection and its authorization before completing local cleanup. Shell reports each
   side's outcome and returns 1 if either side could not be confirmed.
-- **Remote installation.** SSH tries the remote Facade program at its installed path first. The daemon API
-  handshake determines whether the installed builds can work together. An explicit Add or Connect can install Facade
-  on an uninstalled machine through the regular installer when authorized. Passive probes leave sleeping services
-  and missing installations alone. See [Folders and machines](core/FEATURES.md#folders-and-machines).
+- **Remote installation.** SSH probes the executable in the selected remote home. Add or Connect installs the
+  exact local build when that home needs an installation or an upgrade. An equally ranked build proceeds to the
+  daemon handshake. If the remote build ranks higher, upgrade your local home first. Passive probes leave sleeping
+  services and installations alone. See [Folders and machines](framework/FEATURES.md#folders-and-machines).
 - **Facade home.** Use `--home` to select a remote Facade home other than `~/.facade`.
 - **WSL and Dev Containers.** Each is a separate machine. Facade inside the environment uses its own local
   Orchestrator. To connect from outside, configure SSH in that environment and add it from the other machine.
@@ -260,8 +284,8 @@ facade start -d -n Nova codex --model gpt-6.2-sol
 ```
 
 A Shell start receipt confirms the agent has started. Use `facade send` to send it a task and check the receipt.
-For MCP `start_agent`, the Orchestrator handles delivery of an optional first prompt and sends a 🔔 result
-to the agent that started it.
+MCP `start_agent` returns once the launch is recorded. If an optional first prompt fails, Facade sends the
+creator a 🔔. A startup blockage and its first prompt failure share that notice.
 
 - **Defaults.** Shell uses this machine and the current folder. VS Code uses its extension host and a workspace
   folder. MCP uses the calling agent's machine and folder. A Guest starts from the machine it joined. When no
@@ -279,9 +303,9 @@ to the agent that started it.
   run uses the target login environment.
 - **Models, effort and prompts.** Pass supported native options after the CLI name. The target machine's
   settings can supply defaults. A managed resume reuses the recorded launch choices.
-- **Folder trust and setup.** People who start Claude Code see its native folder trust question. For an
-  agent-initiated start, Facade can confirm the expected trust option when YOLO is on at the target home.
-  Facade configures `facade-mcp` and hooks per run and leaves global CLI settings alone.
+- **Folder trust and setup.** Person starts and resumes keep the CLI's initial trust and risk prompts.
+  An MCP start with YOLO on at the target home uses that CLI's supported startup trust and notice settings.
+  Facade configures its MCP tools and hooks per run, including their own approvals. The CLI handles login.
 - **Ending and resuming.** A CLI exit, crash or machine reboot ends the run. Use `resume` to continue it.
   VS Code can resume pinned agents when their workspace reopens.
 - **Errors.** Start reports the failing step, such as a connection, folder, worktree, missing program or
@@ -327,14 +351,14 @@ from the receipt into `read_messages`.
 
 | Recipient | Delivery |
 | --- | --- |
-| Managed agent | Facade waits for an empty input box, pastes the text and submits it. The receipt confirms delivery after submission. Unconfirmed input produces a failure. |
+| Managed agent | Facade waits for an empty input box, pastes the text and submits it. Codex queues the message with Tab while Working. The receipt confirms delivery after the submit key reaches the terminal. |
 | Guest | The Guest takes the message from its inbox with `read_messages`. The read confirms delivery. |
 | Ended agent | Facade reports that the agent has stopped. |
 | Agent outside the caller's reach | Facade reports a permissions error and withholds the target's identity. |
 
 Background delivery has a 30-second deadline. An explicit Shell wait uses the remaining command budget, set with
-`-t` from 1 to 300 seconds. When delivery fails before submission, Facade withdraws the message. A caller waiting
-for delivery gets the reason.
+`-t` from 1 to 300 seconds. Facade reports the delivery facts. An untouched, withdrawn message can be resent.
+Check the recipient's screen before retrying partial or unconfirmed input.
 
 ```text
 📨 Message from ada (a3@laptop) · m42
@@ -343,10 +367,11 @@ for delivery gets the reason.
 📨 Message from eve (a9@devbox) · m45 · Reply to m17@devbox
 ```
 
-Facade marks delivery and wait notices with 🔔. The creator receives the result of an agent's first task delivery.
-A wait for permission, an answer or a login that lasts 20 seconds produces one notice per wait. A Guest creator
-must be reading messages with a matching filter to take the notice. Creators that are agents have inboxes.
-Shell and VS Code starts have no creator inbox.
+Managed agents normally send without waiting. Replies arrive in their terminals and failed background deliveries
+show as 🔔. A startup problem and an undelivered first message share one notice. After startup, the watchdog
+reports a sustained wait, a sustained error or an unexpected end to the live agent creator. For a waiting agent,
+read its screen and respond with keys or text. For an ended agent, the notice gives the exit facts and whether its
+saved session can be resumed. A Guest creator takes notices from its inbox.
 
 Message records last 30 days. MCP `read_messages` reads the caller's own inbox. Shell exposes the send
 receipt. Automatic reconnect retries reuse the original request's outcome when its receipt is available.
@@ -368,20 +393,22 @@ receipt. Automatic reconnect retries reuse the original request's outcome when i
 
 The **keeper** is the parent of the managed CLIs and holds their terminals. The **daemon** manages agents and
 serves Facade's clients. Each service retains access to the terminals while the other restarts. An API-compatible
-daemon takeover keeps the keeper and its CLIs running while clients reconnect. See [Core architecture](core/ARCHITECTURE.md).
+daemon takeover keeps the keeper and its CLIs running while clients reconnect. See [Framework architecture](framework/ARCHITECTURE.md).
 
 - **Status.** `facade status` reports the local Facade home, settings file, version, service PIDs, managed
   agent count, connected machines and the fixed Guest MCP launcher. It queries sleeping services without
   starting them. The daemon and keeper each retain 30 days of logs.
-- **Installation.** Use the [standalone Shell installation](core/FEATURES.md#install-the-standalone-shell).
-  The Orchestrator-backed extension ships the programs for its extension host. If the Facade
-  Code IDE launcher is also installed under `facade`, your PATH determines which command runs.
+- **Installation.** Use the [standalone Shell installation](framework/FEATURES.md#install-the-standalone-shell).
+  The Orchestrator-backed extension ships the programs for its host and can install them into the selected
+  Facade home offline. The selected home supplies the programs for the extension's commands. If another program
+  is named `facade`, PATH determines which executable the shell starts.
 - **Lifetime.** Services start on demand and exit after 30 idle seconds. Running agents, foreground
   connections, active Attach views and requests in progress keep the services in use.
-- **Upgrade.** `facade upgrade` checks for a newer stable release before downloading the installer.
-  `facade upgrade --version X.Y.Z` runs the installer for the specified version. When the active services
-  pass the compatibility check, the new daemon takes over and the agents keep running.
-- **Version.** `facade --version` prints the Shell CLI version.
+- **Upgrade.** `facade upgrade` checks for a newer stable build for the current home before downloading the
+  installer. `facade upgrade --version X.Y.Z` selects a release within the same build order. When the active
+  services pass the compatibility check, the new daemon takes over and the agents keep running.
+- **Version.** `facade --version` prints the build of the invoked executable. Release builds include the source
+  commit time and hash.
 
 ## Shell
 
@@ -419,7 +446,7 @@ Run `facade` to see the command groups. Use `facade <COMMAND> --help` for exampl
 Help and `--version` run without starting services. Results and receipts go to stdout. Empty-result guidance,
 diagnostics and progress go to stderr. An operation failure returns 1. Invalid usage returns 2. After a
 foreground `start`, `resume` or `attach` opens a terminal, Ctrl+] detaches and returns 0. If the agent's CLI
-exits first, the command returns its exit code or 128 plus its signal number. See [Shell commands](core/islands/facade.md#shell-commands).
+exits first, the command returns its exit code or 128 plus its signal number. See [Shell commands](framework/islands/facade.md#shell-commands).
 
 ## MCP
 
@@ -461,13 +488,13 @@ Helpers appear as cards. Windows for the same workspace share the remembered mem
   Run `facade machine add` there to make other machines reachable from that window.
 - **Window Component.** The component supplied with the extension cleans up terminal tabs left by a previous
   extension host after a reconnect or restart.
-- **Engine selection.** This guide describes the Orchestrator-backed Rust engine. The extension's original
-  engine follows the [old-engine rules](extension/PRODUCT.md#57-transition).
+- **Extension implementation.** The [Extension product guide](extension/PRODUCT.md) describes its Framework and
+  legacy implementation settings.
 - **Other actions.** Use Shell for machine administration and sending messages as a person. Use Git to remove
   a worktree.
 
 The [VS Code product guide](extension/PRODUCT.md) explains the editor entry in more detail. The
-[Glossary](core/GLOSSARY.md) defines shared terms such as Attach, Guest, Pin, Resume and YOLO.
+[Glossary](framework/GLOSSARY.md) defines shared terms such as Attach, Guest, Pin, Resume and YOLO.
 
 ## Common workflows
 

@@ -3,10 +3,10 @@
 ## Unreleased
 
 - **Signed on Windows.** `facade.exe` and `facade-mcp.exe` now carry the publisher's code signature. Unsigned in 0.1.6,
-  `facade.exe` was quarantined by Microsoft Defender as a trojan, a false positive, which stopped Facade core and every
+  `facade.exe` was quarantined by Microsoft Defender as a trojan, a false positive, which stopped Facade Code Framework and every
   agent with it.
-- **Three ways to use Facade Code.** Install `facade` and `facade-mcp` for Shell and external MCP apps. The VS Code
-  extension includes the Orchestrator for its workspace host.
+- **Three ways to use Facade Code.** Install `facade` and `facade-mcp` for Shell and external MCP apps. Facade Code
+  Extension includes Facade Code Framework for its workspace host.
 - **Work across machines.** Register hosts with your usual SSH options and start an agent there, including in a
   new worktree. Facade installs or upgrades the matching version on reachable hosts when needed. An idle
   Orchestrator can sleep until a command explicitly needs that machine.
@@ -17,19 +17,18 @@
 - **Attach from multiple windows.** Open the same running agent in more than one VS Code window. Each view
   shows the same terminal, and you can close one view while the others stay attached.
 - **Pins across machines.** Reopening a workspace restores pinned agents, including stopped and crashed ones.
-  The first open after upgrade brings forward the earlier agent list and Pins.
 - **MCP Guests.** An external app joins with `facade-mcp`; sending a message returns the call it can use to wait for
   a reply. Agents exchange messages through MCP and users can follow their work through Attach.
 - **Remote workspaces.** The extension connects to the Orchestrator on its own workspace host. The Window
-  Component cleans up stale terminal tabs. The old engine remains available during the transition.
+  Component cleans up stale terminal tabs. The legacy implementation remains available.
 
 ## 0.1.6
 
-- **A new engine, written in Rust, built for maximum performance.** On macOS, Windows and Linux, Facade now runs your agents on Facade core. With 100 agents idle, it uses under 1% CPU and about 70 MB of memory. Keystrokes in an agent's terminal echo in about 1 ms, even while 100 other agents flood their terminals. A message sent to 100 agents at once reaches 95% of them within 0.2 seconds, and 400 agents use about 250 MB. (Measured on a Mac with Apple M5.)
+- **Facade Code Framework, written in Rust and built for maximum performance.** On macOS, Windows and Linux, Facade now runs your agents on Facade Code Framework. With 100 agents idle, it uses under 1% CPU and about 70 MB of memory. Keystrokes in an agent's terminal echo in about 1 ms, even while 100 other agents flood their terminals. A message sent to 100 agents at once reaches 95% of them within 0.2 seconds, and 400 agents use about 250 MB. (Measured on a Mac with Apple M5.)
 - **Lighter.** An agent no longer needs its own Node.js process for Facade's tools.
-- **`facade` in VS Code's terminal.** In a window running the new engine, `facade list` shows the same agents as the panel, and `facade start` starts one there.
-- **Nothing to do.** Agents that are already running keep running. Once no agent of the old engine is still running on that computer, Facade offers to reload the window, and the window switches. The panel, cards, tabs, Pins and New Agent look and work as before.
-- **If something goes wrong,** set **Facade: Rust Engine** to `off` and reload the window to go back to the old engine, then let us know in a [GitHub issue](https://github.com/y5ez3g/facadecode/issues).
+- **`facade` in VS Code's terminal.** In a window using the Framework, `facade list` shows the same agents as the panel, and `facade start` starts one there.
+- **Nothing to do.** Agents that are already running keep running. Once no agent of the legacy implementation is still running on that computer, Facade offers to reload the window, and the window switches. The panel, cards, tabs, Pins and New Agent look and work as before.
+- **If something goes wrong,** set **Facade: Framework** to `off` and reload the window to go back to the legacy implementation, then let us know in a [GitHub issue](https://github.com/y5ez3g/facadecode/issues).
 
 ## 0.1.5
 

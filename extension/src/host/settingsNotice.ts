@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The old engine's settings file as the editor makes it from earlier Facade settings, and what the person is told
+// The legacy implementation's settings file as the editor makes it from earlier Facade settings, and what the person is told
 // about it in their language (UX-2.4, CONFIGURATION-6.2, 6.3): once, by the window that made it; and why Open facade.json cannot open
 // it where it cannot be made.
 
@@ -14,7 +14,7 @@ import { reasonText } from '../ui/presentation';
 import { FacadeSettings } from './facadeSettings';
 
 /**
- * The old engine's settings file for this window (CONFIGURATION-1.1, 1.3): made where it does not exist from the
+ * The legacy implementation's settings file for this window (CONFIGURATION-1.1, 1.3): made where it does not exist from the
  * editor's old Facade settings, said once by the window that made it, with Open to show it (CONFIGURATION-6.3).
  */
 export function editorFacadeSettings(log: (line: string) => void): FacadeSettings {

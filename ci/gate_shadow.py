@@ -16,7 +16,7 @@ from catalog import AcceptanceError, PRODUCTS, RELEASE_FIXTURE_CASES, load, read
 from evidence import binding_product, digest, git, make_plan, verify_receipts
 from github_evidence import require_run_artifacts, unpack_artifact
 from merge_review import (
-    COLD, CORE, EXTENSION, REMOTE, REQUIRED, REVIEW_MODE, ROOT, RUNNERS, SHA, SHADOW, TARGETS,
+    EXTENSION, FRAMEWORK, REMOTE, REQUIRED, REVIEW_MODE, ROOT, RUNNERS, SHA, SHADOW, TARGETS,
     candidate_position, require_catalog_minimum, require_checkout, require_jobs, require_merge_tree,
     require_run_identity, required_artifact_names,
 )
@@ -24,19 +24,16 @@ from merge_review_native import NATIVE_EDITOR_MINIMUM, TYPED_NATIVE_CASES
 
 
 ROOT_DOCS = {'README.md', 'CONTRIBUTING.md', 'SECURITY.md'}
-PRODUCT_AND_DOC_PATHS = ('core/', 'extension/', 'docs/', 'ide/')
-CORE_COMPATIBILITY = (
-    'core/Cargo.*', 'core/rust-toolchain.toml', 'core/install*', 'core/scripts/leftovers.sh',
-    'core/protocol/*', 'core/crates/base/src/model/*',
-    'core/crates/base/src/paths.rs', 'core/crates/base/src/protocol/*',
-    'core/crates/base/src/platform/install*', 'core/crates/daemon/src/server/*',
-    'core/crates/daemon/src/lifecycle/*', 'core/crates/daemon/src/machine_service.rs',
-    'core/crates/daemon/src/store/*', 'core/crates/keeper/*', 'core/tests/tests/machines.rs',
-    'core/tests/src/binaries.rs', 'core/tests/src/home.rs', 'core/tests/src/bin/facade-fakecli.rs',
-)
-CORE_NATIVE = (
-    'core/crates/base/src/platform/*', 'core/crates/*/src/*pty*', 'core/vendor/*',
-    'core/scripts/package*', 'core/scripts/*ssh*',
+PRODUCT_AND_DOC_PATHS = ('framework/', 'extension/', 'docs/', 'ide/')
+FRAMEWORK_RISK = (
+    'framework/Cargo.*', 'framework/rust-toolchain.toml', 'framework/install*', 'framework/scripts/leftovers.sh',
+    'framework/protocol/*', 'framework/crates/base/src/model/*',
+    'framework/crates/base/src/paths.rs', 'framework/crates/base/src/protocol/*',
+    'framework/crates/base/src/platform/*', 'framework/crates/daemon/src/server/*',
+    'framework/crates/daemon/src/lifecycle/*', 'framework/crates/daemon/src/machine_service.rs',
+    'framework/crates/daemon/src/store/*', 'framework/crates/keeper/*', 'framework/tests/tests/machines.rs',
+    'framework/tests/src/binaries.rs', 'framework/tests/src/home.rs', 'framework/tests/src/bin/facade-fakecli.rs',
+    'framework/crates/*/src/*pty*', 'framework/vendor/*', 'framework/scripts/package*', 'framework/scripts/*ssh*',
 )
 EXTENSION_RISK = (
     'extension/.nvmrc', 'extension/package*.json', 'extension/scripts/*', 'extension/window/*',
@@ -64,20 +61,18 @@ def select_workflows(paths):
         products = PRODUCTS
     if not products:
         catalog = any(path == 'docs/CI-ACCEPTANCE.md'
-                      or path.startswith(('core/', 'extension/', 'docs/core/', 'docs/extension/')) for path in paths)
+                      or path.startswith(('framework/', 'extension/', 'docs/framework/', 'docs/extension/'))
+                      for path in paths)
         return 'empty', products, (SHADOW,) if catalog else ()
-    workflows = [SHADOW, CORE, EXTENSION] if 'core' in products else [SHADOW, EXTENSION]
-    compatibility = {path for path in paths if any(fnmatchcase(path, pattern) for pattern in CORE_COMPATIBILITY)}
-    native = {path for path in paths if any(fnmatchcase(path, pattern) for pattern in CORE_NATIVE)}
-    if compatibility:
-        workflows.append(COLD)
-    remote = any(path.startswith(('core/crates/', 'core/protocol/', 'core/vendor/'))
-                 or path in ('core/Cargo.toml', 'core/Cargo.lock', 'core/rust-toolchain.toml', 'core/scripts/leftovers.sh')
-                 for path in compatibility | native)
+    workflows = [SHADOW, FRAMEWORK, EXTENSION] if 'framework' in products else [SHADOW, EXTENSION]
+    native = {path for path in paths if any(fnmatchcase(path, pattern) for pattern in FRAMEWORK_RISK)}
+    remote = any(path.startswith(('framework/crates/', 'framework/protocol/', 'framework/vendor/'))
+                 or path in ('framework/Cargo.toml', 'framework/Cargo.lock', 'framework/rust-toolchain.toml',
+                             'framework/scripts/leftovers.sh') for path in native)
     remote = remote or any(fnmatchcase(path, pattern) for path in paths for pattern in EXTENSION_RISK)
     if remote:
         workflows.append(REMOTE)
-    route = 'expanded' if compatibility or native or remote else products[0]
+    route = 'expanded' if native or remote else products[0]
     return route, products, tuple(workflows)
 
 

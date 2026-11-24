@@ -16,18 +16,18 @@ import time
 import tomllib
 
 from catalog import AcceptanceError, read_cases, read_json
-from evidence import git, observed_core_tests, run_identity, runtime
-from native_core import (
+from evidence import git, observed_framework_tests, run_identity, runtime
+from native_framework import (
     ROOT, SYSTEM_PATH, cargo_artifact, clean_native_scope, hash_file, interrupted, logged_command,
     owned_homes, read_markers, scenario_sockets, source_identity, verify_native_cleanup, write_receipt,
 )
 
 
-CASE = 'core/p0/service-recovery/keeper-recovery'
-ARTIFACT = 'core-keeper-recovery'
+CASE = 'framework/p0/service-recovery/keeper-recovery'
+ARTIFACT = 'framework-keeper-recovery'
 SELECTOR = 'a_dead_keeper_is_replaced_and_the_daemon_keeps_every_terminal'
-BINDING = {'runner': 'core-scenario', 'target': 'keeper', 'name': SELECTOR}
-CORE = ROOT / 'core'
+BINDING = {'runner': 'framework-scenario', 'target': 'keeper', 'name': SELECTOR}
+FRAMEWORK = ROOT / 'framework'
 PROGRAMS = ('facade', 'facade-mcp', 'facade-fakecli')
 HOME_LOG = 'scenario-homes.txt'
 SCENARIO_TIMEOUT = 300
@@ -43,7 +43,7 @@ def candidate_identity(run):
     hosted = run.startswith('github/')
     if hosted and source['revision'] != os.environ.get('GITHUB_SHA'):
         raise AcceptanceError('the Keeper checkout does not match GITHUB_SHA')
-    paths = () if hosted else ('--', 'core', 'ci/cases.json')
+    paths = () if hosted else ('--', 'framework', 'ci/cases.json')
     dirty = git(ROOT, 'status', '--porcelain', '--untracked-files=normal', *paths)
     if dirty:
         raise AcceptanceError(f'Keeper evidence requires committed candidate inputs:\n{dirty}')
@@ -52,7 +52,7 @@ def candidate_identity(run):
 
 def harness_hashes():
     return {name: hash_file(ROOT / 'ci' / name) for name in (
-        'check_keeper_recovery.py', 'native_core.py', 'evidence.py', 'catalog.py',
+        'check_keeper_recovery.py', 'native_framework.py', 'evidence.py', 'catalog.py',
     )}
 
 
@@ -78,7 +78,7 @@ def run_scenario(scope, output, receipt):
     if cargo is None:
         raise AcceptanceError('cargo is unavailable')
     workspace_build = receipt['workspace_build']
-    target_dir = ((CORE / os.environ.get('CARGO_TARGET_DIR', 'target')).resolve()
+    target_dir = ((FRAMEWORK / os.environ.get('CARGO_TARGET_DIR', 'target')).resolve()
                   if workspace_build else scope / 'target')
     build_env = {
         'PATH': f'{Path(cargo).parent}:{SYSTEM_PATH}', 'HOME': str(build_home), 'TMPDIR': str(tmp),
@@ -87,20 +87,20 @@ def run_scenario(scope, output, receipt):
         'RUSTUP_HOME': os.environ.get('RUSTUP_HOME', str(Path.home() / '.rustup')),
         'CARGO_BUILD_JOBS': '2', 'CARGO_INCREMENTAL': '0',
     }
-    rustc = subprocess.check_output(['rustc', '-vV'], cwd=CORE, env=build_env, text=True, timeout=30)
+    rustc = subprocess.check_output(['rustc', '-vV'], cwd=FRAMEWORK, env=build_env, text=True, timeout=30)
     target = next((line.removeprefix('host: ') for line in rustc.splitlines() if line.startswith('host: ')), '')
     if not target.startswith('x86_64-'):
         raise AcceptanceError('expected a native x64 Rust host target')
     receipt['native'].update(target=target, rustc=rustc.strip(), cargo=subprocess.check_output(
-        [cargo, '--version'], cwd=CORE, env=build_env, text=True, timeout=30,
+        [cargo, '--version'], cwd=FRAMEWORK, env=build_env, text=True, timeout=30,
     ).strip())
     build_args = build_flags(target, workspace_build, receipt['offline'])
     compiled = output / 'keeper-build.log'
-    logged_command([cargo, 'test', *build_args, *SCENARIO_BUILD], CORE, build_env, compiled, receipt)
+    logged_command([cargo, 'test', *build_args, *SCENARIO_BUILD], FRAMEWORK, build_env, compiled, receipt)
     keeper = cargo_artifact(compiled, 'keeper', test=True)
     # Cargo test can also update the standalone fake CLI under target/debug.
     build = output / 'programs.log'
-    logged_command([cargo, 'build', *build_args, *PROGRAM_BUILD], CORE, build_env, build, receipt)
+    logged_command([cargo, 'build', *build_args, *PROGRAM_BUILD], FRAMEWORK, build_env, build, receipt)
     programs = {name: cargo_artifact(build, name, test=False) for name in PROGRAMS}
     profile = (target_dir if workspace_build else target_dir / target) / 'debug'
     if keeper.parent != profile / 'deps' or programs != {name: profile / name for name in PROGRAMS}:
@@ -117,7 +117,7 @@ def run_scenario(scope, output, receipt):
     log = output / 'keeper.log'
     started = time.monotonic()
     try:
-        logged_command([staged['keeper'], *TEST_ARGS], CORE / 'tests', test_env, log, receipt, timeout=SCENARIO_TIMEOUT)
+        logged_command([staged['keeper'], *TEST_ARGS], FRAMEWORK / 'tests', test_env, log, receipt, timeout=SCENARIO_TIMEOUT)
     finally:
         receipt['scenario_elapsed_seconds'] = round(time.monotonic() - started, 3)
     receipt['executable_sha256_after'] = {name: hash_file(path) for name, path in staged.items()}
@@ -127,7 +127,7 @@ def run_scenario(scope, output, receipt):
 
 
 def keeper_observation(log):
-    if not observed_core_tests([SELECTOR], log.read_text()):
+    if not observed_framework_tests([SELECTOR], log.read_text()):
         raise AcceptanceError('expected exactly one passing Keeper recovery selector')
     markers = read_markers(log, OBSERVATION)
     if len(markers) != 1:
@@ -162,7 +162,7 @@ def verify_keeper(output, receipt, source, *, program_sha256=None):
             raise AcceptanceError('Keeper evidence is for a different candidate, attempt or harness')
         native = receipt['native']
         target = native['target']
-        channel = tomllib.loads((CORE / 'rust-toolchain.toml').read_text())['toolchain']['channel']
+        channel = tomllib.loads((FRAMEWORK / 'rust-toolchain.toml').read_text())['toolchain']['channel']
         if ((native['platform'], native['architecture']) != ('linux-x64', 'x86_64')
                 or not re.fullmatch(r'x86_64-unknown-linux-(gnu|musl)', target) or not native['kernel']
                 or f'host: {target}' not in native['rustc'].splitlines()
@@ -217,7 +217,7 @@ def verify_keeper(output, receipt, source, *, program_sha256=None):
             raise AcceptanceError('Keeper evidence did not establish clean scoped teardown')
         directory = str(Path(sockets[0]).parent)
         home_key = sha256(os.fsencode(homes[0])).hexdigest()[:10]
-        if not re.fullmatch(r'/tmp/facade-core-[0-9]+', directory) or sockets != [
+        if not re.fullmatch(r'/tmp/facade-framework-[0-9]+', directory) or sockets != [
                 f'{directory}/{role}-{home_key}.sock' for role in ('daemon', 'keeper')]:
             raise AcceptanceError('Keeper evidence did not identify both owned sockets')
     except (KeyError, TypeError, AttributeError, IndexError) as error:

@@ -13,7 +13,7 @@ from zipfile import ZipFile
 from catalog import AcceptanceError, read_json
 from gate_collect import NATIVE_RECEIPTS, collect
 from gate_shadow import Pending, decide
-from merge_review import COLD, CORE, EXTENSION, REMOTE, SHADOW
+from merge_review import EXTENSION, FRAMEWORK, REMOTE, SHADOW
 from test_gate_shadow import GateFixture, PULL, REPO
 
 
@@ -122,7 +122,7 @@ class CollectionFixture(GateFixture):
 class GateCollectionTests(CollectionFixture, unittest.TestCase):
     def test_rejected_plan_keeps_the_observed_candidate_and_skips_workflow_reads(self):
         self.create_collection_fixture('extension/src/extension.ts')
-        reason = "invalid or duplicate case ID 'framework/configuration/cli-field/args'"
+        reason = "invalid or duplicate case ID 'core/configuration/cli-field/args'"
         with patch('gate_collect.candidate_plan', side_effect=AcceptanceError(reason)):
             result = self.collect_fixture('failure')
         self.assertEqual(result['candidate'], {
@@ -160,19 +160,20 @@ class GateCollectionTests(CollectionFixture, unittest.TestCase):
         self.assertEqual(stale['status'], 'pending')
         self.assertIn('source receipt refers to a different artifact', stale['blockers'][0]['reason'])
 
-    def test_core_collection_uses_both_pilots_and_native_source_receipts(self):
-        self.create_collection_fixture('core/crates/facade/src/cli.rs')
+    def test_framework_collection_uses_both_pilots_and_native_source_receipts(self):
+        self.create_collection_fixture('framework/crates/facade/src/cli.rs')
         result = self.collect_fixture('success')
-        self.assertEqual(set(result['verified_workflows']), {SHADOW, CORE, EXTENSION})
+        self.assertEqual(set(result['verified_workflows']), {SHADOW, FRAMEWORK, EXTENSION})
         self.assertEqual(result['verified_workflows'][SHADOW]['shadow_replay']['verified_cases'],
-                         {'core': 1, 'extension': 1})
+                         {'framework': 1, 'extension': 1})
 
-    def test_expanded_collection_reads_nested_cold_and_remote_receipts(self):
-        self.create_collection_fixture('core/crates/base/src/protocol/address.rs')
+    def test_expanded_collection_checks_the_keeper_manifest_and_remote_source(self):
+        self.create_collection_fixture('framework/crates/base/src/protocol/address.rs')
         result = self.collect_fixture('success')
-        self.assertEqual(set(result['verified_workflows']), {SHADOW, CORE, EXTENSION, COLD, REMOTE})
+        self.assertEqual(set(result['verified_workflows']), {SHADOW, FRAMEWORK, EXTENSION, REMOTE})
+        self.assertIn('framework-keeper-recovery-1', result['verified_workflows'][FRAMEWORK]['artifact_manifest'])
         snapshot = read_json(self.collection / 'observations.json')
-        self.assertEqual(snapshot['workflows'][COLD]['source']['proof']['member'], 'cold-cutover/receipt.json')
+        self.assertEqual(snapshot['workflows'][FRAMEWORK]['source']['proof']['artifact'], 'framework-ssh-route-1')
         self.assertEqual(snapshot['workflows'][REMOTE]['source']['merge'], self.plan['merge'])
 
     def test_empty_collection_only_reads_the_candidate(self):

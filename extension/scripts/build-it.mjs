@@ -1,20 +1,20 @@
 // Assembles the integration suite's own extension in build/extension-it/: the shipped extension of build/extension/, built in test
-// mode with its test commands and the page's probe, core's programs as they ship (scripts/core.mjs), and ptyd as it ships
+// mode with its test commands and the page's probe, framework's programs as they ship (scripts/framework.mjs), and ptyd as it ships
 // (src/test/integration/ptydFixture.ts). Nothing of it reaches the shipped extension or a package (UX-3.2).
-// --core-package DIRECTORY --core-package-evidence-sha256 DIGEST stages Core from a verified native package artifact.
+// --framework-package DIRECTORY --framework-package-evidence-sha256 DIGEST stages Framework from a verified native package artifact.
 // DIGEST is the independently verified SHA-256 of the artifact's native-package-evidence.json.
 import * as esbuild from 'esbuild';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parseArgs } from 'node:util';
-import { BIN, buildCore, coreTriple } from './core.mjs';
+import { BIN, FRAMEWORK_BUILD_FILE, buildFramework, frameworkTriple } from './framework.mjs';
 
-const { values: { 'core-package': packageDir, 'core-package-evidence-sha256': evidenceDigest } } = parseArgs({ options: {
-	'core-package': { type: 'string' },
-	'core-package-evidence-sha256': { type: 'string' }
+const { values: { 'framework-package': packageDir, 'framework-package-evidence-sha256': evidenceDigest } } = parseArgs({ options: {
+	'framework-package': { type: 'string' },
+	'framework-package-evidence-sha256': { type: 'string' }
 } });
 if ((packageDir === undefined) !== (evidenceDigest === undefined)) {
-	throw new Error('Supply --core-package and --core-package-evidence-sha256 together.');
+	throw new Error('Supply --framework-package and --framework-package-evidence-sha256 together.');
 }
 
 const root = path.join(import.meta.dirname, '..');
@@ -23,15 +23,14 @@ const stage = path.join(root, 'build', 'extension-it');
 if (!['extension.js', 'ptyd.js'].every(file => fs.existsSync(path.join(shipped, 'dist', file)))) {
 	throw new Error('build/extension is not built: run `npm run bundle` first.');
 }
-const packagedCore = packageDir === undefined ? undefined
-	: (await import('./editor-core-package.mjs')).readEditorCorePackage(root, packageDir, evidenceDigest);
+const packagedFramework = packageDir === undefined ? undefined
+	: (await import('./editor-framework-package.mjs')).readEditorFrameworkPackage(root, packageDir, evidenceDigest);
 fs.rmSync(stage, { recursive: true, force: true });
 fs.cpSync(shipped, stage, { recursive: true });
 const bin = path.join(stage, 'bin');
-// The Rust engine runs on core's programs, on every supported target
-if (packagedCore) {
+if (packagedFramework) {
 	fs.rmSync(bin, { recursive: true, force: true });
-	for (const [name, bytes] of packagedCore.programs) {
+	for (const [name, bytes] of packagedFramework.programs) {
 		const file = path.join(bin, name);
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(file, bytes);
@@ -39,9 +38,10 @@ if (packagedCore) {
 			fs.chmodSync(file, 0o755);
 		}
 	}
-	console.info(`Staged Core from the verified ${packagedCore.target} package on tree ${packagedCore.tree}.`);
-} else if (coreTriple()) {
-	buildCore();
+	fs.writeFileSync(path.join(bin, FRAMEWORK_BUILD_FILE), packagedFramework.marker);
+	console.info(`Staged Framework from the verified ${packagedFramework.target} package on tree ${packagedFramework.tree}.`);
+} else if (frameworkTriple()) {
+	buildFramework();
 	fs.cpSync(BIN, bin, { recursive: true });
 }
 // jsonc-parser's ES modules, as the shipped bundle has them (scripts/build.mjs)

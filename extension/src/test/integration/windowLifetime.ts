@@ -6,9 +6,9 @@ import * as assert from 'assert';
 import type { ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { AgentListEntry, InspectResult } from '../../base/coreProtocol';
+import type { AgentListEntry, InspectResult } from '../../base/frameworkProtocol';
 import { endEditors, normalizeDriveLetter, until } from './editors';
-import type { Step } from './rustWindowDriver';
+import type { Step } from './frameworkWindowDriver';
 
 type Closed = Extract<Step, { readonly phase: 'closed' }>;
 
@@ -16,7 +16,7 @@ type Closed = Extract<Step, { readonly phase: 'closed' }>;
 export function lifetimeDriverFiles(): Readonly<Record<string, string>> {
 	return {
 		'package.json': JSON.stringify({ name: 'window-lifetime-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], extensionKind: ['workspace'], main: './extension.js' }),
-		'extension.js': fs.readFileSync(path.join(__dirname, 'rustWindowDriver.js'), 'utf8'),
+		'extension.js': fs.readFileSync(path.join(__dirname, 'frameworkWindowDriver.js'), 'utf8'),
 		'editors.js': fs.readFileSync(path.join(__dirname, 'editors.js'), 'utf8')
 	};
 }

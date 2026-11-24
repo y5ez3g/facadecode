@@ -11,7 +11,7 @@ inputs=$(realpath -e -- "$1")
 editor=$(realpath -e -- "$2")
 attempt=$(realpath -m -- "$3")
 mkdir -- "$attempt"
-for input in ci/evidence.py core/scripts/leftovers.sh extension/build/out/test/integration/remote.js extension/build/extension-it/package.json extension/build/window/package.json; do
+for input in ci/evidence.py framework/scripts/leftovers.sh extension/build/out/test/integration/remote.js extension/build/extension-it/package.json extension/build/window/package.json; do
   if [[ ! -f "$stage/$input" ]]; then
     printf 'Build the editor fixtures first. Missing %s\n' "$input" >&2
     exit 2
@@ -183,7 +183,7 @@ done < <(compgen -e FACADE_IT_ || true)
 unset WAYLAND_DISPLAY WAYLAND_SOCKET SSH_AUTH_SOCK
 export TMPDIR="$scope" XDG_RUNTIME_DIR="$scope/runtime" CI_ACCEPTANCE_ROOT="$scope"
 export XDG_SESSION_TYPE=x11 ELECTRON_OZONE_PLATFORM_HINT=x11
-export VSCODE_EXECUTABLE="$editor" FACADE_IT_ENGINE=rust FACADE_IT_ONLY=ssh-connect
+export VSCODE_EXECUTABLE="$editor" FACADE_IT_IMPLEMENTATION=framework FACADE_IT_ONLY=ssh-connect
 export FACADE_IT_REMOTE_ROOT="$scope" FACADE_IT_SSH_HOST=facade-fixture FACADE_IT_SSH_CONFIG="$scope/ssh_config"
 export FACADE_IT_REMOTE_EXTENSION=/opt/facade FACADE_IT_REMOTE_SERVER_TAR=/fixture/vscode-server.tar.gz
 FACADE_IT_REMOTE_VSIXS=$(jq -r --arg assets "$assets" 'map($assets + "/" + .id + "-" + .version + ".vsix") | join(",")' "$fixture/pinned-marketplace.json")

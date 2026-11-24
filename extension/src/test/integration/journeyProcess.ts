@@ -49,7 +49,7 @@ export async function windowsProcessStart(pid: number, timeout = 5_000): Promise
 }
 
 /** Read only the matching result from the tail of the isolated workspace's agents log. */
-export function oldStopResult(home: string | undefined, run: string): string | undefined {
+export function legacyStopResult(home: string | undefined, run: string): string | undefined {
 	if (!home) { return undefined; }
 	try {
 		const root = path.join(home, 'extension', 'workspaces');

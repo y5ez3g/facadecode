@@ -938,7 +938,7 @@ suite('Opening the execution host settings (CONFIGURATION-7.1, UX-6.2)', () => {
 	let file: string;
 
 	setup(() => {
-		temp = tempDir('fd-rust-settings-');
+		temp = tempDir('fd-framework-settings-');
 		previousHome = process.env.FACADE_HOME;
 		legacyRoot = path.join(temp.dir, 'legacy');
 		file = path.join(temp.dir, 'status', 'facade.json');
@@ -974,8 +974,8 @@ suite('Opening the execution host settings (CONFIGURATION-7.1, UX-6.2)', () => {
 			}
 		};
 		const hostFs = new Proxy(fs, { get: (target, key) => key === 'linkSync' ? linkSync : Reflect.get(target, key) });
-		const { rustSettings } = withModules({ vscode, fs: hostFs })<typeof import('../host/rust/settings')>(require.resolve('../host/rust/settings'));
-		const settings = rustSettings({
+		const { frameworkSettings } = withModules({ vscode, fs: hostFs })<typeof import('../host/framework/settings')>(require.resolve('../host/framework/settings'));
+		const settings = frameworkSettings({
 			status: async () => { requests++; return { settings_file: file }; },
 			log: { event: text => created.push(text) }
 		});
@@ -1003,7 +1003,7 @@ suite('Opening the execution host settings (CONFIGURATION-7.1, UX-6.2)', () => {
 		}
 	});
 
-	test('old engine migration reads earlier settings from the remote host', () => {
+	test('legacy implementation migration reads earlier settings from the remote host', () => {
 		const vscode = {
 			env: { remoteName: 'ssh-remote' },
 			l10n,

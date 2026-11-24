@@ -1,6 +1,6 @@
-const versionFile = 'facade-core-version.txt';
+const versionFile = 'facade-framework-version.txt';
 const installer = /^install\.(?:sh|ps1)$/;
-const stableVersion = /^[0-9]+\.[0-9]+\.[0-9]+$/;
+const stableBuild = /^([0-9]+\.[0-9]+\.[0-9]+)(?:\+[0-9]+\.[0-9a-f]{40})?$/;
 const releaseAsset = /^\/releases\/[0-9]+\.[0-9]+\.[0-9]+\/[a-zA-Z0-9][a-zA-Z0-9.-]*$/;
 
 function missing() {
@@ -20,8 +20,8 @@ export default {
 		if (!versioned && key !== versionFile) {
 			if (!installer.test(key)) return missing();
 			const marker = await RELEASES.get(versionFile);
-			const version = (await marker?.text())?.trim();
-			if (!stableVersion.test(version ?? '')) return missing();
+			const version = stableBuild.exec((await marker?.text())?.trim())?.[1];
+			if (!version) return missing();
 			key = `releases/${version}/${file}`;
 		}
 

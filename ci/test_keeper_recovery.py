@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from catalog import AcceptanceError
 import check_keeper_recovery as keeper
-from native_core import hash_file, scenario_sockets
+from native_framework import hash_file, scenario_sockets
 
 
 class KeeperEvidence(unittest.TestCase):
@@ -21,7 +21,7 @@ class KeeperEvidence(unittest.TestCase):
         self.scope = Path('/tmp/fci-keeper-example')
         self.source = {'revision': 'a' * 40, 'tree': 'b' * 40, 'run': 'github/31/1'}
         target = 'x86_64-unknown-linux-gnu'
-        channel = tomllib.loads((keeper.CORE / 'rust-toolchain.toml').read_text())['toolchain']['channel']
+        channel = tomllib.loads((keeper.FRAMEWORK / 'rust-toolchain.toml').read_text())['toolchain']['channel']
         self.observation = {
             **{name: {'pid': pid, 'birth': str(pid * 2)} for pid, name in enumerate(
                 ('daemon', 'keeper_before', 'keeper_after', 'cli', 'stopped_cli'), 10)},

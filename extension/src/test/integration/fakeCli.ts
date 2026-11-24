@@ -31,7 +31,7 @@ const ST = `${ESC}\\`;
 const ANSWER = `${ESC}]7501;?:`;
 
 const record = process.env.FACADE_IT_RECORD!;
-// The old engine says `#a1`, core `a1`: the files this fixture leaves, and the tests that read them, name it `#a1` on both
+// The legacy implementation says `#a1`, framework `a1`: the files this fixture leaves, and the tests that read them, name it `#a1` on both
 const agent = `#${process.env.FACADE_AGENT!.replace(/^#/, '').split('@')[0]}`;
 const args = process.argv.slice(2);
 const redactCredential = (text: string) => text.replace(/("--run-credential"\s*,\s*)"[^"]+"/g, '$1"<redacted>"');
@@ -72,15 +72,15 @@ if (sessionFile) {
 	fs.writeFileSync(sessionFile, JSON.stringify({ session_id: session, cwd: process.cwd(), source: 'startup' }));
 }
 // Claude Code names its conversation to Facade's SessionStart hook, from the settings it was started with, as it starts (CLIS-2.2): the
-// Rust engine learns the session so, where the old engine's file above says it. A resumed conversation keeps its ID; a new one has one.
+// Framework learns the session so, where the legacy implementation's file above says it. A resumed conversation keeps its ID; a new one has one.
 {
 	const given = args.indexOf('--settings');
 	let hook: string | undefined;
 	try {
 		hook = given >= 0 ? JSON.parse(args[given + 1]).hooks?.SessionStart?.[0]?.hooks?.[0]?.command as string | undefined : undefined;
-	} catch { /* a file's path, the old engine's */ }
-	// The other five report in the ways core's rules wire (title command, hooks, a plugin, an extension): where the wiring says the run's
-	// session file is, this fixture writes the file as those reports end up (core's `sessions`: the ID and a newline), once, as it starts
+	} catch { /* a file's path, the legacy implementation's */ }
+	// The other five report in the ways framework's rules wire (title command, hooks, a plugin, an extension): where the wiring says the run's
+	// session file is, this fixture writes the file as those reports end up (framework's `sessions`: the ID and a newline), once, as it starts
 	if (!hook && !sessionFile && process.env.FACADE_AGENT) {
 		const files = args.flatMap((arg, at) => ['-e', '--settings'].includes(args[at - 1] ?? '') && fs.existsSync(arg) ? [fs.readFileSync(arg, 'utf8')] : []);
 		// On Windows a hook may come as PowerShell's `-EncodedCommand`, its script in UTF-16 base64 (Codex's)
@@ -104,7 +104,7 @@ if (sessionFile) {
 	if (hook && !sessionFile) {
 		const flag = args.findIndex(arg => arg === '--resume' || arg === '--session-id');
 		const session = flag >= 0 ? args[flag + 1] : randomUUID();
-		// The conversation's file, which core waits for before it counts the session (PROTOCOL "CLI rules"): where Claude Code keeps it
+		// The conversation's file, which framework waits for before it counts the session (PROTOCOL "CLI rules"): where Claude Code keeps it
 		const transcript = path.join(process.env.CLAUDE_CONFIG_DIR ?? process.cwd(), 'projects', process.cwd().replace(/[^A-Za-z0-9]/g, '-'), `${session}.jsonl`);
 		fs.mkdirSync(path.dirname(transcript), { recursive: true });
 		if (!fs.existsSync(transcript)) {
@@ -430,8 +430,8 @@ function start(): void {
 }
 
 /**
- * Whether it stands in for Antigravity: the old engine's `agy-settings.json`, or the built-in this fixture was told to draw
- * (CLIS-3.4). Read that CLI's settings from its file, or from the earlier core's inline JSON. The keys alone tell nothing, as
+ * Whether it stands in for Antigravity: the legacy implementation's `agy-settings.json`, or the built-in this fixture was told to draw
+ * (CLIS-3.4). Read that CLI's settings from its file, or from the earlier framework's inline JSON. The keys alone tell nothing, as
  * a Claude Code entry's own may hold the same ones.
  */
 const settingsAt = args.indexOf('--settings');
@@ -517,7 +517,7 @@ interface Step {
 
 /** Observe admission without taking the message from the recipient's inbox. */
 async function pendingSend(home: string, target: string, text: string): Promise<number> {
-	const store = new DatabaseSync(path.join(home, 'core', 'facade.db'), { readOnly: true });
+	const store = new DatabaseSync(path.join(home, 'framework', 'facade.db'), { readOnly: true });
 	try {
 		const find = store.prepare(`SELECT number FROM messages
 			WHERE "from" = ? AND "to" = ? AND text = ? AND status = 'pending' AND paste IS NULL`);
@@ -577,7 +577,7 @@ async function drive(server: { command: string; args: string[]; env: { [name: st
 				const { to, text } = args;
 				const home = server.env.FACADE_HOME;
 				if (step.tool !== 'send_message' || typeof to !== 'string' || typeof text !== 'string' || !home) {
-					throw new Error('Cancellation requires a Rust send in the isolated fixture');
+					throw new Error('Cancellation requires a Framework send in the isolated fixture');
 				}
 				const messageNumber = await pendingSend(home, to, text);
 				shim.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId } })}\n`);

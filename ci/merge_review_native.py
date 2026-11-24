@@ -8,30 +8,28 @@ import shutil
 import subprocess
 
 from catalog import (
-    AcceptanceError, NATIVE_INSTALL_CASES, NATIVE_PRIOR_CASE, NATIVE_REMOTE_EDITOR_CASE, NATIVE_SSH_CASE,
+    AcceptanceError, NATIVE_INSTALL_CASES, NATIVE_REMOTE_EDITOR_CASE, NATIVE_SSH_CASE,
     RELEASE_FIXTURE_CASES, read_json,
 )
 from check_keeper_recovery import ARTIFACT as KEEPER_ARTIFACT, CASE as KEEPER_CASE, verify_keeper
-from check_native_install import verified_install
-import check_prior_build as cold
+from check_native_install import SHA256, verified_install
 import check_real_ssh_route as ssh
-from evidence import git
 from github_evidence import download_artifact
-from native_core import hash_file, read_markers, verify_native_cleanup
+from native_framework import hash_file, read_markers, verify_native_cleanup
 import remote_editor_evidence as remote
 
 
 NATIVE_EDITOR_MINIMUM = 61
-OLD_WINDOW_GRACE_CASE = 'extension/p0/pin-reload/old-last-window-grace'
-TYPED_NATIVE_CASES = sorted((*NATIVE_INSTALL_CASES, NATIVE_PRIOR_CASE, NATIVE_REMOTE_EDITOR_CASE,
-                             NATIVE_SSH_CASE, KEEPER_CASE, OLD_WINDOW_GRACE_CASE))
-OLD_IMMEDIATE_REOPEN = '✔ claude: real window close and immediate reopen preserve Pin, exact session and process, with one terminal: '
-OLD_EXPIRED_REOPEN = '✔ claude: real window close and reopen after its grace restore the exact pinned session in a new process, with one terminal: '
-OLD_NATURAL_EXIT = re.compile(r"✔ claude: the closed window's process ended after (\d+) ms, using the production grace period")
+LEGACY_WINDOW_GRACE_CASE = 'extension/p0/pin-reload/legacy-last-window-grace'
+TYPED_NATIVE_CASES = sorted((*NATIVE_INSTALL_CASES, NATIVE_REMOTE_EDITOR_CASE,
+                             NATIVE_SSH_CASE, KEEPER_CASE, LEGACY_WINDOW_GRACE_CASE))
+LEGACY_IMMEDIATE_REOPEN = '✔ claude: real window close and immediate reopen preserve Pin, exact session and process, with one terminal: '
+LEGACY_EXPIRED_REOPEN = '✔ claude: real window close and reopen after its grace restore the exact pinned session in a new process, with one terminal: '
+LEGACY_NATURAL_EXIT = re.compile(r"✔ claude: the closed window's process ended after (\d+) ms, using the production grace period")
 
 
 def file_digests(recorded, names):
-    return recorded.keys() == set(names) and all(re.fullmatch(r'[0-9a-f]{64}', sha) for sha in recorded.values())
+    return recorded.keys() == set(names) and all(SHA256.fullmatch(sha) for sha in recorded.values())
 
 
 def check_ssh(folder, source):
@@ -40,31 +38,8 @@ def check_ssh(folder, source):
     if (receipt['source'] != source or not file_digests(receipt['program_sha256'], ssh.PROGRAMS)
             or receipt['success'] != ssh.ssh_success(receipt)
             or read_markers(folder / 'console.log', ssh.SUCCESS_MARKER) != [receipt['success']]):
-        raise AcceptanceError('native Core SSH receipt does not match the original route and attempt')
+        raise AcceptanceError('native Framework SSH receipt does not match the original route and attempt')
     return NATIVE_SSH_CASE
-
-
-def check_cold(root, folder, source):
-    output = folder / 'cold-cutover'
-    receipt = read_json(output / 'receipt.json')
-    prior = receipt['prior']
-    pinned = {**source, 'revision': cold.PRIOR_MAIN, 'tree': git(root, 'rev-parse', f'{cold.PRIOR_MAIN}^{{tree}}')}
-    candidate = receipt['candidate']
-    if (receipt['source'] != source or receipt['harness_sha256'] != cold.harness_hashes()
-            or (prior['role'], prior['source'], prior['target']) != ('prior-main', pinned, cold.TARGET)
-            or not file_digests(prior['program_sha256'], cold.PROGRAMS)
-            or not file_digests(candidate['program_sha256'], cold.PROGRAMS)
-            or any(not cold.HEX_DIGEST.fullmatch(candidate[key])
-                   for key in ('facade-fakecli_sha256', 'machines_sha256'))):
-        raise AcceptanceError('native cold migration does not name the expected pinned inputs')
-    cold.verify_command_logs(receipt, output)
-    verify_native_cleanup(receipt)
-    if (receipt['fallback_home_empty'] is not True
-            or receipt['observation'] != cold.cold_observation(output, Path(receipt['scope']))
-            or receipt['success'] != cold.prior_success(receipt)
-            or read_markers(folder / 'console.log', cold.SUCCESS_MARKER) != [receipt['success']]):
-        raise AcceptanceError('native cold migration receipt does not match the original execution')
-    return NATIVE_PRIOR_CASE
 
 
 def check_remote(root, folder, source):
@@ -72,7 +47,7 @@ def check_remote(root, folder, source):
     inputs = receipt['inputs']
     commit, assets = remote.pinned_assets()
     if (inputs['source'] != source or inputs['assets'] != assets or inputs['editor']['commit'] != commit
-            or not cold.HEX_DIGEST.fullmatch(inputs['editor']['sha256'])
+            or not SHA256.fullmatch(inputs['editor']['sha256'])
             or not file_digests(inputs['compiled_sha256'], remote.COMPILED)
             or inputs['harness_sha256'] != {name: hash_file(root / name) for name in remote.HARNESS}
             or receipt != remote.completed_receipt(folder, inputs)):
@@ -90,24 +65,24 @@ def editor_passes(path):
     return sum(counts)
 
 
-def check_old_window_grace(path):
+def check_legacy_window_grace(path):
     lines = path.read_text().splitlines()
-    immediate = [(index, line.strip().removeprefix(OLD_IMMEDIATE_REOPEN)) for index, line in enumerate(lines)
-                 if line.strip().startswith(OLD_IMMEDIATE_REOPEN)]
-    expired = [(index, line.strip().removeprefix(OLD_EXPIRED_REOPEN)) for index, line in enumerate(lines)
-               if line.strip().startswith(OLD_EXPIRED_REOPEN)]
+    immediate = [(index, line.strip().removeprefix(LEGACY_IMMEDIATE_REOPEN)) for index, line in enumerate(lines)
+                 if line.strip().startswith(LEGACY_IMMEDIATE_REOPEN)]
+    expired = [(index, line.strip().removeprefix(LEGACY_EXPIRED_REOPEN)) for index, line in enumerate(lines)
+               if line.strip().startswith(LEGACY_EXPIRED_REOPEN)]
     natural_exit = [(index, int(match[1])) for index, line in enumerate(lines)
-                    if (match := OLD_NATURAL_EXIT.fullmatch(line.strip()))]
+                    if (match := LEGACY_NATURAL_EXIT.fullmatch(line.strip()))]
     cleanup = [index for index, line in enumerate(lines) if line.strip() == 'Isolated editor profile cleanup finished.']
     if not all(len(events) == 1 for events in (immediate, expired, natural_exit, cleanup)):
-        raise AcceptanceError(f'{path}: missing or duplicate old window grace observations or cleanup')
+        raise AcceptanceError(f'{path}: missing or duplicate legacy window grace observations or cleanup')
     if (not immediate[0][0] < natural_exit[0][0] < expired[0][0] < cleanup[0] or natural_exit[0][1] < 60_000):
-        raise AcceptanceError(f'{path}: old window grace did not end naturally between the two reopens')
+        raise AcceptanceError(f'{path}: legacy window grace did not end naturally between the two reopens')
     try:
         for keep_process, (_, payload) in ((True, immediate[0]), (False, expired[0])):
             records = json.loads(payload)
             if not isinstance(records, list) or len(records) != 3:
-                raise AcceptanceError(f'{path}: invalid old window grace transcript')
+                raise AcceptanceError(f'{path}: invalid legacy window grace transcript')
             before, closed, after = records
             if ([item['phase'] for item in (before, closed, after)] != ['folder', 'closed', 'reopened']
                     or not all(type(pid) is int and pid > 0 for pid in (before['pid'], closed['host'], after['pid']))
@@ -116,10 +91,10 @@ def check_old_window_grace(path):
                     or before['session'] != after['session'] or type(after['terminals']) is not int
                     or after['terminals'] != 1 or (before['pid'] == after['pid']) != keep_process
                     or (before['runId'] == after['runId']) != keep_process):
-                raise AcceptanceError(f'{path}: wrong process, run or pinned session after old window close')
+                raise AcceptanceError(f'{path}: wrong process, run or pinned session after legacy window close')
     except (KeyError, TypeError, json.JSONDecodeError) as error:
-        raise AcceptanceError(f'{path}: invalid old window grace transcript') from error
-    return OLD_WINDOW_GRACE_CASE
+        raise AcceptanceError(f'{path}: invalid legacy window grace transcript') from error
+    return LEGACY_WINDOW_GRACE_CASE
 
 
 def verify_node_evidence(root, script, folder, source, *arguments):
@@ -153,14 +128,12 @@ def replay_native(root, repo, candidate, records, output):
         return {'revision': candidate['merge'], 'tree': candidate['tree'], 'run': f'github/{run}/1'}
 
     observed = []
-    name = 'core-ssh-route-1'
+    name = 'framework-ssh-route-1'
     observed.append(check_ssh(paths[name], source(name)))
     programs = read_json(paths[name] / 'receipt.json')['program_sha256']
     name = f'{KEEPER_ARTIFACT}-1'
     observed.append(verify_keeper(paths[name], read_json(paths[name] / 'receipt.json'), source(name),
                                   program_sha256=programs))
-    name = 'core-cold-migration-1'
-    observed.append(check_cold(root, paths[name], source(name)))
     name = 'extension-remote-ssh-1'
     observed.append(check_remote(root, paths[name], source(name)))
 
@@ -174,17 +147,17 @@ def replay_native(root, repo, candidate, records, output):
     if set(release['cases']) != set(RELEASE_FIXTURE_CASES):
         raise AcceptanceError('the release fixture does not cover the expected release contracts')
     name = 'native-install-linux-x64-1'
-    install, package = paths[name], packages / 'extension-linux-x64/core'
+    install, package = paths[name], packages / 'extension-linux-x64/framework'
     sidecar = install / 'SHA256SUMS'
     if sidecar.read_bytes() != (package / 'SHA256SUMS').read_bytes():
         raise AcceptanceError('the installed candidate checksum differs from the tested package set')
     project = repo.split('/')[1]
     installed_source = source(name)
-    verified_install(package / 'facade-core-linux-x64.tar.gz', sidecar, install / 'receipt.json',
+    verified_install(package / 'facade-framework-linux-x64.tar.gz', sidecar, install / 'receipt.json',
                      install / 'output.log', installed_source['run'], source=installed_source,
                      producer_checkout=Path('/home/runner/work') / project / project)
     observed.extend(NATIVE_INSTALL_CASES)
-    observed.append(check_old_window_grace(paths['editor-tests-linux-x64-old'] / 'integration.log'))
+    observed.append(check_legacy_window_grace(paths['editor-tests-linux-x64-legacy'] / 'integration.log'))
 
     return {
         'typed_cases': sorted(observed),

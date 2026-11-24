@@ -261,11 +261,11 @@ IN THE SOFTWARE.
 
 ---------------------------------------------------------
 
-ConPTY (conpty.dll and OpenConsole.exe, used by node-pty and Facade core on Windows)
+ConPTY (conpty.dll and OpenConsole.exe, used by node-pty and Facade Code Framework on Windows)
 
 Source: https://github.com/microsoft/terminal, packaged by node-pty as Microsoft.Windows.Console.ConPTY 1.23.251008001
 
-Facade core's copy in bin/conpty/: Microsoft.Windows.Console.ConPTY 1.25.260303002, under the same MIT license below.
+Facade Code Framework's copy in bin/conpty/: Microsoft.Windows.Console.ConPTY 1.25.260303002, under the same MIT license below.
 
 MIT License
 

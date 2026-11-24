@@ -254,7 +254,7 @@ export interface LocationDeps extends FolderStepDeps {
 	readonly worktrees: WorktreePort;
 	/** A deleted worktree's agents are closed first (WORKTREES-3.2, 3.3). */
 	readonly agents: Pick<Agents, 'list' | 'close'>;
-	/** Rust finds affected agents by location source, including those without a card in this window. */
+	/** Framework finds affected agents by location source, including those without a card in this window. */
 	readonly worktreeAgents?: {
 		count(path: string): number;
 		close(path: string): Promise<boolean>;

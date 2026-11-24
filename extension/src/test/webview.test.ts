@@ -1372,7 +1372,7 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(at, [{ preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }]);
 	});
 
-	test('PANEL-2.2, 4.2: a card\'s menu carries its exact run and the action context for its engine', async () => {
+	test('PANEL-2.2, 4.2: a card\'s menu carries its exact run and the action context for its implementation', async () => {
 		assert.deepStrictEqual(await evaluate(`(() => { agents[0] = newCard(1, { menu: { moveUp: false, moveDown: true } }); agents[1] = newCard(2, { menu: { pin: true, moveUp: true, moveDown: false } }); agents[2] = newCard(3, { pinned: true, menu: { unpin: true, dismiss: true, moveUp: false, moveDown: false } }); redraw({ revision: 7 }); return [...document.querySelectorAll('.agent')].slice(0, 4).map(card => JSON.parse(card.dataset.vscodeContext)); })()`), [
 			{ webviewSection: 'agent', run_id: 'run-1', webviewMoveDown: true, preventDefaultContextMenuItems: true },
 			{ webviewSection: 'agent', run_id: 'run-2', webviewMoveUp: true, preventDefaultContextMenuItems: true },
@@ -1445,7 +1445,7 @@ suite('The agent panel in Chromium', function () {
 		], [0]]);
 	});
 
-	test('the Rust cards, revision and pending open belong to the current page and exact action ID (PANEL-3.1, 3.2)', async () => {
+	test('the Framework cards, revision and pending open belong to the current page and exact action ID (PANEL-3.1, 3.2)', async () => {
 		const older = await evaluate('panel.page');
 		await load();
 		const current = await evaluate('panel.page');

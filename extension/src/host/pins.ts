@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { KeptWorkspaceState } from './workspaceState';
-import type { LogPort, Pin, RustPin, RustPinStore } from '../core/ports';
+import type { LogPort, Pin, FrameworkPin, FrameworkPinStore } from '../core/ports';
 
 const KEY = 'facade.pins';
 
@@ -11,19 +11,19 @@ const KEY = 'facade.pins';
  * This workspace's Pins, in their saved order, in workspace storage (ARCHITECTURE-3.1, LIFECYCLE-3.4). A record of another shape - an
  * earlier development build's - is ignored, never translated, with one line in the agents log (ARCHITECTURE-4.2).
  */
-export class WorkspacePins implements RustPinStore {
+export class WorkspacePins implements FrameworkPinStore {
 	private ignored = false;
 
-	constructor(private readonly state: Pick<KeptWorkspaceState, 'get' | 'mutate'>, private readonly log?: LogPort, private readonly hideRustPins = false) { }
+	constructor(private readonly state: Pick<KeptWorkspaceState, 'get' | 'mutate'>, private readonly log?: LogPort, private readonly hideFrameworkPins = false) { }
 
 	list(): readonly Pin[] {
 		const pins = this.read(this.state.get(KEY));
-		return this.hideRustPins ? pins.filter(pin => this.visible(pin)) : pins;
+		return this.hideFrameworkPins ? pins.filter(pin => this.visible(pin)) : pins;
 	}
 
-	/** On an old-engine window under auto, Pins tied to core wait for its records to be verified (RULES-4.2). */
+	/** On a legacy implementation window under auto, Pins tied to the Framework wait for its records to be verified (RULES-4.2). */
 	private visible(pin: Pin): boolean {
-		return !this.hideRustPins || pin.machine_id === undefined;
+		return !this.hideFrameworkPins || pin.machine_id === undefined;
 	}
 
 	private read(value: unknown): readonly Pin[] {
@@ -46,7 +46,7 @@ export class WorkspacePins implements RustPinStore {
 		});
 	}
 
-	pinAgent(pin: RustPin): Pin {
+	pinAgent(pin: FrameworkPin): Pin {
 		let saved: Pin = pin;
 		this.edit(pins => {
 			const existing = pins.find(each => each.machine_id === pin.machine_id && each.agent === pin.agent)
@@ -61,7 +61,7 @@ export class WorkspacePins implements RustPinStore {
 		return saved;
 	}
 
-	updatePin(before: RustPin, after: RustPin): void {
+	updatePin(before: FrameworkPin, after: FrameworkPin): void {
 		this.edit(pins => {
 			const existing = pins.find(pin => pin.id === before.id && pin.machine_id === before.machine_id
 				&& pin.agent === before.agent);

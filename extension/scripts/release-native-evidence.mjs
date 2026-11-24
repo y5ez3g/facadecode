@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { coreArchive } from '../../core/scripts/package-core.mjs';
+import { frameworkArchive } from '../../framework/scripts/package-framework.mjs';
 import { compareVersions, fileFor, nativeTargets, sha256 } from './release-assets.mjs';
 
 const digestPattern = /^[a-f0-9]{64}$/u;
@@ -35,10 +35,10 @@ function readTestLog(directory, check, expected, record) {
 	return bytes.toString('utf8').trimEnd().split(/\r?\n/u);
 }
 
-function verifyCoreInstall(lines, version, target) {
-	const installs = lines.filter(line => line.startsWith(`Installed Facade ${version} in `));
-	assert.equal(installs.length, 1, `${target}: missing or repeated successful Core install`);
-	assert.equal(lines.at(-1), `facade ${version}`, `${target}: Core install did not report the installed Shell version`);
+function verifyFrameworkInstall(lines, build, target) {
+	const installs = lines.filter(line => line.startsWith(`Installed Facade ${build} in `));
+	assert.equal(installs.length, 1, `${target}: missing or repeated successful Framework install`);
+	assert.equal(lines.at(-1), `facade ${build}`, `${target}: Framework install did not report the installed Shell BUILD`);
 }
 
 function verifyEditorTest(lines, check, target) {
@@ -46,7 +46,7 @@ function verifyEditorTest(lines, check, target) {
 	assert.equal(results.length, 1, `${target}/${check}: missing or conflicting editor results`);
 	const cleanup = lines.filter(line => line === editorCleanup);
 	assert.equal(cleanup.length, 1, `${target}/${check}: missing or repeated editor cleanup`);
-	assert.deepStrictEqual(lines.slice(-2), [editorCleanup, editorPass + JSON.stringify({ name: check, engine: 'old' })],
+	assert.deepStrictEqual(lines.slice(-2), [editorCleanup, editorPass + JSON.stringify({ name: check, implementation: 'legacy' })],
 		`${target}/${check}: missing exact installed editor result after cleanup`);
 }
 
@@ -63,7 +63,7 @@ function verifyEditorInputs(editor, prior, version, target) {
 	}
 }
 
-export function verifyNativeTestEvidence(directory, evidence, tag, version, source, assets) {
+export function verifyNativeTestEvidence(directory, evidence, tag, version, build, source, assets) {
 	assert.equal(evidence.tag, tag, 'Native test evidence names another tag');
 	assert.deepStrictEqual(evidence.source, source, 'Native test evidence names another candidate source or attempt');
 	assert.ok(Array.isArray(evidence.targets), 'Missing native test targets');
@@ -77,12 +77,12 @@ export function verifyNativeTestEvidence(directory, evidence, tag, version, sour
 		assert.ok(fs.lstatSync(path.join(logsDirectory, target), { throwIfNoEntry: false })?.isDirectory(),
 			`${target}: missing native test logs`);
 		assert.match(packageEvidenceSha256 ?? '', digestPattern, `${target}: missing native package evidence digest`);
-		assert.deepStrictEqual(Object.keys(logs ?? {}).sort(), ['core-install', 'install-pair', 'upgrade-pair'],
+		assert.deepStrictEqual(Object.keys(logs ?? {}).sort(), ['framework-install', 'install-pair', 'upgrade-pair'],
 			`${target}: missing or unexpected native test records`);
 		const context = { source, target };
-		const coreInputs = inputs(coreArchive(target), target.startsWith('win32-') ? 'install.ps1' : 'install.sh');
-		const install = readTestLog(logsDirectory, 'core-install', { ...context, inputs: coreInputs }, logs['core-install']);
-		verifyCoreInstall(install, version, target);
+		const archive = inputs(frameworkArchive(target), target.startsWith('win32-') ? 'install.ps1' : 'install.sh');
+		const install = readTestLog(logsDirectory, 'framework-install', { ...context, inputs: archive }, logs['framework-install']);
+		verifyFrameworkInstall(install, build, target);
 		const pair = inputs(fileFor(version, target), fileFor(version, 'universal'));
 		for (const check of ['install-pair', 'upgrade-pair']) {
 			verifyEditorTest(readTestLog(logsDirectory, check, { ...context, inputs: pair }, logs[check]), check, target);

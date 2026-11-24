@@ -18,16 +18,15 @@ from gate_shadow import (
 )
 from github_evidence import artifact_pages, check_archive_digest, download_archive, require_run_artifacts
 from merge_review import (
-    COLD, CORE, EXTENSION, REMOTE, REQUIRED, ROOT, SHA, SHADOW, attempt_evidence, find_candidate_run, head_runs,
+    EXTENSION, FRAMEWORK, REMOTE, REQUIRED, ROOT, SHA, SHADOW, attempt_evidence, find_candidate_run, head_runs,
     read_candidate, require_checkout, workflow_registrations,
 )
 
 
 MODE = 'read-only GitHub CI Gate collection'
 NATIVE_RECEIPTS = {
-    CORE: ('core-ssh-route-1', 'receipt.json'),
+    FRAMEWORK: ('framework-ssh-route-1', 'receipt.json'),
     EXTENSION: ('release-fixture-linux-x64-1', 'receipt.json'),
-    COLD: ('core-cold-migration-1', 'cold-cutover/receipt.json'),
     REMOTE: ('extension-remote-ssh-1', 'receipt.json'),
 }
 READ_ERRORS = (*OBSERVATION_ERRORS, subprocess.SubprocessError)

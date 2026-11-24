@@ -1,0 +1,507 @@
+{
+  "initialize by claude's guest server": {
+    "call": {
+      "method": "initialize",
+      "server": [
+        "--guest",
+        "claude"
+      ],
+      "environment": {
+        "CLAUDE_CODE_SESSION_ID": "claude-golden"
+      }
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {
+          "tools": {
+            "listChanged": false
+          }
+        },
+        "serverInfo": {
+          "name": "facade",
+          "version": "<version>"
+        },
+        "instructions": "The Orchestrator's MCP tools start, list and stop agents, exchange messages, and read or operate managed agents' terminals. Use an address such as a3@devbox, an agent number such as a3, or a name. Without a machine, a number or name resolves only on machines that are awake and reachable. The server verifies whether this connection acts for a managed agent or a Guest. Managed agents normally receive messages through their terminals. Guests receive messages through read_messages and should keep their connection open and take messages promptly. timeout_seconds defaults to 0 for both send_message and read_messages: sending confirms inbox acceptance only, and reading returns a snapshot. To wait, set a positive timeout_seconds up to 30. A send also requires wait_for: \"delivery\" or \"result\"; setting wait_for alone does not enable waiting. Managed agents usually omit wait_for and timeout_seconds when sending. Replies and later delivery failures arrive through the terminal. You can resend a withdrawn message if nothing was typed. Check the recipient's terminal before retrying partial or unconfirmed input. Guests needing an answer should use wait_for: \"result\" with timeout_seconds: 30. A positive timeout is one total call budget. After reply_timeout, continue with read_messages using the original full message ID as reply_to and a positive timeout_seconds; do not resend the task. A replyable command-line request appears as the command line with a sender address such as #c42@devbox, also returned as from in its inbox row. Reply to that sender address with the received message number as reply_to. The c address accepts the first reply while the original command is waiting. A 🔔 message reports an Orchestrator result; it is not the recipient's answer or proof of task completion."
+      }
+    }
+  },
+  "list_agents by claude's guest": {
+    "call": {
+      "tool": "list_agents",
+      "arguments": {}
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "agents": [
+          {
+            "id": "a2@golden-host",
+            "name": "<guest name>",
+            "type": "guest",
+            "state": "online",
+            "cli": "test",
+            "folder": "<test>/home",
+            "started_at": "<time>"
+          },
+          {
+            "id": "a1@golden-host",
+            "name": "host",
+            "type": "managed",
+            "state": "starting",
+            "cli": "fake",
+            "folder": "<test>/project",
+            "started_at": "<time>"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "short_id": "<short machine ID>",
+            "name": "golden-host",
+            "selector": "golden-host",
+            "build": "<version>",
+            "state": "online",
+            "status": "answered",
+            "clis": [
+              "fake"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "initialize by codex's guest server": {
+    "call": {
+      "method": "initialize",
+      "server": [
+        "--guest",
+        "codex"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {
+          "tools": {
+            "listChanged": false
+          }
+        },
+        "serverInfo": {
+          "name": "facade",
+          "version": "<version>"
+        },
+        "instructions": "The Orchestrator's MCP tools start, list and stop agents, exchange messages, and read or operate managed agents' terminals. Use an address such as a3@devbox, an agent number such as a3, or a name. Without a machine, a number or name resolves only on machines that are awake and reachable. The server verifies whether this connection acts for a managed agent or a Guest. Managed agents normally receive messages through their terminals. Guests receive messages through read_messages and should keep their connection open and take messages promptly. timeout_seconds defaults to 0 for both send_message and read_messages: sending confirms inbox acceptance only, and reading returns a snapshot. To wait, set a positive timeout_seconds up to 30. A send also requires wait_for: \"delivery\" or \"result\"; setting wait_for alone does not enable waiting. Managed agents usually omit wait_for and timeout_seconds when sending. Replies and later delivery failures arrive through the terminal. You can resend a withdrawn message if nothing was typed. Check the recipient's terminal before retrying partial or unconfirmed input. Guests needing an answer should use wait_for: \"result\" with timeout_seconds: 30. A positive timeout is one total call budget. After reply_timeout, continue with read_messages using the original full message ID as reply_to and a positive timeout_seconds; do not resend the task. A replyable command-line request appears as the command line with a sender address such as #c42@devbox, also returned as from in its inbox row. Reply to that sender address with the received message number as reply_to. The c address accepts the first reply while the original command is waiting. A 🔔 message reports an Orchestrator result; it is not the recipient's answer or proof of task completion."
+      }
+    }
+  },
+  "list_agents by codex's guest": {
+    "call": {
+      "tool": "list_agents",
+      "arguments": {},
+      "_meta": {
+        "sessionId": "codex-golden"
+      }
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "agents": [
+          {
+            "id": "a2@golden-host",
+            "name": "<guest name>",
+            "type": "guest",
+            "state": "online",
+            "cli": "test",
+            "folder": "<test>/home",
+            "started_at": "<time>"
+          },
+          {
+            "id": "a1@golden-host",
+            "name": "host",
+            "type": "managed",
+            "state": "starting",
+            "cli": "fake",
+            "folder": "<test>/project",
+            "started_at": "<time>"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "short_id": "<short machine ID>",
+            "name": "golden-host",
+            "selector": "golden-host",
+            "build": "<version>",
+            "state": "online",
+            "status": "answered",
+            "clis": [
+              "fake"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "read_messages waiting as a guest": {
+    "call": {
+      "tool": "read_messages",
+      "arguments": {
+        "timeout_seconds": 30
+      },
+      "_meta": {
+        "sessionId": "codex-golden"
+      }
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "messages": [
+          {
+            "id": "m1",
+            "from": "a1@golden-host",
+            "at": "<time>",
+            "text": "hello guest"
+          }
+        ]
+      }
+    }
+  },
+  "send_message to a guest": {
+    "call": {
+      "tool": "send_message",
+      "arguments": {
+        "to": "a2@golden-host",
+        "text": "hello guest",
+        "wait_for": "delivery",
+        "timeout_seconds": 30
+      }
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "id": "m1@golden-host",
+        "delivery": "read_by_recipient"
+      }
+    }
+  },
+  "send_message from a guest": {
+    "call": {
+      "tool": "send_message",
+      "arguments": {
+        "to": "a1@golden-host",
+        "text": "hello host",
+        "reply_to": "m1",
+        "wait_for": "delivery",
+        "timeout_seconds": 30
+      },
+      "_meta": {
+        "sessionId": "codex-golden"
+      }
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "id": "m2@golden-host",
+        "delivery": "typed_into_input"
+      }
+    }
+  },
+  "initialize by agy's guest server": {
+    "call": {
+      "method": "initialize",
+      "server": [
+        "--guest",
+        "agy"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {
+          "tools": {
+            "listChanged": false
+          }
+        },
+        "serverInfo": {
+          "name": "facade",
+          "version": "<version>"
+        },
+        "instructions": "The Orchestrator's MCP tools start, list and stop agents, exchange messages, and read or operate managed agents' terminals. Use an address such as a3@devbox, an agent number such as a3, or a name. Without a machine, a number or name resolves only on machines that are awake and reachable. The server verifies whether this connection acts for a managed agent or a Guest. Managed agents normally receive messages through their terminals. Guests receive messages through read_messages and should keep their connection open and take messages promptly. timeout_seconds defaults to 0 for both send_message and read_messages: sending confirms inbox acceptance only, and reading returns a snapshot. To wait, set a positive timeout_seconds up to 30. A send also requires wait_for: \"delivery\" or \"result\"; setting wait_for alone does not enable waiting. Managed agents usually omit wait_for and timeout_seconds when sending. Replies and later delivery failures arrive through the terminal. You can resend a withdrawn message if nothing was typed. Check the recipient's terminal before retrying partial or unconfirmed input. Guests needing an answer should use wait_for: \"result\" with timeout_seconds: 30. A positive timeout is one total call budget. After reply_timeout, continue with read_messages using the original full message ID as reply_to and a positive timeout_seconds; do not resend the task. A replyable command-line request appears as the command line with a sender address such as #c42@devbox, also returned as from in its inbox row. Reply to that sender address with the received message number as reply_to. The c address accepts the first reply while the original command is waiting. A 🔔 message reports an Orchestrator result; it is not the recipient's answer or proof of task completion."
+      }
+    }
+  },
+  "list_agents by agy's guest": {
+    "call": {
+      "tool": "list_agents",
+      "arguments": {},
+      "_meta": {
+        "antigravity.google/root_conversation_id": "agy-golden"
+      }
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "agents": [
+          {
+            "id": "a2@golden-host",
+            "name": "<guest name>",
+            "type": "guest",
+            "state": "online",
+            "cli": "test",
+            "folder": "<test>/home",
+            "started_at": "<time>"
+          },
+          {
+            "id": "a1@golden-host",
+            "name": "host",
+            "type": "managed",
+            "state": "starting",
+            "cli": "fake",
+            "folder": "<test>/project",
+            "started_at": "<time>"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "short_id": "<short machine ID>",
+            "name": "golden-host",
+            "selector": "golden-host",
+            "build": "<version>",
+            "state": "online",
+            "status": "answered",
+            "clis": [
+              "fake"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "initialize by muse's guest server": {
+    "call": {
+      "method": "initialize",
+      "server": [
+        "--guest",
+        "muse"
+      ],
+      "environment": {
+        "MUSE_SESSION_ID": "muse-golden"
+      }
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {
+          "tools": {
+            "listChanged": false
+          }
+        },
+        "serverInfo": {
+          "name": "facade",
+          "version": "<version>"
+        },
+        "instructions": "The Orchestrator's MCP tools start, list and stop agents, exchange messages, and read or operate managed agents' terminals. Use an address such as a3@devbox, an agent number such as a3, or a name. Without a machine, a number or name resolves only on machines that are awake and reachable. The server verifies whether this connection acts for a managed agent or a Guest. Managed agents normally receive messages through their terminals. Guests receive messages through read_messages and should keep their connection open and take messages promptly. timeout_seconds defaults to 0 for both send_message and read_messages: sending confirms inbox acceptance only, and reading returns a snapshot. To wait, set a positive timeout_seconds up to 30. A send also requires wait_for: \"delivery\" or \"result\"; setting wait_for alone does not enable waiting. Managed agents usually omit wait_for and timeout_seconds when sending. Replies and later delivery failures arrive through the terminal. You can resend a withdrawn message if nothing was typed. Check the recipient's terminal before retrying partial or unconfirmed input. Guests needing an answer should use wait_for: \"result\" with timeout_seconds: 30. A positive timeout is one total call budget. After reply_timeout, continue with read_messages using the original full message ID as reply_to and a positive timeout_seconds; do not resend the task. A replyable command-line request appears as the command line with a sender address such as #c42@devbox, also returned as from in its inbox row. Reply to that sender address with the received message number as reply_to. The c address accepts the first reply while the original command is waiting. A 🔔 message reports an Orchestrator result; it is not the recipient's answer or proof of task completion."
+      }
+    }
+  },
+  "list_agents by muse's guest": {
+    "call": {
+      "tool": "list_agents",
+      "arguments": {}
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "agents": [
+          {
+            "id": "a2@golden-host",
+            "name": "<guest name>",
+            "type": "guest",
+            "state": "online",
+            "cli": "test",
+            "folder": "<test>/home",
+            "started_at": "<time>"
+          },
+          {
+            "id": "a1@golden-host",
+            "name": "host",
+            "type": "managed",
+            "state": "starting",
+            "cli": "fake",
+            "folder": "<test>/project",
+            "started_at": "<time>"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "short_id": "<short machine ID>",
+            "name": "golden-host",
+            "selector": "golden-host",
+            "build": "<version>",
+            "state": "online",
+            "status": "answered",
+            "clis": [
+              "fake"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "initialize by opencode's guest server": {
+    "call": {
+      "method": "initialize",
+      "server": [
+        "--guest",
+        "opencode"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {
+          "tools": {
+            "listChanged": false
+          }
+        },
+        "serverInfo": {
+          "name": "facade",
+          "version": "<version>"
+        },
+        "instructions": "The Orchestrator's MCP tools start, list and stop agents, exchange messages, and read or operate managed agents' terminals. Use an address such as a3@devbox, an agent number such as a3, or a name. Without a machine, a number or name resolves only on machines that are awake and reachable. The server verifies whether this connection acts for a managed agent or a Guest. Managed agents normally receive messages through their terminals. Guests receive messages through read_messages and should keep their connection open and take messages promptly. timeout_seconds defaults to 0 for both send_message and read_messages: sending confirms inbox acceptance only, and reading returns a snapshot. To wait, set a positive timeout_seconds up to 30. A send also requires wait_for: \"delivery\" or \"result\"; setting wait_for alone does not enable waiting. Managed agents usually omit wait_for and timeout_seconds when sending. Replies and later delivery failures arrive through the terminal. You can resend a withdrawn message if nothing was typed. Check the recipient's terminal before retrying partial or unconfirmed input. Guests needing an answer should use wait_for: \"result\" with timeout_seconds: 30. A positive timeout is one total call budget. After reply_timeout, continue with read_messages using the original full message ID as reply_to and a positive timeout_seconds; do not resend the task. A replyable command-line request appears as the command line with a sender address such as #c42@devbox, also returned as from in its inbox row. Reply to that sender address with the received message number as reply_to. The c address accepts the first reply while the original command is waiting. A 🔔 message reports an Orchestrator result; it is not the recipient's answer or proof of task completion."
+      }
+    }
+  },
+  "list_agents by opencode's guest": {
+    "call": {
+      "tool": "list_agents",
+      "arguments": {},
+      "_meta": {
+        "ai.opencode/sessionID": "opencode-golden"
+      }
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "agents": [
+          {
+            "id": "a2@golden-host",
+            "name": "<guest name>",
+            "type": "guest",
+            "state": "online",
+            "cli": "test",
+            "folder": "<test>/home",
+            "started_at": "<time>"
+          },
+          {
+            "id": "a1@golden-host",
+            "name": "host",
+            "type": "managed",
+            "state": "starting",
+            "cli": "fake",
+            "folder": "<test>/project",
+            "started_at": "<time>"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "short_id": "<short machine ID>",
+            "name": "golden-host",
+            "selector": "golden-host",
+            "build": "<version>",
+            "state": "online",
+            "status": "answered",
+            "clis": [
+              "fake"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "initialize by pi's guest server": {
+    "call": {
+      "method": "initialize",
+      "server": [
+        "--guest",
+        "pi"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {
+          "tools": {
+            "listChanged": false
+          }
+        },
+        "serverInfo": {
+          "name": "facade",
+          "version": "<version>"
+        },
+        "instructions": "The Orchestrator's MCP tools start, list and stop agents, exchange messages, and read or operate managed agents' terminals. Use an address such as a3@devbox, an agent number such as a3, or a name. Without a machine, a number or name resolves only on machines that are awake and reachable. The server verifies whether this connection acts for a managed agent or a Guest. Managed agents normally receive messages through their terminals. Guests receive messages through read_messages and should keep their connection open and take messages promptly. timeout_seconds defaults to 0 for both send_message and read_messages: sending confirms inbox acceptance only, and reading returns a snapshot. To wait, set a positive timeout_seconds up to 30. A send also requires wait_for: \"delivery\" or \"result\"; setting wait_for alone does not enable waiting. Managed agents usually omit wait_for and timeout_seconds when sending. Replies and later delivery failures arrive through the terminal. You can resend a withdrawn message if nothing was typed. Check the recipient's terminal before retrying partial or unconfirmed input. Guests needing an answer should use wait_for: \"result\" with timeout_seconds: 30. A positive timeout is one total call budget. After reply_timeout, continue with read_messages using the original full message ID as reply_to and a positive timeout_seconds; do not resend the task. A replyable command-line request appears as the command line with a sender address such as #c42@devbox, also returned as from in its inbox row. Reply to that sender address with the received message number as reply_to. The c address accepts the first reply while the original command is waiting. A 🔔 message reports an Orchestrator result; it is not the recipient's answer or proof of task completion."
+      }
+    }
+  },
+  "list_agents by pi's guest": {
+    "call": {
+      "tool": "list_agents",
+      "arguments": {}
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "agents": [
+          {
+            "id": "a2@golden-host",
+            "name": "<guest name>",
+            "type": "guest",
+            "state": "online",
+            "cli": "test",
+            "folder": "<test>/home",
+            "started_at": "<time>"
+          },
+          {
+            "id": "a1@golden-host",
+            "name": "host",
+            "type": "managed",
+            "state": "starting",
+            "cli": "fake",
+            "folder": "<test>/project",
+            "started_at": "<time>"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "short_id": "<short machine ID>",
+            "name": "golden-host",
+            "selector": "golden-host",
+            "build": "<version>",
+            "state": "online",
+            "status": "answered",
+            "clis": [
+              "fake"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

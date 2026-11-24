@@ -15,16 +15,16 @@ from evidence import EDITOR_PASS, INPUT_FILES, binding_paths, binding_product, c
 from gate_shadow import (
     CANDIDATE_FIELDS, CATALOG_JOB, REPORT_JOB, candidate_plan, decide, matches_workflow_path, select_workflows,
 )
-from merge_review import ACTIONS_APP, COLD, CORE, EXTENSION, REMOTE, REQUIRED, ROOT, SHADOW, require_jobs, review
-from merge_review_native import TYPED_NATIVE_CASES
+from merge_review import ACTIONS_APP, EXTENSION, FRAMEWORK, REMOTE, REQUIRED, ROOT, SHADOW, require_jobs, review
+from merge_review_native import NATIVE_EDITOR_MINIMUM, TYPED_NATIVE_CASES
 
 
 REPO, PULL, REPO_ID = 'owner/fixture', 11, 42
 PASS = {'status': 'completed', 'conclusion': 'success'}
 PILOTS = {
-    'core/shell/command/start': {'runner': 'core-scenario', 'target': 'cli', 'name': 'starts_one_agent'},
+    'framework/shell/command/start': {'runner': 'framework-scenario', 'target': 'cli', 'name': 'starts_one_agent'},
     'extension/p0/panel/select': {
-        'runner': 'extension-editor', 'journey': 'stale-owner', 'engine': 'old', 'name': 'selects_agent',
+        'runner': 'extension-editor', 'journey': 'stale-owner', 'implementation': 'legacy', 'name': 'selects_agent',
         'built_in': 'claude',
     },
 }
@@ -44,7 +44,7 @@ class GateFixture:
         for workflow in REQUIRED:
             path = f'.github/workflows/{workflow}'
             self.write(path, (ROOT / path).read_text())
-        self.write('core/rust-toolchain.toml', '[toolchain]\nchannel = "1.98.1"\n')
+        self.write('framework/rust-toolchain.toml', '[toolchain]\nchannel = "1.98.1"\n')
         self.write('extension/.nvmrc', '24\n')
         catalog = [
             {'id': case, 'stage': 'pr', 'assertion': 'Observe the selected agent', 'test': binding}
@@ -140,12 +140,12 @@ class GateFixture:
         directory = self.receipt(product).parent
         directory.mkdir(parents=True, exist_ok=True)
         observation, console, completion = binding_paths(directory, [binding])
-        if product == 'core':
+        if product == 'framework':
             observation.write_text(f'running 1 test\ntest {binding["name"]} ... ok\n'
                                    'test result: ok. 1 passed; 0 failed; 0 ignored;\n')
             console.write_text('no processes left\n')
         else:
-            marker = json.dumps({'name': binding['name'], 'engine': binding['engine']})
+            marker = json.dumps({'name': binding['name'], 'implementation': binding['implementation']})
             console.write_text(f'{EDITOR_PASS}{marker}\nno processes left\n')
         completion.write_text(json.dumps(completion_record(plan, [binding], observation, console)))
         result = {'id': case, 'status': 'pass', 'binding': binding, 'log': observation.name, 'elapsed_ms': 1}
@@ -199,7 +199,7 @@ class GateShadowTests(GateFixture, unittest.TestCase):
         self.evaluate('pending', reason='main is ' + '1' * 40)
 
     def test_product_documentation_needs_only_the_shadow_catalog_job(self):
-        self.prepare('docs/core/example.md')
+        self.prepare('docs/framework/example.md')
         self.assertEqual(list(self.plan['workflows'][SHADOW]), [CATALOG_JOB])
         workflow = self.snapshot['workflows'][SHADOW]
         catalog = workflow['jobs'][0]
@@ -208,17 +208,18 @@ class GateShadowTests(GateFixture, unittest.TestCase):
         del self.snapshot['workflows'][SHADOW]
         self.evaluate('pending', SHADOW, 'missing')
 
-    def test_core_change_proves_both_pilots_on_the_exact_test_merge(self):
-        self.prepare('core/crates/facade/src/cli.rs')
-        self.assertEqual(self.plan['route'], 'core')
-        self.assertEqual(set(self.plan['workflows']), {SHADOW, CORE, EXTENSION})
+    def test_framework_change_proves_both_pilots_on_the_exact_test_merge(self):
+        self.prepare('framework/crates/facade/src/cli.rs')
+        self.assertEqual(self.plan['route'], 'framework')
+        self.assertEqual(set(self.plan['workflows']), {SHADOW, FRAMEWORK, EXTENSION})
         self.git('checkout', '--detach', '-q', self.plan['merge'])
         result = self.evaluate('success')
         workflows = result['verified_workflows']
-        self.assertEqual(workflows[SHADOW]['shadow_replay']['verified_cases'], {'core': 1, 'extension': 1})
-        self.assertIn('job_metadata', workflows[CORE])
-        self.assertIn('core-ssh-route-1', workflows[CORE]['artifact_manifest'])
-        self.assertNotIn('shadow_replay', workflows[CORE])
+        self.assertEqual(workflows[SHADOW]['shadow_replay']['verified_cases'], {'framework': 1, 'extension': 1})
+        self.assertIn('job_metadata', workflows[FRAMEWORK])
+        self.assertEqual(set(workflows[FRAMEWORK]['artifact_manifest']),
+                         {'framework-ssh-route-1', 'framework-keeper-recovery-1'})
+        self.assertNotIn('shadow_replay', workflows[FRAMEWORK])
 
     def test_extension_change_needs_only_its_pilot_and_product_workflow(self):
         self.prepare('extension/src/extension.ts')
@@ -234,17 +235,28 @@ class GateShadowTests(GateFixture, unittest.TestCase):
         archive.unlink()
         self.evaluate('pending', SHADOW, 'missing extension pilot archive')
 
-    def test_expanded_wire_change_needs_compatibility_and_remote_evidence(self):
-        self.prepare('core/crates/base/src/protocol/address.rs')
+    def test_expanded_wire_change_needs_the_four_workflow_matrix_and_keeper_evidence(self):
+        self.prepare('framework/crates/base/src/protocol/address.rs')
         self.assertEqual(self.plan['route'], 'expanded')
-        self.assertEqual(set(self.plan['workflows']), set(REQUIRED))
+        self.assertEqual(set(self.plan['workflows']), {SHADOW, FRAMEWORK, EXTENSION, REMOTE})
+        self.assertEqual(sum(len(jobs) for jobs in self.plan['workflows'].values()), 24)
+        self.assertIn('Extension on linux-x64, legacy implementation', self.plan['workflows'][EXTENSION])
+        self.assertIn('Extension on linux-x64, framework implementation', self.plan['workflows'][EXTENSION])
         self.evaluate('success')
         workflows = self.snapshot['workflows']
-        with patch.dict(workflows[COLD]['artifacts'][0], {'total_count': 0, 'artifacts': []}):
-            self.evaluate('failure', COLD, 'missing artifacts')
-        del workflows[COLD]
-        self.evaluate('pending', COLD, 'missing')
-        workflows[REMOTE]['run']['conclusion'] = 'cancelled'
+        linux = next(job for job in workflows[FRAMEWORK]['jobs'] if job['name'] == 'Framework on linux-x64')
+        for name in ('Run and verify the exact Keeper recovery', 'Keep the Keeper recovery evidence'):
+            step = next(step for step in linux['steps'] if step['name'] == name)
+            with self.subTest(step=name), patch.dict(step, {'conclusion': 'skipped'}):
+                self.evaluate('failure', FRAMEWORK, name)
+        page = workflows[FRAMEWORK]['artifacts'][0]
+        ssh = [entry for entry in page['artifacts'] if entry['name'] == 'framework-ssh-route-1']
+        with patch.dict(page, {'total_count': len(ssh), 'artifacts': ssh}):
+            self.evaluate('failure', FRAMEWORK, 'framework-keeper-recovery-1')
+        remote = workflows.pop(REMOTE)
+        self.evaluate('pending', REMOTE, 'missing')
+        remote['run']['conclusion'] = 'cancelled'
+        workflows[REMOTE] = remote
         self.evaluate('failure', REMOTE, 'completed with cancelled')
 
     def test_shared_policy_or_unclassified_paths_expand_scope(self):
@@ -252,17 +264,23 @@ class GateShadowTests(GateFixture, unittest.TestCase):
                      '.github/workflows/windows-install-check.yml', 'shared-new-input'):
             with self.subTest(path=path):
                 route, products, workflows = select_workflows((path, 'ide/README.md'))
-                self.assertEqual((route, products, set(workflows)), ('expanded', ('core', 'extension'), set(REQUIRED)))
+                self.assertEqual((route, products, set(workflows)),
+                                 ('expanded', ('framework', 'extension'), set(REQUIRED)))
         self.assertEqual(select_workflows(('extension/package.json',)),
                          ('expanded', ('extension',), (SHADOW, EXTENSION, REMOTE)))
         self.assertEqual(select_workflows(('extension/src/base/names.ts',)),
-                         ('core', ('core', 'extension'), (SHADOW, CORE, EXTENSION)))
+                         ('framework', ('framework', 'extension'), (SHADOW, FRAMEWORK, EXTENSION)))
 
-    def test_installer_route_reports_a_missing_pr_trigger(self):
-        self.prepare('core/install.ps1')
-        self.assertEqual(set(self.plan['unsupported_workflows']), {COLD})
-        result = self.evaluate('failure', COLD, 'no changed path matches')
-        self.assertNotIn(COLD, result['verified_workflows'])
+    def test_installer_route_uses_the_current_product_workflows(self):
+        self.prepare('framework/install.ps1')
+        self.assertEqual(self.plan['route'], 'expanded')
+        self.assertEqual(set(self.plan['workflows']), {SHADOW, FRAMEWORK, EXTENSION})
+        self.assertEqual(self.plan['unsupported_workflows'], {})
+        self.evaluate('success')
+
+    def test_policy_route_reports_a_missing_pr_trigger(self):
+        self.prepare('docs/CI.md')
+        self.evaluate('failure', FRAMEWORK, 'no changed path matches')
 
     def test_required_workflow_with_an_unknown_trigger_is_blocked(self):
         self.prepare('.github/workflows/extension-remote.yml')
@@ -277,7 +295,7 @@ class GateShadowTests(GateFixture, unittest.TestCase):
         self.assertFalse(matches_workflow_path('extension/package/nested.json', 'extension/package*.json'))
 
     def test_accepts_the_manual_review_for_the_exact_expanded_evidence(self):
-        self.prepare('core/crates/base/src/protocol/address.rs')
+        self.prepare('framework/crates/base/src/protocol/address.rs')
         observed = self.snapshot['workflows']
         verified = self.evaluate('success')['verified_workflows']
         pilot = verified[SHADOW]['shadow_replay']
@@ -292,7 +310,8 @@ class GateShadowTests(GateFixture, unittest.TestCase):
         native = {
             'typed_cases': TYPED_NATIVE_CASES,
             'release_fixture_cases': sorted(RELEASE_FIXTURE_CASES), 'package_targets': 6,
-            'editor_passes': {name: 61 for name in self.plan['artifacts'][EXTENSION] if name.startswith('editor-tests-')},
+            'editor_passes': {name: NATIVE_EDITOR_MINIMUM for name in self.plan['artifacts'][EXTENSION]
+                              if name.startswith('editor-tests-')},
         }
         replay = Mock(return_value=native)
         output = self.observations.parent / 'manual'
@@ -317,12 +336,14 @@ class GateShadowTests(GateFixture, unittest.TestCase):
             self.snapshot['expanded_review'] = review(*self.arguments[:-1], output)
         replay.assert_called_once()
         self.assertEqual(self.evaluate('success')['expanded_review'], native)
+        self.assertEqual(len(TYPED_NATIVE_CASES), 6)
         for incomplete in ({'typed_cases': TYPED_NATIVE_CASES[:-1]}, {'release_fixture_cases': []},
+                           {'typed_cases': sorted([*TYPED_NATIVE_CASES, 'framework/p0/prior-build/cold-migration'])},
                            {'package_targets': 5}, {'editor_passes': {}},
-                           {'editor_passes': dict.fromkeys(native['editor_passes'], 60)}):
+                           {'editor_passes': dict.fromkeys(native['editor_passes'], NATIVE_EDITOR_MINIMUM - 1)}):
             with self.subTest(incomplete=incomplete), patch.dict(self.snapshot['expanded_review']['native'], incomplete):
                 self.evaluate('failure', reason='expanded review does not cover the required native and release evidence')
-        self.snapshot['expanded_review']['native_artifacts'][COLD] = {}
+        self.snapshot['expanded_review']['native_artifacts'][FRAMEWORK] = {}
         self.evaluate('pending', reason='expanded review is for different native artifacts')
 
     def test_stale_head_merge_tree_plan_and_attempt_cannot_pass(self):
@@ -365,7 +386,7 @@ class GateShadowTests(GateFixture, unittest.TestCase):
         workflow['jobs'].pop(0)
         self.evaluate('pending', EXTENSION, f'missing jobs {job["name"]}')
 
-    def test_wrong_receipt_platform_and_engine_cannot_pass(self):
+    def test_wrong_receipt_platform_and_implementation_cannot_pass(self):
         self.prepare('extension/src/extension.ts')
         path = self.receipt('extension')
         receipt = json.loads(path.read_text())
@@ -373,10 +394,10 @@ class GateShadowTests(GateFixture, unittest.TestCase):
         self.pack_shadow('extension')
         self.evaluate('failure', SHADOW, 'source, plan, platform or attempt')
         result = receipt['results'][0]
-        result['binding']['engine'] = 'rust'
+        result['binding']['implementation'] = 'framework'
         path.write_text(json.dumps(receipt))
         archive = self.pack_shadow('extension')
-        self.evaluate('failure', SHADOW, 'wrong runner, engine or selector')
+        self.evaluate('failure', SHADOW, 'wrong runner, implementation or selector')
         contents = archive.read_bytes()
         archive.write_bytes(contents[1:] + contents[:1])
         self.evaluate('failure', SHADOW, 'does not match the GitHub digest')

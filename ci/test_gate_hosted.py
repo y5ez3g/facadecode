@@ -7,7 +7,7 @@ from unittest.mock import patch
 from catalog import AcceptanceError, load
 from gate_hosted import MAIN, WORKFLOW, checkout_candidate, render_summary, review, trusted_inputs
 from gate_shadow import Pending
-from merge_review import EXTENSION, REMOTE, SHADOW
+from merge_review import EXTENSION, FRAMEWORK, REMOTE, SHADOW
 from test_gate_collect import CollectionFixture
 from test_gate_shadow import PULL, REPO
 
@@ -39,6 +39,7 @@ class HostedReviewTests(CollectionFixture, unittest.TestCase):
         result = self.hosted_review()
         self.assertEqual(result['status'], 'success')
         self.assertEqual(result['plan']['id'], self.plan['id'])
+        self.assertEqual(set(result['matrix']), {SHADOW, FRAMEWORK, EXTENSION, REMOTE})
         self.assertEqual(result['matrix'][REMOTE]['conclusion'], 'failure')
         self.assertEqual(set(result['verified_workflows']), {SHADOW, EXTENSION})
         summary = render_summary(result, REPO, PULL, self.base)
@@ -80,8 +81,8 @@ class HostedReviewTests(CollectionFixture, unittest.TestCase):
             self.hosted_review()
         self.assertTrue(all('/actions/' not in endpoint for endpoint in self.queries()))
 
-    def test_framework_catalog_rejection_reports_the_exact_candidate_before_planning(self):
-        case = 'framework/window/command/open'
+    def test_retired_core_catalog_rejection_reports_the_exact_candidate_before_planning(self):
+        case = 'core/window/command/open'
         catalog = {'version': 2, 'cases': [
             {'id': case, 'assertion': 'Open a window', 'stage': 'pr', 'existing_tests': []},
         ]}

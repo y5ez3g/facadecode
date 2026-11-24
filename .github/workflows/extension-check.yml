@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - 'extension/**'
-      - 'core/**'
+      - 'framework/**'
       - 'docs/extension/**'
       - '.github/workflows/extension-check.yml'
       - '.github/workflows/extension-release.yml'
@@ -13,7 +13,7 @@ on:
       - 'ci/check_native_install.py'
       - 'ci/evidence.py'
       - 'ci/editor_archive.py'
-      - 'ci/native_core.py'
+      - 'ci/native_framework.py'
       - 'ci/run_native_extension.py'
   workflow_dispatch:
     inputs:
@@ -51,17 +51,17 @@ concurrency:
 
 jobs:
   verify:
-    name: Extension on ${{ matrix.target }}, ${{ matrix.engine }} engine
+    name: Extension on ${{ matrix.target }}, ${{ matrix.implementation }} implementation
     outputs:
       package_attempt: ${{ steps.native-package-evidence.outputs.attempt }}
-    # Every target runs the editor journeys on the old engine (`facade.rustEngine` off) and runs them
-    # again on the Rust engine in a job of its own, which builds and tests nothing else.
+    # Every target runs the editor journeys on the legacy implementation (`facade.framework` off) and runs them
+    # again on the Framework implementation in a job of its own, which builds and tests nothing else.
     # A signing run's Windows packages are signed (ARCHITECTURE-4.3) in the environment Azure trusts with the signing identity.
-    environment: ${{ inputs.sign && startsWith(matrix.target, 'win32-') && matrix.engine == 'old' && 'extension-signing' || '' }}
+    environment: ${{ inputs.sign && startsWith(matrix.target, 'win32-') && matrix.implementation == 'legacy' && 'extension-signing' || '' }}
     strategy:
       fail-fast: false
       matrix:
-        engine: ${{ fromJSON(inputs.package_only && '["old"]' || '["old","rust"]') }}
+        implementation: ${{ fromJSON(inputs.package_only && '["legacy"]' || '["legacy","framework"]') }}
         target: [linux-x64, linux-arm64, win32-x64, win32-arm64, darwin-arm64, darwin-x64]
         include:
           - { os: ubuntu-latest, target: linux-x64 }
@@ -75,7 +75,7 @@ jobs:
     timeout-minutes: 60
     env:
       FACADE_PACKAGE_TARGET: ${{ matrix.target }}
-      FACADE_SIGN: ${{ inputs.sign && startsWith(matrix.target, 'win32-') && matrix.engine == 'old' && '--sign' || '' }}
+      FACADE_SIGN: ${{ inputs.sign && startsWith(matrix.target, 'win32-') && matrix.implementation == 'legacy' && '--sign' || '' }}
       CARGO_INCREMENTAL: '0'
     defaults:
       run:
@@ -99,25 +99,25 @@ jobs:
           import { packageTarget } from './scripts/native.mjs';
           console.info(`Building and testing ${packageTarget(process.env.FACADE_PACKAGE_TARGET)}`);
           JS
-      # Core's programs go in every package: the toolchain core pins, on Linux for musl, the target scripts/core.mjs builds
-      - name: Rust toolchain for core
-        working-directory: core
+      # Framework's programs go in every package: the toolchain framework pins, on Linux for musl, the target scripts/framework.mjs builds
+      - name: Rust toolchain for framework
+        working-directory: framework
         run: rustup toolchain install
-      # rustup target add acts on the toolchain of the directory it runs in: core's pinned one, which builds, not the runner's default
-      - name: musl for core on Linux
+      # rustup target add acts on the toolchain of the directory it runs in: framework's pinned one, which builds, not the runner's default
+      - name: musl for framework on Linux
         if: runner.os == 'Linux'
-        working-directory: core
+        working-directory: framework
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
           rustup target add "$(uname -m)-unknown-linux-musl"
           echo "CC_$(uname -m)_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
       - name: Cache Intel macOS editor build dependencies
-        if: github.event_name == 'pull_request' && matrix.target == 'darwin-x64' && matrix.engine == 'rust'
+        if: github.event_name == 'pull_request' && matrix.target == 'darwin-x64' && matrix.implementation == 'framework'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: core
-          key: native-editor-release-darwin-x64-rust
+          workspaces: framework
+          key: native-editor-release-darwin-x64-framework
           cache-bin: false
       - name: Download official VS Code for isolated tests
         if: "!inputs.package_only"
@@ -130,10 +130,10 @@ jobs:
       - run: npm run compile
         if: "!inputs.package_only"
       - run: npm test
-        if: "!inputs.package_only && matrix.engine == 'old'"
+        if: "!inputs.package_only && matrix.implementation == 'legacy'"
       - name: Release script tests
         id: release-tests
-        if: "!inputs.package_only && runner.os == 'Linux' && matrix.engine == 'old'"
+        if: "!inputs.package_only && runner.os == 'Linux' && matrix.implementation == 'legacy'"
         run: |
           if [[ "$FACADE_PACKAGE_TARGET" == linux-x64 && "$GITHUB_EVENT_NAME" == pull_request ]]; then
             mkdir -p "$RUNNER_TEMP/release-fixture"
@@ -142,11 +142,11 @@ jobs:
             node --test scripts/release.test.mjs
           fi
       - name: Record the release fixture results
-        if: github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.engine == 'old' && steps.release-tests.outcome == 'success'
+        if: github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.implementation == 'legacy' && steps.release-tests.outcome == 'success'
         run: node scripts/release-fixture-evidence.mjs stamp "$RUNNER_TEMP/release-fixture"
       - name: Keep the release fixture output
         if: >-
-          always() && github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.engine == 'old' &&
+          always() && github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.implementation == 'legacy' &&
           (steps.release-tests.outcome == 'success' || steps.release-tests.outcome == 'failure')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -154,9 +154,9 @@ jobs:
           path: ${{ runner.temp }}/release-fixture/
           if-no-files-found: error
       - run: node scripts/l10n.mjs check
-        if: "!inputs.package_only && matrix.engine == 'old'"
+        if: "!inputs.package_only && matrix.implementation == 'legacy'"
       - run: python ../docs/extension/audit/check_spec.py
-        if: "!inputs.package_only && matrix.engine == 'old'"
+        if: "!inputs.package_only && matrix.implementation == 'legacy'"
       # Signing: the Artifact Signing client, made for x64 alone, on an x64 .NET 8 - emulated on Arm - and Azure's sign-in
       - uses: actions/setup-dotnet@v5
         if: env.FACADE_SIGN
@@ -180,26 +180,27 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
       - run: npm run package -- --target "$FACADE_PACKAGE_TARGET" $FACADE_SIGN
-        if: matrix.engine == 'old'
+        if: matrix.implementation == 'legacy'
       - run: npm run test:package
-        if: matrix.engine == 'old'
-      - name: Pack core from the native VSIX
-        if: matrix.engine == 'old'
+        if: matrix.implementation == 'legacy'
+      - name: Pack framework from the native VSIX
+        if: matrix.implementation == 'legacy'
         run: |
-          node ../core/scripts/package-core.mjs --target "$FACADE_PACKAGE_TARGET" \
-            --vsix "build/vsix/facadecode-$FACADE_PACKAGE_TARGET-"*.vsix --out-dir build/core
-      - name: Install the local core archive on Linux and macOS
-        if: matrix.engine == 'old' && runner.os != 'Windows'
+          node ../framework/scripts/package-framework.mjs --target "$FACADE_PACKAGE_TARGET" \
+            --vsix "build/vsix/facadecode-$FACADE_PACKAGE_TARGET-"*.vsix --out-dir build/framework
+      - name: Install the local framework archive on Linux and macOS
+        if: matrix.implementation == 'legacy' && runner.os != 'Windows'
         run: |
           root=$(mktemp -d "$RUNNER_TEMP/facade-install.XXXXXX")
           mkdir "$root/home" "$root/tmp"
+          build=$(cat bin/VERSION)
           env -i HOME="$root/home" PATH="$PATH" FACADE_HOME="$root/state" TMPDIR="$root/tmp" \
-            sh ../core/install.sh --install-root "$root/home/.local" \
-            --package "build/core/facade-core-$FACADE_PACKAGE_TARGET.tar.gz" --no-path --no-activate
-          "$root/home/.local/bin/facade" --version
-          test -x "$root/home/.local/bin/facade-mcp"
-      - name: Install the local core archive on Windows
-        if: matrix.engine == 'old' && runner.os == 'Windows'
+            sh ../framework/install.sh --version "${build%%+*}" --expected-build "$build" \
+            --package "build/framework/facade-framework-$FACADE_PACKAGE_TARGET.tar.gz" --no-path --no-activate
+          test "$("$root/state/framework/bin/facade" --version)" = "facade $build"
+          test -x "$root/state/framework/bin/facade-mcp"
+      - name: Install the local framework archive on Windows
+        if: matrix.implementation == 'legacy' && runner.os == 'Windows'
         shell: powershell
         run: |
           $target = $env:FACADE_PACKAGE_TARGET
@@ -212,47 +213,49 @@ jobs:
           $env:FACADE_HOME = Join-Path $root 'state'
           $env:TEMP = $env:TMP = Join-Path $root 'tmp'
           New-Item -ItemType Directory -Path $env:TEMP | Out-Null
-          $install = Join-Path $env:LOCALAPPDATA 'Facade'
-          & ..\core\install.ps1 -InstallRoot $install -Package "build\core\facade-core-$target.zip" -NoPath -NoActivate
-          & "$install\bin\facade.exe" --version
-          if ($LASTEXITCODE -ne 0) { throw 'Installed facade did not run.' }
-          foreach ($file in 'facade-mcp.exe', 'conpty\OpenConsole.exe', 'conpty\conpty.dll') {
-            if (-not (Test-Path -LiteralPath "$install\bin\$file" -PathType Leaf)) { throw "Missing $file." }
+          $build = (Get-Content -Raw -LiteralPath 'bin/VERSION').Trim()
+          $version = ($build -split '\+', 2)[0]
+          & ..\framework\install.ps1 -Version $version -ExpectedBuild $build -Package "build\framework\facade-framework-$target.zip" -NoPath -NoActivate
+          $bin = Join-Path $env:FACADE_HOME 'framework\bin'
+          $reported = & "$bin\facade.exe" --version
+          if ($LASTEXITCODE -ne 0 -or $reported -cne "facade $build") { throw 'Installed facade did not report the exact BUILD.' }
+          foreach ($file in 'facade-mcp.exe', "$build\conpty\OpenConsole.exe", "$build\conpty\conpty.dll") {
+            if (-not (Test-Path -LiteralPath "$bin\$file" -PathType Leaf)) { throw "Missing $file." }
           }
       - name: Verify the installed Linux x64 candidate
-        if: github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.engine == 'old'
+        if: github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.implementation == 'legacy'
         run: |
           mkdir -p build/native-install
-          (cd ../core && cargo build --locked --release --target x86_64-unknown-linux-musl \
+          (cd ../framework && cargo build --locked --release --target x86_64-unknown-linux-musl \
             -p facade-scenarios --bin facade-fakecli)
-          archive=build/core/facade-core-linux-x64.tar.gz
-          cp build/core/SHA256SUMS build/native-install/SHA256SUMS
+          archive=build/framework/facade-framework-linux-x64.tar.gz
+          cp build/framework/SHA256SUMS build/native-install/SHA256SUMS
           checksums=build/native-install/SHA256SUMS
           receipt=build/native-install/receipt.json
           output=build/native-install/output.log
           python -B ../ci/check_native_install.py "$archive" "$checksums" \
-            ../core/target/x86_64-unknown-linux-musl/release/facade-fakecli --receipt "$receipt" | tee "$output"
+            ../framework/target/x86_64-unknown-linux-musl/release/facade-fakecli --receipt "$receipt" | tee "$output"
           python -B ../ci/acceptance.py verify-native-install "$archive" "$checksums" "$receipt" "$output" \
             | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Keep the Linux x64 candidate install evidence
-        if: always() && github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.engine == 'old'
+        if: always() && github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.implementation == 'legacy'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: native-install-linux-x64-${{ github.run_attempt }}
           path: extension/build/native-install/
           if-no-files-found: ignore
-      # The Rust engine's journeys need the built extension and core's programs (scripts/build-it.mjs), not the packages
+      # The Framework implementation's journeys need the built extension and framework's programs (scripts/build-it.mjs), not the packages
       - run: npm run bundle
-        if: matrix.engine == 'rust'
+        if: matrix.implementation == 'framework'
       - name: Build the isolated editor fixtures
         if: "!inputs.package_only"
         run: node scripts/build-it.mjs
       - name: Isolated editor journeys on Linux
         if: "!inputs.package_only && runner.os == 'Linux'"
         env:
-          FACADE_IT_ENGINE: ${{ matrix.engine }}
+          FACADE_IT_IMPLEMENTATION: ${{ matrix.implementation }}
         run: |
-          if [[ "$GITHUB_EVENT_NAME" == pull_request && "$FACADE_PACKAGE_TARGET" == linux-x64 && "$FACADE_IT_ENGINE" == rust ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == pull_request && "$FACADE_PACKAGE_TARGET" == linux-x64 && "$FACADE_IT_IMPLEMENTATION" == framework ]]; then
             python -B ../ci/run_native_extension.py xvfb-run -a node build/out/test/integration/run.js 2>&1 | tee build/integration.log
           else
             xvfb-run -a node build/out/test/integration/run.js 2>&1 | tee build/integration.log
@@ -260,7 +263,7 @@ jobs:
       - name: Isolated editor journeys on Windows
         if: "!inputs.package_only && runner.os == 'Windows'"
         env:
-          FACADE_IT_ENGINE: ${{ matrix.engine }}
+          FACADE_IT_IMPLEMENTATION: ${{ matrix.implementation }}
         run: |
           # A detached Windows helper can keep a logging pipe open after the test runner exits.
           status=0
@@ -270,39 +273,39 @@ jobs:
       - name: Isolated editor journeys on macOS
         if: "!inputs.package_only && runner.os == 'macOS'"
         env:
-          FACADE_IT_ENGINE: ${{ matrix.engine }}
+          FACADE_IT_IMPLEMENTATION: ${{ matrix.implementation }}
         run: node build/out/test/integration/run.js 2>&1 | tee build/integration.log
       - name: Keep editor test output
         if: always() && !inputs.package_only
         uses: actions/upload-artifact@v4
         with:
-          name: editor-tests-${{ matrix.target }}-${{ matrix.engine }}
+          name: editor-tests-${{ matrix.target }}-${{ matrix.implementation }}
           path: extension/build/integration.log
           if-no-files-found: ignore
       - name: Record the tested native package digests
         id: native-package-evidence
-        if: matrix.engine == 'old'
+        if: matrix.implementation == 'legacy'
         run: |
           node scripts/native-package-evidence.mjs stamp build --target "$FACADE_PACKAGE_TARGET" $FACADE_SIGN
           if [[ "$FACADE_PACKAGE_TARGET" == linux-x64 ]]; then
             echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
           fi
       - name: Keep tested packages
-        if: matrix.engine == 'old'
+        if: matrix.implementation == 'legacy'
         uses: actions/upload-artifact@v4
         with:
           name: extension-${{ matrix.target }}
           path: |
             extension/build/vsix/*.vsix
-            extension/build/core/facade-core-*
-            extension/build/core/SHA256SUMS
+            extension/build/framework/facade-framework-*
+            extension/build/framework/SHA256SUMS
             extension/build/native-package-evidence.json
           if-no-files-found: error
       - name: Record the checked-out source tree
-        if: "!inputs.package_only && matrix.target == 'linux-x64' && matrix.engine == 'old'"
+        if: "!inputs.package_only && matrix.target == 'linux-x64' && matrix.implementation == 'legacy'"
         run: git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/extension-tested-tree.txt"
       - name: Keep the checked-out source tree
-        if: "!inputs.package_only && matrix.target == 'linux-x64' && matrix.engine == 'old'"
+        if: "!inputs.package_only && matrix.target == 'linux-x64' && matrix.implementation == 'legacy'"
         uses: actions/upload-artifact@v4
         with:
           name: tested-extension-tree

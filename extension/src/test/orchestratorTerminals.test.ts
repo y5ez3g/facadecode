@@ -3,11 +3,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import type { AgentInfo } from '../base/coreProtocol';
-import type { RustPin } from '../core/ports';
+import type { AgentInfo } from '../base/frameworkProtocol';
+import type { FrameworkPin } from '../core/ports';
 import type { AgentPty } from '../host/execution/agentPty';
-import { restoreRustPins } from '../host/orchestrator/pinRestore';
-import { DaemonError, type AttachListener, type AttachWatchArgs, type OrchestratorLink, type ResizeAttach } from '../host/orchestrator/types';
+import { restoreFrameworkPins } from '../host/framework/pinRestore';
+import { DaemonError, type AttachListener, type AttachWatchArgs, type OrchestratorLink, type ResizeAttach } from '../host/framework/types';
 import { TestEmitter, withModules } from './withModules';
 
 const local = '00000000-0000-4000-8000-000000000001';
@@ -59,7 +59,7 @@ suite('Orchestrator terminals', () => {
 			retries.delete(callback);
 			callback();
 		};
-		const { OrchestratorTerminals } = withModules({ vscode, '../execution/agentTerminals': { AgentTerminals } }, timers)<typeof import('../host/orchestrator/terminals')>(require.resolve('../host/orchestrator/terminals'));
+		const { OrchestratorTerminals } = withModules({ vscode, '../execution/agentTerminals': { AgentTerminals } }, timers)<typeof import('../host/framework/terminals')>(require.resolve('../host/framework/terminals'));
 		let canSend = true;
 		const ref = { machine_id: gpu, agent_id: 'a7' };
 		const link: OrchestratorLink = {
@@ -182,7 +182,7 @@ suite('Orchestrator terminals', () => {
 		const refused: AgentInfo = { ...crashed, reference: { machine_id: server, agent_id: 'a8' }, address: 'a8@server', session: 'server-session' };
 		const restored: AgentInfo = { ...running, reference: { machine_id: gpu, agent_id: 'a9' }, address: 'a9@gpu' };
 		const restoredCrash: AgentInfo = { ...running, reference: crashed.reference, address: crashed.address };
-		const pin = (id: string, agent: AgentInfo): RustPin => ({
+		const pin = (id: string, agent: AgentInfo): FrameworkPin => ({
 			id, conversation: { environment: 'local', cli: agent.cli, sessionId: agent.session },
 			location: 'folder', cwd: agent.cwd, name: agent.name, machine_id: agent.reference.machine_id, agent: agent.reference.agent_id
 		});
@@ -201,7 +201,7 @@ suite('Orchestrator terminals', () => {
 		const unknown = new DaemonError('Agent is unknown', 'not_found', { reason: 'not_found' });
 		const records = new Map([[runningPin, running], [crashedPin, crashed], [refusedPin, refused]]);
 		const effects: unknown[][] = [];
-		await restoreRustPins([refusedPin, runningPin, crashedPin, expiredRecord, missingSession, deleted, missingRecord, offline], {
+		await restoreFrameworkPins([refusedPin, runningPin, crashedPin, expiredRecord, missingSession, deleted, missingRecord, offline], {
 			lookup: async pin => {
 				effects.push(['lookup', pin]);
 				if (pin === offline) { throw unavailable; }

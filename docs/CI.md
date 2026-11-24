@@ -1,7 +1,7 @@
-# Core and Extension CI
+# Framework and Extension CI
 
-**A green CI Gate means the proposed Core and Extension merge passed every check that its acceptance plan
-requires.** Each check identifies the source, target, engine and behavior it exercised. Missing evidence
+**A green CI Gate means the proposed Framework and Extension merge passed every check that its acceptance plan
+requires.** Each check identifies the source, target, implementation and behavior it exercised. Missing evidence
 blocks the decision. A release separately proves that the files offered to users are the files that passed
 candidate acceptance.
 
@@ -10,16 +10,16 @@ acceptance criteria determine when the design is in service.
 
 ## Scope and baseline
 
-This policy covers [Core](core/FEATURES.md) and the [standalone VS Code extension](extension/PRODUCT.md), including each engine and native target that the extension supports. For
-an IDE-only change, CI records an empty Core and Extension test plan. Product behavior and version support
-come from their owning specifications. Use [Core compatibility review](core/ENGINEERING.md#compatibility-contracts) and [Extension verification](extension/engineering/VERIFICATION.md#52-verify-upgrade-and-compatibility-against-the-previous-build) when changing a compatibility boundary.
+This policy covers [Framework](framework/FEATURES.md) and the [standalone VS Code extension](extension/PRODUCT.md), including each implementation and native target that the extension supports. For
+an IDE-only change, CI records an empty Framework and Extension test plan. Product behavior and version support
+come from their owning specifications. Use [Framework compatibility review](framework/ENGINEERING.md#compatibility-contracts) and [Extension verification](extension/engineering/VERIFICATION.md#52-verify-upgrade-and-compatibility-against-the-previous-build) when changing a compatibility boundary.
 
 | Observed at `6a35d3ee` | Consequence for this design |
 | --- | --- |
-| The active `main` ruleset requires PRs and has no required CI check. Core and Extension workflows have separate path filters. | Give every PR candidate one required conclusion and test the policy that selects the individual checks. [Main ruleset](https://github.com/y5ez3g/facadecode/rules/25134905) · [Core workflow](../.github/workflows/core-check.yml) · [Extension workflow](../.github/workflows/extension-check.yml) |
-| PR #103 took 45:34 for 19 jobs to go green. One editor step took about 42 minutes, including 8:28 of Core release compilation. One Core job waited 22:40 for its runner. | Measure queueing, build, test and cleanup separately. Move repetitive long journeys out of the routine PR path after the equivalent acceptance is proven in the new lanes. [Editor job](https://github.com/y5ez3g/facadecode/actions/runs/44944261048/job/136967976476) · [Core job](https://github.com/y5ez3g/facadecode/actions/runs/44944261124/job/136967977192) |
-| Seven PR workflow runs in a 100-run sample initially failed and passed on a later attempt. Logs show both a VS Code download timeout and an intermittent Core RSS assertion. | Preserve the first attempt. Classify a verified dependency error, a harness error and a possible product race by their evidence. [Download failure](https://github.com/y5ez3g/facadecode/actions/runs/44370120326/job/135034307575) · [Core failure and rerun](https://github.com/y5ez3g/facadecode/actions/runs/44913206203) |
-| Real previous-version Core scenarios, Extension Remote SSH and installed VSIX upgrade have explicit entry points. Release can already reuse full checks on an identical source tree. | Make applicable compatibility scenarios mandatory. Bind release reuse and installation evidence to the source and package digests. [Core scenarios](core/ENGINEERING.md#compatibility-contracts) · [Editor runner](../extension/src/test/integration/run.ts) · [Release workflow](../.github/workflows/extension-release.yml) |
+| The active `main` ruleset requires PRs and has no required CI check. Framework and Extension workflows have separate path filters. | Give every PR candidate one required conclusion and test the policy that selects the individual checks. [Main ruleset](https://github.com/y5ez3g/facadecode/rules/25134905) · [Framework workflow](../.github/workflows/framework-check.yml) · [Extension workflow](../.github/workflows/extension-check.yml) |
+| PR #103 took 45:34 for 19 jobs to go green. One editor step took about 42 minutes, including 8:28 of Framework release compilation. One Framework job waited 22:40 for its runner. | Measure queueing, build, test and cleanup separately. Move repetitive long journeys out of the routine PR path after the equivalent acceptance is proven in the new lanes. [Editor job](https://github.com/y5ez3g/facadecode/actions/runs/44944261048/job/136967976476) · [Framework job](https://github.com/y5ez3g/facadecode/actions/runs/44944261124/job/136967977192) |
+| Seven PR workflow runs in a 100-run sample initially failed and passed on a later attempt. Logs show both a VS Code download timeout and an intermittent Framework RSS assertion. | Preserve the first attempt. Classify a verified dependency error, a harness error and a possible product race by their evidence. [Download failure](https://github.com/y5ez3g/facadecode/actions/runs/44370120326/job/135034307575) · [Framework failure and rerun](https://github.com/y5ez3g/facadecode/actions/runs/44913206203) |
+| Real previous-version Framework scenarios, Extension Remote SSH and installed VSIX upgrade have explicit entry points. Release can already reuse full checks on an identical source tree. | Make applicable compatibility scenarios mandatory. Bind release reuse and installation evidence to the source and package digests. [Framework scenarios](framework/ENGINEERING.md#compatibility-contracts) · [Editor runner](../extension/src/test/integration/run.ts) · [Release workflow](../.github/workflows/extension-release.yml) |
 
 The baseline sample takes the latest 100 workflow runs through 2026-11-21 22:24:10 UTC, starting at
 2026-11-18 05:50:42 UTC. Retrieve that creation interval from the [workflow runs endpoint](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository). Select `pull_request` runs that
@@ -40,26 +40,26 @@ candidate.
 
 | Boundary | Source used to enumerate it | Required evidence |
 | --- | --- | --- |
-| Shell and invoked process entry points | [Clap commands and parser dispatch](../core/crates/facade/src/cli.rs), [hook commands](../core/crates/facade/src/hooks.rs) and [Shell contract](PRODUCT.md#shell) | Run the built executable with an expected argv and assert exit status, observed output and effect. Include documented modes such as foreground and detached launches. |
-| Daemon v1 requests, topics and frames | [Rust registry](../core/crates/base/src/protocol/api_v1/daemon/registry.rs) and [generated schema](../core/protocol/protocol.schema.json) | Cover each operation, topic and frame. Receive actual events at subscriber boundaries. Reconcile terminal, Extension, MCP and authenticated peer access with the registry. |
-| Keeper v1 and relay connections | [Keeper schema](../core/protocol/keeper.schema.json), [Keeper contract](../core/protocol/KEEPER.md) and [relay handshake](../core/crates/relay/src/daemon.rs) | Exercise requests and notifications with the real processes. Cover independent version negotiation, reconnect, and native terminal-resource ownership where used. |
-| Both MCP implementations | [Core tool catalog](../core/crates/base/src/texts/tools.json), [Core transport](../core/crates/daemon/src/mcp/lines.rs), [old-engine tool catalog](../extension/src/schema/tools.ts) and [Extension transport](../extension/src/transport/mcpServer.ts) | Send real stdio frames to each implementation and check the advertised tool catalog. Each of the eight names has separate tool evidence for both implementations. Check applicable managed and Guest behavior. |
-| Extension commands | [VS Code contributions](../extension/package.json) and [command handlers](../extension/src/ui/commands/index.ts) | Invoke each supported command through VS Code. Check the handler for each engine in which the command appears and assert the user-visible or persisted result. |
+| Shell and invoked process entry points | [Clap commands and parser dispatch](../framework/crates/facade/src/cli.rs), [hook commands](../framework/crates/facade/src/hooks.rs) and [Shell contract](PRODUCT.md#shell) | Run the built executable with an expected argv and assert exit status, observed output and effect. Include documented modes such as foreground and detached launches. |
+| Daemon v1 requests, topics and frames | [Rust registry](../framework/crates/base/src/protocol/api_v1/daemon/registry.rs) and [generated schema](../framework/protocol/protocol.schema.json) | Cover each operation, topic and frame. Receive actual events at subscriber boundaries. Reconcile terminal, Extension, MCP and authenticated peer access with the registry. |
+| Keeper v1 and relay connections | [Keeper schema](../framework/protocol/keeper.schema.json), [Keeper contract](../framework/protocol/KEEPER.md) and [relay handshake](../framework/crates/relay/src/daemon.rs) | Exercise requests and notifications with the real processes. Cover independent version negotiation, reconnect, and native terminal-resource ownership where used. |
+| Both MCP implementations | [Framework tool catalog](../framework/crates/base/src/texts/tools.json), [Framework transport](../framework/crates/daemon/src/mcp/lines.rs), [legacy tool catalog](../extension/src/schema/tools.ts) and [Extension transport](../extension/src/transport/mcpServer.ts) | Send real stdio frames to each implementation and check the advertised tool catalog. Each of the eight names has separate tool evidence for both implementations. Check applicable managed and Guest behavior. |
+| Extension commands | [VS Code contributions](../extension/package.json) and [command handlers](../extension/src/ui/commands/index.ts) | Invoke each supported command through VS Code. Check the handler for each implementation in which the command appears and assert the user-visible or persisted result. |
 | Extension process and UI boundaries | [Window network declarations](../extension/src/base/windowNetwork.ts), [local window socket](../extension/src/host/windowNetwork.ts), [window identity and terminal registration](../extension/src/base/windowIdentity.ts), [legacy supervisor](../extension/src/ptyd/protocol.ts), [panel host](../extension/src/ui/panel.ts) and [Webview receiver](../extension/src/webview/panel.ts) | Exercise VS Code component commands and the socket's request, correlated response, rejected version, expiry and disconnect paths. Exercise supervisor events and panel actions through the corresponding boundary. Verify sequence, page generation and target identity. |
-| Configuration and reload | [Core settings reader](../core/crates/base/src/settings.rs), [VS Code settings](../extension/package.json) and [Extension settings schema](../extension/media/settings.schema.json) | Exercise the real readers for `facade.json`, `facade.home` and `facade.rustEngine`. Verify defaults, malformed input, scoped home, actual engine selection and live reload where supported. Observe refusal before effects. |
+| Configuration and reload | [Framework settings reader](../framework/crates/base/src/settings.rs), [VS Code settings](../extension/package.json) and [Extension settings schema](../extension/media/settings.schema.json) | Exercise the real readers for `facade.json`, `facade.home` and `facade.framework`. Verify defaults, malformed input, scoped home, actual implementation selection and live reload where supported. Observe refusal before effects. |
 
 Cover each registered, supported entry with at least one observed behavior. A read needs the expected data
 and identity. A mutation needs corroborating observation of the intended state or effect. An event needs its
 source, payload and correlation to the subscriber. An expected refusal needs the reason and evidence that
 state stayed intact. Check advertised allow and deny rules as a generated contract matrix. Use a real
-boundary example for each distinct authority or routing mechanism. Record serving engine and applicable
+boundary example for each distinct authority or routing mechanism. Record serving implementation and applicable
 direction as part of the case identity. A schema or mock check can prove its own contract, and each
 interface obligation also requires evidence from a real boundary.
 
 The catalog records a stable case ID, API or journey ID, owning spec and component, expected assertions,
-runner and selector, engine, target, compatibility fixture, required stage and owner. A single isolated
+runner and selector, implementation, target, compatibility fixture, required stage and owner. A single isolated
 fixture can create several passing case records. Emit them only after their specific assertions complete.
-Start with a repo-native `ci/cases.json` catalog and a support table keyed by product, engine, target, host,
+Start with a repo-native `ci/cases.json` catalog and a support table keyed by product, implementation, target, host,
 supported version direction and stage. Derive a case's required variants from that table. Implement each PR
 smoke using the lowest-cost real boundary, and run platform-specific variants in the required native lanes.
 The first implementation regenerates the inventory from these sources and validates one working mapping in
@@ -81,22 +81,22 @@ missing individual case even when other cases in the same journey are present.
 
 | Journey | Required behavior and failure evidence | Required stage and existing entry point | Case ID suffixes |
 | --- | --- | --- | --- |
-| `core/p0/start-stop` Start, resolve and stop | The selected CLI, folder and stable agent identity match the request. A failed start leaves no live process or published record. A retry with the original request ID creates one run. Stop selects the exact targets and records per-target results. Running and resumable lists show the current native session label, and resume keeps the full session ID. | PR · [CLI scenarios](../core/tests/tests/cli.rs), [reliability cases](../core/tests/tests/reliability.rs) | `start-and-resolve`, `failed-start`, `retry`, `targeted-stop`, `native-session-name` |
-| `core/p0/attach` Shell Attach and exit | Attach streams the selected process. Detach restores native terminal state and keeps the process alive. A foreground exit returns the child status. Reconnect uses the same run. Returning from an alternate screen restores the same host page and scrollback. | PR · [Attach scenarios](../core/tests/tests/attach.rs), [Shell command cases](../core/tests/tests/commands.rs) | `stream`, `detach-reconnect`, `foreground-exit`, `alternate-screen` |
-| `core/p0/input-draft` Input and draft protection | Type the expected Unicode and keys. A mixed sequence stays ordered ahead of subsequent input. Rejected input has zero unintended effect. A person's new input cancels a pending probe and draft-safe send leaves the draft intact. | PR · [MCP cases](../core/tests/tests/mcp.rs), [probe scenarios](../core/tests/tests/probes.rs) | `type`, `invalid-batch`, `draft-protection`, `ordered-sequence` |
-| `core/p0/message-receipt` Message and receipt | Delivery reaches one target with the expected sender and receipt. A deliberately lost response followed by retry with the original ID settles once. Disconnect during raw input reports the supported partial or unknown result. Check immediate inbox acceptance, explicit delivery waits, zero-budget MCP and a linked Shell reply across machines. | PR · [message scenarios](../core/tests/tests/messages.rs), [reliability cases](../core/tests/tests/reliability.rs) | `delivery`, `lost-reply`, `raw-disconnect`, `acceptance-and-delivery`, `mcp-zero-wait`, `shell-linked-reply` |
-| `core/p0/guest-reply` Guest reply | A Guest sends and receives through the real MCP connection. Verify the reply points to the original request, arrives once, and cannot be fetched by a different caller. A result wait can continue by the original message ID after a reply timeout. | PR · [MCP scenarios](../core/tests/tests/mcp.rs), [MCP contract](extension/engineering/MCP.md#7-mcp-through-the-orchestrator) | `correlated-reply`, `wrong-caller`, `result-wait` |
-| `core/p0/authority` Authority and peer identity | Verify authorized and refused callers, a mismatched machine identity, and same names on different machines. Refusal preserves the relevant files, agents, routes and inboxes. Claude trust remains with the person for Shell and IDE starts. An agent start confirms only a recognized choice permitted by the destination. | PR · [authority cases](../core/tests/tests/yolo.rs), [machine cases](../core/tests/tests/machines.rs) | `authorized`, `permission-denied`, `wrong-peer`, `person-claude-trust`, `agent-claude-trust` |
-| `core/p0/remote-execution` Discovery and remote execution | Discover and choose the expected machine. Create a worktree from the remote HEAD, run the CLI in it and reach the same process from Shell and the Extension. Verify route loss and recovery and that the local repository remained intact. Deliberately lose a cross-machine reply after delivery, then retry with the original ID. Check the same settlement and exactly one delivery. Exercise a real SSH transport on SSH-sensitive changes. | PR and targeted native · [machine scenarios](../core/tests/tests/machines.rs), [SSH smoke](../core/scripts/ssh-check.sh) | `remote-worktree`, `route-recovery`, `retry-lost-reply`, `real-ssh` |
-| `core/p0/watch` Watch lifecycle | Watch the initial state and a subsequent correlated update. Unwatch releases resources and ends delivery for that watch. Reconnect gives a fresh snapshot and discards stale events. | PR · [protocol scenarios](../core/tests/tests/protocol.rs), [terminal and watch scenarios](../core/tests/tests/attach.rs) | `snapshot-update`, `unwatch`, `reconnect` |
-| `core/p0/service-recovery` Daemon and Keeper recovery | Replace or restart either service as applicable. Verify original CLI identity, Attach, terminal output and an exactly-once pending effect. Verify resource and process cleanup after the test. | PR and targeted native · [recovery scenarios](../core/tests/tests/recovery.rs), [Keeper scenarios](../core/tests/tests/keeper.rs) | `daemon-restart`, `keeper-recovery`, `pending-effect` |
-| `core/p0/prior-build` Real prior-build compatibility | Negotiate against pinned supported builds. Cold migration preserves IDs, sessions, routes and receipts. Compatible hot replacement keeps the live process. Disjoint versions refuse before changing state or programs. | Compatibility-sensitive PR and candidate · [compatibility scenarios](core/ENGINEERING.md#compatibility-contracts) | `cold-migration`, `hot-replacement`, `incompatible-version` |
-| `extension/p0/activation-shell` Editor activation and Shell handoff | In isolated official VS Code with Rust active, start or locate the same Core agent from Shell and the editor. Operate on its original process and worktree. With the old engine, run the separate start, MCP, terminal and worktree journeys in its own supervisor. Check the actual serving engine. A failed automatic Rust startup shows the recovery warning and leaves the old engine ready without launching an agent on its own. | PR · [editor journeys](../extension/src/test/integration/run.ts), [Shell handoff scenario](../extension/src/test/integration/rustMultiWindow.ts) | `rust-handoff`, `old-supervisor`, `activation-failure`, `startup-fallback` |
-| `extension/p0/pin-reload` Pin, reload and multiple windows | Verify a Pin restores the exact session once. Close one member window and observe the other keeps the same run. A missing session gives the prescribed outcome and an Unpin prevents resurrection. The old-engine scheduled and candidate case also tests its close-last grace with the production timer, reconnect before expiry and cleanup afterward. | PR · [window journeys](../extension/src/test/integration/rustMultiWindow.ts) | `resume-old`, `resume-rust`, `pinned-reload`, `close-one-window`, `missing-session-unpin`, `old-last-window-grace` |
-| `extension/p0/message-delivery` Draft protection in the Rust editor | Run a real CLI stand-in through the Rust extension. An explicit delivery wait blocked by a draft never writes to it or delivers after the draft is cleared. | PR · [MCP editor journey](../extension/src/test/integration/mcp.it.ts) | `draft-protection-rust` |
+| `framework/p0/start-stop` Start, resolve and stop | The selected CLI, folder and stable agent identity match the request. A failed start leaves no live process or published record. A retry with the original request ID creates one run. Stop selects the exact targets and records per-target results. Running and resumable lists show the current native session label, and resume keeps the full session ID. | PR · [CLI scenarios](../framework/tests/tests/cli.rs), [reliability cases](../framework/tests/tests/reliability.rs) | `start-and-resolve`, `failed-start`, `retry`, `targeted-stop`, `native-session-name` |
+| `framework/p0/attach` Shell Attach and exit | Attach streams the selected process. Detach restores native terminal state and keeps the process alive. A foreground exit returns the child status. Reconnect uses the same run. Returning from an alternate screen restores the same host page and scrollback. | PR · [Attach scenarios](../framework/tests/tests/attach.rs), [Shell command cases](../framework/tests/tests/commands.rs) | `stream`, `detach-reconnect`, `foreground-exit`, `alternate-screen` |
+| `framework/p0/input-draft` Input and draft protection | Type the expected Unicode and keys. A mixed sequence stays ordered ahead of subsequent input. Rejected input has zero unintended effect. A person's new input cancels a pending probe and draft-safe send leaves the draft intact. | PR · [MCP cases](../framework/tests/tests/mcp.rs), [probe scenarios](../framework/tests/tests/probes.rs) | `type`, `invalid-batch`, `draft-protection`, `ordered-sequence` |
+| `framework/p0/message-receipt` Message and receipt | Delivery reaches one target with the expected sender and receipt. A deliberately lost response followed by retry with the original ID settles once. Disconnect during raw input reports the supported partial or unknown result. Check immediate inbox acceptance, explicit delivery waits, zero-budget MCP and a linked Shell reply across machines. | PR · [message scenarios](../framework/tests/tests/messages.rs), [reliability cases](../framework/tests/tests/reliability.rs) | `delivery`, `lost-reply`, `raw-disconnect`, `acceptance-and-delivery`, `mcp-zero-wait`, `shell-linked-reply` |
+| `framework/p0/guest-reply` Guest reply | A Guest sends and receives through the real MCP connection. Verify the reply points to the original request, arrives once, and cannot be fetched by a different caller. A result wait can continue by the original message ID after a reply timeout. | PR · [MCP scenarios](../framework/tests/tests/mcp.rs), [MCP contract](extension/engineering/MCP.md#7-mcp-through-the-orchestrator) | `correlated-reply`, `wrong-caller`, `result-wait` |
+| `framework/p0/authority` Authority and peer identity | Verify authorized and refused callers, a mismatched machine identity, and same names on different machines. Refusal preserves the relevant files, agents, routes and inboxes. Claude trust remains with the person for Shell and IDE starts. An agent start confirms only a recognized choice permitted by the destination. | PR · [authority cases](../framework/tests/tests/yolo.rs), [machine cases](../framework/tests/tests/machines.rs) | `authorized`, `permission-denied`, `wrong-peer`, `person-claude-trust`, `agent-claude-trust` |
+| `framework/p0/remote-execution` Discovery and remote execution | Discover and choose the expected machine. Create a worktree from the remote HEAD, run the CLI in it and reach the same process from Shell and the Extension. Verify route loss and recovery and that the local repository remained intact. Deliberately lose a cross-machine reply after delivery, then retry with the original ID. Check the same settlement and exactly one delivery. Exercise a real SSH transport on SSH-sensitive changes. | PR and targeted native · [machine scenarios](../framework/tests/tests/machines.rs), [SSH smoke](../framework/scripts/ssh-check.sh) | `remote-worktree`, `route-recovery`, `retry-lost-reply`, `real-ssh` |
+| `framework/p0/watch` Watch lifecycle | Watch the initial state and a subsequent correlated update. Unwatch releases resources and ends delivery for that watch. Reconnect gives a fresh snapshot and discards stale events. | PR · [protocol scenarios](../framework/tests/tests/protocol.rs), [terminal and watch scenarios](../framework/tests/tests/attach.rs) | `snapshot-update`, `unwatch`, `reconnect` |
+| `framework/p0/service-recovery` Daemon and Keeper recovery | Replace or restart either service as applicable. Verify original CLI identity, Attach, terminal output and an exactly-once pending effect. Verify resource and process cleanup after the test. | PR and targeted native · [recovery scenarios](../framework/tests/tests/recovery.rs), [Keeper scenarios](../framework/tests/tests/keeper.rs) | `daemon-restart`, `keeper-recovery`, `pending-effect` |
+| `framework/p0/prior-build` Real prior-build compatibility | Negotiate against pinned supported builds. Compatible hot replacement keeps the live process. Disjoint versions refuse before changing state or programs. | Compatibility-sensitive PR and candidate · [compatibility scenarios](framework/ENGINEERING.md#compatibility-contracts) | `hot-replacement`, `incompatible-version` |
+| `extension/p0/activation-shell` Editor activation and Shell handoff | In isolated official VS Code with Framework active, start or locate the same Framework agent from Shell and the editor. Operate on its original process and worktree. With the legacy implementation, run the separate start, MCP, terminal and worktree journeys in its own supervisor. Check the actual serving implementation. A failed automatic Framework startup shows the recovery warning and leaves the legacy implementation ready without launching an agent on its own. | PR · [editor journeys](../extension/src/test/integration/run.ts), [Shell handoff scenario](../extension/src/test/integration/frameworkMultiWindow.ts) | `framework-handoff`, `legacy-supervisor`, `activation-failure`, `startup-fallback` |
+| `extension/p0/pin-reload` Pin, reload and multiple windows | Verify a Pin restores the exact session once. Close one member window and observe the other keeps the same run. A missing session gives the prescribed outcome and an Unpin prevents resurrection. The legacy scheduled and candidate case also tests its close-last grace with the production timer, reconnect before expiry and cleanup afterward. | PR · [window journeys](../extension/src/test/integration/frameworkMultiWindow.ts) | `resume-legacy`, `resume-framework`, `pinned-reload`, `close-one-window`, `missing-session-unpin`, `legacy-last-window-grace` |
+| `extension/p0/message-delivery` Draft protection in the editor running Framework | Run a real CLI stand-in through Framework. An explicit delivery wait blocked by a draft never writes to it or delivers after the draft is cleared. | PR · [MCP editor journey](../extension/src/test/integration/mcp.it.ts) | `draft-protection-framework` |
 | `extension/p0/remote-host` Extension host reconnect | Test an actual Remote SSH editor host and controlled peer. Disconnect and reconnect. Verify identity, window ownership and pending message settlement. | Remote-sensitive PR, scheduled and candidate · [remote journeys](../extension/src/test/integration/remote.ts) | `ssh-connect`, `ssh-reconnect` |
-| `extension/p0/window-replacement` Window replacement and engine behavior | Verify both engine paths, Window Component activation and an update with a message in flight. Observe the documented result with no duplicate effect. Stale claims and Webview generations cannot affect the current owner or a different agent. | PR and candidate · [editor runner](../extension/src/test/integration/run.ts), [command tests](../extension/src/test/commands.test.ts) | `window-activation-old`, `window-activation-rust`, `replacement-in-flight`, `stale-owner` |
-| `core/p0/install-upgrade` Core install and upgrade | Install the candidate archive, start and query a fake CLI, and upgrade a pinned prior installation. An invalid digest or incompatible target preserves the working installation. | Installer-sensitive PR and candidate · [upgrade scenarios](../core/tests/tests/upgrade.rs), [native installers](../.github/workflows/extension-check.yml) | `install`, `upgrade`, `bad-archive` |
+| `extension/p0/window-replacement` Window replacement and implementation behavior | Verify both implementation paths, Window Component activation and an update with a message in flight. Observe the documented result with no duplicate effect. Stale claims and Webview generations cannot affect the current owner or a different agent. | PR and candidate · [editor runner](../extension/src/test/integration/run.ts), [command tests](../extension/src/test/commands.test.ts) | `window-activation-legacy`, `window-activation-framework`, `replacement-in-flight`, `stale-owner` |
+| `framework/p0/install-upgrade` Framework install and upgrade | Install the candidate archive, start and query a fake CLI, and upgrade a pinned prior installation. An invalid digest or incompatible target preserves the working installation. | Installer-sensitive PR and candidate · [upgrade scenarios](../framework/tests/tests/upgrade.rs), [native installers](../.github/workflows/extension-check.yml) | `install`, `upgrade`, `bad-archive` |
 | `extension/p0/vsix-upgrade` Installed VSIX and upgrade | Install both candidate VSIX components in clean profiles and exercise activation and a real command. Upgrade the prior supported package and check persisted workspace state, Pins and the Window Component. | Packaging-sensitive PR and candidate · [package tests](../extension/scripts/package.test.mjs), [VSIX upgrade journey](../extension/src/test/integration/run.ts) | `install-pair`, `upgrade-pair` |
 | `extension/p0/release` Release promotion | The trusted candidate record accounts for every expected signed package. Corrupt, missing, wrong-version or stale-source artifacts block promotion. Verify bytes and the stable pointer after promotion. | Candidate · [release script tests](../extension/scripts/release.test.mjs), [release workflow](../.github/workflows/extension-release.yml) | `signed-artifacts`, `invalid-artifact`, `stable-pointer` |
 
@@ -106,10 +106,10 @@ missing individual case even when other cases in the same journey are present.
 
 | Input change | Before merge | After merge or on schedule |
 | --- | --- | --- |
-| Documentation or IDE-only paths | Check the changed CI and product contract documents, links and scope. Emit an explicit empty product plan when no Core or Extension behavior is affected. | Regular scheduled matrix remains the integration baseline. |
-| Core runtime, tests, assets or toolchain | Core format, lint, lockfile and the every-commit build and lockfile check for a Core change. Run all applicable Core API smoke and fast P0 cases. Run Extension Rust-engine contract and smoke against the same Core source. | Expanded native Core and Extension coverage. |
-| Extension runtime, tests, manifests or toolchain | Type, localization and spec checks as applicable, all Extension API smoke, and deterministic editor P0. Exercise each implementation that can be affected. Shared contract changes also select Core. | Expanded native and engine coverage. |
-| Wire, durable state, PTY, paths, SSH, packaging, signing or installers | Add the corresponding exact-version, real transport, native target or candidate-package checks before merge. On shared protocol changes check Core and Extension together. | Six native targets, supported editor versions, native combinations and release fitness. |
+| Documentation or IDE-only paths | Check the changed CI and product contract documents, links and scope. Emit an explicit empty product plan when no Framework or Extension behavior is affected. | Regular scheduled matrix remains the integration baseline. |
+| Framework runtime, tests, assets or toolchain | Framework format, lint, lockfile and the every-commit build and lockfile check for a Framework change. Run all applicable Framework API smoke and fast P0 cases. Run Extension Framework contract and smoke against the same Framework source. | Expanded native Framework and Extension coverage. |
+| Extension runtime, tests, manifests or toolchain | Type, localization and spec checks as applicable, all Extension API smoke, and deterministic editor P0. Exercise each implementation that can be affected. Shared contract changes also select Framework. | Expanded native and implementation coverage. |
+| Wire, durable state, PTY, paths, SSH, packaging, signing or installers | Add the corresponding exact-version, real transport, native target or candidate-package checks before merge. On shared protocol changes check Framework and Extension together. | Six native targets, supported editor versions, native combinations and release fitness. |
 | Workflow, CI policy, shared root files or ambiguous diff | Run policy exercises and every possibly affected product and risk lane. Choose the known complete plan if a diff is ambiguous. A candidate whose source identity is unresolved is blocked. | Review scope drift and the first result on `main`. |
 
 Resolve the checked-out test merge commit's base, head and tree from Git and GitHub. Diff that base to the
@@ -118,14 +118,14 @@ that controls the real entry point, such as generated protocol copies, runtime a
 or mirror scripts and runner changes. Large or incomplete path inputs take the conservative route. Exercise
 the router with fixtures for each row and mixed changes before it can reduce any required coverage.
 
-Retain the owning checks in their defined lanes. Core PRs run `cargo fmt --check`, Clippy, the every-commit
+Retain the owning checks in their defined lanes. Framework PRs run `cargo fmt --check`, Clippy, the every-commit
 build and lockfile check, and affected isolated scenarios. Wire changes run `protocol_files` and
 `guide_examples`, including byte parity of generated TypeScript. The full workspace suite and native SSH
 login smoke run daily and for affected native PRs. Extension PRs run `npm run compile`, relevant `npm test`
 shards, `node scripts/l10n.mjs check`, the spec audit, bundling and isolated editor cases. Package changes
 and candidates run `npm run package` and `npm run test:package`. Changes to release scripts run `node --test
 scripts/release.test.mjs` before merge. The complete Mocha, native packaging and editor suites run at
-milestones and in their scheduled lanes. [Core engineering](core/ENGINEERING.md#tests) · [Required Extension checks](extension/engineering/ARCHITECTURE.md#51-required-checks)
+milestones and in their scheduled lanes. [Framework engineering](framework/ENGINEERING.md#tests) · [Required Extension checks](extension/engineering/ARCHITECTURE.md#51-required-checks)
 
 Use Linux x64 with a pinned current VS Code build as the routine smoke lane. Run platform-specific
 obligations on their actual platform. Express each supported combination in the versioned support table with
@@ -133,16 +133,16 @@ the highest-fidelity required lane.
 
 | Compatibility or native risk | Required fixtures and routing |
 | --- | --- |
-| Platform, PTY, native backend, paths and package layout | Linux x64/Arm64, macOS x64/Arm64 and Windows x64/Arm64 are the six native targets. Require every affected target when its native code, ABI, toolchain or packaging changes. Shared code affecting all targets expands the plan to all six. Test both supported Extension engines on the scheduled native matrix. Verify installed artifacts on every released target. |
+| Platform, PTY, native backend, paths and package layout | Linux x64/Arm64, macOS x64/Arm64 and Windows x64/Arm64 are the six native targets. Require every affected target when its native code, ABI, toolchain or packaging changes. Shared code affecting all targets expands the plan to all six. Test both supported Extension implementations on the scheduled native matrix. Verify installed artifacts on every released target. |
 | Editor host and minimum version | Include VS Code `1.105`, the manifest minimum at the baseline, and a pinned current build. Run real host and component activation on both in the candidate matrix. Manifest or API-usage changes trigger minimum-version checks before merge. A scheduled current-channel lane identifies upstream changes early. |
 | SSH, WSL and Dev Containers | Verify the declared combinations of local and remote clients and hosts using owned, disposable fixtures. Test native SSH with a real peer for remote-sensitive changes. Record local to SSH, SSH to local and SSH to SSH separately. Cover declared SSH host types, WSL on a disposable Windows host and pinned distribution, and Dev Containers with a pinned image. Require advertised directions in their scheduled and release lanes. A missing environment stays visible as an unmet obligation. |
-| Old Core, new Core and retained data | Use immutable builds and state from the supported prior releases. Distinguish pre-v1 cold cutover, compatible v1 hot takeover, and incompatible offers that leave the working install untouched. Lock both build hashes and directions. Use the existing `FACADE_TEST_API_V1_PRERELEASE`, `FACADE_TEST_API_V1_NEXT` and archived fixture inputs described in Core engineering. Require the affected pairs on changes to the wire, migration, takeover, or installer behavior. |
-| Actual extension packages and Window Component | Test the published prior VSIX pair against the new candidate pair with the installed-product harness. Use the accepted prerelease and the pinned fake CLI for `cold-cutover`. Changes to activation, component IPC, persisted Pins or package updates trigger their relevant pair before merge. |
+| Framework build pairs and storage | Use immutable Framework builds for v1 hot takeover and incompatible offers. Record both source revisions, binary digests and API versions. Exercise schema upgrades with Framework store fixtures and the range-hello refusal with its wire scenario. |
+| Actual extension packages and Window Component | Test the published prior VSIX pair against the new candidate pair with the installed-product harness. Changes to activation, component IPC, persisted Pins or package updates trigger their relevant pair before merge. |
 
 The support table uses the repository's advertised compatibility windows and reviewed exceptions. Align
 every included or deferred pairing with the actual contract. Pre-provision disposable native and remote
 fixtures under test-only credentials. The required run uses an isolated test host and scoped test data. A
-required fixture that is unavailable remains an explicit pending or failed obligation. [Core compatibility inputs](core/ENGINEERING.md#compatibility-contracts) · [Extension compatibility inputs](extension/engineering/VERIFICATION.md#52-verify-upgrade-and-compatibility-against-the-previous-build) · [Current Core targets](../.github/workflows/core-check.yml) · [Current Extension targets](../.github/workflows/extension-check.yml)
+required fixture that is unavailable remains an explicit pending or failed obligation. [Framework compatibility inputs](framework/ENGINEERING.md#compatibility-contracts) · [Extension compatibility inputs](extension/engineering/VERIFICATION.md#52-verify-upgrade-and-compatibility-against-the-previous-build) · [Current Framework targets](../.github/workflows/framework-check.yml) · [Current Extension targets](../.github/workflows/extension-check.yml)
 · [VS Code test hosts](https://code.visualstudio.com/api/working-with-extensions/testing-extension) · [Rust target-tier practice](https://doc.rust-lang.org/rustc/platform-support.html)
 
 The owner supplies the native CLI release checks and user walkthroughs required by the Extension
@@ -151,15 +151,15 @@ candidate, host and CLI versions with the owner's observed outcome. [Extension v
 
 Run the standalone `facade-stress` program on a reserved, comparable Linux x64 runner nightly, on release
 candidates and after merges that affect scheduling, terminal throughput or delivery. Use the optimized
-fake-CLI build documented in [Core](../core/README.md#build-and-test), the default 100 agents and 100 flooders,
+fake-CLI build documented in [Framework](../framework/README.md#build-and-test), the default 100 agents and 100 flooders,
 an isolated home, `--json` evidence and a same-shape, same-runner-class `--baseline`. Record the D6.7 and D6.9
 limits with source and fixture hashes. Start with a 20-minute job budget, including cleanup. The program's
-failed assertion or performance comparison opens a Core incident and holds candidate promotion. Keep
+failed assertion or performance comparison opens a Framework incident and holds candidate promotion. Keep
 the original result and run a same-shape comparison for diagnosis. A baseline shape or runner mismatch blocks
-the comparison. To replace the baseline, run the last fully verified Core revision on the new runner and
+the comparison. To replace the baseline, run the last fully verified Framework revision on the new runner and
 workload. Record its source tree, runner, fixture and result digests and obtain separate owner approval
 before testing the candidate against it. Use the expanded affected-native lane for a native regression
-when that target has an approved baseline and workload. [Stress program](../core/tests/src/bin/facade-stress.rs)
+when that target has an approved baseline and workload. [Stress program](../framework/tests/src/bin/facade-stress.rs)
 
 ### One merge conclusion
 
@@ -183,7 +183,7 @@ write access to the driver, oracle, cache writer or evidence. Prefer standard ho
 restriction passes preflight. Use disposable native test capacity on a target that needs a guest. A lane
 with no proven isolation remains blocked.
 
-The protected driver verifies the actual engine, native architecture, toolchain, editor and process
+The protected driver verifies the actual implementation, native architecture, toolchain, editor and process
 identity. It observes effects from outside the candidate domain. Candidate output is input to these
 assertions. Candidate-side helper tests can supply supplemental diagnostics. Only protected assertions emit
 a required pass. The protected worker uploads bounded, schema-validated evidence. The reconciler checks
@@ -212,14 +212,14 @@ the documented support change and observed refusal or migration behavior. The pr
 approved digest. The approval only changes the
 named obligations for the approved candidate. Preserve the record and invalidate it after any tuple change.
 
-A case record contains the case ID, candidate and plan digest, selected target and engine, fixture and
+A case record contains the case ID, candidate and plan digest, selected target and implementation, fixture and
 toolchain revisions, runner image and OS, VS Code build and seed where applicable, run/job/attempt IDs,
 status, elapsed time and sanitized evidence location. Attach artifact digests where cases ran on an
 artifact. Accept an expected pass only from an allowed job of the corresponding protected dispatch, with
 successful execution and matching metadata. Read source, event and conclusion from GitHub. Validate each
 data artifact against a strict schema and byte limit. Only the trusted reconciler turns it into a decision.
 Reconcile API discovery, selection and proof as sets. An unresolved route, missing, duplicate or unexpected
-result, zero-test discovery, skip, cancellation, timeout, wrong engine, stale attempt, or bad evidence
+result, zero-test discovery, skip, cancellation, timeout, wrong implementation, stale attempt, or bad evidence
 leaves the required check red or pending. Legitimately empty plans include the approved scope reason. A
 diagnostic rerun produces additional evidence under the same candidate identity. A product assertion stays
 blocking until a reviewed fix produces a new candidate. For a verified infrastructure failure before
@@ -272,7 +272,7 @@ window. Report delayed obligations and preserve them until they run.
 | Lane | Critical path | Runner budget and split |
 | --- | --- | --- |
 | Routine PR | 2 minutes dispatch, queue and setup, 4 build, 3 tests, 1 decision | At most four Linux jobs and 40 runner-minutes. Include cold runs in the SLO and take at least one cold trace per cohort per week. |
-| Expanded native or compatibility PR | 5 minutes queue, 4 setup and artifact restore, 8 build, 10 tests, 3 decision | Up to two jobs and 60 runner-minutes per affected target. Compile once per target and profile. Reuse the identical binaries for both engine journeys when possible. Split independent native and version rows. |
+| Expanded native or compatibility PR | 5 minutes queue, 4 setup and artifact restore, 8 build, 10 tests, 3 decision | Up to two jobs and 60 runner-minutes per affected target. Compile once per target and profile. Reuse the identical binaries for both implementation journeys when possible. Split independent native and version rows. |
 | Daily native and compatibility matrix | Complete within 24 hours of due time | Start with 90 runner-minutes per native target and track the remote and prior-version lane budgets separately. Stagger native pools. |
 | Release candidate | Measure signing, installation, compatibility and distribution separately | Report cold cost for each target and compare like-for-like acceptance obligations before changing capacity. |
 
@@ -280,11 +280,11 @@ Take paired cold and warm traces during shadow validation. On overrun remove dup
 startup first, then measure runner capacity. Keep the acceptance obligations while changing implementation.
 [GitHub Actions limits](https://docs.github.com/en/actions/reference/limits)
 
-Reuse `core/scripts/test-all.sh` or `test-all.ps1`, the existing daemon and MCP scenario clients, and the
+Reuse `framework/scripts/test-all.sh` or `test-all.ps1`, the existing daemon and MCP scenario clients, and the
 Extension's `test:integration` and `test:remote` harnesses. The new runner exposes each selected case and
 its reproduction command. Keep raw first-attempt summaries and the consolidated case ledger for at least 90
 days. Maintain one weekly report of first failures, slowest cases, queue wait, cold/warm timing and
-unexplained skips. Redact credentials and user content before upload. [Core test runner guidance](core/ENGINEERING.md#tests) · [Extension verification evidence](extension/engineering/VERIFICATION.md#12-evidence-format)
+unexplained skips. Redact credentials and user content before upload. [Framework test runner guidance](framework/ENGINEERING.md#tests) · [Extension verification evidence](extension/engineering/VERIFICATION.md#12-evidence-format)
 
 ## Main and release health
 
@@ -354,7 +354,7 @@ Start the clock when a ready, mergeable candidate satisfies the base rule. Track
 for conflicts, stale bases or a documented fork approval. The first actionable result identifies a completed
 policy, contract or build check that can guide a change. A queued or planned status contributes no feedback
 sample. Count the time until the required decision, including runner queue and infrastructure retries. Split
-Core-only, Extension-only, cross-product and expanded native or compatibility changes. Report warm and cold
+Framework-only, Extension-only, cross-product and expanded native or compatibility changes. Report warm and cold
 samples and each cohort's size. Exclude a canceled candidate only when a newer one is observed. A missing or
 timed-out result for the newest candidate counts as a service failure and a latency breach. Keep these
 observations in the denominator rather than measuring successful jobs alone. Record first-attempt outcomes
@@ -383,9 +383,9 @@ limits above are demonstrated. Regressions in those limits trigger investigation
 
 | Step | Change and accountable role | Exit evidence |
 | --- | --- | --- |
-| 1. Inventory and measurement | CI maintainer owns planner, case ledger and baseline timings. Core and Extension owners verify their source registries and existing case mappings. | From one Core and one Extension run, reconcile exact versions, required IDs and the observed test count. Omit a planned pass and verify the shadow aggregator identifies it by name. Preserve the existing required behavior and check jobs during this stage. |
+| 1. Inventory and measurement | CI maintainer owns planner, case ledger and baseline timings. Framework and Extension owners verify their source registries and existing case mappings. | From one Framework and one Extension run, reconcile exact versions, required IDs and the observed test count. Omit a planned pass and verify the shadow aggregator identifies it by name. Preserve the existing required behavior and check jobs during this stage. |
 | 2. Deterministic required cases | Product owners fill every required API and P0 mapping, using existing test harnesses. CI maintainer adds route fixtures, pinned inputs and reproductions. | All obligations pass on supported profiles. For a duplicate delivery, lost Pin and compatibility refusal, inject the controlled regression, observe the intended assertion fail, then restore and pass. Measure the intended PR lanes in cold and warm conditions. Compare at least 30 same-tree shadow candidates with the current full suite and exercise each high-risk route with fixtures. Include a measurement while native jobs compete for runners. Resolve missed obligations and attain the intended budgets before enforcement. |
-| 3. Protect the merge decision | Repository owner enables the strict `main` rule after the protected verifier is proven. Validate same-name checks, fork candidates and base churn. | Demonstrate that docs-only, Core-plus-Extension, Windows-specific and mixed rename changes select correctly. Confirm that failing, skipped, canceled, zero-test, missing, wrong-engine and stale-candidate evidence cannot merge. An older success cannot satisfy a new merge candidate. Rehearse a late main P0 hold with a previously green PR, a reviewed API retirement, rejected forged evidence and failure of the workflow schedule. |
+| 3. Protect the merge decision | Repository owner enables the strict `main` rule after the protected verifier is proven. Validate same-name checks, fork candidates and base churn. | Demonstrate that docs-only, Framework-plus-Extension, Windows-specific and mixed rename changes select correctly. Confirm that failing, skipped, canceled, zero-test, missing, wrong-implementation and stale-candidate evidence cannot merge. An older success cannot satisfy a new merge candidate. Rehearse a late main P0 hold with a previously green PR, a reviewed API retirement, rejected forged evidence and failure of the workflow schedule. |
 | 4. Transfer deep coverage | Product and CI maintainers enable post-merge and scheduled lanes, candidate verification, and the first-failure dashboard. | Keep the comparison evidence from shadow validation. Confirm post-merge and daily coverage on multiple consecutive runs before retiring duplicate jobs. Resolve any lost obligation before removal. Verify native artifacts, a tag outside verified main, corrupt-artifact refusal, partial channel promotion and safe recovery in a dry run. |
 | 5. Measure sustained operation | CI maintainer reviews the error budget and top critical-path costs weekly. Repository owner handles incidents and protected rule changes. | Use the measured criteria above. Unresolved baseline gaps and insufficient samples stay visible. Work next on the largest measured source of lost time or trust. |
 
@@ -402,10 +402,10 @@ the test service and the release workflow.
 
 The [complete acceptance table](CI-ACCEPTANCE.md) is generated from [`ci/cases.json`](../ci/cases.json),
 which holds the reviewed assertions, stages, candidate test sources and exact bindings. The catalog
-checker discovers Core's CLI, daemon, Keeper, relay, MCP and configuration
+checker discovers Framework's CLI, daemon, Keeper, relay, MCP and configuration
 interfaces from their registries and schemas. It discovers Extension commands, the Window Component,
 local window transport, supervisor, Webview, MCP and settings from declarations and serving code.
-Extension API IDs identify the old or Rust engine when the implementations differ. The P0 table above
+Extension API IDs identify the legacy or Framework implementation when the implementations differ. The P0 table above
 declares each required journey case by name. Every bound PR row enters the plan automatically.
 The catalog rejects any PR P0 row without a binding. Discovery and the P0 table are independent of
 the test bindings. Both installed VSIX rehearsals also require a binding. A surviving obligation
@@ -413,8 +413,8 @@ with a binding at the base commit must keep an executable test. The PR and main 
 changed assertions, stages and selectors and flag removed rows for review before protected enforcement.
 
 The [shadow workflow](../.github/workflows/ci-acceptance.yml) checks catalog drift and policy
-regressions on relevant PRs. Core source or CI policy changes select both Linux x64 pilots,
-because the editor also runs Core. Extension source changes select the editor pilot. Changes to
+regressions on relevant PRs. Framework source or CI policy changes select both Linux x64 pilots,
+because the editor also runs Framework. Extension source changes select the editor pilot. Changes to
 the shared built-in names select both. Documentation updates run the catalog check. Selection
 compares the first parent of the PR merge tree to that tree and includes both paths of a rename.
 The same shadow checks run on the landed `main` tree after a relevant push. Manual and
@@ -424,19 +424,19 @@ once and uses official VS Code `1.105.1` with isolated profiles and fake CLIs.
 It checks the pinned Linux x64 archive size and SHA-256 before each extraction, including
 cache restores. It stages the verified official bundle in fresh scratch before building the
 fixtures. A listed transient download gets one retry within the 90-second acquisition budget,
-and the download log keeps its first failure. Core shares one run
+and the download log keeps its first failure. Framework shares one run
 per scenario target and compares its exact test names. Extension shares a fixture for compatible
-Mocha selections with the same engine and route. Multi-window and lifetime drivers use separate
+Mocha selections with the same implementation and route. Multi-window and lifetime drivers use separate
 fixtures. Shared Window Component and stdio contracts also use exact compiled Mocha selectors.
 The verifier requires their complete JSON report with the selected titles and zero failures or
 skips. The native Extension matrix pins the official VS Code `1.147.0` archive for each host.
 Each job checks the archive size, digest, version and build commit before building editor
 fixtures. The Remote SSH lane stages the same verified Linux x64 desktop archive. Build,
-download and test execution remain separate timed steps. The Intel Rust PR
+download and test execution remain separate timed steps. The Intel Framework PR
 job can restore Cargo dependencies for an eligible build. It still builds from source and runs
-every case. The editor pilot runs the remote worktree case with two live Core Shell Attach clients
+every case. The editor pilot runs the remote worktree case with two live Framework Shell Attach clients
 and a real editor attached to the same process through a fixture SSH route. An incompatible
-Core hello must show its error inside the actual panel, with no serving engine or CLI launch.
+Framework hello must show its error inside the actual panel, with no serving implementation or CLI launch.
 The window update installs the digest-pinned Extension 0.1.5 release into two isolated profiles,
 then installs packages built for the current candidate while the same routed message is pending.
 The run retains both VSIX pairs and verifies their digests with the completion record. It proves
@@ -452,7 +452,7 @@ still have to pass within the same deadlines.
 A separate two-window run checks that an old claim and an old Webview generation
 leave the current owner, both running agents and their terminals intact. The current page then
 changes only its selected agent.
-The Linux x64 PR package job also installs the candidate Core archive with default activation.
+The Linux x64 PR package job also installs the candidate Framework archive with default activation.
 It starts and queries a fake CLI through the installed Shell, checks the installed MCP relay,
 and proves two bad digests leave the install and the same live agent usable. The verifier
 reads the candidate archive and checksum file again, checks the installed programs and
@@ -464,52 +464,13 @@ When checking retained logs from a different runner, pass the known absolute run
 path as `verify-native-install --producer-checkout`. The current local checkout supplies the
 inspected installer source and tree.
 
-The Linux x64 Core job starts a separate loopback OpenSSH peer with disposable keys and homes.
+The Linux x64 Framework job starts a separate loopback OpenSSH peer with disposable keys and homes.
 It checks the selected machine, compares the same agent and process through the peer and the
 forwarded route, and verifies that only the intended peer receives the exact input bytes.
 The job reconciles the original log and scoped cleanup with the three tested binaries and the
 GitHub run attempt. The same job uses locked Cargo commands to revalidate its debug build and runs
 the exact Keeper recovery scenario from an isolated copy. Review checks the process and Attach
 observations, scoped teardown and matching program digests in the Keeper and real SSH receipts.
-
-### Native Core cold cutover
-
-On Linux x64, point the runner at the verified candidate lane's Shell and MCP directory.
-It builds the candidate's exact ignored scenario and test CLI, stages both program pairs in
-a private scope, and emits its marker after the exact test and owned cleanup pass.
-The native workflow runs this replay for changes to the relevant protocol, Core lifecycle
-or migration inputs. It builds the pinned prior source and the current candidate on Linux
-x64 and records the program digests and raw results. [Core compatibility workflow](../.github/workflows/core-compatibility.yml)
-
-Replay a Shell and MCP pair with an externally pinned SHA-256 manifest. The manifest must
-contain one entry for each executable.
-
-```sh
-python3 -B ci/check_prior_build.py --candidate-bin "$candidate_bin" \
-    --output-dir "$work/cold-pinned" --run-id cold-pinned-local \
-    pinned-binaries --prior-bin "$prior_bin" --manifest "$prior_manifest"
-```
-
-The source-compatibility mode instead archives immutable prior main
-`870891350e49c75dec316b9df37554557e257263` from the local Git object store. It compiles
-that source with the pinned Rust toolchain, the Linux musl target, and Cargo's locked
-dependencies. The receipt binds the actual binary hashes, toolchain and source tree to the
-run. The two modes keep their own provenance records. A prior-main build records the hashes
-it produced on the current runner.
-
-```sh
-python3 -B ci/check_prior_build.py --candidate-bin "$candidate_bin" \
-    --output-dir "$work/cold-source" --run-id cold-source-local prior-main
-```
-
-Use a fresh output directory per invocation. For GitHub jobs omit `--run-id` so the receipt
-uses the run and attempt. Make the pinned Git object and Rust musl target available before
-running the source mode. Use `--offline` when Cargo dependencies are already cached.
-Retain the output directory containing the raw test and build logs and `receipt.json`.
-Save the console output with the receipt. Run `ci/acceptance.py verify-native-prior` with the
-same candidate directory and attempt to recheck the two fixture homes, original libtest
-result, session, SSH route, delivery replay and post-cleanup marker. Binary replay also takes
-the original `--prior-bin` and `--manifest`.
 
 ### Local CI Gate decision
 
@@ -524,9 +485,9 @@ python3 -B ci/gate_shadow.py --repo OWNER/REPO --pr NUMBER --head "$head" --base
 
 The decision records the exact candidate, plan digest, changed paths, bound pilot cases, and required
 workflows, jobs, runner labels, steps and artifacts. An IDE-only change gets an explicit empty product
-plan. Changes to product documentation that trigger CI acceptance still require the catalog job. Core
-changes select both pilots because the Extension runs Core. Core compatibility changes add the cold
-migration lane. Package and remote-sensitive paths select their applicable native checks. Shared policy
+plan. Changes to product documentation that trigger CI acceptance still require the catalog job. Framework
+changes select both pilots because the Extension runs the Framework. Package and remote-sensitive
+paths select their applicable native checks. Shared policy
 and unclassified paths select the complete matrix. Each required workflow must have a supported
 `pull_request` path filter that matches the diff. The decision names absent, unsupported or unmatched
 triggers as failures.
@@ -604,7 +565,11 @@ catalog error before any matrix evidence is considered.
 
 ### Expanded PR evidence review
 
-For a same-repository PR that schedules the complete Core and Extension matrix, run the
+The shadow catalog job compares pending totals with the base on PR and main push runs.
+It reports the IDs added to and removed from its pending obligations. An increase in that
+count or the loss of a binding for an existing ID fails the job.
+
+For a same-repository PR that schedules the complete Framework and Extension matrix, run the
 read-only review from a clean, reviewed checkout of the exact head or matching GitHub merge.
 
 ```sh
@@ -612,18 +577,17 @@ python3 -B ci/merge_review.py --repo OWNER/REPO --pr NUMBER --head "$head" --bas
     --output "$work/review"
 ```
 
-Review requires the current `main` base and GitHub test merge, the five first-attempt
-workflows, all 25 jobs on their expected runner labels, and successful execution and
+Review requires the current `main` base and GitHub test merge, the four first-attempt
+workflows, all 24 jobs on their expected runner labels, and successful execution and
 evidence steps. It checks the registered workflow and matching GitHub Actions check for
-each job. It preserves each base catalog obligation and exact existing binding. The catalog check
-also requires an executable binding for every new obligation against the base. Intentional
-catalog changes need separate review. It rehashes the original shadow and native archives,
-reconciles exact shadow case proofs, seven typed runtime case records and two release fixture
-case records, and verifies all six unsigned native package sets and their paired VSIX bytes.
-The Linux x64 old-engine editor log must show the same process on immediate reopen and the
-same session in a new process after the production close-last grace. Each of the 12 native
-editor logs must meet the reviewed 61-pass baseline and record completed profile cleanup.
-The verifier checks the current
+each job. The expanded review preserves each base catalog obligation and exact existing binding.
+It requires a binding for every new obligation and sends intentional catalog changes for separate
+review. It rehashes the original shadow and native archives, reconciles exact shadow case proofs,
+six typed runtime case records and two release fixture case records, and verifies all six unsigned
+native package sets and their paired VSIX bytes. The Linux x64 legacy editor log must show the
+same process on immediate reopen and the same session in a new process after the production
+close-last grace. Each of the 12 native editor logs must meet the reviewed 61-pass baseline and
+record completed profile cleanup. The verifier checks the current
 PR, base, workflows and local checkout again before reporting success. Drafts can be reviewed.
 
 This command is an operator review of already reviewed sources. Required status and App
@@ -641,7 +605,7 @@ It retains the first failed attempt and its failing step links even after a reru
 result replays both main shadow artifacts. The protected health lock and merge authority
 remain separate deployment steps.
 
-The Linux x64 old-engine PR job archives the complete release-script suite with its exact
+The Linux x64 legacy implementation PR job archives the complete release-script suite with its exact
 test names and the producing source and attempt. Its disposable GitHub and website
 transports prove corrupt and stale candidates cannot switch stable, and an interrupted
 promotion can finish with the same verified pointer and manifest.
@@ -672,17 +636,17 @@ map from name to SHA-256).
 
 | Check and log name | Inputs and observations |
 | --- | --- |
-| `core-install.log` | Run the tagged installer on the accepted Core archive in an isolated install root. Keep the installer's output followed by the installed Shell's `facade --version` output. |
+| `framework-install.log` | Run the tagged installer on the accepted Framework archive in an isolated install root. Keep the installer's output followed by the installed Shell's `facade --version` output. |
 | `install-pair.log` | Give `install-pair` the released native and Window Component VSIX files through `FACADE_IT_CURRENT`. Check activation and one New Agent effect in the clean profile. |
 | `upgrade-pair.log` | Give `upgrade-pair` the same candidate pair and the pinned prior pair through `FACADE_IT_RELEASED`. Check the workspace, Pins, Window Component and original sessions. |
 
-Run the existing installed-pair drivers with `FACADE_IT_ENGINE=old`,
+Run the existing installed-pair drivers with `FACADE_IT_IMPLEMENTATION=legacy`,
 `FACADE_IT_BUILT_IN=claude` and the same check name in `FACADE_IT_ONLY` and
 `FACADE_IT_EXPECT_DRIVER`. Their final lines report isolated profile cleanup and the exact
 driver result. Hash staged inputs before and after testing, record the actual exit status
 and retain the original logs alongside the package digests.
 
-Core transcript replay checks the install report and reported Shell version. For evidence
+Framework transcript replay checks the install report and the source-stamped Shell version. For evidence
 of installed program digests, a live fake Agent and installer refusal behavior on Linux x64,
 use the existing `ci/acceptance.py verify-native-install` with its typed receipt, original log,
 and exact tested archive and checksum sidecar. [Native install verifier](../ci/check_native_install.py)
@@ -705,7 +669,7 @@ Replay the record and check the approved producer and attestation before using i
 `signed-artifacts` case. Previous releases provide historical evidence only. The approval
 to publish and switch stable is a separate decision.
 
-### Native Core hot takeover QA
+### Native Framework hot takeover QA
 
 The Linux x64 replay takes two digest-pinned pairs of `facade` and `facade-mcp` from builds
 with compatible v1 APIs. To produce a source QA pair, build the current checkout and a
@@ -714,7 +678,7 @@ in the second worktree and update only the affected workspace package entries in
 Keep the source revision, version diff, build logs and a SHA-256 manifest from each build.
 
 ```sh
-# Run in core/ in both worktrees, with the pinned Rust toolchain.
+# Run in framework/ in both worktrees, with the pinned Rust toolchain.
 cargo build --locked --target x86_64-unknown-linux-gnu \
     -p facade -p facade-relay --bin facade --bin facade-mcp
 # In each target/x86_64-unknown-linux-gnu/debug directory, save these checksums.
@@ -735,9 +699,9 @@ handshakes and owned cleanup. Separate tests exercise same-version, older-versio
 disjoint offers. This is opt-in source QA. Actual incompatible builds and signed release
 artifacts have their own catalog rows.
 
-### Native Core Keeper recovery
+### Native Framework Keeper recovery
 
-Run the exact native Keeper recovery scenario on Linux x64 from a committed Core tree. Give each
+Run the exact native Keeper recovery scenario on Linux x64 from a committed Framework tree. Give each
 attempt its own output directory and run identity.
 
 ```sh
@@ -749,51 +713,51 @@ in the receipt. The scenario replaces the Keeper while the original Daemon and C
 checks exit on the original Attach watch. This is an opt-in local replay. The native acceptance row
 also requires matching evidence from the selected hosted lane when a candidate uses that lane.
 
-### Linux x64 packaged Core upgrade QA
+### Linux x64 packaged Framework upgrade QA
 
 Use two compatible archives, with a higher numeric version in the candidate. Obtain an
 independent SHA-256 pin for each archive and keep its original `SHA256SUMS` file. To use
 local QA builds, prepare the version-only pair described above and package both builds
-with `node core/scripts/package-core.mjs --target linux-x64 --bin-dir "$bin" --out-dir "$package"`.
+with `node framework/scripts/package-framework.mjs --target linux-x64 --bin-dir "$bin" --out-dir "$package"`.
 The fake CLI can come from a locked build of `facade-scenarios --bin facade-fakecli`.
 
 ```sh
 python3 -B ci/check_packaged_upgrade.py \
-    --prior-archive "$prior/facade-core-linux-x64.tar.gz" --prior-checksums "$prior/SHA256SUMS" \
+    --prior-archive "$prior/facade-framework-linux-x64.tar.gz" --prior-checksums "$prior/SHA256SUMS" \
     --prior-sha256 "$prior_sha256" \
-    --candidate-archive "$candidate/facade-core-linux-x64.tar.gz" --candidate-checksums "$candidate/SHA256SUMS" \
+    --candidate-archive "$candidate/facade-framework-linux-x64.tar.gz" --candidate-checksums "$candidate/SHA256SUMS" \
     --candidate-sha256 "$candidate_sha256" --fake-executable "$fake" \
     --output-dir "$work/packaged-upgrade" --run-id packaged-upgrade-local
 ```
 
-The shipped installer installs and activates both verified packages in the same disposable
+The shipped installer selects and activates each exact BUILD in the same disposable
 home. The candidate replaces the Daemon while the Keeper and fake CLI retain their process
-identities and the CLI retains its reported session. Both launchers resolve to the candidate
+identities and the CLI retains its reported session. Both home launchers resolve to the candidate
 programs. The old screen and receipt remain available, and the same CLI receives exactly one
 fresh submission. Retain each archive's provenance, the console output and `receipt.json`
 with the observed commands and scoped cleanup. This local QA evidence records a compatible
 packaged path. The release upgrade row requires a qualifying pinned prior and release candidate.
 
-### Native Core incompatible takeover QA
+### Native Framework incompatible build
 
 On unprivileged Linux x64 with OpenSSH server and pidfds, build the lower and higher
-Linux x64 pairs as described for hot takeover. Apply [the test Keeper API patch](../ci/fixtures/core-keeper-api2.patch)
+Linux x64 pairs as described for hot takeover. Apply [the test Keeper API patch](../ci/fixtures/framework-keeper-api2.patch)
 in the separate higher worktree before compiling. It leaves Daemon API 1 available so
 the higher Shell reaches the actual takeover call, and makes its Keeper negotiate API 2.
 Keep the source versions, the numeric and API diffs, the build logs and the archive checksums.
 
 ```sh
 # From the root of each build checkout, with a separate package directory.
-node core/scripts/package-core.mjs --target linux-x64 \
-    --bin-dir core/target/x86_64-unknown-linux-gnu/debug --out-dir "$package_dir"
+node framework/scripts/package-framework.mjs --target linux-x64 \
+    --bin-dir framework/target/x86_64-unknown-linux-gnu/debug --out-dir "$package_dir"
 # From the original checkout, build the stand-in CLI.
-(cd core && cargo build --locked --target x86_64-unknown-linux-gnu \
+(cd framework && cargo build --locked --target x86_64-unknown-linux-gnu \
     -p facade-scenarios --bin facade-fakecli)
 
 python3 -B ci/check_incompatible_build.py \
-    --lower-archive "$lower_dir/facade-core-linux-x64.tar.gz" --lower-manifest "$lower_dir/SHA256SUMS" \
-    --higher-archive "$higher_dir/facade-core-linux-x64.tar.gz" --higher-manifest "$higher_dir/SHA256SUMS" \
-    --fake-executable core/target/x86_64-unknown-linux-gnu/debug/facade-fakecli \
+    --lower-archive "$lower_dir/facade-framework-linux-x64.tar.gz" --lower-manifest "$lower_dir/SHA256SUMS" \
+    --higher-archive "$higher_dir/facade-framework-linux-x64.tar.gz" --higher-manifest "$higher_dir/SHA256SUMS" \
+    --fake-executable framework/target/x86_64-unknown-linux-gnu/debug/facade-fakecli \
     --output-dir "$work/incompatible" --run-id incompatible-local
 ```
 
@@ -801,8 +765,8 @@ The higher build negotiates Keeper API 2 in a fresh home. Its direct `daemon --t
 against the older live Keeper refuses the exact Agent before changing program or durable
 state. The original process, route, session and receipt stay usable. A repeat produces no
 new terminal input and a fresh message reaches the same CLI once. The separate installer
-check records the verified inactive version cache it can leave when activation fails and
-checks the active installation. This is local source QA for the native incompatible case.
+check verifies that refusal leaves the selected home's program files, launchers and state
+intact. This is local source QA for the native incompatible case.
 
 ### Native Extension Remote SSH
 
@@ -828,33 +792,35 @@ the actual workbench session, verify the original remote Agent identity and rest
 ownership, and settle an in-flight message exactly once before cleanup. This evidence is
 independent of the signed candidate replay. [Remote SSH workflow](../.github/workflows/extension-remote.yml)
 
-Each successful native PR package job records the VSIX pair, Core archive and checksum file
+Each successful native PR package job records the VSIX pair, Framework archive and checksum file
 digests with the checked-out revision, tree and GitHub attempt. Run
 `extension/scripts/native-package-evidence.mjs verify` on the downloaded `extension-*`
 artifacts to require an exact set of targets and recheck their bytes. The CI canary refuses a
 missing target, a wrong-version VSIX, a stale tree or attempt, and a changed archive even when
-its checksum file has also changed. It reads the Core archive's version and checks its executable
+its checksum file has also changed. It reads the Framework archive's version and checks its executable
 members byte for byte against the paired VSIX. This verification reads the unsigned PR artifacts.
 
-A clean checkout with a bundled editor can stage Core from a verified native package on the same
+A clean checkout with a bundled editor can stage Framework programs from a verified native package on the same
 source tree and host target. Supply the reviewed package directory and its pinned evidence digest.
 
 ```sh
-(cd extension && node scripts/build-it.mjs --core-package "$package_dir" \
-  --core-package-evidence-sha256 "$evidence_sha256")
+(cd extension && node scripts/build-it.mjs --framework-package "$package_dir" \
+  --framework-package-evidence-sha256 "$evidence_sha256")
 ```
 
-The builder checks the digest of `native-package-evidence.json` and matches the Core archive and
-VSIX program bytes before staging the fixture. For hosted reuse, verify the artifact against the
-intended producer run and attempt before passing its digest. This option has been replayed on Linux x64.
+The builder checks the digest of `native-package-evidence.json` and matches the Framework archive
+and VSIX program bytes and `VERSION` marker before staging the fixture. For hosted reuse, verify
+the artifact against the intended producer run and attempt before passing its digest. A Linux x64
+fixture comparison exercises staging and refusal before fixture writes.
 
-The manual [Intel macOS handoff canary](../.github/workflows/extension-intel-core-canary.yml) compares
-a Cargo control with the same Rust editor suite using a verified same-attempt package. Run both on
-one revision once the workflow is registered on the default branch. Compare the ordered editor
+The manual [Intel macOS handoff canary](../.github/workflows/extension-intel-framework-canary.yml) compares
+a Cargo control with the same Framework editor suite using a verified same-attempt package. Set
+`reuse_framework` to `true` for the package path. Run both on one revision once the workflow is
+registered on the default branch. Compare the ordered editor
 cases and cleanup, then compare full wall time including producer queue, packaging, handoff wait,
 artifact import and editor execution. [GitHub manual workflow events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)
 
-The Linux x64 Rust PR matrix closes every editor and removes the exact managed agents before
+The Linux x64 Framework PR matrix closes every editor and removes the exact managed agents before
 starting its next independent fixture. Only the previous fixture's daemon and Keeper idle waits
 overlap. The native supervisor joins those waits, checks both endpoints and verifies owned
 process cleanup. It reclaims the disposable scope on an interruption or a failed timeout.
@@ -866,12 +832,12 @@ same fixture using the pinned editor's executable identity. The final scoped sca
 checks all remaining processes and blocks a receipt when any are left.
 Verify requires results, original logs and a post-cleanup record for every
 planned case on the same source, plan, platform and run attempt. The editor tests identify the
-serving engine from the live host. The status describes the shadow pilot only. The existing product
+serving implementation from the live host. The status describes the shadow pilot only. The existing product
 jobs and merge and release rules continue to own their checks.
 
 VS Code `1.105.1` lacks the built-in Git extension's `Repository.createWorktree` method. The
-old engine's New Worktree success case needs an editor with that capability. The minimum-editor
-pilot exercises the old supervisor using a real linked checkout created by the fixture.
+legacy implementation's New Worktree success case needs an editor with that capability. The minimum-editor
+pilot exercises the legacy supervisor using a real linked checkout created by the fixture.
 
 Run from the repository root on Linux x64. Install the pinned Rust toolchain and musl target, the
 Node version from `extension/.nvmrc`, `musl-gcc`, `xvfb-run` and VS Code's runtime libraries.
@@ -885,9 +851,9 @@ python3 -B ci/acceptance.py catalog
 python3 -B ci/acceptance.py table > docs/CI-ACCEPTANCE.md
 work=$(mktemp -d)
 attempt=$(basename "$work")
-python3 -B ci/acceptance.py --run-id "$attempt" run --product core --output "$work/core"
+python3 -B ci/acceptance.py --run-id "$attempt" run --product framework --output "$work/framework"
 python3 -B ci/acceptance.py --run-id "$attempt" run --product extension --output "$work/extension"
-python3 -B ci/acceptance.py --run-id "$attempt" verify "$work/core/receipt.json" "$work/extension/receipt.json"
+python3 -B ci/acceptance.py --run-id "$attempt" verify "$work/framework/receipt.json" "$work/extension/receipt.json"
 ```
 
 To compare hosted runs, pass the full candidate head and each applicable workflow's run ID to
@@ -898,7 +864,7 @@ runner records its wait as queue time and records no runner usage. The eligibili
 steady-state SLO are defined above. [GitHub Actions jobs API](https://docs.github.com/en/rest/actions/workflow-jobs)
 
 ```sh
-python3 -B ci/github_timing.py --repo y5ez3g/facadecode --head "$head" "$shadow_run" "$core_run" "$extension_run"
+python3 -B ci/github_timing.py --repo y5ez3g/facadecode --head "$head" "$shadow_run" "$framework_run" "$extension_run"
 ```
 
 To retain a current candidate observation, supply the exact head and live `main` base of an open,

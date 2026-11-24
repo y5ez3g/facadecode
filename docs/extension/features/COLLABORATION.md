@@ -1,6 +1,6 @@
 # Collaboration
 
-Group 5 covers collaboration through the Orchestrator. Groups 1–4 retain the old-engine transition rules.
+Group 5 covers collaboration through the Orchestrator. Groups 1–4 retain the legacy implementation transition rules.
 
 Layer 3. Facade exposes operations, not a team workflow. [RULES-1](../RULES.md#1-agent-messages) owns delivery;
 [MCP](../engineering/MCP.md) owns schemas. This document owns visible messages, message records and collaboration
@@ -121,7 +121,7 @@ Use a native information notification that names the source agent with its short
 line, with Open Message, which opens the complete saved message (3.2), and Show Agent, which opens the agent's terminal
 (UX-1.2). Existing terminal visibility does not suppress an explicit call. Distinct calls remain distinct records.
 
-The old engine sends only to the sender's window and returns a delivery failure when it cannot hand off there.
+The legacy implementation sends only to the sender's window and returns a delivery failure when it cannot hand off there.
 Eligibility comes from explicit contact, without automatic escalation from an agent-to-agent error or inactivity.
 
 ### 2.4 Errors shown to the person

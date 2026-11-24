@@ -10,7 +10,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { Response, DaemonHelloParams, InspectResult, ScreenText } from '../../base/coreProtocol';
+import type { Response, DaemonHelloParams, InspectResult, ScreenText } from '../../base/frameworkProtocol';
 import { lineReader } from '../../base/lines';
 import { unspun } from '../../base/tabSpinner';
 import { isWindowIdentity, WINDOW_IDENTITY_COMMAND } from '../../base/windowIdentity';
@@ -19,15 +19,15 @@ import type { GuestCaller, RoutedCall } from '../../contract/network';
 import { TOOL_PROTOCOL } from '../../schema/protocol';
 import type { Result } from '../../schema/result';
 import { linesOf as cardLines } from '../detailLines';
-import { coreCall, coreSocket, localFolderIdentity, normalizeDriveLetter } from './editors';
+import { frameworkCall, frameworkSocket, localFolderIdentity, normalizeDriveLetter } from './editors';
 import { BUILT_IN_ADAPTERS } from '../../clis/catalog';
 import type { Card, PanelState } from '../../webview/protocol';
-import { observeAcceptanceEngine } from './acceptanceEngine';
+import { observeAcceptanceImplementation } from './acceptanceImplementation';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
-/** Whether the windows run on the Rust engine: Facade's tools are core's, with core's arguments and results. */
-const RUST = process.env.FACADE_IT_ENGINE === 'rust';
-const DELIVERY_WAIT = RUST ? { wait_for: 'delivery', timeout_seconds: 30 } : {};
+/** Whether the windows run on the Framework: Facade's tools are framework's, with framework's arguments and results. */
+const FRAMEWORK = process.env.FACADE_IT_IMPLEMENTATION === 'framework';
+const DELIVERY_WAIT = FRAMEWORK ? { wait_for: 'delivery', timeout_seconds: 30 } : {};
 const CLI = process.env.FACADE_IT_CLI ?? 'claude';
 /** The label of the other editor window of a cross-window run, and its folder: none in a run of one window. */
 const PEER = process.env.FACADE_IT_PEER;
@@ -146,7 +146,7 @@ async function personAgent(): Promise<{ readonly card: Card; readonly alias: str
 	// The picker shows once its CLIs are found: accepted as soon as it is there, however long that takes
 	const card = await until('a new card', async () => {
 		const mine = (await state()).cards.find(each => !before.has(each.runId) && !cardLines(each).some(line => line.startsWith('Started by')));
-		if (mine && (RUST ? mine.alias : /#a\d+/.test(cardLines(mine).join(' ')))) {
+		if (mine && (FRAMEWORK ? mine.alias : /#a\d+/.test(cardLines(mine).join(' ')))) {
 			return mine;
 		}
 		if (!mine) {
@@ -154,17 +154,17 @@ async function personAgent(): Promise<{ readonly card: Card; readonly alias: str
 		}
 		return undefined;
 	});
-	const address = RUST ? await until(`${card.name} in the shared roster`, async () => {
-		const { agents } = await coreCall(process.env.FACADE_HOME!, 'agent.list', {});
+	const address = FRAMEWORK ? await until(`${card.name} in the shared roster`, async () => {
+		const { agents } = await frameworkCall(process.env.FACADE_HOME!, 'agent.list', {});
 		return agents.find(row => row.type === 'managed' && row.name === card.name && row.reference.agent_id === card.alias)?.address;
 	}) : cardLines(card).join(' ').match(/#a\d+/)![0];
-	const alias = RUST ? fakeAlias(address) : address;
+	const alias = FRAMEWORK ? fakeAlias(address) : address;
 	// Its server answered: the agent's Facade tools are there
 	await until(`${alias}'s Facade server`, () => linesOf(alias).some(line => line.step === 'tools/list') ? true : undefined)
 		.catch(async (error: Error) => {
-			if (RUST && CLI === 'agy') {
-				try { await rustAgentRecord(alias, address); }
-				catch (diagnostic) { console.error(`Rust agy startup diagnostics unavailable: ${diagnostic}`); }
+			if (FRAMEWORK && CLI === 'agy') {
+				try { await frameworkAgentRecord(alias, address); }
+				catch (diagnostic) { console.error(`Framework agy startup diagnostics unavailable: ${diagnostic}`); }
 				throw error;
 			}
 			throw new Error(`${error.message}\n${startRecord(alias)}`);
@@ -173,8 +173,8 @@ async function personAgent(): Promise<{ readonly card: Card; readonly alias: str
 }
 
 /** Capture the current state of a fixture agent after an MCP failure, through its existing Orchestrator. */
-async function rustAgentRecord(alias: string, address: string): Promise<void> {
-	console.error(`Rust MCP diagnostics ${JSON.stringify({ started_at: new Date().toISOString(), alias, platform: process.platform, arch: process.arch })}`);
+async function frameworkAgentRecord(alias: string, address: string): Promise<void> {
+	console.error(`Framework MCP diagnostics ${JSON.stringify({ started_at: new Date().toISOString(), alias, platform: process.platform, arch: process.arch })}`);
 	try {
 		const configured = process.env.FACADE_HOME;
 		if (!configured || !RECORD || !path.isAbsolute(configured) || !path.isAbsolute(RECORD) || fakeAlias(address) !== alias) {
@@ -194,7 +194,7 @@ async function rustAgentRecord(alias: string, address: string): Promise<void> {
 			const requests = [{ method: 'hello', params: hello },
 				{ method: 'call', params: { op: 'agent.inspect', args: { target: address } } },
 				{ method: 'call', params: { op: 'agent.screen', args: { target: address, lines: 400 } } }];
-			const socket = net.createConnection(coreSocket(configured));
+			const socket = net.createConnection(frameworkSocket(configured));
 			const timer = setTimeout(() => socket.destroy(new Error('diagnostic connection exceeded 5 seconds')), 5_000);
 			try {
 				await new Promise<void>((resolve, reject) => {
@@ -227,21 +227,21 @@ async function rustAgentRecord(alias: string, address: string): Promise<void> {
 					}, reject));
 				});
 			} finally { clearTimeout(timer); socket.destroy(); }
-		} catch (error) { console.error(`remaining core diagnostics unavailable: ${error}`); }
-		for (const [file, base64] of [[path.join(home, 'core', 'logs', 'daemon.log'), false], [path.join(home, 'core', 'logs', 'keeper.log'), false],
+		} catch (error) { console.error(`remaining framework diagnostics unavailable: ${error}`); }
+		for (const [file, base64] of [[path.join(home, 'framework', 'logs', 'daemon.log'), false], [path.join(home, 'framework', 'logs', 'keeper.log'), false],
 			[`${record}.stdin.${alias}`, false], [`${record}.bytes.${alias}`, true], [`${record}.panel.${alias}`, false]] as const) {
 			try {
 				if (fs.realpathSync(file) !== file) { throw new Error('diagnostic file resolves outside its expected run path'); }
 				console.error(`${file}${base64 ? ' (base64)' : ''} at ${new Date().toISOString()}:\n${fs.readFileSync(file).toString(base64 ? 'base64' : 'utf8')}`);
 			} catch (error) { console.error(`${file} unavailable: ${error}`); }
 		}
-	} finally { console.error(`Rust MCP diagnostics ended_at=${new Date().toISOString()}`); }
+	} finally { console.error(`Framework MCP diagnostics ended_at=${new Date().toISOString()}`); }
 }
 
 async function expectSent(receipt: { readonly status?: string } | undefined, alias: string, address?: string): Promise<void> {
 	if (address && receipt?.status !== 'success') {
-		try { await rustAgentRecord(alias, address); }
-		catch (error) { console.error(`Rust MCP delivery diagnostics unavailable: ${error}`); }
+		try { await frameworkAgentRecord(alias, address); }
+		catch (error) { console.error(`Framework MCP delivery diagnostics unavailable: ${error}`); }
 	}
 	assert.strictEqual(receipt?.status, 'success', JSON.stringify(receipt));
 }
@@ -250,7 +250,7 @@ async function expectSent(receipt: { readonly status?: string } | undefined, ali
 function startRecord(alias: string): string {
 	const last = (file: string, mine: (line: string) => boolean = () => true) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(line => line && mine(line)).slice(-20).join('\n') : '(none)');
 	const named = new RegExp(`${alias}(?!\\d)`);
-	return [`daemon.log:\n${last(path.join(process.env.FACADE_HOME ?? '', 'core', 'logs', 'daemon.log'), line => named.test(line))}`,
+	return [`daemon.log:\n${last(path.join(process.env.FACADE_HOME ?? '', 'framework', 'logs', 'daemon.log'), line => named.test(line))}`,
 		`${alias}.panel:\n${last(`${RECORD}.panel.${alias}`)}`, `${alias}.stdin:\n${last(`${RECORD}.stdin.${alias}`)}`].join('\n');
 }
 
@@ -278,24 +278,24 @@ const after = (args: readonly string[], option: string) => args[args.indexOf(opt
  */
 function assertTools(alias: string): void {
 	const { cwd, args, env } = argsOf(alias);
-	if (RUST && CLI !== 'claude') {
-		// Core wires each CLI its own way (a hook, a plugin, an extension, per-start overrides): what every one has is core's relay or a file of
+	if (FRAMEWORK && CLI !== 'claude') {
+		// Framework wires each CLI its own way (a hook, a plugin, an extension, per-start overrides): what every one has is framework's relay or a file of
 		// the run's own folder in what the CLI was given
 		const given = `${args.join('\n')}\n${Object.values(env).join('\n')}\n${[...args.entries()].flatMap(([at, arg]) => ['-e', '--settings'].includes(args[at - 1] ?? '') && fs.existsSync(arg) ? [fs.readFileSync(arg, 'utf8')] : []).join('\n')}`;
 		// The run's folder with the system's separator: backslashes on Windows
-		assert.ok(/facade-mcp|[\\/]core[\\/]runs[\\/]/.test(given), `${CLI} is given core's relay or its run's files: ${args.join(' ')}`);
+		assert.ok(/facade-mcp|[\\/]framework[\\/]runs[\\/]/.test(given), `${CLI} is given framework's relay or its run's files: ${args.join(' ')}`);
 		return;
 	}
 	const routes = (variables: { readonly [name: string]: string }) => ['FACADE_PTYD', 'FACADE_RUN'].every(name => typeof variables[name] === 'string' && variables[name] !== '');
 	switch (CLI) {
 		case 'claude': {
 			const server = JSON.parse(fs.readFileSync(after(args, '--mcp-config'), 'utf8')).mcpServers.facade;
-			if (RUST) {
+			if (FRAMEWORK) {
 				assert.deepStrictEqual(Object.keys(server.env), ['FACADE_HOME']);
 				assert.strictEqual(server.env.FACADE_HOME, process.env.FACADE_HOME);
 				assert.ok(path.isAbsolute(server.command));
 				assert.ok(server.args[0] === '--run-credential' && typeof server.args[1] === 'string' && server.args[1].length > 0,
-					'core wrote the actual run credential into the private MCP configuration');
+					'framework wrote the actual run credential into the private MCP configuration');
 			} else {
 				assert.deepStrictEqual(Object.keys(server.env).sort(), ['ELECTRON_RUN_AS_NODE', 'FACADE_AGENT', 'FACADE_LAUNCH_CONTEXT', 'FACADE_PTYD', 'FACADE_RUN']);
 				assert.strictEqual(`#${server.env.FACADE_AGENT.replace(/^#/, '')}`, alias, 'the MCP child receives its own short ID explicitly');
@@ -358,15 +358,15 @@ function block(id: string, from: string, window: string, text: string): RegExp {
 	return new RegExp(String.raw`📨 Message from [^\n]*\(${escaped(from)}\) · ${escaped(id)}(?: · From ${escaped(label)})?\n${escaped(text)}$`);
 }
 
-/** The discovery and start steps for each engine. The Rust address goes back into tool calls. */
-const discover = (): Step => RUST
+/** The discovery and start steps for each implementation. The Framework address goes back into tool calls. */
+const discover = (): Step => FRAMEWORK
 	? { tool: 'list_agents', arguments: {} }
 	: { tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } };
-const startChild = (name: string, prompt: string): Step => RUST
+const startChild = (name: string, prompt: string): Step => FRAMEWORK
 	? { tool: 'start_agent', arguments: { name, cli: CLI, prompt }, save: { child: 'data.id' } }
 	: { tool: 'start_agent', arguments: { name, window_id: '$window', location_id: '$location', cli: CLI, prompt }, save: { child: 'data.agent_id', childAlias: 'data.agent_id' } };
 /** The alias the fake CLI uses for evidence about the child. */
-const childOf = (started: { data: { id?: string; agent_id?: string } }): string => RUST ? fakeAlias(started.data.id!) : started.data.agent_id!;
+const childOf = (started: { data: { id?: string; agent_id?: string } }): string => FRAMEWORK ? fakeAlias(started.data.id!) : started.data.agent_id!;
 
 const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'];
 
@@ -378,10 +378,10 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 	});
 
 	test('two helpers appear in their creator\'s workspace and reply through MCP', async function () {
-		if (!RUST) { this.skip(); }
+		if (!FRAMEWORK) { this.skip(); }
 		this.timeout(120_000);
 		const { card, alias, address } = await personAgent();
-		observeAcceptanceEngine(this, card);
+		observeAcceptanceImplementation(this, card);
 		assertTools(alias);
 		const lines = linesOf(alias);
 		const initialize = lines.find(line => line.step === 'initialize')?.answer?.result;
@@ -475,24 +475,24 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 	});
 
 	// MCP-7.1, RULES-6.7
-	test('cancels the original pending Rust MCP send on its relay without a paste or inbox entry', async function () {
-		if (!RUST || CLI !== 'claude') { this.skip(); }
+	test('cancels the original pending Framework MCP send on its relay without a paste or inbox entry', async function () {
+		if (!FRAMEWORK || CLI !== 'claude') { this.skip(); }
 		this.timeout(120_000);
 		const sender = await personAgent();
 		const agents = [sender];
 		try {
-			observeAcceptanceEngine(this, sender.card);
+			observeAcceptanceImplementation(this, sender.card);
 			assertTools(sender.alias);
 			const recipient = await personAgent();
 			agents.push(recipient);
 			assertTools(recipient.alias);
-			const draft = 'Held Rust MCP draft';
+			const draft = 'Held Framework MCP draft';
 			const pasted = await script(sender.alias, [
 				{ tool: 'type_text', arguments: { agent: recipient.address, text: draft, enter: false } },
 			]);
 			assert.strictEqual(pasted.content('type_text')?.status, 'success');
-			const inspect = async () => (await coreCall(process.env.FACADE_HOME!, 'agent.inspect', { target: recipient.address })).input;
-			await until('Core to recognize the recipient draft', async () => (await inspect()).state === 'draft' || undefined, 10_000);
+			const inspect = async () => (await frameworkCall(process.env.FACADE_HOME!, 'agent.inspect', { target: recipient.address })).input;
+			await until('the Framework to recognize the recipient draft', async () => (await inspect()).state === 'draft' || undefined, 10_000);
 			const rawBytes = () => fs.readFileSync(`${RECORD}.bytes.${recipient.alias}`);
 			const before = rawBytes();
 			assert.ok(before.includes(draft), 'the recipient CLI received the controlled draft');
@@ -540,7 +540,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			assert.ok(submissions[0].includes(followUp));
 			assert.ok(!rawBytes().includes(cancelledText), 'clearing the draft did not deliver the cancelled paste');
 			assert.deepStrictEqual((await inbox()).map(message => message.text), [followUp]);
-			console.log('Rust MCP cancellation ' + JSON.stringify({ relay, requestId, messageNumber, error: -32800,
+			console.log('Framework MCP cancellation ' + JSON.stringify({ relay, requestId, messageNumber, error: -32800,
 				recipient: recipient.address, pastedBytes: 0, inboxEntries: 0, followUpSubmissions: 1 }));
 		} finally {
 			for (const { card } of agents.reverse()) {
@@ -551,9 +551,9 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 
 	test('its CLI gets the Facade server; it lists, starts a child with a first task, reads and types into it and stops it', async function () {
 		this.timeout(120_000);
-		if (RUST) { this.skip(); }
+		if (FRAMEWORK) { this.skip(); }
 		const { card, alias } = await personAgent();
-		observeAcceptanceEngine(this, card);
+		observeAcceptanceImplementation(this, card);
 		assertTools(alias);
 		const lines = linesOf(alias);
 		const initialize = lines.find(line => line.step === 'initialize')?.answer?.result;
@@ -658,8 +658,8 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 	});
 
-	test('the old supervisor serves editor terminal input and starts an MCP child in a linked worktree', async function () {
-		if (RUST || CLI !== 'claude') { this.skip(); }
+	test('the legacy supervisor serves editor terminal input and starts an MCP child in a linked worktree', async function () {
+		if (FRAMEWORK || CLI !== 'claude') { this.skip(); }
 		this.timeout(90_000);
 		const folder = vscode.workspace.workspaceFolders![0].uri.fsPath;
 		const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 10_000 }).trim();
@@ -675,7 +675,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const { card, alias } = await personAgent();
 		let child: string | undefined;
 		try {
-			observeAcceptanceEngine(this, card);
+			observeAcceptanceImplementation(this, card);
 			assertTools(alias);
 			const component = vscode.extensions.getExtension('facade.facadecode-window');
 			assert.ok(component?.isActive, 'the local Window Component activates in the workspace');
@@ -695,7 +695,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			assert.ok(terminal, 'the creator has its editor terminal');
 			const text = 'worktree fixture input';
 			terminal.sendText(text, false);
-			await until('the old supervisor terminal input at the fake CLI', () => {
+			await until('the legacy supervisor terminal input at the fake CLI', () => {
 				const bytes = `${RECORD}.bytes.${alias}`;
 				return fs.existsSync(bytes) && fs.readFileSync(bytes).includes(Buffer.from(text)) || undefined;
 			});
@@ -723,7 +723,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			assert.strictEqual(normalizeDriveLetter(fs.realpathSync(argsOf(child).cwd)), normalizeDriveLetter(fs.realpathSync(checkout)));
 			const screen = ran.content('read_screen');
 			assert.strictEqual(screen?.status, 'success', JSON.stringify(screen));
-			assert.ok(JSON.stringify(screen).includes(prompt), 'the selected old supervisor child drew its prompt');
+			assert.ok(JSON.stringify(screen).includes(prompt), 'the selected legacy supervisor child drew its prompt');
 		} finally {
 			if (child) { await closePublicAgent(child); }
 			await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
@@ -733,7 +733,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 	test('messages: one paste and Enter into the input box; a draft there is waited for, never typed over, and the send fails within its thirty seconds, nothing coming after; an input it cannot read fails the same; reading delivers it once', async function () {
 		this.timeout(180_000);
 		const { card, alias } = await personAgent();
-		observeAcceptanceEngine(this, card);
+		observeAcceptanceImplementation(this, card);
 		const window = vscode.workspace.name!;
 		const first = await script(alias, [
 			discover(),
@@ -746,7 +746,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const childAlias = childOf(started);
 		// A first task that goes in after startup holds the agent's other messages until it went in (RULES-1.10): the start's one later
 		// result, its outcome, says when an ordinary message can go in (RULES-1.4)
-		if (!RUST && started.data.prompt?.path === 'post_start') {
+		if (!FRAMEWORK && started.data.prompt?.path === 'post_start') {
 			await script(alias, [{ tool: 'read_messages', arguments: { all: true }, until: 'after startup', wait: 30_000 }]);
 		}
 		const greeting = 'Hello from your creator.\nTwo lines, one message.';
@@ -760,15 +760,15 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		];
 		const askHuman: Step = { tool: 'send_message', arguments: { to: '#human', text: 'Please look at this.' } };
 
-		if (RUST) {
+		if (FRAMEWORK) {
 			const drafted = await script(alias, drafting);
 			const delivered = drafted.content('send_message');
 			await expectSent(delivered, childAlias, started.data.id);
 			assert.strictEqual(delivered.data.delivery, 'typed_into_input', JSON.stringify(delivered));
 			assert.ok(received(childAlias).some(each => each.includes(greeting)), `its box took the whole message: ${JSON.stringify(received(childAlias))}`);
 			assert.ok(JSON.stringify(drafted.content('read_screen')).includes('Two lines, one message.'), 'its screen shows the message');
-			const inspectInput = async () => (await coreCall(process.env.FACADE_HOME!, 'agent.inspect', { target: started.data.id })).input;
-			const draft = await until('Core to recognize the listener’s draft', async () => {
+			const inspectInput = async () => (await frameworkCall(process.env.FACADE_HOME!, 'agent.inspect', { target: started.data.id })).input;
+			const draft = await until('Framework to recognize the listener’s draft', async () => {
 				const input = await inspectInput();
 				return input.state === 'draft' ? input : undefined;
 			}, 10_000);
@@ -783,16 +783,16 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			]);
 			const held = sending.content('send_message');
 			if (held?.status === 'failure' && held.reason === 'unavailable' && held.data?.unavailable?.execution === 'outcome_unknown') {
-				console.error(`Rust MCP blocked send ${JSON.stringify({ elapsed_ms: sending.elapsedMs('send_message'), envelope: held })}`);
+				console.error(`Framework MCP blocked send ${JSON.stringify({ elapsed_ms: sending.elapsedMs('send_message'), envelope: held })}`);
 				try {
 					const after = rawBytes();
-					console.error(`Rust MCP blocked input ${JSON.stringify({
+					console.error(`Framework MCP blocked input ${JSON.stringify({
 						before: { bytes_base64: before.toString('base64'), submissions: submitted },
 						after: { bytes_base64: after.toString('base64'), submissions: received(childAlias) },
 						bytes_equal: before.equals(after)
 					})}`);
-				} catch (error) { console.error(`Rust MCP blocked input diagnostics unavailable: ${error}`); }
-				await rustAgentRecord(childAlias, started.data.id).catch(error => console.error(`Rust MCP blocked send diagnostics unavailable: ${error}`));
+				} catch (error) { console.error(`Framework MCP blocked input diagnostics unavailable: ${error}`); }
+				await frameworkAgentRecord(childAlias, started.data.id).catch(error => console.error(`Framework MCP blocked send diagnostics unavailable: ${error}`));
 			}
 			const human = sending.content('send_message', 1);
 			assert.strictEqual(held?.status, 'failure', JSON.stringify(held));
@@ -806,7 +806,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			assert.strictEqual(human?.status, 'failure', JSON.stringify(human));
 			assert.strictEqual(human?.data?.window_delivery, undefined);
 			assert.deepStrictEqual(rawBytes(), before, 'no terminal bytes reached the listener during the blocked send');
-			assert.strictEqual((await inspectInput()).state, 'draft', 'Core still sees the original draft');
+			assert.strictEqual((await inspectInput()).state, 'draft', 'Framework still sees the original draft');
 			const cleared = await script(alias, [
 				{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } },
 				{ tool: 'read_screen', arguments: { agent: '$child' }, untilAbsent: 'half-written' }
@@ -823,7 +823,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			const texts = (inbox.data.messages as { text: string }[]).map(message => message.text);
 			assert.ok(texts.includes(greeting), 'the listener’s history contains the delivered message');
 			assert.ok(!texts.includes(forbidden), 'the withdrawn message is absent from the listener’s history');
-			console.log(`      Rust ${CLI} draft: ${draft.state}, ${held.reason}, zero bytes while blocked, only Ctrl+U afterward, no submission or inbox entry`);
+			console.log(`      Framework ${CLI} draft: ${draft.state}, ${held.reason}, zero bytes while blocked, only Ctrl+U afterward, no submission or inbox entry`);
 			// An input its reader cannot recognize: the send fails within its thirty seconds
 			fs.writeFileSync(`${RECORD}.quirks.${childAlias}`, JSON.stringify({ garble: true }));
 			const third = (await script(alias, [
@@ -905,10 +905,10 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 	});
 
-	test('a slow submission is pasted once and a missed Enter follows the engine\'s delivery rule', async function () {
+	test('a slow submission is pasted once and a missed Enter follows the implementation\'s delivery rule', async function () {
 		this.timeout(120_000);
 		const { card, alias } = await personAgent();
-		observeAcceptanceEngine(this, card);
+		observeAcceptanceImplementation(this, card);
 		const first = await script(alias, [
 			discover(),
 			startChild('Slow', 'Wait for my messages.'),
@@ -925,9 +925,9 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			const before = input().length;
 			fs.writeFileSync(quirks, JSON.stringify(quirk));
 			const sent = (await script(alias, [{ tool: 'send_message', arguments: { to: '$child', text, ...DELIVERY_WAIT } }])).content('send_message');
-			await expectSent(sent, childAlias, RUST ? started.data.id : undefined);
+			await expectSent(sent, childAlias, FRAMEWORK ? started.data.id : undefined);
 			await new Promise(resolve => setTimeout(resolve, 5_000));
-			const missed = RUST && 'swallow' in quirk;
+			const missed = FRAMEWORK && 'swallow' in quirk;
 			assert.strictEqual(input().slice(before).split(text).length - 1, 1, 'the message was pasted once');
 			assert.strictEqual(once(text), missed ? 0 : 1, JSON.stringify(received(childAlias)));
 			if (missed) {
@@ -936,11 +936,11 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			}
 			fs.rmSync(quirks, { force: true });
 		}
-		if (RUST) {
+		if (FRAMEWORK) {
 			const stopped = await script(alias, [{ tool: 'stop_agent', arguments: { agent: '$child' } }]);
 			const receipt = stopped.content('stop_agent');
 			if (receipt?.status !== 'success') {
-				await rustAgentRecord(childAlias, started.data.id).catch(error => console.error(`Rust MCP stop diagnostics unavailable: ${error}`));
+				await frameworkAgentRecord(childAlias, started.data.id).catch(error => console.error(`Framework MCP stop diagnostics unavailable: ${error}`));
 			}
 			assert.strictEqual(receipt?.status, 'success', JSON.stringify(receipt));
 		} else {
@@ -957,10 +957,10 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 	});
 
 	test('the Orchestrator starts in the other workspace folder and shows the child in its creator\'s workspace', async function () {
-		if (!RUST) { this.skip(); }
+		if (!FRAMEWORK) { this.skip(); }
 		this.timeout(120_000);
 		const { alias, card } = await personAgent();
-		observeAcceptanceEngine(this, card);
+		observeAcceptanceImplementation(this, card);
 		const folder = PEER_DIR;
 		assert.ok(folder && normalizeDriveLetter(folder) !== normalizeDriveLetter(vscode.workspace.workspaceFolders![0].uri.fsPath), 'the peer has a distinct folder');
 		const ran = await script(alias, [
@@ -988,11 +988,11 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		await vscode.commands.executeCommand('facade.deleteAgent', { run_id: card.runId });
 	});
 
-	if (!RUST && !PEER_ELSEWHERE) {
+	if (!FRAMEWORK && !PEER_ELSEWHERE) {
 		test('the actual Window Component routes to the exact peer and refuses stale sessions and malformed calls', async function () {
 			this.timeout(90_000);
 			const { card, alias } = await personAgent();
-			observeAcceptanceEngine(this, card);
+			observeAcceptanceImplementation(this, card);
 			let child: { run: string; pid: number } | undefined;
 			try {
 				const session = vscode.env.sessionId;
@@ -1107,9 +1107,9 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 
 	test('it lists the other window, starts an agent there, messages it, reads its screen and stops it', async function () {
 		this.timeout(120_000);
-		if (RUST) { this.skip(); }
+		if (FRAMEWORK) { this.skip(); }
 		const { card, alias } = await personAgent();
-		observeAcceptanceEngine(this, card);
+		observeAcceptanceImplementation(this, card);
 		const window = vscode.workspace.name!;
 		// Listed and available: a window that is still starting is listed as unavailable
 		const found = await script(alias, [{ tool: 'list_agents', arguments: {}, until: `"label":${JSON.stringify(PEER)},"environment"`, wait: 30_000 }]);

@@ -7,7 +7,7 @@ import inventory_extension
 
 ROOT = Path(__file__).resolve().parent.parent
 UI = inventory_extension.UI
-RUST_NEW_AGENT = "extension/vscode-rust/command/facade.newAgent"
+FRAMEWORK_NEW_AGENT = "extension/vscode-framework/command/facade.newAgent"
 NEW_AGENT_REGISTRATION = "vscode.commands.registerCommand(COMMANDS.newAgent, () => pickers.newAgent())"
 
 
@@ -24,28 +24,28 @@ class ExtensionCommandInventoryTests(unittest.TestCase):
 
         return patch.object(inventory_extension, "_read", side_effect=changed)
 
-    def test_whitespace_preserves_rust_registration_of_shared_command(self):
+    def test_whitespace_preserves_framework_registration_of_shared_command(self):
         expected = inventory_extension.discover(ROOT)
         with self.mutate_registration(NEW_AGENT_REGISTRATION.replace("(", "( ", 1)):
             actual = inventory_extension.discover(ROOT)
-        self.assertEqual(actual[RUST_NEW_AGENT], UI)
+        self.assertEqual(actual[FRAMEWORK_NEW_AGENT], UI)
         self.assertEqual(actual, expected)
 
-    def test_literal_bracket_member_preserves_rust_registration(self):
+    def test_literal_bracket_member_preserves_framework_registration(self):
         expected = inventory_extension.discover(ROOT)
         for member in ("['registerCommand']", '[ "registerCommand" ]'):
             with self.subTest(member=member), self.mutate_registration(
                 NEW_AGENT_REGISTRATION.replace(".registerCommand", member)
             ):
                 actual = inventory_extension.discover(ROOT)
-                self.assertEqual(actual[RUST_NEW_AGENT], UI)
+                self.assertEqual(actual[FRAMEWORK_NEW_AGENT], UI)
                 self.assertEqual(actual, expected)
 
     def test_unfamiliar_serving_registration_is_rejected(self):
         changed = NEW_AGENT_REGISTRATION.replace("COMMANDS.newAgent", "commandForNewAgent()")
         with self.mutate_registration(changed):
             with self.assertRaisesRegex(
-                ValueError, r"ui/commands/index\.ts: unrecognized rust serving command registration .*commandForNewAgent"
+                ValueError, r"ui/commands/index\.ts: unrecognized framework serving command registration .*commandForNewAgent"
             ):
                 inventory_extension.discover(ROOT)
 

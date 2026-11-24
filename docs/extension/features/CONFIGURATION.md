@@ -1,6 +1,6 @@
 # Configuration
 
-Group 7 covers the Orchestrator-backed editor. Groups 1–6 retain the old-engine settings, examples and migration
+Group 7 covers the Orchestrator-backed editor. Groups 1–6 retain the legacy implementation settings, examples and migration
 rules for the transition.
 
 Facade reads its settings from one file: `facade.json` in the Facade home. Edit it to choose how agents start, add another
@@ -83,7 +83,7 @@ reason. Effort suggestions are not an enum: another nonblank string is valid.
 
 For example, with Facade: Home set to `/tmp/facade-test`, Edit in facade.json opens `/tmp/facade-test/facade.json`.
 
-Below it, **Facade: Rust Engine** (`facade.rustEngine`, machine scope) is `auto`, the default, or `off`: which engine runs
+Below it, **Facade: Framework** (`facade.framework`, machine scope) is `auto`, the default, or `off`: which implementation runs
 a window's agents (ARCHITECTURE-1.4). A change takes effect when the window reloads, offered as Facade: Home's is. A
 remote window reads the remote machine's value, so turning it on locally leaves remote windows as they are.
 
@@ -605,7 +605,7 @@ proof of a successful model request (CLIS-5).
 | `custom` | The program's own arguments and environment | `"args": ["--config", "/path/to/program.json"]` |
 
 Facade preserves native user settings and merges the integration pieces under CLIS-3.4. The only lasting changes
-it writes into a CLI's own global settings are folder-trust entries, as CLIS-3.3 defines for the old engine.
+it writes into a CLI's own global settings are folder-trust entries, as CLIS-3.3 defines for the legacy implementation.
 Project integration files have CLIS-2.2's ownership and cleanup rules. Neither API-key confirmation nor Claude's
 first-use bypass prompt is silently accepted. Antigravity's newer sandbox option has no newly promised mapping here;
 CLIS-1.3 states the supported mapping.
@@ -706,10 +706,9 @@ to reset to product defaults, keep the file and write `{}` instead of deleting i
 **Edit the machine's `facade.json` directly.**
 
 The Orchestrator uses `FACADE_HOME`, defaulting to `~/.facade`. Open Settings opens the machine's
-`facade.json` at the settings path returned by the Orchestrator's status. `facade.home` applies to the old engine
+`facade.json` at the settings path returned by the Orchestrator's status. `facade.home` applies to the legacy implementation
 during the transition.
-YOLO, the name pool and CLI entries appear in `facade.json`. Mark any editor settings still used by the old
-engine for that engine.
+YOLO, the name pool and CLI entries appear in `facade.json`. Mark editor settings that still apply to the legacy implementation.
 A malformed section affects starts that use it and the error points to its source. To find the settings file on another
 machine, connect over SSH and run `facade status` there.
 

@@ -4,14 +4,13 @@ on:
   pull_request:
     paths: &acceptance-paths
       - 'ci/**'
-      - 'core/**'
+      - 'framework/**'
       - 'extension/**'
       - 'docs/CI.md'
       - 'docs/CI-ACCEPTANCE.md'
-      - 'docs/core/**'
+      - 'docs/framework/**'
       - 'docs/extension/**'
-      - '.github/workflows/core-check.yml'
-      - '.github/workflows/core-compatibility.yml'
+      - '.github/workflows/framework-check.yml'
       - '.github/workflows/extension-check.yml'
       - '.github/workflows/extension-remote.yml'
       - '.github/workflows/ci-acceptance.yml'
@@ -44,7 +43,7 @@ jobs:
       - name: Select runtime pilots
         id: scope
         run: |
-          products='["core","extension"]'
+          products='["framework","extension"]'
           if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
             products=$(python3 -B ci/acceptance.py scope --base 'HEAD^1')
           fi
@@ -79,7 +78,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install the pinned Rust toolchain
-        working-directory: core
+        working-directory: framework
         run: rustup toolchain install
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: matrix.product == 'extension'
@@ -93,9 +92,9 @@ jobs:
         with:
           path: extension/.vscode-test/vscode-1.105.1-linux-x64.tar.gz
           key: facade-editor-linux-x64-${{ hashFiles('ci/editor_archive.py') }}
-      - name: Install Linux editor and Core build prerequisites
+      - name: Install Linux editor and Framework build prerequisites
         if: matrix.product == 'extension'
-        working-directory: core
+        working-directory: framework
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools xvfb xauth libgtk-3-0t64 libnss3 libasound2t64
@@ -139,7 +138,7 @@ jobs:
         run: |
           scope=()
           case "$PRODUCTS" in
-            '["core","extension"]') ;;
+            '["framework","extension"]') ;;
             '["extension"]') scope=(--product extension) ;;
             *) echo "Unrecognized runtime pilot selection $PRODUCTS" >&2; exit 1 ;;
           esac

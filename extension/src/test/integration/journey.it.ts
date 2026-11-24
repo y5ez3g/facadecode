@@ -14,9 +14,9 @@ import type { PanelState } from '../../webview/protocol';
 import type { Pin } from '../../core/ports';
 import { linesOf } from '../detailLines';
 import { unspun } from '../../base/tabSpinner';
-import { observeAcceptanceEngine } from './acceptanceEngine';
-import { coreSocket } from './editors';
-import { fixturePid, oldStopResult, pidGone, windowsProcessStart } from './journeyProcess';
+import { observeAcceptanceImplementation } from './acceptanceImplementation';
+import { frameworkSocket } from './editors';
+import { fixturePid, legacyStopResult, pidGone, windowsProcessStart } from './journeyProcess';
 import { RESUME_PICKER_STATE, type ResumePickerState } from './resumePickerFixture';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
@@ -32,13 +32,13 @@ const AGENTS_HOME = process.env.FACADE_IT_AGENTS_HOME;
  */
 const ARGUMENTS: { readonly [cli: string]: readonly string[] } = {
 	agy: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
-	muse: ['--disable-approval', '--disable-sandbox', '--trust-workspace'],
+	muse: ['--disable-approval', '--disable-sandbox'],
 	opencode: ['--auto'],
-	pi: ['--approve'],
+	pi: [],
 	'my-cli': ['--from-custom', 'two words']
 };
-/** Whether the windows run on the Rust engine: core starts each CLI with its own wiring rather than the extension's run files. */
-const RUST = process.env.FACADE_IT_ENGINE === 'rust';
+/** Whether the windows run on the Framework: framework starts each CLI with its own wiring rather than the extension's run files. */
+const FRAMEWORK = process.env.FACADE_IT_IMPLEMENTATION === 'framework';
 /** Whether this run's CLI is the suite's program rather than a built-in. */
 const CUSTOM = CLI === 'my-cli';
 const WAIT_MS = 20_000;
@@ -97,11 +97,11 @@ async function state(): Promise<PanelState> {
 	return await vscode.commands.executeCommand<PanelState>('facade.state');
 }
 
-/** The fake CLI's record uses a leading hash on either engine. */
+/** The fake CLI's record uses a leading hash on either implementation. */
 function fixtureAlias(card: PanelState['cards'][number]): string | undefined {
 	const alias = card.alias;
-	if (!(RUST ? /^a\d+$/ : /^#a\d+$/).test(alias)) { return undefined; }
-	return RUST ? `#${alias}` : alias;
+	if (!(FRAMEWORK ? /^a\d+$/ : /^#a\d+$/).test(alias)) { return undefined; }
+	return FRAMEWORK ? `#${alias}` : alias;
 }
 
 async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = WAIT_MS): Promise<T> {
@@ -127,7 +127,7 @@ async function newCard(): Promise<PanelState['cards'][number]> {
 	return until('a new card', async () => {
 		const now = await state();
 		const added = now.cards.find(card => !before.has(card.runId));
-		// On the Rust engine its short ID comes with core's answer to the start (RULES-2.2): the card is the test's once it has it
+		// On the Framework its short ID comes with framework's answer to the start (RULES-2.2): the card is the test's once it has it
 		if (added && fixtureAlias(added)) {
 			return added;
 		}
@@ -141,7 +141,7 @@ async function newCard(): Promise<PanelState['cards'][number]> {
 /** Stop and clear the fixture from the workspace once its lifecycle has been checked. */
 async function stopAndHide(runId: string): Promise<void> {
 	await vscode.commands.executeCommand('facade.stopAgent', { run_id: runId });
-	if (RUST) { await vscode.commands.executeCommand('facade.hideAgent', { run_id: runId }); }
+	if (FRAMEWORK) { await vscode.commands.executeCommand('facade.hideAgent', { run_id: runId }); }
 }
 
 function alive(pid: number): boolean {
@@ -174,7 +174,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 	test('New Agent with the preselected CLI creates the card and terminal at once, and its CLI runs in the folder', async function () {
 		const card = await newCard();
 		firstRun = card.runId;
-		observeAcceptanceEngine(this, card);
+		observeAcceptanceImplementation(this, card);
 		const terminal = vscode.window.terminals.find(each => unspun(each.name) === card.name);
 		assert.ok(terminal, 'its editor terminal shows only the agent name');
 		const alias = fixtureAlias(card);
@@ -182,8 +182,8 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		const pidFile = `${RECORD}.${alias}`;
 		const pid = await until('the fake CLI to start', async () => fixturePid(pidFile));
 		assert.ok(alive(pid));
-		const windowsOld = !RUST && process.platform === 'win32';
-		const creation = windowsOld ? await windowsProcessStart(pid) : undefined;
+		const windowsLegacy = !FRAMEWORK && process.platform === 'win32';
+		const creation = windowsLegacy ? await windowsProcessStart(pid) : undefined;
 		// A built-in's maker avatar; a program's white robot, on its card and its tab (PANEL-1.3, LIFECYCLE-2.2, CONFIGURATION-2.4)
 		if (CUSTOM) {
 			assert.deepStrictEqual(card.avatar, { file: 'robot-pearl-face.svg', eyes: 'robot-eyes.svg' });
@@ -199,9 +199,10 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			assert.strictEqual(fs.existsSync(`${RECORD}.mcp.${alias}`), false, 'no MCP server is started for a program');
 		} else if (CLI === 'codex') {
 			assert.ok(launch.args.includes('--dangerously-bypass-approvals-and-sandbox'), launch.args.join(' '));
-			assert.ok(launch.args.some(arg => arg.startsWith('projects={ ') && arg.includes('trust_level = "trusted"')));
-		} else if (CLI === 'claude' && RUST) {
-			// Core's own wiring: its tools and its SessionStart hook come inline, in one `--settings`, and its plugin and MCP files are its run's
+			const folderTrusted = launch.args.some(arg => arg.startsWith('projects={ ') && arg.includes('trust_level = "trusted"'));
+			assert.strictEqual(folderTrusted, !FRAMEWORK, 'folder trust for a person starting Codex');
+		} else if (CLI === 'claude' && FRAMEWORK) {
+			// Framework's own wiring: its tools and its SessionStart hook come inline, in one `--settings`, and its plugin and MCP files are its run's
 			const settingsAt = launch.args.indexOf('--settings');
 			assert.ok(settingsAt >= 0 && launch.args.filter(arg => arg === '--settings').length === 1, 'one --settings carries the native session hook');
 			const settings = JSON.parse(launch.args[settingsAt + 1]);
@@ -226,14 +227,20 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		} else {
 			for (const arg of ARGUMENTS[CLI]) { assert.ok(launch.args.includes(arg), `missing native argument ${arg}`); }
 		}
-		// Antigravity's trust in the folder, in its settings in the home its terminal sees: the suite's, never the person's (CLIS-3.3)
+		if (CLI === 'muse') {
+			assert.strictEqual(launch.args.includes('--trust-workspace'), !FRAMEWORK, 'folder trust for a person starting Muse');
+		} else if (CLI === 'pi') {
+			assert.strictEqual(launch.args.includes('--approve'), !FRAMEWORK, 'startup approvals for a person starting Pi');
+		}
+		// Check the folder trust in Antigravity's isolated settings (CLIS-3.3).
 		if (CLI === 'agy') {
-			// Core gives the run's settings by file, or inline in earlier builds; the old engine updates the CLI's settings file.
+			// Framework gives the run's settings by file, or inline in earlier builds; the legacy implementation updates the CLI's settings file.
 			const argument = launch.args[launch.args.indexOf('--settings') + 1];
-			const text = RUST ? (fs.existsSync(argument) ? fs.readFileSync(argument, 'utf8') : argument)
+			const text = FRAMEWORK ? (fs.existsSync(argument) ? fs.readFileSync(argument, 'utf8') : argument)
 				: fs.readFileSync(path.join(AGENTS_HOME!, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8');
-			const settings = JSON.parse(text) as { trustedWorkspaces: string[] };
-			assert.ok(settings.trustedWorkspaces.some(folder => sameFolder(folder, launch.cwd)), JSON.stringify(settings));
+			const settings = JSON.parse(text) as { trustedWorkspaces?: string[] };
+			const folderTrusted = settings.trustedWorkspaces?.some(folder => sameFolder(folder, launch.cwd)) ?? false;
+			assert.strictEqual(folderTrusted, !FRAMEWORK, 'folder trust for a person starting Antigravity');
 		}
 		// The CLI asked whether its terminal takes reports, was answered by ptyd and reported idle - or, Muse Code reporting nothing,
 		// its screen showed its empty input: the card says not working, without a dot (CLIS-2.3). Until then it was
@@ -250,13 +257,13 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		assert.ok(!dots.has('error'), `never red as it started: ${[...dots].join(', ')}`);
 		for (const title of ['✳ Checking responsive layout', '⠐ Checking responsive layout', '● 检查标题更新 | workspace']) {
 			fs.writeFileSync(`${RECORD}.quirks.${alias}`, JSON.stringify({ title, reportedTitle: 'Plain activity title' }));
-			if (RUST) {
+			if (FRAMEWORK) {
 				// RULES-6.2 shows the Orchestrator's terminal title in the card and its details.
 				const shown = await until(`the card title ${title}`, async () => (await state()).cards.find(each => each.runId === card.runId && each.line === title));
 				assert.ok(linesOf(shown).includes(`Title: ${title}`), JSON.stringify(shown));
 				assert.ok(!linesOf(shown).some(line => line.includes('Plain activity title')), JSON.stringify(shown));
 			} else {
-				// CLIS-2.4 gives the old engine a title from history. Let the fixture publish both other titles before checking.
+				// CLIS-2.4 gives the legacy implementation a title from history. Let the fixture publish both other titles before checking.
 				await new Promise(resolve => setTimeout(resolve, 1_000));
 				const shown = (await state()).cards.find(each => each.runId === card.runId);
 				const said = shown ? [shown.line, ...linesOf(shown)] : [];
@@ -268,7 +275,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		}
 
 		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
-		if (!RUST) {
+		if (!FRAMEWORK) {
 			assert.ok(!(await state()).cards.some(each => each.runId === card.runId), 'Stop Agent removes the card at once');
 		}
 		const deadline = Date.now() + WAIT_MS;
@@ -276,7 +283,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		let lastCreation: string | undefined;
 		try {
 			await until('the process to end in the background', async () => {
-				if (!windowsOld) { return alive(pid) ? undefined : true; }
+				if (!windowsLegacy) { return alive(pid) ? undefined : true; }
 				if (pidGone(pid)) { return true; }
 				const now = Date.now();
 				if (now < nextProbe || now >= deadline) { return undefined; }
@@ -286,11 +293,11 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 				return creation && observedCreation && creation !== observedCreation && Date.now() <= deadline ? true : undefined;
 			});
 		} catch (error) {
-			const identity = windowsOld ? ` Windows creation before Stop ${creation ?? 'unavailable'}, last ${lastCreation ?? 'unavailable'}.` : '';
-			const cleanup = !RUST ? ` Stop result ${oldStopResult(process.env.FACADE_HOME, card.runId) ?? 'unavailable'}.` : '';
+			const identity = windowsLegacy ? ` Windows creation before Stop ${creation ?? 'unavailable'}, last ${lastCreation ?? 'unavailable'}.` : '';
+			const cleanup = !FRAMEWORK ? ` Stop result ${legacyStopResult(process.env.FACADE_HOME, card.runId) ?? 'unavailable'}.` : '';
 			throw new Error(`${error.message}. Run ${card.runId}, fixture PID ${pid}.${identity}${cleanup}`, { cause: error });
 		}
-		if (RUST) {
+		if (FRAMEWORK) {
 			await until('Stop to retain the ended card', async () => (await state()).cards.find(each => each.runId === card.runId && each.orchestrator?.running === false));
 			await vscode.commands.executeCommand('facade.hideAgent', { run_id: card.runId });
 		}
@@ -300,7 +307,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 	test('Stop Agent ends the targeted process and leaves a second editor agent running', async function () {
 		const target = await newCard();
 		firstRun = target.runId;
-		observeAcceptanceEngine(this, target);
+		observeAcceptanceImplementation(this, target);
 		const survivor = await newCard();
 		const pidOf = (card: PanelState['cards'][number]) => {
 			const pidFile = `${RECORD}.${fixtureAlias(card)}`;
@@ -324,7 +331,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		const card = await newCard();
 		let watching: vscode.Disposable | undefined;
 		try {
-			observeAcceptanceEngine(this, card);
+			observeAcceptanceImplementation(this, card);
 			const alias = fixtureAlias(card);
 			assert.ok(alias);
 			const terminal = vscode.window.terminals.find(each => unspun(each.name) === card.name);
@@ -337,11 +344,11 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			const pty = (terminal.creationOptions as vscode.ExtensionTerminalOptions).pty;
 			assert.ok(pty, 'the terminal uses the product Pseudoterminal');
 			let screen = '';
-			// Read the same output that draws this terminal, on either engine.
+			// Read the same output that draws this terminal, on either implementation.
 			watching = pty.onDidWrite(data => { screen += data; });
 			const file = `${RECORD}.bytes.${alias}`;
-			if (!RUST && CLI === 'agy') {
-				// The old engine can finish its startup MCP probe after the fake CLI reports Idle.
+			if (!FRAMEWORK && CLI === 'agy') {
+				// The legacy implementation can finish its startup MCP probe after the fake CLI reports Idle.
 				const probe = Buffer.from('\x1b[200~/mcp\x1b[201~\r\x1b');
 				await until('the MCP panel close key to reach the fake CLI', async () =>
 					fs.existsSync(file) && fs.readFileSync(file).includes(probe) || undefined);
@@ -375,7 +382,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		try {
 			const first = await newCard();
 			cards.push(first.runId);
-			observeAcceptanceEngine(this, first);
+			observeAcceptanceImplementation(this, first);
 			await until('its tab active', async () => vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof vscode.TabInputTerminal ? true : undefined);
 			const before = seen();
 			// What terminals the editor opens for the split: VS Code 1.105 opens none - its split of a terminal tab is an empty group
@@ -446,16 +453,16 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		}
 	});
 
-	test('Resuming opens the saved cwd and exact session ID, with the engine\'s Pin behavior', async function () {
+	test('Resuming opens the saved cwd and exact session ID, with the implementation\'s Pin behavior', async function () {
 		if (CUSTOM) { this.skip(); }
 		const folder = vscode.workspace.workspaceFolders![0].uri.fsPath;
 		// The Orchestrator matches the exact queried folder. The old history picker includes descendants.
-		const cwd = RUST ? folder : path.join(folder, 'nested');
+		const cwd = FRAMEWORK ? folder : path.join(folder, 'nested');
 		fs.mkdirSync(cwd, { recursive: true });
 		const fixture = resumeFixture(cwd);
 		const before = new Set((await state()).cards.map(each => each.runId));
 		const started = async () => (await state()).cards.filter(each => !before.has(each.runId));
-		const history = vscode.commands.executeCommand(RUST ? 'facade.resumeAgent' : 'facade.continueSession');
+		const history = vscode.commands.executeCommand(FRAMEWORK ? 'facade.resumeAgent' : 'facade.continueSession');
 		void history.then(undefined, () => undefined);
 		try {
 			let lastPicker: ResumePickerState | undefined;
@@ -472,12 +479,12 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			}).catch(error => { throw new Error(`${(error as Error).message}; picker: ${JSON.stringify(lastPicker)}`); });
 			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 			await history;
-			// On the Rust engine its short ID and name come with core's answer to the start.
+			// On the Framework its short ID and name come with framework's answer to the start.
 			const card = await until('the resumed card', async () => (await started()).find(fixtureAlias));
 			assert.ok(BUILT_IN_NAMES.includes(card.name), `Resume assigns a short name, not the history title: ${card.name}`);
 			const alias = fixtureAlias(card);
 			assert.ok(alias);
-			observeAcceptanceEngine(this, card);
+			observeAcceptanceImplementation(this, card);
 			const launch = await until('the resumed process', async () => fs.existsSync(`${RECORD}.args.${alias}`) ? JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] } : undefined);
 			assert.ok(sameFolder(launch.cwd, cwd));
 			const resumeAt = launch.args.indexOf(fixture.args[0]);
@@ -489,7 +496,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 				console.error('Resumed Pin state', JSON.stringify({ before: pinnable, after: (await state()).cards.find(each => each.runId === card.runId) ?? null }));
 				throw error;
 			});
-			if (RUST) {
+			if (FRAMEWORK) {
 				await vscode.commands.executeCommand('facade.unpinAgent', { run_id: card.runId });
 				await until('the unpinned workspace card', async () => (await state()).cards.find(each => each.runId === card.runId && !each.pinned));
 				await vscode.commands.executeCommand('workbench.action.pinEditor');
@@ -540,7 +547,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			this.skip();
 		}
 		const card = await newCard();
-		observeAcceptanceEngine(this, card);
+		observeAcceptanceImplementation(this, card);
 		// Filter by Working Location..., as the person takes the card's location: in this window of one folder, the item after its
 		// whole folder
 		// The picker lists its locations once the window's locations are read, later in a remote window: a key before that accepts the
@@ -570,7 +577,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		]);
 	});
 
-	if (!RUST && CLI === 'claude') {
+	if (!FRAMEWORK && CLI === 'claude') {
 		test('PANEL-1.3: the Webview Pin and Unpin buttons persist only the exact card’s native session', async function () {
 			const cards: PanelState['cards'][number][] = [];
 			const home = path.join(process.env.FACADE_HOME!, 'extension');
@@ -606,7 +613,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 				cards.push(await newCard());
 				cards.push(await newCard());
 				const [first, second] = cards;
-				observeAcceptanceEngine(this, first);
+				observeAcceptanceImplementation(this, first);
 				const [firstSession, secondSession] = await Promise.all(cards.map(card => until('its exact native conversation can be pinned', async () => {
 					const session = readJson<{ session_id?: string }>(path.join(home, 'runs', card.runId + '.session.json'))?.session_id;
 					return typeof session === 'string' && session && (await state()).cards.some(each => each.runId === card.runId && each.menu.pin)
@@ -636,8 +643,8 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			this.skip();
 		}
 		const before = (await state()).cardCount;
-		// The Rust engine has no Show Agent Command Line (the specification takes it away); its log is core's own
-		if (!RUST) {
+		// The Framework has no Show Agent Command Line (the specification takes it away); its log is framework's own
+		if (!FRAMEWORK) {
 			const showing = vscode.commands.executeCommand('facade.showAgentLaunch');
 			const launch = await until('the launch document', async () => {
 				const document = vscode.workspace.textDocuments.find(document => document.uri.scheme === 'facade-launch');
@@ -658,7 +665,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		}
 		const card = await newCard();
 		firstRun = card.runId;
-		observeAcceptanceEngine(this, card);
+		observeAcceptanceImplementation(this, card);
 		const pidFile = `${RECORD}.${fixtureAlias(card)}`;
 		const pid = await until('the logged fake CLI', async () => fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8').trim()) : undefined);
 		await until('the log to contain a known event from this Facade root', async () => {
@@ -666,7 +673,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			const document = vscode.window.activeTextEditor?.document;
 			if (document?.uri.scheme !== 'facade-agents-log') { return undefined; }
 			const logged = document.getText();
-			return (RUST ? logged.includes(`listening on ${coreSocket(process.env.FACADE_HOME!)}`)
+			return (FRAMEWORK ? logged.includes(`listening on ${frameworkSocket(process.env.FACADE_HOME!)}`)
 				: logged.includes(`Started ${card.alias} (${CLI}) pid ${pid}`)) || undefined;
 		});
 	});

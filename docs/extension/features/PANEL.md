@@ -1,6 +1,6 @@
 # Panel
 
-Group 4 covers the Orchestrator-backed Panel. Groups 1–3 retain the old-engine transition rules and existing
+Group 4 covers the Orchestrator-backed Panel. Groups 1–3 retain the legacy implementation transition rules and existing
 presentation and accessibility details where they apply.
 
 Layer 3. The panel displays this window's agents. [Rules](../RULES.md) owns meanings; [UX](../UX.md) owns common
@@ -184,7 +184,7 @@ was sent to the agent, and by whom, shows at a glance; Facade's own words carry 
 `🧑‍💻` come from who sent the item as its record keeps it, never from a name, the destination or an emoji the text
 begins with. It says where that item came from, not what the agent works on now or
 whether it read it. The accessible label says `Last input: {0}` for the person's input. The card keeps the last item
-across a reload. The old engine also restores the opening from its saved run metadata. When tool injection fails, the
+across a reload. The legacy implementation also restores the opening from its saved run metadata. When tool injection fails, the
 second line says why, such as `Facade tools unavailable · move or rename {0}`. A run that loses its tool connection
 says `Facade tools disconnected`. The second line never says a title - its conversation's is the details' (1.5),
 and a terminal's is never shown (CLIS-2.3) - nor `Working`, `Idle`
