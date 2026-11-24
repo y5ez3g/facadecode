@@ -52,10 +52,15 @@ added optional output and notification fields and skip unknown event kinds.
 ### Agent and machine addresses
 
 A target is a nonempty selector string or an exact `{machine_id,agent_id}` pair. A selector can
-be a local name or ID, or an address such as `a2@devbox`. Keep the full exact reference for a Pin,
-a terminal reconnect, and forwarded requests against an already resolved agent. Display
-the returned address. Ambiguous references return candidates in the error details. The
-entry daemon derives caller identity and the holder checks permissions before acting.
+be an agent name, number or address such as `a2@devbox`. A bare name or number searches the
+machines in the reachable list, probing saved routes without waking their daemons. The lookup
+can find ended agents for operations that accept them. `Pixel@gpu` can select `Pixel` on `gpu`
+or a reachable agent named `Pixel@gpu`. Both readings follow the operation's eligibility and reach.
+For a name, running candidates take precedence over ended ones. Multiple remaining candidates
+return an ambiguity error. Keep the full exact reference for a Pin, a terminal reconnect, and
+forwarded requests against an already resolved agent. Display the
+returned address. Ambiguous references return candidates in the error details. The entry daemon
+derives caller identity and the holder checks permissions before acting.
 
 ### Listing and inspecting
 
