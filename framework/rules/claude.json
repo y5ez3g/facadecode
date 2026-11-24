@@ -18,6 +18,7 @@
 	"paste": {
 		"bracketed": true,
 		"enter_ms": 80,
+		"submit_clear_ms": 582,
 		"placeholders": [
 			{ "pattern": "^\\[Pastedtext#\\d+\\+(\\d+)lines?\\]$", "count": "lines_after_first" },
 			{ "pattern": "^\\[Pastedtext#\\d+\\]$", "count": "single_line" }

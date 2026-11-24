@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use facade_screen::{ParsedOutput, Screen, TerminalColors};
+use facade_screen::{FrameObserver, ParsedOutput, Screen, TerminalColors};
 use tokio::task::JoinHandle;
 
 use super::SCROLLBACK_ROWS;
@@ -433,13 +433,27 @@ impl LoggedScreen {
     }
     /// Appends output in a blocking region before parsing it; takes no lock.
     pub(crate) fn feed(&mut self, bytes: &[u8]) -> ParsedOutput {
+        self.feed_observing(bytes, None)
+    }
+
+    /// See `Screen::feed_observing` for the frame facts a caller may observe.
+    pub(crate) fn feed_observing(
+        &mut self,
+        bytes: &[u8],
+        observe: Option<&mut FrameObserver<'_>>,
+    ) -> ParsedOutput {
         if let Some(journal) = &mut self.log {
             blocking_in_place(|| journal.append_output(bytes));
         }
-        let parsed = self.screen.feed(bytes);
+        let parsed = self.screen.feed_observing(bytes, observe);
         self.record_title(&parsed);
         parsed
     }
+
+    pub(crate) fn mark_pending_frame_earlier(&mut self) {
+        self.screen.mark_pending_frame_earlier();
+    }
+
     /// Logs a changed size before applying it; may block on disk and takes no lock.
     pub(crate) fn resize(&mut self, cols: u16, rows: u16) {
         if (cols, rows) == (self.screen.cols(), self.screen.rows()) {

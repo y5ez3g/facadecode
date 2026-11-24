@@ -7,6 +7,7 @@
 //! terminal I/O thread, around a completion port; it starts on first use.
 
 use std::io;
+use std::sync::OnceLock;
 
 #[cfg(unix)]
 mod unix;
@@ -138,8 +139,14 @@ impl PtyIo {
     /// Writes `bytes`, and returns how many the terminal took, counted once they are in it.
     /// Cancel-safe: a write under way stays under way; the next `write` returns its count and
     /// writes nothing else, so the caller passes the same bytes again until a write returns.
-    pub async fn write(&self, bytes: &[u8]) -> io::Result<usize> {
-        self.io.write(bytes).await
+    /// Fills `before` at the issue of a new write with the readable output prefix, if it can
+    /// be sampled. Collecting the result of a write under way does not fill it again.
+    pub async fn write(
+        &self,
+        bytes: &[u8],
+        before: Option<&OnceLock<Option<usize>>>,
+    ) -> io::Result<usize> {
+        self.io.write(bytes, before).await
     }
 
     /// Sets the terminal's size at once: Unix `TIOCSWINSZ`; Windows the resize packet on its copy

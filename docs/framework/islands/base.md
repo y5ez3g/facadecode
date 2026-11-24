@@ -101,7 +101,10 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   and `AsHandle` and `exit` on `ProcessObservation`.
 - `terminal`: `PtyMaster`, the side of a terminal Facade holds (a PTY master on Unix; on Windows a
   pseudo console's input, output and signal pipe ends and the CLI's job); `PtyIo`, how the daemon
-  reads and writes one, with `stop_reading` and `let_go_before_stop`; `PASTE_BYTES_PER_MS`;
+  reads and writes one, with `stop_reading` and `let_go_before_stop`. A caller can ask `write` for the
+  readable output prefix at the start of its native write. On Windows that includes output a
+  completed read has collected. An overlapped write records this position once, when it is issued.
+  `PASTE_BYTES_PER_MS` estimates paste time.
   `KeyRecord` and `key_down_records` encode console keys. `KeyRecord::press_len` and
   `key_down_records_len` count the encoded bytes. `test_terminal` gives tests both sides of a terminal.
 - `terminal_lines::{LineSender, LineReceiver}` carry keeper lines and their optional terminal.

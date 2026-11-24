@@ -17,7 +17,9 @@ use crate::{
     Scrolled,
 };
 
-pub use paste::{is_legacy_split_paste, is_own_draft, is_same_draft, settle_time, with_paste_text};
+pub use paste::{
+    is_legacy_split_paste, is_own_draft, is_same_draft, settle_time, shows_whole, with_paste_text,
+};
 pub use probe::{ProbeVerdict, restored, shape_of, space_taken, verdict_of};
 
 /// Reads the input box `rule` describes from `view`. Never waits. An open synchronized update, a

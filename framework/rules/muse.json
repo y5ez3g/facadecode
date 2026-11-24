@@ -18,6 +18,7 @@
 	"paste": {
 		"bracketed": true,
 		"enter_ms": 250,
+		"submit_clear_ms": 78,
 		"placeholders": [
 			{ "pattern": "^\\[PastedContent(\\d+)chars?\\]$", "count": "chars" },
 			{ "pattern": "^\\[PastedContent(\\d+)chars?\\]$", "count": "chars", "after_first_character": true }

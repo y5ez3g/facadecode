@@ -112,7 +112,12 @@ struct Harness {
     messages: Arc<crate::messages::Messages>,
 }
 
-fn record(process: ProcessState, exit: Option<ProcessExit>, cols: u16, rows: u16) -> ManagedAgent {
+pub(super) fn record(
+    process: ProcessState,
+    exit: Option<ProcessExit>,
+    cols: u16,
+    rows: u16,
+) -> ManagedAgent {
     ManagedAgent {
         address: None,
         label: None,
@@ -585,10 +590,11 @@ fn the_pastes_before_an_enter_go_with_it_within_the_input_limit() {
     let pasted = |text: &[u8]| [PASTE_START, text, PASTE_END].concat();
     let mut keys = PersonKeys::default();
     assert_eq!(
-        keys.enter(&[pasted(b"one\rtwo"), b" and ".to_vec(), pasted(b"three")].concat()),
+        keys.read(&[pasted(b"one\rtwo"), b" and ".to_vec(), pasted(b"three")].concat())
+            .enter,
         None
     );
-    let Enter { at, pastes } = keys.enter(b"!\r").expect("an Enter");
+    let Enter { at, pastes } = keys.read(b"!\r").enter.expect("an Enter");
     assert_eq!(
         (at, pastes),
         (1, vec!["one\rtwo".to_string(), "three".to_string()])
@@ -596,7 +602,7 @@ fn the_pastes_before_an_enter_go_with_it_within_the_input_limit() {
     // Four bytes and the longest paste but three come to one byte over the limit.
     let long = vec![b'x'; MAX_INPUT_BYTES - 3];
     let keys_with_long = [pasted(b"four"), pasted(&long), b"\r".to_vec()].concat();
-    let Enter { pastes, .. } = keys.enter(&keys_with_long).expect("an Enter");
+    let Enter { pastes, .. } = keys.read(&keys_with_long).enter.expect("an Enter");
     let sizes: Vec<usize> = pastes.iter().map(String::len).collect();
     assert_eq!(
         sizes,
@@ -604,7 +610,7 @@ fn the_pastes_before_an_enter_go_with_it_within_the_input_limit() {
         "the earliest paste makes room"
     );
     assert_eq!(
-        keys.enter(b"\r"),
+        keys.read(b"\r").enter,
         Some(Enter {
             at: 0,
             pastes: Vec::new()
@@ -2394,21 +2400,8 @@ impl Harness {
     /// cursor, its selection on the answer that trusts or on the one that refuses, which it
     /// shows first.
     fn claude_trust(&mut self, trusting: bool) {
-        let (refuse, trust) = if trusting {
-            ("  ", "❯ ")
-        } else {
-            ("❯ ", "  ")
-        };
-        let question = format!(
-            " Accessing workspace:\r\n\r\n /work/probe\r\n\r\n Quick safety check: Is this a \
-             project you created or one you trust? (Like your own\r\n code, a \
-             well-known open source project, or work from your team).\r\n\r\n Claude Code'll \
-             be able to read, edit, and execute files here.\r\n\r\n \
-             {refuse}No, exit\r\n {trust}Yes, I trust this folder\r\n\r\n Enter to confirm · \
-             Esc to cancel"
-        );
         self.cli
-            .write_all(format!("\x1b[2J\x1b[H\x1b[?25l{question}").as_bytes())
+            .write_all(claude_trust_frame(trusting).as_bytes())
             .unwrap();
     }
 
@@ -2584,16 +2577,39 @@ async fn a_message_gets_its_enter_while_its_cli_draws_frame_after_frame() {
     }
 }
 
+const SHOW_CURSOR: &[u8] = b"\x1b[?25h";
 const CLAUDE_PLAIN_HINT: &str = r#"Try "refactor <filepath>""#;
 
+/// Claude Code's workspace trust question, with the cursor hidden.
+pub(super) fn claude_trust_frame(trusting: bool) -> String {
+    let (refuse, trust) = if trusting {
+        ("  ", "❯ ")
+    } else {
+        ("❯ ", "  ")
+    };
+    format!(
+        "\x1b[2J\x1b[H\x1b[?25l Accessing workspace:\r\n\r\n /work/probe\r\n\r\n Quick safety \
+         check: Is this a project you created or one you trust? (Like your own\r\n code, a \
+         well-known open source project, or work from your team).\r\n\r\n Claude Code'll \
+         be able to read, edit, and execute files here.\r\n\r\n \
+         {refuse}No, exit\r\n {trust}Yes, I trust this folder\r\n\r\n Enter to confirm · \
+         Esc to cancel"
+    )
+}
+
+/// A complete frame of Claude Code's plain input with the cursor between before and after.
+pub(super) fn plain_claude_frame(before: &str, after: &str) -> String {
+    let border = "─".repeat(80);
+    let column = 3 + before.chars().count();
+    format!(
+        "\x1b[?2004h\x1b[2J\x1b[H{border}\r\n❯\u{a0}{before}{after}\r\n{border}\x1b[2;{column}H"
+    )
+}
+
 impl Harness {
-    /// Draws Claude Code's plain input with the cursor between `before` and `after`.
+    /// Draws Claude Code's plain input with the cursor between before and after.
     fn plain_claude_input(&mut self, before: &str, after: &str) {
-        let border = "─".repeat(80);
-        let column = 3 + before.chars().count();
-        let frame = format!(
-            "\x1b[?2004h\x1b[2J\x1b[H{border}\r\n❯\u{a0}{before}{after}\r\n{border}\x1b[2;{column}H"
-        );
+        let frame = plain_claude_frame(before, after);
         self.cli.write_all(frame.as_bytes()).unwrap();
     }
 
@@ -2754,6 +2770,570 @@ async fn a_call_held_for_a_plain_claude_hint_probe_runs_after_withdrawal() {
     harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
     assert_eq!(harness.cli_reads(1), b"x");
     answered(answer).await.unwrap();
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// What a terminal reports with nothing typed: the wheel, a move and a click of the mouse, the older
+/// mouse report, the focus, a key let go and a modifier alone, as win32-input-mode and as the kitty
+/// keyboard encoding report them.
+const REPORTS: [&[u8]; 10] = [
+    b"\x1b[<64;20;8M",
+    b"\x1b[<35;20;8M",
+    b"\x1b[<0;20;8M\x1b[<0;20;8m",
+    b"\x1b[M #(",
+    b"\x1b[I",
+    b"\x1b[O",
+    b"\x1b[13;28;13;0;0;1_",
+    b"\x1b[16;42;0;1;16;1_\x1b[16;42;0;0;0;1_",
+    b"\x1b[97;1:3u",
+    b"\x1b[57441;2u",
+];
+
+impl Harness {
+    /// Queues a message of `text` and reads its paste off the terminal.
+    async fn message_pasted(
+        &mut self,
+        text: &str,
+    ) -> watch::Receiver<Option<crate::messages::Settled>> {
+        let message = self
+            .queue_probe_message(text, Duration::from_secs(20))
+            .await;
+        self.cli_reads_paste(text);
+        message
+    }
+
+    fn cli_reads_paste(&mut self, text: &str) {
+        let paste = format!("\x1b[200~{text}\x1b[201~");
+        let read = self.cli_reads(paste.len());
+        assert_eq!(String::from_utf8_lossy(&read), paste);
+    }
+
+    fn nothing_reaches_the_cli(&mut self, time: Duration, why: &str) {
+        let read = self.cli_reads_within(1, time);
+        assert!(read.is_empty(), "{why}: {read:?}");
+    }
+}
+
+async fn assert_delivered(outcome: watch::Receiver<Option<crate::messages::Settled>>) {
+    let settled = probe_message_settled(outcome).await;
+    let crate::messages::Settled::Kept(message) = settled else {
+        panic!("the message is delivered: {settled:?}");
+    };
+    assert_eq!(
+        message.delivery.status,
+        facade_base::model::message::DeliveryStatus::Success,
+        "{message:?}"
+    );
+}
+
+/// A message waits while the person's paste has only begun: the CLI has part of its start, and a
+/// paste of the message's would go into the middle of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_waits_while_the_person_s_paste_has_only_begun() {
+    let home = home("splitstart");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let begun = b"\x1b[20";
+    harness.type_bytes(begun).await.unwrap();
+    assert_eq!(harness.cli_reads(begun.len()), begun);
+    let _message = harness
+        .queue_probe_message("a message", Duration::from_secs(20))
+        .await;
+    harness.nothing_reaches_the_cli(
+        Duration::from_millis(500),
+        "the rest of the paste's start is on its way",
+    );
+    harness.stop().await;
+}
+
+/// Keys after a person's Enter over a message wait no longer than for the message's paste, though
+/// it is not known yet whether the CLI took what the Enter went over.
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_after_a_person_s_enter_over_a_message_wait_no_longer_than_for_its_paste() {
+    let home = home("enterbound");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let _message = harness.message_pasted("a message").await;
+    harness.type_bytes(b"!").await.unwrap();
+    assert_eq!(
+        harness.cli_reads(1),
+        b"!",
+        "the paste holds keys up to its bound"
+    );
+    harness.plain_claude_input("a message!", "");
+    harness.type_bytes(b"\r").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.type_bytes(b"y").await.unwrap();
+    let next = harness.cli_reads_within(1, Duration::from_millis(3000));
+    assert_eq!(next, b"y", "no key waits past the paste's bound");
+    harness.stop().await;
+}
+
+/// An Enter of the person's over a message delivers nothing where a key of theirs that may empty
+/// the input went after it before the CLI showed the input empty.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_enter_over_a_message_and_then_ctrl_c_deliver_nothing() {
+    let home = home("enterctrlc");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let message = harness.message_pasted("a message").await;
+    harness.type_bytes(b"!").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"!");
+    harness.plain_claude_input("a message!", "");
+    harness.type_bytes(b"\r").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.type_bytes(b"\x03").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"\x03");
+    harness.plain_claude_input("", "");
+    let settled = probe_message_settled(message).await;
+    let (crate::messages::Settled::Kept(message) | crate::messages::Settled::Withdrawn(message)) =
+        settled
+    else {
+        panic!("the message ends: {settled:?}");
+    };
+    assert_eq!(
+        (message.delivery.status, message.delivery.reason),
+        (
+            facade_base::model::message::DeliveryStatus::Failure,
+            Some(facade_base::model::message::DeliveryFailure::SubmissionUnconfirmed)
+        ),
+        "{message:?}"
+    );
+    harness.stop().await;
+}
+
+/// What the person's terminal reports by itself goes through at once while a message goes in, and
+/// the message is submitted all the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_terminal_s_own_reports_neither_wait_for_a_message_nor_stop_it() {
+    let home = home("reports");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    for (number, report) in REPORTS.into_iter().enumerate() {
+        let text = format!("message {number}");
+        let message = harness.message_pasted(&text).await;
+        harness.type_bytes(report).await.unwrap();
+        assert_eq!(harness.cli_reads(report.len()), report);
+        harness.plain_claude_input(&text, "");
+        assert_eq!(
+            harness.cli_reads(1),
+            b"\r",
+            "Enter after {:?}",
+            String::from_utf8_lossy(report)
+        );
+        harness.plain_claude_input("", "");
+        assert_delivered(message).await;
+    }
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// What the person types while a message goes in waits until the CLI took the message, so that
+/// Enter submits the message alone, and then follows it in the order it came.
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_typed_while_a_message_goes_in_follow_it_once_the_cli_took_it() {
+    let home = home("keysfollow");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let message = harness.message_pasted("a message").await;
+    for keys in [&b"x"[..], b"\x1b[<64;20;8M", b"y"] {
+        harness.type_bytes(keys).await.unwrap();
+    }
+    harness.plain_claude_input("a message", "");
+    assert_eq!(
+        harness.cli_reads(1),
+        b"\r",
+        "Enter goes over the message alone"
+    );
+    harness.type_bytes(b"z").await.unwrap();
+    harness.nothing_reaches_the_cli(
+        Duration::from_millis(200),
+        "the input still shows the message, so the CLI may not have read its Enter",
+    );
+    harness.plain_claude_input("", "");
+    assert_eq!(harness.cli_reads(14), b"x\x1b[<64;20;8Myz");
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// The keys held for one message go before the next one's paste, which waits until the person's
+/// own draft is gone.
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_held_for_a_message_go_before_the_message_behind_it() {
+    let home = home("keysbetween");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let first = harness.message_pasted("first").await;
+    let second = harness
+        .queue_probe_message("second", Duration::from_secs(20))
+        .await;
+    harness.type_bytes(b"x").await.unwrap();
+    harness.plain_claude_input("first", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_eq!(harness.cli_reads(1), b"x");
+    harness.nothing_reaches_the_cli(
+        Duration::from_millis(100),
+        "the input does not show the person's key yet",
+    );
+    harness.plain_claude_input("x", "");
+    harness.nothing_reaches_the_cli(Duration::from_millis(600), "the person's draft");
+    harness.plain_claude_input("", "");
+    harness.cli_reads_paste("second");
+    harness.plain_claude_input("second", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_delivered(first).await;
+    assert_delivered(second).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// Held keys go on as separate as they came: an Escape let go with the key after it would reach the
+/// CLI as Alt and that key.
+#[tokio::test(flavor = "multi_thread")]
+async fn held_keys_go_on_as_far_apart_as_they_came() {
+    let home = home("keysapart");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let message = harness.message_pasted("a message").await;
+    for keys in [&b"x"[..], b"\x1b", b"\x03", b"y"] {
+        harness.type_bytes(keys).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+    }
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    let mut came = Vec::new();
+    for key in [&b"x"[..], b"\x1b", b"\x03", b"y"] {
+        assert_eq!(harness.cli_reads(1), key, "in the order they came");
+        came.push(std::time::Instant::now());
+    }
+    for pair in came.windows(2) {
+        assert!(
+            pair[1] - pair[0] >= Duration::from_millis(30),
+            "a pause between them: {:?}",
+            pair[1] - pair[0]
+        );
+    }
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A menu or question of the CLI's own takes the person's keys at once, held ones first.
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_for_a_question_do_not_wait_for_a_message() {
+    let home = home("keysquestion");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let message = harness.message_pasted("a message").await;
+    harness.type_bytes(b"x").await.unwrap();
+    harness.nothing_reaches_the_cli(Duration::from_millis(50), "the message goes in");
+    harness.claude_trust(false);
+    assert!(harness.shows("Yes, I trust", Duration::from_secs(5)).await);
+    harness.type_bytes(b"\x1b[B").await.unwrap();
+    assert_eq!(harness.cli_reads(4), b"x\x1b[B");
+    // They went to the question: the message is still alone in the input behind it.
+    harness.cli.write_all(SHOW_CURSOR).unwrap();
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// Keys wait only so long for a message the CLI never shows.
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_wait_a_bounded_time_for_a_message_the_cli_never_shows() {
+    let home = home("keysbound");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let _message = harness.message_pasted("a message").await;
+    harness.type_bytes(b"x").await.unwrap();
+    harness.nothing_reaches_the_cli(Duration::from_secs(1), "the message may still show");
+    assert_eq!(harness.cli_reads(1), b"x", "let go at the bound");
+    harness.type_bytes(b"y").await.unwrap();
+    assert_eq!(
+        harness.cli_reads_within(1, Duration::from_secs(1)),
+        b"y",
+        "nothing waits for this message any more"
+    );
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A person who types into a message that stayed in the input, and submits it whole, delivers it
+/// when the CLI draws an empty frame with only Enter between the draft and the empty frame.
+/// An intervening key still goes at the paste's bound, leaving the submission unconfirmed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_person_s_enter_over_a_message_that_stayed_in_the_input_delivers_it() {
+    for intervening_key in [false, true] {
+        let home = home("enterover");
+        let mut harness = claude(&home, false);
+        harness.plain_claude_input("", "");
+        let message = harness.message_pasted("a message").await;
+        harness.type_bytes(b"!").await.unwrap();
+        assert_eq!(harness.cli_reads(1), b"!", "let go at the bound");
+        harness.plain_claude_input("a message!", "");
+        harness.type_bytes(b"\r").await.unwrap();
+        if intervening_key {
+            harness.type_bytes(b"y").await.unwrap();
+            assert_eq!(harness.cli_reads(2), b"\ry", "the paste's bound is over");
+        } else {
+            assert_eq!(harness.cli_reads(1), b"\r");
+        }
+        harness.plain_claude_input("", "");
+        if intervening_key {
+            let crate::messages::Settled::Kept(kept) = probe_message_settled(message).await else {
+                panic!("a message whose paste began is kept");
+            };
+            assert_eq!(
+                kept.delivery.reason,
+                Some(facade_base::model::message::DeliveryFailure::SubmissionUnconfirmed)
+            );
+        } else {
+            assert_delivered(message).await;
+        }
+        harness.stop().await;
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+}
+
+/// Keys held for a message go with a run that ends, and a run that takes its place gets none.
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_held_for_a_message_end_with_their_run() {
+    let home = home("keysend");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let message = harness.message_pasted("a message").await;
+    harness.type_bytes(b"x").await.unwrap();
+    harness.end_run(FIRST_RUN, 0).await;
+    let crate::messages::Settled::Kept(ended) = probe_message_settled(message).await else {
+        panic!("a message whose paste began is kept");
+    };
+    assert_eq!(
+        ended.delivery.reason,
+        Some(facade_base::model::message::DeliveryFailure::Ended)
+    );
+    harness.prepare_restart(FIRST_RUN + 1, 80, 24).await;
+    let (master, mut next) = raw_terminal(80, 24);
+    harness.install(FIRST_RUN + 1, master).await;
+    harness.type_for(FIRST_RUN + 1, b"y").await.unwrap();
+    assert_eq!(
+        next.reads_within(2, Duration::from_millis(500)),
+        b"y",
+        "the next run gets its own keys alone"
+    );
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// Before a newer Facade takes over, the keys held for a message reach the terminal.
+#[tokio::test(flavor = "multi_thread")]
+async fn held_keys_reach_the_terminal_before_a_takeover() {
+    let home = home("keystakeover");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let _message = harness.message_pasted("a message").await;
+    for keys in [&b"x"[..], b"\x1b", b"y"] {
+        harness.type_bytes(keys).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+    let (reply, quiet) = oneshot::channel();
+    harness.send(AgentCommand::Quiesce { reply }).await;
+    tokio::time::timeout(Duration::from_secs(5), quiet)
+        .await
+        .expect("the agent goes quiet")
+        .unwrap();
+    assert_eq!(
+        harness.cli_reads_within(3, Duration::from_millis(500)),
+        b"x\x1by"
+    );
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// Keys held for a message stay before a size the person gives after them, and keys after the size
+/// stay behind them.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_size_between_held_keys_keeps_their_order() {
+    let home = home("keyssize");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let message = harness.message_pasted("a message").await;
+    harness.type_bytes(b"x").await.unwrap();
+    harness.send(AgentCommand::ResizeTerminal(80, 30)).await;
+    harness.type_bytes(b"y").await.unwrap();
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_eq!(harness.cli_reads(2), b"xy");
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A message waits for what the person just typed to show: until then the input still reads empty.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_waits_for_keys_the_cli_has_not_drawn() {
+    let home = home("keysundrawn");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    harness.type_bytes(b"x").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"x");
+    let message = harness
+        .queue_probe_message("a message", Duration::from_secs(20))
+        .await;
+    harness.nothing_reaches_the_cli(Duration::from_millis(100), "the key is not drawn");
+    harness.plain_claude_input("x", "");
+    harness.nothing_reaches_the_cli(Duration::from_millis(600), "the person's draft");
+    harness.plain_claude_input("", "");
+    harness.cli_reads_paste("a message");
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A slow CLI still draws the line the person submitted, and then empties its input for it, while
+/// their next line is on its way: a message waits for that one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_waits_for_a_line_on_its_way_behind_the_one_shown() {
+    let home = home("keysonway");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    harness.type_bytes(b"one").await.unwrap();
+    assert_eq!(harness.cli_reads(3), b"one");
+    harness.plain_claude_input("one", "");
+    let message = harness
+        .queue_probe_message("a message", Duration::from_secs(20))
+        .await;
+    harness.nothing_reaches_the_cli(Duration::from_millis(100), "the person's draft");
+    harness.type_bytes(b"\r").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.type_bytes(b"two").await.unwrap();
+    assert_eq!(harness.cli_reads(3), b"two");
+    for shown in ["one", ""] {
+        harness.plain_claude_input(shown, "");
+        harness.nothing_reaches_the_cli(Duration::from_millis(200), "two is on its way");
+    }
+    harness.plain_claude_input("two", "");
+    harness.nothing_reaches_the_cli(Duration::from_millis(200), "the person's draft");
+    harness.type_bytes(b"\r").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    harness.cli_reads_paste("a message");
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// An Enter of the person's that is held until its draft shows goes before a message's paste.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_waits_for_the_enter_the_person_pressed_with_their_text() {
+    let home = home("enterfirst");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    harness.type_bytes(b"abc\r").await.unwrap();
+    let message = harness
+        .queue_probe_message("a message", Duration::from_secs(20))
+        .await;
+    assert_eq!(harness.cli_reads(4), b"abc\r");
+    harness.plain_claude_input("", "");
+    harness.cli_reads_paste("a message");
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A message's paste never lands between the pieces of a paste of the person's.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_waits_for_the_rest_of_the_person_s_paste() {
+    let home = home("pastepieces");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let (first, rest) = (b"\x1b[200~one ", b"two\x1b[201~");
+    harness.type_bytes(first).await.unwrap();
+    assert_eq!(harness.cli_reads(first.len()), first);
+    let message = harness
+        .queue_probe_message("a message", Duration::from_secs(20))
+        .await;
+    harness.nothing_reaches_the_cli(Duration::from_millis(100), "the paste goes on");
+    harness.type_bytes(rest).await.unwrap();
+    assert_eq!(harness.cli_reads(rest.len()), rest);
+    harness.plain_claude_input("one two", "");
+    harness.nothing_reaches_the_cli(Duration::from_millis(600), "the person's draft");
+    harness.plain_claude_input("", "");
+    harness.cli_reads_paste("a message");
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A message waiting behind the person's draft goes in as soon as the CLI took the draft.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_follows_the_person_s_submission_at_once() {
+    let home = home("aftersubmission");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    harness.type_bytes(b"hi").await.unwrap();
+    assert_eq!(harness.cli_reads(2), b"hi");
+    harness.plain_claude_input("hi", "");
+    let message = harness
+        .queue_probe_message("a message", Duration::from_secs(20))
+        .await;
+    harness.nothing_reaches_the_cli(Duration::from_millis(600), "the person's draft");
+    harness.type_bytes(b"\r").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    let paste = b"\x1b[200~a message\x1b[201~";
+    assert_eq!(
+        harness.cli_reads_within(paste.len(), Duration::from_millis(250)),
+        paste,
+        "the empty input shows that the CLI took the person's Enter"
+    );
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A report before the first message leaves a fresh run's hint to the probe: nothing was typed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_report_before_the_first_message_leaves_the_hint_to_the_probe() {
+    let home = home("reportbeforehint");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+    harness.type_bytes(b"\x1b[I").await.unwrap();
+    assert_eq!(harness.cli_reads(3), b"\x1b[I");
+    let message = harness
+        .queue_probe_message("a message", Duration::from_secs(20))
+        .await;
+    assert_eq!(harness.cli_reads(1), b" ", "the hint is probed");
+    harness.plain_claude_input(" ", "");
+    assert_eq!(harness.cli_reads(1), b"\x7f");
+    harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+    harness.cli_reads_paste("a message");
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    assert_delivered(message).await;
     harness.stop().await;
     std::fs::remove_dir_all(&home).unwrap();
 }

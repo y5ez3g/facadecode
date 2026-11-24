@@ -222,8 +222,39 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
 - **Owns:** one actor per agent the daemon started (a guest has a handle with no actor). The actor holds the terminal (a `PtyIo`), the input waiting for it, the screen and its screen log, the state, the typist, the viewers and the start of each run. The agent's record (`AgentInfo`) is shared with its handles under a leaf lock; only the actor changes it while it runs. `framework/screens/<id>/`: one folder per agent, deleted through `Screens`.
 - **Keeps:**
   - Input and exits reach only the run they name. Each run has a number, starting at `FIRST_RUN`; `WriteInput`, `ProcessExited` and `StartPrompt` for any other run are refused as ended or dropped. An exit of a run whose terminal is not installed yet waits until it is.
-  - Automatic input never interleaves (RULES 1.10): messages wait behind the start prompt; while the start readies the tools, keys and calls wait and then go in the order they came; the person's Enter waits, with the keys after it, until the input can be read.
+  - Automatic input never interleaves (RULES 1.10): messages wait behind the start prompt and what the start types. Keys and calls go on in the order they came, through one queue: the first waits while the start readies the tools, for an unstyled hint probe or an ordered sequence, and behind the person's Enter, which waits until the input can be read; the person's keys also wait for a message in the input.
   - An ordered input sequence enters the typist once. Earlier accepted input runs first. Later calls and raw Attach input wait until the sequence's last write.
+  - The person's keys wait for a message from its paste until a complete reading shows the paste has
+    left, and while it is erased. A menu or question of the CLI's own takes the keys immediately.
+    Before the submission key reaches the terminal, the hold budget is the time to read the paste,
+    the settle time and `SLOWEST_DRAW`. Once the submission key reaches the terminal, a hold still
+    in effect lasts up to the CLI's `submit_clear_ms`. A rule without this value uses `SLOWEST_DRAW`.
+    Held keys go on as far apart as they came, for at most `ESCAPE_DELAY`. Mouse events, focus
+    changes, key releases and standalone modifiers do not wait for a message.
+  - A message's paste, probe, submission key and erasing wait for the person's queued keys, the rest of a paste or escape sequence they started, and what the input has yet to show of their keys in order. Text leaves a draft. Enter or another key that can clear it leaves an empty input. A slow CLI that still shows an earlier line has yet to show the next one. What never shows is waited for until neither a key went in nor the input changed for `SLOWEST_DRAW`.
+  - A person's Enter can prove delivery from two frames in output order. After the paste is issued,
+    a complete frame shows the whole message. A complete frame on the Enter's side of the output
+    then writes or erases cells on the input cursor's row and reads empty. Buffered frames can prove
+    this sequence after reads resume. An interaction frame discards a pending draft as evidence.
+    A new complete draft can start another sequence before the delivery deadline. Missing evidence
+    at that deadline leaves delivery unconfirmed.
+    Base samples the readable prefix on issue of the paste, Enter and first following edit.
+    Terminal splits its reads at those positions. The actor applies all output. Screen carries a
+    pending character, sequence or synchronized frame across the Enter boundary. The write receipt
+    accounts for the key even when its frames arrived before it. The first following edit ends the
+    interval that can confirm the Enter. Frames already in that prefix still count, including an
+    empty frame waiting to be read. Issued Enters retain their output boundaries in input order
+    as later Enters wait or go on. An incomplete control sequence has a provisional boundary
+    until it is classified. A completed terminal report removes that boundary, and any editing
+    key that follows it has its own byte position. An unclassified escape sequence in the input box
+    defers probes, automatic submission and cleanup. The actor
+    remembers where it was released through later frames, including menus. A confirmed editing
+    key disowns the paste and stops a probe's Backspace. A completed terminal report lifts the
+    provisional restriction. A sequence still incomplete at the input wait bound counts as an
+    edit. A subsequent empty input allows new delivery. Messages waiting during classification
+    still reach their original deadlines.
+    An already visible interaction takes the Escape itself. The actor offers confirmed frames
+    to the typist before retiring their Enter. Later keys wait within the paste's hold limit.
   - Every screen change goes into the screen log before the screen takes it.
   - The record shows a run's end before anything waiting on the run learns it. The installed run
     number changes when its terminal is installed. Input is fenced from the previous run as soon
@@ -333,7 +364,7 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
 
 `Typist`: types calls and messages into the input box, one at a time, and settles each message.
 
-- **Owns:** the calls and messages waiting, the paste under way, where its bytes are in the terminal, its pauses, and what it submitted; the probe under way, and what this run's probes found of each row they tried (`probed`).
+- **Owns:** the calls and messages waiting, the paste in the input until that holds nothing of it, where its bytes are in the terminal, its pauses, and what it submitted; the probe under way, and what this run's probes found of each row they tried (`probed`).
 - The actor allows unstyled hint probes for automatic delivery to a freshly launched input. Starting with a
   session, recovery, resume, an unconfirmed paste or accepting external input leaves plain writing on the
   normal draft path. External input that arrives during an unstyled hint probe waits for its Space and
@@ -345,20 +376,43 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     A direct text call follows the screen's bracketed paste mode.
   - The submission key goes over a reading of the moment that shows this paste alone in the input box, once it
     has shown for the CLI's settle time. Unread readings in between, as in the middle of a frame, keep that
-    time running; a reading of anything else starts it again.
+    time running; a reading of anything else starts it again. Where somebody typed into the input since the
+    paste, only the message's whole text is its draft: a placeholder may stand for a paste of theirs.
     Codex queues an ordinary message with Tab while Working. The start prompt and recovered pastes use Enter.
-  - At its deadline the typist erases its paste where a reading shows it alone, nobody typed since it went in
-    and its length is known. An unread reading after one that showed it waits for the next frame: the receipt
-    for at most `RESPONSE_GRACE`, the erasing on after the receipt. A receipt is given once, by two
-    `RESPONSE_GRACE` after the deadline, and says what is known then; erasing later changes none. The next
-    message waits for an input box that reads empty.
-  - A message is delivered once its submission key reaches the terminal. When the deadline expires before
-    submission, the typist can withdraw the message after the screen confirms it cleared its own draft.
+  - What the typist put into the input box is its own from the paste through submission or cleanup.
+    No other paste or probe begins meanwhile. After the submission key goes in, the typist keeps
+    that ownership until a complete frame reads as an empty input. A menu, question, unread frame
+    or cropped draft keeps the paste under the typist's care.
+    Cleanup keeps the last paste number it observed through a menu or an ambiguous row.
+  - A message is delivered once its submission key reaches the terminal, or once a person's Enter submitted the
+    whole of it. One that somebody else takes out of the input ends unconfirmed once the input has read empty
+    for the CLI's settle time.
+  - After its deadline the typist erases its paste once where a current reading shows the same draft alone,
+    nobody typed since it went in and its length is known. It remembers a displayed paste's placeholder number
+    through menus and unread frames. It follows the erased draft until a complete reading shows that the paste
+    left the input. What a person typed into is theirs. Where the input box showed the paste last and the
+    deadline falls on an unread reading, the receipt waits for the next frame, for at most `RESPONSE_GRACE`. A receipt is given
+    once, by two `RESPONSE_GRACE` after the deadline, and says what is known then; erasing later changes none.
   - The start prompt is pasted alone; a paste an earlier daemon began is never typed again.
   - With console typing, characters above U+FFFF go as key-down records, a text's line breaks as presses of the rule's line break key, a key-down and a key-up record each, where it names one, and the wait before a call's Enter adds `per_char` for each UTF-16 code unit.
   - An input whose row may be a hint or a draft (it reads unsure) is probed once a run, by its child `probe`: a space where the input starts, then, once the input is drawn still, Backspace, and a check that the input is as it was. Nothing else is typed meanwhile. The input is read every 100 ms; still means two equal readings in a row that show the row, for at most a second after each key; where that time ends on an unread reading, the next frame decides, within `RESPONSE_GRACE`. Unread readings count for nothing, and no key goes by an earlier reading. Backspace goes only where the space went in, no menu or question shows, and the person typed nothing since the probe read the input; after a failed check nothing more is pressed. What a probe finds, a hint, a draft or neither for sure, is kept for the row until the CLI's next run, so a row is never probed twice in a run.
 - **Never does:** write the terminal (it hands its bytes to the actor); read the screen except through the reading the actor gives it; take the person's keys; touch the database.
-- **Interface:** the daemon builds `Typing::text(text, enter, sender)`, `Typing::keys(names)` and `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses `new(agent, rule, console_typing, DeliveryHandle)`, `push`, `deliver`, `deliver_first`, `finish_paste`, `fail_prompt(prompt, reason)`, `fail_all(written, why)`, `hold_pastes()`, and `step(now, written, queued, modes, typed, read, read_screen) -> Step { write, wake }`, where `typed` counts the person's writes and `read_screen` reads the input as the screen shows it; for probes, `recall(reading)` (a row a probe found a hint reads as an empty input, a draft as a draft), `want_probe()` (the start waits on an unsure input) and `clear_probes()` (a new run starts); it reads `take_submitted()`, `take_entered()`, `held_bytes()`, `console()`, `paste_rule()`, `busy()`, `pasting()`, `types_calls()`, `reads_input()`, `probing()`. Through `DeliveryHandle` it asks `still_to_type(number)`, records `begin_paste(numbers)` and `settle(numbers, outcome)`.
+- **Interface.** The daemon builds `Typing::text(text, enter, sender)`, `Typing::keys(names)` and
+  `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses
+  `new(agent, rule, console_typing, DeliveryHandle)`, `push`, `deliver`, `deliver_first`, `finish_paste`,
+  `fail_prompt(prompt, reason)`, `fail_all(written, why)`, `hold_pastes()`, and
+  `step(now, written, queued, modes, writes, observe) -> Step { write, wake }`. The `writes` argument
+  (`BoxWrites`) tells the typist whether it may write into the input box on its own. The `observe`
+  callback gives the current reading in `InputObservation` and the draft proved submitted by the
+  person's Enter. That proof may come from earlier frames in the same read. A pending observation
+  after an interaction leaves the batch waiting for a new complete sequence until its deadline.
+  The actor calls `input_edited()` when keys that can change the input go into it. For probes,
+  `recall(reading)` uses a prior probe's result, `want_probe()`
+  requests a probe and `clear_probes()` starts a run with fresh probe evidence. The actor reads
+  `take_submitted()`, `take_entered()`, `held_bytes()`, `console()`, `paste_rule()`, `busy()`,
+  `pasting()`, `occupies_input()`, `paste_hold_until()`, `types_calls()`, `reads_input()` and
+  `probing()`. Through `DeliveryHandle` it asks `still_to_type(number)`, records
+  `begin_paste(numbers)` and settles a delivery with `settle(numbers, outcome)`.
 
 #### viewers
 

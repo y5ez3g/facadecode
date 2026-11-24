@@ -26,6 +26,7 @@
 	"paste": {
 		"bracketed": true,
 		"enter_ms": 80,
+		"submit_clear_ms": 132,
 		"tab_while_working": true,
 		"placeholders": [
 			{ "pattern": "^\\[PastedContent(\\d+)chars?\\]$", "count": "chars" },

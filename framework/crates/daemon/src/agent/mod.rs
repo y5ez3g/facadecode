@@ -62,6 +62,9 @@ pub(crate) type WatchdogSink = Box<dyn Fn(ManagedAgent, Trouble) + Send>;
 
 /// The pause after an Escape, so that the CLI does not read it with the next key as Alt.
 const ESCAPE_DELAY: Duration = Duration::from_millis(50);
+/// The longest a CLI takes to draw what it read: what the input shows is waited for this long. On
+/// 2026-11-24 the slowest of 59 messages to a CLI on a machine starting ten others took 2.5 seconds.
+const SLOWEST_DRAW: Duration = Duration::from_millis(2500);
 /// How long a run's start may take before its CLI should show its input.
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 

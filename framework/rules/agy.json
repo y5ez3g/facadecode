@@ -26,6 +26,7 @@
 		"bracketed": true,
 		"enter_ms": 80,
 		"line_ms": 45,
+		"submit_clear_ms": 352,
 		"placeholders": [
 			{ "pattern": "^\\[Pastedtext#\\d+\\+(\\d+)lines?\\]$", "count": "lines" },
 			{ "pattern": "^\\[Pasted text #\\d+ (\\d+) chars\\]$", "count": "unicode_scalars", "spaced": true }

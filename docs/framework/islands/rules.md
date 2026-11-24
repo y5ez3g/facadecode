@@ -135,7 +135,7 @@ Rust regular expressions.
 | `arguments` | how the CLI reads its arguments, and the options and keys Facade sets itself |
 | `choices` | the arguments that give a model and an effort |
 | `input` | the layout of the input box: `frame`, `prompt`, `editor`, `box` or `prompt_row` |
-| `paste` | the settle time, submission key policy, and placeholders for a pasted message |
+| `paste` | the settle time, submission key policy, time to show an empty input after submission, and placeholders for a pasted message |
 | `session` | `capture` (`session_start` or `none`) and the `resume` arguments with `${session_id}` |
 | `status` | how Facade reads the CLI's state from its screen or a report's words |
 | `status_glyph` | the CLI's glyph for viewer titles once the CLI has reported its state. The `working` list holds one or more glyph frames, each shown for `frame_ms` milliseconds. The `resting` glyph is for Starting after a report, Idle, Just done, Waiting for you and Error. Every glyph must be nonempty, and `frame_ms` must be positive |
@@ -288,7 +288,12 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     - `is_own_draft(&PasteRule, draft, text, hidden) -> bool` matches the message in the input box before submission.
     - `is_legacy_split_paste(&PasteRule, draft, prefix, pasted) -> bool` matches an older daemon's visible typed prefix and the paste placeholder during recovery.
     - `settle_time(&PasteRule, text) -> Duration` gives the base wait plus the wait for each line.
+    - `PasteRule::submit_clear_time() -> Option<Duration>` gives the hold limit once the submission key
+      reaches the terminal. Set `submit_clear_ms` to the p99.9 time from key write to a complete empty
+      input under load. The built-in rules use twice the maximum observed on a quiet machine until
+      the loaded measurements are available.
     - `is_same_draft(draft, seen, text, hidden) -> bool` compares the observed drafts, including the placeholder's paste number.
+    - `shows_whole(draft, text, hidden) -> bool`: a draft shows all of a message, alone or among other text. A placeholder or a scrolled draft does not.
     - `PasteRule::submission_key(working) -> Key` selects Tab for Codex while Working and Enter otherwise.
   - For the typist's probe, each from the row before its key and the reading after:
     - `space_taken(&InputLine, &BoxReading) -> bool`: whether its space went in: the cursor one column on, the row its space ahead of the text it held, or its space alone.

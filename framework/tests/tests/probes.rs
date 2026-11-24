@@ -122,8 +122,17 @@ fn a_hint_is_probed_once_a_run_and_the_message_goes_in() {
         "review my changes",
     );
     report_session(&home, &id, "muse");
+    // A delivery receipt can precede the fake CLI's read and submission log.
+    let wait_for_submissions = |count| {
+        assert!(
+            wait_until(LOADED_TIMEOUT, || home.submitted_messages().len() >= count),
+            "submissions: {:?}",
+            home.submitted_messages()
+        );
+    };
     let (sent, said) = send(&home, "muse", "first message");
     assert!(sent, "{said}");
+    wait_for_submissions(1);
     assert_eq!(
         pressed(&file),
         b" \x7f\r",
@@ -131,6 +140,7 @@ fn a_hint_is_probed_once_a_run_and_the_message_goes_in() {
     );
     let (sent, said) = send(&home, "muse", "second message");
     assert!(sent, "{said}");
+    wait_for_submissions(2);
     assert_eq!(pressed(&file), b" \x7f\r\r", "the run remembers the hint");
     let messages = home.submitted_messages();
     assert_eq!(messages.len(), 2, "{messages:?}");
@@ -156,6 +166,7 @@ fn a_hint_is_probed_once_a_run_and_the_message_goes_in() {
     assert!(wait_for_screen_text(&home, "muse", "❯ review my changes"));
     let (sent, said) = send(&home, "muse", "third message");
     assert!(sent, "{said}");
+    wait_for_submissions(3);
     assert_eq!(
         pressed(&file),
         b" \x7f\r\r \x7f\r",

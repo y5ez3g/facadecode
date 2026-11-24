@@ -428,6 +428,12 @@ fn a_recovered_multiline_prompt_is_bracketed_even_without_the_saved_mode() {
         "expected one complete prompt, got {prompts:?}"
     );
     home.run_facade_ok(&["send", "child", "next\nmessage", "-w"]);
+    // The receipt and the CLI's submission log are written by separate processes.
+    assert!(
+        wait_until(LOADED_TIMEOUT, || home.submitted_messages().len() >= 2),
+        "{}",
+        home.daemon_log()
+    );
     assert_eq!(
         home.submitted_messages(),
         [

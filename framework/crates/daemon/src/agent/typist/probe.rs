@@ -27,8 +27,8 @@ enum Pressed {
 /// A probe under way.
 pub(super) struct Probe {
     before: InputLine,
-    /// The person's writes when the probe read the input: Backspace goes only while they are this.
-    typed: u64,
+    /// Keys of the person's went into the input since the probe read it: no Backspace goes.
+    edited: bool,
     pressed: Pressed,
     /// When its last key was written.
     since: Instant,
@@ -48,11 +48,11 @@ pub(super) enum Next {
 }
 
 impl Probe {
-    /// A probe of `line`, whose space is written now; `typed` counts the person's writes so far.
-    pub(super) fn new(line: InputLine, now: Instant, typed: u64) -> Probe {
+    /// A probe of `line`, whose space is written now.
+    pub(super) fn new(line: InputLine, now: Instant) -> Probe {
         Probe {
             before: line,
-            typed,
+            edited: false,
             pressed: Pressed::Space,
             since: now,
             last: None,
@@ -65,6 +65,11 @@ impl Probe {
         &self.before.cells
     }
 
+    /// Keys of the person's went into the input.
+    pub(super) fn edited(&mut self) {
+        self.edited = true;
+    }
+
     /// One step at `now`. The input is read every [`PROBE_READ`] until two readings in a row show
     /// the same row and cursor, for at most [`PROBE_STILL`]: a draft read half drawn after the
     /// space could pass for a hint, so a verdict waits for the input to be still. A reading in the
@@ -74,7 +79,6 @@ impl Probe {
         &mut self,
         agent: &str,
         now: Instant,
-        typed: u64,
         read_screen: &dyn Fn() -> BoxReading,
     ) -> Next {
         let due = self.last.as_ref().map_or(self.since, |(at, _)| *at) + PROBE_READ;
@@ -98,7 +102,7 @@ impl Probe {
         let after = shape_of(reading.line.as_ref());
         match self.pressed {
             Pressed::Space => {
-                if typed != self.typed {
+                if self.edited {
                     log(
                         agent,
                         &format!(

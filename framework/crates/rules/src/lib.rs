@@ -38,7 +38,7 @@ pub use formats::shell_word;
 pub use input::{
     BoxReading, InputLine, LineCell, ProbeVerdict, is_legacy_split_paste, is_own_draft,
     is_same_draft, read_box, read_box_for_typing, read_draft, read_input, restored, settle_time,
-    shape_of, space_taken, verdict_of, with_paste_text,
+    shape_of, shows_whole, space_taken, verdict_of, with_paste_text,
 };
 pub use sessions::{
     Reported, SESSION_FILE, SESSION_VARIABLES, SavedSession, SessionFile, WriteFailure,
@@ -224,8 +224,8 @@ pub fn console_typing(rule: &Rule) -> Option<ConsoleTyping> {
     })
 }
 
-/// How the CLI takes a pasted message: its terminal mode, what its input shows, and how long a
-/// message shows there before submission.
+/// How the CLI takes a pasted message: its terminal mode, what its input shows, and how long
+/// the CLI takes to settle the draft and to show an empty input after submission.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PasteRule {
@@ -241,6 +241,9 @@ pub struct PasteRule {
     /// How much longer for each line of the message, in milliseconds.
     #[serde(default)]
     pub line_ms: u64,
+    /// The measured upper bound from the submission key to an empty input, in milliseconds.
+    #[serde(default)]
+    submit_clear_ms: Option<u64>,
     /// What the input shows in place of a long paste.
     #[serde(default)]
     pub placeholders: Vec<PastePlaceholder>,
@@ -728,6 +731,11 @@ impl PasteRule {
     /// Whether automatic delivery uses paste brackets.
     pub fn brackets_delivery(&self) -> bool {
         self.bracketed
+    }
+
+    /// How long this CLI has to show an empty input after its submission key reaches it.
+    pub fn submit_clear_time(&self) -> Option<Duration> {
+        self.submit_clear_ms.map(Duration::from_millis)
     }
 
     /// Which key submits a checked message draft.

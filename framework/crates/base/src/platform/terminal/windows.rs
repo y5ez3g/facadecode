@@ -2,11 +2,11 @@
 
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use windows_sys::Win32::Foundation::{
-    ERROR_BROKEN_PIPE, ERROR_OPERATION_ABORTED, ERROR_PIPE_NOT_CONNECTED, GENERIC_READ,
-    GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+    ERROR_BROKEN_PIPE, ERROR_IO_INCOMPLETE, ERROR_OPERATION_ABORTED, ERROR_PIPE_NOT_CONNECTED,
+    GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_OVERLAPPED, OPEN_EXISTING, PIPE_ACCESS_INBOUND, PIPE_ACCESS_OUTBOUND,
@@ -183,6 +183,57 @@ impl Io {
         }
     }
 
+    fn queued_output_bytes(&self) -> io::Result<usize> {
+        let reading = lock(&self.reading);
+        let output = self.output.as_raw_handle();
+        let completed = || {
+            let Some(read) = &reading.under_way else {
+                return Ok(Some(0));
+            };
+            let mut bytes = 0;
+            // SAFETY: this is the live operation on output. The call only samples its result.
+            if unsafe { GetOverlappedResult(output, read.overlapped(), &mut bytes, 0) } != 0 {
+                return Ok(Some(bytes as usize));
+            }
+            let error = io::Error::last_os_error();
+            match error.raw_os_error().map(|code| code as u32) {
+                Some(ERROR_IO_INCOMPLETE) => Ok(None),
+                Some(ERROR_OPERATION_ABORTED | ERROR_BROKEN_PIPE | ERROR_PIPE_NOT_CONNECTED) => {
+                    Ok(Some(0))
+                }
+                _ => Err(error),
+            }
+        };
+        let queued = || {
+            let mut bytes = 0;
+            // SAFETY: output is open, and only the count of bytes waiting is requested.
+            let peeked = unsafe {
+                PeekNamedPipe(
+                    output,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut bytes,
+                    std::ptr::null_mut(),
+                )
+            };
+            if peeked == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(bytes as usize)
+        };
+        let mut read = completed()?;
+        let mut pipe = queued()?;
+        if read.is_none() {
+            read = completed()?;
+            if read.is_some() {
+                // The outstanding read may have taken bytes counted by the first peek.
+                pipe = queued()?;
+            }
+        }
+        Ok(reading.kept.len() + read.unwrap_or(0) + pipe)
+    }
+
     /// Output there now: kept bytes, or what a read that completes at once brings, or `Some(0)`
     /// at the output's end. Issues a read where none is under way; None while it stays under way.
     fn output_now(&self, reading: &mut Reading, buf: &mut [u8]) -> io::Result<Option<usize>> {
@@ -228,7 +279,11 @@ impl Io {
         Ok(reading.give(buf).unwrap_or(0))
     }
 
-    pub(super) async fn write(&self, bytes: &[u8]) -> io::Result<usize> {
+    pub(super) async fn write(
+        &self,
+        bytes: &[u8],
+        before: Option<&OnceLock<Option<usize>>>,
+    ) -> io::Result<usize> {
         let write = {
             let mut writing = lock(&self.writing);
             match writing.as_ref() {
@@ -240,6 +295,9 @@ impl Io {
                     let write = Operation::new(bytes[..bytes.len().min(CHUNK_BYTES)].to_vec());
                     let input = self.input.as_raw_handle();
                     let under_way = io_thread::issue(&write, |buffer, length, overlapped| {
+                        if let Some(before) = before {
+                            let _ = before.set(self.queued_output_bytes().ok());
+                        }
                         // SAFETY: the handle is open and bound; buffer and overlapped live in
                         // the operation, which outlives the write.
                         unsafe {

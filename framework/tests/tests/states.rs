@@ -411,17 +411,16 @@ fn an_enter_s_draft_is_read_once_the_synchronized_update_that_draws_it_ends() {
     // second; Enter empties it.
     let script = r#"#!/bin/sh
 stty raw -echo
-draw() { printf '\033[2J\033[H❯ %s' "$1"; }
 draft=''
-draw ''
+printf '\033[H❯ '
 while :; do
 	keys=$(dd bs=64 count=1 2>/dev/null)
 	case "$keys" in
-	*"$(printf '\r')"*) draft=''; draw ''; continue ;;
+	*"$(printf '\r')"*) draft=''; printf '\033[1;3H\033[K'; continue ;;
 	esac
 	draft="$draft$keys"
-	printf '\033[?2026h'
-	draw "$draft"
+	# Keep the prompt in place and draw the draft before erasing any cells.
+	printf '\033[?2026h\033[1;3H%s\033[K' "$draft"
 	sleep 0.5
 	printf '\033[?2026l'
 done

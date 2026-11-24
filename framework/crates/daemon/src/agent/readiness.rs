@@ -43,8 +43,6 @@ pub(crate) struct StartView<'a> {
 pub(crate) struct StartStep {
     /// When to look again; the actor also looks whenever the CLI draws.
     pub(crate) wake: Option<Instant>,
-    /// The keys and calls held meanwhile go on now, in the order they came.
-    pub(crate) release_held: bool,
     /// Readying the tools failed: they stay unavailable until their server connects.
     pub(crate) tools_not_started: bool,
 }
@@ -112,14 +110,11 @@ impl Readiness {
     ) -> StartStep {
         let mut result = StartStep {
             wake: None,
-            release_held: false,
             tools_not_started: false,
         };
         if let Some(mut tools) = self.tools.take() {
             tools.advance(now, view, press, &mut result, &self.agent_id);
-            if matches!(tools.phase, ToolPhase::Done) {
-                result.release_held = true;
-            } else {
+            if !matches!(tools.phase, ToolPhase::Done) {
                 result.wake = Some(tools.wake(now));
                 self.tools = Some(tools);
             }
@@ -192,7 +187,7 @@ impl ToolStart {
         agent_id: &str,
     ) {
         let outcome = match self.phase {
-            ToolPhase::Input => self.input(now, view, press, result),
+            ToolPhase::Input => self.input(now, view, press),
             ToolPhase::Text => self.text(now, view, press),
             ToolPhase::Panel => self.panel(now, view, press),
             ToolPhase::Drain => {
@@ -231,11 +226,7 @@ impl ToolStart {
         now: Instant,
         view: &StartView<'_>,
         press: &mut dyn FnMut(Press) -> Result<(), String>,
-        result: &mut StartStep,
     ) -> Option<Result<String, String>> {
-        if view.input == InputState::Interaction {
-            result.release_held = true;
-        }
         if view.input == InputState::Interaction
             || (view.input == InputState::Unknown && view.start_bound.is_none_or(|end| now < end))
         {

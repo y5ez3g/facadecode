@@ -41,6 +41,13 @@ pub fn is_same_draft(draft: &str, seen: &str, text: &str, hidden: Option<HiddenR
     without_space(draft) == without_space(seen) || draws_text(draft, text, hidden)
 }
 
+/// Whether `draft` shows all of `text`, alone or with other text around it. A placeholder does not,
+/// nor does a draft with rows scrolled out of the input box. Never waits.
+pub fn shows_whole(draft: &str, text: &str, hidden: Option<HiddenRows>) -> bool {
+    hidden.is_none_or(|hidden| hidden.above == 0 && hidden.below == 0)
+        && without_space(draft).contains(&without_space(text))
+}
+
 /// `draft` with the placeholders the CLI draws for pastes of `texts` given back as their text. Each
 /// paste, in order, takes the first placeholder of its size that no earlier paste took; a paste
 /// the draft shows no placeholder for changes nothing. Never waits.
@@ -381,6 +388,21 @@ mod tests {
             ),
             "[Pasted text #9 +1 lines]\nx"
         );
+    }
+
+    #[test]
+    fn a_draft_shows_the_whole_of_a_text_it_holds_among_others() {
+        let text = "the start\nand the end";
+        assert!(shows_whole(text, text, None));
+        assert!(shows_whole(
+            "the start\n  and the end, typed on",
+            text,
+            None
+        ));
+        assert!(!shows_whole("the start and the", text, None));
+        assert!(!shows_whole("[Pasted text #1 +1 lines]", text, None));
+        let scrolled = Some(HiddenRows { above: 1, below: 0 });
+        assert!(!shows_whole(text, text, scrolled));
     }
 
     #[test]

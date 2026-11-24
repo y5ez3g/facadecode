@@ -3,6 +3,7 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+use std::sync::OnceLock;
 
 use nix::fcntl::{FcntlArg, OFlag};
 use tokio::io::Interest;
@@ -107,14 +108,35 @@ impl Io {
         end_of_output(self.0.get_ref().read(buf))
     }
 
+    fn queued_output_bytes(&self) -> io::Result<usize> {
+        let mut bytes: libc::c_int = 0;
+        nix::ioctl_read_bad!(queued, libc::FIONREAD, libc::c_int);
+        // SAFETY: the descriptor stays open and bytes is writable count storage.
+        unsafe { queued(self.0.get_ref().as_raw_fd(), &mut bytes) }?;
+        usize::try_from(bytes).map_err(|_| io::Error::other("invalid queued terminal byte count"))
+    }
+
     pub(super) async fn stop_reading(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
         Ok(0)
     }
 
-    pub(super) async fn write(&self, bytes: &[u8]) -> io::Result<usize> {
+    pub(super) async fn write(
+        &self,
+        bytes: &[u8],
+        before: Option<&OnceLock<Option<usize>>>,
+    ) -> io::Result<usize> {
         loop {
             let mut ready = self.0.writable().await?;
-            match ready.try_io(|file| file.get_ref().write(bytes)) {
+            match ready.try_io(|file| {
+                let prefix = before.and_then(|_| self.queued_output_bytes().ok());
+                let written = file.get_ref().write(bytes);
+                if written.as_ref().is_ok_and(|n| *n > 0)
+                    && let Some(before) = before
+                {
+                    let _ = before.set(prefix);
+                }
+                written
+            }) {
                 Ok(written) => return written,
                 // A full PTY master can go on reporting writable while a write would block, as
                 // Linux 7.0's does: wait a moment before trying again rather than spin.
