@@ -388,6 +388,173 @@ function withArtifactChange(file, bytes, action) {
 	}
 }
 
+function nativeReplay(fixture) {
+	const { tag, source, version, build } = fixture;
+	const directory = path.join(path.dirname(fixture.inputs), 'native-evidence');
+	const packages = path.join(directory, 'packages');
+	fs.cpSync(fixture.inputs, packages, { recursive: true });
+	const manifest = fs.readFileSync(path.join(fixture.release, 'SHA256SUMS'));
+	const sums = parseChecksums(manifest.toString('utf8'));
+	const inputs = (...files) => Object.fromEntries(files.map(file => [file, sums.get(file)]));
+	const logPath = (target, check) => path.join(directory, 'tests', target, check + '.log');
+	const targets = targetsFor(version).filter(target => target !== 'universal').map(target => {
+		const win = target.startsWith('win32-');
+		const editor = { version: '1.147.0', commit: 'c'.repeat(40), sha256: sha256('fixture editor ' + target) };
+		const priorVersion = '0.1.5';
+		const prior = { tag: 'extension/' + priorVersion, files: Object.fromEntries([target, 'universal'].map(target => {
+			const file = fileFor(priorVersion, target);
+			return [file, sha256('prior fixture ' + file)];
+		})) };
+		fs.mkdirSync(path.dirname(logPath(target, 'framework-install')), { recursive: true });
+		const log = (check, inputs, lines) => {
+			const bytes = [...lines, ''].join(win ? '\r\n' : '\n');
+			fs.writeFileSync(logPath(target, check), bytes);
+			return { source, target, inputs, exitCode: 0, sha256: sha256(bytes) };
+		};
+		const install = log('framework-install', inputs(frameworkArchive(target), win ? 'install.ps1' : 'install.sh'), [
+			`Installed Facade ${build} in disposable-bin.`, `facade ${build}`,
+		]);
+		const pair = inputs(fileFor(version, target), fileFor(version, 'universal'));
+		const editorLog = check => log(check, pair, [
+			'Isolated editor profile cleanup finished.', 'Facade acceptance test ' + JSON.stringify({ name: check, implementation: 'legacy' }),
+		]);
+		const packageEvidence = fs.readFileSync(path.join(packages, 'extension-' + target, evidenceFile));
+		return { target, packageEvidenceSha256: sha256(packageEvidence), logs: {
+			'framework-install': install,
+			'install-pair': { ...editorLog('install-pair'), editor },
+			'upgrade-pair': { ...editorLog('upgrade-pair'), editor, prior },
+		} };
+	});
+	const index = path.join(directory, 'native-test-evidence.json');
+	const evidence = { schemaVersion: 1, tag, source, manifestSha256: sha256(manifest), targets };
+	fs.writeFileSync(index, JSON.stringify(evidence));
+	const digest = sha256(fs.readFileSync(index));
+	const verify = (pin = digest, args = []) => fixture.command('verify', ['--evidence-dir', directory, '--evidence-digest', pin, ...args]);
+	return { packages, logPath, index, evidence, digest, verify };
+}
+
+test('read-only release replay binds every native install and editor result to the candidate bytes', t => {
+	const fixture = disposableRelease(t);
+	checkExit(fixture.prepare(), 0);
+	const standard = fixture.command('verify', ['--prepare']);
+	checkExit(standard, 0);
+	assert.equal(standard.stdout, `${fixture.tag}: verified ${requiredReleaseFiles(fixture.version).length + 1} Release files.\n`);
+	const replay = nativeReplay(fixture);
+	const before = fixture.log();
+	const consulted = replay.verify();
+	checkExit(consulted, 0);
+	assert.equal(fixture.log().slice(before.length), 'github release view\ngithub release download\n');
+	const candidateBytes = fs.readFileSync(path.join(fixture.release, 'release-candidate.json'));
+	const candidate = JSON.parse(candidateBytes.toString('utf8'));
+	assert.deepStrictEqual(JSON.parse(consulted.stdout), {
+		schemaVersion: 1, kind: 'release-evidence-replay', tag: fixture.tag, source: fixture.source,
+		candidateSha256: sha256(candidateBytes), manifestSha256: replay.evidence.manifestSha256, evidenceSha256: replay.digest,
+		assets: candidate.assets, windowsSignatures: candidate.windowsSignatures, targets: replay.evidence.targets,
+	});
+	const readLog = fixture.log();
+	const archived = replay.verify(replay.digest, ['--release-dir', fixture.release]);
+	checkExit(archived, 0);
+	assert.equal(archived.stdout, consulted.stdout);
+	checkExit(replay.verify(replay.digest, ['--prepare']), 1, /replay cannot prepare a draft/);
+	assert.equal(fixture.log(), readLog);
+	assert.equal(fixture.latest(), 'extension/' + fixture.oldVersion);
+	assert.equal(fs.existsSync(fixture.output), false);
+});
+
+test('read-only release replay refuses missing or conflicting native artifacts and results', t => {
+	const fixture = disposableRelease(t);
+	checkExit(fixture.prepare(), 0);
+	const replay = nativeReplay(fixture);
+	const before = fixture.log();
+	const verify = digest => replay.verify(digest, ['--release-dir', fixture.release]);
+	const reject = (result, message) => {
+		checkExit(result, 1, message);
+		assert.equal(result.stdout, '');
+	};
+	const reviseIndex = (change, action) => {
+		const evidence = structuredClone(replay.evidence);
+		change(evidence);
+		const bytes = JSON.stringify(evidence);
+		withArtifactChange(replay.index, bytes, () => action(sha256(bytes)));
+	};
+	const rejectIndex = (change, message) => reviseIndex(change, pin => reject(verify(pin), message));
+	reject(verify('a'.repeat(64)), /differs from the reviewed digest/);
+	rejectIndex(evidence => { evidence.manifestSha256 = 'b'.repeat(64); }, /SHA256SUMS differs from the native test evidence/);
+	rejectIndex(evidence => { evidence.source.attempt = '2'; }, /another candidate source or attempt/);
+	rejectIndex(evidence => evidence.targets.pop(), /Missing, unexpected or duplicate native test targets/);
+	rejectIndex(evidence => evidence.targets.push(evidence.targets[0]), /Missing, unexpected or duplicate native test targets/);
+	rejectIndex(evidence => { delete evidence.targets[0].logs['upgrade-pair']; }, /missing or unexpected native test records/);
+	rejectIndex(evidence => { evidence.targets[0].logs['framework-install'].exitCode = 1; }, /missing successful native test record/);
+	const installLog = replay.logPath('linux-x64', 'framework-install');
+	const wrongBuild = fixture.build.replace(/\+\d+\./u, '+0.');
+	const wrongLog = fs.readFileSync(installLog, 'utf8').replace(`facade ${fixture.build}`, `facade ${wrongBuild}`);
+	withArtifactChange(installLog, wrongLog, () => rejectIndex(evidence => {
+		evidence.targets.find(record => record.target === 'linux-x64').logs['framework-install'].sha256 = sha256(wrongLog);
+	}, /Framework install did not report the installed Shell BUILD/));
+
+	const target = 'win32-arm64';
+	const check = 'install-pair';
+	const changeEditorRecord = (change, message) => rejectIndex(evidence => {
+		change(evidence.targets.find(record => record.target === target).logs[check]);
+	}, message);
+	const log = replay.logPath(target, check);
+	const original = fs.readFileSync(log, 'utf8');
+	withArtifactChange(log, undefined, () => reject(verify(), /missing or invalid evidence file/));
+	withArtifactChange(log, original + 'changed', () => reject(verify(), /log differs from the native test record/));
+	const rejectLog = (change, message) => {
+		const changed = change(original);
+		withArtifactChange(log, changed, () => changeEditorRecord(record => { record.sha256 = sha256(changed); }, message));
+	};
+	const window = fileFor(fixture.version, 'universal');
+	const wrongWindow = path.join(replay.packages, 'extension-' + target, 'vsix', window);
+	changeEditorRecord(record => {
+		record.inputs = { ...record.inputs, [window]: sha256(fs.readFileSync(wrongWindow)) };
+	}, /package inputs differ/);
+	changeEditorRecord(record => { record.target = 'win32-x64'; }, /target or package inputs differ/);
+	changeEditorRecord(record => { record.source = { ...record.source, attempt: '2' }; }, /source, target or package inputs differ/);
+	rejectLog(bytes => bytes.replace('Isolated editor profile cleanup finished.\r\n', ''), /missing or repeated editor cleanup/);
+	rejectLog(bytes => bytes.replace('"implementation":"legacy"', '"implementation":"framework"'), /missing exact installed editor result after cleanup/);
+
+	const winEvidence = path.join(replay.packages, 'extension-' + target, evidenceFile);
+	const record = JSON.parse(fs.readFileSync(winEvidence, 'utf8'));
+	delete record.signing;
+	const replaceStamp = (record, message, { keepPin = false } = {}) => {
+		const bytes = JSON.stringify(record);
+		withArtifactChange(winEvidence, bytes, () => {
+			if (keepPin) reject(verify(), message);
+			else rejectIndex(evidence => {
+				evidence.targets.find(item => item.target === target).packageEvidenceSha256 = sha256(bytes);
+			}, message);
+		});
+	};
+	replaceStamp(record, /package evidence differs from the reviewed digest/, { keepPin: true });
+	replaceStamp(record, /missing trusted signing evidence/);
+	const native = path.join(replay.packages, 'extension-' + target);
+	const withheld = path.join(replay.packages, 'withheld');
+	fs.renameSync(native, withheld);
+	try {
+		reject(verify(), /Missing or unexpected native package targets/);
+	} finally {
+		fs.renameSync(withheld, native);
+	}
+	const stagedVsix = path.join(native, 'vsix', fileFor(fixture.version, target));
+	withArtifactChange(stagedVsix, fs.readFileSync(stagedVsix), () => {
+		vsix(stagedVsix, { target, name: 'facadecode', version: fixture.version,
+			programs: [...programsFor(target), ['VERSION', fixture.build + '\n'], ['fixture', 'different package with the same version']],
+		});
+		const changed = captureNativePackage(native, target, fixture.version, fixture.source, {
+			signing: JSON.parse(fs.readFileSync(winEvidence, 'utf8')).signing,
+		});
+		replaceStamp(changed, /differs from the retained native package/);
+	});
+	withArtifactChange(path.join(fixture.release, frameworkArchive(target)), undefined, () => {
+		reject(verify(), /missing, unexpected or duplicate attached files/);
+	});
+	assert.equal(fixture.log(), before);
+	assert.equal(fixture.latest(), 'extension/' + fixture.oldVersion);
+	assert.equal(fs.existsSync(fixture.output), false);
+});
+
 test('release preparation refuses invalid native inputs before writing the GitHub draft', t => {
 	const fixture = disposableRelease(t);
 	const win = path.join(fixture.inputs, 'extension-win32-x64', evidenceFile);

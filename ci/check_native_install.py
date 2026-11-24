@@ -202,8 +202,9 @@ def verify_install_commands(commands, scope, address, build, installer):
 
 def install_success(receipt, build, programs, archive_sha, corrupt_sha, *, installer=FRAMEWORK / 'install.sh'):
     try:
+        # Compare the digest with the reviewed checkout. The producer path is used to verify the recorded commands.
         if (receipt['build'], receipt['version'], receipt['program_sha256'], receipt['installer_sha256']) != (
-                build, build.split('+', 1)[0], programs, hash_file(installer)):
+                build, build.split('+', 1)[0], programs, hash_file(FRAMEWORK / 'install.sh')):
             raise AcceptanceError('native install did not use the candidate program pair and installer')
         if not build.endswith('.' + receipt['source']['revision']):
             raise AcceptanceError('native install build names a different source revision')

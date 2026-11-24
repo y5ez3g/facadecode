@@ -211,7 +211,12 @@
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/yolo.rs"
-      ]
+      ],
+      "test": {
+        "runner": "framework-scenario",
+        "target": "yolo",
+        "name": "yolo_is_captured_at_each_launch_and_at_the_guests_first_tool_call"
+      }
     },
     {
       "id": "framework/daemon/daemon-notification/changed",
@@ -806,7 +811,12 @@
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/states.rs:822"
-      ]
+      ],
+      "test": {
+        "runner": "framework-scenario",
+        "target": "machines",
+        "name": "a_remote_childs_wait_notice_reaches_its_creator_once"
+      }
     },
     {
       "id": "framework/daemon/operation/internal.ensure_route",
@@ -882,7 +892,12 @@
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "framework-scenario",
+        "target": "machines",
+        "name": "daemon_and_shell_remove_only_the_selected_saved_route"
+      }
     },
     {
       "id": "framework/daemon/operation/machine.rename",
@@ -2010,7 +2025,12 @@
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/machines.rs"
-      ]
+      ],
+      "test": {
+        "runner": "framework-scenario",
+        "target": "machines",
+        "name": "daemon_and_shell_remove_only_the_selected_saved_route"
+      }
     },
     {
       "id": "framework/shell/command/machine.rename",
@@ -3114,8 +3134,15 @@
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/mcp.rs:1846",
-        "extension/src/test/integration/mcp.it.ts:463"
-      ]
+        "extension/src/test/integration/mcp.it.ts:478"
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "journey": "journeys",
+        "built_in": "claude",
+        "name": "Journey: claude uses its Facade tools in this window (J10, M02, M03, M07, M15, M17) cancels the original pending Framework MCP send on its relay without a paste or inbox entry",
+        "implementation": "framework"
+      }
     },
     {
       "id": "extension/mcp-framework/notification/notifications.initialized",

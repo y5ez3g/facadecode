@@ -19,7 +19,7 @@ from evidence import digest
 from native_framework import ROOT, SYSTEM_PATH, hash_file, source_identity
 
 
-def installed_observation(source, archive_sha, sidecar_sha, build, programs, corrupt_sha):
+def installed_observation(source, archive_sha, sidecar_sha, build, programs, corrupt_sha, *, producer_checkout=ROOT):
     scope = Path('/tmp/fci-install-policy-fixture')
     target = 'a1@fixture-host'
     cwd = str(scope / 'project')
@@ -43,7 +43,7 @@ def installed_observation(source, archive_sha, sidecar_sha, build, programs, cor
     stable = digest({'install_tree': tree, 'runtime': runtime, 'settings_sha256': settings_sha})
     commands = []
     shell = str(bin_dir / 'facade')
-    installer = Path(__file__).resolve().parents[1] / 'framework/install.sh'
+    installer = producer_checkout / 'framework/install.sh'
 
     def record(label, args, stdout='', stderr='', status=0):
         commands.append({'label': label, 'args': args, 'status': status, 'stdout': stdout, 'stderr': stderr})
@@ -84,7 +84,8 @@ def installed_observation(source, archive_sha, sidecar_sha, build, programs, cor
         record(f'read screen after {label}', screen, marker)
     record('stop the fixture agent', [shell, 'stop', target])
     return {'source': source, 'archive_sha256': archive_sha, 'sidecar_sha256': sidecar_sha,
-            'fixture': str(scope), 'build': build, 'version': version, 'program_sha256': programs, 'installer_sha256': hash_file(installer),
+            'fixture': str(scope), 'build': build, 'version': version, 'program_sha256': programs,
+            'installer_sha256': hash_file(ROOT / 'framework/install.sh'),
             'original_runtime': runtime, 'install_tree': tree, 'settings_sha256': settings_sha, 'fake_sha256': 'e' * 64,
             'commands': commands, 'refusals': refusals,
             'cleanup': {'status': 'pass', 'sockets_absent': True, 'log': 'no processes left\n'}}
@@ -102,6 +103,33 @@ def write_candidate(archive, sums, marker, program):
 
 
 class NativeInstallEvidence(unittest.TestCase):
+    def test_replays_install_evidence_from_another_runner_checkout(self):
+        with tempfile.TemporaryDirectory(prefix='native-install-replay-') as directory:
+            root = Path(directory)
+            producer = root / 'runner-checkout'
+            archive, sums, receipt, output = (root / name for name in (ASSET, 'SHA256SUMS', 'receipt', 'output'))
+            run = 'github/1/1'
+            source = {'revision': 'a' * 40, 'tree': 'b' * 40, 'run': run}
+            build = f"0.1.6+1700000000.{source['revision']}"
+            program = bytearray(20)
+            program[:6] = b'\x7fELF\x02\x01'
+            program[18] = 62
+            write_candidate(archive, sums, build + '\n', program)
+            _, programs, archive_sha, sidecar_sha = archive_metadata(archive, sums)
+            saved = installed_observation(source, archive_sha, sidecar_sha, build, programs,
+                                          sha256(corrupted_archive(archive)).hexdigest(), producer_checkout=producer)
+            saved['success'] = {'case_ids': list(NATIVE_INSTALL_CASES), 'archive_sha256': archive_sha,
+                                'evidence_sha256': digest(saved)}
+            receipt.write_text(json.dumps(saved))
+            output.write_text(SUCCESS_MARKER + json.dumps(saved['success']) + '\n')
+            self.assertFalse(producer.exists())
+            self.assertEqual(verified_install(archive, sums, receipt, output, run,
+                                              producer_checkout=producer, source=source), 2)
+
+            receipt.write_text(json.dumps({**saved, 'installer_sha256': '0' * 64}))
+            with self.assertRaisesRegex(AcceptanceError, 'candidate program pair and installer'):
+                verified_install(archive, sums, receipt, output, run, producer_checkout=producer, source=source)
+
     def test_candidate_marker_is_stamped_and_numeric_debug_archives_are_local(self):
         with tempfile.TemporaryDirectory(prefix='native-install-build-') as directory:
             root = Path(directory)

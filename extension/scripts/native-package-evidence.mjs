@@ -126,7 +126,7 @@ export function captureNativePackage(directory, target, version, source, { signi
 	return record;
 }
 
-export function verifyNativePackages(directory, version, source, { requireSigning = false } = {}) {
+export function verifyNativePackages(directory, version, source, { requireSigning = false, evidenceDigests } = {}) {
 	validateSource(source);
 	const expected = platforms(version).map(target => 'extension-' + target);
 	const present = fs.readdirSync(directory, { withFileTypes: true })
@@ -136,7 +136,11 @@ export function verifyNativePackages(directory, version, source, { requireSignin
 		const folder = 'extension-' + target;
 		requireFiles(directory, folder, ['framework', evidenceFile, 'vsix']);
 		const root = path.join(directory, folder);
-		const record = JSON.parse(fileBytes(root, evidenceFile).toString('utf8'));
+		const bytes = fileBytes(root, evidenceFile);
+		if (evidenceDigests) {
+			assert.equal(sha256(bytes), evidenceDigests.get(target), target + ' package evidence differs from the reviewed digest');
+		}
+		const record = JSON.parse(bytes.toString('utf8'));
 		assert.deepStrictEqual(record.source, source, target + ' has a stale candidate source or run attempt');
 		if (requireSigning && target.startsWith('win32-')) {
 			assert.ok(record.signing, target + ' is missing trusted signing evidence');

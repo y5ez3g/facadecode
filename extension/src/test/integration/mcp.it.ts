@@ -74,6 +74,7 @@ interface Line {
 	readonly phase?: number;
 	readonly answer?: Answer;
 	readonly elapsedMs?: number;
+	readonly cancellation?: { readonly requestId: number; readonly messageNumber: number; readonly relay: string };
 }
 
 /** The fake CLI's record of its tool calls: every answer, as a JSON line. */
@@ -105,6 +106,7 @@ interface Step {
 	readonly untilAbsent?: string;
 	readonly wait?: number;
 	readonly timed?: boolean;
+	readonly cancelWhenPending?: true;
 }
 
 /** Has the agent `alias` run `steps` through its Facade tools, and answers what each step got, by the step's tool and its order. */
@@ -112,6 +114,7 @@ async function script(alias: string, steps: readonly Step[], ms = 90_000): Promi
 	readonly answer: (tool: string, nth?: number) => Answer['result'];
 	readonly content: (tool: string, nth?: number) => any;
 	readonly elapsedMs: (tool: string, nth?: number) => number | undefined;
+	readonly recorded: (tool: string, nth?: number) => Line | undefined;
 }> {
 	const phase = phases.get(alias) ?? 0;
 	phases.set(alias, phase + 1);
@@ -128,7 +131,7 @@ async function script(alias: string, steps: readonly Step[], ms = 90_000): Promi
 	}
 	const step = (tool: string, nth = 0) => lines.filter(line => line.step === tool)[nth];
 	const answer = (tool: string, nth?: number) => step(tool, nth)?.answer?.result;
-	return { answer, content: (tool, nth) => answer(tool, nth)?.structuredContent, elapsedMs: (tool, nth) => step(tool, nth)?.elapsedMs };
+	return { answer, content: (tool, nth) => answer(tool, nth)?.structuredContent, elapsedMs: (tool, nth) => step(tool, nth)?.elapsedMs, recorded: step };
 }
 
 function fakeAlias(address: string): string {
@@ -469,6 +472,81 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		}
 		assert.ok(card.runId);
 		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId }).then(undefined, () => undefined);
+	});
+
+	// MCP-7.1, RULES-6.7
+	test('cancels the original pending Framework MCP send on its relay without a paste or inbox entry', async function () {
+		if (!FRAMEWORK || CLI !== 'claude') { this.skip(); }
+		this.timeout(120_000);
+		const sender = await personAgent();
+		const agents = [sender];
+		try {
+			observeAcceptanceImplementation(this, sender.card);
+			assertTools(sender.alias);
+			const recipient = await personAgent();
+			agents.push(recipient);
+			assertTools(recipient.alias);
+			const draft = 'Held Framework MCP draft';
+			const pasted = await script(sender.alias, [
+				{ tool: 'type_text', arguments: { agent: recipient.address, text: draft, enter: false } },
+			]);
+			assert.strictEqual(pasted.content('type_text')?.status, 'success');
+			const inspect = async () => (await frameworkCall(process.env.FACADE_HOME!, 'agent.inspect', { target: recipient.address })).input;
+			await until('the Framework to recognize the recipient draft', async () => (await inspect()).state === 'draft' || undefined, 10_000);
+			const rawBytes = () => fs.readFileSync(`${RECORD}.bytes.${recipient.alias}`);
+			const before = rawBytes();
+			assert.ok(before.includes(draft), 'the recipient CLI received the controlled draft');
+			assert.deepStrictEqual(received(recipient.alias), [], 'the draft has never been submitted');
+			const send = (text: string) => ({ to: recipient.address, text, ...DELIVERY_WAIT });
+			const cancelledText = 'This pending message must never be pasted';
+			const call = (await script(sender.alias, [
+				{ tool: 'send_message', arguments: send(cancelledText), cancelWhenPending: true },
+			], 40_000)).recorded('send_message');
+			assert.ok(call?.cancellation, 'the fake client observed the pending send and wrote its cancellation');
+			const { requestId, messageNumber, relay } = call.cancellation;
+			assert.match(relay, /^facade-mcp(?:\.exe)?$/u);
+			assert.ok(Number.isSafeInteger(messageNumber) && messageNumber > 0, 'a persisted send was pending');
+			assert.deepStrictEqual(call.answer, {
+				jsonrpc: '2.0', id: requestId,
+				error: { code: -32800, message: 'the client cancelled this call; nothing was sent' },
+			});
+			const inbox = async () => {
+				const result = (await script(recipient.alias, [{ tool: 'read_messages', arguments: { last: 10 } }])).content('read_messages');
+				assert.strictEqual(result?.status, 'success', JSON.stringify(result));
+				return result.data.messages as { text: string }[];
+			};
+			assert.deepStrictEqual(await inbox(), [], 'the recipient inbox has no cancelled message');
+			assert.deepStrictEqual(rawBytes(), before, 'no bytes reached the recipient during cancellation');
+			assert.deepStrictEqual(received(recipient.alias), [], 'nothing was submitted during cancellation');
+			assert.strictEqual((await inspect()).state, 'draft');
+
+			const cleared = await script(sender.alias, [
+				{ tool: 'press_keys', arguments: { agent: recipient.address, keys: ['Ctrl+U'] } },
+				{ tool: 'read_screen', arguments: { agent: recipient.address }, untilAbsent: draft },
+			]);
+			assert.strictEqual(cleared.content('press_keys')?.status, 'success');
+			const screen = cleared.content('read_screen');
+			assert.strictEqual(screen?.status, 'success');
+			assert.ok(!screen.data.text.includes(draft), 'the draft cleared');
+			assert.deepStrictEqual(rawBytes(), Buffer.concat([before, Buffer.from([0x15])]), 'only the clear key reached the recipient');
+			const followUp = 'One delivery after relay cancellation';
+			const delivered = (await script(sender.alias, [{ tool: 'send_message', arguments: send(followUp) }])).content('send_message');
+			await expectSent(delivered, recipient.alias, recipient.address);
+			const submissions = await until('the follow-up submission', () => {
+				const texts = received(recipient.alias);
+				return texts.length ? texts : undefined;
+			});
+			assert.strictEqual(submissions.length, 1);
+			assert.ok(submissions[0].includes(followUp));
+			assert.ok(!rawBytes().includes(cancelledText), 'clearing the draft did not deliver the cancelled paste');
+			assert.deepStrictEqual((await inbox()).map(message => message.text), [followUp]);
+			console.log('Framework MCP cancellation ' + JSON.stringify({ relay, requestId, messageNumber, error: -32800,
+				recipient: recipient.address, pastedBytes: 0, inboxEntries: 0, followUpSubmissions: 1 }));
+		} finally {
+			for (const { card } of agents.reverse()) {
+				await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
+			}
+		}
 	});
 
 	test('its CLI gets the Facade server; it lists, starts a child with a first task, reads and types into it and stops it', async function () {

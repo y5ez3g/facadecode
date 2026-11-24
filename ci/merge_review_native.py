@@ -11,6 +11,7 @@ from catalog import (
     AcceptanceError, NATIVE_INSTALL_CASES, NATIVE_REMOTE_EDITOR_CASE, NATIVE_SSH_CASE,
     RELEASE_FIXTURE_CASES, read_json,
 )
+from check_keeper_recovery import ARTIFACT as KEEPER_ARTIFACT, CASE as KEEPER_CASE, verify_keeper
 from check_native_install import SHA256, verified_install
 import check_real_ssh_route as ssh
 from github_evidence import download_artifact
@@ -19,6 +20,12 @@ import remote_editor_evidence as remote
 
 
 NATIVE_EDITOR_MINIMUM = 61
+LEGACY_WINDOW_GRACE_CASE = 'extension/p0/pin-reload/legacy-last-window-grace'
+TYPED_NATIVE_CASES = sorted((*NATIVE_INSTALL_CASES, NATIVE_REMOTE_EDITOR_CASE,
+                             NATIVE_SSH_CASE, KEEPER_CASE, LEGACY_WINDOW_GRACE_CASE))
+LEGACY_IMMEDIATE_REOPEN = '✔ claude: real window close and immediate reopen preserve Pin, exact session and process, with one terminal: '
+LEGACY_EXPIRED_REOPEN = '✔ claude: real window close and reopen after its grace restore the exact pinned session in a new process, with one terminal: '
+LEGACY_NATURAL_EXIT = re.compile(r"✔ claude: the closed window's process ended after (\d+) ms, using the production grace period")
 
 
 def file_digests(recorded, names):
@@ -58,6 +65,38 @@ def editor_passes(path):
     return sum(counts)
 
 
+def check_legacy_window_grace(path):
+    lines = path.read_text().splitlines()
+    immediate = [(index, line.strip().removeprefix(LEGACY_IMMEDIATE_REOPEN)) for index, line in enumerate(lines)
+                 if line.strip().startswith(LEGACY_IMMEDIATE_REOPEN)]
+    expired = [(index, line.strip().removeprefix(LEGACY_EXPIRED_REOPEN)) for index, line in enumerate(lines)
+               if line.strip().startswith(LEGACY_EXPIRED_REOPEN)]
+    natural_exit = [(index, int(match[1])) for index, line in enumerate(lines)
+                    if (match := LEGACY_NATURAL_EXIT.fullmatch(line.strip()))]
+    cleanup = [index for index, line in enumerate(lines) if line.strip() == 'Isolated editor profile cleanup finished.']
+    if not all(len(events) == 1 for events in (immediate, expired, natural_exit, cleanup)):
+        raise AcceptanceError(f'{path}: missing or duplicate legacy window grace observations or cleanup')
+    if (not immediate[0][0] < natural_exit[0][0] < expired[0][0] < cleanup[0] or natural_exit[0][1] < 60_000):
+        raise AcceptanceError(f'{path}: legacy window grace did not end naturally between the two reopens')
+    try:
+        for keep_process, (_, payload) in ((True, immediate[0]), (False, expired[0])):
+            records = json.loads(payload)
+            if not isinstance(records, list) or len(records) != 3:
+                raise AcceptanceError(f'{path}: invalid legacy window grace transcript')
+            before, closed, after = records
+            if ([item['phase'] for item in (before, closed, after)] != ['folder', 'closed', 'reopened']
+                    or not all(type(pid) is int and pid > 0 for pid in (before['pid'], closed['host'], after['pid']))
+                    or not all(re.fullmatch(r'run-[0-9a-f]{32}', item['runId']) for item in (before, after))
+                    or not isinstance(before['session'], str) or not before['session']
+                    or before['session'] != after['session'] or type(after['terminals']) is not int
+                    or after['terminals'] != 1 or (before['pid'] == after['pid']) != keep_process
+                    or (before['runId'] == after['runId']) != keep_process):
+                raise AcceptanceError(f'{path}: wrong process, run or pinned session after legacy window close')
+    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        raise AcceptanceError(f'{path}: invalid legacy window grace transcript') from error
+    return LEGACY_WINDOW_GRACE_CASE
+
+
 def verify_node_evidence(root, script, folder, source, *arguments):
     node = shutil.which('node')
     if node is None:
@@ -91,6 +130,10 @@ def replay_native(root, repo, candidate, records, output):
     observed = []
     name = 'framework-ssh-route-1'
     observed.append(check_ssh(paths[name], source(name)))
+    programs = read_json(paths[name] / 'receipt.json')['program_sha256']
+    name = f'{KEEPER_ARTIFACT}-1'
+    observed.append(verify_keeper(paths[name], read_json(paths[name] / 'receipt.json'), source(name),
+                                  program_sha256=programs))
     name = 'extension-remote-ssh-1'
     observed.append(check_remote(root, paths[name], source(name)))
 
@@ -114,6 +157,7 @@ def replay_native(root, repo, candidate, records, output):
                      install / 'output.log', installed_source['run'], source=installed_source,
                      producer_checkout=Path('/home/runner/work') / project / project)
     observed.extend(NATIVE_INSTALL_CASES)
+    observed.append(check_legacy_window_grace(paths['editor-tests-linux-x64-legacy'] / 'integration.log'))
 
     return {
         'typed_cases': sorted(observed),
