@@ -484,6 +484,26 @@ fn all_processes() -> Vec<i32> {
     }
 }
 
+/// The memory process `pid` has for itself alone, in bytes, with what it allocated and never touched:
+/// what Windows counts against the system's commit limit.
+#[cfg(windows)]
+pub fn private_memory(pid: i32) -> usize {
+    use windows_sys::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX,
+    };
+    use windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
+    // SAFETY: PROCESS_MEMORY_COUNTERS_EX is plain data, valid with every byte zero.
+    let mut counters: PROCESS_MEMORY_COUNTERS_EX = unsafe { std::mem::zeroed() };
+    counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
+    let size = counters.cb;
+    with_process(pid, PROCESS_QUERY_LIMITED_INFORMATION, |process| {
+        // SAFETY: the process's handle is open and the system writes at most `size` bytes.
+        unsafe { GetProcessMemoryInfo(process, (&raw mut counters).cast(), size) };
+    });
+    assert!(counters.PrivateUsage > 0, "no memory of {pid}");
+    counters.PrivateUsage
+}
+
 /// The program process `pid` runs, where it can be opened.
 #[cfg(windows)]
 pub fn program_of(pid: i32) -> Option<PathBuf> {

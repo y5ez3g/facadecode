@@ -9,9 +9,9 @@ per agent, rules reads its views, and the scenario tests use it as a viewer's te
 
 All of it in memory, one set per `Screen`:
 
-- **alacritty's terminal** (`alacritty_terminal`, vendored in `framework/vendor/`): the main and
-  alternate grids, cursor and saved cursor, pen, charsets, modes, and the parser with the frame an
-  open synchronized update holds back.
+- **alacritty's terminal** (`alacritty_terminal` and its parser `vte`, vendored in
+  `framework/vendor/`): the main and alternate grids, cursor and saved cursor, pen, charsets, modes,
+  and the parser with the frame an open synchronized update holds back.
 - **The unit being written**: the bytes of a character, escape sequence or control string the CLI
   has started and not finished.
 - **Supplied terminal colors**: optional foreground, background and cursor RGB values, used for
@@ -55,6 +55,9 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
   Each query of a supplied color gets one reply; an omitted color gets none.
 - `scrollback_bytes` stays within `SCROLLBACK_BUDGET` (2 MiB). Past it, whole blocks of the oldest
   rows go, and a read reports `trimmed`.
+- Besides its scrollback a screen takes its two grids' cells and little more: the frame that a
+  synchronized update holds back takes memory only while an update is open, and never more than the
+  parser's 2 MiB limit.
 - A status report that breaks any limit of the protocol is dropped whole. Its words are only ever
   text: base64 decoded, at most 2,048 bytes, no control characters.
 
@@ -164,6 +167,11 @@ limits it sets.
 
 - `alacritty_terminal` 0.26.0 from `framework/vendor/`, whose changes let a grid hand the rows its
   scrollback lets go of to a `HistoryKeeper` and take rows back (`vendor/README.md`).
+- `vte` 0.15.0, alacritty's parser, from `framework/vendor/`. Upstream sets up the 2 MiB that a
+  synchronized update may hold back with each parser and keeps them, as a private field. Its changes,
+  marked `Facade (memory)`, allocate the 2 MiB once when an update first holds output back. The
+  buffer stays with the next update if one write ends an update and begins another. It is freed
+  when no update is open.
 - `base64`, for the words in status reports.
 - No Facade crate.
 

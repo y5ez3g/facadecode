@@ -93,6 +93,9 @@ static HOMES: AtomicU64 = AtomicU64::new(0);
 /// The settings entry of the test's shell as a custom program: [`TestHome::shell_cli`].
 pub const SHELL_CLI: &str = "sh";
 
+/// The settings entry of the fake CLI as a custom program: [`TestHome::start_plain`].
+const PLAIN_CLI: &str = "plain";
+
 /// Reads the Ref in the first line of a managed agent's background start or resume receipt.
 pub fn started_ref(out: &str) -> &str {
     let line = out.lines().next().expect("a background receipt");
@@ -439,6 +442,30 @@ impl TestHome {
         let path = self.path_with_test_programs();
         env.push(("PATH", &path));
         self.start_in_background(name, "fake", &env)
+    }
+
+    /// Starts `count` fake CLIs as a custom program, without a rule and so without an MCP server, and
+    /// waits until each drew its input. Returns their IDs.
+    pub fn start_plain(&self, count: usize) -> Vec<String> {
+        self.add_custom_cli(PLAIN_CLI, &test_binaries().fakecli);
+        let mut wire = connect(self);
+        let agents: Vec<String> = (0..count)
+            .map(|_| {
+                let started = wire.call_ok(
+                    "agent.start",
+                    json!({
+                        "cli": PLAIN_CLI, "folder": self.project,
+                        "size": { "cols": 80, "rows": 24 },
+                    }),
+                );
+                let id = started["agent"]["reference"]["agent_id"].as_str();
+                id.expect("a started agent").to_string()
+            })
+            .collect();
+        for agent in &agents {
+            assert!(wait_for_screen_text(self, agent, "❯"), "{agent} drew");
+        }
+        agents
     }
 
     /// `facade`, run with an empty home folder of the test's own, so that no CLI settings of the
