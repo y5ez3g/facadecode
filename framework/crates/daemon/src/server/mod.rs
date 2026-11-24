@@ -8,7 +8,7 @@ mod lanes;
 mod outbox;
 mod relay;
 
-use std::future::Future;
+use std::future::{Future, pending};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -268,24 +268,27 @@ pub(crate) async fn serve<S: Service>(
 
 /// Serves one connected socket until it closes.
 pub(crate) async fn serve_connection<S: Service>(service: Arc<S>, socket: ServerSocket) {
-    serve_peer(service, socket, None).await;
+    serve_peer(service, socket, None, pending()).await;
 }
 
-/// Serves an in-process connection for an actor the daemon already authenticated.
+/// Serves an in-process connection for an actor the daemon already authenticated, until it closes
+/// or `ended` completes.
 pub(crate) async fn serve_actor<S: Service>(
     service: Arc<S>,
     socket: ServerSocket,
     actor: VerifiedActor,
+    ended: impl Future<Output = ()> + Send,
 ) {
-    serve_peer(service, socket, Some(actor)).await;
+    serve_peer(service, socket, Some(actor), ended).await;
 }
 
 async fn serve_peer<S: Service>(
     service: Arc<S>,
     socket: ServerSocket,
     actor: Option<VerifiedActor>,
+    ended: impl Future<Output = ()> + Send,
 ) {
-    if let Err(err) = connection::serve(service, socket, actor).await {
+    if let Err(err) = connection::serve(service, socket, actor, ended).await {
         log("warn", &format!("a connection ended: {err}"));
     }
 }

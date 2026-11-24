@@ -513,19 +513,18 @@ impl Daemon {
             reference: crate::api::wire_ref(&actor.reference),
             send_deadline,
         };
-        runtime.spawn(async move {
-            let service = server::serve_actor(daemon, theirs, verified);
-            if let Some(run) = managed_run {
-                let mut exit = agent.exit();
-                let _presence = agent.tools_connected();
-                tokio::select! {
-                    () = service => {}
-                    _ = exit.wait_for(|exit| exit.is_some() || agent.run() != run) => {}
-                }
-            } else {
-                service.await;
-            }
-        });
+        // A managed run's tools are there while its connection is, which ends with the run.
+        let presence = managed_run.map(|run| (run, agent.tools_connected()));
+        let ended = async move {
+            let Some((run, _tools)) = presence else {
+                return std::future::pending().await;
+            };
+            let mut exit = agent.exit();
+            let _ = exit
+                .wait_for(|exit| exit.is_some() || agent.run() != run)
+                .await;
+        };
+        runtime.spawn(server::serve_actor(daemon, theirs, verified, ended));
         match DaemonClient::hello_actor(ours) {
             Ok(client) => Ok(Some(client)),
             Err(err) if upgrading(&err) => Ok(None),

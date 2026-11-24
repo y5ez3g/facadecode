@@ -663,7 +663,8 @@ trait and writes responses and watch changes back, without knowing what any oper
   - `bind() -> Result<DaemonListener>`; `serve(listener: DaemonListener, service: Arc<S>, closing:
     watch::Receiver<bool>, paused: watch::Sender<bool>)`: accepts clients, pausing while
     `closing` is true and saying so in `paused`; `serve_connection(service, socket: ServerSocket)`: one
-    connection, also the daemon's own in-process MCP server's.
+    connection; `serve_actor(service, socket, actor: VerifiedActor, ended: impl Future)`: the private
+    connection of an actor the daemon authenticated, until the client closes it or `ended` completes.
   - `trait Service`, implemented by the daemon:
     - `hello(HelloParams, api_version, peer_pid) -> (HelloResult, Client, Hold)` runs after the
       server selects a supported API version and checks the client kind.
@@ -712,7 +713,8 @@ It uses the same address, creation source and run context as launch preparation.
 The parent hands the verified actor to the private daemon connection. Only the validated process
 can bring a run's tools online. The connection rechecks the run when it sends a new request. A
 waiting inbox read also ends with its bound run, and Post checks the bound actor while it settles
-the available page.
+the available page. A managed run's private connections end with the run: what they have under way
+is answered, then they close.
 
 One table defines the eight tools served by `tools/list` and dispatched by `tools/call`. The
 catalog is sent as shipped, and a verified connection reports tools ready when it serves the list.

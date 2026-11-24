@@ -1,15 +1,18 @@
-//! What ends leaves nothing open in the daemon: not the handles of an ended run's terminal, however
-//! the run ends and whichever daemon and keeper held it.
+//! What ends leaves nothing open in the daemon: not the handles of an ended run's terminal, and not
+//! the connections that acted for it, however the run ends and whichever daemon and keeper held it.
 //!
 //! Each scenario ends many and counts the daemon's handles, which come back to what they were but for
 //! the few its threads hold for a while: what one would leave shows as many times.
 
 use std::process::Stdio;
 
+use facade_scenarios::serde_json::json;
 use facade_scenarios::*;
 
-/// How many agents a scenario ends.
+/// How many agents or Guests a scenario ends.
 const MANY: usize = 12;
+/// How many relays a run has. Each leaves less than an agent would.
+const RELAYS: usize = 24;
 /// How many handles may come and go with the daemon's threads.
 const PASSING: usize = 10;
 
@@ -144,4 +147,99 @@ fn agents_another_daemon_took_over_leave_no_handle_of_their_terminals() {
     let running = home.daemon_handles();
     stop(&home, &agents);
     home.expect_daemon_handles(running - MANY * TERMINAL_HANDLES + PASSING);
+}
+
+/// Connections that act for `agent`'s run, as its CLI's MCP servers do. The test closes them, so that
+/// the run ends first.
+fn relays(home: &TestHome, agent: &str) -> Vec<McpTestClient> {
+    (0..RELAYS)
+        .map(|_| McpTestClient::relay_configured(home, agent))
+        .collect()
+}
+
+/// The daemon's handles once a run with a relay is over.
+fn before_relays(home: &TestHome) -> usize {
+    let agent = [home.start_fake("before").id];
+    let relay = McpTestClient::relay_configured(home, &agent[0]);
+    stop(home, &agent);
+    drop(relay);
+    home.daemon_handles()
+}
+
+#[test]
+fn relays_of_a_stopped_run_leave_no_handle() {
+    let home = TestHome::new("relaystop");
+    let before = before_relays(&home);
+    let agent = [home.start_fake("stopped").id];
+    let relays = relays(&home, &agent[0]);
+    stop(&home, &agent);
+    drop(relays);
+    home.expect_daemon_handles(before + PASSING);
+}
+
+#[test]
+fn relays_of_a_run_that_exits_leave_no_handle() {
+    let home = TestHome::new("relayexit");
+    let before = before_relays(&home);
+    let agent = [home.start_fake("exits").id];
+    let relays = relays(&home, &agent[0]);
+    exit(&home, &agent);
+    drop(relays);
+    home.expect_daemon_handles(before + PASSING);
+}
+
+#[test]
+fn relays_of_a_resumed_agent_s_runs_leave_no_handle() {
+    let home = TestHome::new("relayresume");
+    let before = before_relays(&home);
+    let agent = [start_with_session(&home, "resumed", SESSION)];
+    let first = relays(&home, &agent[0]);
+    stop(&home, &agent);
+    resume(&home, &agent[0]);
+    let second = relays(&home, &agent[0]);
+    stop(&home, &agent);
+    drop((first, second));
+    home.expect_daemon_handles(before + PASSING);
+}
+
+#[test]
+fn relays_of_a_run_another_keeper_took_over_leave_no_handle() {
+    let home = TestHome::new("relaykeeper");
+    let before = before_relays(&home);
+    let agent = [home.start_fake("kept").id];
+    let relays = relays(&home, &agent[0]);
+    replace_keeper(&home, &agent);
+    stop(&home, &agent);
+    drop(relays);
+    home.expect_daemon_handles(before + PASSING);
+}
+
+#[test]
+fn relays_of_a_run_another_daemon_took_over_leave_no_handle() {
+    let home = TestHome::new("relaydaemon");
+    let agent = [home.start_fake("kept").id];
+    replace_daemon(&home);
+    let before = home.daemon_handles();
+    let relays = relays(&home, &agent[0]);
+    stop(&home, &agent);
+    drop(relays);
+    home.expect_daemon_handles(before + PASSING);
+}
+
+#[test]
+fn guests_that_leave_leave_no_handle() {
+    let home = TestHome::new("guestends");
+    // A connection keeps the daemon from ending while no Guest is there.
+    let _client = connect(&home);
+    let guest = || {
+        let mut guest = McpTestClient::open_guest(&home, "codex", &[]);
+        let listed = guest.call("list_agents", json!({}));
+        assert_eq!(listed["status"], "success", "{listed}");
+        guest
+    };
+    drop(guest());
+    let before = home.daemon_handles();
+    let guests: Vec<_> = (0..MANY).map(|_| guest()).collect();
+    drop(guests);
+    home.expect_daemon_handles(before + PASSING);
 }

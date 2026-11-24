@@ -2,6 +2,7 @@
 //! a request that the service answers.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::Shutdown;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -154,11 +155,13 @@ struct MachineHandoff<M> {
     machine: M,
 }
 
-/// Serves `socket` until the client closes, and cleans up after it.
+/// Serves `socket` until the client closes or `ended` completes, and cleans up after it. Dropped
+/// before it returns, it would leave the tasks of the connection behind.
 pub(super) async fn serve<S: Service>(
     service: Arc<S>,
     socket: ServerSocket,
     verified_actor: Option<VerifiedActor>,
+    ended: impl Future<Output = ()> + Send,
 ) -> anyhow::Result<()> {
     let Some(work) = service.work() else {
         return Ok(());
@@ -191,7 +194,10 @@ pub(super) async fn serve<S: Service>(
         teller: None,
     };
     let mut reader = BufReader::new(read);
-    let served = connection.read_requests(&mut reader).await;
+    let served = tokio::select! {
+        served = connection.read_requests(&mut reader) => served,
+        () = ended => Ok(None),
+    };
     // A reader can finish while the writer still needs the Shell cutoff.
     let shell_attach = connection.shell_attach.take();
     connection.clean_up(!matches!(&served, Ok(Some(_)))).await;
