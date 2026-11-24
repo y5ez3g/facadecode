@@ -96,6 +96,9 @@ pub const SHELL_CLI: &str = "sh";
 /// The settings entry of the fake CLI as a custom program: [`TestHome::start_plain`].
 const PLAIN_CLI: &str = "plain";
 
+/// What a running agent's terminal takes in the daemon: its actor's handles on it, and its run's.
+pub const TERMINAL_HANDLES: usize = if cfg!(windows) { 6 + 4 } else { 2 + 1 };
+
 /// Reads the Ref in the first line of a managed agent's background start or resume receipt.
 pub fn started_ref(out: &str) -> &str {
     let line = out.lines().next().expect("a background receipt");
@@ -466,6 +469,27 @@ impl TestHome {
             assert!(wait_for_screen_text(self, agent, "❯"), "{agent} drew");
         }
         agents
+    }
+
+    /// The handles the daemon holds open.
+    pub fn daemon_handles(&self) -> usize {
+        open_handles(self.daemon_pid().expect("a running daemon"))
+    }
+
+    /// Waits until the daemon holds at most `most` handles open: its threads end seconds after their
+    /// last work. A client of the test's keeps the daemon from ending meanwhile.
+    #[track_caller]
+    pub fn expect_daemon_handles(&self, most: usize) {
+        let _client = connect(self);
+        let mut open = 0;
+        assert!(
+            wait_until(LOADED_TIMEOUT, || {
+                open = self.daemon_handles();
+                open <= most
+            }),
+            "{open} handles stay open, {} more than were to be",
+            open - most
+        );
     }
 
     /// `facade`, run with an empty home folder of the test's own, so that no CLI settings of the

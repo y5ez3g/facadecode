@@ -1433,6 +1433,34 @@ fn a_newer_build_s_command_takes_over_while_agents_run() {
     );
 }
 
+/// The daemon of a newer build lets go of the terminals it took over as their runs end.
+#[test]
+fn agents_a_newer_build_took_over_leave_no_handle_of_their_terminals() {
+    const MANY: usize = 12;
+    let home = TestHome::new("takeoverends");
+    home.start_facade_with(&[]);
+    let agents = home.start_plain(MANY);
+    let older = home.daemon_pid();
+    let program = program_of_build(&home, &newer());
+    let run = |args: &[&str]| {
+        let ran = home
+            .command(&program)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(ran.status.success(), "{args:?}: {}", stderr(&ran));
+    };
+    run(&["list"]);
+    assert_ne!(home.daemon_pid(), older, "the newer build's daemon serves");
+    let running = home.daemon_handles();
+    for agent in &agents {
+        run(&["stop", agent]);
+    }
+    // Ten handles may come and go with the daemon's threads.
+    home.expect_daemon_handles(running - MANY * TERMINAL_HANDLES + 10);
+}
+
 /// A call on a connection that said hello before the drain is refused as `upgrading` and does
 /// nothing; a command repeats it at the next daemon, which does it once.
 #[test]

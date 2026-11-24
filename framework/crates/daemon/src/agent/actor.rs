@@ -1237,9 +1237,6 @@ impl Actor {
 
     /// Reads the last output into the screen before removal, and ends an open synchronized update.
     fn drain_for_removal(&mut self) {
-        if !self.terminal.is_open() {
-            return;
-        }
         let mut read = 0;
         while read < MAX_DRAIN_BYTES {
             let Some(n) = self.terminal.read_now() else {

@@ -277,8 +277,8 @@ Only the actor publishes the record.
 
 The terminal, as a `PtyIo`, and the input waiting for it.
 
-- **Owns:** the `PtyIo` (none between runs or once the terminal closed), the input queue, the last output read, whether the CLI's side closed, the bytes written so far and when.
-- **Keeps:** Input is written in order, at most 64 KiB at a time; a read takes at most 64 KiB. The count of bytes written never resets, across runs too: the typist finds its own bytes by it. Letting go of the terminal drops the queued input. `ready` can be cancelled safely. A write under way is given the same head of the queue until it returns; clearing the queue keeps those bytes. `stop_reading` leaves no read under way.
+- **Owns:** the `PtyIo` (none between runs or once the run's output ended), the input queue, the last output read, the bytes written so far and when.
+- **Keeps:** Input is written in order, at most 64 KiB at a time; a read takes at most 64 KiB. The count of bytes written never resets, across runs too: the typist finds its own bytes by it. Letting go of the terminal, as a read that finds the end of its output does, drops the queued input and the last output. `ready` can be cancelled safely. A write under way is given the same head of the queue until it returns; clearing the queue keeps those bytes. `stop_reading` leaves no read under way.
 - **Never does:** parse output, decide what input may wait, or select a submission key.
 - **Interface:** `new(Option<PtyMaster>)`, `install(PtyMaster)`, `detach()`, `stop_reading() -> Option<usize>` (async), `let_go_before_stop()`; `ready(TerminalWait) -> TerminalEvent` (`Read`, `Closed`, `Wrote`, `WriteFailed`), `read_now() -> Option<usize>`, `output() -> &[u8]`; `push(&[u8])`, `clear()`, `queued()`, `written()`, `written_at()`; `is_open()`, `is_closed()`, `set_size(cols, rows)`.
 

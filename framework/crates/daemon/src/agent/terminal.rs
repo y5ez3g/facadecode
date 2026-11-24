@@ -31,8 +31,8 @@ pub(crate) enum TerminalWait {
 
 /// An agent's terminal and the input waiting for it. Owned by its actor, without locks.
 pub(crate) struct Terminal {
+    /// None between runs and once the run's output ended.
     master: Option<PtyIo>,
-    read_closed: bool,
     input: VecDeque<u8>,
     /// The bytes at the head of `input` that a write under way was given: the terminal may still
     /// take them, so they stay at the head until a write returns.
@@ -48,7 +48,6 @@ impl Terminal {
     pub(crate) fn new(master: Option<PtyMaster>) -> anyhow::Result<Terminal> {
         let mut terminal = Self {
             master: None,
-            read_closed: true,
             input: VecDeque::new(),
             writing: 0,
             sent: 0,
@@ -65,17 +64,16 @@ impl Terminal {
     /// Takes a resumed run's master in place of none, without waiting or taking locks.
     pub(crate) fn install(&mut self, master: PtyMaster) -> anyhow::Result<()> {
         self.master = Some(PtyIo::new(master)?);
-        self.read_closed = false;
         self.received = 0;
         Ok(())
     }
 
-    /// Lets go of the master as a resume begins. Queued input is dropped.
+    /// Lets go of the master, as the run's output ends or a resume begins, and of what the run
+    /// left: its queued input is dropped.
     pub(crate) fn detach(&mut self) {
         self.master = None;
-        self.read_closed = true;
         self.writing = 0;
-        self.clear();
+        self.input = VecDeque::new();
         self.buffer = Vec::new();
         self.received = 0;
     }
@@ -86,7 +84,7 @@ impl Terminal {
         let Some(master) = self.master.as_ref() else {
             return pending().await;
         };
-        let read = matches!(wait, TerminalWait::ReadAndWrite) && !self.read_closed;
+        let read = matches!(wait, TerminalWait::ReadAndWrite);
         if read {
             self.buffer.resize(MAX_READ_BYTES, 0);
         }
@@ -100,19 +98,9 @@ impl Terminal {
             writing => &head[..writing],
         };
         self.writing = head.len();
-        tokio::select! {
-            result = master.read(&mut self.buffer), if read => {
-                match result {
-                    Ok(n) if n > 0 => {
-                        self.received = n;
-                        TerminalEvent::Read
-                    }
-                    _ => {
-                        self.read_closed = true;
-                        TerminalEvent::Closed
-                    }
-                }
-            }
+        let event = tokio::select! {
+            // A write that is done counts before the output's end lets go of the terminal.
+            biased;
             result = master.write(head), if !head.is_empty() => {
                 self.writing = 0;
                 match result {
@@ -125,24 +113,35 @@ impl Terminal {
                     Err(error) => TerminalEvent::WriteFailed(error),
                 }
             }
+            result = master.read(&mut self.buffer), if read => {
+                match result {
+                    Ok(n) if n > 0 => {
+                        self.received = n;
+                        TerminalEvent::Read
+                    }
+                    _ => TerminalEvent::Closed,
+                }
+            }
             else => pending().await,
+        };
+        if matches!(event, TerminalEvent::Closed) {
+            self.detach();
         }
+        event
     }
 
     /// One read that does not wait: how many bytes it brought, or None when nothing is there or the terminal closed.
     pub(crate) fn read_now(&mut self) -> Option<usize> {
-        if self.is_closed() {
-            return None;
-        }
+        let master = self.master.as_ref()?;
         self.buffer.resize(MAX_READ_BYTES, 0);
-        match self.master.as_ref()?.try_read(&mut self.buffer) {
+        match master.try_read(&mut self.buffer) {
             Ok(n) if n > 0 => {
                 self.received = n;
                 Some(n)
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => None,
             _ => {
-                self.read_closed = true;
+                self.detach();
                 None
             }
         }
@@ -150,7 +149,7 @@ impl Terminal {
 
     /// Leaves no read under way: how many bytes the read it ended brought, which `output` then
     /// holds, or None once no read is under way and no byte is kept, or with no master. Called
-    /// until it gives None. A failure closes the read side, as a failed read does.
+    /// until it gives None. A failure lets go of the master, as a failed read does.
     pub(crate) async fn stop_reading(&mut self) -> Option<usize> {
         let master = self.master.as_mut()?;
         self.buffer.resize(MAX_READ_BYTES, 0);
@@ -161,7 +160,7 @@ impl Terminal {
                 Some(n)
             }
             Err(_) => {
-                self.read_closed = true;
+                self.detach();
                 None
             }
         }
@@ -185,9 +184,9 @@ impl Terminal {
         self.master.is_some()
     }
 
-    /// Whether nothing more can be read: no master, or its CLI side closed.
+    /// Whether nothing more can be read: no master.
     pub(crate) fn is_closed(&self) -> bool {
-        self.read_closed
+        !self.is_open()
     }
 
     /// Queues input after what waits, without writing or waiting.
@@ -220,5 +219,104 @@ impl Terminal {
         if let Some(master) = &self.master {
             master.set_size(cols, rows);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use facade_base::terminal::{TestCli, test_terminal};
+
+    use super::*;
+
+    fn opened() -> (Terminal, TestCli) {
+        let (master, cli) = test_terminal(80, 24).unwrap();
+        (Terminal::new(Some(master)).unwrap(), cli)
+    }
+
+    /// Whether nothing of the run is left: no handle of its terminal, no input, no buffer.
+    fn let_go(terminal: &Terminal) -> bool {
+        !terminal.is_open()
+            && terminal.is_closed()
+            && (terminal.input.capacity(), terminal.buffer.capacity()) == (0, 0)
+    }
+
+    /// The terminal's next event, or a failure after 10 seconds.
+    async fn next(terminal: &mut Terminal) -> TerminalEvent {
+        let event = terminal.ready(TerminalWait::ReadAndWrite);
+        tokio::time::timeout(Duration::from_secs(10), event)
+            .await
+            .expect("an event")
+    }
+
+    #[tokio::test]
+    async fn a_terminal_is_let_go_of_as_its_output_ends() {
+        let (mut terminal, mut cli) = opened();
+        cli.write_output(b"last words").unwrap();
+        terminal.push(b"never read");
+        drop(cli);
+        let mut read = Vec::new();
+        loop {
+            assert!(terminal.is_open(), "open until its output was read");
+            match next(&mut terminal).await {
+                TerminalEvent::Read => read.extend_from_slice(terminal.output()),
+                TerminalEvent::Closed => break,
+                TerminalEvent::Wrote => {}
+                TerminalEvent::WriteFailed(_) => terminal.clear(),
+            }
+        }
+        assert_eq!(read, b"last words");
+        assert!(let_go(&terminal));
+    }
+
+    /// A write waits while the CLI reads nothing. What the CLI read before it closed was written.
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_write_that_is_done_counts_before_the_output_s_end() {
+        for _ in 0..20 {
+            let (mut terminal, mut cli) = opened();
+            // The terminal holds the first of two writes while the CLI reads nothing.
+            terminal.push(&[b'x'; 2 * MAX_WRITE_BYTES]);
+            assert!(matches!(next(&mut terminal).await, TerminalEvent::Wrote));
+            let waits = tokio::time::timeout(
+                Duration::from_millis(20),
+                terminal.ready(TerminalWait::ReadAndWrite),
+            );
+            assert!(waits.await.is_err(), "the second write waits");
+            let mut left = 2 * MAX_WRITE_BYTES;
+            let mut input = vec![0; MAX_WRITE_BYTES];
+            while left > 0 {
+                left -= cli.read_input(&mut input).unwrap();
+            }
+            drop(cli);
+            // Both the write and the output's end are there.
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            assert!(matches!(next(&mut terminal).await, TerminalEvent::Wrote));
+            assert_eq!(terminal.written(), 2 * MAX_WRITE_BYTES as u64);
+            assert!(matches!(next(&mut terminal).await, TerminalEvent::Closed));
+            assert!(let_go(&terminal));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_read_that_does_not_wait_lets_go_of_an_ended_terminal() {
+        let (mut terminal, mut cli) = opened();
+        cli.write_output(b"last words").unwrap();
+        drop(cli);
+        let mut read = Vec::new();
+        let ended = async {
+            while terminal.is_open() {
+                if terminal.read_now().is_some() {
+                    read.extend_from_slice(terminal.output());
+                }
+                tokio::task::yield_now().await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), ended)
+            .await
+            .expect("let go of at its end");
+        assert_eq!(read, b"last words");
+        assert!(let_go(&terminal));
     }
 }
