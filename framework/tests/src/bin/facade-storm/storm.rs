@@ -794,7 +794,20 @@ pub fn run(spec: &Spec, out: &Path) -> anyhow::Result<Outcome> {
     };
     let viewers = viewers + usize::from(frames.is_some());
     let strangers = Strangers::watch(&field.lab, &boss, viewers)?;
+    let idle_cpu = (spec.hogs > 0).then(crate::sample::machine);
     std::thread::sleep(Duration::from_millis(500));
+    let load = if spec.hogs > 0 {
+        let pid = field.lab.home.daemon_pid().context("the daemon PID")?;
+        Some((crate::sample::Over::start(pid), crate::sample::machine()))
+    } else {
+        None
+    };
+    if let Some(idle_cpu) = idle_cpu {
+        field.note(
+            "before_load_machine_cpu_percent",
+            json!(crate::sample::machine_percent(idle_cpu)),
+        );
+    }
     let hogs = Hogs::start(spec.hogs);
 
     // Every sender sends at one moment.
@@ -817,6 +830,16 @@ pub fn run(spec: &Spec, out: &Path) -> anyhow::Result<Outcome> {
         }
     });
     field.quiet()?;
+    if let Some((daemon, machine)) = load {
+        field.note(
+            "traffic_load",
+            json!({
+                "hogs": spec.hogs,
+                "machine_cpu_percent": crate::sample::machine_percent(machine),
+                "daemon": daemon.end(),
+            }),
+        );
+    }
     std::thread::sleep(spec.stay.saturating_sub(came.elapsed()));
     drop(hogs);
     if let Some(person) = person {
@@ -842,14 +865,14 @@ fn handoffs(lab: &Lab, boss: &Agent, frames: &crate::real::Frames) -> anyhow::Re
     let seen = frames.drafts();
     let tape = lab.tape(&boss.id);
     let mut parts: [Vec<f64>; 5] = Default::default();
-    for (paste, token) in &tape.tokens {
-        let crate::tape::Token::Paste(text) = token else {
+    for (read, token) in &tape.tokens {
+        let crate::tape::Token::Paste(paste) = token else {
             continue;
         };
-        let Some(number) = judge::headers(text).first().copied() else {
+        let Some(number) = judge::headers(&paste.text).first().copied() else {
             continue;
         };
-        let after = |us: u64| us > *paste;
+        let after = |us: u64| us > *read;
         let drawn = tape
             .boxes
             .iter()
@@ -858,7 +881,7 @@ fn handoffs(lab: &Lab, boss: &Agent, frames: &crate::real::Frames) -> anyhow::Re
         let key = tape
             .tokens
             .iter()
-            .find(|(us, token)| *us >= *paste && *token == crate::tape::Token::Control(b'\r'))
+            .find(|(us, token)| *us >= *read && *token == crate::tape::Token::Control(b'\r'))
             .map(|(us, _)| *us);
         let submit = tape
             .submissions
@@ -878,7 +901,7 @@ fn handoffs(lab: &Lab, boss: &Agent, frames: &crate::real::Frames) -> anyhow::Re
         };
         let ms = |from: u64, to: u64| (to as f64 - from as f64) / 1000.0;
         for (part, value) in parts.iter_mut().zip([
-            ms(*paste, drawn),
+            ms(*read, drawn),
             ms(drawn, viewer),
             ms(viewer, written),
             ms(written, key),

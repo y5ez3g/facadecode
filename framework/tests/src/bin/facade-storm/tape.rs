@@ -27,10 +27,31 @@ pub enum Token {
     Char(char),
     /// A control byte outside a paste, such as Enter.
     Control(u8),
-    /// A bracketed paste's text as it was read.
-    Paste(String),
+    /// A bracketed paste as it was read.
+    Paste(Paste),
     /// An escape sequence: CSI, SS3, OSC or a lone Escape.
     Escape(Vec<u8>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Paste {
+    pub text: String,
+    pub began_us: u64,
+    /// The fake CLI numbers only the pastes it displays as placeholders.
+    number: Option<usize>,
+}
+
+impl Paste {
+    /// How the fake CLI draws this paste in its input.
+    pub fn displayed(&self) -> String {
+        match self.number {
+            Some(number) => {
+                let lines_after_first = self.text.matches('\n').count();
+                format!("[Pasted text #{number} +{lines_after_first} lines]")
+            }
+            None => self.text.clone(),
+        }
+    }
 }
 
 pub struct Tape {
@@ -103,34 +124,34 @@ impl Tape {
 
     /// [`Tape::held_ms`], and besides, from each of a person's keys until the input shows, in order,
     /// what that key left: its line so far after a character or a Backspace, an empty input after an
-    /// Enter, any change after a paste. A key the input never shows holds it until 2.5 s after that key
-    /// or after the input's last change, whichever is later (a58's rule, director m310; the product's
-    /// own `Unshown`).
+    /// Enter, the pasted text or its own placeholder after a paste. If the CLI takes a paste without
+    /// drawing it, the following edits cannot account for its missing frame. The person's use then
+    /// holds the input until both their keys and the input have been quiet for 2.5 s.
     pub fn held_with_keys_ms(&self, from: u64, to: u64) -> u64 {
         const SLOWEST_DRAW: u64 = 2_500_000;
         // The person's keys as the CLI read them, each with what the input shows once it has them.
-        let mut keys: Vec<(u64, Option<String>)> = Vec::new();
+        let mut keys = Vec::new();
         let (mut line, mut theirs) = (String::new(), false);
         for (us, token) in &self.tokens {
             match token {
                 Token::Char(ch) => {
                     line.push(*ch);
                     theirs = true;
-                    keys.push((*us, Some(line.clone())));
+                    keys.push((*us, *us, line.clone(), false));
                 }
-                Token::Paste(text) if !is_facades(text) => {
+                Token::Paste(paste) if !is_facades(&paste.text) => {
                     theirs = true;
-                    line.clear();
-                    keys.push((*us, None));
+                    line.push_str(&paste.displayed());
+                    keys.push((paste.began_us, *us, line.clone(), true));
                 }
                 Token::Control(0x7f | 0x08) if theirs => {
                     line.pop();
-                    keys.push((*us, Some(line.clone())));
+                    keys.push((*us, *us, line.clone(), false));
                 }
                 Token::Control(b'\r') if theirs => {
                     line.clear();
                     theirs = false;
-                    keys.push((*us, Some(String::new())));
+                    keys.push((*us, *us, String::new(), false));
                 }
                 Token::Paste(_) | Token::Control(b'\r') => {
                     line.clear();
@@ -141,24 +162,48 @@ impl Tape {
         }
         let mut spans: Vec<(u64, u64)> = Vec::new();
         let mut next_box = 0;
-        for (at, (us, shows)) in keys.iter().enumerate() {
+        for (at, (began, us, expected, paste)) in keys.iter().enumerate() {
             // The input's changes after this key, in order, from where the key before left off.
-            while next_box < self.boxes.len() && self.boxes[next_box].0 <= *us {
+            while next_box < self.boxes.len() && self.boxes[next_box].0 < *us {
                 next_box += 1;
             }
             let seen = self.boxes[next_box..]
                 .iter()
-                .position(|(_, shown)| match shows {
-                    Some(expected) => shown.trim_end() == expected.trim_end(),
-                    None => true,
-                });
+                .position(|(_, shown)| shown.trim_end() == expected.trim_end());
             let until = match seen {
                 Some(found) => {
                     next_box += found;
                     self.boxes[next_box].0
                 }
+                None if *paste => {
+                    // A later paste's draft and Enter belong to that paste. Keep the unshown
+                    // interval until the end of this stretch of editing, including the final draw.
+                    let mut edits = keys[at + 1..].iter().peekable();
+                    let mut drawings = self.boxes[next_box..]
+                        .iter()
+                        .map(|frame| frame.0)
+                        .peekable();
+                    let mut until = us + SLOWEST_DRAW;
+                    loop {
+                        let edit = edits.peek().map(|key| key.0);
+                        let Some(next) = edit.into_iter().chain(drawings.peek().copied()).min()
+                        else {
+                            break;
+                        };
+                        if next > until {
+                            break;
+                        }
+                        let last = if edit == Some(next) {
+                            edits.next().unwrap().1
+                        } else {
+                            drawings.next().unwrap()
+                        };
+                        until = until.max(last + SLOWEST_DRAW);
+                    }
+                    until
+                }
                 None => {
-                    let later = keys.get(at + 1).map_or(0, |(us, _)| *us);
+                    let later = keys.get(at + 1).map_or(0, |key| key.0);
                     let changed = self
                         .boxes
                         .iter()
@@ -169,7 +214,7 @@ impl Tape {
                     (changed.max(*us) + SLOWEST_DRAW).min(later.max(us + SLOWEST_DRAW))
                 }
             };
-            spans.push((*us, until));
+            spans.push((*began, until));
         }
         let mut held = self.held_spans();
         held.extend(spans);
@@ -198,16 +243,13 @@ impl Tape {
     /// When its input held something that was not Facade's, or a question was in its place.
     fn held_spans(&self) -> Vec<(u64, u64)> {
         // The numbers the fake CLI gives Facade's pastes in their placeholders.
-        let mut number = 0;
         let mut facades = std::collections::BTreeSet::new();
         for (_, token) in &self.tokens {
-            let Token::Paste(text) = token else { continue };
-            let text = text.replace("\r\n", "\n").replace('\r', "\n");
-            if text.contains('\n') || text.len() > 400 {
-                number += 1;
-                if is_facades(&text) {
-                    facades.insert(number);
-                }
+            if let Token::Paste(paste) = token
+                && let Some(number) = paste.number
+                && is_facades(&paste.text)
+            {
+                facades.insert(number);
             }
         }
         let is_held = |shown: &str| {
@@ -250,9 +292,7 @@ impl Tape {
         let pastes: Vec<u64> = self
             .tokens
             .iter()
-            .filter(|(_, token)| {
-                matches!(token, Token::Paste(text) if is_facades(&text.replace('\r', "\n")))
-            })
+            .filter(|(_, token)| matches!(token, Token::Paste(paste) if is_facades(&paste.text)))
             .map(|(us, _)| *us)
             .collect();
         for (at, paste) in pastes.iter().enumerate() {
@@ -310,6 +350,7 @@ fn tokens(reads: &[(u64, Vec<u8>)]) -> Vec<(u64, Token)> {
     };
     let mut out = Vec::new();
     let mut i = 0;
+    let mut number = 0;
     while i < bytes.len() {
         let rest = &bytes[i..];
         if rest.starts_with(PASTE_START) {
@@ -319,11 +360,22 @@ fn tokens(reads: &[(u64, Vec<u8>)]) -> Vec<(u64, Token)> {
                 Some(end) => (&bytes[from..end], end + PASTE_END.len()),
                 None => (&bytes[from..], bytes.len()),
             };
-            let mut text = String::from_utf8_lossy(text).into_owned();
+            let mut text = crate::judge::plain(&String::from_utf8_lossy(text));
+            let placeholder = end.is_some() && (text.contains('\n') || text.len() > 400);
             if end.is_none() {
                 text.push_str("<no end>");
             }
-            out.push((at(next), Token::Paste(text)));
+            if placeholder {
+                number += 1;
+            }
+            out.push((
+                at(next),
+                Token::Paste(Paste {
+                    text,
+                    began_us: at(i + 1),
+                    number: placeholder.then_some(number),
+                }),
+            ));
             i = next;
         } else if rest[0] == 0x1b {
             let length = escape_length(rest);
@@ -378,4 +430,40 @@ fn escape_length(bytes: &[u8]) -> usize {
 
 fn find(bytes: &[u8], what: &[u8]) -> Option<usize> {
     bytes.windows(what.len()).position(|part| part == what)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_later_paste_does_not_show_the_one_the_cli_skipped_drawing() {
+        let mut tape = Tape::of(Vec::new());
+        tape.tokens = tokens(&[
+            (100_000, b"\x1b[200~one".to_vec()),
+            (300_000, b"\rtwo\x1b[201~\r".to_vec()),
+            (1_800_000, b"\x1b[200~three\rfour\x1b[201~".to_vec()),
+            (2_000_000, b"\r".to_vec()),
+        ]);
+        tape.boxes = vec![
+            (1_900_000, "[Pasted text #2 +1 lines]".to_string()),
+            (2_100_000, String::new()),
+        ];
+        assert_eq!(tape.held_with_keys_ms(0, 10_000_000), 4500);
+    }
+
+    #[test]
+    fn a_chunked_paste_holds_from_its_first_byte_to_its_own_draft_and_clear() {
+        let mut tape = Tape::of(Vec::new());
+        tape.tokens = tokens(&[
+            (100_000, b"\x1b[200~one".to_vec()),
+            (300_000, b"\rtwo\x1b[201~".to_vec()),
+            (400_000, b"\r".to_vec()),
+        ]);
+        tape.boxes = vec![
+            (350_000, "[Pasted text #1 +1 lines]".to_string()),
+            (500_000, String::new()),
+        ];
+        assert_eq!(tape.held_with_keys_ms(0, 10_000_000), 400);
+    }
 }

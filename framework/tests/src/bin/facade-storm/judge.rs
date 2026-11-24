@@ -756,7 +756,7 @@ fn removed_by_person(window: &Window, number: u64) -> bool {
         return false;
     }
     let pasted = window.tape.tokens.iter().position(
-        |(_, token)| matches!(token, Token::Paste(text) if headers(text).contains(&number)),
+        |(_, token)| matches!(token, Token::Paste(paste) if headers(&paste.text).contains(&number)),
     );
     pasted.is_some_and(|at| {
         window.tape.tokens[at + 1..]
@@ -870,9 +870,9 @@ fn leftovers(
     }
     let allowed = STAYS_MS + TYPIST_MS + 4 * window.draw_ms;
     for (us, token) in &window.tape.tokens {
-        let Token::Paste(text) = token else { continue };
-        let text = plain(text);
-        if !is_facades(&text) {
+        let Token::Paste(paste) = token else { continue };
+        let text = &paste.text;
+        if !is_facades(text) {
             continue;
         }
         let submitted = window
@@ -883,7 +883,7 @@ fn leftovers(
                 submission.us >= *us
                     && submission.pieces.iter().any(|piece| match piece {
                         Piece::Pasted(pasted) | Piece::Typed(pasted) => {
-                            plain(pasted).contains(&text)
+                            plain(pasted).contains(text)
                         }
                     })
             })
@@ -971,23 +971,41 @@ fn keys(window: &Window, say: &mut dyn FnMut(&'static str, String, Option<&'stat
     let given: String = person.chars.iter().map(|(ch, _)| ch).collect();
     let got: String = read.iter().map(|(ch, _)| ch).collect();
     let mut late = Vec::new();
-    // Facade's pastes, each with how long the CLI took to show it: the time it took to read it.
-    let pastes: Vec<(u64, u64)> = window
+    // The input tape comes from the fake CLI. Use the rule's settle time and measure each paste
+    // from its first byte to the frame showing its full draft.
+    let fake_rule = facade_rules::find("fake").ok().flatten();
+    let pastes: Vec<_> = window
         .tape
         .tokens
         .iter()
-        .filter_map(|(us, token)| match token {
-            Token::Paste(text) if is_facades(text) => Some(*us),
-            _ => None,
-        })
-        .map(|us| {
+        .filter_map(|(us, token)| {
+            let Token::Paste(paste) = token else {
+                return None;
+            };
+            if !is_facades(&paste.text) {
+                return None;
+            }
+            let expected = paste.displayed();
             let shown = window
                 .tape
                 .boxes
                 .iter()
-                .find(|(at, shown)| *at >= us && !shown.is_empty())
-                .map_or(us, |(at, _)| *at);
-            (us, shown - us)
+                .find(|(at, shown)| *at >= *us && *shown == expected)?
+                .0;
+            let settle = facade_rules::settle_time(&fake_rule?.paste, &paste.text);
+            let ready = shown + settle.as_micros() as u64;
+            let submitted = window
+                .tape
+                .submissions
+                .iter()
+                .find(|submission| {
+                    submission.us >= shown
+                        && submission.pieces.iter().any(|piece| match piece {
+                            Piece::Pasted(text) | Piece::Typed(text) => *text == paste.text,
+                        })
+                })
+                .map_or(ready, |submission| submission.us);
+            Some((paste.began_us, submitted.max(ready), ready - paste.began_us))
         })
         .collect();
     if given == got {
@@ -995,16 +1013,15 @@ fn keys(window: &Window, say: &mut dyn FnMut(&'static str, String, Option<&'stat
         for ((_, sent), (_, read)) in person.chars.iter().zip(&read) {
             let delay = read.saturating_sub(*sent) as f64 / 1000.0;
             late.push(delay);
-            // I13: what the CLI took to read a message of Facade's that went in meanwhile, its settle
-            // time and 200 ms.
-            let reading = pastes
+            // Only a paste that could have held this key contributes to its allowance.
+            let paste_and_settle = pastes
                 .iter()
-                .filter(|(us, _)| *us + 1_000_000 >= *sent && *us <= *read)
-                .map(|(_, took)| *took)
+                .filter(|(began, until, _)| *began <= *read && *until >= *sent)
+                .map(|(_, _, took)| *took)
                 .max()
                 .unwrap_or(0) as f64
                 / 1000.0;
-            let allowed = reading + STAYS_MS as f64 + 200.0;
+            let allowed = paste_and_settle + 200.0;
             if delay - allowed > worst.0 - worst.1 {
                 worst = (delay, allowed);
             }
@@ -1047,7 +1064,7 @@ fn keys(window: &Window, say: &mut dyn FnMut(&'static str, String, Option<&'stat
         .tokens
         .iter()
         .filter_map(|(_, token)| match token {
-            Token::Paste(text) => Some(plain(text)),
+            Token::Paste(paste) => Some(paste.text.clone()),
             _ => None,
         })
         .filter(|text| !is_facades(text))

@@ -260,7 +260,7 @@ fn reads(tape: &Tape, name: &str) -> Option<(u64, u64)> {
     let paste = tape
         .tokens
         .iter()
-        .position(|(_, token)| matches!(token, Token::Paste(text) if text.contains(name)))?;
+        .position(|(_, token)| matches!(token, Token::Paste(paste) if paste.text.contains(name)))?;
     let enter = tape.tokens[paste..]
         .iter()
         .find(|(_, token)| *token == Token::Control(b'\r'))?;
@@ -620,7 +620,7 @@ fn burst(
         .tokens
         .iter()
         .filter(|(us, token)| {
-            *us > began && matches!(token, Token::Paste(text) if is_facades(text))
+            *us > began && matches!(token, Token::Paste(paste) if is_facades(&paste.text))
         })
         .zip(&mine)
         .map(|((paste, _), key)| key.saturating_sub(*paste) as f64 / 1000.0)
