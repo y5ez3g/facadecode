@@ -18,7 +18,6 @@ use facade_base::model::terminal::DEFAULT_TERMINAL_SIZE;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use super::addresses::inbox_role;
 use super::daemon_calls::{CONNECT_TIMEOUT, failed, open_with};
 use super::{
     ActorIdentity, Relay, Tool, ToolCall, agent_tools, envelope, message_tools, optional,
@@ -147,19 +146,10 @@ fn start(
     match client.call_with_request_id::<AgentStart>(start, true) {
         Ok((started, _)) => {
             let agent = started.agent;
-            let mut data = json!({
+            envelope::success(json!({
                 "id": agent.address, "name": agent.name, "folder": agent.cwd,
                 "machine_id": agent.reference.machine_id,
-            });
-            if let (Some(id), Some(machine)) =
-                (started.result_message_id, started.result_message_machine_id)
-            {
-                match inbox_role(&id, &machine, &actor.reference.machine_id, &[]) {
-                    Ok(address) => data["result_message"] = json!(address),
-                    Err(error) => return envelope::refusal(&error),
-                }
-            }
-            envelope::success(data)
+            }))
         }
         Err(err) => match err.downcast_ref::<api_v1::ErrorBody>() {
             Some(error) => agent_tools::start_daemon_refused(error),

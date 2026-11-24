@@ -67,7 +67,6 @@ fn a_startup_permission_wait_and_prompt_failure_share_the_reserved_notice() {
     let mut tools = McpTestClient::open(&home, &boss.id);
     let started = start_child(&home, &mut tools, "child", Some("initial instruction"));
     let address = started["id"].as_str().unwrap();
-    let reserved = started["result_message"].as_str().unwrap();
     assert!(wait_for_screen_text(&home, address, "❯"));
     let since = Instant::now();
     submit(&home, address, "/fake block permission Trust this folder?");
@@ -107,7 +106,7 @@ fn a_startup_permission_wait_and_prompt_failure_share_the_reserved_notice() {
     home.run_facade_ok(&["send", address, "after recovery", "-w"]);
     let rows = system_inbox(&mut tools);
     assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["id"], reserved, "{rows:?}");
+    assert_eq!(rows[0]["id"], "m2", "{rows:?}");
     let text = rows[0]["text"].as_str().unwrap();
     for fact in [address, "Your prompt", "permission", "read_screen"] {
         assert!(text.contains(fact), "missing {fact:?}: {text}");

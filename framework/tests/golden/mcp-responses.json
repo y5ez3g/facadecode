@@ -958,8 +958,7 @@
         "id": "a4@golden-host",
         "name": "twin",
         "folder": "<test>/project",
-        "machine_id": "<machine ID>",
-        "result_message": "m4"
+        "machine_id": "<machine ID>"
       }
     }
   },

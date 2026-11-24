@@ -3382,8 +3382,20 @@ fn peers_keep_the_wait_and_start_result_notice_shapes() {
         }),
     );
     assert_eq!(start["status"], "success", "{start}");
-    let reserved = start["data"]["result_message"].as_str().unwrap();
     let first_prompt = start["data"]["id"].as_str().unwrap();
+    let request = observed_frame(
+        &bridge.from_front,
+        "the start with a first prompt",
+        |frame| {
+            frame["params"]["params"]["op"] == "agent.start"
+                && frame["params"]["params"]["args"]["name"] == "first-prompt"
+        },
+    );
+    let reserved = &request["params"]["start_result"];
+    assert_eq!(reserved["machine_id"], origin_id, "{request}");
+    let notice_id = reserved["message_id"]
+        .as_str()
+        .expect("the reserved notice number");
     peer.wait_for_gate("before-prompt-delivery");
     peer.run_facade_ok(&["stop", first_prompt]);
     peer.release_gate("before-prompt-delivery");
@@ -3395,7 +3407,7 @@ fn peers_keep_the_wait_and_start_result_notice_shapes() {
     assert_eq!(args.as_object().unwrap().len(), 2, "{args}");
     assert_eq!(args["recipient"], boss_ref);
     let message = &args["message"];
-    assert_eq!(message["message_id"], reserved, "{message}");
+    assert_eq!(message["message_id"], notice_id, "{message}");
     assert_eq!(message["from"], "facade", "{message}");
     let outcome = &message["result"];
     assert_eq!(outcome["agent"]["process"], "ended", "{outcome}");
@@ -3676,8 +3688,18 @@ fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
         start["params"]["params"]["args"]["prompt"], prompt,
         "{start}"
     );
-    let receipt = &started["data"]["result_message"];
-    let expected_receipt = json!({ "machine_id": origin_id, "message_id": receipt });
+    let start_reply = observed_frame(&bridge.from_peer, "the holder's start receipt", |frame| {
+        frame["id"] == start["id"] && frame.get("method").is_none()
+    });
+    let receipt = &start_reply["result"];
+    assert_eq!(
+        receipt["result_message_machine_id"], origin_id,
+        "{start_reply}"
+    );
+    let receipt_id = receipt["result_message_id"]
+        .as_str()
+        .expect("the reserved receipt ID");
+    let expected_receipt = json!({ "machine_id": origin_id, "message_id": receipt_id });
     assert_eq!(start["params"]["start_result"], expected_receipt, "{start}");
     let address = started["data"]["id"].as_str().expect("the child's address");
     assert_eq!(address, format!("{}@holder", creator.id), "{started}");
@@ -3718,7 +3740,7 @@ fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
     assert_eq!(args["recipient"], creator_ref, "{args}");
     let message = &args["message"];
     assert_eq!(message["message_ref"], expected_receipt, "{message}");
-    assert_eq!(message["message_id"], *receipt, "{message}");
+    assert_eq!(message["message_id"], receipt_id, "{message}");
     assert_eq!(message["from"], "facade", "{message}");
     assert_eq!(message["to"], creator.id, "{message}");
     let outcome = &message["result"];
@@ -3765,7 +3787,6 @@ fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
     let prompt_id = outcome["prompt"]["message_id"]
         .as_str()
         .expect("the prompt's ID");
-    let receipt_id = receipt.as_str().expect("the reserved receipt ID");
     let title = format!("child ({address}) has started.");
     let summary = format!(
         "Your prompt {prompt_id}@holder could not be delivered. Nothing was entered in the terminal."

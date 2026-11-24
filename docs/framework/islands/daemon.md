@@ -720,6 +720,10 @@ adds available CLI names on answered, reachable machines within the roster deadl
 Local Managed discovery uses the verified run environment and working directory. Guest discovery and remote
 discovery use the target login context. Local Guest start still validates its authenticated relay environment.
 
+`start_agent` returns the agent's address, name, folder and machine ID. If the first prompt fails
+while the caller's inbox is available, the notice uses the message number reserved by the daemon's
+start receipt.
+
 `read_messages` filters its page before delivery and commits only complete returned messages. `reply_to`
 includes retained, delivered replies. Guests and agents without terminal message delivery can wait for matches
 under the call's deadline. A positive `timeout_seconds` for a managed agent with terminal message delivery is

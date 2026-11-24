@@ -135,7 +135,7 @@ fn start_agent_s_prompt_goes_first_without_a_success_notice() {
         (&json!(format!("a2@{host}")), &json!("child")),
         "{started}"
     );
-    assert_eq!(started["data"]["result_message"], "m2", "{started}");
+    assert!(started["data"].get("result_message").is_none(), "{started}");
     assert!(wait_for_submission(&home, &prompt(&host)));
     // The second delivered message confirms that the typist has settled the prompt.
     let next = home.run_facade_ok(&["send", "child", "next", "-w"]);
@@ -157,8 +157,7 @@ fn a_child_reading_its_initial_prompt_settles_it_silently() {
     let home = TestHome::new("promptreadsits");
     home.start_facade_with(&[("FACADE_TEST_GATES", "before-prompt-delivery")]);
     let (mut boss, here) = boss(&home);
-    let started = start_child(&mut boss, &here, "fix the bug");
-    assert_eq!(started["data"]["result_message"], "m2", "{started}");
+    start_child(&mut boss, &here, "fix the bug");
     home.wait_for_gate("before-prompt-delivery");
     let mut child = McpTestClient::open(&home, "a2");
     let read = child.call("read_messages", json!({}));
@@ -420,7 +419,9 @@ fn a_failure_result_read_before_it_is_typed_is_never_typed() {
     home.release_gate("before-prompt-delivery");
     home.wait_for_gate("before-result-delivery");
     let read = boss.call("read_messages", json!({}));
-    let row = &read["data"]["messages"][0];
+    let [row] = read["data"]["messages"].as_array().unwrap().as_slice() else {
+        panic!("expected exactly one start result: {read}");
+    };
     assert_eq!(
         (&row["id"], &row["from"]),
         (&json!("m2"), &json!("facade")),

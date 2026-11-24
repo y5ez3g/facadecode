@@ -172,7 +172,8 @@ A managed agent with terminal message delivery can read immediately or end its t
 A positive read timeout for that agent is refused before touching its inbox. Read pages with `after` or `last`.
 Tool results carry complete message text inline.
 Managed agents receive replies and background failures in their terminals. A terminal notice begins with `🔔`.
-Its record number is available in the inbox. A first prompt's failure and its startup problem share one notice.
+Its record number is available in the inbox. `start_agent` returns the agent's address, name, folder and machine ID.
+A first prompt's failure and its startup problem share one notice in the live caller's inbox.
 The live agent creator also receives one notice per incident when its agent waits
 for permission, an answer or login for 30 seconds, stays in Error for 30 seconds, or ends without its request.
 See the [MCP contract](../extension/engineering/MCP.md#7-mcp-through-the-orchestrator).
