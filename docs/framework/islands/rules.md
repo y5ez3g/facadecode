@@ -226,6 +226,9 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     rule or the screen's end, and no menu shows. Without the upper rule among those rows, rows may
     be out of sight above: `InputLine::cut` says so, and `BoxReading::draft_hidden` counts one row
     there for telling a message's own draft. `hidden` stays empty, as Pi marks nothing.
+  - Muse Code's frame also scrolls without a mark (`scrolls_unmarked`), its prompt row with the
+    draft's first rows. A frame without its prompt row is then a draft cut above, as Pi's cut editor
+    is, where it ends in the cursor's row, behind the text, and no menu shows.
   - Codex's `prompt` input accepts `›` and its `alternate_prompt`, `»` at Ultra effort.
     A wrapped footer can end with a shortcuts row that may include aligned status, the
     `tab to queue message` hint, or a standalone warning count ending in `f2 to view` with at least
@@ -235,7 +238,15 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     and last input rows. When the model line is absent, those glyphs anchor the scrolled composer.
     The draft omits the glyphs and the reading reports one hidden row for each marked side.
   - OpenCode's box has one space between the bar and the text below `narrow_below` (44 columns),
-    and two spaces from that width.
+    and two spaces from that width. Where the screen ends within the box, its rows up to the cursor
+    are a draft, and nothing as empty. The cursor has to be behind the text, over a blank row of the
+    box or the screen's end, and no menu shows.
+  - In a narrow window, Muse Code ends the title in its frame's upper rule with `…`, and Codex draws
+    `…` in its model line in place of the folder.
+  - Where a draft does not fit with Codex's model line, Codex leaves the model line out and marks
+    nothing. Its input from the prompt row down to the cursor's row is then a draft, never an empty
+    input: the cursor stands behind the text of the input's last row, the rows under it are blank but
+    for the screen's last, where Codex keeps its status, and no menu shows.
   - A screen in the middle of a synchronized update, a cursor off the screen, or a hidden terminal cursor with no inverse cell of the CLI's own at that position never reads `usable` or `draft`.
   - Colored text alone where the input starts could be a hint or a draft. Claude can also draw hints without styling. For automatic delivery to a fresh input that has received no external edits, the reader marks a single unstyled row at the input start as `unknown` and unsure. Ordinary input reads identify that writing as a draft. A dim hint, or a mode placeholder shown above its footer, counts as empty only while the cursor is where the input starts.
   - A probe is judged from two readings, before its key and after, never from the time between them: whether its space went in by the cursor and the text, what the row was by the text alone, and whether Backspace put the box back by every cell and the cursor.

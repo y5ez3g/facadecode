@@ -9,7 +9,7 @@
 		"mechanism": "prompt",
 		"prompt": "›",
 		"alternate_prompt": "»",
-		"model_line": "^ {2}\\S.*? · (?:[~/]|[A-Za-z]:\\\\)",
+		"model_line": "^ {2}\\S.*? · (?:[~/]|[A-Za-z]:\\\\|…\\s*$)",
 		"wrapped_footer_hint": "^(?: {2}(?:(?:← for agents · )?\\? for shortcuts(?: {2,}\\S.*)?|tab to queue message)| {20,}⚠ (?:1 warning|(?:[2-9]|[1-9][0-9]+) warnings) · f2 to view)$",
 		"scrolled": { "position": "last_column", "above": "↑", "below": "↓" },
 		"menus": [{ "selected": "^› \\d+\\. \\S", "next": "^ {2}\\d+\\. \\S", "hint": { "pattern": "^ {2}(?:Press )?[Ee]nter\\b", "within": 10 } }]

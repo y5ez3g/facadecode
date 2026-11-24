@@ -9,9 +9,10 @@
 		"mechanism": "frame",
 		"prompt": "❯",
 		"gap": " ",
-		"upper": "^(?:─+|─{2} [^─]+ ─+)$",
+		"upper": "^(?:─+|─{2} [^─]+ ─+|─{2} [^─]+… *)$",
 		"lower": "^─+$",
 		"scrolled": { "position": "rows", "above": "^↑ (\\d+) more lines?$", "below": "^↓ (\\d+) more lines?$" },
+		"scrolls_unmarked": true,
 		"menus": [{ "selected": "^⟩ \\d+ +\\S", "next": "^ {2}\\d+ +\\S" }]
 	},
 	"paste": {

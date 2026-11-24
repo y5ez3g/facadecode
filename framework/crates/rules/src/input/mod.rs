@@ -537,7 +537,8 @@ impl<'a> Screen<'a> {
             Scrolled::Rules(marks) => (None, Some(marks)),
             Scrolled::LastColumn { .. } => (None, None),
         };
-        // Up from the cursor over wrapped rows to the prompt or a marked upper rule.
+        // Up from the cursor over wrapped rows to the prompt, or to the upper rule over a draft that
+        // scrolled.
         let upper = (0..=cursor_row)
             .rev()
             .find(|&y| prompt_at(y) || !self.wrapped(y))
@@ -552,10 +553,14 @@ impl<'a> Screen<'a> {
             return missing();
         };
         let first = upper + 1;
-        let above = rule_marks.and_then(|marks| counted(&marks.above, &self.lines[upper]));
-        if first > cursor_row
-            || !(above.is_some() || prompt_at(first) && frame.upper.is_match(&self.lines[upper]))
-        {
+        let upper_at = frame.upper.is_match(&self.lines[upper]);
+        let above = match &frame.scrolled {
+            Scrolled::Rules(marks) => counted(&marks.above, &self.lines[upper]),
+            Scrolled::Rows(_) | Scrolled::LastColumn { .. } => None,
+        };
+        // The prompt row scrolled out without a mark.
+        let unmarked = frame.scrolls_unmarked && above.is_none() && upper_at && !prompt_at(first);
+        if first > cursor_row || !(above.is_some() || unmarked || prompt_at(first) && upper_at) {
             return missing();
         }
         // Down over wrapped rows to the lower rule.
@@ -569,9 +574,13 @@ impl<'a> Screen<'a> {
             return missing();
         };
         let below = below_at(lower);
-        if above.is_some() || below.is_some() {
+        if above.is_some() || below.is_some() || unmarked {
             let lines: Vec<&Cells> = (first..lower).map(|y| self.from(y, 2)).collect();
-            return self.scrolled_draft(first, "the input frame", (above, below), &lines);
+            let draft = || self.scrolled_draft(first, "the input frame", (above, below), &lines);
+            return match unmarked && below.is_none() {
+                true => self.as_pasted(missing(), first, &lines, || draft().cut()),
+                false => draft(),
+            };
         }
         if let Some(mode) = &frame.placeholder {
             let one_row = lower == first + 1;
@@ -660,7 +669,7 @@ impl<'a> Screen<'a> {
             _ => (false, false),
         };
         if model.is_none() && !above && !below {
-            return missing_model();
+            return self.without_model_line(prompt, prompt_at, missing_model());
         }
         if !(prompt..end).contains(&cursor_row) {
             return if model.is_some() {
@@ -696,6 +705,29 @@ impl<'a> Screen<'a> {
             (above.then_some(1), below.then_some(1)),
             &lines,
         )
+    }
+
+    /// A prompt input whose CLI left its model line out, as one does where a draft does not fit
+    /// with it, from row `prompt`: a draft where its last row is the cursor's and holds text, and
+    /// only blank rows are under it but for the screen's last, where the CLI keeps its status, and no
+    /// menu shows; otherwise `none`. An empty input keeps its model line.
+    fn without_model_line(
+        &self,
+        prompt: usize,
+        prompt_at: impl Fn(usize) -> bool,
+        none: Reading,
+    ) -> Reading {
+        let cursor_row = self.cursor.1;
+        let under = cursor_row + 1;
+        let status = |y: usize| y > under && y + 1 == self.height() && !prompt_at(y);
+        let alone = (under..self.height()).all(|y| self.blank(y) || status(y));
+        if prompt > cursor_row || self.blank(cursor_row) || !alone {
+            return none;
+        }
+        let lines: Vec<&Cells> = (prompt..under).map(|y| self.from(y, 2)).collect();
+        self.as_pasted(none, prompt, &lines, || {
+            self.scrolled_draft(prompt, "the input", (None, None), &lines)
+        })
     }
 
     /// `editor`: rows between two rules, with a cursor the CLI draws itself.
@@ -842,23 +874,24 @@ impl<'a> Screen<'a> {
         if !inside(cursor_row) || column < text_from {
             return missing();
         }
-        let border = (cursor_row + 1..self.height())
-            .find(|&y| !barred(y))
-            .unwrap_or(self.height());
-        if border >= self.height() || border < 2 {
+        let border = (cursor_row + 1..self.height()).find(|&y| !barred(y));
+        // Under the text, a blank box row, then the box's last row over the border. Where the screen
+        // ends within the box, the blank row is the last thing looked for.
+        let under = cursor_row + 1;
+        let pad = match border {
+            Some(border) => border.checked_sub(2).filter(|&pad| {
+                self.char(border, bar) == rule.corner
+                    && self.char(border, bar + 1) == rule.edge
+                    && pad > cursor_row
+                    && gap(pad)
+                    && inside(border - 1)
+                    && !all_space(self.from(border - 1, text_from))
+            }),
+            None => (under == self.height() || gap(under)).then_some(under),
+        };
+        let Some(pad) = pad else {
             return missing();
-        }
-        // Under the text, a blank box row, then the box's last row over the border.
-        let pad = border - 2;
-        let closed = self.char(border, bar) == rule.corner
-            && self.char(border, bar + 1) == rule.edge
-            && pad > cursor_row
-            && gap(pad)
-            && inside(border - 1)
-            && !all_space(self.from(border - 1, text_from));
-        if !closed {
-            return missing();
-        }
+        };
         // Up from the cursor over the box's text rows to the blank row that opens it.
         let top = (0..cursor_row)
             .rev()
@@ -880,16 +913,24 @@ impl<'a> Screen<'a> {
             };
         }
         let lines: Vec<&Cells> = (top + 1..pad).map(|y| self.from(y, text_from)).collect();
+        let placeholder = lines.len() == 1 && rule.placeholder.is_match(&joined(lines[0]));
+        let drafted = || drafted(&place, (None, None), &lines);
+        if border.is_none() {
+            return match placeholder {
+                true => missing(),
+                false => self.as_pasted(missing(), top + 1, &lines, drafted),
+            };
+        }
         let empty = |tail: &str| match lines.len() == 1 && self.cursor_at(text_from, top + 1) {
             true => usable(format!("{place} is empty{tail}")),
             false => unknown(format!(
                 "{place} is empty, but the cursor is not where the input starts"
             )),
         };
-        if lines.len() == 1 && rule.placeholder.is_match(&joined(lines[0])) {
+        if placeholder {
             empty(" but for its placeholder")
         } else if holds_writing(&lines) {
-            drafted(&place, (None, None), &lines)
+            drafted()
         } else {
             empty("")
         }

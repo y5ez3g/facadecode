@@ -61,10 +61,10 @@ fn reads_as_recorded(cli: &str) {
     states.sort();
     states.dedup();
     // Codex's recordings also show its search and selection screens, which read unknown, Muse's its
-    // drafts with the cursor where the input starts, which read unknown as unsure, and Pi's its
-    // dialogs in a small window.
+    // drafts with the cursor where the input starts, which read unknown as unsure, OpenCode's an
+    // empty box that the screen ends in, and Pi's its dialogs in a small window.
     let shown: &[&str] = match cli {
-        "codex" | "muse" | "pi" => &["draft", "interaction", "unknown", "usable"],
+        "codex" | "muse" | "opencode" | "pi" => &["draft", "interaction", "unknown", "usable"],
         _ => &["draft", "interaction", "usable"],
     };
     assert_eq!(states, shown, "the recordings of {cli} show every state");
@@ -411,6 +411,266 @@ fn no_other_cli_s_screen_is_an_editor() {
                 read.evidence
             );
         }
+    }
+}
+
+/// The messages of these screens are their inputs' own drafts though a small window cut the input:
+/// Muse scrolls its prompt row out with a draft's first rows and ends its frame's title in `…`, Codex
+/// ends its model line there or leaves the line out where a draft does not fit with it, and
+/// OpenCode's box goes on below the screen.
+#[test]
+fn a_message_is_its_own_draft_in_an_input_a_small_window_cuts() {
+    let mut wrong = Vec::new();
+    for (cli, label) in [
+        ("muse", "muse-1.4.25-15rows/pasted-13-rows"),
+        ("muse", "muse-1.4.25-10rows/pasted-5-lines"),
+        ("muse", "muse-1.4.25-20cols/typed"),
+        ("muse", "muse-1.4.25-20cols/pasted-2-lines"),
+        ("codex", "codex-0.170.0-20cols/typed"),
+        ("codex", "codex-0.170.0-8rows/pasted-6-lines"),
+        ("codex", "codex-0.170.0-30cols-10rows/pasted-6-lines"),
+        ("codex", "codex-0.170.0-6rows/pasted-3-lines"),
+        ("codex", "codex-0.170.0-20cols/pasted-2-lines"),
+        ("opencode", "opencode-2.2.4-12rows/pasted-2-lines"),
+        ("opencode", "opencode-2.2.4-40cols-15rows/pasted-2-lines"),
+    ] {
+        let screen = screen_of(cli, label);
+        let text = screen["paste"].as_str().unwrap();
+        let (own, read) = shows_own(cli, &view_of(&screen), text);
+        if !own {
+            wrong.push(format!("{label}: reads {read}"));
+        }
+        for other in [format!("{text} again"), text[..text.len() - 1].to_string()] {
+            let (own, read) = shows_own(cli, &view_of(&screen), &other);
+            assert!(!own, "{label}: another message's draft, {read}");
+        }
+        // Muse marks nothing: the row out of sight stays with the reading's first row.
+        if label.contains("pasted-13-rows") || label.contains("pasted-5-lines") {
+            let read = read_box(&find(cli).unwrap().unwrap().input, &view_of(&screen));
+            assert_eq!(read.info.hidden, None, "{label}");
+            let above = HiddenRows { above: 1, below: 0 };
+            assert_eq!(read.draft_hidden(), Some(above), "{label}");
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Codex keeps its model line under its popups and pickers in a small window, and draws them over its
+/// input or in its place: they never read as an empty input, nor as any message's draft but for one
+/// typed under them. Without a cursor, a picker reads as no input.
+#[test]
+fn codex_s_popups_and_pickers_in_a_small_window_are_no_message_s_draft() {
+    let codex = find("codex").unwrap().unwrap();
+    let messages: Vec<String> = ["claude", "codex", "agy", "muse", "opencode", "pi"]
+        .into_iter()
+        .flat_map(recorded)
+        .filter_map(|screen| screen["paste"].as_str().map(str::to_string))
+        .collect();
+    for label in [
+        "codex-0.170.0-8rows/slash-popup",
+        "codex-0.170.0-30cols-10rows/at-popup",
+        "codex-0.170.0-8rows/at-after-a-draft",
+        "codex-0.170.0-30cols-10rows/at-after-a-draft",
+        "codex-0.170.0-8rows/permissions-picker",
+        "codex-0.170.0-30cols-10rows/permissions-picker",
+    ] {
+        let screen = screen_of("codex", label);
+        let read = read_box(&codex.input, &view_of(&screen));
+        let (state, evidence) = (read.info.state, &read.info.evidence);
+        assert_ne!(state, InputState::Usable, "{label}: {evidence}");
+        assert_eq!(read.draft_hidden(), None, "{label}: {evidence}");
+        let typed = screen["paste"].as_str();
+        for text in messages.iter().filter(|text| Some(text.as_str()) != typed) {
+            let own = (read.draft.as_deref())
+                .is_some_and(|draft| is_own_draft(&codex.paste, draft, text, read.draft_hidden()));
+            assert!(!own, "{label} shows {text:?}");
+        }
+    }
+}
+
+/// Muse's frame with its prompt row scrolled out is nothing of another CLI's, whose screens have
+/// rules of their own around the cursor. Codex's and OpenCode's inputs are no other CLI's either.
+#[test]
+fn no_other_cli_s_screen_is_an_input_a_small_window_cuts() {
+    let mut wrong = Vec::new();
+    for cli in ["muse", "codex", "opencode"] {
+        let rule = find(cli).unwrap().unwrap();
+        for other in ["agy", "claude", "codex", "muse", "opencode", "pi"] {
+            for screen in recorded(other) {
+                let read = read_input(&rule.input, &view_of(&screen));
+                let cut = match cli {
+                    "muse" => read.hidden.is_some(),
+                    _ => matches!(read.state, InputState::Usable | InputState::Draft),
+                };
+                if cli != other && cut {
+                    wrong.push(format!(
+                        "{cli} reads {}: {} ({})",
+                        screen["label"],
+                        read.state.as_str(),
+                        read.evidence
+                    ));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// What a small window leaves of an input is a draft only while its last rows show, the cursor
+/// behind them, and never an empty input.
+#[test]
+fn an_input_a_small_window_cuts_reads_as_nothing_else() {
+    let read = |cli: &str, label: &str, change: &dyn Fn(&mut serde_json::Value)| {
+        let mut screen = screen_of(cli, label);
+        change(&mut screen);
+        read_input(&find(cli).unwrap().unwrap().input, &view_of(&screen))
+    };
+    let opencode = "opencode-2.2.4-12rows/pasted-2-lines";
+    let codex = "codex-0.170.0-8rows/pasted-6-lines";
+    for (what, read) in [
+        (
+            "OpenCode's placeholder over the screen's end",
+            read(
+                "opencode",
+                "opencode-2.2.4-40cols-15rows/empty",
+                &|_screen| {},
+            ),
+        ),
+        (
+            "an empty box over the screen's end",
+            read("opencode", opencode, &|screen| {
+                screen["rows"][8] = serde_json::json!({ "cells": "  ┃" });
+                screen["rows"][9] = serde_json::json!({ "cells": "  ┃" });
+                screen["cursor"] = serde_json::json!({ "x": 5, "y": 9 });
+            }),
+        ),
+        (
+            "the cursor a row up in OpenCode's box",
+            read("opencode", opencode, &|screen| {
+                screen["cursor"] = serde_json::json!({ "x": 5, "y": 8 });
+            }),
+        ),
+        (
+            "the cursor within its row of OpenCode's box",
+            read("opencode", opencode, &|screen| {
+                screen["cursor"] = serde_json::json!({ "x": 6, "y": 9 });
+            }),
+        ),
+        (
+            "another line than Codex's model line, going on behind its mark",
+            read("codex", "codex-0.170.0-20cols/typed", &|screen| {
+                screen["rows"][3] = serde_json::json!({ "cells": "  esc to back · …and" });
+            }),
+        ),
+        (
+            "Codex's input over another line",
+            read("codex", "codex-0.170.0-20cols/empty", &|screen| {
+                screen["rows"][3] = serde_json::json!({ "cells": "  enter · esc to ba…" });
+            }),
+        ),
+        (
+            "a message of Codex's history over its input, the cursor in it",
+            read("codex", codex, &|screen| {
+                screen["rows"][5] = serde_json::json!({ "cells": "" });
+                screen["rows"][6] = serde_json::json!({ "cells": "› check 4", "bold": [[0, 1]] });
+                screen["cursor"] = serde_json::json!({ "x": 9, "y": 4 });
+            }),
+        ),
+        (
+            "a prompt row of Codex's last on the screen, under the cursor",
+            read("codex", codex, &|screen| {
+                screen["rows"][7] = serde_json::json!({ "cells": "› next", "bold": [[0, 1]] });
+            }),
+        ),
+        (
+            "the cursor a row up in Codex's input",
+            read("codex", codex, &|screen| {
+                screen["cursor"] = serde_json::json!({ "x": 9, "y": 5 });
+            }),
+        ),
+        (
+            "the cursor within its row of Codex's input",
+            read("codex", codex, &|screen| {
+                screen["cursor"] = serde_json::json!({ "x": 5, "y": 6 });
+            }),
+        ),
+        (
+            "the cursor under Codex's input",
+            read("codex", codex, &|screen| {
+                screen["cursor"] = serde_json::json!({ "x": 0, "y": 7 });
+            }),
+        ),
+        (
+            "a line right under Codex's input",
+            read("codex", codex, &|screen| {
+                screen["rows"][7] = serde_json::json!({ "cells": "  /model  choose what model" });
+            }),
+        ),
+        (
+            "a line under Codex's input, above its status",
+            read("codex", "codex-0.170.0-6rows/pasted-3-lines", &|screen| {
+                screen["rows"][4] = serde_json::json!({ "cells": "  enter insert · esc close" });
+            }),
+        ),
+        (
+            "no prompt row over Codex's input",
+            read("codex", codex, &|screen| {
+                screen["rows"][1] = serde_json::json!({ "cells": "  Message m2" });
+            }),
+        ),
+        (
+            "Codex's cursor hidden",
+            read("codex", codex, &|screen| {
+                screen["cursor_hidden"] = serde_json::json!(true);
+            }),
+        ),
+        (
+            "Muse's frame without its lower rule",
+            read("muse", "muse-1.4.25-10rows/pasted-5-lines", &|screen| {
+                screen["rows"][8] = serde_json::json!({ "cells": "" });
+            }),
+        ),
+        (
+            "the cursor a row up in Muse's frame",
+            read("muse", "muse-1.4.25-10rows/pasted-5-lines", &|screen| {
+                screen["cursor"] = serde_json::json!({ "x": 9, "y": 6 });
+            }),
+        ),
+        (
+            "the cursor within its row of Muse's frame",
+            read("muse", "muse-1.4.25-10rows/pasted-5-lines", &|screen| {
+                screen["cursor"] = serde_json::json!({ "x": 4, "y": 7 });
+            }),
+        ),
+        (
+            "blank rows in Muse's frame",
+            read("muse", "muse-1.4.25-10rows/pasted-5-lines", &|screen| {
+                for y in 1..8 {
+                    screen["rows"][y] = serde_json::json!({ "cells": "" });
+                }
+                screen["cursor"] = serde_json::json!({ "x": 2, "y": 7 });
+            }),
+        ),
+        (
+            "Muse's frame under another line",
+            read("muse", "muse-1.4.25-10rows/pasted-5-lines", &|screen| {
+                screen["rows"][0] =
+                    serde_json::json!({ "cells": "── Voice input (Alt+V to start)" });
+            }),
+        ),
+    ] {
+        assert_eq!(read.state, InputState::Unknown, "{what}: {}", read.evidence);
+    }
+    let permission = read("opencode", opencode, &|screen| {
+        screen["rows"][7] = serde_json::json!({ "cells": "  ┃  △ Permission required" });
+    });
+    let trust = read("muse", "muse-1.4.25-15rows/pasted-13-rows", &|screen| {
+        screen["rows"][0] = serde_json::json!({ "cells": "⟩ 1  Yes, I trust this folder" });
+        screen["rows"][1] = serde_json::json!({ "cells": "  2  No, exit" });
+        screen["rows"][2] = serde_json::json!({ "cells": "─".repeat(60) });
+    });
+    for asked in [permission, trust] {
+        assert_eq!(asked.state, InputState::Interaction, "{}", asked.evidence);
     }
 }
 

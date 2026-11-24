@@ -325,6 +325,10 @@ pub struct Frame {
     /// The CLI can draw a hint in the same style as a draft in a fresh input.
     #[serde(default)]
     pub probe_unstyled_hint: bool,
+    /// The CLI also scrolls a draft taller than its frame without a mark, its prompt row with the
+    /// draft's first rows.
+    #[serde(default)]
+    pub(crate) scrolls_unmarked: bool,
     pub menus: Vec<Menu>,
 }
 
