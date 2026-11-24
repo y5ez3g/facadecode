@@ -643,6 +643,11 @@ fn a_session_nested_in_a_run_of_its_own_cli_is_a_guest_of_its_own() {
         });
         let mut server =
             McpTestClient::open_guest(&home, cli, &[("FACADE_AGENT", &run), (variable, &nested)]);
+        assert_eq!(
+            server.initialized()["result"]["instructions"],
+            facade_base::instructions::for_connection(),
+            "{cli}: the nested session receives the Guest instructions"
+        );
         assert_eq!(tools(&mut server), 8, "{cli}: the nested session's server");
         let listed = server.call_in("list_agents", json!({}), meta);
         assert_eq!(listed["status"], "success", "{cli}: {listed}");

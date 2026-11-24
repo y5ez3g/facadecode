@@ -2053,6 +2053,102 @@ fn two_framework_builds_cold_dial_each_other() {
     }
 }
 
+#[test]
+fn bare_agent_names_find_peers_over_a_saved_route() {
+    saved_route_agent_names(&test_binaries().facade);
+}
+
+#[test]
+#[ignore = "requires the separately built 146 Framework CLI in FACADE_TEST_FRAMEWORK_PEER"]
+fn bare_agent_names_find_a_146_peer_over_a_saved_route() {
+    let peer = std::path::PathBuf::from(
+        std::env::var_os("FACADE_TEST_FRAMEWORK_PEER").expect("the 146 Framework artifact"),
+    );
+    assert!(peer.is_absolute() && peer.is_file() && peer != test_binaries().facade);
+    assert!(
+        std::fs::read(&peer).unwrap() != std::fs::read(&test_binaries().facade).unwrap(),
+        "provide a separately built 146 program"
+    );
+    saved_route_agent_names(&peer);
+}
+
+/// An unqualified name uses the same passive reach as the roster. Automatic naming only looks
+/// at agents already visible, and a name containing "@" can match both ways.
+fn saved_route_agent_names(holder: &Path) {
+    let caller = TestHome::new("saved-name-caller");
+    let remote = TestHome::new("saved-name-holder");
+    let programs = test_binaries();
+    install_machine_ssh_with_programs(&[
+        ("caller", &caller, &programs.facade),
+        ("holder", &remote, holder),
+    ]);
+    name_machine(&caller, "caller");
+    let caller_hello = caller.hello_result().unwrap();
+
+    run_using_ok(&remote, holder, &["machine", "list"]);
+    let holder_hello = remote.hello_result().unwrap();
+    let holder_id = holder_hello["machine_id"].as_str().unwrap();
+    run_using_ok(&remote, holder, &["machine", "rename", holder_id, "holder"]);
+    assert_eq!(caller_hello["api_version"], 1);
+    assert_eq!(holder_hello["api_version"], 1);
+    let holder_pid = holder_hello["pid"].clone();
+
+    remote.add_custom_cli("qa-fake", &programs.fakecli);
+    let start_remote = |name| {
+        let out = run_using_ok(&remote, holder, &["start", "-d", "-n", name, "qa-fake"]);
+        started_ref(&out).to_owned()
+    };
+    let worker = start_remote("PeerWorker");
+    let literal = start_remote("Literal@unlisted");
+    let remote_pixel = start_remote("Pixel@caller");
+    add_saved(&caller, "holder", &remote);
+    assert!(!ssh_attempts(&remote).is_empty());
+    caller.kill_home_processes();
+    assert_eq!(remote.hello_result().unwrap()["pid"], holder_pid);
+
+    let attempts = ssh_attempts(&remote);
+    caller.run_facade_ok(&["start", "-d", "fake"]);
+    assert_eq!(
+        ssh_attempts(&remote),
+        attempts,
+        "automatic naming dialed SSH"
+    );
+    caller.kill_home_processes();
+
+    for (selector, address) in [("PeerWorker", worker), ("Literal@unlisted", literal)] {
+        let before = ssh_serves(&remote);
+        let inspected = connect(&caller).call_ok("agent.inspect", json!({ "target": selector }));
+        assert_eq!(inspected["agent"]["address"], address, "{inspected}");
+        assert_eq!(
+            ssh_serves(&remote),
+            format!("{before}no-start\n"),
+            "{selector}"
+        );
+        caller.kill_home_processes();
+    }
+
+    let local_pixel = caller.start_named_fake("Pixel", &[]);
+    let before = ssh_serves(&remote);
+    let refused = connect(&caller).call("agent.inspect", json!({ "target": "Pixel@caller" }));
+    assert_eq!(error_reason(&refused), "ambiguous_reference", "{refused}");
+    let candidates = refused["error"]["data"]["details"]["candidates"]
+        .as_array()
+        .unwrap();
+    assert_eq!(candidates.len(), 2, "{refused}");
+    assert!(
+        candidates.contains(&json!(local_pixel.address)),
+        "{refused}"
+    );
+    assert!(candidates.contains(&json!(remote_pixel)), "{refused}");
+    assert_eq!(ssh_serves(&remote), format!("{before}no-start\n"));
+    assert_eq!(remote.hello_result().unwrap()["pid"], holder_pid);
+    println!(
+        "API v1 caller {} and holder {} resolved names over the passive saved route; holder daemon kept PID {holder_pid}",
+        programs.facade.display(),
+        holder.display(),
+    );
+}
+
 #[cfg(unix)]
 mod authorization {
     use super::*;
@@ -3672,7 +3768,7 @@ fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
     let receipt_id = receipt.as_str().expect("the reserved receipt ID");
     let title = format!("child ({address}) has started.");
     let summary = format!(
-        "Your initial message {prompt_id}@holder could not be delivered. Nothing was entered in the terminal."
+        "Your prompt {prompt_id}@holder could not be delivered. Nothing was entered in the terminal."
     );
     assert_eq!(row["id"], receipt_id, "{row}");
     assert_eq!(row["from"], "facade", "{row}");

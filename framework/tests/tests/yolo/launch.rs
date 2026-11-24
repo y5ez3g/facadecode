@@ -245,7 +245,7 @@ fn check_cli(home: &TestHome, cli: &str, args: &[String], env: &Value, agent: bo
             let extension = std::fs::read_to_string(extension).unwrap();
             assert!(
                 extension.contains("registerMcpServer(\"facade\",")
-                    && extension.contains("\"exposure\":\"direct\"")
+                    && extension.contains("\"exposure\":\"deferred\"")
             );
         }
         _ => unreachable!(),

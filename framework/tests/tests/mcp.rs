@@ -225,6 +225,31 @@ fn mcp_cli_names_match_the_managed_and_guest_default_start_contexts() {
 }
 
 #[test]
+fn an_opencode_start_refuses_model_and_effort_together() {
+    let home = TestHome::new("mcp-opencode-options");
+    std::fs::write(
+        home.path.join("facade.json"),
+        json!({ "clis": { "opencode": { "program": test_binaries().fakecli } } }).to_string(),
+    )
+    .unwrap();
+    let caller = home.start_named_fake("caller", &[]);
+    let mut tools = McpTestClient::open_configured(&home, &caller.id);
+    let refused = tools.call(
+        "start_agent",
+        json!({
+            "name": "worker", "cli": "opencode", "model": "example", "effort": "low",
+        }),
+    );
+    assert_eq!(refused["status"], "failure", "{refused}");
+    assert_eq!(refused["reason"], "unsupported", "{refused}");
+    assert_eq!(
+        refused["message"],
+        "OpenCode takes no explicit model or effort; leave `model` and `effort` out to use its defaults."
+    );
+    assert!(home.listed_agent("worker").is_none());
+}
+
+#[test]
 fn mcp_remote_cli_lookup_preserves_the_roster_when_settings_fail() {
     let local = TestHome::new("mcpclis-local");
     let remote = TestHome::new("mcpclis-remote");
@@ -1248,10 +1273,9 @@ fn a_daemon_that_starts_again_lets_go_of_a_plugin_its_predecessor_kept() {
 
 /// An Antigravity run gets Facade's plugin in the folder it starts in, the only file Facade writes
 /// into the person's project, and its start readies the tools through the CLI's MCP panel before
-/// its first turn. The plugin's hook gives the model its instructions, and the plugin holds the
-/// skill; the runs in a folder share the plugin, and it goes once the last of them ends. A plugin
-/// of the person's own there is left as it is, and the run starts without the tools. The test CLI
-/// draws Antigravity's screen.
+/// its first turn. The plugin's hook gives the model its instructions. Runs in a folder share the
+/// plugin. Facade keeps a same-version plugin with the old skill while a run uses it and replaces
+/// it on the next start once the folder is free. The test CLI draws Antigravity's screen.
 #[test]
 fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_turn() {
     let home = TestHome::new("agyplugin");
@@ -1282,15 +1306,7 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     files.sort_unstable();
-    assert_eq!(
-        files,
-        ["hooks.json", "mcp_config.json", "plugin.json", "skills"]
-    );
-    assert_eq!(
-        std::fs::read_to_string(plugin.join("skills/facade/SKILL.md")).unwrap(),
-        facade_base::skill::text(),
-        "and the skill"
-    );
+    assert_eq!(files, ["hooks.json", "mcp_config.json", "plugin.json"]);
     let servers: Value =
         serde_json::from_str(&std::fs::read_to_string(plugin.join("mcp_config.json")).unwrap())
             .unwrap();
@@ -1384,7 +1400,7 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
     let instructions = |messages: Vec<String>| {
         messages.iter().any(|message| {
             message.starts_with("PreInvocation ")
-                && message.contains(&format!("You are managed agent {address}, working in "))
+                && message.contains(&format!("Your address is {address}."))
         })
     };
     assert!(
@@ -1396,7 +1412,39 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
     start("bob");
     home.run_facade_ok(&["stop", "ada"]);
     assert!(plugin.join("mcp_config.json").exists(), "bob's run uses it");
+
+    // The old build wrote these same plugin files and also shipped a skill, at the same version.
+    let legacy_skill = plugin.join("skills/facade/SKILL.md");
+    std::fs::create_dir_all(legacy_skill.parent().unwrap()).unwrap();
+    std::fs::write(&legacy_skill, "The old Facade skill.\n").unwrap();
+    start("busy");
+    assert!(legacy_skill.is_file(), "bob's run still holds the plugin");
+    home.run_facade_ok(&["stop", "busy"]);
     home.run_facade_ok(&["stop", "bob"]);
+    assert!(
+        wait_until(secs(10), || home
+            .daemon_log()
+            .contains("was changed since Facade wrote it")),
+        "{}",
+        home.daemon_log()
+    );
+    assert!(
+        legacy_skill.is_file(),
+        "cleanup leaves a same-version plugin"
+    );
+
+    start("replacement");
+    assert!(
+        !legacy_skill.exists(),
+        "a free folder gets the current plugin"
+    );
+    assert!(
+        wait_until(secs(15), || row("replacement")["tools_state"]
+            == "available"),
+        "{}",
+        row("replacement")
+    );
+    home.run_facade_ok(&["stop", "replacement"]);
     assert!(
         wait_until(secs(10), || !home.project.join(".agents").exists()),
         "the plugin goes with the folder's last run"
@@ -1560,9 +1608,8 @@ fn run_hook(home: &TestHome, hook: &str, cli: &str, input: &str, env: &[(&str, &
 }
 
 /// The hook that gives the model of a CLI that shows it no server's instructions those its run's
-/// start wrote in the run's folder: Muse Code's to the session the run starts alone, not to one a
-/// subagent starts, followed by the skill there, and Antigravity's to each invocation, whose plugin
-/// holds the skill. Outside an agent's run, or without its run's files, it gives none.
+/// start wrote in the run's folder: Muse Code's to the session the run starts, and Antigravity's
+/// to each invocation. An existing run's old skill stays out of the hook output.
 #[test]
 fn the_instructions_hook_gives_the_run_s_own_session_its_agent_s_instructions() {
     let home = TestHome::new("instructionshook");
@@ -1577,12 +1624,13 @@ fn the_instructions_hook_gives_the_run_s_own_session_its_agent_s_instructions() 
     // The run's folder, as its start wrote it.
     let folder = home.path.join("framework/runs/a3/5a1f00d1c0ffee00");
     std::fs::create_dir_all(folder.join("skills/facade")).unwrap();
-    let (instructions, skill) = (
-        "You are Facade agent #a3, as your run began.",
-        "The skill of the build that started the run.",
-    );
+    let instructions = "You are Facade agent a3, as your run began.";
     std::fs::write(folder.join("instructions.md"), instructions).unwrap();
-    std::fs::write(folder.join("skills/facade/SKILL.md"), skill).unwrap();
+    std::fs::write(
+        folder.join("skills/facade/SKILL.md"),
+        "The old Facade skill.",
+    )
+    .unwrap();
     let given: Value = serde_json::from_str(&run_hook(
         &home,
         "instructions",
@@ -1596,9 +1644,8 @@ fn the_instructions_hook_gives_the_run_s_own_session_its_agent_s_instructions() 
         "{given}"
     );
     assert_eq!(
-        given["hookSpecificOutput"]["additionalContext"],
-        format!("{instructions}\n\n{skill}"),
-        "the instructions, then the skill"
+        given["hookSpecificOutput"]["additionalContext"], instructions,
+        "the run's instructions"
     );
     for (input, env) in [
         (starts("s2"), &run[..]),
@@ -1662,10 +1709,6 @@ fn the_instructions_hook_says_where_the_run_s_agent_works() {
         let id = record["reference"]["agent_id"].as_str().unwrap();
         let address = record["address"].as_str().unwrap();
         let (_, machine) = address.split_once('@').expect("a complete address");
-        let place = format!(
-            "You are managed agent {address}, working in {} on machine {machine}.",
-            record["cwd"].as_str().unwrap(),
-        );
         let run = [("FACADE_AGENT", id), ("MUSE_SESSION_ID", "s1")];
         let given: Value = serde_json::from_str(&run_hook(
             &home,
@@ -1679,12 +1722,14 @@ fn the_instructions_hook_says_where_the_run_s_agent_works() {
             .as_str()
             .or(given["injectSteps"][0]["ephemeralMessage"].as_str())
             .unwrap_or_default();
-        let started_by = format!("{place} You were started from the command line.");
-        assert!(
-            told.starts_with(&started_by)
-                && told
-                    .contains(" YOLO is on. Your tools reach agents on all reachable machines. "),
-            "{cli}: {told}"
+        assert_eq!(
+            told.lines().last().unwrap(),
+            format!(
+                "YOLO is on: your tools reach agents on all reachable machines. Your address is \
+                 {address}. You were started from the command line in {} on {machine}.",
+                record["cwd"].as_str().unwrap(),
+            ),
+            "{cli}: {told}",
         );
     }
 }

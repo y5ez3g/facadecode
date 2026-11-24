@@ -172,14 +172,17 @@ fn a_child_joins_its_creator_s_tree_and_the_person_s_start_heads_its_own() {
         (&json!("a2"), &ada_ref, &ada_ref, &json!(true))
     );
     let mut bea_server = McpTestClient::open(&home, "a2");
-    let started_by = format!(" You were started by ada (a1@{host}). ");
-    assert!(
-        bea_server.initialized()["result"]["instructions"]
+    let bea_init = bea_server.initialized();
+    assert_eq!(
+        bea_init["result"]["instructions"]
             .as_str()
             .unwrap()
-            .contains(&started_by),
-        "{}",
-        bea_server.initialized()
+            .lines()
+            .last()
+            .unwrap(),
+        format!(
+            "YOLO is on: your tools reach agents on all reachable machines. Your address is a2@{host}. You were started by ada (a1@{host}) in {cwd} on {host}."
+        )
     );
     let cy = child(&mut bea_server, "cy");
     assert_eq!(
@@ -209,13 +212,17 @@ fn a_child_joins_its_creator_s_tree_and_the_person_s_start_heads_its_own() {
         (None, &eve["reference"]),
         "the person's start is the first of its own tree"
     );
-    assert!(
-        ada.initialized()["result"]["instructions"]
+    let ada_init = ada.initialized();
+    assert_eq!(
+        ada_init["result"]["instructions"]
             .as_str()
             .unwrap()
-            .contains(" You were started from the command line. "),
-        "{}",
-        ada.initialized()
+            .lines()
+            .last()
+            .unwrap(),
+        format!(
+            "YOLO is on: your tools reach agents on all reachable machines. Your address is a1@{host}. You were started from the command line in {cwd} on {host}."
+        )
     );
 }
 

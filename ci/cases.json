@@ -1762,6 +1762,20 @@
       }
     },
     {
+      "id": "framework/p0/remote-execution/saved-agent-lookup",
+      "assertion": "Resolve an unqualified agent selector across a disconnected saved route, check literal names containing @ and ambiguity, and verify automatic name allocation does not probe that route.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/machines.rs:2057",
+        "framework/tests/tests/machines.rs:2063"
+      ],
+      "test": {
+        "runner": "framework-scenario",
+        "target": "machines",
+        "name": "bare_agent_names_find_peers_over_a_saved_route"
+      }
+    },
+    {
       "id": "framework/p0/service-recovery/daemon-restart",
       "assertion": "Replace the Daemon while a Keeper owns the process. Observe the original CLI identity, reattach and read its output.",
       "stage": "pr",
@@ -1818,6 +1832,20 @@
       }
     },
     {
+      "id": "framework/p0/start-stop/managed-tools",
+      "assertion": "Launch each managed built-in beside the person's existing Facade MCP entry and verify the run gets Facade's tools without the retired skill.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/integrations.rs:52",
+        "framework/crates/rules/src/compose/tools_tests.rs:409"
+      ],
+      "test": {
+        "runner": "framework-scenario",
+        "target": "integrations",
+        "name": "a_run_beside_the_person_s_own_facade_line_gets_facade_s_tools"
+      }
+    },
+    {
       "id": "framework/p0/start-stop/native-session-name",
       "assertion": "Show current Claude and Pi session labels in running and resumable lists, including renamed and unnamed sessions. Resume the same saved session using its original full ID.",
       "stage": "pr",
@@ -1867,6 +1895,19 @@
         "runner": "framework-scenario",
         "target": "cli",
         "name": "stop_confirms_each_explicit_target_once"
+      }
+    },
+    {
+      "id": "framework/p0/start-stop/unsupported-choices",
+      "assertion": "Request both explicit model and effort through MCP for OpenCode and verify the combined refusal leaves no child agent.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/mcp.rs:228"
+      ],
+      "test": {
+        "runner": "framework-scenario",
+        "target": "mcp",
+        "name": "an_opencode_start_refuses_model_and_effort_together"
       }
     },
     {
@@ -2321,9 +2362,14 @@
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/hooks.rs:57",
-        "framework/tests/tests/resume.rs:282",
-        "framework/tests/tests/resume.rs:376"
-      ]
+        "framework/tests/tests/resume.rs:330",
+        "framework/crates/rules/src/compose/tools_tests.rs:433"
+      ],
+      "test": {
+        "runner": "framework-scenario",
+        "target": "resume",
+        "name": "the_session_hook_accepts_the_old_skill_flag_and_records_the_session"
+      }
     },
     {
       "id": "framework/shell/process/hook.title",

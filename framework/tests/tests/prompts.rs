@@ -108,7 +108,7 @@ fn prompt(host: &str) -> String {
 fn ended_result_prefix(host: &str) -> String {
     format!(
         "🔔 child (a2@{host}) has started. · m2\nIts Facade tools are unavailable: its CLI \
-         ended.\nYour initial message m1@{host} could not be delivered. Nothing was entered in the \
+         ended.\nYour prompt m1@{host} could not be delivered. Nothing was entered in the \
          terminal.\na2@{host} ended before the message was delivered."
     )
 }

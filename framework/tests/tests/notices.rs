@@ -92,7 +92,7 @@ fn a_startup_permission_wait_and_prompt_failure_share_the_reserved_notice() {
     for fact in [
         address,
         reserved,
-        "initial message",
+        "Your prompt",
         "permission",
         "read_screen",
     ] {
@@ -113,7 +113,7 @@ fn a_startup_permission_wait_and_prompt_failure_share_the_reserved_notice() {
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0]["id"], reserved, "{rows:?}");
     let text = rows[0]["text"].as_str().unwrap();
-    for fact in [address, "initial message", "permission", "read_screen"] {
+    for fact in [address, "Your prompt", "permission", "read_screen"] {
         assert!(text.contains(fact), "missing {fact:?}: {text}");
     }
     assert_eq!(notices(&home), terminal);
