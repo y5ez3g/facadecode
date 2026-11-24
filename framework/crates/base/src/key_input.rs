@@ -225,7 +225,7 @@ mod tests {
         assert_eq!(keys["minItems"], 1);
         assert_eq!(keys["maxItems"], MAX_KEYS);
         assert!(
-            tool["description"]
+            keys["description"]
                 .as_str()
                 .unwrap()
                 .contains(&NAMED_KEYS.join(", "))

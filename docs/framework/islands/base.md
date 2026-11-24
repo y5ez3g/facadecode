@@ -313,15 +313,15 @@ What Facade asks of the operating system. `framework/crates/base/src/platform/`.
 ### texts
 
 What a model reads at Facade API v1's MCP entry point in `framework/crates/base/src/texts/`.
-- **Owns** the instructions the daemon's MCP server returns from `initialize` (`instructions.rs`),
-  the skill (`skill.rs`), and the definitions of the eight tools (`tools.json`).
-- **Keeps** one skill and one table for `tools/list` and `tools/call`. `for_connection` describes
-  the tools before a new connection is associated with an actor. `for_managed` adds the run's
-  machine, folder, creator and saved YOLO. Both describe inbox acceptance, optional waits and
-  command-line replies. The skill explains how to find available CLIs, continue a reply wait
-  and use the terminal tools. It ends with the Framework version.
+- **Owns** the Guest and managed instructions (`instructions.rs`), the skill (`skill.rs`), and the
+  definitions of the eight tools (`tools.json`).
+- **Keeps** one table for `tools/list` and `tools/call`. `for_connection` tells a Guest how to read
+  its inbox and wait for delivery or one reply. `for_managed` tells a managed agent how to answer
+  messages and recognize notices. Its last line gives the run's reach under its saved YOLO setting,
+  address, creator, folder and machine. The skill ends with the Framework version.
 - **Never keeps** a text used only by tests.
-- **Input:** the daemon's MCP server supplies `ManagedRun` from the agent's authenticated run.
+- **Input:** the daemon supplies `ManagedRun` from the agent's run. MCP `initialize` and run hooks
+  use the instructions according to the CLI's rule.
 - **Interface:** `instructions::{for_connection, for_managed, Creator, ManagedRun}`,
   `skill::text()`, `tools::DEFINITIONS`.
   The [Framework MCP contract](../../extension/engineering/MCP.md#7-mcp-through-the-orchestrator)

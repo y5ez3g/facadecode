@@ -222,11 +222,7 @@ pub struct PromptOutcome {
 /// tools are there, and what became of its prompt, with what of it reached the terminal and, where
 /// it was not delivered, why.
 pub fn start_result_text(outcome: &StartOutcome) -> String {
-    start_result_text_at(
-        outcome,
-        &format!("#{}", outcome.agent.agent_id),
-        &format!("#{}", outcome.prompt.message_id),
-    )
+    start_result_text_at(outcome, &outcome.agent.agent_id, &outcome.prompt.message_id)
 }
 
 /// Formats a start result using the agent and prompt addresses resolved for the recipient.
@@ -259,23 +255,23 @@ pub fn start_result_text_at(
             if delivery.delivered_via == Some(DeliveredVia::ReadByRecipient) =>
         {
             lines.push(format!(
-                "Your initial message {prompt_address} has been passed on through read_messages."
+                "Your prompt {prompt_address} has been passed on through read_messages."
             ));
             if !untouched {
                 lines.push(input_words(delivery, false));
             }
         }
-        DeliveryStatus::Success => lines.push(format!(
-            "Your initial message {prompt_address} has been passed on."
-        )),
+        DeliveryStatus::Success => {
+            lines.push(format!("Your prompt {prompt_address} has been passed on."))
+        }
         _ => {
             lines.push(match untouched {
                 true => format!(
-                    "Your initial message {prompt_address} could not be delivered. {}",
+                    "Your prompt {prompt_address} could not be delivered. {}",
                     input_words(delivery, true)
                 ),
                 false => format!(
-                    "Delivery of your initial message {prompt_address} could not be confirmed. {}",
+                    "Delivery of your prompt {prompt_address} could not be confirmed. {}",
                     input_words(delivery, true)
                 ),
             });
@@ -845,7 +841,7 @@ mod tests {
         );
         assert_eq!(
             words(&agent, typed.clone()),
-            "helper (#a5) has started.\nYour initial message #m42 has been passed on."
+            "helper (a5) has started.\nYour prompt m42 has been passed on."
         );
         let read = delivery(
             DeliveryStatus::Success,
@@ -856,7 +852,7 @@ mod tests {
         );
         assert_eq!(
             words(&agent, read),
-            "helper (#a5) has started.\nYour initial message #m42 has been passed on through \
+            "helper (a5) has started.\nYour prompt m42 has been passed on through \
              read_messages."
         );
         let read_while_typed = delivery(
@@ -868,7 +864,7 @@ mod tests {
         );
         assert_eq!(
             words(&agent, read_while_typed),
-            "helper (#a5) has started.\nYour initial message #m42 has been passed on through \
+            "helper (a5) has started.\nYour prompt m42 has been passed on through \
              read_messages.\n\
              How much text was entered is unknown. Whether the submission key was pressed is \
              unknown. Check the terminal for leftover input."
@@ -882,13 +878,13 @@ mod tests {
         );
         assert_eq!(
             words(&agent, ended.clone()),
-            "helper (#a5) has started.\nYour initial message #m42 could not be delivered. Nothing \
+            "helper (a5) has started.\nYour prompt m42 could not be delivered. Nothing \
              was entered in the terminal.\n\
-             #a5 ended before the message was delivered."
+             a5 ended before the message was delivered."
         );
         assert_eq!(
             start_result_text_at(&outcome(&agent, ended.clone()), "a5@devbox", "m42@devbox"),
-            "helper (a5@devbox) has started.\nYour initial message m42@devbox could not be delivered. \
+            "helper (a5@devbox) has started.\nYour prompt m42@devbox could not be delivered. \
              Nothing was entered in the terminal.\na5@devbox ended before the message was delivered."
         );
         let ended_agent = ManagedAgent {
@@ -924,9 +920,9 @@ mod tests {
         );
         assert_eq!(
             words(&agent, unconfirmed),
-            "helper (#a5) has started.\nDelivery of your initial message #m42 could not be \
+            "helper (a5) has started.\nDelivery of your prompt m42 could not be \
              confirmed. The full message was entered. The submission key was not pressed. \
-             Check the terminal before sending it again.\n#a5's CLI did not take the \
+             Check the terminal before sending it again.\na5's CLI did not take the \
              message before the deadline."
         );
         let unavailable = ManagedAgent {
@@ -966,7 +962,7 @@ mod tests {
         };
         assert_eq!(
             typed_text(&result),
-            "🔔 helper (#a5) has started. · #m43\nYour initial message #m42 has been passed on."
+            "🔔 helper (a5) has started. · #m43\nYour prompt m42 has been passed on."
         );
         assert_eq!(
             typed_text(&Message {

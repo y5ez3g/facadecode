@@ -1,40 +1,18 @@
-//! The Orchestrator's MCP instructions for a connection or a known managed run.
+//! Facade's MCP instructions for a Guest or a known managed run.
 
 use crate::model::terminal::display_name;
 
-const TOOLS: &str = "The Orchestrator's MCP tools start, list and stop agents, exchange messages, \
-                     and read or operate managed agents' terminals. \
-                     Use an address such as a3@devbox, an agent number such as a3, or a name. \
-                     Without a machine, a number or name resolves only on machines that are awake \
-                     and reachable.";
+const MANAGED: &str = r##"Facade Code runs you as a managed agent; messages and notices arrive as input. If one needs a reply and has a return address, call send_message with to (that address), reply_to (its own number) and text. Tools also list, start and stop agents.
+A header such as "📨 Message from Ada (a2@devbox) · m42 · Reply to m17" is Ada's m42, answering your m17. The person or a script waiting for one reply shows as "the command line (#c44@devbox) · m44": answer to "#c44@devbox" with reply_to "m44". A plain "the command line" has no return address.
+A header starting with "🔔" is a notice from Facade about a failed or unconfirmed delivery, or an agent you started that ended, needs someone's input or is in error. It gives the reason and any next step; it is no reply, no new task and no sign that work is done.
+After a send or a "reply_timeout", keep working or end your turn: any reply comes on its own. Wait in a call only when you need delivery or a reply confirmed within its 30 seconds, and do not poll read_messages or read_screen. If your client has tool search, load the Facade tools you need in one search."##;
 
-const RESULT: &str = "A 🔔 message reports an Orchestrator result; it is not the recipient's \
-                      answer or proof of task completion.";
-
-const MANAGED_SEND: &str = "Managed agents usually omit wait_for and timeout_seconds when sending. \
-                            Replies and later delivery failures arrive through the terminal. \
-                            You can resend a withdrawn message if nothing was typed. \
-                            Check the recipient's terminal before retrying partial or unconfirmed \
-                            input.";
-
-/// The instructions for MCP initialization before the connection has a known agent.
+/// The instructions for a connection that receives the Guest text at initialization.
 pub fn for_connection() -> String {
-    format!(
-        "{TOOLS} The server verifies whether this connection acts for a managed agent or a Guest. \
-         Managed agents normally receive messages through their terminals. Guests receive messages \
-         through read_messages and should keep their connection open and take messages promptly. \
-         timeout_seconds defaults to 0 for both send_message and read_messages: sending confirms \
-         inbox acceptance only, and reading returns a snapshot. To wait, set a positive \
-         timeout_seconds up to 30. A send also requires wait_for: \"delivery\" or \"result\"; setting \
-         wait_for alone does not enable waiting. {MANAGED_SEND} \
-         Guests needing an answer should use wait_for: \"result\" with \
-         timeout_seconds: 30. A positive timeout is one total call budget. After reply_timeout, \
-         continue with read_messages using the original full message ID as reply_to and a positive \
-         timeout_seconds; do not resend the task. A replyable command-line request appears as the \
-         command line with a sender address such as #c42@devbox, also returned as from in its inbox \
-         row. Reply to that sender address with the received message number as reply_to. The c \
-         address accepts the first reply while the original command is waiting. {RESULT}"
-    )
+    r#"Facade Code connects agents. As a Guest, read messages and notices with read_messages and only timeout_seconds 30. send_message takes to and text; to wait for delivery or one reply, add wait_for "delivery" or "result" and timeout_seconds 30.
+A connection that Facade cannot verify as a managed agent's joins as a Guest at its first tool call, with an address and an inbox. Where Facade's instructions say you are a managed agent, they apply to calls through that agent's server.
+As a Guest, nothing is typed into your input: messages, and notices from "facade", reach you only when you read them, and an unread one is withdrawn, usually within 30 seconds. So start waiting as soon as you expect one, and wait again while you still do. If your client has tool search, load the Facade tools you need in one search."#
+        .to_owned()
 }
 
 /// The known facts of a managed run that its instructions give.
@@ -57,37 +35,26 @@ pub enum Creator<'a> {
 
 /// The instructions for a managed agent whose current run is known.
 pub fn for_managed(address: &str, run: &ManagedRun<'_>) -> String {
+    let reach = if run.yolo {
+        "YOLO is on: your tools reach agents on all reachable machines."
+    } else {
+        "YOLO is off: your tools reach only your creation tree, its first agent and every agent started under it."
+    };
     let creator = match &run.creator {
         Some(Creator::Agent {
             address,
             name: Some(name),
-        }) => format!(" You were started by {} ({address}).", display_name(name)),
+        }) => format!(" by {} ({address})", display_name(name)),
         Some(Creator::Agent {
             address,
             name: None,
-        }) => format!(" You were started by {address}."),
-        Some(Creator::CommandLine) => " You were started from the command line.".into(),
-        Some(Creator::VsCode) => " You were started from VS Code.".into(),
+        }) => format!(" by {address}"),
+        Some(Creator::CommandLine) => " from the command line".into(),
+        Some(Creator::VsCode) => " from VS Code".into(),
         None => String::new(),
     };
-    let reach = if run.yolo {
-        "YOLO is on. Your tools reach agents on all reachable machines."
-    } else {
-        "YOLO is off. Your tools reach agents in your creation tree."
-    };
     format!(
-        "You are managed agent {address}, working in {} on machine {}.{creator} {TOOLS} {reach} \
-         Messages are typed into your terminal. You can use read_messages to take messages before \
-         typing begins. {MANAGED_SEND} timeout_seconds defaults to 0 for both \
-         send_message and read_messages: sending confirms inbox acceptance only, and reading returns \
-         a snapshot. Setting wait_for alone does not enable waiting. Use wait_for: \"result\" with a \
-         positive timeout_seconds when this call needs a linked reply. A positive timeout is one \
-         total call budget of at most 30 seconds; a send also requires wait_for. After reply_timeout, \
-         continue with read_messages using the original full message ID as reply_to and a positive \
-         timeout_seconds; do not resend the task. A replyable command-line request appears as the \
-         command line (#c42@devbox) within its single header line. Copy that sender address into to \
-         and the received message number into reply_to. The c address accepts the first reply while \
-         the original command is waiting. {RESULT}",
+        "{MANAGED}\n{reach} Your address is {address}. You were started{creator} in {} on {}.",
         run.folder, run.machine
     )
 }
@@ -96,32 +63,33 @@ pub fn for_managed(address: &str, run: &ManagedRun<'_>) -> String {
 mod tests {
     use super::*;
 
-    /// The instructions say where the agent works and who started it, where that is known, in their
-    /// first sentences, so that it can start an agent beside itself and answer its creator without
-    /// asking first.
+    /// The last line gives the agent's address, creator, folder and machine.
     #[test]
     fn the_instructions_say_where_the_agent_works_and_who_started_it_where_that_is_known() {
         for (creator, expected) in [
             (
                 Some(Creator::Agent {
-                    address: "a2@laptop",
-                    name: Some("Ada"),
+                    address: "a1@devbox",
+                    name: Some("Nova"),
                 }),
-                " You were started by Ada (a2@laptop).",
+                "You were started by Nova (a1@devbox) in /work/app on devbox.",
             ),
             (
                 Some(Creator::Agent {
-                    address: "a2@laptop",
+                    address: "a1@devbox",
                     name: None,
                 }),
-                " You were started by a2@laptop.",
+                "You were started by a1@devbox in /work/app on devbox.",
             ),
             (
                 Some(Creator::CommandLine),
-                " You were started from the command line.",
+                "You were started from the command line in /work/app on devbox.",
             ),
-            (Some(Creator::VsCode), " You were started from VS Code."),
-            (None, ""),
+            (
+                Some(Creator::VsCode),
+                "You were started from VS Code in /work/app on devbox.",
+            ),
+            (None, "You were started in /work/app on devbox."),
         ] {
             let text = for_managed(
                 "a3@devbox",
@@ -133,9 +101,10 @@ mod tests {
                 },
             );
             assert_eq!(
-                text.split_once(" The Orchestrator's MCP tools").unwrap().0,
+                text.lines().last().unwrap(),
                 format!(
-                    "You are managed agent a3@devbox, working in /work/app on machine devbox.{expected}"
+                    "YOLO is on: your tools reach agents on all reachable machines. \
+                     Your address is a3@devbox. {expected}"
                 )
             );
         }
@@ -152,21 +121,38 @@ mod tests {
         };
         assert!(
             for_managed("a3@devbox", &run)
-                .contains("YOLO is on. Your tools reach agents on all reachable machines.")
+                .lines()
+                .last()
+                .unwrap()
+                .starts_with("YOLO is on: your tools reach agents on all reachable machines.")
         );
         run.yolo = false;
         assert!(
             for_managed("a3@devbox", &run)
-                .contains("YOLO is off. Your tools reach agents in your creation tree.")
+                .lines()
+                .last()
+                .unwrap()
+                .starts_with(
+                    "YOLO is off: your tools reach only your creation tree, \
+                     its first agent and every agent started under it."
+                )
         );
     }
 
-    /// The connection instructions explain what the bell reports.
+    /// The managed instructions explain what the bell reports.
     #[test]
-    fn the_instructions_say_a_bell_is_facade_s_result() {
-        assert!(for_connection().ends_with(
-            "A 🔔 message reports an Orchestrator result; it is not the recipient's answer or \
-             proof of task completion."
-        ));
+    fn the_instructions_say_a_bell_is_a_facade_notice() {
+        let run = ManagedRun {
+            folder: "/work/app",
+            machine: "devbox",
+            creator: None,
+            yolo: false,
+        };
+        assert_eq!(
+            for_managed("a3@devbox", &run).lines().nth(2),
+            Some(
+                r#"A header starting with "🔔" is a notice from Facade about a failed or unconfirmed delivery, or an agent you started that ended, needs someone's input or is in error. It gives the reason and any next step; it is no reply, no new task and no sign that work is done."#
+            )
+        );
     }
 }
