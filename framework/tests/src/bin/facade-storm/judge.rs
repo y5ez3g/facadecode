@@ -106,8 +106,18 @@ pub fn kind(submission: &Submission) -> Kind {
             Piece::Typed(text) | Piece::Pasted(text) => plain(text),
         })
         .collect();
-    let numbers = headers(&all);
-    let notices = all.matches("🔔 ").count();
+    // A message may quote another's header in its body.
+    let opens = all.starts_with("📨 Message m");
+    let numbers: Vec<u64> = match opens {
+        true if !all.contains("\n\n📨 Message m") => {
+            headers(all.lines().next().unwrap_or_default())
+        }
+        _ => headers(&all),
+    };
+    let notices = match opens {
+        true => 0,
+        false => all.matches("🔔 ").count(),
+    };
     // Facade pastes its text whole: a second piece is someone else's.
     let alone = submission.pieces.len() == 1;
     match (numbers.len(), notices) {
@@ -614,14 +624,30 @@ pub fn judge(case: &Case<'_>) -> Verdict {
     let mut people = Vec::new();
     for window in case.windows {
         let keys = keys(window, &mut say);
+        let [drawn, key, emptied, next] = window.tape.segments();
+        let segments = match key.len() {
+            0..5 => Value::Null,
+            _ => json!({
+                "paste_to_drawn": summary(drawn), "drawn_to_key": summary(key),
+                "key_to_emptied": summary(emptied), "emptied_to_next_paste": summary(next),
+            }),
+        };
         people.push(json!({
             "agent": window.agent, "longest_stay_ms": stays[window.agent.as_str()], "keys": keys,
+            "segments_ms": segments,
         }));
     }
     for line in case.warnings {
         say("I12", format!("the log: {line}"), None);
     }
 
+    // From a message's keeping to its delivery, by the store's own times.
+    let kept_to_delivered: Vec<f64> = case
+        .rows
+        .values()
+        .filter(|row| row.status == "success")
+        .filter_map(|row| Some(row.delivered_ms?.saturating_sub(row.at_ms) as f64))
+        .collect();
     // How long each recipient took between one delivery and the next.
     let mut gaps: BTreeMap<String, Vec<u64>> = BTreeMap::new();
     for row in case.rows.values().filter(|row| row.status == "success") {
@@ -655,6 +681,7 @@ pub fn judge(case: &Case<'_>) -> Verdict {
         "called_to_submitted_ms": summary(waits),
         "send_call_ms": summary(case.sent.iter().map(|sent| sent.took_ms).collect()),
         "reasonable": reasonable,
+        "kept_to_delivered_ms": summary(kept_to_delivered),
         "between_deliveries_ms": gaps,
         "notices": notices.values().map(Vec::len).sum::<usize>(),
         "windows": people.into_iter().filter(|window| {
@@ -902,7 +929,8 @@ fn keys(window: &Window, say: &mut dyn FnMut(&'static str, String, Option<&'stat
             .map(|((_, sent), (_, read))| (read.saturating_sub(*sent)) as f64 / 1000.0)
             .collect();
         let worst = late.iter().copied().fold(0.0, f64::max);
-        if worst > 200.0 {
+        // A delivery may keep a key for its settle time and 200 ms: the fake CLI reads a paste at once.
+        if worst > 280.0 {
             say(
                 "I13",
                 format!("{}: a key reached the CLI {worst:.0} ms late", window.agent),

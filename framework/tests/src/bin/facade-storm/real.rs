@@ -96,6 +96,17 @@ pub fn person_env() -> BTreeMap<String, String> {
 impl Lab {
     /// A home whose agents run real CLIs, under `root`, its daemon running.
     pub fn real(root: &Path, name: &str, work: &Path) -> anyhow::Result<Lab> {
+        Self::real_with(root, name, work, &[], own_model().as_deref())
+    }
+
+    /// [`Lab::real`], each CLI with `env` besides.
+    pub fn real_with(
+        root: &Path,
+        name: &str,
+        work: &Path,
+        env: &[(&str, &str)],
+        model: Option<&str>,
+    ) -> anyhow::Result<Lab> {
         let folder = root.join(format!("stress-{name}-{}", std::process::id()));
         let home = TestHome {
             path: folder.join("home"),
@@ -107,8 +118,35 @@ impl Lab {
         std::fs::create_dir_all(work)?;
         let mut clis = serde_json::Map::new();
         for cli in CLIS {
-            if !cli.args.is_empty() {
-                clis.insert(cli.name.into(), json!({ "args": cli.args }));
+            let mut entry = serde_json::Map::new();
+            let mut args: Vec<String> = cli.args.iter().map(|arg| arg.to_string()).collect();
+            if let (Some(url), "codex") = (model, cli.name) {
+                for set in [
+                    "model_provider=storm".to_string(),
+                    "model_providers.storm.name=storm".into(),
+                    format!("model_providers.storm.base_url=\"{url}\""),
+                    "model_providers.storm.wire_api=responses".into(),
+                    "model_providers.storm.requires_openai_auth=false".into(),
+                    "model_providers.storm.supports_websockets=false".into(),
+                ] {
+                    args.extend(["-c".to_string(), set]);
+                }
+            }
+            if !args.is_empty() {
+                entry.insert("args".into(), json!(args));
+            }
+            let mut env: BTreeMap<&str, &str> = env.iter().copied().collect();
+            let base;
+            if let (Some(url), "claude") = (model, cli.name) {
+                base = url.trim_end_matches("/v1").to_string();
+                env.insert("ANTHROPIC_BASE_URL", &base);
+                env.insert("ANTHROPIC_AUTH_TOKEN", "none");
+            }
+            if !env.is_empty() {
+                entry.insert("env".into(), json!(env));
+            }
+            if !entry.is_empty() {
+                clis.insert(cli.name.into(), Value::Object(entry));
             }
         }
         std::fs::write(
@@ -155,7 +193,7 @@ impl Lab {
         if cli.name == "opencode" {
             std::fs::write(
                 folder.join("opencode.json"),
-                r#"{"$schema":"https://opencode.ai/config.json","model":"opencode/deepseek-v4.1-flash-free"}"#,
+                r#"{"$schema":"https://opencode.ai/config.json","model":"opencode/mimo-v2.6-flash-free"}"#,
             )?;
         }
         let mut args = json!({
@@ -345,8 +383,28 @@ pub struct RealSpec {
     /// The recipient writes a long answer meanwhile.
     pub busy: bool,
     pub hogs: usize,
-    /// One sender sends each of [`shapes`] in turn.
-    pub shapes: bool,
+    pub course: Course,
+}
+
+/// What a real CLI's senders do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Course {
+    /// All send at one moment.
+    Burst,
+    /// One sends each of [`shapes`] in turn.
+    Shapes,
+    /// One sends each of [`endings`] this many times.
+    Endings(usize),
+    /// [`Course::Endings`], each with each of [`TAILS`] after it.
+    Tails(usize),
+    /// One sends a message that nothing completes, one at a time, this many times.
+    Plain(usize),
+    /// What a CLI does with messages it took when its work is cut short.
+    Returns,
+    /// What a CLI makes of one paste whose bytes come in two parts.
+    Split,
+    /// A recipient that ends while a message is typed to it, this many times.
+    Ends(usize),
 }
 
 /// The storms whose names hold one of `only`'s words, parted by commas.
@@ -366,18 +424,31 @@ pub fn specs(only: Option<&str>, senders: Option<usize>, each: Option<usize>) ->
                 each: each.unwrap_or(1),
                 busy,
                 hogs,
-                shapes: false,
+                course: Course::Burst,
             });
         }
-        specs.push(RealSpec {
-            name: format!("{} shapes.", cli.name),
-            cli,
-            senders: 1,
-            each: 1,
-            busy: false,
-            hogs: 0,
-            shapes: true,
-        });
+        let times = each.unwrap_or(30);
+        for (what, hogs, course) in [
+            ("shapes", 0, Course::Shapes),
+            ("endings", 0, Course::Endings(times)),
+            ("endings cores", 15, Course::Endings(times)),
+            ("tails", 0, Course::Tails(each.unwrap_or(10))),
+            ("plain", 0, Course::Plain(times)),
+            ("plain cores", 15, Course::Plain(times)),
+            ("returns", 0, Course::Returns),
+            ("split", 0, Course::Split),
+            ("ends", 0, Course::Ends(times)),
+        ] {
+            specs.push(RealSpec {
+                name: format!("{} {what}.", cli.name),
+                cli,
+                senders: 1,
+                each: 1,
+                busy: false,
+                hogs,
+                course,
+            });
+        }
     }
     let wanted =
         |name: &str| only.is_none_or(|only| only.split(',').any(|word| name.contains(word)));
@@ -390,6 +461,11 @@ const LONG_ANSWER: &str = "Write the integers from 1 to 700 in English words, on
 
 /// Runs one storm of fake senders to one real CLI.
 pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Result<Outcome> {
+    match spec.course {
+        Course::Returns => return returns(spec, name, root, out),
+        Course::Ends(times) => return ends(spec, times, name, root, out),
+        _ => {}
+    }
     let tag: String = name
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
@@ -408,7 +484,7 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
     // An agent starts it, so that a new folder is trusted as Facade trusts one.
     let folder = work.join(spec.cli.name);
     std::fs::create_dir_all(&folder)?;
-    prepare(spec.cli, &folder)?;
+    prepare(spec.cli, &folder, own_model().as_deref())?;
     let since = SystemTime::now();
     let mut arguments = json!({ "cli": spec.cli.name, "name": "boss", "folder": folder });
     for (key, value) in [("model", spec.cli.model), ("effort", spec.cli.effort)] {
@@ -459,7 +535,8 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
     let timeline = Timeline::watch(
         &field.lab.home.daemon_socket(),
         &boss.reference,
-        Duration::from_millis(40),
+        // Each look costs the daemon a read of the CLI's whole saved session.
+        Duration::from_millis(400),
     )?;
     field.watch_real(RealAgent {
         agent: boss.clone(),
@@ -470,10 +547,50 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
     if spec.busy {
         std::thread::sleep(Duration::from_millis(2500));
     }
-    if spec.shapes {
-        send_shapes(&field, &clients[0], &senders[0], &boss)?;
-    }
     let hogs = crate::storm::Hogs::start(spec.hogs);
+    let saved = RealAgent {
+        agent: boss.clone(),
+        cli: spec.cli,
+        since,
+        timeline: Timeline::watch(
+            &field.lab.home.daemon_socket(),
+            &boss.reference,
+            Duration::from_secs(5),
+        )?,
+    };
+    match spec.course {
+        Course::Burst | Course::Returns | Course::Ends(_) => {}
+        Course::Split => {
+            split(&field, &saved, out)?;
+        }
+        Course::Shapes => send_shapes(&field, &clients[0], &senders[0], &boss)?,
+        Course::Endings(times) | Course::Tails(times) | Course::Plain(times) => {
+            let wanted = std::env::var("FACADE_STORM_TAILS").unwrap_or_default();
+            let tails: Vec<(&str, &str)> = TAILS
+                .iter()
+                .copied()
+                .filter(|(name, _)| {
+                    wanted.is_empty() || wanted.split(',').any(|each| each == *name)
+                })
+                .collect();
+            let (kinds, tails) = match spec.course {
+                Course::Plain(_) => (vec![("plain", PLAIN)], &[("", "")][..]),
+                Course::Tails(_) => (endings(), tails.as_slice()),
+                _ => (endings(), &[("", "")][..]),
+            };
+            send_endings(
+                &field,
+                &clients[0],
+                &senders[0],
+                &saved,
+                times,
+                &kinds,
+                tails,
+                out,
+            )?;
+        }
+    }
+    let _ = saved.timeline.end();
     let barrier = std::sync::Barrier::new(senders.len().max(1));
     let state_before = field.lab.inspect(&boss)?["agent"]["state"].clone();
     std::thread::scope(|scope| {
@@ -481,7 +598,10 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
             let (barrier, field, boss) = (&barrier, &field, &boss);
             scope.spawn(move || {
                 barrier.wait();
-                let count = if spec.shapes { 0 } else { spec.each };
+                let count = match spec.course {
+                    Course::Burst => spec.each,
+                    _ => 0,
+                };
                 for _ in 0..count {
                     field.send(mcp, &sender.id, boss, Shape::Ask, "inbox");
                 }
@@ -619,24 +739,13 @@ fn send_shapes(
                 "left": if sent.succeeded { String::new() } else { screen_tail(&field.lab, boss) },
             }),
         );
-        let failed = !sent.succeeded;
         field.note_sent(sent);
-        // What a failure leaves in the input goes, as a person clears it, so that the next shape is
-        // judged by itself.
-        for _ in 0..5 {
-            if !failed || field.lab.input_state(boss) == "usable" {
-                break;
-            }
-            field.lab.wire.call(
-                "agent.type",
-                json!({
-                    "target": boss.reference,
-                    "input": { "kind": "raw", "raw": facade_base::base64::encode(b"\x03") },
-                }),
-            )?;
-            std::thread::sleep(Duration::from_millis(1500));
-        }
+        // What a failure, or a success that was none, leaves in the input goes, as a person clears
+        // it, so that the next shape is judged by itself.
         wait_idle(field, boss, Duration::from_secs(90));
+        if field.lab.input_state(boss) != "usable" {
+            clear_input(field, boss, 200)?;
+        }
     }
     // A control character is refused, with words.
     let (seq, _) = field.name_next(&sender.id);
@@ -648,11 +757,224 @@ fn send_shapes(
     Ok(())
 }
 
-/// Waits until a CLI stayed out of work for 2 seconds.
+/// Ends of a message that a CLI may offer to complete, or take its Enter for something else, each with
+/// a name. `README.md` and `src/main.rs` are in the CLI's folder.
+pub fn endings() -> Vec<(&'static str, &'static str)> {
+    let wanted = std::env::var("FACADE_STORM_ENDINGS").unwrap_or_default();
+    let mut all = vec![
+        ("at a file", "no reply needed about @README.md"),
+        ("at no file", "no reply needed about @nosuchfile"),
+        ("at an address", "no reply needed to @a1@aaron-pc"),
+        ("at a name", "no reply needed to @lead"),
+        ("a command in a line", "no reply needed, then /compact"),
+        ("a command as a line", "no reply needed\n/compact"),
+        ("a dollar", "no reply needed about $skill"),
+        ("a path", "no reply needed about src/main.rs"),
+        ("a backslash", "no reply needed about C:\\work\\src\\"),
+        ("a hash", "no reply needed about #general"),
+        ("a bang as a line", "no reply needed\n!ls"),
+        ("a colon word", "no reply needed :smile"),
+    ];
+    all.retain(|(name, _)| wanted.is_empty() || wanted.split(',').any(|each| each == *name));
+    all
+}
+
+const PLAIN: &str = "answer with the single word ok and nothing else, and use no tools.";
+
+/// What could follow a message so that nothing completes it.
+pub const TAILS: &[(&str, &str)] = &[
+    ("space", " "),
+    ("newline", "\n"),
+    ("line", "\n—"),
+    ("end line", "\n— end of message"),
+];
+
+/// Where a model of the storm's own answers, if one does: `FACADE_STORM_MODEL`. The CLIs that can be
+/// told of one then spend no quota.
+fn own_model() -> Option<String> {
+    std::env::var("FACADE_STORM_MODEL")
+        .ok()
+        .filter(|url| url.starts_with("http://127.0.0.1:"))
+}
+
+/// Sends each ending `times` times, one at a time to an idle CLI, and after each whether the input is
+/// empty again. What stays in it is kept, then cleared as a person clears it.
+#[allow(clippy::too_many_arguments)]
+fn send_endings(
+    field: &Field,
+    mcp: &client::Mcp,
+    sender: &Agent,
+    real: &RealAgent,
+    times: usize,
+    kinds: &[(&'static str, &'static str)],
+    tails: &[(&str, &str)],
+    out: &Path,
+) -> anyhow::Result<()> {
+    let boss = &real.agent;
+    // By ending and tail: sent, told delivered, left in the input though told delivered, failed.
+    let mut counts: BTreeMap<String, [usize; 4]> = BTreeMap::new();
+    let mut first_left: BTreeMap<String, String> = BTreeMap::new();
+    let mut numbers: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+    let mut texts: BTreeMap<u64, (String, String)> = BTreeMap::new();
+    let mut first_shown: BTreeMap<String, String> = BTreeMap::new();
+    for round in 0..times {
+        for (ending, text) in kinds {
+            for (tail, add) in tails {
+                let name = match tail.is_empty() {
+                    true => ending.to_string(),
+                    false => format!("{ending} + {tail}"),
+                };
+                let (seq, _) = field.name_next(&sender.id);
+                let text = format!("n{seq:05} {text}{add}");
+                let sent = crate::storm::send(mcp, &sender.id, boss, seq, text.clone(), "delivery");
+                if let Some(number) = sent.number {
+                    texts.insert(number, (name.clone(), text));
+                }
+                if round == 0 {
+                    std::thread::sleep(Duration::from_millis(400));
+                    first_shown.insert(name.clone(), screen_text(&field.lab, boss));
+                }
+                let count = counts.entry(name.clone()).or_default();
+                count[0] += 1;
+                count[if sent.succeeded { 1 } else { 3 }] += 1;
+                if let Some(number) = sent.number {
+                    numbers.entry(name.clone()).or_default().push(number);
+                }
+                let succeeded = sent.succeeded;
+                field.note_sent(sent);
+                wait_idle(field, boss, Duration::from_secs(60));
+                // An input that still holds text, once the CLI is idle, was not submitted.
+                let held = field.lab.input_state(boss) != "usable" && {
+                    std::thread::sleep(Duration::from_millis(700));
+                    field.lab.input_state(boss) != "usable"
+                };
+                if held {
+                    if succeeded {
+                        count[2] += 1;
+                    }
+                    first_left
+                        .entry(name.clone())
+                        .or_insert_with(|| screen_tail(&field.lab, boss));
+                    clear_input(field, boss, 110)?;
+                    // A CLI that has not worked off all those keys takes them out of the message
+                    // that comes next: one that counts for nothing goes first.
+                    for _ in 0..3 {
+                        let (seq, _) = field.name_next(&sender.id);
+                        let text = format!("n{seq:05} {PLAIN}");
+                        let after =
+                            crate::storm::send(mcp, &sender.id, boss, seq, text, "delivery");
+                        let succeeded = after.succeeded;
+                        field.note_sent(after);
+                        wait_idle(field, boss, Duration::from_secs(60));
+                        if succeeded && clear_input(field, boss, 110)? {
+                            break;
+                        }
+                        clear_input(field, boss, 110)?;
+                    }
+                }
+            }
+        }
+        println!("   round {round}: {counts:?}");
+        let report = json!({
+            "counts_sent_delivered_left_failed": counts, "first_left": first_left,
+            "numbers": numbers, "first_shown": first_shown,
+            "saved": saved_as(field, real, &texts),
+        });
+        field.note("endings", report.clone());
+        std::fs::create_dir_all(out)?;
+        std::fs::write(
+            out.join("endings.json"),
+            serde_json::to_string_pretty(&report)?,
+        )?;
+    }
+    Ok(())
+}
+
+/// How a CLI's saved session holds each ending: by its name, how many it holds exactly, how many
+/// without the white space they ended with, how many changed and how many not at all, with the first
+/// that changed.
+fn saved_as(field: &Field, real: &RealAgent, texts: &BTreeMap<u64, (String, String)>) -> Value {
+    let taken = match submissions(&field.lab, real) {
+        Ok(Some(taken)) => taken,
+        Ok(None) => return json!("no reader"),
+        Err(err) => return json!(format!("{err:#}")),
+    };
+    let taken: Vec<String> = taken
+        .into_iter()
+        .flat_map(|one| one.pieces)
+        .map(|piece| match piece {
+            crate::tape::Piece::Pasted(text) | crate::tape::Piece::Typed(text) => text,
+        })
+        .collect();
+    let mut counts: BTreeMap<&str, [usize; 4]> = BTreeMap::new();
+    let mut changed: BTreeMap<&str, (String, String)> = BTreeMap::new();
+    for (number, (name, text)) in texts {
+        let count = counts.entry(name).or_default();
+        let header = format!("📨 Message m{number} from ");
+        let Some(saved) = taken.iter().find(|saved| saved.contains(&header)) else {
+            count[3] += 1;
+            continue;
+        };
+        let body = saved[saved.find(&header).expect("its header")..]
+            .split_once('\n')
+            .map_or("", |(_, body)| body);
+        // Claude Code marks the lines it folded away in its display.
+        let body = match body.trim_end().rfind("\n</pasted_content") {
+            Some(at) if body.trim_end().ends_with('>') => &body[..at],
+            _ => body,
+        };
+        let kind = match body {
+            body if body == text => 0,
+            body if body.trim_end() == text.trim_end() => 1,
+            _ => 2,
+        };
+        count[kind] += 1;
+        if kind == 2 {
+            changed
+                .entry(name)
+                .or_insert_with(|| (text.clone(), body.chars().take(300).collect()));
+        }
+    }
+    json!({ "exact_trimmed_changed_missing": counts, "first_changed": changed })
+}
+
+/// Clears an input as a person does who holds Backspace down for `count` characters. Returns whether it
+/// is empty then, and has been a while: a CLI may take its time over that many keys.
+fn clear_input(field: &Field, boss: &Agent, count: usize) -> anyhow::Result<bool> {
+    let empty_for = |time: u64| {
+        let until = Instant::now() + Duration::from_millis(time);
+        while Instant::now() < until {
+            if field.lab.input_state(boss) != "usable" {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        true
+    };
+    for _ in 0..6 {
+        if empty_for(1500) {
+            return Ok(true);
+        }
+        field.lab.wire.call(
+            "agent.type",
+            json!({
+                "target": boss.reference,
+                "input": {
+                    "kind": "raw", "raw": facade_base::base64::encode(&vec![0x7f; count]),
+                },
+            }),
+        )?;
+        std::thread::sleep(Duration::from_millis(1800));
+    }
+    Ok(field.lab.input_state(boss) == "usable")
+}
+
+/// Waits until a CLI stayed out of work for a second or two.
 fn wait_idle(field: &Field, agent: &Agent, timeout: Duration) {
     let until = Instant::now() + timeout;
     let mut quiet_since = Instant::now();
-    while quiet_since.elapsed() < Duration::from_secs(2) && Instant::now() < until {
+    let quiet = Duration::from_millis(if own_model().is_some() { 1200 } else { 2000 });
+    while quiet_since.elapsed() < quiet && Instant::now() < until {
         let working = field.lab.inspect(agent).is_ok_and(|info| {
             let state = info["agent"]["state"].clone();
             state == "working" || state == "starting"
@@ -660,17 +982,586 @@ fn wait_idle(field: &Field, agent: &Agent, timeout: Duration) {
         if working {
             quiet_since = Instant::now();
         }
-        std::thread::sleep(Duration::from_millis(150));
+        std::thread::sleep(Duration::from_millis(400));
     }
 }
 
-/// What a CLI needs in its folder.
-fn prepare(cli: &Cli, folder: &Path) -> anyhow::Result<()> {
-    if cli.name == "opencode" {
+/// Starts `cli` by an agent of the storm's, so that a new folder is trusted as Facade trusts one.
+fn start_by_agent(
+    field: &Field,
+    lead: &client::Mcp,
+    cli: &Cli,
+    name: &str,
+    folder: &Path,
+    prompt: Option<&str>,
+) -> anyhow::Result<Agent> {
+    start_by_agent_with(
+        field,
+        lead,
+        cli,
+        name,
+        folder,
+        prompt,
+        own_model().as_deref(),
+    )
+}
+
+/// [`start_by_agent`], whose CLI asks `model` if it can be told of one.
+fn start_by_agent_with(
+    field: &Field,
+    lead: &client::Mcp,
+    cli: &Cli,
+    name: &str,
+    folder: &Path,
+    prompt: Option<&str>,
+    model: Option<&str>,
+) -> anyhow::Result<Agent> {
+    std::fs::create_dir_all(folder)?;
+    prepare(cli, folder, model)?;
+    let mut arguments = json!({ "cli": cli.name, "name": name, "folder": folder });
+    for (key, value) in [
+        ("model", cli.model),
+        ("effort", cli.effort),
+        ("prompt", prompt),
+    ] {
+        if let Some(value) = value {
+            arguments[key] = json!(value);
+        }
+    }
+    let started = lead.call("start_agent", arguments)?;
+    anyhow::ensure!(started["status"] == "success", "start_agent: {started}");
+    let info = field
+        .lab
+        .wire
+        .call("agent.inspect", json!({ "target": started["data"]["id"] }))?;
+    Lab::agent(&info["agent"])
+}
+
+/// The bytes of `text`, as a person's keys.
+fn type_raw(field: &Field, agent: &Agent, bytes: &[u8]) -> anyhow::Result<()> {
+    field.lab.wire.call(
+        "agent.type",
+        json!({
+            "target": agent.reference,
+            "input": { "kind": "raw", "raw": facade_base::base64::encode(bytes) },
+        }),
+    )?;
+    Ok(())
+}
+
+/// Pastes two lines in two parts, with a wait between them, at each place a paste's bytes can part.
+fn split(field: &Field, real: &RealAgent, out: &Path) -> anyhow::Result<()> {
+    let mut report: Vec<Value> = Vec::new();
+    let mut n = 0;
+    for (place, first, second) in [
+        (
+            "after the return",
+            "\x1b[200~{n} one\r",
+            "{n} two, answer ok\x1b[201~",
+        ),
+        (
+            "inside a line",
+            "\x1b[200~{n} o",
+            "ne\r{n} two, answer ok\x1b[201~",
+        ),
+        (
+            "in the opening mark",
+            "\x1b[20",
+            "0~{n} one\r{n} two, answer ok\x1b[201~",
+        ),
+        (
+            "after the opening mark",
+            "\x1b[200~",
+            "{n} one\r{n} two, answer ok\x1b[201~",
+        ),
+        (
+            "before the closing mark",
+            "\x1b[200~{n} one\r{n} two, answer ok",
+            "\x1b[201~",
+        ),
+        (
+            "in the closing mark",
+            "\x1b[200~{n} one\r{n} two, answer ok\x1b[20",
+            "1~",
+        ),
+    ] {
+        for gap in [0, 20, 60, 150, 400, 1000] {
+            let name = format!("split{n:03}");
+            n += 1;
+            let part = |text: &str| text.replace("{n}", &name).into_bytes();
+            type_raw(field, &real.agent, &part(first))?;
+            std::thread::sleep(Duration::from_millis(gap));
+            type_raw(field, &real.agent, &part(second))?;
+            std::thread::sleep(Duration::from_millis(1500));
+            let input = field.lab.input_state(&real.agent);
+            let screen = screen_tail(&field.lab, &real.agent);
+            type_raw(field, &real.agent, b"\r")?;
+            wait_idle(field, &real.agent, Duration::from_secs(45));
+            let after = field.lab.input_state(&real.agent);
+            if after != "usable" {
+                clear_input(field, &real.agent, 45)?;
+            }
+            let taken: Vec<String> = submissions(&field.lab, real)?
+                .unwrap_or_default()
+                .into_iter()
+                .flat_map(|one| one.pieces)
+                .map(|piece| match piece {
+                    crate::tape::Piece::Pasted(text) | crate::tape::Piece::Typed(text) => text,
+                })
+                .filter(|text| text.contains(&name))
+                .collect();
+            let whole =
+                taken.len() == 1 && taken[0].trim() == format!("{name} one\n{name} two, answer ok");
+            let one = json!({
+                "place": place, "gap_ms": gap, "whole": whole, "taken": taken,
+                "before_enter": input, "after_enter": after,
+                "screen_before_enter": if whole { Value::Null } else { json!(screen) },
+            });
+            println!(
+                "   {place} {gap} ms: {}",
+                if whole {
+                    "whole".into()
+                } else {
+                    json!(taken).to_string()
+                }
+            );
+            report.push(one);
+            std::fs::create_dir_all(out)?;
+            std::fs::write(
+                out.join("split.json"),
+                serde_json::to_string_pretty(&report)?,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Ends a recipient while a message is typed to it: `times` new agents, each stopped or told to leave
+/// at another moment of the typing. A message told delivered must be in the session it ended with.
+fn ends(
+    spec: &RealSpec,
+    times: usize,
+    name: &str,
+    root: &Path,
+    out: &Path,
+) -> anyhow::Result<Outcome> {
+    let tag: String = name
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect();
+    let work = root
+        .join("work")
+        .join("real")
+        .join(format!("{tag}{}", std::process::id()));
+    let lab = Lab::real(&root.join("homes"), &tag, &work)?;
+    let field = Field::over(name, format!("{spec:?}"), lab)?;
+    let lead = field.start("lead", &[])?;
+    let mcp = field.client(&lead)?;
+    let mut verdict = crate::judge::Verdict::default();
+    let mut report: Vec<Value> = Vec::new();
+    std::fs::create_dir_all(out)?;
+    let moments = [60, 90, 100, 105, 110, 115, 120, 130, 150, 200, 300, 600];
+    for n in 0..times {
+        let (way, moment) = (
+            ["stop", "ctrl-c twice"][n % 2],
+            moments[n / 2 % moments.len()],
+        );
+        let one = end_one(&field, &mcp, &lead, spec.cli, &work, n, way, moment);
+        let one = one.unwrap_or_else(|err| json!({ "could_not_run": format!("{err:#}") }));
+        println!("   {n}: {}", {
+            let mut short = one.clone();
+            if let Some(short) = short.as_object_mut() {
+                short.remove("screen");
+            }
+            short
+        });
+        report.push(one);
         std::fs::write(
-            folder.join("opencode.json"),
-            r#"{"$schema":"https://opencode.ai/config.json","model":"opencode/deepseek-v4.1-flash-free"}"#,
+            out.join("ends.json"),
+            serde_json::to_string_pretty(&report)?,
         )?;
+    }
+    let false_success = report
+        .iter()
+        .filter(|one| one["said"] == "typed_into_input" && one["in_session"] == 0)
+        .count();
+    let twice = report
+        .iter()
+        .filter(|one| one["said"] != "typed_into_input" && one["in_session"] != 0)
+        .count();
+    verdict.stats = json!({
+        "ended": report.len(), "told_delivered_not_in_session": false_success,
+        "told_failed_in_session": twice,
+    });
+    field.lab.keep_evidence(&out.join(&tag))?;
+    drop(mcp);
+    crate::storm::stop_all(&field.lab, &[lead], &mut verdict);
+    Ok(Outcome {
+        name: name.into(),
+        verdict,
+        seconds: 0.0,
+        evidence: Some(out.to_path_buf()),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn end_one(
+    field: &Field,
+    mcp: &client::Mcp,
+    lead: &Agent,
+    cli: &'static Cli,
+    work: &Path,
+    n: usize,
+    way: &str,
+    moment: u64,
+) -> anyhow::Result<Value> {
+    let since = SystemTime::now();
+    let boss = start_by_agent(
+        field,
+        mcp,
+        cli,
+        &format!("x{n:02}"),
+        &work.join("ends"),
+        None,
+    )?;
+    let ready = wait_until(Duration::from_secs(90), || {
+        field.lab.inspect(&boss).is_ok_and(|info| {
+            info["input"]["state"] == "usable" && info["agent"]["tools_state"] != "connecting"
+        })
+    });
+    anyhow::ensure!(ready, "not ready: {}", screen_tail(&field.lab, &boss));
+    std::thread::sleep(Duration::from_millis(700));
+    let (seq, _) = field.name_next(&lead.id);
+    let text = format!("ends{seq:05} reply with the single word ok");
+    let sent = std::thread::scope(|scope| {
+        let ending = scope.spawn(|| -> anyhow::Result<()> {
+            std::thread::sleep(Duration::from_millis(moment));
+            match way {
+                "stop" => {
+                    field.lab.wire.call(
+                        "agent.stop",
+                        json!({ "selection": { "kind": "targets", "targets": [boss.reference] } }),
+                    )?;
+                }
+                _ => {
+                    type_raw(field, &boss, b"\x03")?;
+                    std::thread::sleep(Duration::from_millis(30));
+                    // It may be gone already.
+                    let _ = type_raw(field, &boss, b"\x03");
+                }
+            }
+            Ok(())
+        });
+        let sent = crate::storm::send(mcp, &lead.id, &boss, seq, text, "delivery");
+        (sent, ending.join().expect("the ending"))
+    });
+    let (sent, ended) = sent;
+    ended?;
+    std::thread::sleep(Duration::from_millis(2500));
+    let info = field.lab.inspect(&boss)?;
+    let real = RealAgent {
+        agent: boss.clone(),
+        cli,
+        since,
+        timeline: Timeline::watch(
+            &field.lab.home.daemon_socket(),
+            &boss.reference,
+            Duration::from_secs(1),
+        )?,
+    };
+    let header = sent.number.map(|number| format!("Message m{number} from "));
+    let taken = match submissions(&field.lab, &real) {
+        Ok(Some(taken)) => json!(
+            taken
+                .iter()
+                .flat_map(|one| &one.pieces)
+                .filter(|piece| match piece {
+                    crate::tape::Piece::Pasted(text) | crate::tape::Piece::Typed(text) => {
+                        header.as_ref().is_some_and(|header| text.contains(header))
+                    }
+                })
+                .count()
+        ),
+        Ok(None) => json!("no reader"),
+        Err(err) => json!(format!("{err:#}")),
+    };
+    let _ = real.timeline.end();
+    let screen = screen_tail(&field.lab, &boss);
+    let one = json!({
+        "n": n, "way": way, "moment_ms": moment, "agent": boss.id, "number": sent.number,
+        "said": sent.said, "succeeded": sent.succeeded, "took_ms": sent.took_ms,
+        "state": info["agent"]["state"], "session": info["agent"]["session"],
+        "in_session": taken, "screen": screen,
+    });
+    if info["agent"]["state"] != "ended" {
+        let mut verdict = crate::judge::Verdict::default();
+        crate::storm::stop_all(&field.lab, &[boss], &mut verdict);
+    }
+    Ok(one)
+}
+
+/// What cuts a CLI's work short.
+const CUTS: &[(&str, &[u8])] = &[
+    ("escape", b"\x1b"),
+    ("escape twice", b"\x1b\x1b"),
+    ("ctrl-c", b"\x03"),
+    ("/compact", b"/compact\r"),
+    ("/clear", b"/clear\r"),
+    ("/new", b"/new\r"),
+];
+
+/// For each way a CLI's work is cut short, with one message taken and three waiting in the CLI:
+/// whether their text comes back to its input, and what its session holds of them, before and after
+/// the next Enter. Then the same with a network that refuses the model's request.
+fn returns(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Result<Outcome> {
+    let tag: String = name
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect();
+    let mut report = serde_json::Map::new();
+    std::fs::create_dir_all(out)?;
+    for refuse in [false, true] {
+        let part = if refuse { "refused" } else { "cut" };
+        let work = root
+            .join("work")
+            .join("real")
+            .join(format!("{tag}{part}{}", std::process::id()));
+        // A proxy nothing listens at: every request of the CLI's fails at once.
+        let nowhere = "http://127.0.0.1:9";
+        let mut model = own_model();
+        let has_own = model.is_some() && matches!(spec.cli.name, "codex" | "opencode");
+        if refuse && has_own {
+            model = model.map(|url| url.replace("/v1", "/fail/v1"));
+        }
+        let env: &[(&str, &str)] = match refuse && !has_own {
+            true => &[
+                ("HTTPS_PROXY", nowhere),
+                ("HTTP_PROXY", nowhere),
+                ("ALL_PROXY", nowhere),
+                ("https_proxy", nowhere),
+                ("http_proxy", nowhere),
+            ],
+            false => &[],
+        };
+        let lab = Lab::real_with(
+            &root.join("homes"),
+            &format!("{tag}{part}"),
+            &work,
+            env,
+            model.as_deref(),
+        )?;
+        let field = Field::over(name, format!("{spec:?} {part}"), lab)?;
+        let lead = field.start("lead", &[])?;
+        let mcp = field.client(&lead)?;
+        let cases: &[(&str, &[u8])] = if refuse { &[("refused", b"")] } else { CUTS };
+        for (case, keys) in cases {
+            let since = SystemTime::now();
+            let one = cut_short(
+                &field,
+                &mcp,
+                &lead,
+                spec.cli,
+                &work,
+                case,
+                keys,
+                since,
+                refuse,
+                model.as_deref(),
+            );
+            let one = match one {
+                Ok(one) => one,
+                Err(err) => json!({ "could_not_run": format!("{err:#}") }),
+            };
+            println!("   {case}: {one}");
+            report.insert((*case).to_string(), one);
+            std::fs::write(
+                out.join("returns.json"),
+                serde_json::to_string_pretty(&report)?,
+            )?;
+        }
+        field.lab.keep_evidence(&out.join(format!("{tag}{part}")))?;
+        drop(mcp);
+        let mut verdict = crate::judge::Verdict::default();
+        crate::storm::stop_all(&field.lab, &[lead], &mut verdict);
+    }
+    Ok(Outcome {
+        name: name.into(),
+        verdict: crate::judge::Verdict {
+            stats: Value::Object(report),
+            ..Default::default()
+        },
+        seconds: 0.0,
+        evidence: Some(out.to_path_buf()),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cut_short(
+    field: &Field,
+    mcp: &client::Mcp,
+    lead: &Agent,
+    cli: &'static Cli,
+    work: &Path,
+    case: &str,
+    keys: &[u8],
+    since: SystemTime,
+    refuse: bool,
+    model: Option<&str>,
+) -> anyhow::Result<Value> {
+    let folder = work.join(
+        case.chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+            .collect::<String>(),
+    );
+    let prompt = (!refuse).then_some(LONG_ANSWER);
+    let boss = start_by_agent_with(field, mcp, cli, "boss", &folder, prompt, model)?;
+    let ready = wait_until(Duration::from_secs(90), || {
+        field.lab.inspect(&boss).is_ok_and(|info| match refuse {
+            false => info["agent"]["state"] == "working",
+            true => {
+                info["input"]["state"] == "usable" && info["agent"]["tools_state"] != "connecting"
+            }
+        })
+    });
+    anyhow::ensure!(ready, "not ready: {}", screen_tail(&field.lab, &boss));
+    std::thread::sleep(Duration::from_millis(2000));
+    let count = if refuse { 1 } else { 3 };
+    let sent: Vec<_> = (0..count)
+        .map(|_| field.send(mcp, &lead.id, &boss, Shape::Ask, "delivery"))
+        .collect();
+    let numbers: Vec<u64> = sent.iter().filter_map(|sent| sent.number).collect();
+    std::thread::sleep(Duration::from_millis(1500));
+    let type_raw = |bytes: &[u8]| {
+        field.lab.wire.call(
+            "agent.type",
+            json!({
+                "target": boss.reference,
+                "input": { "kind": "raw", "raw": facade_base::base64::encode(bytes) },
+            }),
+        )
+    };
+    if !keys.is_empty() {
+        type_raw(keys)?;
+    }
+    std::thread::sleep(Duration::from_secs(if refuse { 30 } else { 8 }));
+    let real = RealAgent {
+        agent: boss.clone(),
+        cli,
+        since,
+        timeline: Timeline::watch(
+            &field.lab.home.daemon_socket(),
+            &boss.reference,
+            Duration::from_secs(1),
+        )?,
+    };
+    // Of the session it had then too, if its work ended in a new one.
+    let had = field.lab.inspect(&boss)?["agent"]["session"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    let session = || -> Value {
+        let mut all = submissions(&field.lab, &real);
+        let now = field
+            .lab
+            .inspect(&boss)
+            .map(|info| info["agent"]["session"].clone());
+        if !had.is_empty() && now.is_ok_and(|now| now != had) {
+            let older = submissions_of(cli, &had, since)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            all = all.map(|all| Some(older.into_iter().chain(all.unwrap_or_default()).collect()));
+        }
+        match all {
+            Ok(Some(taken)) => {
+                let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+                for number in taken.iter().flat_map(|one| {
+                    one.pieces
+                        .iter()
+                        .flat_map(|piece| match piece {
+                            crate::tape::Piece::Pasted(text) | crate::tape::Piece::Typed(text) => {
+                                crate::judge::headers(text)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                }) {
+                    *counts.entry(format!("m{number}")).or_default() += 1;
+                }
+                json!(counts)
+            }
+            Ok(None) => json!("no reader"),
+            Err(err) => json!(format!("{err:#}")),
+        }
+    };
+    let input = field.lab.input_state(&boss);
+    let screen = screen_tail(&field.lab, &boss);
+    let before = session();
+    let back: Vec<u64> = match input.as_str() {
+        "usable" => Vec::new(),
+        _ => numbers
+            .iter()
+            .copied()
+            .filter(|number| screen.contains(&format!("Message m{number} ")))
+            .collect(),
+    };
+    // What the next Enter does with it.
+    let after = match input == "draft" {
+        true => {
+            type_raw(b"\r")?;
+            std::thread::sleep(Duration::from_secs(8));
+            session()
+        }
+        false => Value::Null,
+    };
+    let state = field.lab.inspect(&boss)?["agent"]["state"].clone();
+    // Until it stopped working, or long enough: what then came of them.
+    let first = field.lab.inspect(&boss)?["agent"]["session"].clone();
+    let until = Instant::now() + Duration::from_secs(if refuse { 20 } else { 120 });
+    let mut idle_since = Instant::now();
+    while idle_since.elapsed() < Duration::from_secs(6) && Instant::now() < until {
+        let state = field.lab.inspect(&boss)?["agent"]["state"].clone();
+        if state == "working" || state == "starting" {
+            idle_since = Instant::now();
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    let last = field.lab.inspect(&boss)?;
+    let finally = json!({
+        "session_changed": last["agent"]["session"] != first,
+        "session": session(), "state": last["agent"]["state"],
+        "input": field.lab.input_state(&boss),
+        "screen": screen_tail(&field.lab, &boss),
+    });
+    let one = json!({
+        "sent": sent.iter().map(|sent| json!([sent.number, sent.said])).collect::<Vec<_>>(),
+        "input": input, "in_the_input": back, "session": before,
+        "session_after_enter": after, "state": state, "screen": screen,
+        "input_after": field.lab.input_state(&boss), "finally": finally,
+    });
+    let _ = real.timeline.end();
+    let mut verdict = crate::judge::Verdict::default();
+    crate::storm::stop_all(&field.lab, &[boss], &mut verdict);
+    Ok(one)
+}
+
+/// What a CLI needs in its folder.
+fn prepare(cli: &Cli, folder: &Path, model: Option<&str>) -> anyhow::Result<()> {
+    std::fs::write(folder.join("README.md"), "A test folder.\n")?;
+    std::fs::create_dir_all(folder.join("src"))?;
+    std::fs::write(folder.join("src/main.rs"), "fn main() {}\n")?;
+    if cli.name == "opencode" {
+        let config = match model {
+            None => json!({ "model": "opencode/mimo-v2.6-flash-free" }),
+            Some(url) => json!({
+                "model": "storm/fake", "small_model": "storm/fake",
+                "provider": { "storm": {
+                    "npm": "@ai-sdk/openai-compatible", "name": "storm",
+                    "options": { "baseURL": url, "apiKey": "none" },
+                    "models": { "fake": { "name": "fake" } },
+                } },
+            }),
+        };
+        std::fs::write(folder.join("opencode.json"), config.to_string())?;
     }
     Ok(())
 }
@@ -732,6 +1623,7 @@ impl Frames {
             let reading = facade_rules::read_box(&rule.input, &screen.view());
             seen_in.lock().unwrap().push(json!({
                 "us": now_us(), "kind": change["kind"], "bytes": bytes.len(),
+                "data": change["data"],
                 "input": format!("{:?}", reading.info.state).to_lowercase(),
                 "in_update": screen.synchronized_update_deadline().is_some(),
                 "draft": reading.draft.as_deref().map(crate::judge::short),
@@ -805,17 +1697,21 @@ impl Frames {
 pub fn submissions(lab: &Lab, real: &RealAgent) -> anyhow::Result<Option<Vec<Submission>>> {
     let info = lab.inspect(&real.agent)?;
     let session = info["agent"]["session"].as_str().unwrap_or("").to_string();
-    anyhow::ensure!(
-        !session.is_empty(),
-        "{} has no session: {info}",
-        real.agent.id
-    );
-    match real.cli.name {
-        "opencode" => return opencode(&session).map(Some),
-        "agy" => return antigravity(&session).map(Some),
+    anyhow::ensure!(!session.is_empty(), "{} has no session", real.agent.id);
+    submissions_of(real.cli, &session, real.since)
+}
+
+fn submissions_of(
+    cli: &Cli,
+    session: &str,
+    since: SystemTime,
+) -> anyhow::Result<Option<Vec<Submission>>> {
+    match cli.name {
+        "opencode" => return opencode(session).map(Some),
+        "agy" => return antigravity(session).map(Some),
         _ => {}
     }
-    let files = files_of(&session_roots(real.cli.name), &session, real.since);
+    let files = files_of(&session_roots(cli.name), session, since);
     let mut out: Vec<Submission> = Vec::new();
     for file in &files {
         let Ok(text) = std::fs::read_to_string(file) else {
@@ -825,7 +1721,7 @@ pub fn submissions(lab: &Lab, real: &RealAgent) -> anyhow::Result<Option<Vec<Sub
             let Ok(entry) = serde_json::from_str::<Value>(line) else {
                 continue;
             };
-            for text in given_texts(real.cli.name, &entry) {
+            for text in given_texts(cli.name, &entry) {
                 out.push(Submission {
                     us: entry_us(&entry),
                     pieces: vec![crate::tape::Piece::Pasted(text)],
@@ -856,7 +1752,10 @@ fn given_texts(cli: &str, entry: &Value) -> Vec<String> {
                 parts(&entry["attachment"]["prompt"])
             }
             _ => Vec::new(),
-        },
+        }
+        .into_iter()
+        .map(|text| without_paste_mark(&text))
+        .collect(),
         "codex" => match (entry["type"].as_str(), entry["payload"]["role"].as_str()) {
             (Some("response_item"), Some("user")) => parts(&entry["payload"]["content"]),
             _ => Vec::new(),
@@ -869,6 +1768,19 @@ fn given_texts(cli: &str, entry: &Value) -> Vec<String> {
             _ => Vec::new(),
         },
         _ => Vec::new(),
+    }
+}
+
+/// `text` without the mark Claude Code saves a long paste in.
+fn without_paste_mark(text: &str) -> String {
+    let inner = text
+        .trim()
+        .strip_prefix("<pasted_content id=\"")
+        .and_then(|rest| rest.split_once("\">"))
+        .and_then(|(_, rest)| rest.strip_suffix("</pasted_content>"));
+    match inner {
+        Some(inner) => inner.trim_matches('\n').to_string(),
+        None => text.to_string(),
     }
 }
 

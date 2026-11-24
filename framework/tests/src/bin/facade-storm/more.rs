@@ -28,6 +28,16 @@ pub fn set(name: &str) -> Option<Vec<(&'static str, Run)>> {
             ("X1 ping-pong of 6 pairs, 20 rounds", x1),
             ("N8 two recipients that send to each other", n8),
         ],
+        "z" => vec![
+            (
+                "Z1 first messages across a crash of the daemon",
+                crate::crash::prompts as Run,
+            ),
+            (
+                "Z2 ends across a crash of the daemon",
+                crate::crash::ends as Run,
+            ),
+        ],
         "s" => vec![
             ("S1 10 starts with a first message", s1),
             ("S2 30 starts at one moment", s2),

@@ -23,21 +23,40 @@ use crate::tape::{Tape, Token, is_facades};
 /// How long the daemon gets to settle before it is measured idle.
 const SETTLE: Duration = Duration::from_secs(45);
 
-pub fn run(agents: usize) -> anyhow::Result<Value> {
-    let mut out = json!({ "agents": agents });
-    println!("== floors");
-    out["floors"] = floors()?;
-    println!("   {}", out["floors"]);
-    println!("== one agent");
-    out["one"] = one_agent()?;
-    println!("   {}", out["one"]);
-    println!("== {agents} agents");
-    out["many"] = many_agents(agents)?;
-    println!("   {}", out["many"]);
-    println!("== 10,000 messages");
-    out["growth"] = growth(agents)?;
-    println!("   {}", out["growth"]);
-    Ok(out)
+type Part = Box<dyn Fn() -> anyhow::Result<Value>>;
+
+pub fn run(folder: &Path, agents: usize, shared: bool) -> anyhow::Result<()> {
+    let mut out = crate::programs();
+    out["set"] = json!("perf");
+    out["agents"] = json!(agents);
+    out["shared"] = json!(shared);
+    let parts: [(&str, Part); 6] = [
+        ("floors", Box::new(floors)),
+        ("cpu_floors", Box::new(cpu_floors)),
+        ("one", Box::new(one_agent)),
+        ("many", Box::new(move || many_agents(agents))),
+        ("growth", Box::new(move || growth(agents))),
+        ("cycles", Box::new(move || cycles(30, 4))),
+    ];
+    let wanted = std::env::var("FACADE_STORM_PARTS").unwrap_or_default();
+    for (name, part) in parts {
+        if !wanted.is_empty() && !wanted.split(',').any(|each| each == name) {
+            continue;
+        }
+        println!("== {name}");
+        match part() {
+            Ok(value) => {
+                println!("   {value}");
+                out[name] = value;
+            }
+            Err(err) => {
+                println!("   could not run: {err:#}");
+                out[name] = json!({ "could_not_run": format!("{err:#}") });
+            }
+        }
+        crate::save(folder, &out);
+    }
+    Ok(())
 }
 
 fn ms(duration: Duration) -> f64 {
@@ -83,6 +102,157 @@ fn floors() -> anyhow::Result<Value> {
         "pipe_ms": summary(pipe), "commit_ms": summary(commit),
         "spawn_in_console_ms": summary(spawned), "fake_cli_drawn_ms": summary(drawn),
     }))
+}
+
+/// The processor this process spends on `count` runs of `each`, in milliseconds for one.
+fn cpu_of(count: usize, mut each: impl FnMut()) -> f64 {
+    let pid = std::process::id() as i32;
+    let before = one(pid).cpu_s;
+    for _ in 0..count {
+        each();
+    }
+    (one(pid).cpu_s - before) * 1000.0 / count as f64
+}
+
+/// What feeding `pieces` to a screen costs, and what reading the input after each piece adds. One row
+/// for the least a daemon can do with a CLI's output.
+fn parse_cost(pieces: &[Vec<u8>], rule: &str) -> anyhow::Result<Value> {
+    let rule = facade_rules::find(rule)
+        .map_err(anyhow::Error::msg)?
+        .context("a rule")?;
+    let bytes: usize = pieces.iter().map(Vec::len).sum();
+    anyhow::ensure!(bytes > 0, "no bytes were recorded");
+    // Enough of them that the clock of processor time tells.
+    let times = (12_000_000 / bytes).clamp(1, 3000);
+    let feed = cpu_of(times, || {
+        let mut screen = facade_screen::Screen::new(120, 30, 200);
+        for piece in pieces {
+            screen.feed(piece);
+        }
+        std::hint::black_box(screen.view());
+    });
+    let read = cpu_of(times.div_ceil(4), || {
+        let mut screen = facade_screen::Screen::new(120, 30, 200);
+        for piece in pieces {
+            screen.feed(piece);
+            std::hint::black_box(facade_rules::read_box(&rule.input, &screen.view()));
+        }
+    });
+    let mb = bytes as f64 / 1e6;
+    Ok(json!({
+        "bytes": bytes, "pieces": pieces.len(),
+        "feed_cpu_ms_per_mb": round(feed / mb),
+        "feed_and_read_each_piece_cpu_ms_per_mb": round(read / mb),
+        "read_one_piece_cpu_us": round((read - feed).max(0.0) * 1000.0 / pieces.len() as f64),
+        "feed_cpu_ms": round(feed), "feed_and_read_cpu_ms": round(read),
+    }))
+}
+
+/// The least processor a delivery could cost: one commit, and the parse of what the CLI draws for it.
+/// `FACADE_STORM_FRAMES` names real CLIs' recordings: `cli=messages=file`, parted by semicolons.
+fn cpu_floors() -> anyhow::Result<Value> {
+    let lab = Lab::fake("cpu-floors")?;
+    let connection = rusqlite::Connection::open(lab.home.folder().join("floor.db"))?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
+    connection.pragma_update(None, "synchronous", "FULL")?;
+    connection.execute("CREATE TABLE t (n INTEGER PRIMARY KEY, text TEXT)", [])?;
+    let commit = cpu_of(3000, || {
+        let _ = connection.execute("INSERT INTO t (text) VALUES (?1)", ["x".repeat(200)]);
+    });
+
+    // The fake CLI's own bytes for one message, as a viewer of it is given them.
+    let boss = lab.start_fake("boss", &[])?;
+    let sender = lab.start_fake("s01", &[])?;
+    lab.wait_ready(&[boss.clone(), sender.clone()], secs(60))?;
+    let daemon = lab.home.daemon_pid().context("the daemon")?;
+    let mcp = Mcp::managed(&lab.home, &sender.id)?;
+    let deliver = |count: usize, name: &str| {
+        for n in 0..count {
+            let text = format!("{name}-{n:04}");
+            storm::send(&mcp, &sender.id, &boss, n, text, "delivery");
+        }
+    };
+    deliver(20, "warm");
+    let over = Over::start(daemon);
+    deliver(300, "floor");
+    let cpu = over.cpu_s() * 1000.0 / 300.0;
+    let switches = over.end()["switches_per_s"].clone();
+    let seen: std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>> = Default::default();
+    let seen_in = seen.clone();
+    let wire = client::terminal_with(&lab.home.daemon_socket(), move |notice| {
+        let params = &notice["params"];
+        let change = match params["change"].is_object() {
+            true => &params["change"],
+            false => params,
+        };
+        if let Some(bytes) = change["data"]
+            .as_str()
+            .and_then(|data| base64::decode(data).ok())
+        {
+            seen_in.lock().unwrap().push(bytes);
+        }
+    })?;
+    wire.request(
+        "watch",
+        json!({ "topic": "attach", "args": {
+            "target": boss.reference, "size": { "cols": 120, "rows": 30 }, "viewer": "storm",
+        } }),
+        secs(30),
+    )?;
+    std::thread::sleep(secs(1));
+    seen.lock().unwrap().clear();
+    let over = Over::start(daemon);
+    deliver(100, "seen");
+    let cpu_watched = over.cpu_s() * 1000.0 / 100.0;
+    std::thread::sleep(Duration::from_millis(300));
+    let pieces = seen.lock().unwrap().clone();
+    let rule = lab.inspect(&boss)?["rule"]
+        .as_str()
+        .unwrap_or("claude")
+        .to_string();
+    let parse = parse_cost(&pieces, &rule)?;
+    let floor = commit + parse["feed_cpu_ms"].as_f64().unwrap_or_default() / 100.0;
+    let mut out = json!({
+        "commit_cpu_ms": round(commit),
+        "fake": {
+            "daemon_cpu_ms_per_message": round(cpu),
+            "daemon_cpu_ms_per_message_with_a_viewer": round(cpu_watched),
+            "daemon_switches_per_s": switches,
+            "bytes_per_message": parse["bytes"].as_u64().unwrap_or_default() / 100,
+            "pieces_per_message": pieces.len() as f64 / 100.0,
+            "parse": parse,
+            "least_cpu_ms_per_message": round(floor),
+            "times_the_least": round(cpu / floor),
+        },
+        "real": {},
+    });
+    for named in std::env::var("FACADE_STORM_FRAMES")
+        .unwrap_or_default()
+        .split(';')
+        .filter(|named| !named.is_empty())
+    {
+        let mut words = named.splitn(3, '=');
+        let (Some(cli), Some(count), Some(file)) = (words.next(), words.next(), words.next())
+        else {
+            continue;
+        };
+        let messages: f64 = count.parse()?;
+        let pieces: Vec<Vec<u8>> = std::fs::read_to_string(file)?
+            .lines()
+            .filter_map(|line| facade_scenarios::serde_json::from_str::<Value>(line).ok())
+            .filter_map(|piece| base64::decode(piece["data"].as_str()?).ok())
+            .collect();
+        let parse = parse_cost(&pieces, cli)?;
+        let feed = parse["feed_cpu_ms"].as_f64().unwrap_or_default();
+        out["real"][cli] = json!({
+            "messages": messages,
+            "bytes_per_message": round(parse["bytes"].as_f64().unwrap_or_default() / messages),
+            "pieces_per_message": round(pieces.len() as f64 / messages),
+            "parse": parse,
+            "least_cpu_ms_per_message": round(commit + feed / messages),
+        });
+    }
+    Ok(out)
 }
 
 /// When each message's paste and submission key were read, by the message's name in its text.
@@ -515,6 +685,81 @@ fn growth(agents: usize) -> anyhow::Result<Value> {
             std::fs::metadata(lab.database()).map_or(0, |file| file.len()) as f64 / 1048576.0
         ),
     }))
+}
+
+/// Agents started, each sent a few messages, and stopped, again and again: what each round leaves in
+/// the daemon a minute later, so that memory kept for reuse shows apart from memory lost.
+fn cycles(agents: usize, rounds: usize) -> anyhow::Result<Value> {
+    let lab = Lab::fake("cycles")?;
+    let daemon = lab.home.daemon_pid().context("the daemon")?;
+    std::thread::sleep(secs(3));
+    let mut out = vec![json!({ "empty_mb": round(one(daemon).private_mb) })];
+    for n in 0..rounds {
+        let names: Vec<String> = (0..agents).map(|k| format!("c{n}-{k:02}")).collect();
+        let all = storm::start_many(&lab, &names, &[])?;
+        lab.wait_ready(&all, secs(120))?;
+        let mcp = Mcp::managed(&lab.home, &all[0].id)?;
+        for (k, to) in all[1..].iter().enumerate() {
+            storm::send(
+                &mcp,
+                &all[0].id,
+                to,
+                k,
+                format!("cycle-{n}-{k}"),
+                "delivery",
+            );
+        }
+        let running = one(daemon);
+        drop(mcp);
+        for agent in &all {
+            lab.wire.call(
+                "agent.stop",
+                json!({ "selection": { "kind": "targets", "targets": [agent.reference] } }),
+            )?;
+        }
+        std::thread::sleep(secs(70));
+        let after = one(daemon);
+        out.push(json!({
+            "round": n + 1, "agents": agents, "running_mb": round(running.private_mb),
+            "a_minute_after_stops_mb": round(after.private_mb),
+            "handles_running": running.handles, "handles_after": after.handles,
+            "threads_running": running.threads, "threads_after": after.threads,
+        }));
+        println!("   {}", out.last().expect("a round"));
+    }
+    Ok(Value::Array(out))
+}
+
+/// What each question a viewer asks costs the daemon of a home under test: its own processor time for a
+/// hundred of them, and how long each takes.
+pub fn cost(home: &Path) -> anyhow::Result<()> {
+    let wire = client::terminal(&facade_base::paths::daemon_socket_for(home)?)?;
+    let pid = wire.call("daemon.status", json!({})).ok();
+    println!("{pid:?}");
+    let agents = wire.call("agent.list", json!({}))?;
+    let count = agents["agents"].as_array().map_or(0, Vec::len);
+    println!("{count} agents");
+    for agent in agents["agents"].as_array().cloned().unwrap_or_default() {
+        let target = agent["reference"].clone();
+        for (op, args) in [
+            ("agent.inspect", json!({ "target": target })),
+            ("agent.screen", json!({ "target": target, "lines": 60 })),
+        ] {
+            let mut times = Vec::new();
+            for _ in 0..40 {
+                let began = Instant::now();
+                let _ = wire.call(op, args.clone());
+                times.push(ms(began.elapsed()));
+            }
+            println!(
+                "{} {} {op}: {}",
+                agent["address"],
+                agent["cli"],
+                summary(times)
+            );
+        }
+    }
+    Ok(())
 }
 
 fn wal_mb(lab: &Lab) -> f64 {

@@ -14,6 +14,7 @@
 //! every rule, 1 when one broke one, 2 when a storm could not run, and 3 when it refused to run.
 
 mod client;
+mod crash;
 mod demo;
 mod judge;
 mod lab;
@@ -134,10 +135,19 @@ fn main() {
         }
         return;
     }
+    if options.set == "cost" {
+        let home = std::path::PathBuf::from(options.only.clone().unwrap_or_default());
+        guard(&home);
+        if let Err(err) = perf::cost(&home) {
+            eprintln!("could not measure {}: {err:#}", home.display());
+            std::process::exit(2);
+        }
+        return;
+    }
     if options.set == "replay" {
-        // `--only` names the screen log.
+        // `--only` names the screen log, and `--senders` a record to show the screen after.
         let log = PathBuf::from(options.only.unwrap_or_default());
-        if let Err(err) = replay::run(&log, &options.cli) {
+        if let Err(err) = replay::run(&log, &options.cli, options.senders.map(|at| at as u64)) {
             eprintln!("could not replay {}: {err:#}", log.display());
             std::process::exit(2);
         }
@@ -165,12 +175,12 @@ fn main() {
         real_storms(&options);
     }
     if options.set == "perf" {
-        let report = perf::run(options.senders.unwrap_or(50)).unwrap_or_else(|err| {
+        // Another run on the machine makes the times a guide alone.
+        let shared = options.only.as_deref() == Some("shared");
+        if let Err(err) = perf::run(&options.out, options.senders.unwrap_or(50), shared) {
             eprintln!("the measures could not run: {err:#}");
             std::process::exit(2);
-        });
-        let text = serde_json::to_string_pretty(&report).expect("JSON");
-        std::fs::write(options.out.join("perf.json"), text).expect("the report");
+        }
         return;
     }
     let storms = scenes::set(&options.set, options.senders, options.each)
@@ -183,7 +193,10 @@ fn main() {
             if options
                 .only
                 .as_ref()
-                .is_some_and(|only| !storm.name().contains(only.as_str()))
+                .is_some_and(|only| match only.strip_prefix('=') {
+                    Some(exact) => storm.name() != exact,
+                    None => !storm.name().contains(only.as_str()),
+                })
             {
                 continue;
             }
@@ -225,11 +238,31 @@ fn main() {
 }
 
 fn write_report(options: &Options, outcomes: &[Value]) {
-    let report = json!({
-        "set": options.set, "build": env!("CARGO_PKG_VERSION"), "storms": outcomes,
-    });
-    let text = serde_json::to_string_pretty(&report).expect("JSON");
-    std::fs::write(options.out.join("report.json"), text).expect("the report");
+    let mut report = programs();
+    report["set"] = json!(options.set);
+    report["storms"] = json!(outcomes);
+    save(&options.out, &report);
+}
+
+/// Writes `report` to `out`.
+pub fn save(out: &Path, report: &Value) {
+    std::fs::create_dir_all(out).expect("the folder for the report");
+    let text = serde_json::to_string_pretty(report).expect("JSON");
+    std::fs::write(out.join("report.json"), text).expect("the report");
+}
+
+/// The programs under test: their folder, and the commit a file `HEAD` beside them names.
+pub fn programs() -> Value {
+    let folder = test_binaries()
+        .facade
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let head = std::fs::read_to_string(folder.join("HEAD")).unwrap_or_default();
+    json!({
+        "head": head.trim(), "bin": folder.display().to_string(),
+        "build": env!("CARGO_PKG_VERSION"),
+    })
 }
 
 /// Runs the storms of real CLIs, and exits.
@@ -277,11 +310,15 @@ fn print(outcome: &storm::Outcome) {
         short_summary(&stats["send_call_ms"]),
     );
     for window in stats["windows"].as_array().into_iter().flatten() {
+        if window["keys"].is_null() && window["segments_ms"].is_null() {
+            continue;
+        }
         println!(
-            "   {} · longest own text stayed {} ms · keys {}",
+            "   {} · longest own text stayed {} ms · keys {} · segments {}",
             window["agent"].as_str().unwrap_or_default(),
             window["longest_stay_ms"],
-            window["keys"]
+            window["keys"],
+            window["segments_ms"]
         );
     }
     if !verdict.strangers.is_empty() {

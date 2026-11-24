@@ -26,6 +26,16 @@ pub type Answer = mpsc::Receiver<(Instant, Value)>;
 pub struct Rpc {
     write: Mutex<Box<dyn Write + Send>>,
     waiting: Waiting,
+    /// The socket under it, if it has one: its reader keeps it open until it is shut.
+    socket: Option<ClientSocket>,
+}
+
+impl Drop for Rpc {
+    fn drop(&mut self) {
+        if let Some(socket) = &self.socket {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
+    }
 }
 
 impl Rpc {
@@ -65,7 +75,20 @@ impl Rpc {
         Rpc {
             write: Mutex::new(write),
             waiting,
+            socket: None,
         }
+    }
+
+    /// A connection over `socket`, which closes it as it ends.
+    fn over(
+        socket: ClientSocket,
+        read: impl Read + Send + 'static,
+        on_notice: impl FnMut(Value) + Send + 'static,
+    ) -> anyhow::Result<Rpc> {
+        let write = socket.try_clone()?;
+        let mut rpc = Self::with_notices(read, Box::new(write), on_notice);
+        rpc.socket = Some(socket);
+        Ok(rpc)
     }
 
     fn write_line(&self, message: &Value) -> std::io::Result<()> {
@@ -127,7 +150,7 @@ pub fn terminal_with(
 ) -> anyhow::Result<Rpc> {
     let stream = ClientSocket::connect(socket).context("connecting to the storm's daemon")?;
     let read = stream.try_clone()?;
-    let rpc = Rpc::with_notices(read, Box::new(stream), on_notice);
+    let rpc = Rpc::over(stream, read, on_notice)?;
     let hello = rpc.request(
         "hello",
         json!({ "api_versions": DAEMON_API_VERSIONS, "build": "storm", "kind": "terminal" }),
@@ -175,7 +198,7 @@ impl Mcp {
             answered["result"] == json!({ "relay": 1 }),
             "the relay's hello: {answered}"
         );
-        Self::initialize(Rpc::new(read, Box::new(stream)), Server::Daemon)
+        Self::initialize(Rpc::over(stream, read, |_| {})?, Server::Daemon)
     }
 
     /// `agent`'s MCP session through the `facade-mcp` its CLI was given.

@@ -7,7 +7,7 @@ use std::path::Path;
 use anyhow::Context;
 
 /// Prints each change of the reading in `log`, and how many pieces of output kept it.
-pub fn run(log: &Path, cli: &str) -> anyhow::Result<()> {
+pub fn run(log: &Path, cli: &str, shown_at: Option<u64>) -> anyhow::Result<()> {
     let rule = facade_rules::find(cli)
         .map_err(anyhow::Error::msg)?
         .with_context(|| format!("no rule for {cli}"))?;
@@ -43,6 +43,12 @@ pub fn run(log: &Path, cli: &str) -> anyhow::Result<()> {
             screen.end_synchronized_update();
         }
         records += 1;
+        if Some(records) == shown_at {
+            println!("the screen after record {records}:");
+            for line in screen.text(usize::from(rows)) {
+                println!("  {line}");
+            }
+        }
         let view = screen.view();
         let reading = facade_rules::read_box(&rule.input, &view);
         let in_update = screen.synchronized_update_deadline().is_some();
@@ -74,6 +80,10 @@ pub fn run(log: &Path, cli: &str) -> anyhow::Result<()> {
         last = state;
     }
     println!("{records} records, readings {counts:?}");
+    println!("the screen at the end:");
+    for line in screen.text(usize::from(rows)) {
+        println!("  {line}");
+    }
     Ok(())
 }
 

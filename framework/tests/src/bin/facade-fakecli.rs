@@ -1694,6 +1694,11 @@ fn run() -> anyhow::Result<()> {
                 0x1b => {
                     // Skip the complete key escape sequence, once it is complete.
                     let mut j = i + 1;
+                    if pending.get(j) == Some(&0x1b) {
+                        // The Escape key, then a sequence of its own.
+                        i += 1;
+                        continue;
+                    }
                     if j < pending.len() && (pending[j] == b'[' || pending[j] == b'O') {
                         j += 1;
                         while j < pending.len() && !(0x40..=0x7e).contains(&pending[j]) {

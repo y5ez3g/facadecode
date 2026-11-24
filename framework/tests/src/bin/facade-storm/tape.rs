@@ -147,6 +147,53 @@ impl Tape {
         held / 1000
     }
 
+    /// Where each of Facade's messages spent its time in the input, in milliseconds: until the CLI drew
+    /// its draft; until Facade's key was read; until the CLI drew the input emptied; and until the next
+    /// message's paste was read, which Facade did alone.
+    pub fn segments(&self) -> [Vec<f64>; 4] {
+        let mut out: [Vec<f64>; 4] = Default::default();
+        let ms = |from: u64, to: u64| to.saturating_sub(from) as f64 / 1000.0;
+        let pastes: Vec<u64> = self
+            .tokens
+            .iter()
+            .filter(|(_, token)| {
+                matches!(token, Token::Paste(text) if is_facades(&text.replace('\r', "\n")))
+            })
+            .map(|(us, _)| *us)
+            .collect();
+        for (at, paste) in pastes.iter().enumerate() {
+            let next = pastes.get(at + 1).copied();
+            let after = |us: u64, empty: bool| {
+                self.boxes
+                    .iter()
+                    .find(|(drawn, shown)| *drawn >= us && shown.is_empty() == empty)
+                    .map(|(drawn, _)| *drawn)
+            };
+            let Some(drawn) = after(*paste, false) else {
+                continue;
+            };
+            let Some(key) = self
+                .submissions
+                .iter()
+                .map(|submission| submission.us)
+                .find(|us| us >= paste)
+                .filter(|us| next.is_none_or(|next| *us < next))
+            else {
+                continue;
+            };
+            out[0].push(ms(*paste, drawn));
+            out[1].push(ms(drawn, key));
+            if let Some(emptied) = after(key, true) {
+                out[2].push(ms(key, emptied));
+                // Only where another message waited.
+                if let Some(next) = next.filter(|next| *next < emptied + 400_000) {
+                    out[3].push(ms(emptied, next));
+                }
+            }
+        }
+        out
+    }
+
     /// The draft its last frame showed.
     pub fn last_box(&self) -> &str {
         self.boxes.last().map_or("", |(_, shown)| shown.as_str())
