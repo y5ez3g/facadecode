@@ -150,6 +150,20 @@ pub struct Window {
     pub timeline: Option<Vec<(u64, String, String)>>,
     /// Nothing says what it submitted.
     pub unsaved: bool,
+    /// Texts its CLI put back into its input by itself, with words of its own error on the screen.
+    pub returned: Vec<Returned>,
+}
+
+/// A message OpenCode had taken and put back into its input: L7.
+#[derive(Clone, Copy, Debug)]
+pub struct Returned {
+    /// The message, where its header shows.
+    pub number: Option<u64>,
+    /// When the input was empty of it.
+    pub emptied_us: u64,
+    /// When it held it again, and until when.
+    pub from_us: u64,
+    pub until_us: u64,
 }
 
 impl Window {
@@ -362,8 +376,30 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                     .windows
                     .iter()
                     .any(|window| window.agent == sent.to && window.unsaved);
+                let gave_back = case.windows.iter().any(|window| {
+                    window.agent == sent.to
+                        && window.returned.iter().any(|one| match one.number {
+                            Some(back) => back == number,
+                            // The last one delivered before its input was empty.
+                            None => {
+                                let last = case
+                                    .rows
+                                    .values()
+                                    .filter(|row| row.to == sent.to)
+                                    .filter(|row| {
+                                        row.delivered_ms
+                                            .is_some_and(|ms| ms * 1000 <= one.emptied_us + 1000)
+                                    })
+                                    .max_by_key(|row| row.delivered_ms);
+                                last.is_some_and(|row| row.number == number)
+                            }
+                        })
+                });
                 match here {
                     [] if unsaved => {}
+                    [] if gave_back => {
+                        *reasonable.entry("L7").or_default() += 1;
+                    }
                     [] => say(
                         "I1",
                         format!("{who} is recorded as delivered and was never submitted"),
@@ -429,9 +465,21 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                             window.read_as_ms(&["interaction"], from, to)
                         }
                         Some(_) => window.read_as_ms(&["interaction", "draft"], from, to),
+                        None if window.person.is_some() => window.tape.held_with_keys_ms(from, to),
                         None => window.tape.held_ms(from, to),
                     }
                 });
+                // Behind a text OpenCode put back by itself (L7).
+                let back = window.map_or(0, |window| {
+                    let (from, to) = (sent.called_us, sent.called_us + sent.limit_us);
+                    window
+                        .returned
+                        .iter()
+                        .map(|one| one.until_us.min(to).saturating_sub(one.from_us.max(from)))
+                        .sum::<u64>()
+                        / 1000
+                });
+                let held = held + back;
                 let free = (sent.limit_us / 1000).saturating_sub(held);
                 let ahead = case
                     .sent
@@ -459,7 +507,9 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                 } else if window.is_some_and(|window| removed_by_person(window, number)) {
                     *reasonable.entry("L6").or_default() += 1;
                 } else if held > 0 && free < needed {
-                    let kind = if reason == "input_interaction" {
+                    let kind = if back > 0 {
+                        "L7"
+                    } else if reason == "input_interaction" {
                         "L2"
                     } else {
                         "L1"

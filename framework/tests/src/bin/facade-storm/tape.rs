@@ -101,9 +101,82 @@ impl Tape {
         tape
     }
 
+    /// [`Tape::held_ms`], and besides, from each of a person's keys until the input shows what it
+    /// left: the first change of the input after the last key of a run of them, or 2.5 s after the last
+    /// key and the last change, whichever comes first (a58's rule, director m310: a person's keys on
+    /// their way hold the input).
+    pub fn held_with_keys_ms(&self, from: u64, to: u64) -> u64 {
+        const SLOWEST_DRAW: u64 = 2_500_000;
+        let mut spans: Vec<(u64, u64)> = Vec::new();
+        // The person's keys, as the CLI read them: typed characters, their pastes, and the Enters and
+        // Backspaces that follow either.
+        let mut theirs = false;
+        let mut keys: Vec<u64> = Vec::new();
+        for (us, token) in &self.tokens {
+            let mine = match token {
+                Token::Char(_) => true,
+                Token::Paste(text) => !is_facades(text),
+                Token::Control(byte) => theirs && matches!(byte, b'\r' | 0x7f | 0x08),
+                _ => false,
+            };
+            theirs = match token {
+                Token::Char(_) => true,
+                Token::Paste(text) => !is_facades(text),
+                Token::Control(b'\r') => false,
+                _ => theirs,
+            };
+            if mine {
+                keys.push(*us);
+            }
+        }
+        let mut at = 0;
+        while at < keys.len() {
+            // A run of keys, each within the slowest draw of the one before.
+            let first = keys[at];
+            let mut last = first;
+            while at + 1 < keys.len() && keys[at + 1] <= last + SLOWEST_DRAW {
+                at += 1;
+                last = keys[at];
+            }
+            at += 1;
+            let shown = self.boxes.iter().map(|(us, _)| *us).find(|us| *us > last);
+            let latest_change = self
+                .boxes
+                .iter()
+                .map(|(us, _)| *us)
+                .filter(|us| *us <= last + SLOWEST_DRAW)
+                .max()
+                .unwrap_or(last)
+                .max(last);
+            let until = shown.unwrap_or(u64::MAX).min(latest_change + SLOWEST_DRAW);
+            spans.push((first, until));
+        }
+        let mut held = self.held_spans();
+        held.extend(spans);
+        held.sort_unstable();
+        let (mut total, mut end) = (0u64, 0u64);
+        for (start, stop) in held {
+            let (start, stop) = (start.max(from).max(end), stop.min(to));
+            if stop > start {
+                total += stop - start;
+            }
+            end = end.max(stop);
+        }
+        total / 1000
+    }
+
     /// How long, between two times, its input held something that was not Facade's, or a question
     /// was in its place, in milliseconds: what the person's draft or a menu kept from Facade.
     pub fn held_ms(&self, from: u64, to: u64) -> u64 {
+        self.held_spans()
+            .into_iter()
+            .map(|(start, stop)| stop.min(to).saturating_sub(start.max(from)))
+            .sum::<u64>()
+            / 1000
+    }
+
+    /// When its input held something that was not Facade's, or a question was in its place.
+    fn held_spans(&self) -> Vec<(u64, u64)> {
         // The numbers the fake CLI gives Facade's pastes in their placeholders.
         let mut number = 0;
         let mut facades = std::collections::BTreeSet::new();
@@ -132,19 +205,20 @@ impl Tape {
             .chain(self.menus.iter().map(|(us, open)| (*us, None, Some(*open))))
             .collect();
         changes.sort_by_key(|(us, ..)| *us);
-        let (mut draft, mut menu, mut since, mut held) = (false, false, 0, 0);
+        let (mut draft, mut menu, mut since) = (false, false, 0);
+        let mut spans = Vec::new();
         for (us, drafts, asks) in changes {
             if draft || menu {
-                held += us.min(to).saturating_sub(since.max(from));
+                spans.push((since, us));
             }
             since = us;
             draft = drafts.unwrap_or(draft);
             menu = asks.unwrap_or(menu);
         }
         if draft || menu {
-            held += to.saturating_sub(since.max(from));
+            spans.push((since, u64::MAX));
         }
-        held / 1000
+        spans
     }
 
     /// Where each of Facade's messages spent its time in the input, in milliseconds: until the CLI drew

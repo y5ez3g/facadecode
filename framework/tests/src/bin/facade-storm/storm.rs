@@ -346,6 +346,11 @@ pub struct Field {
     /// Agents the storm stopped, or whose CLI it ended, and when.
     ended: Mutex<HashMap<String, u64>>,
     reads: Mutex<Vec<Read>>,
+    returned: Mutex<HashMap<String, Vec<judge::Returned>>>,
+    /// How real CLIs' inputs read after each piece of their output.
+    readings: Mutex<HashMap<String, Vec<(u64, String)>>>,
+    /// The machine's processors as the storm began.
+    machine: Option<(f64, f64)>,
     expected_warnings: Mutex<Vec<&'static str>>,
     notes: Mutex<BTreeMap<String, Value>>,
     reals: Mutex<Vec<RealAgent>>,
@@ -381,6 +386,9 @@ impl Field {
             strangers: Mutex::default(),
             ended: Mutex::default(),
             reads: Mutex::default(),
+            returned: Mutex::default(),
+            readings: Mutex::default(),
+            machine: crate::sample::machine(),
             expected_warnings: Mutex::default(),
             notes: Mutex::default(),
         })
@@ -465,6 +473,22 @@ impl Field {
         send(mcp, from, to, seq, shape.text(&name), wait)
     }
 
+    /// Keeps how `agent`'s input read after each piece of its CLI's output.
+    pub fn note_readings(&self, agent: &Agent, readings: Vec<(u64, String)>) {
+        self.readings
+            .lock()
+            .unwrap()
+            .insert(agent.id.clone(), readings);
+    }
+
+    /// Keeps what `agent`'s CLI put back into its input by itself.
+    pub fn note_returned(&self, agent: &Agent, returned: Vec<judge::Returned>) {
+        self.returned
+            .lock()
+            .unwrap()
+            .insert(agent.id.clone(), returned);
+    }
+
     /// Keeps a send made another way.
     pub fn note_sent(&self, sent: Sent) -> Sent {
         self.sent.lock().unwrap().push(sent.clone());
@@ -543,21 +567,56 @@ impl Field {
     /// one that broke a rule.
     pub fn finish(self, out: &Path) -> anyhow::Result<Outcome> {
         self.quiet()?;
+        // A slow CLI may still be working through a person's keys: until each window's tape has not
+        // grown for 3 s, at most 150 s, so that what it is still to submit is not judged as lost.
+        let people: Vec<String> = self.people.lock().unwrap().keys().cloned().collect();
+        for agent in people {
+            let file = self.lab.tapes.join(format!("{agent}.tape"));
+            let size = || std::fs::metadata(&file).map_or(0, |meta| meta.len());
+            let until = Instant::now() + Duration::from_secs(150);
+            let (mut last, mut since) = (size(), Instant::now());
+            while since.elapsed() < Duration::from_secs(3) && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(250));
+                if size() != last {
+                    (last, since) = (size(), Instant::now());
+                }
+            }
+        }
+        if let Some(percent) = crate::sample::machine_percent(self.machine) {
+            self.note("machine_cpu_percent", json!(percent));
+        }
         std::thread::sleep(Duration::from_secs(5));
         let agents = self.agents.lock().unwrap().clone();
         let ended = self.ended.lock().unwrap().clone();
         let people = self.people.lock().unwrap().clone();
         let draws = self.draws.lock().unwrap().clone();
         let strangers = self.strangers.lock().unwrap().clone();
+        let returned = self.returned.lock().unwrap().clone();
+        let readings = self.readings.lock().unwrap().clone();
         let mut sent = self.sent.lock().unwrap().clone();
         sent.sort_by_key(|sent| sent.seq);
         let mut reals: HashMap<String, (&'static Cli, Option<Vec<_>>, Vec<_>)> = HashMap::new();
         for real in self.reals.lock().unwrap().drain(..) {
             let submissions = crate::real::submissions(&self.lab, &real)?;
-            reals.insert(
-                real.agent.id.clone(),
-                (real.cli, submissions, real.timeline.end()),
-            );
+            let asked = real.timeline.end();
+            // Each piece of its output says how its input read; what was asked now and then says the
+            // agent's state besides.
+            let timeline = match readings.get(&real.agent.id) {
+                None => asked,
+                Some(read) => {
+                    let mut states = asked.iter().peekable();
+                    let mut state = String::new();
+                    read.iter()
+                        .map(|(us, input)| {
+                            while let Some((_, _, next)) = states.next_if(|one| one.0 <= *us) {
+                                state = next.clone();
+                            }
+                            (*us, input.clone(), state.clone())
+                        })
+                        .collect()
+                }
+            };
+            reals.insert(real.agent.id.clone(), (real.cli, submissions, timeline));
         }
         let windows: Vec<Window> = agents
             .iter()
@@ -578,11 +637,13 @@ impl Field {
                         strangers: strangers.get(&agent.id).copied().unwrap_or_default(),
                         ended_us: ended.get(&agent.id).copied(),
                         timeline: Some(timeline),
+                        returned: returned.get(&agent.id).cloned().unwrap_or_default(),
                     };
                 }
                 Window {
                     unsaved: false,
                     timeline: None,
+                    returned: Vec::new(),
                     agent: agent.id.clone(),
                     tape: self.lab.tape(&agent.id),
                     person: people.get(&agent.id).cloned(),
@@ -722,6 +783,16 @@ pub fn run(spec: &Spec, out: &Path) -> anyhow::Result<Outcome> {
         .chain(&spec.others)
         .filter(|(_, way)| matches!(way, Way::Attach | Way::Started | Way::Editor))
         .count();
+    // A viewer that keeps when it saw each piece of output, to tell the CLI's time from the daemon's.
+    let frames = match std::env::var_os("FACADE_STORM_WATCH") {
+        Some(_) => {
+            let rule = field.lab.inspect(&boss)?["rule"].clone();
+            let rule = rule.as_str().unwrap_or("fake");
+            Some(crate::real::Frames::watch(&field.lab, &boss, rule)?)
+        }
+        None => None,
+    };
+    let viewers = viewers + usize::from(frames.is_some());
     let strangers = Strangers::watch(&field.lab, &boss, viewers)?;
     std::thread::sleep(Duration::from_millis(500));
     let hogs = Hogs::start(spec.hogs);
@@ -756,7 +827,74 @@ pub fn run(spec: &Spec, out: &Path) -> anyhow::Result<Outcome> {
     }
     field.note_strangers(&boss, strangers.end());
     drop(clients);
+    if let Some(frames) = frames {
+        let handoffs = handoffs(&field.lab, &boss, &frames)?;
+        field.note("handoffs_ms", handoffs);
+    }
     field.finish(out)
+}
+
+/// Where each message's time in the input went: the CLI reading and drawing it, the drawing reaching the
+/// daemon's viewer, the daemon deciding and writing the key, the key reaching the CLI, and the CLI
+/// submitting.
+fn handoffs(lab: &Lab, boss: &Agent, frames: &crate::real::Frames) -> anyhow::Result<Value> {
+    let rows = lab.rows()?;
+    let seen = frames.drafts();
+    let tape = lab.tape(&boss.id);
+    let mut parts: [Vec<f64>; 5] = Default::default();
+    for (paste, token) in &tape.tokens {
+        let crate::tape::Token::Paste(text) = token else {
+            continue;
+        };
+        let Some(number) = judge::headers(text).first().copied() else {
+            continue;
+        };
+        let after = |us: u64| us > *paste;
+        let drawn = tape
+            .boxes
+            .iter()
+            .find(|(us, shown)| after(*us) && !shown.is_empty())
+            .map(|(us, _)| *us);
+        let key = tape
+            .tokens
+            .iter()
+            .find(|(us, token)| *us >= *paste && *token == crate::tape::Token::Control(b'\r'))
+            .map(|(us, _)| *us);
+        let submit = tape
+            .submissions
+            .iter()
+            .find(|one| after(one.us))
+            .map(|one| one.us);
+        let written = rows
+            .get(&number)
+            .and_then(|row| row.delivered_ms)
+            .map(|ms| ms * 1000 + 500);
+        let (Some(drawn), Some(key), Some(submit), Some(written)) = (drawn, key, submit, written)
+        else {
+            continue;
+        };
+        let Some(viewer) = seen.iter().copied().find(|us| *us >= drawn) else {
+            continue;
+        };
+        let ms = |from: u64, to: u64| (to as f64 - from as f64) / 1000.0;
+        for (part, value) in parts.iter_mut().zip([
+            ms(*paste, drawn),
+            ms(drawn, viewer),
+            ms(viewer, written),
+            ms(written, key),
+            ms(key, submit),
+        ]) {
+            part.push(value);
+        }
+    }
+    let [read, reached, decided, key, taken] = parts;
+    Ok(json!({
+        "cli_read_to_drawn": judge::summary(read),
+        "drawn_to_seen_by_a_viewer": judge::summary(reached),
+        "seen_to_key_written": judge::summary(decided),
+        "key_written_to_read": judge::summary(key),
+        "key_read_to_submitted": judge::summary(taken),
+    }))
 }
 
 /// Deletes a storm's home, which the storm made under its own temporary folder; what broke a rule was

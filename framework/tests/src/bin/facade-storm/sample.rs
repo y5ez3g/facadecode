@@ -68,6 +68,20 @@ impl Over {
     }
 }
 
+/// How long this machine's processors were busy since it started, and how long they could have been,
+/// in seconds of processor. None where this system does not say.
+pub fn machine() -> Option<(f64, f64)> {
+    imp::machine()
+}
+
+/// How busy this machine's processors were since `before`, in percent.
+pub fn machine_percent(before: Option<(f64, f64)>) -> Option<f64> {
+    let ((busy, all), (busy_before, all_before)) = (machine()?, before?);
+    Some(round(
+        100.0 * (busy - busy_before) / (all - all_before).max(1e-9),
+    ))
+}
+
 pub fn round(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
 }
@@ -75,6 +89,20 @@ pub fn round(value: f64) -> f64 {
 #[cfg(windows)]
 mod imp {
     use super::Usage;
+
+    #[link(name = "kernel32", kind = "raw-dylib")]
+    unsafe extern "system" {
+        fn GetSystemTimes(idle: *mut u64, kernel: *mut u64, user: *mut u64) -> i32;
+    }
+
+    pub fn machine() -> Option<(f64, f64)> {
+        let (mut idle, mut kernel, mut user) = (0u64, 0u64, 0u64);
+        // SAFETY: each argument points to eight bytes of this frame, as a FILETIME has.
+        let said = unsafe { GetSystemTimes(&mut idle, &mut kernel, &mut user) };
+        // The kernel's time holds the idle time too.
+        let all = kernel + user;
+        (said != 0).then(|| ((all - idle) as f64 / 1e7, all as f64 / 1e7))
+    }
 
     #[link(name = "ntdll", kind = "raw-dylib")]
     unsafe extern "system" {
@@ -149,5 +177,9 @@ mod imp {
     /// Storms run on Windows; elsewhere nothing is measured.
     pub fn all() -> Vec<(i32, Usage)> {
         Vec::new()
+    }
+
+    pub fn machine() -> Option<(f64, f64)> {
+        None
     }
 }

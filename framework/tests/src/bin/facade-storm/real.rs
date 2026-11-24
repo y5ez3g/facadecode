@@ -117,6 +117,7 @@ impl Lab {
         std::fs::create_dir_all(&home.project)?;
         std::fs::create_dir_all(work)?;
         let mut clis = serde_json::Map::new();
+        let asks = std::env::var_os("FACADE_STORM_ASKS").is_some();
         for cli in CLIS {
             let mut entry = serde_json::Map::new();
             let mut args: Vec<String> = cli.args.iter().map(|arg| arg.to_string()).collect();
@@ -131,6 +132,10 @@ impl Lab {
                 ] {
                     args.extend(["-c".to_string(), set]);
                 }
+            }
+            // Without YOLO, Codex asks to update itself before anything; Facade trusts its folder.
+            if asks && cli.name == "codex" {
+                args.extend(["-c".to_string(), "check_for_update_on_startup=false".into()]);
             }
             if !args.is_empty() {
                 entry.insert("args".into(), json!(args));
@@ -149,9 +154,13 @@ impl Lab {
                 clis.insert(cli.name.into(), Value::Object(entry));
             }
         }
+        let mut settings = json!({ "clis": clis });
+        if std::env::var_os("FACADE_STORM_ASKS").is_some() {
+            settings["yolo"] = json!(false);
+        }
         std::fs::write(
             home.path.join("facade.json"),
-            serde_json::to_string_pretty(&json!({ "clis": clis }))?,
+            serde_json::to_string_pretty(&settings)?,
         )?;
         let started = std::process::Command::new(&test_binaries().facade)
             .args(["daemon", "--detach"])
@@ -405,6 +414,19 @@ pub enum Course {
     Split,
     /// A recipient that ends while a message is typed to it, this many times.
     Ends(usize),
+    /// A question the CLI asks its person while messages come, this many times.
+    Questions(usize),
+    /// [`Course::Questions`], of a permission to run a command.
+    Permissions(usize),
+    /// A question or a permission with no message on its way: when the CLI says so, and when it shows.
+    Asks(usize),
+    /// The submission key on an empty input, this many times in each state.
+    Keys(usize),
+    /// The submission key a set time after the whole paste first shows, this many times for each.
+    Delays(usize),
+    /// A paste whose submission key comes at once and may become a part of it, then the key again,
+    /// this many times.
+    Again(usize),
 }
 
 /// The storms whose names hold one of `only`'s words, parted by commas.
@@ -438,6 +460,15 @@ pub fn specs(only: Option<&str>, senders: Option<usize>, each: Option<usize>) ->
             ("returns", 0, Course::Returns),
             ("split", 0, Course::Split),
             ("ends", 0, Course::Ends(times)),
+            ("questions", 0, Course::Questions(times)),
+            ("permissions", 0, Course::Permissions(times)),
+            ("asks", 0, Course::Asks(times)),
+            ("asks cores", 15, Course::Asks(times)),
+            ("keys", 0, Course::Keys(each.unwrap_or(50))),
+            ("delays", 0, Course::Delays(each.unwrap_or(300))),
+            ("delays cores", 15, Course::Delays(each.unwrap_or(300))),
+            ("again", 0, Course::Again(each.unwrap_or(300))),
+            ("again cores", 15, Course::Again(each.unwrap_or(300))),
         ] {
             specs.push(RealSpec {
                 name: format!("{} {what}.", cli.name),
@@ -511,6 +542,14 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
         let Ok(info) = field.lab.inspect(&boss) else {
             return false;
         };
+        // Without YOLO a CLI may first ask whether its folder is to be trusted: its person says yes.
+        if std::env::var_os("FACADE_STORM_ASKS").is_some()
+            && info["input"]["state"] == "interaction"
+            && screen_tail(&field.lab, &boss).contains("trust this folder")
+        {
+            let _ = type_raw(&field, &boss, b"\r");
+            std::thread::sleep(Duration::from_millis(1500));
+        }
         match spec.busy {
             true => info["agent"]["state"] == "working",
             false => {
@@ -560,6 +599,34 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
     };
     match spec.course {
         Course::Burst | Course::Returns | Course::Ends(_) => {}
+        Course::Questions(times) => {
+            questions(
+                &field,
+                &clients[0],
+                &senders[0],
+                &saved,
+                "ASKME",
+                times,
+                out,
+            )?;
+        }
+        Course::Permissions(times) => {
+            questions(
+                &field,
+                &clients[0],
+                &senders[0],
+                &saved,
+                "RUNME",
+                times,
+                out,
+            )?;
+        }
+        Course::Asks(times) => asks_alone(&field, &saved, &frames, times, out)?,
+        Course::Keys(times) => {
+            empty_keys(&field, &clients[0], &senders[0], &saved, times, out)?;
+        }
+        Course::Again(times) => again(&field, &saved, &frames, times, out)?,
+        Course::Delays(times) => delays(&field, &saved, &frames, times, out)?,
         Course::Split => {
             split(&field, &saved, out)?;
         }
@@ -625,6 +692,10 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
         }
         std::thread::sleep(Duration::from_millis(300));
     }
+    if spec.cli.name == "opencode" {
+        field.note_returned(&boss, frames.returned());
+    }
+    field.note_readings(&boss, frames.readings());
     field.note(
         "frames",
         frames.end(&out.join(format!("{tag}frames.jsonl")))?,
@@ -1136,6 +1207,561 @@ fn split(field: &Field, real: &RealAgent, out: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Whether the last lines of a screen are a question or a permission for a person.
+fn shows_a_question(tail: &str) -> bool {
+    let text = tail.to_lowercase();
+    [
+        "esc to cancel",
+        "esc dismiss",
+        "press enter to confirm or esc",
+        "allow once",
+        "do you want to proceed",
+        "yes, and don't ask again",
+        "yes, proceed",
+        "requesting permission",
+    ]
+    .iter()
+    .any(|words| text.contains(words))
+}
+
+/// Has the CLI ask its person, with no message on its way, and dismisses it: the pieces a viewer was
+/// given, with their bytes, say when the CLI's own report came and when its screen showed it.
+fn asks_alone(
+    field: &Field,
+    real: &RealAgent,
+    frames: &Frames,
+    times: usize,
+    out: &Path,
+) -> anyhow::Result<()> {
+    let boss = &real.agent;
+    std::fs::create_dir_all(out)?;
+    let mut report = Vec::new();
+    for round in 0..times {
+        let word = if std::env::var_os("FACADE_STORM_RUNME").is_some() {
+            "RUNME"
+        } else {
+            "ASKME"
+        };
+        // Outside the CLI's own folder, so that a CLI asks before it writes there.
+        let to = std::env::temp_dir().join("asks");
+        std::fs::create_dir_all(&to)?;
+        let text = format!(
+            "{word} now, and nothing else. Run this command exactly: cmd /c echo hi > {}",
+            to.join(format!("ran{round:03}.txt")).display()
+        );
+        type_raw(field, boss, format!("\x1b[200~{text}\x1b[201~").as_bytes())?;
+        std::thread::sleep(Duration::from_millis(1200));
+        let from = now_us();
+        type_raw(field, boss, b"\r")?;
+        let opened = wait_until(Duration::from_secs(40), || {
+            shows_a_question(&screen_tail(&field.lab, boss))
+        });
+        std::thread::sleep(Duration::from_millis(1200));
+        let state = field.lab.inspect(boss)?;
+        let screen = screen_tail(&field.lab, boss);
+        let cleared_from = now_us();
+        for _ in 0..3 {
+            if !shows_a_question(&screen_tail(&field.lab, boss)) {
+                break;
+            }
+            type_raw(field, boss, b"\x1b")?;
+            std::thread::sleep(Duration::from_millis(1200));
+        }
+        wait_idle(field, boss, Duration::from_secs(40));
+        if field.lab.input_state(boss) == "draft" {
+            clear_input(field, boss, 120)?;
+        }
+        report.push(json!({
+            "round": round, "from_us": from, "until_us": cleared_from, "opened": opened,
+            "input": state["input"]["state"], "agent": state["agent"]["state"],
+            "screen": if round < 2 || !opened { json!(screen) } else { Value::Null },
+        }));
+        println!(
+            "   round {round}: opened {opened}, read as {}",
+            state["input"]["state"]
+        );
+        std::fs::write(
+            out.join("asks.json"),
+            serde_json::to_string_pretty(&json!({ "rounds": report }))?,
+        )?;
+    }
+    // Not only as the storm ends: it may be ended.
+    let _ = frames.last();
+    Ok(())
+}
+
+/// What a CLI's saved session and screen say, for telling whether a key did anything.
+fn now_of(field: &Field, real: &RealAgent) -> (usize, String, String) {
+    let taken = submissions(&field.lab, real)
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+        .len();
+    let info = field.lab.inspect(&real.agent).unwrap_or_default();
+    (
+        taken,
+        info["input"]["state"].as_str().unwrap_or("").to_string(),
+        info["agent"]["state"].as_str().unwrap_or("").to_string(),
+    )
+}
+
+/// Presses the submission key on an empty input: idle, working, and working with a message queued.
+fn empty_keys(
+    field: &Field,
+    mcp: &client::Mcp,
+    sender: &Agent,
+    real: &RealAgent,
+    times: usize,
+    out: &Path,
+) -> anyhow::Result<()> {
+    let boss = &real.agent;
+    std::fs::create_dir_all(out)?;
+    let mut report: Vec<Value> = Vec::new();
+    let send = |text: &str| {
+        let (seq, _) = field.name_next(&sender.id);
+        let text = format!("n{seq:05} {text}");
+        field.note_sent(crate::storm::send(
+            mcp, &sender.id, boss, seq, text, "delivery",
+        ));
+    };
+    let keys: &[(&str, &[u8])] = match real.cli.name {
+        "codex" => &[("enter", b"\r"), ("tab", b"\t")],
+        _ => &[("enter", b"\r")],
+    };
+    // Something to suggest a next prompt from.
+    send(PLAIN);
+    wait_idle(field, boss, Duration::from_secs(60));
+    for state in ["idle", "working", "queued"] {
+        for (key, bytes) in keys {
+            let mut pressed = 0;
+            let mut effects: Vec<Value> = Vec::new();
+            let mut suggested = 0;
+            let mut left = 12;
+            while pressed < times && left > 0 {
+                if state != "idle" {
+                    let working =
+                        field.lab.inspect(boss)?["agent"]["state"].as_str() == Some("working");
+                    if !working {
+                        left -= 1;
+                        wait_idle(field, boss, Duration::from_secs(60));
+                        send(LONG_ANSWER);
+                        std::thread::sleep(Duration::from_millis(2500));
+                        if state == "queued" {
+                            send(PLAIN);
+                            std::thread::sleep(Duration::from_millis(1200));
+                        }
+                        continue;
+                    }
+                }
+                let before = now_of(field, real);
+                // Muse's empty input reads as one Facade would have to probe.
+                let empty =
+                    before.1 == "usable" || (real.cli.name == "muse" && before.1 == "unknown");
+                if !empty {
+                    std::thread::sleep(Duration::from_millis(500));
+                    left -= 1;
+                    continue;
+                }
+                let screen = screen_tail(&field.lab, boss);
+                // A grey word in the empty input: dim text after the prompt.
+                suggested += usize::from(screen.lines().any(|line| {
+                    line.trim_start().starts_with(['❯', '›', '>']) && line.contains("{{")
+                }));
+                type_raw(field, boss, bytes)?;
+                std::thread::sleep(Duration::from_millis(900));
+                let after = now_of(field, real);
+                pressed += 1;
+                let did = after.0 != before.0 && state == "idle"
+                    || after.1 == "draft"
+                    || after.1 == "interaction"
+                    || (state == "idle" && after.2 == "working" && before.2 != "working")
+                    || (state != "idle" && before.2 == "working" && after.2 == "just_done");
+                if did {
+                    effects.push(json!({
+                        "before": before, "after": after, "screen_before": screen,
+                        "screen_after": screen_tail(&field.lab, boss),
+                    }));
+                    if after.1 == "draft" {
+                        clear_input(field, boss, 60)?;
+                    }
+                    wait_idle(field, boss, Duration::from_secs(60));
+                }
+            }
+            println!(
+                "   {state} {key}: pressed {pressed}, effects {}, with a suggestion {suggested}",
+                effects.len()
+            );
+            report.push(json!({
+                "state": state, "key": key, "pressed": pressed, "effects": effects.len(),
+                "with_a_suggestion": suggested, "first_effects": effects.iter().take(3).collect::<Vec<_>>(),
+            }));
+            std::fs::write(
+                out.join("keys.json"),
+                serde_json::to_string_pretty(&report)?,
+            )?;
+        }
+        wait_idle(field, boss, Duration::from_secs(90));
+    }
+    field.note("keys", json!(report));
+    Ok(())
+}
+
+/// X1: pastes two lines, waits until the whole paste first shows in the input, then the time each of
+/// `FACADE_STORM_DELAYS` (milliseconds, parted by commas) names, and presses the submission key once.
+/// Whether the input then let go of the text, and what the session holds of it.
+fn delays(
+    field: &Field,
+    real: &RealAgent,
+    frames: &Frames,
+    times: usize,
+    out: &Path,
+) -> anyhow::Result<()> {
+    let boss = &real.agent;
+    std::fs::create_dir_all(out)?;
+    let waits: Vec<u64> = std::env::var("FACADE_STORM_DELAYS")
+        .unwrap_or_else(|_| "0,10,20,40,80".into())
+        .split(',')
+        .filter_map(|each| each.trim().parse().ok())
+        .collect();
+    let lines: usize = std::env::var("FACADE_STORM_LINES")
+        .ok()
+        .and_then(|each| each.parse().ok())
+        .unwrap_or(2);
+    let mut counts: BTreeMap<String, BTreeMap<&str, usize>> = BTreeMap::new();
+    let mut names: Vec<(String, u64, &str)> = Vec::new();
+    let mut odd: Vec<Value> = Vec::new();
+    let started = crate::sample::machine();
+    let mut n = 0;
+    for _ in 0..times {
+        for wait in &waits {
+            let name = format!("x{n:05}");
+            n += 1;
+            let body: Vec<String> = (0..lines)
+                .map(|line| match line + 1 == lines {
+                    true => format!("{name} line {line}, answer ok "),
+                    false => format!("{name} line {line}"),
+                })
+                .collect();
+            let paste = format!("\x1b[200~{}\x1b[201~", body.join("\r"));
+            type_raw(field, boss, paste.as_bytes())?;
+            // The whole paste shows: its last line's words.
+            let shown = wait_until(Duration::from_secs(10), || {
+                let (_, input, draft) = frames.last();
+                input == "draft" && draft.contains(&name) && draft.contains("answer ok")
+            });
+            let what = if !shown {
+                "never showed whole"
+            } else {
+                std::thread::sleep(Duration::from_millis(*wait));
+                type_raw(field, boss, b"\r")?;
+                let let_go = wait_until(Duration::from_secs(6), || {
+                    let (_, input, draft) = frames.last();
+                    !(input == "draft" && draft.contains(&name))
+                });
+                match let_go {
+                    true => "taken",
+                    false => "stayed",
+                }
+            };
+            *counts
+                .entry(format!("{wait} ms"))
+                .or_default()
+                .entry(what)
+                .or_default() += 1;
+            names.push((name.clone(), *wait, what));
+            if what != "taken" {
+                if odd.len() < 20 {
+                    odd.push(json!({ "name": name, "wait": wait, "what": what,
+                        "screen": screen_tail(&field.lab, boss) }));
+                }
+                clear_input(field, boss, 80)?;
+            }
+            wait_idle(field, boss, Duration::from_secs(40));
+        }
+        if n % (waits.len() * 20) == 0 {
+            println!("   {n}: {counts:?}");
+        }
+    }
+    // What the session holds of each.
+    let saved: Vec<String> = submissions(&field.lab, real)
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|one| one.pieces)
+        .map(|piece| match piece {
+            crate::tape::Piece::Pasted(text) | crate::tape::Piece::Typed(text) => text,
+        })
+        .collect();
+    let mut session: BTreeMap<String, BTreeMap<&str, usize>> = BTreeMap::new();
+    for (name, wait, what) in &names {
+        let with: Vec<&String> = saved
+            .iter()
+            .filter(|text| text.contains(name.as_str()))
+            .collect();
+        let whole = with.len() == 1
+            && (0..lines).all(|line| with[0].contains(&format!("{name} line {line}")));
+        let kind = match (with.len(), whole, *what) {
+            (0, _, "taken") => "taken but not in the session",
+            (0, _, _) => "not in the session",
+            (1, true, _) => "whole, once",
+            (1, false, _) => "changed",
+            _ => "in pieces or twice",
+        };
+        *session
+            .entry(format!("{wait} ms"))
+            .or_default()
+            .entry(kind)
+            .or_default() += 1;
+    }
+    let report = json!({
+        "lines": lines, "counts": counts, "session": session, "odd": odd,
+        "machine_cpu_percent": crate::sample::machine_percent(started),
+    });
+    println!("   {report}");
+    field.note("delays", report.clone());
+    std::fs::write(
+        out.join("delays.json"),
+        serde_json::to_string_pretty(&report)?,
+    )?;
+    Ok(())
+}
+
+/// Writes a paste and its submission key at once, so that a CLI that takes a paste key by key may take
+/// the key as a part of it; then, where the text stayed, the key once more.
+fn again(
+    field: &Field,
+    real: &RealAgent,
+    frames: &Frames,
+    times: usize,
+    out: &Path,
+) -> anyhow::Result<()> {
+    /// How long the whole text has to stay, untouched, before the key is pressed again.
+    const STAYS: Duration = Duration::from_millis(600);
+    let boss = &real.agent;
+    std::fs::create_dir_all(out)?;
+    let (mut merged, mut taken_then, mut at_once, mut never) = (0usize, 0usize, 0usize, 0usize);
+    let mut by_key: BTreeMap<String, usize> = BTreeMap::new();
+    let mut kept: Vec<Value> = Vec::new();
+    let mut names: Vec<(String, &str)> = Vec::new();
+    for n in 0..times {
+        let name = format!("again{n:04}");
+        let bytes = format!("\x1b[200~{name} one\r{name} two, answer ok \x1b[201~\r");
+        let seen_from = now_us();
+        type_raw(field, boss, bytes.as_bytes())?;
+        // Until the input no longer holds the text, the key pressed again each time the whole text
+        // stayed as it is, at most three times: what Facade is to do.
+        let (mut presses, mut whole_since, mut gone_since) = (1usize, None, None);
+        let mut shown = false;
+        let until = Instant::now() + Duration::from_secs(14);
+        let taken = loop {
+            std::thread::sleep(Duration::from_millis(40));
+            let (us, input, draft) = frames.last();
+            let holds = input == "draft" && draft.contains(&name);
+            shown |= us >= seen_from && holds;
+            if holds && draft.contains("answer ok") {
+                gone_since = None;
+                let since = *whole_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= STAYS && presses < 4 {
+                    type_raw(field, boss, b"\r")?;
+                    presses += 1;
+                    whole_since = None;
+                }
+            } else {
+                whole_since = None;
+                if shown && !holds {
+                    let since = *gone_since.get_or_insert_with(Instant::now);
+                    if since.elapsed() >= Duration::from_millis(1500) {
+                        break true;
+                    }
+                } else {
+                    gone_since = None;
+                }
+            }
+            if Instant::now() > until {
+                break false;
+            }
+        };
+        *by_key
+            .entry(match taken {
+                true => format!("taken by key {presses}"),
+                false => format!("never, {presses} keys"),
+            })
+            .or_default() += 1;
+        match (taken, presses) {
+            (true, 1) => {
+                at_once += 1;
+                names.push((name.clone(), "by the first key"));
+            }
+            (true, _) => {
+                merged += 1;
+                taken_then += 1;
+                names.push((name.clone(), "by a later key"));
+            }
+            (false, _) => {
+                merged += 1;
+                never += 1;
+                names.push((name.clone(), "never"));
+                kept.push(json!({
+                    "n": n, "presses": presses, "shown": shown, "last": frames.last().2,
+                    "screen": screen_tail(&field.lab, boss),
+                }));
+                clear_input(field, boss, 60)?;
+            }
+        }
+        wait_idle(field, boss, Duration::from_secs(60));
+        if n % 20 == 19 || n + 1 == times {
+            println!("   {}: {by_key:?}", n + 1);
+            let saved: Vec<String> = submissions(&field.lab, real)
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+                .into_iter()
+                .flat_map(|one| one.pieces)
+                .map(|piece| match piece {
+                    crate::tape::Piece::Pasted(text) | crate::tape::Piece::Typed(text) => text,
+                })
+                .collect();
+            let mut session: BTreeMap<String, usize> = BTreeMap::new();
+            let mut wrong: Vec<Value> = Vec::new();
+            for (name, how) in &names {
+                let whole = format!("{name} one\n{name} two, answer ok");
+                let with: Vec<&String> = saved
+                    .iter()
+                    .filter(|text| text.contains(name.as_str()))
+                    .collect();
+                let what = match with.as_slice() {
+                    [] => "not in the session",
+                    [text] if text.trim_end() == whole => "whole, once",
+                    [_] => "changed",
+                    _ => "in several pieces",
+                };
+                *session.entry(format!("{how}: {what}")).or_default() += 1;
+                if what != "whole, once" && wrong.len() < 12 {
+                    wrong.push(json!({ "name": name, "how": how, "what": what, "saved": with }));
+                }
+            }
+            let report = json!({
+                "sent": n + 1, "taken_by_the_first_key": at_once, "stayed": merged,
+                "taken_by_a_later_key": taken_then, "never_taken": never, "by_key": by_key,
+                "session": session, "wrong": wrong, "kept": kept.iter().take(6).collect::<Vec<_>>(),
+            });
+            field.note("again", report.clone());
+            std::fs::write(
+                out.join("again.json"),
+                serde_json::to_string_pretty(&report)?,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Has the CLI's model ask its person a question while messages come one after another, so that the
+/// question opens at any moment of a message's typing. Nobody but the person may answer it, and every
+/// message told delivered must be in the session.
+fn questions(
+    field: &Field,
+    mcp: &client::Mcp,
+    sender: &Agent,
+    real: &RealAgent,
+    word: &str,
+    times: usize,
+    out: &Path,
+) -> anyhow::Result<()> {
+    let boss = &real.agent;
+    let mut report = Vec::new();
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    std::fs::create_dir_all(out)?;
+    let asks = || shows_a_question(&screen_tail(&field.lab, boss));
+    let ran = || {
+        field
+            .lab
+            .inspect(boss)
+            .ok()
+            .and_then(|info| info["agent"]["cwd"].as_str().map(PathBuf::from))
+            .is_some_and(|folder| folder.join("ran.txt").exists())
+    };
+    let mut answered = 0;
+    for round in 0..times {
+        let (seq, _) = field.name_next(&sender.id);
+        let ask = format!("n{seq:05} {word} now, and nothing else. Run: echo hi > ran.txt");
+        field.note_sent(crate::storm::send(
+            mcp, &sender.id, boss, seq, ask, "delivery",
+        ));
+        let stop = AtomicBool::new(false);
+        let (opened, stayed, screen) = std::thread::scope(|scope| {
+            let sending = scope.spawn(|| {
+                for _ in 0..90 {
+                    if stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let (seq, _) = field.name_next(&sender.id);
+                    let text = format!("n{seq:05} {PLAIN}");
+                    field.note_sent(crate::storm::send(
+                        mcp, &sender.id, boss, seq, text, "inbox",
+                    ));
+                    std::thread::sleep(Duration::from_millis(220));
+                }
+            });
+            let opened = wait_until(Duration::from_secs(25), asks);
+            let screen = screen_text(&field.lab, boss);
+            std::thread::sleep(Duration::from_millis(1500));
+            stop.store(true, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(1500));
+            let stayed = opened && asks();
+            sending.join().expect("the sender");
+            (opened, stayed, screen)
+        });
+        let after = screen_text(&field.lab, boss);
+        let what = match (opened, stayed) {
+            (false, _) => "no question",
+            (true, true) => "stayed until the person answered",
+            (true, false) => "was answered or went away by itself",
+        };
+        // A command its person never allowed.
+        if ran() {
+            answered += 1;
+            if let Ok(info) = field.lab.inspect(boss) {
+                let folder = PathBuf::from(info["agent"]["cwd"].as_str().unwrap_or_default());
+                let _ = std::fs::remove_file(folder.join("ran.txt"));
+            }
+        }
+        *counts.entry(what).or_default() += 1;
+        if opened && !stayed {
+            report.push(json!({ "round": round, "what": what, "screen": screen, "after": after }));
+        }
+        // The person's own answer, if it is still there.
+        for _ in 0..3 {
+            if !asks() {
+                break;
+            }
+            type_raw(field, boss, b"\x1b")?;
+            std::thread::sleep(Duration::from_millis(1500));
+        }
+        wait_idle(field, boss, Duration::from_secs(60));
+        wait_until(Duration::from_secs(40), || {
+            field.lab.input_state(boss) == "usable"
+        });
+        if field.lab.input_state(boss) != "usable" {
+            let left = screen_tail(&field.lab, boss);
+            report.push(json!({ "round": round, "what": "left in the input", "after": left }));
+            clear_input(field, boss, 120)?;
+        }
+        println!("   round {round}: {counts:?}");
+        std::fs::write(
+            out.join("questions.json"),
+            serde_json::to_string_pretty(
+                &json!({ "counts": counts, "commands_run": answered, "not_stayed": report }),
+            )?,
+        )?;
+    }
+    field.note(
+        "questions",
+        json!({ "counts": counts, "commands_run": answered, "not_stayed": report }),
+    );
+    Ok(())
+}
+
 /// Ends a recipient while a message is typed to it: `times` new agents, each stopped or told to leave
 /// at another moment of the typing. A message told delivered must be in the session it ended with.
 fn ends(
@@ -1547,6 +2173,14 @@ fn cut_short(
 /// What a CLI needs in its folder.
 fn prepare(cli: &Cli, folder: &Path, model: Option<&str>) -> anyhow::Result<()> {
     std::fs::write(folder.join("README.md"), "A test folder.\n")?;
+    // Claude Code asks before every command here, whatever mode its person chose.
+    if cli.name == "claude" && std::env::var_os("FACADE_STORM_ASKS").is_some() {
+        std::fs::create_dir_all(folder.join(".claude"))?;
+        std::fs::write(
+            folder.join(".claude").join("settings.json"),
+            r#"{"permissions":{"defaultMode":"default","ask":["Bash"]}}"#,
+        )?;
+    }
     std::fs::create_dir_all(folder.join("src"))?;
     std::fs::write(folder.join("src/main.rs"), "fn main() {}\n")?;
     if cli.name == "opencode" {
@@ -1591,9 +2225,124 @@ fn screen_text(lab: &Lab, agent: &Agent) -> String {
 pub struct Frames {
     seen: Arc<Mutex<Vec<Value>>>,
     _wire: client::Rpc,
+    /// The agent's state as the daemon told its watchers, and when.
+    states: Arc<Mutex<Vec<Value>>>,
+    _states_wire: client::Rpc,
 }
 
+/// The state of the agent `id` in a record of the agents topic, wherever in it.
+fn state_of(value: &Value, id: &str) -> Option<String> {
+    match value {
+        Value::Object(fields) => {
+            if value["reference"]["agent_id"] == id
+                && let Some(state) = value["state"].as_str()
+            {
+                return Some(state.to_string());
+            }
+            fields.values().find_map(|each| state_of(each, id))
+        }
+        Value::Array(items) => items.iter().find_map(|each| state_of(each, id)),
+        _ => None,
+    }
+}
+
+/// What OpenCode says when it could not send or lost its own server, or its model refused.
+const OPENCODE_ERRORS: &[&str] = &[
+    "failed to send prompt",
+    "connection lost",
+    "usage limit",
+    "free limit",
+    "limit reached",
+    "unable to connect",
+];
+
 impl Frames {
+    /// How the input read after each piece, where that changed. A piece in the middle of a frame says
+    /// nothing.
+    pub fn readings(&self) -> Vec<(u64, String)> {
+        let mut out: Vec<(u64, String)> = Vec::new();
+        for piece in self.seen.lock().unwrap().iter() {
+            let input = piece["input"].as_str().unwrap_or_default();
+            let half = piece["in_update"] == true;
+            if half || out.last().is_some_and(|(_, last)| last == input) {
+                continue;
+            }
+            out.push((piece["us"].as_u64().unwrap_or_default(), input.to_string()));
+        }
+        out
+    }
+
+    /// The texts the CLI put back into its input by itself, with words of its own error on the screen
+    /// within three seconds.
+    pub fn returned(&self) -> Vec<crate::judge::Returned> {
+        let seen = self.seen.lock().unwrap();
+        let us = |piece: &Value| piece["us"].as_u64().unwrap_or_default();
+        let mut out: Vec<crate::judge::Returned> = Vec::new();
+        let (mut draft, mut emptied): (Option<String>, Option<u64>) = (None, None);
+        for (at, piece) in seen.iter().enumerate() {
+            let text = piece["draft"].as_str().unwrap_or_default().to_string();
+            match piece["input"].as_str() {
+                Some("draft") if !text.is_empty() => {
+                    if let (Some(before), Some(from)) = (&draft, emptied)
+                        && *before == text
+                    {
+                        let now = us(piece);
+                        let says = seen
+                            .iter()
+                            .filter(|one| us(one) + 1_000_000 >= from && us(one) <= now + 3_000_000)
+                            .any(|one| one["error"].is_string());
+                        let until = seen[at..]
+                            .iter()
+                            .find(|one| one["input"] == "usable")
+                            .or(seen.last())
+                            .map_or(now, us);
+                        if says {
+                            out.push(crate::judge::Returned {
+                                number: crate::judge::headers(&text).first().copied(),
+                                emptied_us: from,
+                                from_us: now,
+                                until_us: until,
+                            });
+                        }
+                    }
+                    draft = Some(text);
+                    emptied = None;
+                }
+                Some("usable") if draft.is_some() && emptied.is_none() => {
+                    emptied = Some(us(piece));
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// When the last piece came, how the input read after it, and its draft.
+    pub fn last(&self) -> (u64, String, String) {
+        self.seen.lock().unwrap().last().map_or_else(
+            || (0, String::new(), String::new()),
+            |piece| {
+                let text = |key: &str| piece[key].as_str().unwrap_or_default().to_string();
+                (
+                    piece["us"].as_u64().unwrap_or_default(),
+                    text("input"),
+                    text("draft"),
+                )
+            },
+        )
+    }
+
+    /// When each piece that showed a draft came.
+    pub fn drafts(&self) -> Vec<u64> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|piece| piece["input"] == "draft")
+            .filter_map(|piece| piece["us"].as_u64())
+            .collect()
+    }
+
     pub fn watch(lab: &Lab, agent: &Agent, cli: &str) -> anyhow::Result<Frames> {
         use facade_base::base64;
         let rule = facade_rules::find(cli)
@@ -1603,6 +2352,7 @@ impl Frames {
         let seen_in = seen.clone();
         let screen = Arc::new(Mutex::new(facade_screen::Screen::new(COLS, ROWS, 200)));
         let screen_in = screen.clone();
+        let opencode = cli == "opencode";
         let wire = client::terminal_with(&lab.home.daemon_socket(), move |notice| {
             let params = &notice["params"];
             let change = match params["change"].is_object() {
@@ -1621,7 +2371,18 @@ impl Frames {
             }
             screen.feed(&bytes);
             let reading = facade_rules::read_box(&rule.input, &screen.view());
+            // Words of OpenCode's own error, which make a text it puts back L7.
+            let error = opencode
+                .then(|| {
+                    let text = screen.text(usize::from(ROWS)).join("\n").to_lowercase();
+                    OPENCODE_ERRORS
+                        .iter()
+                        .find(|words| text.contains(**words))
+                        .copied()
+                })
+                .flatten();
             seen_in.lock().unwrap().push(json!({
+                "error": error,
                 "us": now_us(), "kind": change["kind"], "bytes": bytes.len(),
                 "data": change["data"],
                 "input": format!("{:?}", reading.info.state).to_lowercase(),
@@ -1642,7 +2403,30 @@ impl Frames {
         {
             screen.lock().unwrap().feed(&bytes);
         }
-        Ok(Frames { seen, _wire: wire })
+        let states: Arc<Mutex<Vec<Value>>> = Arc::default();
+        let (states_in, id) = (states.clone(), agent.id.clone());
+        let states_wire = client::terminal_with(&lab.home.daemon_socket(), move |notice| {
+            if let Some(state) = state_of(&notice["params"], &id) {
+                let mut states = states_in.lock().unwrap();
+                if states
+                    .last()
+                    .is_none_or(|last: &Value| last["state"] != state.as_str())
+                {
+                    states.push(json!({ "us": now_us(), "state": state }));
+                }
+            }
+        })?;
+        states_wire.request(
+            "watch",
+            json!({ "topic": "agents", "args": {} }),
+            Duration::from_secs(30),
+        )?;
+        Ok(Frames {
+            seen,
+            _wire: wire,
+            states,
+            _states_wire: states_wire,
+        })
     }
 
     /// Writes every piece to `file`, and returns what matters of them: how far apart they came, and
@@ -1658,6 +2442,21 @@ impl Frames {
             std::fs::create_dir_all(folder)?;
         }
         std::fs::write(file, text)?;
+        let states: String = self
+            .states
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|one| format!("{one}\n"))
+            .collect();
+        std::fs::write(
+            file.with_file_name(
+                file.file_name()
+                    .map(|name| name.to_string_lossy().replace("frames", "states"))
+                    .unwrap_or_default(),
+            ),
+            states,
+        )?;
         let us = |piece: &Value| piece["us"].as_u64().unwrap_or_default();
         let gaps: Vec<f64> = seen
             .windows(2)
@@ -1761,7 +2560,14 @@ fn given_texts(cli: &str, entry: &Value) -> Vec<String> {
             _ => Vec::new(),
         },
         "muse" if entry["payload_type"] == "runtime.user_intent.accepted" => {
-            facades_text(&entry["payload"]).into_iter().collect()
+            facades_text(&entry["payload"])
+                .or_else(|| {
+                    entry["payload"]["refill_blocks"][0]["text"]
+                        .as_str()
+                        .map(str::to_string)
+                })
+                .into_iter()
+                .collect()
         }
         "pi" => match (entry["type"].as_str(), entry["message"]["role"].as_str()) {
             (Some("message"), Some("user")) => parts(&entry["message"]["content"]),
