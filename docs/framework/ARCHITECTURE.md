@@ -71,8 +71,9 @@ The [daemon takeover](../../framework/protocol/DAEMON.md#daemon-takeover) and
 [keeper replacement](../../framework/protocol/KEEPER.md#exit-and-replacement) references define version checks and the
 formal API support window for each endpoint.
 
-**A machine connects on demand.** A reachable list or scoped stop can probe saved SSH routes without waking a
-sleeping daemon. An explicit action such as starting an agent on a named machine can wake it through a saved route.
+**A machine connects on demand.** A reachable list, a scoped stop or a lookup by bare agent name or number can
+probe saved SSH routes without waking a sleeping daemon. An explicit action such as starting an agent on a named
+machine can wake it through a saved route.
 In-flight calls, foreground connects and remote Attach watches keep their routes active, including on forwarding hops.
 An idle saved session closes after 30 seconds. The machine table keeps the saved settings for the next request.
 
@@ -95,7 +96,7 @@ An idle saved session closes after 30 seconds. The machine table keeps the saved
 | A client and the daemon | Daemon API v1 uses one JSON-RPC 2.0 object per line on `/tmp/facade-framework-<uid>/daemon-<key>.sock` or Windows `\\.\pipe\facade-framework-daemon-<key>`. Clients negotiate `api_versions` in `hello`, then use `call`, `watch`, `unwatch` and `cancel`. The daemon sends `changed` and `closing`. | [Daemon API](../../framework/protocol/DAEMON.md) |
 | The daemon and the keeper | Keeper API v1 negotiates its own version on the keeper socket. The daemon calls `agent.start`, `agent.stop`, `agent.sync` and `daemon.ping`, and the keeper reports exits with `changed`. The associated terminal is a PTY master or, on Windows, handles duplicated into the receiving process and carried in the same line. | [KEEPER](../../framework/protocol/KEEPER.md) |
 | A relay and the daemon | The external connection starts with `hello` using `relay:1`, the relay's own handshake, then exchanges MCP lines. The daemon opens a separate authenticated API v1 session for its internal actor. `closing` lets the relay reconnect to the new daemon with its outstanding calls. | [The relay](../../framework/protocol/DAEMON.md#the-relay) |
-| A CLI and its relay | MCP over standard input and output, negotiated by its date-format `protocolVersion`: Facade API v1's MCP entry point, with one table of eight tools and one skill | [MCP](../extension/engineering/MCP.md) |
+| A CLI and its relay | MCP over standard input and output, negotiated by its date-format `protocolVersion`. Facade API v1's MCP entry point supplies the instructions and catalog of eight tools. | [MCP](../extension/engineering/MCP.md#7-mcp-through-the-orchestrator) |
 | A CLI and its hooks | The CLI runs `facade hook <event> …` with its hook input. The hook saves the session the input reports in the run's session file, which the daemon follows, and prints, in the CLI's own format, the instructions the run's start wrote | [facade](islands/facade.md), [rules](islands/rules.md) |
 | Two daemons | Daemon API v1 with an authenticated `machine` hello, followed by calls, watches and changes in both directions. A machine session runs over SSH to the installed `facade machine serve` and can forward traffic along a route. The API version determines compatibility. | [Machine sessions](../../framework/protocol/DAEMON.md#machine-sessions) |
 | A CLI and the daemon | What the CLI draws in its terminal, and its own reports of what it does, the Program Status Protocol (OSC 7501) | [States](../../framework/protocol/DAEMON.md#states) |
@@ -133,7 +134,7 @@ framework
 │   ├── protocol    API v1 framing, separate daemon and Keeper registries, the daemon client
 │   ├── platform    what Facade asks of the operating system
 │   ├── settings    facade.json
-│   └── texts       what a model reads: instructions, skill, tool definitions
+│   └── texts       what a model reads: instructions and tool definitions
 ├── screen     a headless terminal for one agent
 ├── rules      what Facade knows of each CLI: rule files
 │   ├── command_line  program, arguments, model, effort, YOLO
@@ -205,11 +206,15 @@ The dependency column lists direct Facade crate dependencies. Run the acceptance
   [Location request](../../framework/crates/daemon/src/service.rs#L1251) ·
   [Start preflight](../../framework/crates/daemon/src/operations.rs#L448).
 - **MCP catalog and relay.** The daemon binds each shipped tool definition to a typed action. The live catalog feeds
-  listing, validation, dispatch and send/read cancellation. The daemon supplies verified actor services and shares
-  one deadline across a call that requests waiting. The relay carries MCP lines. [Catalog](../../framework/crates/daemon/src/mcp/mod.rs#L161) ·
+  listing, validation, dispatch and send/read cancellation. The client controls when it exposes definitions to its
+  model. `initialize` supplies the managed instructions for verified runs that use server instructions. Other
+  verified runs get their managed instructions from a hook or extension and receive the Guest instructions during
+  `initialize`, as do unbound connections. The daemon supplies verified actor services and shares one deadline
+  across a call that requests waiting. The relay carries MCP lines.
+  [Catalog](../../framework/crates/daemon/src/mcp/mod.rs#L161) ·
   [Relay ingress](../../framework/crates/daemon/src/mcp/lines.rs#L52) ·
-  [Actor services](../../framework/crates/daemon/src/relays.rs#L127) ·
-  [Relay golden case](../../framework/tests/tests/mcp.rs#L2009).
+  [Instruction selection](../../framework/crates/daemon/src/relays.rs#L228) ·
+  [Relay golden case](../../framework/tests/tests/mcp.rs#L2558).
 
 ### Thread model and call chains
 

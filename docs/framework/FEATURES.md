@@ -73,6 +73,8 @@ gets a name and inbox when it first calls a tool. From that point it can receive
   `--machine <MACHINE>` queries the named machine and wakes it if needed. The `SESSION` column shows the latest
   saved native session name, the session preview when unnamed, or `-` when neither is available.
   Use `facade status <AGENT>` for the full session ID, working directory and attached viewers.
+- A bare agent name or number searches the machines in the reachable list. Use the full address shown in the list
+  to select an agent on a particular machine.
 - `facade stop <AGENT>...` ends one or more managed agents and keeps their records, screens and inboxes for 30 days.
   Their helpers keep running. Use `--local`, `--machine <MACHINE>` or `--all` to stop running managed agents in one
   scope. Scope stops skip Guests and probe remote machines without waking them. A partial failure returns 1 after
@@ -170,6 +172,10 @@ Managed agents receive replies and background failures in their terminals. A fir
 startup problem share one 🔔. The live agent creator also receives one notice per incident when its agent waits
 for permission, an answer or login for 30 seconds, stays in Error for 30 seconds, or ends without its request.
 See the [MCP contract](../extension/engineering/MCP.md#7-mcp-through-the-orchestrator).
+
+Facade supplies the same eight tool definitions to managed agents and Guests. The MCP client controls when it
+exposes them to the model. Muse Code, Pi and Antigravity runs get their managed instructions from their run hook or
+extension.
 
 ## Access and settings
 
