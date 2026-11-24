@@ -1512,7 +1512,8 @@
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/probes.rs:269",
-        "framework/tests/tests/probes.rs"
+        "framework/tests/tests/probes.rs",
+        "framework/crates/rules/tests/input/codex.json"
       ],
       "test": {
         "runner": "framework-scenario",

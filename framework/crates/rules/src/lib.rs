@@ -341,6 +341,9 @@ pub struct Prompt {
     #[serde(default)]
     pub alternate_prompt: Option<String>,
     pub model_line: Pattern,
+    /// A bottom hint that can follow several indented rows of the model footer.
+    #[serde(default)]
+    pub wrapped_footer_hint: Option<Pattern>,
     pub scrolled: Scrolled,
     pub menus: Vec<Menu>,
 }

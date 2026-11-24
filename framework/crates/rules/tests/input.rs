@@ -437,6 +437,15 @@ fn a_draft_reads_as_its_rows_draw_it_and_a_long_paste_as_its_placeholder() {
         draft("opencode", "opencode-2.1.4/typed"),
         "draft probe text"
     );
+    for label in [
+        "codex-0.170.0/narrow-wrapped-working-draft",
+        "codex-0.170.0/narrow-wrapped-warning-draft",
+    ] {
+        assert_eq!(
+            draft("codex", label),
+            "📨 Message m4 from example-helper (a2@testbox) · in reply to m2\nExample reply body"
+        );
+    }
     let lines = |count: usize| {
         (1..=count)
             .map(|line| format!("line {line}"))

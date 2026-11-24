@@ -218,6 +218,10 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     capture counts from the upper and lower border rules. A frame with a marked upper rule can
     start on a continuation row.
   - Codex's `prompt` input accepts `›` and its `alternate_prompt`, `»` at Ultra effort.
+    A wrapped footer can end with a shortcuts row that may include aligned status, the
+    `tab to queue message` hint, or a standalone warning count ending in `f2 to view` with at least
+    20 leading spaces. The model line must start the contiguous, indented footer above the hint
+    and have a blank row above it.
     Its `last_column` position uses dim glyphs (`↑` and `↓`) in the last column of the first
     and last input rows. When the model line is absent, those glyphs anchor the scrolled composer.
     The draft omits the glyphs and the reading reports one hidden row for each marked side.
