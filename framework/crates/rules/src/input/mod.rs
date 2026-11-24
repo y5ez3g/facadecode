@@ -10,7 +10,7 @@ use facade_base::model::terminal::{HiddenRows, InputInfo, InputState};
 use facade_screen::{ScreenView, VisibleCell};
 use regex::Regex;
 
-use crate::{BoxInput, CountedScroll, Editor, Frame, InputRule, Menu, Prompt, Scrolled};
+use crate::{BoxInput, CountedScroll, Editor, Frame, InputRule, Menu, Prompt, Question, Scrolled};
 
 pub use paste::{is_legacy_split_paste, is_own_draft, is_same_draft, settle_time, with_paste_text};
 pub use probe::{ProbeVerdict, restored, shape_of, space_taken, verdict_of};
@@ -750,6 +750,22 @@ impl<'a> Screen<'a> {
             return self.cut_editor(rule, upper, lower, none);
         };
         let place = format!("the editor at {}", row_span(upper + 2, lower));
+        if let Some((row, certain)) = self.question_row(&rule.question, upper, lower) {
+            return match certain {
+                true => reading(
+                    InputState::Interaction,
+                    format!(
+                        "{place} answers a question of the CLI's, as row {} shows",
+                        row + 1
+                    ),
+                ),
+                false => unknown(format!(
+                    "{place} may answer a question of the CLI's, as row {} may show over its \
+                     footer",
+                    row + 1
+                )),
+            };
+        }
         if cursor_row == lower || !self.own_cursor(cursor_row, column) {
             return unknown(format!(
                 "{place} has no cursor of its own where the cursor is, at row {}",
@@ -761,6 +777,32 @@ impl<'a> Screen<'a> {
         let line = line_of(lines[0], upper + 1, 0, rest, self.cursor);
         self.editor_reading(rule, upper, lower, &lines, &place)
             .with_line(line)
+    }
+
+    /// The row that shows that the editor between these rules may answer a question of the CLI's,
+    /// and whether it shows that for certain: its keys under it; or, where they are out of sight, the
+    /// rule over the question, a blank row, the question and a blank row over it, for certain where
+    /// the footer is cut too, as the CLI cuts its footer first. Over a whole footer, an extension's
+    /// rows under the question or a footer of more rows may have taken the keys' place, and the CLI's
+    /// own input may stand under such rows as well.
+    fn question_row(
+        &self,
+        question: &Question,
+        upper: usize,
+        lower: usize,
+    ) -> Option<(usize, bool)> {
+        let shown = |y: usize| y < self.height() && !self.blank(y);
+        let keys = lower + 2;
+        if !shown(lower + 1) && shown(keys) && question.keys.is_match(&self.lines[keys]) {
+            return Some((keys, true));
+        }
+        // The screen's first row is the transcript's.
+        let top = (1..upper)
+            .rev()
+            .find(|&y| question.top.is_match(&self.lines[y]))?;
+        let asked = top + 2 < upper - 1 && !shown(top + 1) && shown(top + 2) && !shown(upper - 1);
+        let footer = (1..=question.footer_rows).all(|row| shown(lower + row));
+        asked.then_some((top, !footer))
     }
 
     /// A draft in an editor the screen has no room for, otherwise `none`. The CLI keeps the cursor's

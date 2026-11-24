@@ -226,6 +226,13 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     rule or the screen's end, and no menu shows. Without the upper rule among those rows, rows may
     be out of sight above: `InputLine::cut` says so, and `BoxReading::draft_hidden` counts one row
     there for telling a message's own draft. `hidden` stays empty, as Pi marks nothing.
+  - Pi asks some questions with an editor of its own, between two rules like its input's. Such an
+    editor is an interaction, never an input. `question` describes the row of `keys` that stands under
+    it. Where the keys are out of sight, the rule over the question (`top`), a blank row, the question
+    and a blank row over the editor tell it: an interaction where the footer's `footer_rows` are cut
+    as well, as Pi cuts its footer first, and unknown over a whole footer, never usable. Over a whole
+    footer, an extension's rows or a footer of more rows may have taken the keys' place, and Pi's own
+    input can stand under such rows too.
   - Muse Code's frame also scrolls without a mark (`scrolls_unmarked`), its prompt row with the
     draft's first rows. A frame without its prompt row is then a draft cut above, as Pi's cut editor
     is, where it ends in the cursor's row, behind the text, and no menu shows.

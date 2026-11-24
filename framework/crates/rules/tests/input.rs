@@ -396,6 +396,98 @@ fn an_editor_pi_cuts_short_reads_as_nothing_else() {
     }
 }
 
+/// Pi asks a question with an editor of its own, in place of its input. No cut of it is Pi's input,
+/// under Pi's own footer of two rows, a footer an extension's status makes three rows, or an
+/// extension's row under the question: Pi cuts its keys, and shows such rows whole. Where the keys
+/// show, or Pi cut its footer too, it is a question. The real frame of Pi's own layout that a footer
+/// of three rows made read as usable, `pi-1.4.0-15rows/question-under-3-row-footer`, is a recorded
+/// screen.
+#[test]
+fn no_cut_of_a_question_is_an_input() {
+    let pi = find("pi").unwrap().unwrap();
+    for label in [
+        "pi-1.4.0-30rows/question-empty",
+        "pi-1.4.0-30rows/question-answered",
+    ] {
+        let screen = screen_of("pi", label);
+        let rows = screen["rows"].as_array().unwrap();
+        let whole = 17..28;
+        let (pwd, stats) = (rows[28].clone(), rows[29].clone());
+        let status = serde_json::json!({ "cells": " an extension's status" });
+        let widget = serde_json::json!({ "cells": " an extension's widget" });
+        let unders = [
+            vec![],
+            vec![pwd.clone()],
+            vec![pwd.clone(), stats.clone()],
+            vec![pwd.clone(), stats.clone(), status],
+            vec![widget.clone(), pwd.clone(), stats.clone()],
+            vec![widget, pwd],
+        ];
+        for kept in 3..=whole.len() {
+            for under in &unders {
+                let view = view_of(&cut_over(&screen, whole.clone(), kept, under));
+                let read = read_input(&pi.input, &view);
+                let what = format!("{label}, {kept} rows, {} under it", under.len());
+                assert_ne!(read.state, InputState::Usable, "{what}: {}", read.evidence);
+                if kept >= 9 || kept == 8 {
+                    let asked = read.state == InputState::Interaction;
+                    assert!(asked, "{what}: {} ({})", read.state.as_str(), read.evidence);
+                }
+            }
+        }
+    }
+}
+
+/// A command's output or a notice leaves a rule in the transcript over Pi's input, with words under
+/// it. Unless they stand as a question's do, a blank row over and under the one row of words, they
+/// ask nothing. Where they do, over Pi's whole footer, the input reads unknown: a question cut short
+/// over a footer of more rows shows the same.
+#[test]
+fn a_rule_and_words_over_pi_s_input_ask_nothing() {
+    let pi = find("pi").unwrap().unwrap();
+    let empty = screen_of("pi", "pi-1.4.0-24rows/empty");
+    let (upper, lower) = (19, 21);
+    let rule = || serde_json::json!({ "cells": "─".repeat(120), "colored": [[0, 120]] });
+    let words = || serde_json::json!({ "cells": " Model: example", "colored": [[1, 15]] });
+    let blank = || serde_json::json!({ "cells": "" });
+    let keys = || serde_json::json!({ "cells": " enter submit  escape cancel" });
+    let mut asked = empty.clone();
+    for (y, row) in [
+        (upper - 4, rule()),
+        (upper - 3, blank()),
+        (upper - 2, words()),
+        (upper - 1, blank()),
+    ] {
+        asked["rows"][y] = row;
+    }
+    let read = read_input(&pi.input, &view_of(&asked));
+    assert_eq!(read.state, InputState::Unknown, "{}", read.evidence);
+    for (what, changed) in [
+        (
+            "a rule with words right under it, over an input with one row under it",
+            vec![
+                (upper - 3, rule()),
+                (upper - 2, words()),
+                (upper - 1, blank()),
+                (lower + 2, blank()),
+            ],
+        ),
+        ("one row under the input", vec![(lower + 2, blank())]),
+        ("a blank row under the input", vec![(lower + 1, blank())]),
+        (
+            "words like the keys right under the input",
+            vec![(lower + 1, keys())],
+        ),
+    ] {
+        let mut screen = empty.clone();
+        for (y, row) in changed {
+            screen["rows"][y] = row;
+        }
+        let read = read_input(&pi.input, &view_of(&screen));
+        assert_eq!(read.state, InputState::Usable, "{what}: {}", read.evidence);
+    }
+}
+
 /// No other CLI's screen is Pi's editor, whole or cut short.
 #[test]
 fn no_other_cli_s_screen_is_an_editor() {

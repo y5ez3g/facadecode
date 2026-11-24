@@ -361,7 +361,23 @@ pub struct Editor {
     /// all. Pi 1.4.0's full-screen layout keeps three: `minSize` of the editor at line 16 of
     /// pi-coding-agent's `dist/modes/interactive/chat-viewport.js`.
     pub(crate) least_rows: usize,
+    pub(crate) question: Question,
     pub menus: Vec<Menu>,
+}
+
+/// A question the CLI asks with an editor of its own, in place of its input: a rule, the question,
+/// the editor and the keys that answer it, with a blank row between each two. Pi 1.4.0 draws it in
+/// pi-coding-agent's `dist/modes/interactive/components/extension-editor.js`, lines 37 to 68.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Question {
+    /// The rule over the question.
+    pub(crate) top: Pattern,
+    /// The row of the keys, the first of them where they wrap.
+    pub(crate) keys: Pattern,
+    /// How many rows the CLI's own footer has, right under its input. The CLI cuts them before the
+    /// keys.
+    pub(crate) footer_rows: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -779,6 +795,9 @@ impl Editor {
         }
         if self.least_rows < 3 {
             return Err("least_rows must hold a row between two rules".into());
+        }
+        if self.question.footer_rows == 0 {
+            return Err("question.footer_rows must be positive".into());
         }
         if (0.0..=1.0).contains(&self.most_share) && self.most_share != 0.0 {
             Ok(())
