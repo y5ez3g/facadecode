@@ -6,7 +6,7 @@ from github_timing import job_sample
 class HostedTiming(unittest.TestCase):
     def test_distinguishes_a_queued_cancellation_from_runner_time(self):
         job = {
-            'name': 'Extension on darwin-arm64, rust engine',
+            'name': 'Extension on darwin-arm64, Framework implementation',
             'html_url': 'https://github.com/owner/name/actions/runs/1/job/2',
             'created_at': '2026-11-22T08:57:38Z',
             'started_at': '2026-11-22T08:57:38Z',

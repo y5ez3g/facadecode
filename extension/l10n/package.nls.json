@@ -37,7 +37,7 @@
 	"command.continueSession": "Continue Session...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "Old engine only. This folder holds its settings, agent history, and messages. A path here takes precedence over `FACADE_HOME` and the `~/.facade` default.\n\n[Edit in facade.json](command:facade.openSettingsFile) to change YOLO, suggested names, and how CLIs start.",
-	"config.rustEngine": "Controls which engine runs your agents. The new Rust engine is built for maximum performance.\n\n- `auto`: Use the Rust engine. A window switches to it once no agent of the old engine is still running on this computer. Running agents are never interrupted: when the last one has ended, Facade offers to reload the window.\n- `off`: Use the old engine. If the Rust engine causes problems, select `off`, reload the window, and let us know in a [GitHub issue](https://github.com/y5ez3g/facadecode/issues).\n\nIn a remote window, the remote machine's setting applies.",
+	"config.home": "Legacy implementation only. This folder holds its settings, agent history, and messages. A path here takes precedence over `FACADE_HOME` and the `~/.facade` default.\n\n[Edit in facade.json](command:facade.openSettingsFile) to change YOLO, suggested names, and how CLIs start.",
+	"config.framework": "Controls which implementation runs your agents.\n\n- `auto`: Use the Facade Code Framework. A window switches to it once no agent of the legacy implementation is still running on this computer. Running agents are never interrupted: when the last one has ended, Facade offers to reload the window.\n- `off`: Use the legacy implementation. If the Facade Code Framework causes problems, select `off`, reload the window, and let us know in a [GitHub issue](https://github.com/y5ez3g/facadecode/issues).\n\nIn a remote window, the remote machine's setting applies.",
 	"config.home.pattern": "The path must start with ~/ or be absolute."
 }

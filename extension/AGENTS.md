@@ -16,7 +16,7 @@ together. This file routes work on the extension in `extension/`; the repository
 ## 2 The specification
 
 **[Facade Code](../docs/PRODUCT.md) defines the product.** The extension's rules in `../docs/extension/` define the
-editor interaction and the optional old engine. Where code disagrees with a rule, fix the code or amend the owning rule
+editor interaction and the legacy implementation. Where code disagrees with a rule, fix the code or amend the owning rule
 first.
 
 The [specification index](../docs/extension/README.md) lists its layers and each document's responsibility. Product constrains
@@ -30,8 +30,8 @@ Verification results accompany the tested build or handoff.
   Keep present tense. Use exact cases/values in lower layers; include a reason where it helps.
 - Separate the target from evidence: “not run,” “historical claim,” “failed” and “passed” have different meanings.
   Never make a document match a code defect just to call the work complete.
-- For Core integration, start with [ARCHITECTURE-6](../docs/extension/engineering/ARCHITECTURE.md#6-connecting-the-editor-to-the-orchestrator).
-  Read [Core compatibility review](../docs/core/ENGINEERING.md#compatibility-contracts) before changing API use
+- For Framework integration, start with [ARCHITECTURE-6](../docs/extension/engineering/ARCHITECTURE.md#6-connecting-the-editor-to-the-orchestrator).
+  Read [Framework compatibility review](../docs/framework/ENGINEERING.md#compatibility-contracts) before changing API use
   or the saved workspace roster, Pins or identity. The [verification cases](../docs/extension/engineering/VERIFICATION.md#52-verify-upgrade-and-compatibility-against-the-previous-build)
   identify the required prior-build inputs.
 - Amend the owning rule first, with its reason in the rule where it helps, then dependent schemas/scenarios/references,

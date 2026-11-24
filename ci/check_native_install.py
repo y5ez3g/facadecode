@@ -21,21 +21,24 @@ from uuid import UUID
 
 from catalog import AcceptanceError, NATIVE_INSTALL_CASES, read_json
 from evidence import digest, run_identity
-from native_core import (
+from native_framework import (
     ROOT, SYSTEM_PATH, clean_native_scope, hash_file, interrupted, process_identity, query,
     read_markers, source_identity, verify_native_cleanup, wait_for, write_receipt,
 )
 
 
-ASSET = 'facade-core-linux-x64.tar.gz'
+ASSET = 'facade-framework-linux-x64.tar.gz'
 PROGRAMS = ('facade', 'facade-mcp')
-CORE = ROOT / 'core'
+FRAMEWORK = ROOT / 'framework'
 SUCCESS_MARKER = 'Facade native install test '
-REFUSALS = ('corrupted-bytes', 'wrong-digest')
+REFUSALS = ('corrupted-bytes', 'wrong-digest', 'wrong-build')
+REFUSAL_STAGES = ('corrupted', 'wrong-digest', 'wrong-build')
 SHA256 = re.compile(r'[0-9a-f]{64}')
+VERSION = r'[0-9]+\.[0-9]+\.[0-9]+'
+BUILD = VERSION + r'\+[0-9]+\.[0-9a-f]{40}'
 
 
-def validate_inputs(archive, sidecar, fake):
+def validate_inputs(archive, sidecar, fake, *, local=False):
     if not hasattr(os, 'uname') or (os.uname().sysname, os.uname().machine) != ('Linux', 'x86_64'):
         raise ValueError('this fixture requires native Linux x64')
     if not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
@@ -43,10 +46,10 @@ def validate_inputs(archive, sidecar, fake):
     os.close(os.pidfd_open(os.getpid()))
     if not fake.is_file() or not os.access(fake, os.X_OK):
         raise ValueError('the fake CLI executable is missing or cannot run')
-    return archive_metadata(archive, sidecar)
+    return archive_metadata(archive, sidecar, local=local)
 
 
-def archive_metadata(archive, sidecar):
+def archive_metadata(archive, sidecar, *, local=False):
     if archive.name != ASSET or not archive.is_file():
         raise ValueError(f'expected a file named {ASSET}')
     if not sidecar.is_file():
@@ -65,21 +68,32 @@ def archive_metadata(archive, sidecar):
         members = package.getmembers()
         if sorted(entry.name for entry in members) != sorted((*PROGRAMS, 'VERSION', 'LICENSE.txt')) or not all(entry.isfile() for entry in members):
             raise ValueError('unexpected native archive contents')
-        version = package.extractfile('VERSION').read().decode('ascii')
-        if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+\n?', version):
-            raise ValueError('the package does not contain a release version')
+        marker = package.extractfile('VERSION').read().decode('ascii')
+        identity = f'(?:{BUILD}|{VERSION})' if local else BUILD
+        if not re.fullmatch(identity + r'\n', marker):
+            raise ValueError('the package does not contain a valid build identity')
         digests = {}
         for program in PROGRAMS:
             data = package.extractfile(program).read()
             if data[:6] != b'\x7fELF\x02\x01' or int.from_bytes(data[18:20], 'little') != 62:
                 raise ValueError(f'{program} is not an ELF x86-64 executable for {ASSET}')
             digests[program] = sha256(data).hexdigest()
-    return version.strip(), digests, hashes[0], sha256(checksum_bytes).hexdigest()
+    return marker.removesuffix('\n'), digests, hashes[0], sha256(checksum_bytes).hexdigest()
 
 
-def installer_args(installer, package, install, version):
-    return ['sh', str(installer), '--version', version, '--package', str(package),
-            '--install-root', str(install), '--no-path']
+def installer_args(installer, package, build, *, expected_build=None):
+    return ['sh', str(installer), '--version', build.split('+', 1)[0], '--package', str(package),
+            '--expected-build', expected_build or build, '--no-path']
+
+
+def wrong_build(build):
+    return f"{build.split('+', 1)[0]}+1.{'0' * 40}"
+
+
+def refused_package(label, build, stderr):
+    if label == 'wrong-build':
+        return stderr.startswith(f'facade install: Expected Facade build {wrong_build(build)}, found {build} in the package.')
+    return stderr.strip() == f'facade install: SHA-256 verification failed for {ASSET}.'
 
 
 def corrupted_archive(archive):
@@ -131,9 +145,9 @@ def relay_ready(stdout, version):
             and {'start_agent', 'list_agents'} <= {tool['name'] for tool in answers[1]['result']['tools']})
 
 
-def verify_install_commands(commands, scope, address, version, installer):
-    install = scope / 'install'
-    shell = str(install / 'bin/facade')
+def verify_install_commands(commands, scope, address, build, installer):
+    bin_dir = scope / 'state/framework/bin'
+    shell = str(bin_dir / 'facade')
     project = str(scope / 'project')
     records = iter(commands)
 
@@ -143,8 +157,9 @@ def verify_install_commands(commands, scope, address, version, installer):
             raise AcceptanceError(f'native install did not record the exact command and outcome for {label}')
         return step
 
-    def installed_package(label, stage, status=0):
-        return observed(label, installer_args(installer, scope / stage / ASSET, install, version), status)
+    def installed_package(label, stage, status=0, expected_build=None):
+        return observed(label, installer_args(installer, scope / stage / ASSET, build,
+                                              expected_build=expected_build), status)
 
     screen = [shell, 'screen', address]
 
@@ -153,25 +168,28 @@ def verify_install_commands(commands, scope, address, version, installer):
             continue
 
     installed = installed_package('install candidate', 'candidate')
+    unchanged = installed_package('select the same candidate again', 'candidate')
     version_result = observed('installed Shell version', [shell, '--version'])
     started = observed('start fake CLI', [shell, 'start', '-d', '--name', 'installed-agent', '--workdir',
                                           project, 'qa-install', '--', 'candidate argument'])
     wait_for_screen('read original screen', 'Native install fixture')
     listing = observed('list the installed candidate agent', [shell, 'list'])['stdout']
-    relay = observed('use installed MCP relay', [str(install / 'bin/facade-mcp')])
-    if (f'Installed Facade {version}' not in installed['stdout']
-            or version_result['stdout'].strip() != f'facade {version}'
+    relay = observed('use installed MCP relay', [str(bin_dir / 'facade-mcp')])
+    if (installed['stdout'] != f'Installed Facade {build} in {bin_dir}.\n'
+            or unchanged['stdout'] != f'Facade {build} is already up to date in {bin_dir}.\n'
+            or version_result['stdout'].strip() != f'facade {build}'
             or started['stdout'] != f'Started installed-agent ({address}) in the background.\n'
             or not any(all(value in line for value in ('installed-agent', address, 'qa-install', project))
                        for line in listing.splitlines())
-            or not relay_ready(relay['stdout'], version)):
+            or not relay_ready(relay['stdout'], build.split('+', 1)[0])):
         raise AcceptanceError('native install did not observe the installed Shell and MCP relay')
 
-    for label, stage in zip(REFUSALS, ('corrupted', 'wrong-digest')):
+    for label, stage in zip(REFUSALS, REFUSAL_STAGES):
         before = observed(f'screen before {label}', screen)
-        refusal = installed_package(f'refuse {label}', stage, status=1)
+        pin = wrong_build(build) if label == 'wrong-build' else build
+        refusal = installed_package(f'refuse {label}', stage, status=1, expected_build=pin)
         after = observed(f'screen survived {label}', screen)
-        if (refusal['stderr'].strip() != f'facade install: SHA-256 verification failed for {ASSET}.'
+        if (not refused_package(label, build, refusal['stderr'])
                 or after['stdout'] != before['stdout']):
             raise AcceptanceError(f'native install did not refuse {label} and preserve the original screen')
         marker = f'usable after {label}'
@@ -182,11 +200,13 @@ def verify_install_commands(commands, scope, address, version, installer):
         raise AcceptanceError('native install recorded unexpected commands after stopping the fixture agent')
 
 
-def install_success(receipt, version, programs, archive_sha, corrupt_sha, *, installer=CORE / 'install.sh'):
+def install_success(receipt, build, programs, archive_sha, corrupt_sha, *, installer=FRAMEWORK / 'install.sh'):
     try:
-        if (receipt['version'], receipt['program_sha256'], receipt['installer_sha256']) != (
-                version, programs, hash_file(CORE / 'install.sh')):
+        if (receipt['build'], receipt['version'], receipt['program_sha256'], receipt['installer_sha256']) != (
+                build, build.split('+', 1)[0], programs, hash_file(installer)):
             raise AcceptanceError('native install did not use the candidate program pair and installer')
+        if not build.endswith('.' + receipt['source']['revision']):
+            raise AcceptanceError('native install build names a different source revision')
         scope = Path(receipt['fixture'])
         if scope.parent != Path('/tmp') or not scope.name.startswith('fci-install-'):
             raise AcceptanceError('native install reported an invalid fixture scope')
@@ -207,7 +227,7 @@ def install_success(receipt, version, programs, archive_sha, corrupt_sha, *, ins
         if row[:5] != [agent_id, 'installed-agent', 'qa-install', cwd, fake['pid']] or row[6] is not None:
             raise AcceptanceError('native install did not keep the original live agent record')
         services = runtime['services']
-        executable = str(scope / 'state/core/bin' / version / 'facade')
+        executable = str(scope / 'state/framework/bin' / build / 'facade')
         if (set(services) != {'daemon', 'keeper'} or {record['executable'] for record in services.values()} != {executable}
                 or fake['executable'] != str(scope / 'fixture-bin/facade-fakecli')
                 or len({record['pid'] for record in (*services.values(), fake)}) != 3
@@ -217,21 +237,19 @@ def install_success(receipt, version, programs, archive_sha, corrupt_sha, *, ins
             raise AcceptanceError('native install did not observe the two candidate services and original CLI')
 
         tree = receipt['install_tree']
-        share = 'share/facade'
-        if (tuple(tree[f'{share}/current'][1:]) != ('link', f'versions/{version}')
-                or any(tuple(tree[f'bin/{name}'][1:]) != ('link', f'../{share}/current/{name}')
-                       or tuple(tree[f'{share}/versions/{version}/{name}']) != (0o755, 'file', programs[name]) for name in PROGRAMS)):
+        if any(tuple(tree[name][1:]) != ('link', f'{build}/{name}')
+               or tuple(tree[f'{build}/{name}']) != (0o700, 'file', programs[name]) for name in PROGRAMS):
             raise AcceptanceError('native install did not observe the candidate launchers and program bytes')
         settings_sha = receipt['settings_sha256']
         if not SHA256.fullmatch(settings_sha) or not SHA256.fullmatch(receipt['fake_sha256']):
             raise AcceptanceError('native install is missing the settings or fixture program digest')
         original = digest({'install_tree': tree, 'runtime': runtime, 'settings_sha256': settings_sha})
-        verify_install_commands(receipt['commands'], scope, address, version, installer)
+        verify_install_commands(receipt['commands'], scope, address, build, installer)
         refusals = receipt['refusals']
         if set(refusals) != set(REFUSALS):
-            raise AcceptanceError('native install did not observe both corrupt-package refusals')
+            raise AcceptanceError('native install did not observe every package refusal')
         for label, proof in refusals.items():
-            manifest = archive_sha if label == 'corrupted-bytes' else '0' * 64
+            manifest = '0' * 64 if label == 'wrong-digest' else archive_sha
             if (proof['state_sha256'] != original or proof['live_marker'] != f'usable after {label}'
                     or proof['sidecar_sha256'] != sha256(f'{manifest}  {ASSET}\n'.encode()).hexdigest()
                     or proof['archive_sha256'] != (corrupt_sha if label == 'corrupted-bytes' else archive_sha)):
@@ -252,14 +270,14 @@ def verified_install(archive, sidecar, receipt_path, output, run, *, producer_ch
     if receipt.get('archive_sha256') != hash_file(archive) or receipt.get('sidecar_sha256') != hash_file(sidecar):
         raise AcceptanceError('native install receipt does not match the candidate archive and checksum file')
     try:
-        version, programs, archive_sha, sidecar_sha = archive_metadata(archive, sidecar)
+        build, programs, archive_sha, sidecar_sha = archive_metadata(archive, sidecar)
     except tarfile.TarError as error:
         raise AcceptanceError('native install candidate is not a readable archive') from error
     if (receipt['archive_sha256'], receipt['sidecar_sha256']) != (archive_sha, sidecar_sha):
         raise AcceptanceError('native install candidate archive or checksum file changed during verification')
     verify_native_cleanup(receipt)
-    expected = install_success(receipt, version, programs, archive_sha, sha256(corrupted_archive(archive)).hexdigest(),
-                               installer=producer_checkout / 'core/install.sh')
+    expected = install_success(receipt, build, programs, archive_sha, sha256(corrupted_archive(archive)).hexdigest(),
+                               installer=producer_checkout / 'framework/install.sh')
     if read_markers(output, SUCCESS_MARKER) != [expected] or receipt.get('success') != expected:
         raise AcceptanceError('native install did not observe the exact cases and archive')
     return len(expected['case_ids'])
@@ -284,7 +302,7 @@ def exercise(archive, sidecar, fake, receipt):
     isolated = Path(tempfile.mkdtemp(prefix='fci-install-', dir='/tmp')).resolve()
     receipt['fixture'] = str(isolated)
     key = sha256(os.fsencode(isolated / 'state')).hexdigest()[:10]
-    directory = Path(f'/tmp/facade-core-{os.getuid()}')
+    directory = Path(f'/tmp/facade-framework-{os.getuid()}')
     sockets = {role: directory / f'{role}-{key}.sock' for role in ('daemon', 'keeper')}
     if any(os.path.lexists(endpoint) for endpoint in sockets.values()):
         isolated.rmdir()
@@ -301,14 +319,15 @@ def exercise(archive, sidecar, fake, receipt):
 
 
 def check_installed_programs(archive, sidecar, fake, root, sockets, receipt):
-    version, digests, expected = (receipt[key] for key in ('version', 'program_sha256', 'archive_sha256'))
-    home, state, install, project, tmp, runtime = (root / name for name in ('home', 'state', 'install', 'project', 'tmp', 'runtime'))
+    build, digests, expected = (receipt[key] for key in ('build', 'program_sha256', 'archive_sha256'))
+    home, state, project, tmp, runtime = (root / name for name in ('home', 'state', 'project', 'tmp', 'runtime'))
+    bin_dir = state / 'framework/bin'
     config, cache, data, state_dir = (home / name for name in ('config', 'cache', 'data', 'state'))
     for directory in (home, state, project, tmp, runtime, config, cache, data, state_dir):
         directory.mkdir(mode=0o700)
     env = {key: str(value) for key, value in {
         'CI_ACCEPTANCE_ROOT': root, 'HOME': home, 'FACADE_HOME': state, 'TMPDIR': tmp,
-        'PATH': f'{install}/bin:{SYSTEM_PATH}',
+        'PATH': f'{bin_dir}:{SYSTEM_PATH}',
         'XDG_CONFIG_HOME': config, 'XDG_CACHE_HOME': cache, 'XDG_DATA_HOME': data,
         'XDG_STATE_HOME': state_dir, 'XDG_RUNTIME_DIR': runtime, 'TERM': 'xterm-256color', 'LC_ALL': 'C.UTF-8',
     }.items()}
@@ -320,7 +339,7 @@ def check_installed_programs(archive, sidecar, fake, root, sockets, receipt):
                 'FAKECLI_STARTS': str(starts), 'FAKECLI_KEYS': str(keys)},
     }}}) + '\n')
     settings_before = settings.read_bytes()
-    facade = install / 'bin/facade'
+    facade = bin_dir / 'facade'
     target = None
 
     def run(label, argv, *, status=0, relay=False, timeout=20):
@@ -344,21 +363,26 @@ def check_installed_programs(archive, sidecar, fake, root, sockets, receipt):
         (folder / 'SHA256SUMS').write_bytes(manifest)
         return staged
 
-    def install_package(label, package, status=0):
-        return run(label, installer_args(CORE / 'install.sh', package, install, version), status=status)
+    def install_package(label, package, status=0, expected_build=None):
+        return run(label, installer_args(FRAMEWORK / 'install.sh', package, build,
+                                         expected_build=expected_build), status=status)
 
     try:
         candidate = stage('candidate', archive, sidecar.read_bytes())
         if hash_file(candidate) != expected or hash_file(candidate.with_name('SHA256SUMS')) != receipt['sidecar_sha256']:
             raise AcceptanceError('candidate archive or checksum file changed while staging')
         installed = install_package('install candidate', candidate)
-        assert f'Installed Facade {version}' in installed.stdout, installed
-        assert os.readlink(install / 'share/facade/current') == f'versions/{version}'
+        assert installed.stdout == f'Installed Facade {build} in {bin_dir}.\n', installed
+        before_equal = install_tree(state)
+        unchanged = install_package('select the same candidate again', candidate)
+        assert unchanged.stdout == f'Facade {build} is already up to date in {bin_dir}.\n', unchanged
+        assert install_tree(state) == before_equal
+        assert not any(os.path.lexists(endpoint) for endpoint in sockets.values())
         for program, program_sha in digests.items():
-            launcher = install / 'bin' / program
-            assert os.readlink(launcher) == f'../share/facade/current/{program}'
+            launcher = bin_dir / program
+            assert os.readlink(launcher) == f'{build}/{program}'
             assert hash_file(launcher) == program_sha and os.access(launcher, os.X_OK), program
-        assert run('installed Shell version', [facade, '--version']).stdout.strip() == f'facade {version}'
+        assert run('installed Shell version', [facade, '--version']).stdout.strip() == f'facade {build}'
         started = run('start fake CLI', [facade, 'start', '-d', '--name', 'installed-agent', '--workdir', project,
                                           'qa-install', '--', 'candidate argument']).stdout
         match = re.fullmatch(r'Started installed-agent \((a\d+@[^)]+)\) in the background\.\n', started)
@@ -371,15 +395,15 @@ def check_installed_programs(archive, sidecar, fake, root, sockets, receipt):
         listing = run('list the installed candidate agent', [facade, 'list']).stdout
         assert any('installed-agent' in line and target in line and 'qa-install' in line and str(project) in line for line in listing.splitlines()), listing
 
-        mcp = run('use installed MCP relay', [install / 'bin/facade-mcp'], relay=True)
-        assert relay_ready(mcp.stdout, version), mcp
+        mcp = run('use installed MCP relay', [bin_dir / 'facade-mcp'], relay=True)
+        assert relay_ready(mcp.stdout, build.split('+', 1)[0]), mcp
 
         def observe():
             hello, status = query(sockets['daemon'], 'daemon.status', {})
             _, inspected = query(sockets['daemon'], 'agent.inspect', {'target': target})
             row = inspected['agent']
             reference = {'machine_id': hello['machine_id'], 'agent_id': target.split('@', 1)[0]}
-            assert (status['home'], status['build'], status['daemon_pid']) == (str(state), version, hello['pid'])
+            assert (status['home'], status['build'], status['daemon_pid']) == (str(state), build, hello['pid'])
             assert (row['reference'], row['address'], row['pid'], row['cwd'], row['process']) == (
                 reference, target, fake_pid, str(project), 'running')
             services = {role: process_identity(status[f'{role}_pid']) for role in ('daemon', 'keeper')}
@@ -390,7 +414,7 @@ def check_installed_programs(archive, sidecar, fake, root, sockets, receipt):
             assert Path(original['executable']) == fake, original
             assert (Path('/proc') / str(fake_pid) / 'cwd').resolve(strict=True) == project
             assert starts.read_text().splitlines() == [str(fake_pid)]
-            db = state / 'core/facade.db'
+            db = state / 'framework/facade.db'
             with closing(sqlite3.connect(db.as_uri() + '?mode=ro', uri=True)) as store:
                 machine = [list(row) for row in store.execute('SELECT machine_id, name FROM machine')]
                 agents = [list(row) for row in store.execute('SELECT agent_id, name, cli, cwd, pid, created_at, exit_at FROM agents')]
@@ -402,19 +426,20 @@ def check_installed_programs(archive, sidecar, fake, root, sockets, receipt):
 
         original = observe()
         receipt['original_runtime'] = original
-        tree = install_tree(install)
+        tree = install_tree(bin_dir)
         receipt['install_tree'] = tree
         receipt['settings_sha256'] = sha256(settings_before).hexdigest()
-        assert [entry.name for entry in (install / 'share/facade/versions').iterdir()] == [version]
         corrupt = stage('corrupted', candidate, f'{expected}  {ASSET}\n'.encode())
         corrupt.write_bytes(corrupted_archive(candidate))
         wrong_digest = stage('wrong-digest', candidate, f'{"0" * 64}  {ASSET}\n'.encode())
-        for label, package in (('corrupted-bytes', corrupt), ('wrong-digest', wrong_digest)):
+        wrong_pin = stage('wrong-build', candidate, f'{expected}  {ASSET}\n'.encode())
+        for label, package in zip(REFUSALS, (corrupt, wrong_digest, wrong_pin)):
             before_input = keys.read_bytes()
             before_screen = run(f'screen before {label}', [facade, 'screen', target]).stdout
-            result = install_package(f'refuse {label}', package, status=1)
-            assert result.stderr.strip() == f'facade install: SHA-256 verification failed for {ASSET}.', result
-            current_tree, current_settings, current = install_tree(install), settings.read_bytes(), observe()
+            pin = wrong_build(build) if label == 'wrong-build' else build
+            result = install_package(f'refuse {label}', package, status=1, expected_build=pin)
+            assert refused_package(label, build, result.stderr), result
+            current_tree, current_settings, current = install_tree(bin_dir), settings.read_bytes(), observe()
             assert current_tree == tree and current_settings == settings_before, label
             assert current == original and keys.read_bytes() == before_input, label
             assert run(f'screen survived {label}', [facade, 'screen', target]).stdout == before_screen, label
@@ -447,13 +472,15 @@ def main():
     fake = args.fake_executable.resolve()
     try:
         source = source_identity(run_identity(args.run_id, os.environ))
-        version, digests, expected, checksum = validate_inputs(archive, sidecar, fake)
+        build, digests, expected, checksum = validate_inputs(archive, sidecar, fake)
+        if not build.endswith('.' + source['revision']):
+            raise ValueError('candidate archive names a different source revision')
     except (OSError, ValueError, tarfile.TarError) as error:
         parser.exit(2, f'native install check: {error}\n')
     signal.signal(signal.SIGTERM, interrupted)
     receipt = {'source': source, 'archive': str(archive), 'archive_sha256': expected, 'sidecar_sha256': checksum,
-               'installer_sha256': hash_file(CORE / 'install.sh'), 'fake_sha256': hash_file(fake),
-               'version': version, 'program_sha256': digests,
+               'installer_sha256': hash_file(FRAMEWORK / 'install.sh'), 'fake_sha256': hash_file(fake),
+               'build': build, 'version': build.split('+', 1)[0], 'program_sha256': digests,
                'commands': [], 'refusals': {}}
     started = time.monotonic()
     try:
@@ -463,7 +490,7 @@ def main():
         if args.receipt is not None:
             write_receipt(args.receipt, receipt)
     verify_native_cleanup(receipt)
-    receipt['success'] = install_success(receipt, version, digests, expected, sha256(corrupted_archive(archive)).hexdigest())
+    receipt['success'] = install_success(receipt, build, digests, expected, sha256(corrupted_archive(archive)).hexdigest())
     if args.receipt is not None:
         write_receipt(args.receipt, receipt)
     print(SUCCESS_MARKER + json.dumps(receipt['success'], separators=(',', ':')))

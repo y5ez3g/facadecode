@@ -1,0 +1,7218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Facade daemon API",
+  "description": "A single JSON-RPC 2.0 frame. Success result and change types are selected by the corresponding request or watch.",
+  "api_versions": [
+    1
+  ],
+  "anyOf": [
+    {
+      "$ref": "#/$defs/LocalClientRequest"
+    },
+    {
+      "$ref": "#/$defs/MachineRequest"
+    },
+    {
+      "$ref": "#/$defs/SuccessResponse"
+    },
+    {
+      "$ref": "#/$defs/ErrorResponse"
+    },
+    {
+      "$ref": "#/$defs/LocalClientNotification"
+    },
+    {
+      "$ref": "#/$defs/MachineNotification"
+    },
+    {
+      "$ref": "#/$defs/DaemonNotification"
+    },
+    {
+      "$ref": "#/$defs/RelayHelloRequest"
+    },
+    {
+      "$ref": "#/$defs/RelayHelloResponse"
+    }
+  ],
+  "$defs": {
+    "AdvertiseParams": {
+      "type": "object",
+      "properties": {
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MachineInfo"
+          }
+        }
+      },
+      "required": [
+        "machines"
+      ]
+    },
+    "AgentCreator": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "agent"
+            },
+            "address": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "address"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "command_line"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "vs_code"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ],
+      "description": "The source of an agent's start, as displayed to the caller."
+    },
+    "AgentInfo": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "address": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/AgentKind"
+        },
+        "label": {
+          "type": "string"
+        },
+        "unreachable": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "cli": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessState"
+        },
+        "size": {
+          "$ref": "#/$defs/Size"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "creator_kind": {
+          "$ref": "#/$defs/CreatorKind"
+        },
+        "creator": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "root": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "yolo": {
+          "type": "boolean"
+        },
+        "exit": {
+          "$ref": "#/$defs/ProcessExit"
+        },
+        "session": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AgentState"
+        },
+        "state_detail": {
+          "$ref": "#/$defs/StateDetail"
+        },
+        "said": {
+          "$ref": "#/$defs/Said"
+        },
+        "tools_state": {
+          "$ref": "#/$defs/ToolsState"
+        },
+        "tools_reason": {
+          "$ref": "#/$defs/ToolsReason"
+        }
+      },
+      "required": [
+        "reference",
+        "address",
+        "type",
+        "name",
+        "cli",
+        "args",
+        "cwd",
+        "process",
+        "created_at",
+        "started_at",
+        "root",
+        "yolo",
+        "state",
+        "tools_state"
+      ]
+    },
+    "AgentKind": {
+      "type": "string",
+      "enum": [
+        "managed",
+        "guest"
+      ]
+    },
+    "AgentLabel": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "address": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/AgentKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "cli": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AgentState"
+        },
+        "resumable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reference",
+        "address",
+        "type",
+        "name",
+        "cli",
+        "state",
+        "resumable"
+      ]
+    },
+    "AgentListArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      }
+    },
+    "AgentListEntry": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "address": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/AgentKind"
+        },
+        "state": {
+          "$ref": "#/$defs/AgentState"
+        },
+        "cli": {
+          "type": "string"
+        },
+        "folder": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "session_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference",
+        "address",
+        "name",
+        "type",
+        "state",
+        "cli",
+        "folder",
+        "started_at"
+      ]
+    },
+    "AgentListResult": {
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentListEntry"
+          }
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MachineQuery"
+          }
+        }
+      },
+      "required": [
+        "agents",
+        "machines"
+      ]
+    },
+    "AgentLookupCandidate": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentInfo"
+        },
+        "has_rule": {
+          "type": "boolean"
+        },
+        "session_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent",
+        "has_rule"
+      ]
+    },
+    "AgentMachineState": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AgentSyncState"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentInfo"
+          }
+        }
+      },
+      "required": [
+        "machine_id",
+        "state"
+      ]
+    },
+    "AgentRef": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "agent_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine_id",
+        "agent_id"
+      ]
+    },
+    "AgentRemoval": {
+      "type": "string",
+      "enum": [
+        "expired",
+        "removed"
+      ],
+      "description": "The recorded cause of an agent record's removal."
+    },
+    "AgentState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "starting",
+          "description": "The CLI has not shown what it is doing yet, within 30 seconds of its start or resume."
+        },
+        {
+          "type": "string",
+          "const": "working",
+          "description": "The CLI is working, or stopped working less than a second ago."
+        },
+        {
+          "type": "string",
+          "const": "waiting_for_you",
+          "description": "The CLI waits for the person; `state_detail.kind` says for what. A menu or question it draws\nin place of its input counts, with `kind` `unknown` where it did not say, also while it\nstarts."
+        },
+        {
+          "type": "string",
+          "const": "just_done",
+          "description": "A turn ended while no terminal showed the agent. It stays so until one does. Work before the\nCLI is asked to do anything is no turn: an Enter typed into it asks, unless it answers a\nquestion the CLI shows. Words after the CLI's name at its start are the CLI's own and ask\nnothing."
+        },
+        {
+          "type": "string",
+          "const": "idle",
+          "description": "The CLI is not working and waits for nothing."
+        },
+        {
+          "type": "string",
+          "const": "error",
+          "description": "The CLI reported an error or its screen shows that the turn it reported ended failed, or,\nstarted by its rule's name, it showed nothing of what it is doing within 30 seconds of its\nstart or resume."
+        },
+        {
+          "type": "string",
+          "const": "ended",
+          "description": "The CLI's process ended; `state_detail.how` says how, where that is known."
+        },
+        {
+          "type": "string",
+          "const": "unknown",
+          "description": "Nothing shows what the CLI is doing; `state_detail.reason` says why."
+        },
+        {
+          "type": "string",
+          "const": "online",
+          "description": "A Guest is connected and can take messages."
+        }
+      ],
+      "description": "The agent's current state."
+    },
+    "AgentSyncState": {
+      "type": "string",
+      "enum": [
+        "synced",
+        "pending",
+        "unreachable"
+      ]
+    },
+    "AgentTarget": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "object",
+          "properties": {
+            "machine_id": {
+              "type": "string"
+            },
+            "agent_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "machine_id",
+            "agent_id"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AgentTargetArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/AgentTarget"
+        }
+      },
+      "required": [
+        "target"
+      ]
+    },
+    "AgentTypeArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/AgentTarget"
+        },
+        "input": {
+          "$ref": "#/$defs/TerminalInput"
+        }
+      },
+      "required": [
+        "target",
+        "input"
+      ]
+    },
+    "AgentsChange": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "updated"
+            },
+            "agent": {
+              "$ref": "#/$defs/AgentInfo"
+            }
+          },
+          "required": [
+            "kind",
+            "agent"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "removed"
+            },
+            "machine_id": {
+              "type": "string"
+            },
+            "agent_id": {
+              "type": "string"
+            },
+            "cause": {
+              "$ref": "#/$defs/AgentRemoval"
+            }
+          },
+          "required": [
+            "kind",
+            "machine_id",
+            "agent_id",
+            "cause"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "machine_state"
+            },
+            "machine": {
+              "$ref": "#/$defs/AgentMachineState"
+            }
+          },
+          "required": [
+            "kind",
+            "machine"
+          ]
+        }
+      ]
+    },
+    "AgentsSnapshot": {
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentInfo"
+          }
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentMachineState"
+          }
+        }
+      },
+      "required": [
+        "agents",
+        "machines"
+      ]
+    },
+    "ApiVersions": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 1
+      },
+      "minItems": 1
+    },
+    "AttachArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/AgentTarget"
+        },
+        "size": {
+          "type": "object",
+          "properties": {
+            "cols": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 2,
+              "maximum": 65535
+            },
+            "rows": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          },
+          "required": [
+            "cols",
+            "rows"
+          ],
+          "additionalProperties": false
+        },
+        "viewer": {
+          "type": "string"
+        },
+        "keep_scrollback": {
+          "type": "boolean"
+        },
+        "include_scrollback": {
+          "type": "boolean",
+          "default": true
+        },
+        "allow_ended": {
+          "type": "boolean"
+        },
+        "report_activity": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "target"
+      ]
+    },
+    "AttachBinding": {
+      "type": "object",
+      "properties": {
+        "viewer": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "boot_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "viewer",
+        "boot_id"
+      ]
+    },
+    "AttachResizeArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "watch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "size": {
+          "type": "object",
+          "properties": {
+            "cols": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 2,
+              "maximum": 65535
+            },
+            "rows": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          },
+          "required": [
+            "cols",
+            "rows"
+          ],
+          "additionalProperties": false
+        },
+        "colors": {
+          "$ref": "#/$defs/TerminalColors"
+        }
+      },
+      "required": [
+        "watch",
+        "size"
+      ]
+    },
+    "AttachmentInfo": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/AttachmentKind"
+        },
+        "machine_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "machine_id"
+      ]
+    },
+    "AttachmentKind": {
+      "type": "string",
+      "enum": [
+        "shell",
+        "vs_code"
+      ]
+    },
+    "BatchStopResult": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StopItem"
+          }
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MachineQuery"
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "CallParams": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "agent.list"
+            },
+            "args": {
+              "$ref": "#/$defs/AgentListArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "agent.start"
+            },
+            "args": {
+              "$ref": "#/$defs/StartArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "agent.stop"
+            },
+            "args": {
+              "$ref": "#/$defs/StopArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "agent.resume_list"
+            },
+            "args": {
+              "$ref": "#/$defs/ResumeListArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "agent.resume"
+            },
+            "args": {
+              "$ref": "#/$defs/ResumeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "agent.inspect"
+            },
+            "args": {
+              "$ref": "#/$defs/AgentTargetArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "agent.screen"
+            },
+            "args": {
+              "$ref": "#/$defs/ScreenArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "agent.type"
+            },
+            "args": {
+              "$ref": "#/$defs/AgentTypeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "agent.send"
+            },
+            "args": {
+              "$ref": "#/$defs/SendArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "agent.remove"
+            },
+            "args": {
+              "$ref": "#/$defs/AgentTargetArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "agent.rename"
+            },
+            "args": {
+              "$ref": "#/$defs/RenameArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "attach.resize"
+            },
+            "args": {
+              "$ref": "#/$defs/AttachResizeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "cli.list"
+            },
+            "args": {
+              "$ref": "#/$defs/CliListArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "location.list"
+            },
+            "args": {
+              "$ref": "#/$defs/LocationListArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "machine.list"
+            },
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "machine.connect"
+            },
+            "args": {
+              "$ref": "#/$defs/MachineConnectArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "machine.remove"
+            },
+            "args": {
+              "$ref": "#/$defs/MachineRemoveArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "machine.rename"
+            },
+            "args": {
+              "$ref": "#/$defs/MachineRenameArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "daemon.status"
+            },
+            "args": {
+              "$ref": "#/$defs/StatusArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "daemon.log"
+            },
+            "args": {
+              "$ref": "#/$defs/LogArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "daemon.upgrade"
+            },
+            "args": {
+              "$ref": "#/$defs/DaemonUpgradeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "internal.agent_records"
+            },
+            "args": {
+              "$ref": "#/$defs/InternalAgentRecordsArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "internal.resume_records"
+            },
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "internal.ensure_route"
+            },
+            "args": {
+              "$ref": "#/$defs/InternalEnsureRouteArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "internal.attach_resize"
+            },
+            "args": {
+              "$ref": "#/$defs/InternalAttachResizeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "internal.deliver_start_result"
+            },
+            "args": {
+              "$ref": "#/$defs/InternalDeliverStartResultArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "internal.deliver_wait_notice"
+            },
+            "args": {
+              "$ref": "#/$defs/InternalDeliverWaitNoticeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "internal.deliver_notice"
+            },
+            "args": {
+              "$ref": "#/$defs/InternalDeliverNoticeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "internal.command_reply"
+            },
+            "args": {
+              "$ref": "#/$defs/CommandReplyArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        }
+      ]
+    },
+    "Caller": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "terminal"
+            },
+            "machine_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "machine_id"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ide"
+            },
+            "machine_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "machine_id"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "agent"
+            },
+            "agent": {
+              "type": "object",
+              "properties": {
+                "machine_id": {
+                  "type": "string"
+                },
+                "agent_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "machine_id",
+                "agent_id"
+              ],
+              "additionalProperties": false
+            },
+            "root": {
+              "type": "object",
+              "properties": {
+                "machine_id": {
+                  "type": "string"
+                },
+                "agent_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "machine_id",
+                "agent_id"
+              ],
+              "additionalProperties": false
+            },
+            "yolo": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "agent",
+            "root",
+            "yolo"
+          ]
+        }
+      ]
+    },
+    "CancelParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "ChangedParams": {
+      "type": "object",
+      "properties": {
+        "watch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "change": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentsChange"
+            },
+            {
+              "$ref": "#/$defs/MachinesChange"
+            },
+            {
+              "$ref": "#/$defs/ScreenChange"
+            },
+            {
+              "$ref": "#/$defs/ScreenChange"
+            }
+          ]
+        }
+      },
+      "required": [
+        "watch",
+        "change"
+      ]
+    },
+    "CliInfo": {
+      "type": "object",
+      "properties": {
+        "cli": {
+          "type": "string",
+          "description": "The name a start gives: a built-in's, such as `claude`, or the name of a CLI the settings\nfile adds."
+        },
+        "display_name": {
+          "type": "string",
+          "description": "The name people know it by: a built-in's, such as `Claude Code`, or an added CLI's own."
+        },
+        "available": {
+          "type": "boolean",
+          "description": "Whether it can be started: its entry is right and its program is found."
+        },
+        "problem": {
+          "type": "string",
+          "description": "Why it cannot be started: what is wrong with its entry, or that its program cannot run where\nit would start, each said by its setting. Omitted where it can."
+        },
+        "not_installed": {
+          "type": "boolean",
+          "description": "A built-in CLI whose entry has no problem and names no program of its own, and whose\nprogram is not found where the start would run: not installed. Only with `available` false.\nA client may leave it out of its list instead of showing it as one that cannot start.\nOmitted otherwise."
+        },
+        "overrides": {
+          "$ref": "#/$defs/Overrides",
+          "description": "Whether a start can choose its model and its effort (CLIS-1.4)."
+        }
+      },
+      "required": [
+        "cli",
+        "display_name",
+        "available",
+        "overrides"
+      ],
+      "description": "A CLI a start can run: an entry of Facade's settings file (CONFIGURATION-2.1)."
+    },
+    "CliListArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/SingleMachineScope"
+        },
+        "folder": {
+          "type": "string"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "CliListResult": {
+      "type": "object",
+      "properties": {
+        "clis": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CliInfo"
+          }
+        },
+        "settings_problem": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "clis"
+      ]
+    },
+    "ClientKind": {
+      "type": "string",
+      "enum": [
+        "terminal",
+        "ide",
+        "mcp",
+        "machine"
+      ]
+    },
+    "ClosingParams": {
+      "type": "object",
+      "properties": {
+        "build": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "build"
+      ]
+    },
+    "CommandReply": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/MessageRef"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference",
+        "text"
+      ]
+    },
+    "CommandReplyArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "original": {
+          "type": "object",
+          "properties": {
+            "machine_id": {
+              "type": "string"
+            },
+            "message_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "machine_id",
+            "message_id"
+          ],
+          "additionalProperties": false
+        },
+        "reply": {
+          "$ref": "#/$defs/CommandReplyInput"
+        }
+      },
+      "required": [
+        "request_id",
+        "original",
+        "reply"
+      ]
+    },
+    "CommandReplyInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reference": {
+          "type": "object",
+          "properties": {
+            "machine_id": {
+              "type": "string"
+            },
+            "message_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "machine_id",
+            "message_id"
+          ],
+          "additionalProperties": false
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference",
+        "text"
+      ]
+    },
+    "ConnectFailedParams": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/ErrorBody"
+        }
+      },
+      "required": [
+        "error"
+      ]
+    },
+    "ConnectedMachine": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "boot_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "build": {
+          "type": "string"
+        },
+        "ssh_cleans_processes": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "machine_id",
+        "boot_id",
+        "name",
+        "build"
+      ]
+    },
+    "ConnectedParams": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "$ref": "#/$defs/ConnectedMachine"
+        },
+        "first_connection": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "machine",
+        "first_connection"
+      ]
+    },
+    "ConnectionKind": {
+      "type": "string",
+      "enum": [
+        "saved",
+        "temporary"
+      ]
+    },
+    "ConnectionState": {
+      "type": "string",
+      "enum": [
+        "connected",
+        "disconnected",
+        "ssh_interaction_required"
+      ]
+    },
+    "CreatorKind": {
+      "type": "string",
+      "enum": [
+        "agent",
+        "command_line",
+        "vs_code"
+      ]
+    },
+    "DaemonHelloParams": {
+      "$ref": "#/$defs/HelloParams"
+    },
+    "DaemonHelloResult": {
+      "$ref": "#/$defs/HelloResult"
+    },
+    "DaemonNotification": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "changed"
+            },
+            "params": {
+              "$ref": "#/$defs/ChangedParams"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "watch_ended"
+            },
+            "params": {
+              "$ref": "#/$defs/WatchEndedParams"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "closing"
+            },
+            "params": {
+              "$ref": "#/$defs/ClosingParams"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "connected"
+            },
+            "params": {
+              "$ref": "#/$defs/ConnectedParams"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "connect_failed"
+            },
+            "params": {
+              "$ref": "#/$defs/ConnectFailedParams"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "DaemonUpgradeArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "program": {
+          "type": "string"
+        },
+        "build": {
+          "type": "string"
+        },
+        "daemon_api_versions": {
+          "$ref": "#/$defs/ApiVersions"
+        },
+        "keeper_api_versions": {
+          "$ref": "#/$defs/ApiVersions"
+        }
+      },
+      "required": [
+        "program",
+        "build",
+        "daemon_api_versions",
+        "keeper_api_versions"
+      ]
+    },
+    "DaemonUpgradeResult": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "agent_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "from",
+        "agent_count"
+      ]
+    },
+    "DeliveredVia": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "terminal",
+          "description": "Typed into the recipient's terminal and submitted."
+        },
+        {
+          "type": "string",
+          "const": "read",
+          "description": "Returned by a snapshot of the recipient's `messages` topic."
+        },
+        {
+          "type": "string",
+          "const": "notified",
+          "description": "A message to the person: delivered to one or more member windows' subscriptions."
+        },
+        {
+          "type": "string",
+          "const": "returned_to_request",
+          "description": "Returned to the sending command as its reply."
+        }
+      ],
+      "description": "How a message was delivered."
+    },
+    "Delivery": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/DeliveryStatus",
+          "description": "`pending` while the message is being delivered, then `success` or `failure`."
+        },
+        "reason": {
+          "description": "Why it was not delivered. Omitted unless it failed.",
+          "$ref": "#/$defs/DeliveryFailure"
+        },
+        "text_written": {
+          "$ref": "#/$defs/TextWritten",
+          "description": "How much of the message reached the recipient's terminal."
+        },
+        "enter_written": {
+          "type": "boolean",
+          "description": "Whether the message's submission key (Enter or Tab) reached the recipient's terminal.\nOmitted when the write outcome is unknown, for example when the key was still queued at the\ndeadline or a restart interrupted delivery."
+        },
+        "deadline": {
+          "type": "string",
+          "description": "When a pending delivery fails if the message is not delivered by then. Omitted once it is\nsettled."
+        },
+        "delivered_via": {
+          "description": "How the message was delivered. Omitted unless it was.",
+          "$ref": "#/$defs/DeliveredVia"
+        },
+        "delivered_at": {
+          "type": "string",
+          "description": "When the message was delivered. Omitted unless it was."
+        }
+      },
+      "required": [
+        "status",
+        "text_written"
+      ],
+      "description": "What became of a message."
+    },
+    "DeliveryFailure": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "ended",
+          "description": "The recipient ended, or its terminal stopped taking input, before the message was delivered."
+        },
+        {
+          "type": "string",
+          "const": "input_draft",
+          "description": "A draft held the recipient's input until the deadline. A draft that is not the message's own\nis never typed over."
+        },
+        {
+          "type": "string",
+          "const": "input_interaction",
+          "description": "A menu, login, or question of the recipient's CLI held its input until the deadline."
+        },
+        {
+          "type": "string",
+          "const": "input_unknown",
+          "description": "The recipient's input was not recognized as empty until the deadline: its screen did not\nshow it as its CLI's rule describes it."
+        },
+        {
+          "type": "string",
+          "const": "timeout",
+          "description": "The input was empty. The delivery deadline passed before the paste and submission key\ncould both reach the terminal and be confirmed."
+        },
+        {
+          "type": "string",
+          "const": "submission_unconfirmed",
+          "description": "Its paste began, but the recipient's CLI did not take the message before the deadline. A\npaste its terminal had not taken whole by then still goes in, and no Enter follows it."
+        },
+        {
+          "type": "string",
+          "const": "unsupported",
+          "description": "The recipient's CLI has no rule to read its input by, so Facade types no message into it."
+        }
+      ],
+      "description": "Why a message was not delivered."
+    },
+    "DeliveryStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "pending",
+          "description": "The message is being delivered, or waits for its guest's next turn."
+        },
+        {
+          "type": "string",
+          "const": "success",
+          "description": "The message was delivered."
+        },
+        {
+          "type": "string",
+          "const": "failure",
+          "description": "The message was not delivered."
+        }
+      ],
+      "description": "The state of a message's delivery."
+    },
+    "EmptyResult": {
+      "type": "object",
+      "description": "An empty success result: `{}`."
+    },
+    "EndReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "terminal_closed",
+          "description": "Neither service held the CLI's terminal, so it closed. A CLI that ignores hangup may still\nbe running."
+        }
+      ],
+      "description": "Why an exit has no code or signal."
+    },
+    "ErrorBody": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/ErrorData"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "data"
+      ]
+    },
+    "ErrorData": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "reason"
+      ]
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "$ref": "#/$defs/ErrorBody"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "FolderScope": {
+      "type": "string",
+      "enum": [
+        "cwd",
+        "all"
+      ]
+    },
+    "ForwardParams": {
+      "type": "object",
+      "properties": {
+        "route": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "caller": {
+          "$ref": "#/$defs/Caller"
+        },
+        "time_left_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "from_name": {
+          "type": "string"
+        },
+        "start_result": {
+          "type": "object",
+          "properties": {
+            "machine_id": {
+              "type": "string"
+            },
+            "message_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "machine_id",
+            "message_id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "route",
+        "caller"
+      ],
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "call"
+            },
+            "params": {
+              "$ref": "#/$defs/CallParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "watch"
+            },
+            "params": {
+              "$ref": "#/$defs/WatchParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "ForwardWatchResult": {
+      "type": "object",
+      "properties": {
+        "watch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentsSnapshot"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MachineInfo"
+              }
+            },
+            {
+              "$ref": "#/$defs/ScreenSnapshot"
+            },
+            {
+              "$ref": "#/$defs/ScreenSnapshot"
+            }
+          ]
+        },
+        "view": {
+          "$ref": "#/$defs/AttachBinding"
+        }
+      },
+      "required": [
+        "watch",
+        "snapshot"
+      ]
+    },
+    "HelloParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_versions": {
+          "$ref": "#/$defs/ApiVersions"
+        },
+        "build": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ClientKind"
+        },
+        "machine": {
+          "$ref": "#/$defs/MachineHelloParams"
+        },
+        "foreground": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "api_versions",
+        "build",
+        "kind"
+      ]
+    },
+    "HelloResult": {
+      "type": "object",
+      "properties": {
+        "api_version": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 1
+        },
+        "build": {
+          "type": "string"
+        },
+        "machine_id": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "agent_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ops": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "keeper": {
+          "$ref": "#/$defs/KeeperInfo"
+        },
+        "machine": {
+          "$ref": "#/$defs/MachineHelloResult"
+        }
+      },
+      "required": [
+        "api_version",
+        "build",
+        "machine_id",
+        "pid",
+        "agent_count",
+        "ops",
+        "topics"
+      ]
+    },
+    "HiddenRows": {
+      "type": "object",
+      "properties": {
+        "above": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Rows hidden above the visible input, or 1 where the CLI marks hidden rows without counting them."
+        },
+        "below": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Rows hidden below the visible input, or 1 where the CLI marks hidden rows without counting them."
+        }
+      },
+      "required": [
+        "above",
+        "below"
+      ],
+      "description": "Rows of a draft scrolled out of the CLI's input, as the CLI marks them."
+    },
+    "HowEnded": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "normal",
+          "description": "It exited with code 0."
+        },
+        {
+          "type": "string",
+          "const": "stopped",
+          "description": "Facade stopped it."
+        },
+        {
+          "type": "string",
+          "const": "crashed",
+          "description": "It exited with another code, or a signal ended it."
+        }
+      ],
+      "description": "How an agent's process ended."
+    },
+    "InputInfo": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/InputState"
+        },
+        "evidence": {
+          "type": "string",
+          "description": "What on the screen the state rests on, such as `the input frame at row 22 is empty`. Never\nthe draft's text."
+        },
+        "mechanism": {
+          "description": "The layout the agent's CLI rule reads. Omitted without a rule.",
+          "$ref": "#/$defs/InputMechanism"
+        },
+        "hidden": {
+          "description": "Draft rows scrolled out of the input. Omitted unless the CLI marks such rows.",
+          "$ref": "#/$defs/HiddenRows"
+        }
+      },
+      "required": [
+        "state",
+        "evidence"
+      ],
+      "description": "An agent's message input as its screen shows it now."
+    },
+    "InputMechanism": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "frame",
+          "description": "A prompt row inside a frame of two rules."
+        },
+        {
+          "type": "string",
+          "const": "prompt",
+          "description": "A prompt row above a model line at the bottom of the screen."
+        },
+        {
+          "type": "string",
+          "const": "editor",
+          "description": "An editor between two rules, with a cursor the CLI draws."
+        },
+        {
+          "type": "string",
+          "const": "box",
+          "description": "A box of bar rows above a border."
+        },
+        {
+          "type": "string",
+          "const": "prompt_row",
+          "description": "The last row that starts with the prompt."
+        }
+      ],
+      "description": "The layout a CLI's rule reads its input from."
+    },
+    "InputState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "usable",
+          "description": "The CLI's input is drawn empty."
+        },
+        {
+          "type": "string",
+          "const": "draft",
+          "description": "The CLI's input holds text, typed, pasted, or recalled."
+        },
+        {
+          "type": "string",
+          "const": "interaction",
+          "description": "A menu or question of the CLI's own is drawn in place of its input."
+        },
+        {
+          "type": "string",
+          "const": "unknown",
+          "description": "The screen does not show the input as the CLI's rule describes it."
+        }
+      ],
+      "description": "How an agent's message input reads on its screen. A reading never means input may be typed."
+    },
+    "InputStep": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "text"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "key"
+            },
+            "key": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "key"
+          ]
+        }
+      ]
+    },
+    "InspectResult": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentInfo"
+        },
+        "input": {
+          "$ref": "#/$defs/InputInfo"
+        },
+        "session_tracking": {
+          "type": "boolean"
+        },
+        "viewers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rule": {
+          "type": "string"
+        },
+        "started_by": {
+          "$ref": "#/$defs/AgentCreator"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AttachmentInfo"
+          }
+        },
+        "launch_command": {
+          "type": "string"
+        },
+        "session_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent",
+        "input",
+        "session_tracking",
+        "viewers"
+      ]
+    },
+    "InternalAgentRecordsArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "active": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "active"
+      ]
+    },
+    "InternalAttachResizeArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "viewer": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "boot_id": {
+          "type": "string"
+        },
+        "size": {
+          "type": "object",
+          "properties": {
+            "cols": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 2,
+              "maximum": 65535
+            },
+            "rows": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          },
+          "required": [
+            "cols",
+            "rows"
+          ],
+          "additionalProperties": false
+        },
+        "colors": {
+          "$ref": "#/$defs/TerminalColors"
+        }
+      },
+      "required": [
+        "viewer",
+        "boot_id",
+        "size"
+      ]
+    },
+    "InternalDeliverNoticeArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "recipient": {
+          "type": "object",
+          "properties": {
+            "machine_id": {
+              "type": "string"
+            },
+            "agent_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "machine_id",
+            "agent_id"
+          ],
+          "additionalProperties": false
+        },
+        "notice": {
+          "$ref": "#/$defs/Notice"
+        }
+      },
+      "required": [
+        "recipient",
+        "notice"
+      ]
+    },
+    "InternalDeliverStartResultArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "recipient": {
+          "type": "object",
+          "properties": {
+            "machine_id": {
+              "type": "string"
+            },
+            "agent_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "machine_id",
+            "agent_id"
+          ],
+          "additionalProperties": false
+        },
+        "message": {
+          "type": "object",
+          "properties": {
+            "message_id": {
+              "type": "string"
+            },
+            "message_ref": {
+              "type": "object",
+              "properties": {
+                "machine_id": {
+                  "type": "string"
+                },
+                "message_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "machine_id",
+                "message_id"
+              ],
+              "additionalProperties": false
+            },
+            "from": {
+              "type": "string"
+            },
+            "from_machine_id": {
+              "type": "string"
+            },
+            "from_name": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "reply_to": {
+              "type": "string"
+            },
+            "reply_to_machine_id": {
+              "type": "string"
+            },
+            "call_id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "object",
+              "properties": {
+                "agent": {
+                  "type": "object",
+                  "properties": {
+                    "reference": {
+                      "type": "object",
+                      "properties": {
+                        "machine_id": {
+                          "type": "string"
+                        },
+                        "agent_id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "machine_id",
+                        "agent_id"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "address": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "$ref": "#/$defs/AgentKind"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "unreachable": {
+                      "type": "boolean"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "cli": {
+                      "type": "string"
+                    },
+                    "args": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "model": {
+                      "type": "string"
+                    },
+                    "effort": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "cwd": {
+                      "type": "string"
+                    },
+                    "pid": {
+                      "type": "integer",
+                      "format": "uint32",
+                      "minimum": 0
+                    },
+                    "process": {
+                      "$ref": "#/$defs/ProcessState"
+                    },
+                    "size": {
+                      "type": "object",
+                      "properties": {
+                        "cols": {
+                          "type": "integer",
+                          "format": "uint16",
+                          "minimum": 2,
+                          "maximum": 65535
+                        },
+                        "rows": {
+                          "type": "integer",
+                          "format": "uint16",
+                          "minimum": 1,
+                          "maximum": 65535
+                        }
+                      },
+                      "required": [
+                        "cols",
+                        "rows"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "created_at": {
+                      "type": "string"
+                    },
+                    "started_at": {
+                      "type": "string"
+                    },
+                    "creator_kind": {
+                      "$ref": "#/$defs/CreatorKind"
+                    },
+                    "creator": {
+                      "type": "object",
+                      "properties": {
+                        "machine_id": {
+                          "type": "string"
+                        },
+                        "agent_id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "machine_id",
+                        "agent_id"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "root": {
+                      "type": "object",
+                      "properties": {
+                        "machine_id": {
+                          "type": "string"
+                        },
+                        "agent_id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "machine_id",
+                        "agent_id"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "yolo": {
+                      "type": "boolean"
+                    },
+                    "exit": {
+                      "$ref": "#/$defs/ProcessExit"
+                    },
+                    "session": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "$ref": "#/$defs/AgentState"
+                    },
+                    "state_detail": {
+                      "$ref": "#/$defs/StateDetail"
+                    },
+                    "said": {
+                      "$ref": "#/$defs/Said"
+                    },
+                    "tools_state": {
+                      "$ref": "#/$defs/ToolsState"
+                    },
+                    "tools_reason": {
+                      "$ref": "#/$defs/ToolsReason"
+                    }
+                  },
+                  "required": [
+                    "reference",
+                    "address",
+                    "type",
+                    "name",
+                    "cli",
+                    "args",
+                    "cwd",
+                    "process",
+                    "created_at",
+                    "started_at",
+                    "root",
+                    "yolo",
+                    "state",
+                    "tools_state"
+                  ]
+                },
+                "prompt": {
+                  "$ref": "#/$defs/PromptOutcome"
+                }
+              },
+              "required": [
+                "agent",
+                "prompt"
+              ]
+            },
+            "at": {
+              "type": "string"
+            },
+            "delivery": {
+              "$ref": "#/$defs/Delivery"
+            }
+          },
+          "required": [
+            "message_id",
+            "from",
+            "to",
+            "text",
+            "at",
+            "delivery"
+          ]
+        }
+      },
+      "required": [
+        "recipient",
+        "message"
+      ]
+    },
+    "InternalDeliverWaitNoticeArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "recipient": {
+          "type": "object",
+          "properties": {
+            "machine_id": {
+              "type": "string"
+            },
+            "agent_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "machine_id",
+            "agent_id"
+          ],
+          "additionalProperties": false
+        },
+        "waiting": {
+          "type": "object",
+          "properties": {
+            "machine_id": {
+              "type": "string"
+            },
+            "agent_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "machine_id",
+            "agent_id"
+          ],
+          "additionalProperties": false
+        },
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/WaitKind"
+        }
+      },
+      "required": [
+        "recipient",
+        "waiting",
+        "name",
+        "kind"
+      ]
+    },
+    "InternalEnsureRouteArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "wake": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "wake"
+      ]
+    },
+    "JsonRpc": {
+      "type": "string",
+      "enum": [
+        "2.0"
+      ]
+    },
+    "KeeperInfo": {
+      "type": "object",
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "build": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pid",
+        "build"
+      ]
+    },
+    "LocalClientNotification": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "call"
+            },
+            "params": {
+              "anyOf": [
+                {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "op": {
+                          "const": "attach.resize"
+                        },
+                        "args": {
+                          "$ref": "#/$defs/AttachResizeArgs"
+                        }
+                      },
+                      "required": [
+                        "op",
+                        "args"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "agent.type"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/AgentTypeArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "args": {
+                          "properties": {
+                            "target": {
+                              "type": "object"
+                            },
+                            "input": {
+                              "properties": {
+                                "kind": {
+                                  "const": "raw"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "cancel"
+            },
+            "params": {
+              "$ref": "#/$defs/CancelParams"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "closing"
+            },
+            "params": {
+              "$ref": "#/$defs/NoArgs"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "LocalClientRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "hello"
+            },
+            "params": {
+              "$ref": "#/$defs/HelloParams"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "call"
+            },
+            "params": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "agent.list"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/AgentListArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "agent.start"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/StartArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "agent.stop"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/StopArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "agent.resume_list"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/ResumeListArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "agent.resume"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/ResumeArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "agent.inspect"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/AgentTargetArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "agent.screen"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/ScreenArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "agent.type"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/AgentTypeArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "agent.send"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/SendArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "agent.remove"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/AgentTargetArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "agent.rename"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/RenameArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "attach.resize"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/AttachResizeArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "cli.list"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/CliListArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "location.list"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/LocationListArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "machine.list"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/NoArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "machine.connect"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/MachineConnectArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "machine.remove"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/MachineRemoveArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "machine.rename"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/MachineRenameArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "daemon.status"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/StatusArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "daemon.log"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/LogArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "daemon.upgrade"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/DaemonUpgradeArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                }
+              ]
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "watch"
+            },
+            "params": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "topic": {
+                      "const": "agents"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/NoArgs"
+                    }
+                  },
+                  "required": [
+                    "topic",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "topic": {
+                      "const": "machines"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/NoArgs"
+                    }
+                  },
+                  "required": [
+                    "topic",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "topic": {
+                      "const": "attach"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/AttachArgs"
+                    }
+                  },
+                  "required": [
+                    "topic",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "topic": {
+                      "const": "attach.shell"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/AttachArgs"
+                    }
+                  },
+                  "required": [
+                    "topic",
+                    "args"
+                  ]
+                }
+              ]
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "unwatch"
+            },
+            "params": {
+              "$ref": "#/$defs/UnwatchParams"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "cancel"
+            },
+            "params": {
+              "$ref": "#/$defs/CancelParams"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params",
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "LocationInfo": {
+      "type": "object",
+      "properties": {
+        "location_id": {
+          "type": "string",
+          "description": "`loc-` followed by 16 hexadecimal digits of the SHA-256 of the location's path: the same in\nevery window that lists it."
+        },
+        "label": {
+          "type": "string",
+          "description": "The checkout's branch, or else the folder's name."
+        },
+        "path": {
+          "type": "string",
+          "description": "The absolute path, with symbolic links resolved."
+        },
+        "kind": {
+          "$ref": "#/$defs/LocationKind",
+          "description": "What the location is: a folder, a repository's main checkout, or a linked worktree."
+        },
+        "source_folder": {
+          "type": "string",
+          "description": "The requested workspace folder that produced this local result."
+        }
+      },
+      "required": [
+        "location_id",
+        "label",
+        "path",
+        "kind"
+      ]
+    },
+    "LocationKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "folder",
+          "description": "A folder outside any Git checkout, or one inside a checkout that is not its root."
+        },
+        {
+          "type": "string",
+          "const": "main",
+          "description": "A repository's main checkout."
+        },
+        {
+          "type": "string",
+          "const": "worktree",
+          "description": "A linked worktree of a repository."
+        }
+      ],
+      "description": "What a location is."
+    },
+    "LocationListArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/SingleMachineScope"
+        },
+        "folders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "LocationListResult": {
+      "type": "object",
+      "properties": {
+        "locations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LocationInfo"
+          }
+        }
+      },
+      "required": [
+        "locations"
+      ]
+    },
+    "LogArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lines": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 200
+        }
+      }
+    },
+    "LogResult": {
+      "type": "object",
+      "properties": {
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "lines"
+      ]
+    },
+    "MachineConnectArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "transport": {
+          "$ref": "#/$defs/MachineTransportInput"
+        },
+        "kind": {
+          "$ref": "#/$defs/ConnectionKind"
+        },
+        "expected_machine_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "transport",
+        "kind"
+      ]
+    },
+    "MachineConnectResult": {
+      "type": "object",
+      "properties": {
+        "transport": {
+          "$ref": "#/$defs/MachineTransport"
+        },
+        "expected_machine_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "transport"
+      ]
+    },
+    "MachineConnection": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "initiator_machine_id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ConnectionKind"
+        },
+        "state": {
+          "$ref": "#/$defs/ConnectionState"
+        },
+        "transport": {
+          "$ref": "#/$defs/SshTransport"
+        },
+        "ssh_interaction": {
+          "$ref": "#/$defs/SshInteraction"
+        }
+      },
+      "required": [
+        "machine_id",
+        "initiator_machine_id",
+        "kind",
+        "state"
+      ]
+    },
+    "MachineHelloParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "boot_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "ssh_cleans_processes": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "machine_id",
+        "boot_id",
+        "name"
+      ]
+    },
+    "MachineHelloResult": {
+      "type": "object",
+      "properties": {
+        "boot_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "ssh_cleans_processes": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "boot_id",
+        "name"
+      ]
+    },
+    "MachineInfo": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "short_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "selector": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/MachineState"
+        },
+        "boot_id": {
+          "type": "string"
+        },
+        "build": {
+          "type": "string"
+        },
+        "last_seen": {
+          "type": "string"
+        },
+        "ssh_error": {
+          "type": "string"
+        },
+        "route": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "connections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MachineConnection"
+          }
+        }
+      },
+      "required": [
+        "machine_id",
+        "short_id",
+        "name",
+        "selector",
+        "state",
+        "connections"
+      ]
+    },
+    "MachineListResult": {
+      "type": "object",
+      "properties": {
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MachineInfo"
+          }
+        }
+      },
+      "required": [
+        "machines"
+      ]
+    },
+    "MachineNotification": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "advertise"
+            },
+            "params": {
+              "$ref": "#/$defs/AdvertiseParams"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "machine.sleeping"
+            },
+            "params": {
+              "$ref": "#/$defs/MachineSleepingParams"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "cancel"
+            },
+            "params": {
+              "$ref": "#/$defs/CancelParams"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "changed"
+            },
+            "params": {
+              "$ref": "#/$defs/ChangedParams"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "watch_ended"
+            },
+            "params": {
+              "$ref": "#/$defs/WatchEndedParams"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "MachineQuery": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "short_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "selector": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/MachineState"
+        },
+        "status": {
+          "$ref": "#/$defs/QueryStatus"
+        },
+        "build": {
+          "type": "string"
+        },
+        "last_seen": {
+          "type": "string"
+        },
+        "ssh_error": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine_id",
+        "short_id",
+        "name",
+        "selector",
+        "state",
+        "status"
+      ]
+    },
+    "MachineRemoveArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "machine": {
+          "type": "string"
+        },
+        "expected_machine_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine"
+      ]
+    },
+    "MachineRemoveResult": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "reachable": {
+          "type": "boolean"
+        },
+        "transport": {
+          "$ref": "#/$defs/SshTransport"
+        },
+        "name": {
+          "type": "string"
+        },
+        "via": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine_id",
+        "reachable"
+      ]
+    },
+    "MachineRenameArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "machine": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine",
+        "name"
+      ]
+    },
+    "MachineRenameResult": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "previous_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine_id",
+        "name"
+      ]
+    },
+    "MachineRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "hello"
+            },
+            "params": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/HelloParams"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "machine"
+                    }
+                  },
+                  "required": [
+                    "machine"
+                  ]
+                }
+              ]
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "advertise"
+            },
+            "params": {
+              "$ref": "#/$defs/AdvertiseParams"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "forward"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "route": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                "caller": {
+                  "$ref": "#/$defs/Caller"
+                },
+                "time_left_ms": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "from_name": {
+                  "type": "string"
+                },
+                "start_result": {
+                  "type": "object",
+                  "properties": {
+                    "machine_id": {
+                      "type": "string"
+                    },
+                    "message_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "machine_id",
+                    "message_id"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "route",
+                "caller"
+              ],
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "type": "string",
+                      "const": "call"
+                    },
+                    "params": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "agent.start"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/StartArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "agent.stop"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/StopArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "agent.resume_list"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/ResumeListArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "agent.resume"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/ResumeArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "agent.inspect"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/AgentTargetArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "agent.screen"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/ScreenArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "agent.type"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/AgentTypeArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "agent.send"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/SendArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "agent.remove"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/AgentTargetArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "agent.rename"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/RenameArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "cli.list"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/CliListArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "location.list"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/LocationListArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "machine.rename"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/MachineRenameArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "daemon.status"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/StatusArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "internal.agent_records"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/InternalAgentRecordsArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "internal.resume_records"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/NoArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "internal.ensure_route"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/InternalEnsureRouteArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "internal.attach_resize"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/InternalAttachResizeArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "internal.deliver_start_result"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/InternalDeliverStartResultArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "internal.deliver_wait_notice"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/InternalDeliverWaitNoticeArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "internal.deliver_notice"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/InternalDeliverNoticeArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "op": {
+                              "const": "internal.command_reply"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/CommandReplyArgs"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "args"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "params"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "type": "string",
+                      "const": "watch"
+                    },
+                    "params": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "topic": {
+                              "const": "agents"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/NoArgs"
+                            }
+                          },
+                          "required": [
+                            "topic",
+                            "args"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "topic": {
+                              "const": "attach"
+                            },
+                            "args": {
+                              "$ref": "#/$defs/AttachArgs"
+                            }
+                          },
+                          "required": [
+                            "topic",
+                            "args"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "params"
+                  ]
+                }
+              ],
+              "unevaluatedProperties": false
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "unwatch"
+            },
+            "params": {
+              "$ref": "#/$defs/UnwatchParams"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "cancel"
+            },
+            "params": {
+              "$ref": "#/$defs/CancelParams"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params",
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "MachineSleepingParams": {
+      "type": "object"
+    },
+    "MachineState": {
+      "type": "string",
+      "enum": [
+        "online",
+        "connecting",
+        "disconnected",
+        "sleeping",
+        "unreachable",
+        "ssh_interaction_required"
+      ]
+    },
+    "MachineTransport": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "bridge"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "$ref": "#/$defs/SshTransport"
+        }
+      ]
+    },
+    "MachineTransportInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ssh"
+            },
+            "ssh_destination": {
+              "type": "string"
+            },
+            "ssh_args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "remote_home": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "ssh_destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "bridge"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "MachinesChange": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "updated"
+            },
+            "machine": {
+              "$ref": "#/$defs/MachineInfo"
+            }
+          },
+          "required": [
+            "kind",
+            "machine"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "removed"
+            },
+            "machine_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "machine_id"
+          ]
+        }
+      ]
+    },
+    "Message": {
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "message_ref": {
+          "$ref": "#/$defs/MessageRef"
+        },
+        "from": {
+          "type": "string"
+        },
+        "from_machine_id": {
+          "type": "string"
+        },
+        "from_name": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "reply_to": {
+          "type": "string"
+        },
+        "reply_to_machine_id": {
+          "type": "string"
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/StartOutcome"
+        },
+        "at": {
+          "type": "string"
+        },
+        "delivery": {
+          "$ref": "#/$defs/Delivery"
+        }
+      },
+      "required": [
+        "message_id",
+        "from",
+        "to",
+        "text",
+        "at",
+        "delivery"
+      ]
+    },
+    "MessageRef": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine_id",
+        "message_id"
+      ]
+    },
+    "NoArgs": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "Notice": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "agent_error"
+            },
+            "agent": {
+              "type": "object",
+              "properties": {
+                "machine_id": {
+                  "type": "string"
+                },
+                "agent_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "machine_id",
+                "agent_id"
+              ],
+              "additionalProperties": false
+            },
+            "name": {
+              "type": "string"
+            },
+            "state_detail": {
+              "$ref": "#/$defs/StateDetail"
+            },
+            "tools_reason": {
+              "$ref": "#/$defs/ToolsReason"
+            }
+          },
+          "required": [
+            "kind",
+            "agent",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "agent_ended"
+            },
+            "agent": {
+              "type": "object",
+              "properties": {
+                "machine_id": {
+                  "type": "string"
+                },
+                "agent_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "machine_id",
+                "agent_id"
+              ],
+              "additionalProperties": false
+            },
+            "name": {
+              "type": "string"
+            },
+            "exit": {
+              "$ref": "#/$defs/ProcessExit"
+            },
+            "how": {
+              "$ref": "#/$defs/HowEnded"
+            },
+            "resumable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "agent",
+            "name",
+            "exit",
+            "resumable"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "send_failed"
+            },
+            "target": {
+              "type": "object",
+              "properties": {
+                "machine_id": {
+                  "type": "string"
+                },
+                "agent_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "machine_id",
+                "agent_id"
+              ],
+              "additionalProperties": false
+            },
+            "message": {
+              "type": "object",
+              "properties": {
+                "machine_id": {
+                  "type": "string"
+                },
+                "message_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "machine_id",
+                "message_id"
+              ],
+              "additionalProperties": false
+            },
+            "delivery": {
+              "$ref": "#/$defs/Delivery"
+            },
+            "withdrawn": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "target",
+            "message",
+            "delivery",
+            "withdrawn"
+          ]
+        }
+      ]
+    },
+    "Notification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpc"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "Overrides": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "boolean"
+        },
+        "effort": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "model",
+        "effort"
+      ],
+      "description": "Whether a start can choose a CLI's model and its effort."
+    },
+    "ProcessExit": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32",
+          "description": "The exit code, if the CLI exited normally and its status is known. On Windows every exit\nhas one: the process's 32-bit exit code carried as an `i32`, so that 0xC000013A is\n-1073741510."
+        },
+        "signal": {
+          "type": "string",
+          "description": "The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. Never on\nWindows."
+        },
+        "reason": {
+          "description": "Why no code or signal is available, if known. If all three fields are absent, the exit\nstatus is unavailable.",
+          "$ref": "#/$defs/EndReason"
+        },
+        "at": {
+          "type": "string",
+          "description": "The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or\nsignal, the time Facade noticed it."
+        }
+      },
+      "required": [
+        "at"
+      ],
+      "description": "A recorded CLI exit. Without a code or signal, its status is unavailable; do not treat it as\nexit code zero."
+    },
+    "ProcessState": {
+      "type": "string",
+      "enum": [
+        "running",
+        "ended",
+        "unknown"
+      ]
+    },
+    "PromptOutcome": {
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "delivery": {
+          "$ref": "#/$defs/Delivery"
+        }
+      },
+      "required": [
+        "message_id",
+        "delivery"
+      ],
+      "description": "A start prompt's message ID and what became of it."
+    },
+    "ProtocolMismatchDetails": {
+      "type": "object",
+      "properties": {
+        "offered_api_versions": {
+          "$ref": "#/$defs/ApiVersions"
+        },
+        "supported_api_versions": {
+          "$ref": "#/$defs/ApiVersions"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentLabel"
+          }
+        }
+      },
+      "required": [
+        "supported_api_versions"
+      ]
+    },
+    "QueryStatus": {
+      "type": "string",
+      "enum": [
+        "answered",
+        "unavailable",
+        "timed_out",
+        "error"
+      ]
+    },
+    "RelayHelloRequest": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "hello"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "relay": {
+              "const": 1
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reconnect": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "relay",
+            "args",
+            "env",
+            "reconnect"
+          ],
+          "additionalProperties": false
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "RelayHelloResponse": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "result": {
+          "type": "object",
+          "properties": {
+            "relay": {
+              "const": 1
+            }
+          },
+          "required": [
+            "relay"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "RemoveResult": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "address": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference",
+        "address"
+      ]
+    },
+    "RenameArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/AgentTarget"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "name"
+      ]
+    },
+    "RenameResult": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentInfo"
+        },
+        "previous_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent"
+      ]
+    },
+    "ReplyTo": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "machine_id": {
+              "type": "string"
+            },
+            "message_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "machine_id",
+            "message_id"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpc"
+        },
+        "id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "Response": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "properties": {
+            "jsonrpc": {
+              "$ref": "#/$defs/JsonRpc"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "result": true
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "jsonrpc",
+            "id",
+            "error"
+          ],
+          "properties": {
+            "jsonrpc": {
+              "$ref": "#/$defs/JsonRpc"
+            },
+            "id": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "error": {
+              "$ref": "#/$defs/ErrorBody"
+            }
+          }
+        }
+      ]
+    },
+    "ResumeArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/ResumeTarget"
+        },
+        "size": {
+          "type": "object",
+          "properties": {
+            "cols": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 2,
+              "maximum": 65535
+            },
+            "rows": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          },
+          "required": [
+            "cols",
+            "rows"
+          ],
+          "additionalProperties": false
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "target",
+        "size"
+      ]
+    },
+    "ResumeCandidate": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/ResumeCandidateTarget"
+        },
+        "machine_id": {
+          "type": "string"
+        },
+        "cli": {
+          "type": "string"
+        },
+        "folder": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "agent": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "name": {
+          "type": "string"
+        },
+        "stopped": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "session_name": {
+          "type": "string"
+        },
+        "session_selector": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "machine_id",
+        "cli",
+        "folder",
+        "session"
+      ]
+    },
+    "ResumeCandidateTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "agent"
+            },
+            "reference": {
+              "$ref": "#/$defs/AgentRef"
+            }
+          },
+          "required": [
+            "kind",
+            "reference"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "session"
+            },
+            "machine_id": {
+              "type": "string"
+            },
+            "cli": {
+              "type": "string"
+            },
+            "session": {
+              "type": "string"
+            },
+            "folder": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "machine_id",
+            "cli",
+            "session",
+            "folder"
+          ]
+        }
+      ]
+    },
+    "ResumeListArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "folder": {
+          "type": "string"
+        },
+        "folder_scope": {
+          "$ref": "#/$defs/FolderScope"
+        }
+      }
+    },
+    "ResumeListResult": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResumeCandidate"
+          }
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MachineQuery"
+          }
+        }
+      },
+      "required": [
+        "items",
+        "machines"
+      ]
+    },
+    "ResumeResult": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentInfo"
+        },
+        "from_saved_session": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "agent"
+      ]
+    },
+    "ResumeTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "agent"
+            },
+            "reference": {
+              "type": "object",
+              "properties": {
+                "machine_id": {
+                  "type": "string"
+                },
+                "agent_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "machine_id",
+                "agent_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "kind",
+            "reference"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "session"
+            },
+            "machine_id": {
+              "type": "string"
+            },
+            "cli": {
+              "type": "string"
+            },
+            "session": {
+              "type": "string"
+            },
+            "folder": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "machine_id",
+            "cli",
+            "session",
+            "folder"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "selector"
+            },
+            "selector": {
+              "type": "string",
+              "minLength": 1
+            },
+            "scope": {
+              "$ref": "#/$defs/SingleMachineScope"
+            },
+            "folder": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "selector"
+          ]
+        }
+      ]
+    },
+    "Said": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The text on one line, at most 1,024 characters."
+        },
+        "from": {
+          "type": "string",
+          "description": "Who said it: an agent ID, or `human` for the person."
+        },
+        "from_name": {
+          "type": "string",
+          "description": "The agent's name when it said it. Omitted for the person."
+        },
+        "at": {
+          "type": "string",
+          "description": "When, in UTC ISO 8601 format with milliseconds."
+        }
+      },
+      "required": [
+        "text",
+        "from",
+        "at"
+      ],
+      "description": "The latest submission through an agent's terminal, from a person, an `agent.type` call with\n`enter`, or a message Facade delivered."
+    },
+    "Scope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "local"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "machine"
+            },
+            "machine": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "machine"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "reachable"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ScreenArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/AgentTarget"
+        },
+        "lines": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 2000
+        }
+      },
+      "required": [
+        "target"
+      ]
+    },
+    "ScreenBuffer": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "normal",
+          "description": "The normal screen, with scrollback."
+        },
+        {
+          "type": "string",
+          "const": "alternate",
+          "description": "The alternate screen, which a full-screen view draws on. It has no scrollback."
+        }
+      ],
+      "description": "The screen buffer a CLI shows."
+    },
+    "ScreenChange": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "output"
+            },
+            "data": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "redraw"
+            },
+            "size": {
+              "$ref": "#/$defs/Size"
+            },
+            "data": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "size",
+            "data"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "activity"
+            },
+            "working": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "working"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "exit"
+            },
+            "exit": {
+              "$ref": "#/$defs/ProcessExit"
+            },
+            "exit_status": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "resume_hint": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "exit"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "removed"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "ScreenSnapshot": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "address": {
+          "type": "string"
+        },
+        "size": {
+          "$ref": "#/$defs/Size"
+        },
+        "redraw": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "exit": {
+          "$ref": "#/$defs/ProcessExit"
+        },
+        "exit_status": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "resume_hint": {
+          "type": "string"
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessState"
+        },
+        "working": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reference",
+        "address",
+        "size",
+        "redraw"
+      ]
+    },
+    "ScreenText": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "address": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessState"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "buffer": {
+          "$ref": "#/$defs/ScreenBuffer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "line_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "older_lines": {
+          "type": "boolean"
+        },
+        "trimmed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reference",
+        "address",
+        "process",
+        "observed_at",
+        "buffer",
+        "text",
+        "line_count",
+        "older_lines",
+        "trimmed"
+      ]
+    },
+    "SendArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "to": {
+          "$ref": "#/$defs/AgentTarget"
+        },
+        "text": {
+          "type": "string"
+        },
+        "reply_to": {
+          "$ref": "#/$defs/ReplyTo"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "time_left_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "allow_unsupported_receipt": {
+          "type": "boolean"
+        },
+        "wait_for": {
+          "$ref": "#/$defs/SendWait"
+        }
+      },
+      "required": [
+        "to",
+        "text"
+      ]
+    },
+    "SendResult": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "message": {
+          "$ref": "#/$defs/Message"
+        },
+        "recipient": {
+          "$ref": "#/$defs/AgentLabel"
+        },
+        "repeated": {
+          "type": "boolean"
+        },
+        "withdrawn": {
+          "type": "boolean"
+        },
+        "expected_reply_to": {
+          "$ref": "#/$defs/MessageRef"
+        },
+        "reply": {
+          "$ref": "#/$defs/CommandReply"
+        }
+      },
+      "required": [
+        "id",
+        "message"
+      ]
+    },
+    "SendWait": {
+      "type": "string",
+      "enum": [
+        "inbox",
+        "delivery",
+        "result"
+      ]
+    },
+    "SingleMachineScope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "local"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "machine"
+            },
+            "machine": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "machine"
+          ]
+        }
+      ]
+    },
+    "Size": {
+      "type": "object",
+      "properties": {
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 2,
+          "maximum": 65535
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
+      ]
+    },
+    "SshInteraction": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "message",
+        "command"
+      ],
+      "description": "A diagnostic and the command that repairs the saved SSH connection."
+    },
+    "SshTransport": {
+      "type": "object",
+      "properties": {
+        "ssh_destination": {
+          "type": "string"
+        },
+        "ssh_args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remote_home": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "ssh"
+        }
+      },
+      "required": [
+        "ssh_destination",
+        "ssh_args",
+        "kind"
+      ],
+      "description": "Normalized SSH arguments, including an empty argv when no options are required."
+    },
+    "StartArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cli": {
+          "type": "string"
+        },
+        "size": {
+          "type": "object",
+          "properties": {
+            "cols": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 2,
+              "maximum": 65535
+            },
+            "rows": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          },
+          "required": [
+            "cols",
+            "rows"
+          ],
+          "additionalProperties": false
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scope": {
+          "$ref": "#/$defs/SingleMachineScope"
+        },
+        "folder": {
+          "type": "string"
+        },
+        "folder_is_default": {
+          "type": "boolean"
+        },
+        "worktree": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "call_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cli",
+        "size"
+      ]
+    },
+    "StartOutcome": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentInfo"
+        },
+        "prompt": {
+          "$ref": "#/$defs/PromptOutcome"
+        }
+      },
+      "required": [
+        "agent",
+        "prompt"
+      ]
+    },
+    "StartResult": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentInfo"
+        },
+        "prompt": {
+          "$ref": "#/$defs/Message"
+        },
+        "result_message_id": {
+          "type": "string"
+        },
+        "result_message_machine_id": {
+          "type": "string"
+        },
+        "repeated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "agent"
+      ]
+    },
+    "StateDetail": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "What the CLI waits for, on `waiting_for_you`.",
+          "$ref": "#/$defs/WaitKind"
+        },
+        "text": {
+          "type": "string",
+          "description": "The CLI's own words where it gave any, on `waiting_for_you` and on an `error` the CLI\nreported. Untrusted text on one line."
+        },
+        "how": {
+          "description": "How the process ended, on `ended`. Omitted when its exit status is unavailable and Facade\ndid not stop it; `exit.reason` says what is known.",
+          "$ref": "#/$defs/HowEnded"
+        },
+        "reason": {
+          "description": "Why nothing shows what the CLI is doing, on `unknown`, or what Facade found wrong, on an\n`error` it found: a start that showed nothing, or tools the CLI cannot use.",
+          "$ref": "#/$defs/StateReason"
+        }
+      },
+      "description": "More about an agent's state."
+    },
+    "StateReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "not_shown",
+          "description": "`unknown`: a program without a rule has shown nothing of what it is doing since it started."
+        },
+        {
+          "type": "string",
+          "const": "asked",
+          "description": "`unknown`: the CLI asked to report what it is doing and has not reported since."
+        },
+        {
+          "type": "string",
+          "const": "taken_back",
+          "description": "`unknown`: the CLI took back what it reported, or a full reset or a shell's new prompt ended\nit."
+        },
+        {
+          "type": "string",
+          "const": "unrecognized",
+          "description": "`unknown`: the CLI's screen shows nothing its rule recognizes."
+        },
+        {
+          "type": "string",
+          "const": "not_ready",
+          "description": "`error`: a CLI started by its rule's name showed nothing of what it is doing within 30\nseconds of its start or resume."
+        },
+        {
+          "type": "string",
+          "const": "tools_unavailable",
+          "description": "`error`: the CLI cannot use the Facade tools it was given; `tools_reason` says why."
+        }
+      ],
+      "description": "Why nothing shows what an agent's CLI is doing, or what Facade found wrong with it."
+    },
+    "StatusArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/SingleMachineScope"
+        }
+      }
+    },
+    "StatusResult": {
+      "type": "object",
+      "properties": {
+        "home": {
+          "type": "string"
+        },
+        "settings_file": {
+          "type": "string"
+        },
+        "build": {
+          "type": "string"
+        },
+        "daemon_pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "keeper_pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "agent_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MachineQuery"
+          }
+        }
+      },
+      "required": [
+        "home",
+        "settings_file",
+        "build",
+        "daemon_pid",
+        "agent_count",
+        "machines"
+      ]
+    },
+    "StopArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "selection": {
+          "$ref": "#/$defs/StopSelection"
+        }
+      },
+      "required": [
+        "selection"
+      ]
+    },
+    "StopItem": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "$ref": "#/$defs/AgentRef"
+            }
+          ]
+        },
+        "agent": {
+          "$ref": "#/$defs/AgentLabel"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "stopped"
+            },
+            "exit": {
+              "$ref": "#/$defs/ProcessExit"
+            }
+          },
+          "required": [
+            "status",
+            "exit"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "failed"
+            },
+            "error": {
+              "$ref": "#/$defs/ErrorBody"
+            }
+          },
+          "required": [
+            "status",
+            "error"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "skipped"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        }
+      ]
+    },
+    "StopSelection": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "targets"
+            },
+            "targets": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AgentTarget"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "kind",
+            "targets"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "all"
+            },
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            }
+          },
+          "required": [
+            "kind",
+            "scope"
+          ]
+        }
+      ]
+    },
+    "SuccessResponse": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HelloResult"
+            },
+            {
+              "$ref": "#/$defs/EmptyResult"
+            },
+            {
+              "$ref": "#/$defs/WatchResult"
+            },
+            {
+              "$ref": "#/$defs/ForwardWatchResult"
+            },
+            {
+              "$ref": "#/$defs/AgentListResult"
+            },
+            {
+              "$ref": "#/$defs/StartResult"
+            },
+            {
+              "$ref": "#/$defs/BatchStopResult"
+            },
+            {
+              "$ref": "#/$defs/ResumeListResult"
+            },
+            {
+              "$ref": "#/$defs/ResumeResult"
+            },
+            {
+              "$ref": "#/$defs/InspectResult"
+            },
+            {
+              "$ref": "#/$defs/ScreenText"
+            },
+            {
+              "$ref": "#/$defs/TypeResult"
+            },
+            {
+              "$ref": "#/$defs/SendResult"
+            },
+            {
+              "$ref": "#/$defs/RemoveResult"
+            },
+            {
+              "$ref": "#/$defs/RenameResult"
+            },
+            {
+              "$ref": "#/$defs/EmptyResult"
+            },
+            {
+              "$ref": "#/$defs/CliListResult"
+            },
+            {
+              "$ref": "#/$defs/LocationListResult"
+            },
+            {
+              "$ref": "#/$defs/MachineListResult"
+            },
+            {
+              "$ref": "#/$defs/MachineConnectResult"
+            },
+            {
+              "$ref": "#/$defs/MachineRemoveResult"
+            },
+            {
+              "$ref": "#/$defs/MachineRenameResult"
+            },
+            {
+              "$ref": "#/$defs/StatusResult"
+            },
+            {
+              "$ref": "#/$defs/LogResult"
+            },
+            {
+              "$ref": "#/$defs/DaemonUpgradeResult"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AgentLookupCandidate"
+              }
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ResumeCandidate"
+              }
+            },
+            {
+              "$ref": "#/$defs/EmptyResult"
+            },
+            {
+              "$ref": "#/$defs/EmptyResult"
+            },
+            {
+              "$ref": "#/$defs/EmptyResult"
+            },
+            {
+              "$ref": "#/$defs/EmptyResult"
+            },
+            {
+              "$ref": "#/$defs/EmptyResult"
+            },
+            {
+              "$ref": "#/$defs/EmptyResult"
+            }
+          ]
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "TerminalColors": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "foreground": {
+          "type": "string"
+        },
+        "background": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string"
+        }
+      }
+    },
+    "TerminalInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "text"
+            },
+            "text": {
+              "type": "string"
+            },
+            "enter": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "keys"
+            },
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "keys"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "raw"
+            },
+            "raw": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "raw"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "sequence"
+            },
+            "steps": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/InputStep"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "steps"
+          ]
+        }
+      ]
+    },
+    "TextWritten": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "none",
+          "description": "None of it."
+        },
+        {
+          "type": "string",
+          "const": "partial",
+          "description": "Part of it."
+        },
+        {
+          "type": "string",
+          "const": "full",
+          "description": "All of it."
+        },
+        {
+          "type": "string",
+          "const": "unknown",
+          "description": "Not known: the recipient read the message while its typist was typing it, its typist did not\nsay by the deadline, what it typed was still queued then, to reach the terminal once the CLI\nreads, or the daemon before a restart had begun its paste."
+        }
+      ],
+      "description": "How much of a message reached the recipient's terminal."
+    },
+    "ToolsReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "not_given",
+          "description": "Facade could not give them to this run's CLI; the daemon's log says why."
+        },
+        {
+          "type": "string",
+          "const": "not_connected",
+          "description": "Its Facade server did not connect within 30 seconds of the run's start or resume, or of a\ndaemon's recovery of the run."
+        },
+        {
+          "type": "string",
+          "const": "not_started",
+          "description": "Its CLI starts its servers only with its first turn or its panel of servers, and the run's\nstart could not have the panel start Facade's server before the first turn; the daemon's log\nsays why. The first turn starts it."
+        },
+        {
+          "type": "string",
+          "const": "disconnected",
+          "description": "Its Facade server's last connection closed while the run went on."
+        },
+        {
+          "type": "string",
+          "const": "ended",
+          "description": "The CLI ended."
+        }
+      ],
+      "description": "Why an agent's CLI cannot use the Facade tools it was given."
+    },
+    "ToolsState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "not_injected",
+          "description": "The CLI was not given the tools: it has no rule, or its rule does not give them."
+        },
+        {
+          "type": "string",
+          "const": "connecting",
+          "description": "The CLI was given the tools, and its server has not answered the CLI's `tools/list` yet."
+        },
+        {
+          "type": "string",
+          "const": "available",
+          "description": "The CLI's server answered its `tools/list` and holds a connection."
+        },
+        {
+          "type": "string",
+          "const": "unavailable",
+          "description": "The CLI was given the tools but cannot use them; `tools_reason` says why."
+        }
+      ],
+      "description": "Whether an agent's CLI can use Facade's tools: `facade-mcp`, the MCP server that a CLI started\nby its rule is given for its run."
+    },
+    "TypeResult": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentLabel"
+        }
+      }
+    },
+    "UnwatchParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "watch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "watch"
+      ]
+    },
+    "WaitKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "permission",
+          "description": "The person's permission to go on."
+        },
+        {
+          "type": "string",
+          "const": "question",
+          "description": "The person's answer to a question."
+        },
+        {
+          "type": "string",
+          "const": "auth",
+          "description": "The person to sign in."
+        },
+        {
+          "type": "string",
+          "const": "unknown",
+          "description": "The CLI did not say."
+        }
+      ],
+      "description": "What a CLI waits for."
+    },
+    "WatchEndedParams": {
+      "type": "object",
+      "properties": {
+        "watch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "error": {
+          "$ref": "#/$defs/ErrorBody"
+        }
+      },
+      "required": [
+        "watch",
+        "error"
+      ]
+    },
+    "WatchParams": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "topic": {
+              "const": "agents"
+            },
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            }
+          },
+          "required": [
+            "topic",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "topic": {
+              "const": "machines"
+            },
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            }
+          },
+          "required": [
+            "topic",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "topic": {
+              "const": "attach"
+            },
+            "args": {
+              "$ref": "#/$defs/AttachArgs"
+            }
+          },
+          "required": [
+            "topic",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "topic": {
+              "const": "attach.shell"
+            },
+            "args": {
+              "$ref": "#/$defs/AttachArgs"
+            }
+          },
+          "required": [
+            "topic",
+            "args"
+          ]
+        }
+      ]
+    },
+    "WatchResult": {
+      "type": "object",
+      "properties": {
+        "watch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentsSnapshot"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MachineInfo"
+              }
+            },
+            {
+              "$ref": "#/$defs/ScreenSnapshot"
+            },
+            {
+              "$ref": "#/$defs/ScreenSnapshot"
+            }
+          ]
+        }
+      },
+      "required": [
+        "watch",
+        "snapshot"
+      ]
+    }
+  },
+  "x-facade": {
+    "operations": {
+      "agent.list": {
+        "args": {
+          "$ref": "#/$defs/AgentListArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/AgentListResult"
+        },
+        "local": [
+          "terminal",
+          "ide",
+          "mcp"
+        ],
+        "forwarded": false
+      },
+      "agent.start": {
+        "args": {
+          "$ref": "#/$defs/StartArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/StartResult"
+        },
+        "local": [
+          "terminal",
+          "ide",
+          "mcp"
+        ],
+        "forwarded": true
+      },
+      "agent.stop": {
+        "args": {
+          "$ref": "#/$defs/StopArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/BatchStopResult"
+        },
+        "local": [
+          "terminal",
+          "ide",
+          "mcp"
+        ],
+        "forwarded": true
+      },
+      "agent.resume_list": {
+        "args": {
+          "$ref": "#/$defs/ResumeListArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/ResumeListResult"
+        },
+        "local": [
+          "terminal",
+          "ide"
+        ],
+        "forwarded": true
+      },
+      "agent.resume": {
+        "args": {
+          "$ref": "#/$defs/ResumeArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/ResumeResult"
+        },
+        "local": [
+          "terminal",
+          "ide"
+        ],
+        "forwarded": true
+      },
+      "agent.inspect": {
+        "args": {
+          "$ref": "#/$defs/AgentTargetArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/InspectResult"
+        },
+        "local": [
+          "terminal",
+          "ide",
+          "mcp"
+        ],
+        "forwarded": true
+      },
+      "agent.screen": {
+        "args": {
+          "$ref": "#/$defs/ScreenArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/ScreenText"
+        },
+        "local": [
+          "terminal",
+          "ide",
+          "mcp"
+        ],
+        "forwarded": true
+      },
+      "agent.type": {
+        "args": {
+          "$ref": "#/$defs/AgentTypeArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/TypeResult"
+        },
+        "local": [
+          "terminal",
+          "ide",
+          "mcp"
+        ],
+        "forwarded": true
+      },
+      "agent.send": {
+        "args": {
+          "$ref": "#/$defs/SendArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/SendResult"
+        },
+        "local": [
+          "terminal",
+          "ide",
+          "mcp"
+        ],
+        "forwarded": true
+      },
+      "agent.remove": {
+        "args": {
+          "$ref": "#/$defs/AgentTargetArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/RemoveResult"
+        },
+        "local": [
+          "terminal",
+          "ide",
+          "mcp"
+        ],
+        "forwarded": true
+      },
+      "agent.rename": {
+        "args": {
+          "$ref": "#/$defs/RenameArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/RenameResult"
+        },
+        "local": [
+          "terminal",
+          "ide",
+          "mcp"
+        ],
+        "forwarded": true
+      },
+      "attach.resize": {
+        "args": {
+          "$ref": "#/$defs/AttachResizeArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/EmptyResult"
+        },
+        "local": [
+          "terminal",
+          "ide"
+        ],
+        "forwarded": false
+      },
+      "cli.list": {
+        "args": {
+          "$ref": "#/$defs/CliListArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/CliListResult"
+        },
+        "local": [
+          "terminal",
+          "ide",
+          "mcp"
+        ],
+        "forwarded": true
+      },
+      "location.list": {
+        "args": {
+          "$ref": "#/$defs/LocationListArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/LocationListResult"
+        },
+        "local": [
+          "terminal",
+          "ide",
+          "mcp"
+        ],
+        "forwarded": true
+      },
+      "machine.list": {
+        "args": {
+          "$ref": "#/$defs/NoArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/MachineListResult"
+        },
+        "local": [
+          "terminal",
+          "ide",
+          "mcp"
+        ],
+        "forwarded": false
+      },
+      "machine.connect": {
+        "args": {
+          "$ref": "#/$defs/MachineConnectArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/MachineConnectResult"
+        },
+        "local": [
+          "terminal"
+        ],
+        "forwarded": false
+      },
+      "machine.remove": {
+        "args": {
+          "$ref": "#/$defs/MachineRemoveArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/MachineRemoveResult"
+        },
+        "local": [
+          "terminal",
+          "ide"
+        ],
+        "forwarded": false
+      },
+      "machine.rename": {
+        "args": {
+          "$ref": "#/$defs/MachineRenameArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/MachineRenameResult"
+        },
+        "local": [
+          "terminal",
+          "ide"
+        ],
+        "forwarded": true
+      },
+      "daemon.status": {
+        "args": {
+          "$ref": "#/$defs/StatusArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/StatusResult"
+        },
+        "local": [
+          "terminal",
+          "ide"
+        ],
+        "forwarded": true
+      },
+      "daemon.log": {
+        "args": {
+          "$ref": "#/$defs/LogArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/LogResult"
+        },
+        "local": [
+          "terminal",
+          "ide"
+        ],
+        "forwarded": false
+      },
+      "daemon.upgrade": {
+        "args": {
+          "$ref": "#/$defs/DaemonUpgradeArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/DaemonUpgradeResult"
+        },
+        "local": [
+          "terminal"
+        ],
+        "forwarded": false
+      },
+      "internal.agent_records": {
+        "args": {
+          "$ref": "#/$defs/InternalAgentRecordsArgs"
+        },
+        "result": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentLookupCandidate"
+          }
+        },
+        "local": [],
+        "forwarded": true
+      },
+      "internal.resume_records": {
+        "args": {
+          "$ref": "#/$defs/NoArgs"
+        },
+        "result": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResumeCandidate"
+          }
+        },
+        "local": [],
+        "forwarded": true
+      },
+      "internal.ensure_route": {
+        "args": {
+          "$ref": "#/$defs/InternalEnsureRouteArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/EmptyResult"
+        },
+        "local": [],
+        "forwarded": true
+      },
+      "internal.attach_resize": {
+        "args": {
+          "$ref": "#/$defs/InternalAttachResizeArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/EmptyResult"
+        },
+        "local": [],
+        "forwarded": true
+      },
+      "internal.deliver_start_result": {
+        "args": {
+          "$ref": "#/$defs/InternalDeliverStartResultArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/EmptyResult"
+        },
+        "local": [],
+        "forwarded": true
+      },
+      "internal.deliver_wait_notice": {
+        "args": {
+          "$ref": "#/$defs/InternalDeliverWaitNoticeArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/EmptyResult"
+        },
+        "local": [],
+        "forwarded": true
+      },
+      "internal.deliver_notice": {
+        "args": {
+          "$ref": "#/$defs/InternalDeliverNoticeArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/EmptyResult"
+        },
+        "local": [],
+        "forwarded": true
+      },
+      "internal.command_reply": {
+        "args": {
+          "$ref": "#/$defs/CommandReplyArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/EmptyResult"
+        },
+        "local": [],
+        "forwarded": true
+      }
+    },
+    "topics": {
+      "agents": {
+        "args": {
+          "$ref": "#/$defs/NoArgs"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/AgentsSnapshot"
+        },
+        "change": {
+          "$ref": "#/$defs/AgentsChange"
+        },
+        "local": [
+          "terminal",
+          "ide",
+          "mcp"
+        ],
+        "forwarded": true
+      },
+      "machines": {
+        "args": {
+          "$ref": "#/$defs/NoArgs"
+        },
+        "snapshot": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MachineInfo"
+          }
+        },
+        "change": {
+          "$ref": "#/$defs/MachinesChange"
+        },
+        "local": [
+          "terminal",
+          "ide",
+          "mcp"
+        ],
+        "forwarded": false
+      },
+      "attach": {
+        "args": {
+          "$ref": "#/$defs/AttachArgs"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/ScreenSnapshot"
+        },
+        "change": {
+          "$ref": "#/$defs/ScreenChange"
+        },
+        "local": [
+          "terminal",
+          "ide"
+        ],
+        "forwarded": true
+      },
+      "attach.shell": {
+        "args": {
+          "$ref": "#/$defs/AttachArgs"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/ScreenSnapshot"
+        },
+        "change": {
+          "$ref": "#/$defs/ScreenChange"
+        },
+        "local": [
+          "terminal"
+        ],
+        "forwarded": false
+      }
+    },
+    "methods": [
+      "hello",
+      "call",
+      "watch",
+      "unwatch",
+      "cancel",
+      "changed",
+      "watch_ended",
+      "closing",
+      "advertise",
+      "forward",
+      "machine.sleeping",
+      "connected",
+      "connect_failed"
+    ]
+  }
+}

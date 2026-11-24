@@ -16,7 +16,7 @@ import * as path from 'path';
 import { parse as parseJsonc, ParseError } from 'jsonc-parser';
 import { pathToFileURL } from 'url';
 import { isDeepStrictEqual } from 'util';
-import { coreCall, coreListens, coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
+import { frameworkCall, frameworkListens, frameworkProgram, EDITOR_FLAGS, editorProfile, endFramework, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
 import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { runRemoteWorktree } from './remoteWorktree';
@@ -24,7 +24,7 @@ import { assertTemporaryState, probeEnvironment } from './probeState';
 import { replacementInFlight } from './replacementInFlight';
 import { installLocalVsixes, runEditorCli } from './vsixInstall';
 import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
-import { activationFailure, coldCutoverJourney, incompatibleActivation, missingSessionUnpin, multiWindowDriverFiles, rustMultiWindow, sharedAttachJourney, shellHandoff, staleOwner, withRustWindows } from './rustMultiWindow';
+import { activationFailure, incompatibleActivation, missingSessionUnpin, multiWindowDriverFiles, frameworkMultiWindow, sharedAttachJourney, shellHandoff, staleOwner, withFrameworkWindows } from './frameworkMultiWindow';
 
 /** An entry of Facade's settings file, by its fields (CONFIGURATION-2.2). */
 type Entry = { readonly [field: string]: unknown };
@@ -43,20 +43,20 @@ const BUILT_INS: readonly { readonly id: string; readonly segment: string; reado
 ];
 
 const ACCEPTANCE_DRIVERS = new Map([
-	['activation-failure', { engine: 'rust', cli: 'claude' }],
-	['conversion', { engine: 'old', cli: 'claude' }],
-	['expiry', { engine: 'old', cli: 'claude' }],
-	['incompatible-activation', { engine: 'rust', cli: 'claude' }],
-	['install-pair', { engine: 'old', cli: 'claude' }],
-	['lifetime', { engine: 'rust', cli: 'claude' }],
-	['missing-session-unpin', { engine: 'rust', cli: 'claude' }],
-	['multi-window', { engine: 'rust', cli: 'claude' }],
-	['remote-worktree', { engine: 'rust', cli: 'fake' }],
-	['replacement-in-flight', { engine: 'old', cli: 'claude' }],
-	['shell-handoff', { engine: 'rust', cli: 'codex' }],
-	['stale-owner', { engine: 'old', cli: 'claude' }],
-	['switch', { engine: 'rust', cli: 'claude' }],
-	['upgrade-pair', { engine: 'old', cli: 'claude' }]
+	['activation-failure', { implementation: 'framework', cli: 'claude' }],
+	['conversion', { implementation: 'legacy', cli: 'claude' }],
+	['expiry', { implementation: 'legacy', cli: 'claude' }],
+	['incompatible-activation', { implementation: 'framework', cli: 'claude' }],
+	['install-pair', { implementation: 'legacy', cli: 'claude' }],
+	['lifetime', { implementation: 'framework', cli: 'claude' }],
+	['missing-session-unpin', { implementation: 'framework', cli: 'claude' }],
+	['multi-window', { implementation: 'framework', cli: 'claude' }],
+	['remote-worktree', { implementation: 'framework', cli: 'fake' }],
+	['replacement-in-flight', { implementation: 'legacy', cli: 'claude' }],
+	['shell-handoff', { implementation: 'framework', cli: 'codex' }],
+	['stale-owner', { implementation: 'legacy', cli: 'claude' }],
+	['switch', { implementation: 'framework', cli: 'claude' }],
+	['upgrade-pair', { implementation: 'legacy', cli: 'claude' }]
 ] as const);
 type AcceptanceDriver = typeof ACCEPTANCE_DRIVERS extends ReadonlyMap<infer Name, unknown> ? Name : never;
 
@@ -96,11 +96,11 @@ async function main(): Promise<void> {
 	const grep = process.env.FACADE_IT_GREP;
 	const expectedTest = process.env.FACADE_IT_EXPECT_TESTS;
 	const expectedDriver = process.env.FACADE_IT_EXPECT_DRIVER;
-	const overlapCoreIdle = process.env.FACADE_IT_OVERLAP_CORE_IDLE === '1';
-	if (overlapCoreIdle) {
+	const overlapFrameworkIdle = process.env.FACADE_IT_OVERLAP_FRAMEWORK_IDLE === '1';
+	if (overlapFrameworkIdle) {
 		const scope = process.env.CI_ACCEPTANCE_ROOT;
 		if (process.platform !== 'linux' || !scope || scope !== os.tmpdir() || !/^\/tmp\/fnative-[a-zA-Z0-9_-]+$/u.test(scope)) {
-			throw new Error('Overlapping Core idle cleanup requires the Linux owned-scope native editor runner.');
+			throw new Error('Overlapping Framework idle cleanup requires the Linux owned-scope native editor runner.');
 		}
 	}
 	// For a look at what a run left: its folder kept, and one part of it alone (`journeys`, `cross` or `conversion`)
@@ -108,12 +108,11 @@ async function main(): Promise<void> {
 	const only = process.env.FACADE_IT_ONLY;
 	const attachFake = process.env.FACADE_IT_FAKECLI;
 	const attachUpgrade = process.env.FACADE_IT_ATTACH_UPGRADE;
-	const prereleaseBuild = process.env.FACADE_IT_PRERELEASE_BUILD;
-	// The engine the windows run on: `old`, the default, writes `facade.rustEngine: off` into each profile; `rust` writes `auto`, which the
-	// package with core's programs takes to the Rust engine (the setting's own default is `auto`, so the suite always says it)
-	const engine = process.env.FACADE_IT_ENGINE ?? 'old';
-	if (engine !== 'old' && engine !== 'rust') {
-		throw new Error('FACADE_IT_ENGINE is old or rust.');
+	// The implementation the windows run on: `legacy`, the default, writes `facade.framework: off` into each profile; `framework` writes `auto`, which the
+	// package with framework's programs takes to the Framework (the setting's own default is `auto`, so the suite always says it)
+	const implementation = process.env.FACADE_IT_IMPLEMENTATION ?? 'legacy';
+	if (implementation !== 'legacy' && implementation !== 'framework') {
+		throw new Error('FACADE_IT_IMPLEMENTATION is legacy or framework.');
 	}
 	// Real agents, for `real` alone: the built-in FACADE_IT_REAL (Claude Code by default) at FACADE_IT_REAL_PATH - FACADE_IT_CLAUDE
 	// for Claude Code - and Claude Code's temporary configuration folder FACADE_IT_CLAUDE_CONFIG, signed in for testing. Its terminals
@@ -155,18 +154,18 @@ async function main(): Promise<void> {
 	}
 	if (expectedDriver) {
 		const selected = ACCEPTANCE_DRIVERS.get(expectedDriver as AcceptanceDriver);
-		if (!selected || expectedDriver !== only || engine !== selected.engine || builtIn !== selected.cli || expectedTest || grep || keep) {
-			throw new Error('An exact acceptance driver requires the matching isolated mode, engine and fake CLI.');
+		if (!selected || expectedDriver !== only || implementation !== selected.implementation || builtIn !== selected.cli || expectedTest || grep || keep) {
+			throw new Error('An exact acceptance driver requires the matching isolated mode, implementation and fake CLI.');
 		}
 	}
-	type ServingEngine = 'old' | 'rust' | 'none';
-	let observedDriver: { name: AcceptanceDriver; engine: ServingEngine } | undefined;
-	const driverPassed = (name: AcceptanceDriver, actual: ServingEngine) => {
+	type ServingImplementation = 'legacy' | 'framework' | 'none';
+	let observedDriver: { name: AcceptanceDriver; implementation: ServingImplementation } | undefined;
+	const driverPassed = (name: AcceptanceDriver, actual: ServingImplementation) => {
 		if (expectedDriver === name) {
-			const serving = name === 'activation-failure' ? 'old' : name === 'incompatible-activation' ? 'none' : engine;
-			assert.strictEqual(actual, serving, 'the completed driver exercised its expected serving engine');
+			const serving = name === 'activation-failure' ? 'legacy' : name === 'incompatible-activation' ? 'none' : implementation;
+			assert.strictEqual(actual, serving, 'the completed driver exercised its expected serving implementation');
 			assert.ok(!observedDriver, 'the exact driver runs once');
-			observedDriver = { name, engine: actual };
+			observedDriver = { name, implementation: actual };
 		}
 	};
 	const passed = Object.fromEntries((process.env.FACADE_IT_REAL_PASS ?? '').split(',').filter(name => name && process.env[name] !== undefined).map(name => [name, process.env[name]!]));
@@ -224,7 +223,7 @@ async function main(): Promise<void> {
 		'update.mode': 'none',
 		'extensions.autoUpdate': false,
 		'extensions.autoCheckUpdates': false,
-		'facade.rustEngine': engine === 'rust' ? 'auto' : 'off'
+		'facade.framework': implementation === 'framework' ? 'auto' : 'off'
 	};
 	/**
 	 * Facade's settings file in the Facade root `facade` (CONFIGURATION-1.1): every built-in's command a fake - the suite never starts
@@ -232,7 +231,7 @@ async function main(): Promise<void> {
 	 */
 	const facadeSettings = (facade: string, clis: { readonly [name: string]: Entry } = {}, yolo?: boolean) => {
 		// Resume listing reads the settings entry's effective environment on the Orchestrator machine.
-		const fixtureEnv = engine === 'rust' && only !== 'real' && !nativeLifecycle
+		const fixtureEnv = implementation === 'framework' && only !== 'real' && !nativeLifecycle
 			? { HOME: agentsHome, USERPROFILE: agentsHome, ...isolatedStorage }
 			: undefined;
 		const entries: { [name: string]: Entry } = Object.fromEntries(BUILT_INS.map(cli => [cli.id, {
@@ -248,19 +247,19 @@ async function main(): Promise<void> {
 	const alone = (cli: string) => Object.fromEntries(BUILT_INS.filter(each => each.id !== cli).map(each => [each.id, { enabled: false }]));
 	const extension = path.resolve(__dirname, '..', '..', '..', 'extension-it');
 	const windowComponent = path.resolve(__dirname, '..', '..', '..', 'window');
-	/** Core's programs in the stage, and what a run on the Rust engine leaves of them in the Facade root `facade`: ended as core's README ends them. */
-	const corePrograms = coreProgram(path.join(extension, 'bin'));
+	/** Framework's programs in the stage, and what a run on the Framework leaves of them in the Facade root `facade`: ended as framework's README ends them. */
+	const frameworkPrograms = frameworkProgram(path.join(extension, 'bin'));
 	const idleChecks: Promise<unknown>[] = [];
-	const endRust = async (facade: string, independentHome = false) => {
-		if (engine === 'rust') {
+	const cleanUpFramework = async (facade: string, independentHome = false) => {
+		if (implementation === 'framework') {
 			const exact = expectedTest || expectedDriver;
-			const overlap = overlapCoreIdle && independentHome && !exact && !keep
+			const overlap = overlapFrameworkIdle && independentHome && !exact && !keep
 				&& (!only || ['journeys', 'conversion', 'reopen'].includes(only));
-			await endCore(facade, exact || overlap ? 45_000 : undefined, overlap ? waiting => {
+			await endFramework(facade, exact || overlap ? 45_000 : undefined, overlap ? waiting => {
 				// Agent removal has already finished. Only this home's idle/socket wait can overlap a different test.
 				idleChecks.push(waiting.then(() => undefined, error => error));
 			} : undefined);
-			if ((expectedTest || expectedDriver) && coreListens(facade)) {
+			if ((expectedTest || expectedDriver) && frameworkListens(facade)) {
 				throw new Error('The isolated acceptance test daemon did not exit.');
 			}
 		}
@@ -294,7 +293,7 @@ async function main(): Promise<void> {
 					FACADE_HOME: facade,
 					FACADE_IT_RECORD: record,
 					FACADE_IT_AGENTS_HOME: agentsHome,
-					FACADE_IT_ENGINE: engine,
+					FACADE_IT_IMPLEMENTATION: implementation,
 					CLAUDE_CONFIG_DIR: claude,
 					...(grep ? { FACADE_IT_GREP: grep } : {}),
 					...(expectedTest ? { FACADE_IT_EXPECT_TESTS: expectedTest } : {}),
@@ -306,7 +305,7 @@ async function main(): Promise<void> {
 			// The cross-window fixture owns both editor holds and cleans their shared services after both close.
 			if (name !== 'cross') {
 				endMatching(path.join(facade, 'extension', 'ptyd'));
-				await endRust(facade, true);
+				await cleanUpFramework(facade, true);
 			}
 		}
 	};
@@ -331,7 +330,7 @@ async function main(): Promise<void> {
 		}
 		// The fake runtime registry keys leases by PID. A different journey's fixture must not reuse a stale lease.
 		const more = nativeLifecycle ? terminalEnv(realEnv)
-			: engine === 'old' && cli.id === 'muse' ? terminalEnv({ XDG_DATA_HOME: path.join(facade, 'agent-data') }) : {};
+			: implementation === 'legacy' && cli.id === 'muse' ? terminalEnv({ XDG_DATA_HOME: path.join(facade, 'agent-data') }) : {};
 		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, ...more }));
 		facadeSettings(facade, { ...alone(cli.id), ...nativeLifecycle ? { [cli.id]: { command: realPath, args: realArgs } } : {} }, nativeLifecycle ? false : undefined);
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'conversion-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
@@ -351,9 +350,9 @@ async function main(): Promise<void> {
 			child.stderr?.on('data', append);
 			child.on('error', append);
 		};
-		const editorEnv = { ...process.env, ...passed, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_ENGINE: engine,
+		const editorEnv = { ...process.env, ...passed, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_IMPLEMENTATION: implementation,
 			// The first built-in's journey reloads a busy window: twenty agents beside its own (VERIFICATION G2)
-			...engine === 'old' && !reopening && !nativeLifecycle && cli === BUILT_INS[0] ? { FACADE_IT_LOAD: '20' } : {},
+			...implementation === 'legacy' && !reopening && !nativeLifecycle && cli === BUILT_INS[0] ? { FACADE_IT_LOAD: '20' } : {},
 			FACADE_IT_SECOND: second, FACADE_IT_REOPEN: reopening ? '1' : '0', FACADE_IT_NATIVE: nativeLifecycle ? cli.id : '', CLAUDE_CONFIG_DIR: realConfig ?? claudeConfig };
 		let editor = spawn(executable, [solo, '--new-window', '--disable-extensions', ...profile.args,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
@@ -383,7 +382,7 @@ async function main(): Promise<void> {
 				if (expiry) {
 					const closedAt = Date.now();
 					if (nativeLifecycle) { endMatching(path.join(facade, 'extension', 'ptyd'));
-			await endRust(facade); }
+			await cleanUpFramework(facade); }
 					// A local window's grace, 90 seconds from its extension host's disconnect, a few seconds before `closedAt` (RULES-4.1):
 					// ended about then, well after the close
 					const expiresBy = closedAt + 150_000;
@@ -405,18 +404,18 @@ async function main(): Promise<void> {
 				const reopenBy = Date.now() + (nativeLifecycle ? 150_000 : 45_000);
 				while (Date.now() < reopenBy && !lines().some(line => line.phase === 'reopened' || line.phase === 'error')) { await new Promise(resolve => setTimeout(resolve, 250)); }
 				const after = lines().find(line => line.phase === 'reopened');
-				// On the Rust engine a run is known by its agent's ID once a window has claimed it, where the first window's was its start's own
+				// On the Framework a run is known by its agent's ID once a window has claimed it, where the first window's was its start's own
 				// ID: the process and the session are the run's identity there
 				// A local window closed and reopened within its 90 seconds takes its run over, as a reload does - no claim ends it; after its
 				// grace the process ended already and the Pin restores the exact session in a new process (RULES-4.1)
-				if (!after || (expiry ? after.runId === before.runId || after.pid === before.pid || alive(Number(before.pid)) : (engine === 'rust' ? false : after.runId !== before.runId) || after.pid !== before.pid)
+				if (!after || (expiry ? after.runId === before.runId || after.pid === before.pid || alive(Number(before.pid)) : (implementation === 'framework' ? false : after.runId !== before.runId) || after.pid !== before.pid)
 					|| !before.session || after.session !== before.session || after.terminals !== 1 || !alive(Number(after.pid))) {
 					throw new Error(`Closing and reopening did not ${expiry ? 'restore' : 'preserve'} the pinned conversation: ${JSON.stringify(lines())}`);
 				}
 				console.log(`  ✔ ${cli.id}: real window close and ${expiry ? 'reopen after its grace restore the exact pinned session in a new process' : 'immediate reopen preserve Pin, exact session and process'}, with one terminal: ${JSON.stringify(lines())}`);
 				if (expectedDriver === 'expiry') {
-					assert.match(String(before.runId), /^run-/u, 'the previously pinned run has an old-engine identity');
-					if (expiry) { driverPassed('expiry', 'old'); }
+					assert.match(String(before.runId), /^run-/u, 'the previously pinned run has a legacy implementation identity');
+					if (expiry) { driverPassed('expiry', 'legacy'); }
 				}
 				return;
 			}
@@ -437,8 +436,8 @@ async function main(): Promise<void> {
 				throw new Error(`A reload's claim took too long or was not timed: ${JSON.stringify(claims)}`);
 			}
 			if (expectedDriver === 'conversion') {
-				assert.match(before.runId, /^run-/u, 'the reloaded pinned run has an old-engine identity');
-				driverPassed('conversion', 'old');
+				assert.match(before.runId, /^run-/u, 'the reloaded pinned run has a legacy implementation identity');
+				driverPassed('conversion', 'legacy');
 			}
 		} catch (error) {
 			console.error(`Editor output for ${suffix} (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
@@ -449,7 +448,7 @@ async function main(): Promise<void> {
 			} finally {
 				endMatching(user);
 				endMatching(path.join(facade, 'extension', 'ptyd'));
-				await endRust(facade, true);
+				await cleanUpFramework(facade, true);
 			}
 		}
 	};
@@ -550,7 +549,7 @@ async function main(): Promise<void> {
 			} finally {
 				endMatching(user);
 				endMatching(path.join(facade, 'extension', 'ptyd'));
-			await endRust(facade);
+			await cleanUpFramework(facade);
 			}
 		}
 	};
@@ -575,7 +574,7 @@ async function main(): Promise<void> {
 		});
 		try {
 			// The other window is there once its component registered it on this computer
-			if (engine === 'old' && await registeredWindow(facade, label => label === 'peer') === undefined) {
+			if (implementation === 'legacy' && await registeredWindow(facade, label => label === 'peer') === undefined) {
 				throw new Error('The second editor window did not join this computer\'s Facade windows.');
 			}
 			await run('cross', repo, { FACADE_IT_CLI: 'claude', FACADE_IT_PEER: 'peer', FACADE_IT_PEER_DIR: fs.realpathSync(peer) });
@@ -585,7 +584,7 @@ async function main(): Promise<void> {
 			} finally {
 				endMatching(user);
 				endMatching(path.join(facade, 'extension', 'ptyd'));
-				await endRust(facade);
+				await cleanUpFramework(facade);
 			}
 		}
 	};
@@ -642,7 +641,7 @@ async function main(): Promise<void> {
 			...(installPair || upgradePair ? { FACADE_IT_UPDATE_ROLE: installPair ? 'install' : 'upgrade' } : {}) };
 		if (replacement) {
 			await replacementInFlight({ root, facade, folder, record, executable, driver, from, to, receiver: profile, env, endMatching });
-			driverPassed('replacement-in-flight', 'old');
+			driverPassed('replacement-in-flight', 'legacy');
 			return;
 		}
 		const install = (files: readonly string[]) => installLocalVsixes(executable, profile, files, env, 30_000);
@@ -748,7 +747,7 @@ async function main(): Promise<void> {
 					assert.deepStrictEqual(fs.readFileSync(record + '.starts.' + alias, 'utf8').trim().split(/\r?\n/u).map(Number), [pids[index]]);
 				}
 				console.log('  ✔ candidate update preserves the workspace, two ordered Pins and the live Window Component publication ' + JSON.stringify({ original, successor, pids }));
-				driverPassed('upgrade-pair', 'old');
+				driverPassed('upgrade-pair', 'legacy');
 				return;
 			}
 			const started = await phase('started') as { phase: string; version: string; alias: string; tabs: string[][] };
@@ -766,7 +765,7 @@ async function main(): Promise<void> {
 				assert.deepStrictEqual(launches, [`${path.basename(record)}.starts.${observed.alias}`]);
 				assert.deepStrictEqual(fs.readFileSync(path.join(path.dirname(record), launches[0]), 'utf8').trim().split(/\r?\n/u).map(Number), [pid]);
 				console.log(`  ✔ clean candidate pair activation and one New Agent effect: ${JSON.stringify({ ...observed, pid })}`);
-				driverPassed('install-pair', 'old');
+				driverPassed('install-pair', 'legacy');
 				return;
 			}
 			// What it got before it first asked - the released build's terminal opening - is not this journey's
@@ -820,7 +819,7 @@ async function main(): Promise<void> {
 			} finally {
 				endMatching(profile.env.VSCODE_PORTABLE);
 				endMatching(path.join(facade, 'extension', 'ptyd'));
-			await endRust(facade);
+			await cleanUpFramework(facade);
 			}
 		}
 	};
@@ -860,15 +859,15 @@ async function main(): Promise<void> {
 		}
 	};
 	/**
-	 * The Rust engine's acceptance on the extension's side, in one window on it (engine.it.ts): the window runs on core of its Facade
+	 * The Framework's acceptance on the extension's side, in one window on it (framework.it.ts): the window runs on framework of its Facade
 	 * root, its terminal's `facade list` shows the editor's agent, Resume Agent restores the record Stop Agent retained, and a program
 	 * is told the theme's colours.
 	 */
-	const rustJourneys = async () => {
-		await run('engine', repo, { FACADE_IT_JOURNEY: 'engine', FACADE_IT_GREP: 'Journey: the Rust engine' }, alone('claude'));
+	const frameworkJourneys = async () => {
+		await run('framework', repo, { FACADE_IT_JOURNEY: 'framework', FACADE_IT_GREP: 'Journey: the Framework' }, alone('claude'));
 	};
-	/** Real reload, close, reopen and daemon replacement on Rust, followed by saved Pin restoration (RULES-4.1, 4.2). */
-	const rustWindowLifetime = async () => {
+	/** Real reload, close, reopen and daemon replacement on Framework, followed by saved Pin restoration (RULES-4.1, 4.2). */
+	const frameworkWindowLifetime = async () => {
 		const folder = path.join(root, 'lifetime');
 		const profile = editorProfile(root, 'l');
 		const { user } = profile;
@@ -887,10 +886,10 @@ async function main(): Promise<void> {
 		const start = () => spawn(executable, [folder, '--new-window', '--disable-extensions', ...profile.args,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS],
 			{ env: { ...env, ...profile.env }, stdio: ['ignore', 'pipe', 'pipe'] });
-		const screen = (agent: string) => execFileSync(corePrograms, ['screen', agent, '--lines', '120'], { env, encoding: 'utf8', timeout: 20_000 });
-		const list = async () => (await coreCall(facade, 'agent.list', {})).agents;
-		const inspect = (agent: string) => coreCall(facade, 'agent.inspect', { target: agent });
-		console.log('\n  Journey: the Rust window lifetime and saved Pins');
+		const screen = (agent: string) => execFileSync(frameworkPrograms, ['screen', agent, '--lines', '120'], { env, encoding: 'utf8', timeout: 20_000 });
+		const list = async () => (await frameworkCall(facade, 'agent.list', {})).agents;
+		const inspect = (agent: string) => frameworkCall(facade, 'agent.inspect', { target: agent });
+		console.log('\n  Journey: the Framework window lifetime and saved Pins');
 		try {
 			await windowLifetime(start, () => fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '', async step => {
 				if (step.after === 'reload') {
@@ -898,24 +897,24 @@ async function main(): Promise<void> {
 				} else if (step.after === 'pins') {
 					const { agent } = await inspect(step.removed);
 					const reference = agent.reference;
-					assert.deepStrictEqual((await coreCall(facade, 'agent.remove', { target: reference })).reference, reference);
+					assert.deepStrictEqual((await frameworkCall(facade, 'agent.remove', { target: reference })).reference, reference);
 				}
 			});
 			if (expectedDriver === 'lifetime') {
 				const steps = fs.readFileSync(out, 'utf8').trim().split('\n').map(line => JSON.parse(line));
 				const began = steps.find(step => step.phase === 'started')?.agent;
 				const restored = steps.find(step => step.phase === 'done')?.detail;
-				assert.ok(began && restored && /^a\d+$/u.test(began.id), 'the lifetime driver observed a Core agent');
+				assert.ok(began && restored && /^a\d+$/u.test(began.id), 'the lifetime driver observed a Framework agent');
 				assert.deepStrictEqual([restored.id, restored.cwd, restored.session], [began.id, began.cwd, began.session]);
 				const starts = fs.readFileSync(`${env.FACADE_IT_RECORD}.starts.#${began.id}`, 'utf8').trim().split(/\r?\n/u).map(Number);
 				assert.deepStrictEqual(starts, [began.pid, restored.pid], 'one original start and one restoration of the saved Pin');
-				driverPassed('lifetime', 'rust');
+				driverPassed('lifetime', 'framework');
 			}
 		} finally {
-			await endRust(facade);
+			await cleanUpFramework(facade);
 		}
 	};
-	const rustWindows = async (runName: 'multi' | 'handoff' | 'attach' | 'cutover' | 'missing-session-unpin' | 'activation-failure' | 'incompatible-activation' | 'stale-owner') => {
+	const frameworkWindows = async (runName: 'multi' | 'handoff' | 'attach' | 'missing-session-unpin' | 'activation-failure' | 'incompatible-activation' | 'stale-owner') => {
 		const driver = path.join(root, `driver-${runName}`);
 		const facade = path.join(home, runName);
 		const peer = path.join(root, `${runName}-peer`);
@@ -928,22 +927,6 @@ async function main(): Promise<void> {
 		for (const [name, contents] of Object.entries(multiWindowDriverFiles())) {
 			fs.writeFileSync(path.join(driver, name), contents);
 		}
-		let prior: { extension: string; driver: string; program: string } | undefined;
-		if (runName === 'cutover') {
-			assert.ok(prereleaseBuild && path.isAbsolute(prereleaseBuild),
-				'Set FACADE_IT_PRERELEASE_BUILD to the absolute staged build of the accepted prerelease editor and Core.');
-			assert.ok(attachFake && path.isAbsolute(attachFake) && fs.statSync(attachFake, { throwIfNoEntry: false })?.isFile(),
-				'Set FACADE_IT_FAKECLI to the absolute path of the test build of facade-fakecli.');
-			const stage = path.join(prereleaseBuild, 'extension-it');
-			const oldDriver = path.join(root, 'driver-prerelease');
-			const program = coreProgram(path.join(stage, 'bin'));
-			assert.ok(fs.statSync(program, { throwIfNoEntry: false })?.isFile(), program);
-			fs.mkdirSync(oldDriver);
-			for (const [name, contents] of Object.entries(multiWindowDriverFiles(path.join(prereleaseBuild, 'out', 'test', 'integration')))) {
-				fs.writeFileSync(path.join(oldDriver, name), contents);
-			}
-			prior = { extension: stage, driver: oldDriver, program };
-		}
 		if (runName === 'attach') {
 			assert.ok(attachFake && path.isAbsolute(attachFake) && fs.statSync(attachFake, { throwIfNoEntry: false })?.isFile(),
 				'Set FACADE_IT_FAKECLI to the absolute path of the test build of facade-fakecli.');
@@ -952,12 +935,6 @@ async function main(): Promise<void> {
 			fs.mkdirSync(facade, { recursive: true });
 			const clis = { ...alone('qa-fake'), 'qa-fake': { type: 'custom', program: attachFake } };
 			fs.writeFileSync(path.join(facade, 'facade.json'), JSON.stringify({ clis }));
-		} else if (prior) {
-			facadeSettings(facade, { ...alone('qa-fake'), 'qa-fake': {
-				type: 'fake', command: attachFake!, env: {
-					FAKECLI_SESSION: '960c20b4-1304-4bf8-bcc0-ef2102ad17c1', FAKECLI_STATUS: '1'
-				}
-			} });
 		} else {
 			facadeSettings(facade, alone(runName === 'handoff' ? 'codex' : 'claude'));
 		}
@@ -975,38 +952,38 @@ async function main(): Promise<void> {
 		const fallback = runName === 'activation-failure';
 		const incompatible = runName === 'incompatible-activation';
 		const faultStage = path.join(root, 'extension-with-fault');
-		const faultProgram = coreProgram(path.join(faultStage, 'bin'));
+		const faultProgram = frameworkProgram(path.join(faultStage, 'bin'));
 		if (fallback) {
-			assert.ok(fs.statSync(corePrograms).isFile(), 'the original stage has the bundled native program');
+			assert.ok(fs.statSync(frameworkPrograms).isFile(), 'the original stage has the bundled native program');
 			fs.cpSync(extension, faultStage, { recursive: true, dereference: true });
-			// The native program path still exists, so auto selects Rust and actually attempts the spawn.
+			// The native program path still exists, so auto selects Framework and actually attempts the spawn.
 			fs.unlinkSync(faultProgram);
 			fs.mkdirSync(faultProgram);
 		}
 		const start = (folder: string, name: string, control: string, port: number) => {
-			const oldEngine = runName === 'stale-owner' || runName === 'attach' && name === 'old-engine';
-			const withComponent = runName === 'multi' || oldEngine || fallback || incompatible;
+			const legacyImplementation = runName === 'stale-owner' || runName === 'attach' && name === 'legacy';
+			const withComponent = runName === 'multi' || legacyImplementation || fallback || incompatible;
 			const profile = editorProfile(root, `${runName[0]}-${name}`);
 			const userSettings = path.join(profile.user, 'User', 'settings.json');
 			if (!fs.existsSync(userSettings)) {
 				fs.mkdirSync(path.dirname(userSettings), { recursive: true });
 				fs.writeFileSync(userSettings, JSON.stringify({
-					...settings, 'window.dialogStyle': 'custom', ...oldEngine ? { 'facade.rustEngine': 'off' } : {}
+					...settings, 'window.dialogStyle': 'custom', ...legacyImplementation ? { 'facade.framework': 'off' } : {}
 				}));
 			}
 			return spawn(executable, [folder, '--new-window', '--disable-extensions', ...profile.args,
-				`--extensionDevelopmentPath=${fallback ? faultStage : prior?.extension ?? extension}`,
+				`--extensionDevelopmentPath=${fallback ? faultStage : extension}`,
 				...withComponent ? [`--extensionDevelopmentPath=${windowComponent}`] : [],
-				`--extensionDevelopmentPath=${prior?.driver ?? driver}`, `--remote-debugging-port=${port}`, '--locale=en', ...EDITOR_FLAGS],
+				`--extensionDevelopmentPath=${driver}`, `--remote-debugging-port=${port}`, '--locale=en', ...EDITOR_FLAGS],
 				{ env: { ...env, ...profile.env, FACADE_IT_WINDOW_CONTROL: control,
 					...withComponent ? {} : { FACADE_IT_WINDOW_NO_COMPONENT: '1' },
 					...fallback ? { FACADE_IT_WINDOW_FALLBACK: '1' } : {},
 					...incompatible ? { FACADE_IT_WINDOW_INCOMPATIBLE: '1' } : {} }, stdio: ['ignore', 'pipe', 'pipe'] });
 		};
 		try {
-			await withRustWindows(files, start, open => {
+			await withFrameworkWindows(files, start, open => {
 				if (runName === 'multi') {
-					return rustMultiWindow(open, { folder: repo, peer, shared, home: facade, remote: null, files });
+					return frameworkMultiWindow(open, { folder: repo, peer, shared, home: facade, remote: null, files });
 				}
 				if (runName === 'missing-session-unpin') { return missingSessionUnpin(open, repo, env); }
 				if (runName === 'stale-owner') { return staleOwner(open, repo, env); }
@@ -1016,39 +993,32 @@ async function main(): Promise<void> {
 					...env, ...isolatedStorage, HOME: agentsHome, USERPROFILE: agentsHome,
 					APPDATA: path.join(agentsHome, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(agentsHome, 'AppData', 'Local')
 				};
-				if (prior) {
-					return coldCutoverJourney(open, repo, shellEnv, prior.program, corePrograms, () => { prior = undefined; });
-				}
 				return runName === 'attach'
-					? sharedAttachJourney(open, repo, corePrograms, shellEnv, attachUpgrade)
-					: shellHandoff(open, repo, corePrograms, { ...shellEnv, FACADE_IT_AS: 'codex' });
+					? sharedAttachJourney(open, repo, frameworkPrograms, shellEnv, attachUpgrade)
+					: shellHandoff(open, repo, frameworkPrograms, { ...shellEnv, FACADE_IT_AS: 'codex' });
 			});
-			// Both journeys observe the live Core daemon and an editor view of the same machine-qualified agent.
-			if (runName === 'multi') { driverPassed('multi-window', 'rust'); }
-			if (runName === 'handoff') { driverPassed('shell-handoff', 'rust'); }
-			if (runName === 'missing-session-unpin') { driverPassed('missing-session-unpin', 'rust'); }
-			if (fallback) { driverPassed('activation-failure', 'old'); }
+			// Both journeys observe the live Framework daemon and an editor view of the same machine-qualified agent.
+			if (runName === 'multi') { driverPassed('multi-window', 'framework'); }
+			if (runName === 'handoff') { driverPassed('shell-handoff', 'framework'); }
+			if (runName === 'missing-session-unpin') { driverPassed('missing-session-unpin', 'framework'); }
+			if (fallback) { driverPassed('activation-failure', 'legacy'); }
 			if (incompatible) { driverPassed('incompatible-activation', 'none'); }
-			if (runName === 'stale-owner') { driverPassed('stale-owner', 'old'); }
+			if (runName === 'stale-owner') { driverPassed('stale-owner', 'legacy'); }
 		} finally {
-			if (prior) {
-				endMatching(facade);
-			} else {
-				await endRust(facade);
-			}
+			await cleanUpFramework(facade);
 			if (runName === 'attach') {
 				endMatching(facade);
-				endMatching(path.join(root, 'a-old-engine'));
+				endMatching(path.join(root, 'a-legacy'));
 			}
 			if (fallback || incompatible || runName === 'stale-owner') { endMatching(path.join(facade, 'extension', 'ptyd')); }
 		}
 	};
 	/**
-	 * Switching engines (spec 验收): two agents under `off`; the setting `auto` and a reload: both go on, on the old engine; both ended,
-	 * a new agent is not started there; reload: the window is on the Rust engine, and Resume Agent continues both saved sessions. The
-	 * reloads end a test run's extension host, so a driver beside Facade Code (engineDriver.ts) does the steps and this judges them.
+	 * Switching implementations (spec 验收): two agents under `off`; the setting `auto` and a reload: both go on, on the legacy implementation; both ended,
+	 * a new agent is not started there; reload: the window is on the Framework, and Resume Agent continues both saved sessions. The
+	 * reloads end a test run's extension host, so a driver beside Facade Code (implementationDriver.ts) does the steps and this judges them.
 	 */
-	const engineSwitch = async () => {
+	const implementationSwitch = async () => {
 		const solo = path.join(root, 'switch-app');
 		const profile = editorProfile(root, 'sw');
 		const { user } = profile;
@@ -1058,10 +1028,10 @@ async function main(): Promise<void> {
 		for (const dir of [solo, path.join(user, 'User'), driver]) {
 			fs.mkdirSync(dir, { recursive: true });
 		}
-		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, 'facade.rustEngine': 'off' }));
+		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, 'facade.framework': 'off' }));
 		facadeSettings(facade, alone('claude'));
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'switch-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
-		fs.copyFileSync(path.join(__dirname, 'engineDriver.js'), path.join(driver, 'extension.js'));
+		fs.copyFileSync(path.join(__dirname, 'implementationDriver.js'), path.join(driver, 'extension.js'));
 		fs.copyFileSync(path.join(__dirname, 'resumePickerFixture.js'), path.join(driver, 'resumePickerFixture.js'));
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
 			fs.rmSync(path.join(root, file));
@@ -1080,52 +1050,52 @@ async function main(): Promise<void> {
 		const lines = () => fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { phase: string; [key: string]: unknown }) : [];
 		try {
 			const end = Date.now() + 240_000;
-			while (Date.now() < end && !lines().some(line => line.phase === 'rust' || line.phase === 'error')) {
+			while (Date.now() < end && !lines().some(line => line.phase === 'framework' || line.phase === 'error')) {
 				await new Promise(resolve => setTimeout(resolve, 500));
 			}
 			const said = lines();
-			console.log(`  Journey: switching engines (spec 验收)\n    ${JSON.stringify(said)}`);
+			console.log(`  Journey: switching implementations (spec 验收)\n    ${JSON.stringify(said)}`);
 			const phase = (name: string) => said.find(line => line.phase === name);
-			const two = phase('two') as { before: string; defaultSetting: string; agents: { runId: string; alias: string; session: string }[]; core: boolean } | undefined;
-			const still = phase('old-still') as { cards: string[]; alive: boolean[]; core: boolean; setting: string } | undefined;
-			const refused = phase('refused') as { cards: number; newCli: string[]; core: boolean } | undefined;
-			const rust = phase('rust') as { core: boolean; resumed: { runId: string; session: string }[] } | undefined;
+			const two = phase('two') as { before: string; defaultSetting: string; agents: { runId: string; alias: string; session: string }[]; framework: boolean } | undefined;
+			const still = phase('legacy-still') as { cards: string[]; alive: boolean[]; framework: boolean; setting: string } | undefined;
+			const refused = phase('refused') as { cards: number; newCli: string[]; framework: boolean } | undefined;
+			const framework = phase('framework') as { framework: boolean; resumed: { runId: string; session: string }[] } | undefined;
 			const problems = [
-				...!two || two.agents.length !== 2 || two.core ? ['two agents did not start on the old engine, with no core running'] : [],
-				...!still || still.setting !== 'auto' || still.core || still.alive.some(each => !each) || !two || !isDeepStrictEqual([...still.cards].sort(), two.agents.map(agent => agent.runId).sort())
-					? ['after `auto` and a reload the two agents did not go on, on the old engine'] : [],
-				...!refused || refused.cards !== 0 || refused.newCli.length || refused.core ? ['with both ended, a new agent was started or core was started where the window says to reload'] : [],
-				...!rust || !rust.core ? ['the window did not come up on the Rust engine after the second reload'] : [],
-				...rust && two && !isDeepStrictEqual(rust.resumed.map(each => each.session).sort(), two.agents.map(agent => agent.session).sort()) ? ['Resume Agent did not continue both saved sessions'] : [],
-				...rust && rust.resumed.some(each => !/^[^/]+\/a\d+$/u.test(each.runId)) ? ['one of the sessions has no Orchestrator agent identity'] : [],
+				...!two || two.agents.length !== 2 || two.framework ? ['two agents did not start on the legacy implementation, with no framework running'] : [],
+				...!still || still.setting !== 'auto' || still.framework || still.alive.some(each => !each) || !two || !isDeepStrictEqual([...still.cards].sort(), two.agents.map(agent => agent.runId).sort())
+					? ['after `auto` and a reload the two agents did not go on, on the legacy implementation'] : [],
+				...!refused || refused.cards !== 0 || refused.newCli.length || refused.framework ? ['with both ended, a new agent was started or framework was started where the window says to reload'] : [],
+				...!framework || !framework.framework ? ['the window did not come up on the Framework after the second reload'] : [],
+				...framework && two && !isDeepStrictEqual(framework.resumed.map(each => each.session).sort(), two.agents.map(agent => agent.session).sort()) ? ['Resume Agent did not continue both saved sessions'] : [],
+				...framework && framework.resumed.some(each => !/^[^/]+\/a\d+$/u.test(each.runId)) ? ['one of the sessions has no Orchestrator agent identity'] : [],
 				...phase('error') ? [`the driver failed: ${JSON.stringify(phase('error'))}`] : []
 			];
 			if (problems.length) {
-				throw new Error(`Switching engines failed: ${problems.join('; ')}`);
+				throw new Error(`Switching implementations failed: ${problems.join('; ')}`);
 			}
-			console.log('    ✔ off → auto keeps the live old agents through one reload. After they end, the next reload starts core and Resume Agent continues both saved sessions');
+			console.log('    ✔ off → auto keeps the live old agents through one reload. After they end, the next reload starts framework and Resume Agent continues both saved sessions');
 			if (expectedDriver === 'switch') {
 				assert.ok(two);
 				assert.deepStrictEqual([two.defaultSetting, two.before], ['auto', 'off']);
-				assert.ok(two.agents.every(agent => /^#a\d+$/u.test(agent.alias)), 'the first two agents are old-engine runs');
-				driverPassed('switch', 'rust');
+				assert.ok(two.agents.every(agent => /^#a\d+$/u.test(agent.alias)), 'the first two agents are legacy implementation runs');
+				driverPassed('switch', 'framework');
 			}
 		} catch (error) {
-			console.error(`Editor output for the engine switch (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
+			console.error(`Editor output for the implementation switch (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
 			throw error;
 		} finally {
 			try {
 				await endEditors(editors);
 			} finally {
 				try {
-					console.log('    Ending the engine switch editor and terminal helpers.');
+					console.log('    Ending the implementation switch editor and terminal helpers.');
 					endMatching(user);
 					endMatching(path.join(facade, 'extension', 'ptyd'));
 				} finally {
-					console.log('    Ending the engine switch Orchestrator.');
-					await endRust(facade);
+					console.log('    Ending the implementation switch Orchestrator.');
+					await cleanUpFramework(facade);
 				}
-				console.log('    Engine switch cleanup finished.');
+				console.log('    Implementation switch cleanup finished.');
 			}
 		}
 	};
@@ -1163,51 +1133,48 @@ async function main(): Promise<void> {
 		if (!only || only === 'reopen') {
 			for (const cli of BUILT_INS) { await conversion(cli, true); }
 		}
-		if (engine === 'old' && (!only || only === 'expiry')) {
+		if (implementation === 'legacy' && (!only || only === 'expiry')) {
 			// The shared supervisor's real local grace, not a shortened fixture timer.
 			if (expectedDriver === 'expiry') { await conversion(BUILT_INS[0], true); }
 			await conversion(BUILT_INS[0], true, true);
 		}
-		// The Rust engine's acceptance on the extension's side: with the engine on, a run of the whole suite has it, and each is asked for alone
-		if (['activation-failure', 'engine', 'incompatible-activation', 'switch', 'lifetime', 'multi-window', 'missing-session-unpin', 'remote-worktree', 'shell-handoff', 'shared-attach', 'cold-cutover'].includes(only ?? '') && engine !== 'rust') {
-			throw new Error(`FACADE_IT_ONLY=${only} runs on the Rust engine: set FACADE_IT_ENGINE=rust.`);
+		// The Framework's acceptance on the extension's side: with the implementation on, a run of the whole suite has it, and each is asked for alone
+		if (['activation-failure', 'framework', 'incompatible-activation', 'switch', 'lifetime', 'multi-window', 'missing-session-unpin', 'remote-worktree', 'shell-handoff', 'shared-attach'].includes(only ?? '') && implementation !== 'framework') {
+			throw new Error(`FACADE_IT_ONLY=${only} runs on the Framework: set FACADE_IT_IMPLEMENTATION=framework.`);
 		}
-		if (only === 'engine' || (!only && engine === 'rust')) {
-			await rustJourneys();
+		if (only === 'framework' || (!only && implementation === 'framework')) {
+			await frameworkJourneys();
 		}
-		if (engine === 'rust' && (!only || only === 'lifetime' || only === 'reopen' || only === 'expiry')) {
-			await rustWindowLifetime();
+		if (implementation === 'framework' && (!only || only === 'lifetime' || only === 'reopen' || only === 'expiry')) {
+			await frameworkWindowLifetime();
 		}
-		if (engine === 'rust' && (!only || only === 'multi-window')) {
-			await rustWindows('multi');
+		if (implementation === 'framework' && (!only || only === 'multi-window')) {
+			await frameworkWindows('multi');
 		}
 		if (only === 'missing-session-unpin') {
-			await rustWindows('missing-session-unpin');
+			await frameworkWindows('missing-session-unpin');
 		}
 		if (only === 'activation-failure') {
-			await rustWindows('activation-failure');
+			await frameworkWindows('activation-failure');
 		}
 		if (only === 'incompatible-activation') {
-			await rustWindows('incompatible-activation');
+			await frameworkWindows('incompatible-activation');
 		}
 		if (only === 'stale-owner') {
-			assert.strictEqual(engine, 'old', 'stale-owner uses the old window owner');
-			await rustWindows('stale-owner');
+			assert.strictEqual(implementation, 'legacy', 'stale-owner uses the old window owner');
+			await frameworkWindows('stale-owner');
 		}
 		if (only === 'remote-worktree') {
 			driverPassed('remote-worktree', runRemoteWorktree(home, executable));
 		}
-		if (engine === 'rust' && (!only || only === 'shell-handoff')) {
-			await rustWindows('handoff');
+		if (implementation === 'framework' && (!only || only === 'shell-handoff')) {
+			await frameworkWindows('handoff');
 		}
-		if (engine === 'rust' && (only === 'shared-attach' || (!only && attachFake))) {
-			await rustWindows('attach');
+		if (implementation === 'framework' && (only === 'shared-attach' || (!only && attachFake))) {
+			await frameworkWindows('attach');
 		}
-		if (engine === 'rust' && only === 'cold-cutover') {
-			await rustWindows('cutover');
-		}
-		if (only === 'switch' || (!only && engine === 'rust')) {
-			await engineSwitch();
+		if (only === 'switch' || (!only && implementation === 'framework')) {
+			await implementationSwitch();
 		}
 		// Asked for alone, as its three reloads of a window of twelve agents or more take minutes
 		if (only === 'pins') {
@@ -1223,7 +1190,7 @@ async function main(): Promise<void> {
 			await update();
 		}
 		if (only === 'replacement-in-flight' || only === 'install-pair' || only === 'upgrade-pair') {
-			assert.strictEqual(engine, 'old');
+			assert.strictEqual(implementation, 'legacy');
 			await update(only);
 		}
 		// Never unasked: it signs in and uses an account's usage
@@ -1236,7 +1203,7 @@ async function main(): Promise<void> {
 			try {
 				await conversion(cli);
 				await conversion(cli, true);
-				if (engine === 'old') { await conversion(cli, true, true); }
+				if (implementation === 'legacy') { await conversion(cli, true, true); }
 			} finally {
 				if (cli.id === 'claude') { untrust(path.join(realConfig ?? claudeConfig, '.claude.json'), root); }
 			}
@@ -1247,7 +1214,7 @@ async function main(): Promise<void> {
 	} finally {
 		const idleFailures = (await Promise.all(idleChecks)).filter(error => error !== undefined);
 		try {
-			if (overlapCoreIdle) {
+			if (overlapFrameworkIdle) {
 				console.log(`Leaving ${root} to the owned-scope native editor runner.`);
 			} else if (keep) {
 				console.log(`Kept ${root}`);

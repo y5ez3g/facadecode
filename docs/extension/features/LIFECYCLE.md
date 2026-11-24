@@ -1,6 +1,6 @@
 # Agent lifecycle
 
-Group 5 covers the Orchestrator-backed editor. Groups 1–4 retain the old-engine transition rules.
+Group 5 covers the Orchestrator-backed editor. Groups 1–4 retain the legacy implementation transition rules.
 
 Layer 3. [Experience](../EXPERIENCE.md) explains use; [Rules](../RULES.md) owns identity, state and lifetime. This
 document owns starts, naming, terminal, finding, closing, Resume and Pin interactions.
@@ -284,7 +284,7 @@ A refused Pin save leaves the pair in place and reports the failure to the initi
 
 The initiator sees a refusal or unknown result as `Could not stop {0}: {1}`. A known failure after the local pair
 has already closed reports `{0}'s card and terminal were closed, but its process could not be stopped.` The
-initiator sees a dismissal failure as `Could not dismiss {0}: {1}`. The old engine records an unconfirmed cleanup so that a reload ends that
+initiator sees a dismissal failure as `Could not dismiss {0}: {1}`. The legacy implementation records an unconfirmed cleanup so that a reload ends that
 run. A stop during launch waits for its cleanup result. Worktrees, files, conversation history and child agents
 stay. Unsolicited exits follow RULES-3.3.
 
@@ -344,10 +344,10 @@ unchanged. An ordinary reload preserves the running agent's name. Automatic Pin 
 nonempty name; a blank one follows 2.1.
 Missing original session, location or configuration fails with its actual reason. For a vendor's ambiguous workspace-folder
 set under 3.2, the person's explicit location choice supplies the missing cwd.
-Concurrent resumes of the same retained number share a process under RULES-4.2. If a Resume call errors and core
+Concurrent resumes of the same retained number share a process under RULES-4.2. If a Resume call errors and the Framework
 already reports the same member running, the window reattaches to it. A manual failure says
 `Could not resume {0}: {1}` with the saved title. Continue Session uses the session ID and starts a new agent even if
-an ended record has the same session. Its failure says `Could not continue {0}: {1}`. On the old engine an accepted
+an ended record has the same session. Its failure says `Could not continue {0}: {1}`. On the legacy implementation an accepted
 continuation creates its pair immediately and retains actual launch failure. Do not acquire an external
 conversation-writer lease or replay the original creation prompt.
 On process start, register the successful cwd under WORKTREES-1.2 and update human launch history under 1.2.
@@ -418,7 +418,7 @@ saving the new identity fails. Report that failure; reattachment reconciles the 
 stale saved key cannot start a second, old conversation. If a normal exit cannot remove its Pin, retain an ended failure card with the reason, tell the person
 `Could not unpin {0}: {1}`, and allow Unpin or Dismiss Agent to retry; do not silently restore that stale intent on reload. A
 conversation has one Pin: pinning a card whose conversation is already pinned takes that Pin, moved last among the Pins
-(PANEL-2.1), and a pinned card whose CLI switches to a pinned conversation replaces that conversation's other Pin. **Old engine Pin restoration** is
+(PANEL-2.1), and a pinned card whose CLI switches to a pinned conversation replaces that conversation's other Pin. **Legacy implementation Pin restoration** is
 each activation's start, after reattachment (3.5), of new runs for the saved Pins no run holds, their earlier processes
 having ended: in saved order, their processes started in the background at most two at a time; a reload therefore
 restarts none that still run or were retained as failures. An extension-host restart, as a reload, instead reattaches
@@ -442,7 +442,7 @@ Stop Agent, Dismiss Agent and a normal exit remove the Pin; whole-window close p
 
 **Reload and temporary disconnection reuse existing runs. Reopening can restore ended agents through saved Pins.**
 
-On the old engine, RULES-4.1 keeps runs for its grace after disconnect. Reattach those runs before restoring Pins, never duplicating a
+On the legacy implementation, RULES-4.1 keeps runs for its grace after disconnect. Reattach those runs before restoring Pins, never duplicating a
 conversation still held by Facade: Pins are restored only once the conversations every ptyd of the window holds are
 known, and one that does not answer yet delays them. A run that exits between the listing and its reattachment shows
 that exit. A failure to clean up a kept record never stops the window's agents from showing. A retained failed
@@ -478,12 +478,12 @@ Facade's own showing of a tab for its mark leaves the recorded placement alone. 
 remembered group on reload.
 
 Reconnect output, process/run identity and location before accepting further input. Do not infer closure from terminal
-silence or a remote disconnect. Reconcile actual process state before restoring a run. On the old engine, RULES-4.1's
+silence or a remote disconnect. Reconcile actual process state before restoring a run. On the legacy implementation, RULES-4.1's
 grace after the extension host disconnects is the only time-based cleanup. A window that claims the
 workspace while the grace is ending its runs waits for those ends, within the five seconds cleanup takes (4.2), before
 it restores Pins. A run whose end is not confirmed stays listed as uncertain, holding its conversation, its Pin not
 restored beside it, and shows a red card whose second line says `Stop unconfirmed · check process`, where Stop Agent
-retries the stop; once its exit is heard the card goes and its Pin is restored as an ended run's. On the old engine, proven
+retries the stop; once its exit is heard the card goes and its Pin is restored as an ended run's. On the legacy implementation, proven
 folder or worktree removal closes and unpins affected agents, including when removal is found on restart.
 
 ## 4 Technical design
@@ -552,7 +552,7 @@ error on the card when recovery fails.
 | --- | --- |
 | 1.1–1.5 | Plain/no-Git/multi-folder flow, current Settings tab and Change Name placeholder, name and actual location visible while searching - the window's one place to work left unsaid -, editable name, last CLI/location, workspace folder and location choices, Back and Escape, filter unchanged, agent starts in the background, immediate pair, usable CLI after a tool failure and initiator-owned errors |
 | 2.1–2.3 | Configured/default names, trimming and case-insensitive exclusions, empty/exhausted lists, blank starts/renames, invalid names blocking starts, ID names omitted from Resume/Pin, duplicate/spaced names and `human`, icon plus name-only tabs through CLI title updates and reloads, a busy tab's spinner, literal native renames, editor-only terminals, agent tabs that stay open where opened, hidden tabs and agent-started agents without one, tabs known by the editor's reports and unknown ones acting on none, a copied tab becoming an ordinary terminal in its agent's folder, a reload's pinned tabs alone back in their groups as 3.5 says, every other tab hidden, ID/copied-reference search, distinguishable picker details |
-| 3.1–3.5 | Separate Stop Agent and Dismiss Agent actions, a closed tab hiding its agent, children kept, reload/disconnect reuse, exact Resume, linked Pins and the person's close of a marked tab Unpinning, bounded restoration, the pinned tabs of a reload, an extension-host restart and Pin restoration opening one at a time in one sequence in the Pins' order, each marked as it opens before the next, the last in front of the active group with nothing given back and the selection on it, the other agents' tabs hidden, Resume file-problem rows and gear buttons before history reads, Edit in facade.json on Pin file errors and restored-card launch failures but not missing locations, a restored Pin whose start fails dropping out, the person's Pin or Unpin - card, Command Palette or key - showing its tab as a click on the card does and marking it there, a hidden agent's Pin opening its tab, marks that borrow the focus put on at once one tab at a time and the person's front given back, a mark changed on a tab Facade could not tell winning once it is known only where no Pin or Unpin came after it, the old engine's uncertain-end red card and restoration after the confirmed end, proven folder/worktree removal |
+| 3.1–3.5 | Separate Stop Agent and Dismiss Agent actions, a closed tab hiding its agent, children kept, reload/disconnect reuse, exact Resume, linked Pins and the person's close of a marked tab Unpinning, bounded restoration, the pinned tabs of a reload, an extension-host restart and Pin restoration opening one at a time in one sequence in the Pins' order, each marked as it opens before the next, the last in front of the active group with nothing given back and the selection on it, the other agents' tabs hidden, Resume file-problem rows and gear buttons before history reads, Edit in facade.json on Pin file errors and restored-card launch failures but not missing locations, a restored Pin whose start fails dropping out, the person's Pin or Unpin - card, Command Palette or key - showing its tab as a click on the card does and marking it there, a hidden agent's Pin opening its tab, marks that borrow the focus put on at once one tab at a time and the person's front given back, a mark changed on a tab Facade could not tell winning once it is known only where no Pin or Unpin came after it, the legacy implementation's uncertain-end red card and restoration after the confirmed end, proven folder/worktree removal |
 | 4.1–4.2 | One service, truthful effects, current startup configuration, bounded cleanup without UI wait |
 | 5.1–5.5 | Start by machine and folder, Go to Agent roster, card and tab actions, unified Resume, session-backed Pin |
 

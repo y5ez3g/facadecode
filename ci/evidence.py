@@ -24,8 +24,8 @@ from editor_archive import EDITOR, stage_editor
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 PLATFORM = 'linux-x64'
 HARNESS_FILES = (
-    'core/scripts/leftovers.sh',
-    'core/scripts/test-all.sh',
+    'framework/scripts/leftovers.sh',
+    'framework/scripts/test-all.sh',
     'extension/src/test/integration/index.ts',
     'extension/src/test/integration/journey.it.ts',
     'extension/src/test/integration/run.ts',
@@ -70,7 +70,7 @@ def run_identity(local_id, env):
 
 def make_plan(root, pilots, run_id):
     dirty = git(
-        root, 'status', '--porcelain', '--untracked-files=normal', '--', 'core', 'extension',
+        root, 'status', '--porcelain', '--untracked-files=normal', '--', 'framework', 'extension',
         *(f':(exclude){path}' for path in HARNESS_FILES),
     )
     if dirty:
@@ -85,7 +85,7 @@ def make_plan(root, pilots, run_id):
         'tree': git(root, 'rev-parse', 'HEAD^{tree}'),
         'platform': PLATFORM,
         'editor': EDITOR,
-        'rust': tomllib.loads((root / 'core/rust-toolchain.toml').read_text())['toolchain']['channel'],
+        'rust': tomllib.loads((root / 'framework/rust-toolchain.toml').read_text())['toolchain']['channel'],
         'node_major': (root / 'extension/.nvmrc').read_text().strip(),
         'run': run_id,
         'catalog': hashlib.sha256((root / 'ci/cases.json').read_bytes()).hexdigest(),
@@ -116,17 +116,17 @@ def execution_groups(cases):
     groups = {}
     for case_id, binding in cases.items():
         runner = binding['runner']
-        if runner in ('core-scenario', 'extension-unit'):
+        if runner in ('framework-scenario', 'extension-unit'):
             key = (runner, binding['target'])
         else:
-            key = (runner, binding['journey'], binding['engine'], binding['built_in'])
+            key = (runner, binding['journey'], binding['implementation'], binding['built_in'])
         groups.setdefault(key, {})[case_id] = binding
     for cases_in_group in groups.values():
         unique = {binding['name']: binding for binding in cases_in_group.values()}
         yield cases_in_group, [unique[name] for name in sorted(unique)]
 
 
-def observed_core_tests(names, output):
+def observed_framework_tests(names, output):
     count = len(names)
     results = re.findall(r'^test (.+?) \.\.\. (.+)$', output, re.M)
     summaries = re.findall(r'^test result: (.+)$', output, re.M)
@@ -139,7 +139,7 @@ def observed_core_tests(names, output):
 
 
 def observed_remote_worktree(output):
-    if not observed_core_tests([REMOTE_WORKTREE_SCENARIO], output):
+    if not observed_framework_tests([REMOTE_WORKTREE_SCENARIO], output):
         return False
     records = [line.removeprefix(REMOTE_EDITOR_EVIDENCE)
                for line in output.splitlines() if line.startswith(REMOTE_EDITOR_EVIDENCE)]
@@ -153,7 +153,7 @@ def observed_remote_worktree(output):
         return False
     reference = record['reference']
     return (
-        record.get('engine') == 'rust'
+        record.get('implementation') == 'framework'
         and record.get('viewers') == [2, 3, 2]
         and isinstance(record.get('origin'), str) and bool(record['origin'])
         and isinstance(reference.get('machine_id'), str) and bool(reference['machine_id'])
@@ -170,8 +170,8 @@ def observed_remote_worktree(output):
 def observed_pass(bindings, output):
     output = ANSI.sub('', output)
     binding = bindings[0]
-    if binding['runner'] == 'core-scenario':
-        return observed_core_tests([entry['name'] for entry in bindings], output)
+    if binding['runner'] == 'framework-scenario':
+        return observed_framework_tests([entry['name'] for entry in bindings], output)
     if binding['runner'] == 'extension-unit':
         return observed_mocha_tests([entry['name'] for entry in bindings], binding['target'], output)
     markers = [line.removeprefix(EDITOR_PASS) for line in output.splitlines() if line.startswith(EDITOR_PASS)]
@@ -180,13 +180,13 @@ def observed_pass(bindings, output):
     except ValueError:
         return False
     if not all(
-        isinstance(record, dict) and record.keys() == {'name', 'engine'}
-        and isinstance(record['name'], str) and isinstance(record['engine'], str)
+        isinstance(record, dict) and record.keys() == {'name', 'implementation'}
+        and isinstance(record['name'], str) and isinstance(record['implementation'], str)
         for record in records
     ):
         return False
-    observations = sorted((record['name'], record['engine']) for record in records)
-    expected = sorted((entry['name'], entry['engine']) for entry in bindings)
+    observations = sorted((record['name'], record['implementation']) for record in records)
+    expected = sorted((entry['name'], entry['implementation']) for entry in bindings)
     return observations == expected and (
         binding['journey'] != 'remote-worktree' or observed_remote_worktree(output)
     )
@@ -225,8 +225,8 @@ def mocha_pattern(names):
 
 def command_for(root, bindings, log_path, vscode, env):
     binding = bindings[0]
-    if binding['runner'] == 'core-scenario':
-        return root / 'core', [
+    if binding['runner'] == 'framework-scenario':
+        return root / 'framework', [
             'sh', 'scripts/test-all.sh', str(log_path.with_suffix('')), '--', '--locked', '-p', 'facade-scenarios',
             '--test', binding['target'], '--', '--exact', '--test-threads=1',
             *(entry['name'] for entry in bindings),
@@ -242,7 +242,7 @@ def command_for(root, bindings, log_path, vscode, env):
     editor_env = {
         **env,
         'VSCODE_EXECUTABLE': str(vscode),
-        'FACADE_IT_ENGINE': binding['engine'],
+        'FACADE_IT_IMPLEMENTATION': binding['implementation'],
         'FACADE_IT_ONLY': binding['journey'],
         'FACADE_IT_BUILT_IN': binding['built_in'],
     }
@@ -252,8 +252,8 @@ def command_for(root, bindings, log_path, vscode, env):
     else:
         editor_env['FACADE_IT_EXPECT_DRIVER'] = binding['name']
         if binding['journey'] in ('activation-failure', 'incompatible-activation'):
-            # Observe the outcome of Rust startup through the real workbench.
-            editor_env['FACADE_IT_ENGINE'] = 'rust'
+            # Observe the outcome of Framework startup through the real workbench.
+            editor_env['FACADE_IT_IMPLEMENTATION'] = 'framework'
     return root / 'extension', ['xvfb-run', '-a', 'node', 'build/out/test/integration/run.js'], editor_env
 
 
@@ -345,7 +345,7 @@ def editor_identity(vscode):
 def binding_paths(directory, bindings):
     base = directory / digest(bindings)[:12]
     console = base.with_suffix('.console.log')
-    suffixes = {'core-scenario': '.log.full', 'extension-unit': '.mocha.json'}
+    suffixes = {'framework-scenario': '.log.full', 'extension-unit': '.mocha.json'}
     observation = base.with_suffix(suffixes.get(bindings[0]['runner'], '.console.log'))
     return observation, console, base.with_suffix('.complete.json')
 
@@ -449,7 +449,7 @@ def clean_scope(root, isolated, env, stream, interrupted, *, editor=None):
                 reclaim_scope_processes(isolated, stream, executable=crashpad)
             except OSError as error:
                 print(f'Editor crash reporter cleanup: {error}', file=stream, flush=True)
-    command = ['sh', 'core/scripts/leftovers.sh', str(isolated)]
+    command = ['sh', 'framework/scripts/leftovers.sh', str(isolated)]
     # Detached services can finish a launch after an interrupted process's first sweep.
     for _ in range(3 if interrupted else 1):
         if interrupted:
@@ -498,7 +498,7 @@ def run_binding(root, bindings, output_dir, vscode, env, cancelled=None):
 
 def binding_product(binding):
     # The remote worktree case needs both products, so its editor binding runs with the editor job.
-    return 'extension' if binding['runner'] in ('extension-editor', 'extension-unit') else 'core'
+    return 'extension' if binding['runner'] in ('extension-editor', 'extension-unit') else 'framework'
 
 
 def run_pilots(root, plan, product, output_dir, vscode, *, editor_stage, editor_workers=2):
@@ -514,8 +514,8 @@ def run_pilots(root, plan, product, output_dir, vscode, *, editor_stage, editor_
         and key != 'VSCODE_EXECUTABLE'
     }
     env.setdefault('CC_x86_64_unknown_linux_musl', 'musl-gcc')
-    rustc = subprocess.check_output(['rustup', 'which', 'rustc'], cwd=root / 'core', env=env, text=True).strip()
-    rust = subprocess.check_output([rustc, '--version'], cwd=root / 'core', env=env, text=True).strip()
+    rustc = subprocess.check_output(['rustup', 'which', 'rustc'], cwd=root / 'framework', env=env, text=True).strip()
+    rust = subprocess.check_output([rustc, '--version'], cwd=root / 'framework', env=env, text=True).strip()
     if not rust.startswith(f'rustc {plan["rust"]} '):
         raise AcceptanceError(f'expected pinned Rust {plan["rust"]}, observed {rust}')
     (output_dir / 'rustc-version.txt').write_text(rust + '\n')
@@ -639,7 +639,7 @@ def verify_receipts(plan, receipts, product=None):
         if not isinstance(receipt['rust'], str) or not receipt['rust'].startswith(f'rustc {plan["rust"]} '):
             raise AcceptanceError('wrong Rust toolchain in receipt')
         receipt_product = receipt['product']
-        if receipt_product not in ('core', 'extension'):
+        if receipt_product not in ('framework', 'extension'):
             raise AcceptanceError('invalid receipt product')
         if receipt_product == 'extension' and (
             not isinstance(receipt['node'], str) or not receipt['node'].startswith(f'v{plan["node_major"]}.')
@@ -655,7 +655,7 @@ def verify_receipts(plan, receipts, product=None):
                 raise AcceptanceError(f'{case_id}: wrong receipt product')
             seen.add(case_id)
             if item['binding'] != expected[case_id]:
-                failures.append(f'{case_id}: wrong runner, engine or selector')
+                failures.append(f'{case_id}: wrong runner, implementation or selector')
             if item['status'] != 'pass':
                 failures.append(f'{case_id}: {item["status"]!r}')
             elif receipt['editor'] != (plan['editor'] if receipt_product == 'extension' else None):

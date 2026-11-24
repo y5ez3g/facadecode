@@ -13,8 +13,8 @@ from catalog import AcceptanceError, Case
 
 class PilotScopeTests(unittest.TestCase):
     def test_a_surviving_api_cannot_lose_its_test(self):
-        case_id = 'core/shell/command/start'
-        binding = {'runner': 'core-scenario', 'target': 'cli', 'name': 'start_fixture'}
+        case_id = 'framework/shell/command/start'
+        binding = {'runner': 'framework-scenario', 'target': 'cli', 'name': 'start_fixture'}
         before = [{'id': case_id, 'assertion': 'Observe the started process', 'stage': 'pr', 'test': binding}]
         case = Case(case_id, 'pr', 'Observe the started process', (), binding)
         review_bound_cases({case_id: case}, before)
@@ -22,21 +22,21 @@ class PilotScopeTests(unittest.TestCase):
             review_bound_cases({case_id: replace(case, test=None)}, before)
 
     def test_selects_product_changes_and_shared_inputs(self):
-        both = ('core', 'extension')
+        both = ('framework', 'extension')
         examples = {
-            'docs and IDE': (('docs/CI-ACCEPTANCE.md', 'docs/core/protocol.md', 'core/README.md', 'ide/src/change.ts'), ()),
+            'docs and IDE': (('docs/CI-ACCEPTANCE.md', 'docs/framework/protocol.md', 'framework/README.md', 'ide/src/change.ts'), ()),
             'policy': (('ci/evidence.py',), both),
             'workflow': (('.github/workflows/extension-check.yml',), both),
-            'native compatibility workflow': (('.github/workflows/core-compatibility.yml',), both),
+            'native Framework workflow': (('.github/workflows/framework-check.yml',), both),
             'remote editor workflow': (('.github/workflows/extension-remote.yml',), both),
             'release workflow': (('.github/workflows/extension-release.yml',), both),
             'release mirror': (('.github/release-mirror/worker.mjs',), both),
             'design': (('docs/CI.md',), both),
-            'core code and editor binaries': (('core/crates/daemon/src/lib.rs',), both),
+            'framework code and editor binaries': (('framework/crates/daemon/src/lib.rs',), both),
             'shared names': (('extension/src/base/names.ts',), both),
             'extension source': (('extension/src/extension.ts',), ('extension',)),
             'extension packaging': (('extension/package.json',), ('extension',)),
-            'mixed': (('core/Cargo.lock', 'extension/package.json'), both),
+            'mixed': (('framework/Cargo.lock', 'extension/package.json'), both),
         }
         for name, (paths, expected) in examples.items():
             with self.subTest(scenario=name):
@@ -55,18 +55,18 @@ class PilotScopeTests(unittest.TestCase):
                 ], env=env, stderr=subprocess.PIPE, text=True).strip()
 
             git('init', '-q')
-            for name in ('core', 'docs'):
+            for name in ('framework', 'docs'):
                 (root / name).mkdir()
-            old = 'core/removed interface.ts'
+            old = 'framework/removed interface.ts'
             new = 'docs/moved interface.ts'
-            (root / old).write_text('a source file previously in Core\n')
+            (root / old).write_text('a source file previously in Framework\n')
             git('add', old)
             git('commit', '-qm', 'base')
             base = git('rev-parse', 'HEAD')
             git('mv', old, new)
             git('commit', '-qm', 'candidate rename')
             self.assertEqual(set(changed_paths(root, base)), {old, new})
-            self.assertEqual(affected_products(changed_paths(root, base)), ('core', 'extension'))
+            self.assertEqual(affected_products(changed_paths(root, base)), ('framework', 'extension'))
 
 
 if __name__ == '__main__':

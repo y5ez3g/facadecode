@@ -1,6 +1,6 @@
 # Architecture and engineering
 
-Group 6 describes the Orchestrator-backed editor. Sections on old-engine execution, window lifetime and storage
+Group 6 describes the Orchestrator-backed editor. Sections on legacy implementation execution, window lifetime and storage
 apply to the transition. Groups 4 and 5 also specify shared packaging and engineering safeguards.
 
 Layer 4. The product and shared rules decide behavior; this document chooses the implementation structure and
@@ -150,15 +150,16 @@ pickers and terminal management, not to the New Agent picker. Execution does not
 `ui/presentation.ts` owns native CLI icons and shared launch-failure wording; name normalization is in `core/names.ts`.
 Worktree input and planning are shared under WORKTREES-4.3 rather than copied into each entry flow.
 
-### 1.4 Two engines, one per window
+### 1.4 Two implementations, one per window
 
-**The editor selects one engine at activation or reload.**
+**The editor selects one implementation at activation or reload.**
 
-The **Facade: Rust Engine** setting is `auto` by default. In `auto`, use the bundled Orchestrator on its supported
-host after existing old-engine runs in that execution environment have ended. While they are still running, stay
-on the old engine. The editor offers to reload once it can switch. Explicit `off` selects the old engine. A failure
-to start or connect to the bundled Orchestrator can fall back to the old engine and display the notice in UX-6.2. Group 6
-defines the Orchestrator-backed connection, the first API v1 cutover and the workspace data retained through it.
+The **Facade: Framework** setting (`facade.framework`) is `auto` by default. In `auto`, use the bundled Framework on its supported
+host after existing legacy runs in that execution environment have ended. While they are still running, stay
+on the legacy implementation. The editor offers to reload once it can switch. Explicit `off` selects the legacy implementation. A failure
+to start or connect to the bundled Orchestrator can fall back to the legacy implementation and display the notice in UX-6.2. Group 6
+defines the Framework connection and the workspace state it uses. The context key `facade.implementation` is
+`framework` or `legacy` and selects the corresponding window menus.
 
 ## 2 Ownership and recovery
 
@@ -234,7 +235,7 @@ merging all historical workspace URIs.
 When the local component survives, native terminal replacement uses its live run-to-Terminal object registrations,
 never a title, PID, private ID or an activation snapshot guess. Current session and monotonically increasing owner
 claims fence operations so that a late request from an older host cannot replace or dispose a newer binding of the
-same window. On the old engine, an activation whose workspace a newer activation claimed detaches its cards and
+same window. On the legacy implementation, an activation whose workspace a newer activation claimed detaches its cards and
 terminals without ending a process (RULES-4.1).
 Normal close drops the exact object's binding. The workspace runtime serializes terminal creation: begin a
 capture bounded to ten seconds, create its terminal, wait for that object's public open event, then finish. The local
@@ -284,7 +285,7 @@ workspace conversion outside test mode, which refuses to enter a workspace.
 
 Gate G2 needs isolated traces for reload, extension-host restart, remote loss, close-one, close-last and immediate
 reopen. Deactivation, terminal closure, `sessionId`, a missing-heartbeat timer, a hidden terminal's death, the
-Shutdown exit reason and another window's claim alone provide too little evidence to report closure. The old engine
+Shutdown exit reason and another window's claim alone provide too little evidence to report closure. The legacy implementation
 uses RULES-4.1's grace for cleanup. A mechanism proven on the editor can take the place of a
 derived design; it cannot silently redefine RULES-4.1's behavior. This rule is a proof obligation, not a claim that
 every supported editor supplies a complete mechanism.
@@ -453,14 +454,14 @@ Windows node-pty's console worker - starts no program and says that its installa
 | Client Facade directory, `<Facade home>/extension` on the client computer | Window registry in `network/` - one entry for each open window (1.1) - and the client-wide counters `client-agent-numbers.json` and `client-message-numbers.json` |
 | Execution supervisor's memory | Processes, screens, output sequences and input effects, and the details each window keeps with its runs - among them whether a run's tab is open and in which editor group, which LIFECYCLE-3.5's restoration needs - for as long as ptyd runs (2.3) |
 | Execution Facade directory, `<Facade home>/extension` in that execution environment | Per-run launch files, the injection record (CLIS-2.2), message records, long results in `results/` (at most 30 days), location metadata, Facade conversation names/locations, the workspace URI ledger `workspace-uris.json` and window records in `windows/` (30 days, 2.2), owner claims in `claims/`, the environment's own counters `agent-aliases.json` and `message-aliases.json` (1.1), ptyd's log `ptyd/ptyd.log` (3.3), each listening ptyd's record in `ptyd/sockets/` (2.4), and in `workspaces/<key>/` each workspace's agents log and structured history (3.3), the copy of its workspace state, its retained failed launches - with whether each one's tab is open and in which group (LIFECYCLE-3.5) - and request records (2.4) and its closes ptyd has not confirmed (`closing.json`, 2.3) |
-| Editor workspace storage | Workspace key (2.2) and the old engine's workspace state mirror; old-engine pending updates coalesce within 100 ms and flush on deactivation, with synchronous Pin saves |
+| Editor workspace storage | Workspace key (2.2) and the legacy implementation's workspace state mirror; legacy implementation pending updates coalesce within 100 ms and flush on deactivation, with synchronous Pin saves |
 | Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing original cwd, Facade name and the associated CLI entry name/type; no transcript or environment-value copy (CONFIGURATION-3.4) |
 | Vendor CLI store | Its own conversations, credentials and settings |
 | Beside the main checkout | New worktrees under WORKTREES-2.2 |
 
-The old engine's workspace claim guards its state writes. A superseded claim cannot commit.
+The legacy implementation's workspace claim guards its state writes. A superseded claim cannot commit.
 
-For the old engine, the Facade home is chosen as the window starts. An explicitly set **Facade: Home** (`facade.home`, machine scope)
+For the legacy implementation, the Facade home is chosen as the window starts. An explicitly set **Facade: Home** (`facade.home`, machine scope)
 wins, then `FACADE_HOME`, then `~/.facade`. Blank strings and `null` count as unset. The setting's box shows
 `~/.facade`; that default does not override the environment variable. A setting value must be absolute or start with `~/` (`~\` on Windows). An unusable setting
 stops every start with an error and an Open Settings button at `facade.home`, on the Remote tab in a remote window
@@ -626,7 +627,7 @@ or another Facade data directory. Explicit settings from released standalone-ext
 new file is missing, with CONFIGURATION-6's conversions, conflict handling and one notice. They stop controlling
 launches after the move; old IDE settings are outside this migration. Released runtime protocols remain supported
 under 2.4. Released commands in UX-3.1 and UX-3.2 keep their IDs; other commands gain no aliases. Unknown
-launch-group, trust or settings-template fields are configuration errors, not a second compatibility engine.
+launch-group, trust or settings-template fields are configuration errors, not a second compatibility implementation.
 
 ### 4.3 Packaging and version support
 
@@ -634,11 +635,11 @@ launch-group, trust or settings-template fields are configuration errors, not a 
 
 The minimum editor is VS Code 1.105 (`engines.vscode` is `^1.105.0` in both components); a newer public API is
 feature-detected or raises the declared minimum, never called unguarded. Facade Code is published to the Marketplace and
-Open VSX only when the owner asks. Both components and core carry one release version, 0.1.6, which the changelog's
-heading names; the build refuses a window component of another version, packaging refuses a core of another version or a
-protocol copy (`src/base/coreProtocol.ts`) that differs from core's, and `scripts/release.mjs version` raises all three.
-The darwin-x64, darwin-arm64, linux-x64 and linux-arm64 packages carry core's release programs, `bin/facade` and
-`bin/facade-mcp`, Linux's built with musl and static. The win32-x64 and win32-arm64 packages carry core's release
+Open VSX only when the owner asks. Both components and the Framework carry one release version, 0.1.6, which the changelog's
+heading names; the build refuses a window component of another version, packaging refuses a Framework build of another version or a
+protocol copy (`src/base/frameworkProtocol.ts`) that differs from the Framework source, and `scripts/release.mjs version` raises all three.
+The darwin-x64, darwin-arm64, linux-x64 and linux-arm64 packages carry the Framework's release programs, `bin/facade` and
+`bin/facade-mcp`, Linux's built with musl and static. The win32-x64 and win32-arm64 packages carry the Framework's release
 programs, `bin/facade.exe` and `bin/facade-mcp.exe`, built for `x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`
 respectively, and ConPTY for the same architecture, `bin/conpty/conpty.dll` and `bin/conpty/OpenConsole.exe`. Packaging
 refuses a package where any of these four is missing or a binary is of another target; executable-mode and static-musl
@@ -646,18 +647,22 @@ checks apply only to Unix. A release signs the Windows packages' programs with t
 (Azure Artifact Signing, IDENTITY I6), each signature timestamped: packaging with `--sign` signs every program and library
 in `bin/` that has no trusted signature - ConPTY's come signed by Microsoft - and packages none that still has none.
 Unsigned, the 0.1.6 `facade.exe` was quarantined by Microsoft Defender as `Trojan:Win32/Bearfoos.A!ml`, which ended the
-running core and every agent with it, and Smart App Control refuses an unsigned program outright. Pull request checks
-package them unsigned. Third-party notices name core's ConPTY, Microsoft.Windows.Console.ConPTY 1.25.260303002, as
+running Framework and every agent with it, and Smart App Control refuses an unsigned program outright. Pull request checks
+package them unsigned. Third-party notices name the Framework's ConPTY, Microsoft.Windows.Console.ConPTY 1.25.260303002, as
 they name node-pty's. Release candidates target darwin-x64, darwin-arm64, linux-x64, linux-arm64, win32-x64 and
 win32-arm64, together with the window component. Publication requires each platform's build and verification evidence
 from the release run. The version advances when preparing a release; already published versions retain their original
 artifacts. [Official manifest reference](https://code.visualstudio.com/api/references/extension-manifest).
 
+The native Cargo build uses the source commit time and hash. The main executable reports
+`<version>+<commit time>.<commit hash>`. Its build ID travels with the paired programs in the VSIX and standalone
+archive, and the release marker carries the same ID. Release tags and mirror directories use the numeric version.
+
 The extension checks workflow builds candidate packages for darwin-x64, darwin-arm64, linux-x64, linux-arm64,
 win32-x64 and win32-arm64. It uses `macos-15-intel` for Intel Macs, `ubuntu-24.04-arm` for Linux ARM64 and
 `windows-11-arm` for Windows ARM64. Each job verifies its requested target against its native host before
 installation, passes that target to packaging, and runs the same unit, package-content and isolated editor suites,
-with core built by its pinned toolchain on every target and the editor journeys run on both engines (1.4).
+with the Framework built by its pinned toolchain on every target and the editor journeys run on both implementations (1.4).
 Artifacts and editor logs name the target. A configured CI target does not establish verified or published support;
 that requires the corresponding results and release evidence under VERIFICATION-2.1.
 
@@ -714,7 +719,7 @@ with vsce pinned at 4.1.0. The workspace manifest installs its local window comp
 `extensionDependencies`: in a remote window the editor installs the remote extension and activates it before it installs
 a local dependency, and an unmet dependency then blocks activation with no reload offered. The window component's
 manifest names the workspace extension in its own `extensionPack`, so installing either one installs both; alone, the
-window component shows nothing. When activating the old engine, the workspace component waits up to 60 seconds for `facade.window.identity` and continues as soon as it appears, including when the
+window component shows nothing. When activating the legacy implementation, the workspace component waits up to 60 seconds for `facade.window.identity` and continues as soon as it appears, including when the
 editor reports the component installed later. If it does not appear, the window cannot read its own identity (2.2),
 which the component reads, so it cannot tell which agents are its own and shows and starts none (RULES-4.1): the panel
 and one notification explain in plain words that the Facade Code Window Component must be installed and enabled on this
@@ -815,19 +820,18 @@ using that connection's advertised operations and topics. Send one `agent.start`
 The Orchestrator validates the request before creating a worktree or process. Stop uses one exact target and reports
 the result of that item. Resume passes the returned exact target from a local, folder-scoped query.
 
-The workspace host's [activation](../../../extension/src/extension.ts#L11) selects the engine and starts the
-[Orchestrator connection](../../../extension/src/host/orchestrator/index.ts#L77) for the resolved home. After hello,
+The workspace host's [activation](../../../extension/src/extension.ts#L11) selects the implementation and starts the
+[Orchestrator connection](../../../extension/src/host/framework/index.ts#L77) for the resolved home. On activation
+or a home switch, the extension offers its bundled program set for selection. The home keeps an equal or higher
+selection. A higher bundled build installs from the extension files and can take over after normal admission.
+Commands use the selected home launcher. After hello,
 it opens the workspace state, installs the machine and agent watches and connects them to the Panel. The
-[agent view](../../../extension/src/host/orchestrator/agents.ts#L76) reconciles confirmed roster snapshots
-with local members and Pins. Opening a terminal uses Attach (6.3). [Deactivation](../../../extension/src/host/orchestrator/index.ts#L215)
+[agent view](../../../extension/src/host/framework/agents.ts#L76) reconciles confirmed roster snapshots
+with local members and Pins. Opening a terminal uses Attach (6.3). [Deactivation](../../../extension/src/host/framework/index.ts#L215)
 releases the editor's subscriptions, terminal views and connection while the Orchestrator retains the agents.
 
-An incompatible hello makes Orchestrator-backed activation fail with a version error. For a planned switch
-with a pending legacy workspace import, finish the import in the prerelease editor while it can still read
-both local and remote members and Pins. Restore any required route there and confirm the roster and Pins
-are saved. Then let active agents finish and stop both services. Keep the Facade home, editor profile and
-workspace storage. During a compatible takeover the daemon sends `closing {build}`. The editor acknowledges
-on that connection and verifies a fresh hello.
+An incompatible hello makes Framework activation fail with a version error. During a compatible takeover the daemon
+sends `closing {build}`. The editor acknowledges on that connection and verifies a fresh hello.
 
 ### 6.2 Workspace state and upgrade
 
@@ -863,17 +867,17 @@ RULES-6.8. A missing component leaves the Orchestrator-backed editor usable and 
 
 **The extension packages an Orchestrator for the target on which its workspace host runs.**
 
-The editor package carries the corresponding programs and, on Windows, their required ConPTY files.
-The extension starts those packaged programs directly. The standalone archives reuse the same programs from the
-VSIX. The archives are `facade-core-darwin-<arch>.tar.gz`, `facade-core-linux-<arch>.tar.gz` and
-`facade-core-win32-<arch>.zip`, with `x64` and `arm64` as architecture values. The release publishes these with
-`install.sh`, `install.ps1`, `facade-core-version.txt` and `SHA256SUMS`. The stores serve the VSIX packages.
+The editor package carries the corresponding Framework programs and, on Windows, their required ConPTY files.
+The extension selects the packaged build for the resolved home and connects through that home's launcher. The standalone archives reuse the same programs from the
+VSIX. The archives are `facade-framework-darwin-<arch>.tar.gz`, `facade-framework-linux-<arch>.tar.gz` and
+`facade-framework-win32-<arch>.zip`, with `x64` and `arm64` as architecture values. The release publishes these with
+`install.sh`, `install.ps1`, `facade-framework-version.txt` and `SHA256SUMS`. The stores serve the VSIX packages.
 
 ## Checks
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.4 | Local/remote installation, window components and registry, public API audit, layer rules, native backend package; the journeys on each engine (`FACADE_IT_ENGINE`) and switching engines |
+| 1.1–1.4 | Local/remote installation, window components and registry, public API audit, layer rules, native backend package; the journeys on each implementation (`FACADE_IT_IMPLEMENTATION`) and switching implementations |
 | 2.1–2.4 | G1 routes between local and remote windows; G2 actual close/reload traces; folder-to-workspace handover; shim routing and input deadlines; color scheme reports with current and earlier supervisors (VERIFICATION E07); pressure/upgrades from every released build with agents running |
 | 3.1–3.3 | Home precedence, User/Remote Settings tabs, reload after invalid-home correction, local home record writes/removal and remote use, reload on record changes, invalid paths and wrong JSON types preserving the record, Windows homes naming a drive or share, null/blank unset, same-folder reload suppression locally/remotely including links and fallback, a record written before the watch starts, disposal and failed watches, storage ownership/retention, preserved user files, correct paths and safe text rendering without an authentication subsystem |
 | 4.1–4.4 | Build/package checks and native platform matrix, extension-pack installation in local and remote windows, development-build state ignored without migration, locale completeness |

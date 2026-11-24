@@ -20,9 +20,9 @@
 //   ssh-ssh    an agent of an SSH window works with an agent of another SSH window on the same host
 //   local-ssh  an agent of a local window works with an agent of an SSH window
 //   ssh-local  an agent of an SSH window works with an agent of a local window
-//   ssh-lifetime  a Rust agent keeps its process and screen through the SSH window's lifecycle
-//   ssh-multi-window  two Rust editor windows share one Facade home on an SSH host
-//   ssh-network  two Rust Remote-SSH windows attach to one local agent over an explicit SSH connection
+//   ssh-lifetime  a Framework agent keeps its process and screen through the SSH window's lifecycle
+//   ssh-multi-window  two Framework editor windows share one Facade home on an SSH host
+//   ssh-network  two Framework Remote-SSH windows attach to one local agent over an explicit SSH connection
 //
 // and, given two hosts, `hosts`: an agent of an SSH window on the first works with an agent of an SSH window on the second.
 //
@@ -36,10 +36,10 @@ import { ChildProcess, execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
-import type { DaemonOperations, InspectResult } from '../../base/coreProtocol';
-import { callInCore, coreCall, detachedStartReference, EDITOR_FLAGS, editorBuildCommit, editorProfile, endCore, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup, until } from './editors';
+import type { DaemonOperations, InspectResult } from '../../base/frameworkProtocol';
+import { callInFramework, frameworkCall, detachedStartReference, EDITOR_FLAGS, editorBuildCommit, editorProfile, endFramework, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup, until } from './editors';
 import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
-import { multiWindowDriverFiles, rustMultiWindow, withRustWindows } from './rustMultiWindow';
+import { multiWindowDriverFiles, frameworkMultiWindow, withFrameworkWindows } from './frameworkMultiWindow';
 
 const SCENARIOS = ['ssh', 'ssh-ssh', 'local-ssh', 'ssh-local', 'hosts', 'ssh-lifetime', 'ssh-multi-window', 'ssh-network', 'ssh-connect'] as const;
 type Scenario = typeof SCENARIOS[number];
@@ -119,11 +119,11 @@ async function main(): Promise<void> {
 		throw new Error(`FACADE_IT_ONLY is one of ${SCENARIOS.join(', ')}.`);
 	}
 	const keep = !!process.env.FACADE_IT_KEEP;
-	// The engine the windows run on, as `run.ts` has it: `old` (the default) writes `facade.rustEngine: off`, `rust` writes `auto`. The
+	// The implementation the windows run on, as `run.ts` has it: `legacy` (the default) writes `facade.framework: off`, `framework` writes `auto`. The
 	// setting is the machine's: a remote window reads its own host's, which this run writes where it can (a container's user settings)
-	const engine = process.env.FACADE_IT_ENGINE ?? 'old';
-	if (engine !== 'old' && engine !== 'rust') {
-		throw new Error('FACADE_IT_ENGINE is old or rust.');
+	const implementation = process.env.FACADE_IT_IMPLEMENTATION ?? 'legacy';
+	if (implementation !== 'legacy' && implementation !== 'framework') {
+		throw new Error('FACADE_IT_IMPLEMENTATION is legacy or framework.');
 	}
 	const connectOnly = only === 'ssh-connect';
 	const attempt = process.env.FACADE_IT_REMOTE_ATTEMPT;
@@ -138,9 +138,9 @@ async function main(): Promise<void> {
 		throw new Error('The SSH connect fixture needs one SSH host, three pinned local VSIXs and the pinned remote server tar.');
 	}
 
-	const rustOnly = connectOnly || only === 'ssh-lifetime' || only === 'ssh-multi-window' || only === 'ssh-network';
-	if (rustOnly && (engine !== 'rust' || !aliases.length)) {
-		throw new Error(`The ${only} journey needs the Rust engine and an SSH host.`);
+	const frameworkOnly = connectOnly || only === 'ssh-lifetime' || only === 'ssh-multi-window' || only === 'ssh-network';
+	if (frameworkOnly && (implementation !== 'framework' || !aliases.length)) {
+		throw new Error(`The ${only} journey needs the Framework and an SSH host.`);
 	}
 	const base = process.env.FACADE_IT_REMOTE_ROOT || '/tmp';
 	// Read before this: it removes every variable of Facade's and of the CLIs' from this process
@@ -193,10 +193,10 @@ async function main(): Promise<void> {
 		const folder = path.resolve(__dirname, '..', '..', '..', '..');
 		const alias = `${name}-container`;
 		try {
-			// On the Rust engine the stage's bin/ holds this computer's core, which the container cannot run: FACADE_IT_REMOTE_BIN names a folder
-			// of core's programs built for the container's platform, which the container sees in its place
-			const linuxCore = process.env.FACADE_IT_REMOTE_BIN ? ['--volume', `${path.resolve(process.env.FACADE_IT_REMOTE_BIN)}:${folder}/build/extension-it/bin:ro`] : [];
-			execFileSync('docker', ['run', '--detach', '--name', alias, '--user', 'node', '--volume', `${folder}:${folder}:ro`, ...linuxCore, image, 'sleep', 'infinity'], { stdio: 'pipe' });
+			// On the Framework the stage's bin/ holds this computer's framework, which the container cannot run: FACADE_IT_REMOTE_BIN names a folder
+			// of framework's programs built for the container's platform, which the container sees in its place
+			const linuxFramework = process.env.FACADE_IT_REMOTE_BIN ? ['--volume', `${path.resolve(process.env.FACADE_IT_REMOTE_BIN)}:${folder}/build/extension-it/bin:ro`] : [];
+			execFileSync('docker', ['run', '--detach', '--name', alias, '--user', 'node', '--volume', `${folder}:${folder}:ro`, ...linuxFramework, image, 'sleep', 'infinity'], { stdio: 'pipe' });
 		} catch (err) {
 			throw new Error(`A container of ${image} could not be started: ${failureOf(err)}`);
 		}
@@ -228,7 +228,7 @@ async function main(): Promise<void> {
 		'window.restoreWindows': 'none',
 		'workbench.startupEditor': 'none',
 		'update.mode': 'none',
-		'facade.rustEngine': engine === 'rust' ? 'auto' : 'off',
+		'facade.framework': implementation === 'framework' ? 'auto' : 'off',
 		'extensions.autoUpdate': false,
 		'extensions.autoCheckUpdates': false,
 		'telemetry.telemetryLevel': 'off',
@@ -258,7 +258,7 @@ async function main(): Promise<void> {
 		return local;
 	};
 	/** What the editor gives its extension hosts, local and remote, with this scenario's own. */
-	const environment = (more: { readonly [variable: string]: string } = {}) => ({ FACADE_IT_ENGINE: engine, FACADE_HOME: facade, CLAUDE_CONFIG_DIR: claude, FACADE_IT_RECORD: record, ...more });
+	const environment = (more: { readonly [variable: string]: string } = {}) => ({ FACADE_IT_IMPLEMENTATION: implementation, FACADE_HOME: facade, CLAUDE_CONFIG_DIR: claude, FACADE_IT_RECORD: record, ...more });
 	const opened = (folder: Folder) => 'local' in folder ? [folder.local] : ['--folder-uri', folder.host.uri(folder.remote)];
 	const workspaceExtension = (folder: Folder) => 'local' in folder ? extension : folder.host.uri(`${folder.host.build}/extension-it`);
 
@@ -347,8 +347,8 @@ node -p ${quoted(`JSON.stringify(require(${JSON.stringify(installed + '/product.
 					const qaMachine = host.kind === 'container'
 						? '/home/node/.vscode-server/data/Machine/settings.json'
 						: `${server(host)}/.vscode-server/data/Machine/settings.json`;
-					const qaValue = engine === 'old' ? 'off' : 'auto';
-					const qaText = JSON.stringify({ 'facade.rustEngine': qaValue });
+					const qaValue = implementation === 'legacy' ? 'off' : 'auto';
+					const qaText = JSON.stringify({ 'facade.framework': qaValue });
 					const qaNode = "const fs=require('fs'),crypto=require('crypto');const p=process.argv[1],s=fs.readFileSync(p,'utf8');console.log(JSON.stringify({path:p,sha256:crypto.createHash('sha256').update(s).digest('hex'),settings:JSON.parse(s)}))";
 					const qaReadback = host.run(`set -e
 umask 077
@@ -445,7 +445,7 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 			const start = () => spawn(executable, [...args, `--extensionEnvironment=${JSON.stringify(env)}`], { env: { ...process.env, ...local.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
 			const screen = (agent: string) => host.run(`unset FACADE_AGENT\nFACADE_HOME=${quoted(facade)} ${quoted(`${host.build}/extension-it/bin/facade`)} screen ${quoted(agent)} --lines 120`);
 			const query = async <O extends 'agent.list' | 'agent.inspect'>(op: O, args: DaemonOperations[O]['args']): Promise<DaemonOperations[O]['result']> => {
-				const probe = 'require(process.argv[1]).coreCall(process.argv[2], process.argv[3], JSON.parse(process.argv[4])).then(result => console.log(JSON.stringify(result))).catch(error => { console.error(error); process.exitCode = 1; });';
+				const probe = 'require(process.argv[1]).frameworkCall(process.argv[2], process.argv[3], JSON.parse(process.argv[4])).then(result => console.log(JSON.stringify(result))).catch(error => { console.error(error); process.exitCode = 1; });';
 				return JSON.parse(host.run(`node -e ${quoted(probe)} ${quoted(`${host.build}/out/test/integration/editors.js`)} ${quoted(facade)} ${quoted(op)} ${quoted(JSON.stringify(args))}`)) as DaemonOperations[O]['result'];
 			};
 			await windowLifetime(start, () => host.run(`if [ -f ${quoted(out)} ]; then cat ${quoted(out)}; fi`), async step => {
@@ -485,10 +485,10 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 				const localPath = `${path.join(extension, 'bin')}${path.delimiter}${process.env.PATH ?? ''}`;
 				return spawn(executable, args, { env: { ...process.env, ...user.env, ...env, PATH: localPath }, stdio: ['ignore', 'pipe', 'pipe'] });
 			};
-			const localCore = path.join(extension, 'bin', 'facade');
-			const daemonLog = path.join(facade, 'core', 'logs', 'daemon.log');
+			const localFramework = path.join(extension, 'bin', 'facade');
+			const daemonLog = path.join(facade, 'framework', 'logs', 'daemon.log');
 			const trace = () => fs.existsSync(daemonLog) ? fs.readFileSync(daemonLog, 'utf8') : '';
-			await withRustWindows(files, start, async open => {
+			await withFrameworkWindows(files, start, async open => {
 				if (connectOnly) {
 					const place = `${root}/app`;
 					const window = await open(place, 'a');
@@ -527,7 +527,7 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 				}
 
 				if (!network) {
-					await rustMultiWindow(open, {
+					await frameworkMultiWindow(open, {
 						folder: `${root}/app`, peer: `${root}/remote-peer`, shared, home: facade, remote: 'ssh-remote',
 						files
 					});
@@ -536,7 +536,7 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 				// Use the staged program at the bootstrap's fixed location inside a test-only SSH home.
 				const remoteHome = `${root}/ssh-home`;
 				const remoteBin = `${remoteHome}/.local/bin`;
-				const remoteCore = `${host.build}/extension-it/bin/facade`;
+				const remoteFramework = `${host.build}/extension-it/bin/facade`;
 				const localBin = path.join(root, 'ssh-network-bin');
 				const localHome = path.join(root, 'shell-home');
 				fs.mkdirSync(localBin, { recursive: true });
@@ -548,30 +548,30 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 					XDG_CONFIG_HOME: path.join(localHome, '.config'), XDG_DATA_HOME: path.join(localHome, '.local', 'share'),
 					XDG_CACHE_HOME: path.join(localHome, '.cache'), XDG_STATE_HOME: path.join(localHome, '.local', 'state')
 				};
-				const call = (...args: string[]) => execFileSync(localCore, args, { encoding: 'utf8', timeout: 20_000, cwd: local.app, env });
+				const call = (...args: string[]) => execFileSync(localFramework, args, { encoding: 'utf8', timeout: 20_000, cwd: local.app, env });
 				const remoteVersion = host.run(`set -e
 umask 077
 mkdir -p ${quoted(remoteBin)}
-ln -sf ${quoted(remoteCore)} ${quoted(`${remoteBin}/facade`)}
+ln -sf ${quoted(remoteFramework)} ${quoted(`${remoteBin}/facade`)}
 printf '%s\n' '#!/bin/sh' 'echo "Package downloads are disabled in this fixture" >&2' 'exit 1' > ${quoted(`${remoteBin}/curl`)}
 chmod +x ${quoted(`${remoteBin}/curl`)}
 ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 				assert.strictEqual(remoteVersion.trim(), call('--version').trim(), 'the two isolated packages have the same version');
 				call('daemon', '--detach');
-				const localMachines = async () => (await coreCall(facade, 'machine.list', {})).machines;
+				const localMachines = async () => (await frameworkCall(facade, 'machine.list', {})).machines;
 				const localMachine = (await localMachines()).find(row => row.route?.length === 0);
 				assert.ok(localMachine);
 				const myId = localMachine.machine_id;
 				const localName = 'network-local';
-				assert.strictEqual((await coreCall(facade, 'machine.rename', { machine: myId, name: localName })).machine_id, myId);
+				assert.strictEqual((await frameworkCall(facade, 'machine.rename', { machine: myId, name: localName })).machine_id, myId);
 				const first = await open(`${root}/app`, 'a');
 				const theirId = first.ready.machineId;
 				assert.notStrictEqual(theirId, myId);
 				assert.strictEqual(first.ready.remote, 'ssh-remote');
 				const name = 'Network QA worker';
 				const address = detachedStartReference(call('start', '-d', '--name', name, 'claude'), name);
-				const inspect = () => coreCall(facade, 'agent.inspect', { target: address });
-				const link = spawn(localCore, ['machine', 'connect', '--home', facade, '-F', config, '-o', 'BatchMode=yes', host.alias],
+				const inspect = () => frameworkCall(facade, 'agent.inspect', { target: address });
+				const link = spawn(localFramework, ['machine', 'connect', '--home', facade, '-F', config, '-o', 'BatchMode=yes', host.alias],
 					{ cwd: local.app, env, stdio: ['ignore', 'pipe', 'pipe'] });
 				let linkOutput = '';
 				const capture = (chunk: unknown) => { linkOutput = (linkOutput + String(chunk)).slice(-16_000); };
@@ -628,12 +628,12 @@ ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 					assert.ok(both.includes(firstViewer));
 					const secondViewer = both.find(viewer => viewer !== firstViewer);
 					assert.ok(secondViewer, JSON.stringify(both));
-					const { agents } = await coreCall(facade, 'agent.list', {});
+					const { agents } = await frameworkCall(facade, 'agent.list', {});
 					assert.deepStrictEqual(agents.map(row => [row.address, row.reference.machine_id, row.name]), [[address, myId, name]]);
 					const screen = () => call('screen', address, '--lines', '120');
 					assert.ok(screen().includes(firstText) && screen().includes(secondText));
 					const message = 'Unsupported human recipient marker';
-					const rejected = await callInCore(facade, 'agent.send', { to: '#human', text: message });
+					const rejected = await callInFramework(facade, 'agent.send', { to: '#human', text: message });
 					assert.ok('error' in rejected, JSON.stringify(rejected));
 					assert.strictEqual(rejected.error.data.reason, 'not_found');
 					assert.strictEqual(rejected.error.data.details?.message_ref, undefined);
@@ -662,7 +662,7 @@ ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 					await endEditors([link]);
 					call('stop', address);
 				}
-			}).finally(async () => { if (network) { await endCore(facade); } });
+			}).finally(async () => { if (network) { await endFramework(facade); } });
 		};
 		const runs: { readonly scenario: Scenario; readonly title: string; readonly go: () => Promise<void> }[] = [];
 		for (const host of hosts) {
@@ -684,8 +684,8 @@ ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 				},
 				{
 					scenario: 'local-ssh', title: on, go: async () => {
-						// The Rust engine's computers do not work together: of this scenario the local window's own journeys run, the container started beside it
-						if (engine === 'rust') {
+						// The Framework's computers do not work together: of this scenario the local window's own journeys run, the container started beside it
+						if (implementation === 'framework') {
 							await suite('local-ssh', { local: fs.realpathSync(local.app) }, { FACADE_IT_CLI: 'claude' });
 							return;
 						}
@@ -699,8 +699,8 @@ ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 						await suite('ssh-local', app(host), { FACADE_IT_CLI: 'claude', FACADE_IT_PEER: label, FACADE_IT_PEER_DIR: fs.realpathSync(local.peer), FACADE_IT_PEER_ELSEWHERE: '1' });
 					}
 				}
-			] as const).filter(each => !inContainer || each.scenario === 'local-ssh').filter(each => engine !== 'rust' || each.scenario === (inContainer ? 'local-ssh' : 'ssh')));
-			if (engine === 'rust') {
+			] as const).filter(each => !inContainer || each.scenario === 'local-ssh').filter(each => implementation !== 'framework' || each.scenario === (inContainer ? 'local-ssh' : 'ssh')));
+			if (implementation === 'framework') {
 				if (host.kind === 'ssh' && host.platform !== 'windows') {
 					if (connectOnly) {
 						runs.push({ scenario: 'ssh-connect', title: on, go: () => sshMultiWindow(host) });
@@ -712,7 +712,7 @@ ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 				}
 			}
 		}
-		if (hosts.length === 2 && hosts[0].kind === 'ssh' && engine !== 'rust') {
+		if (hosts.length === 2 && hosts[0].kind === 'ssh' && implementation !== 'framework') {
 			const [first, second] = hosts;
 			runs.push({
 				scenario: 'hosts', title: `${first.alias} with ${second.alias}`, go: async () => {
@@ -722,7 +722,7 @@ ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 			});
 		}
 		const selected = runs.filter(each => !only || each.scenario === only);
-		if (rustOnly && !selected.length) {
+		if (frameworkOnly && !selected.length) {
 			throw new Error(`The ${only} journey needs a Linux or macOS SSH host.`);
 		}
 		for (const run of selected) {

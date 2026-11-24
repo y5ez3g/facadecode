@@ -59,11 +59,11 @@ import { showComponentMissing, waitForWindowIdentity } from './windowComponent';
 import { registerShowLaunch, watchSettingsFile } from './showLaunch';
 import { WindowLifetime } from './windowLifetime';
 import { KeptWorkspaceState } from './workspaceState';
-import { chooseEngine, oldRunsRunning, retireWhenDone, rustEngineSetting, watchRustEngineSetting } from './engine';
-import { activateOrchestrator } from './orchestrator/index';
-import { DaemonError } from './orchestrator/types';
-import { FACADE_PROGRAM } from './rust/types';
-import { facadeInTerminals } from './rust/environment';
+import { chooseImplementation, oldRunsRunning, retireWhenDone, frameworkSetting, watchFrameworkSetting } from './implementation';
+import { activateOrchestrator } from './framework/index';
+import { DaemonError } from './framework/types';
+import { FACADE_PROGRAM } from './framework/daemonTypes';
+import { facadeInTerminals } from './framework/environment';
 
 declare const FACADE_TEST_MODE: boolean;
 
@@ -142,20 +142,19 @@ function workspaceUri(): string {
  * directory. Returns what deactivation runs: the window detaches, and its agents' processes go on in ptyd (RULES-4.1).
  */
 export async function activateFacade(context: vscode.ExtensionContext): Promise<() => Promise<void>> {
-	const automaticEngine = rustEngineSetting() === 'auto';
-	let switchable = automaticEngine && fs.existsSync(path.join(context.extensionPath, FACADE_PROGRAM));
+	const automaticFramework = frameworkSetting() === 'auto';
+	let switchable = automaticFramework && fs.existsSync(path.join(context.extensionPath, FACADE_PROGRAM));
 	const configured = homeSetting();
 	const oldRoot = configured === undefined ? undefined : homePathOf(configured);
 	const legacyHome = oldRoot === undefined ? undefined : path.join(oldRoot, 'extension');
-	context.subscriptions.push(watchRustEngineSetting());
-	const engine = await chooseEngine(context, legacyHome ?? (switchable ? facadeHome() : ''));
-	if (engine === 'rust') {
+	context.subscriptions.push(watchFrameworkSetting());
+	const implementation = await chooseImplementation(context, legacyHome ?? (switchable ? facadeHome() : ''));
+	if (implementation === 'framework') {
 		try {
 			const root = facadeRoot();
 			return await activateOrchestrator(context, {
 				root,
-				home: path.join(root, 'extension'),
-				...(legacyHome !== undefined ? { legacyHome } : {})
+				home: path.join(root, 'extension')
 			});
 		} catch (error) {
 			const cause = error instanceof Error ? error.cause : undefined;
@@ -163,10 +162,10 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 				throw new ActivationError(cause.message);
 			}
 			switchable = false;
-			await vscode.commands.executeCommand('setContext', 'facade.engine', 'old');
+			await vscode.commands.executeCommand('setContext', 'facade.implementation', 'legacy');
 			void vscode.window.showWarningMessage(vscode.l10n.t(
-				"The old engine is active on {0}. {1} Fix the problem, set {2} to `auto`, and reload the window to try the Rust engine again.",
-				os.hostname(), messageOf(error), 'facade.rustEngine'
+				"The legacy implementation is active on {0}. {1} Fix the problem, set {2} to `auto`, and reload the window to try Facade Code Framework again.",
+				os.hostname(), messageOf(error), 'facade.framework'
 			));
 		}
 	}
@@ -272,7 +271,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		human,
 		conversations,
 		titles: vendorHistory,
-		pinStore: new WorkspacePins(workspaceState, log, automaticEngine),
+		pinStore: new WorkspacePins(workspaceState, log, automaticFramework),
 		newPinId: () => `pin-${crypto.randomBytes(16).toString('hex')}`,
 		retained: new RetainedFile<RetainedRun>(record.dir, writeIfOwned),
 		aliases: address !== undefined ? agentAliases(agentNumbers) : NO_AGENT_NUMBERS,
@@ -296,7 +295,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		warmUp: (run, warmUp): Promise<void> => input.warmUp(run, warmUp),
 		newRunId: () => `run-${crypto.randomBytes(16).toString('hex')}`
 	});
-	// Under `auto`, the person's starts here stop once no run of the old engine is left: a reload switches this window
+	// Under `auto`, the person's starts here stop once no run of the legacy implementation is left: a reload switches this window
 	const retired = switchable ? retireWhenDone(agents, () => oldRunsRunning(home), log) : undefined;
 	const uiAgents = retired?.agents ?? agents;
 	// This window's address for the tools: it may change on reload, while its runs keep their IDs (ARCHITECTURE-2.2)

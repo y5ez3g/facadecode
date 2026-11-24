@@ -29,7 +29,7 @@ class ExpandedReview(unittest.TestCase):
         } for name, index in self.workflows.items()]
 
     def test_catalog_minimum_retains_the_meaning_and_bound_selector(self):
-        case_id = 'core/shell/command/start'
+        case_id = 'framework/shell/command/start'
         binding = {'name': 'starts_one_cli'}
         old = {'id': case_id, 'assertion': 'starts one CLI', 'stage': 'pr', 'test': binding}
         case = Case(case_id, 'pr', old['assertion'], (), binding)
@@ -43,8 +43,8 @@ class ExpandedReview(unittest.TestCase):
                 require_catalog_minimum(changed, [old])
 
     def test_a_new_api_needs_a_binding_while_visible_backlog_is_preserved(self):
-        old_id = 'core/shell/command/list'
-        new_id = 'core/shell/command/screen'
+        old_id = 'framework/shell/command/list'
+        new_id = 'framework/shell/command/screen'
         old = Case(old_id, 'pr', 'List visible agents.', (), None)
         new = Case(new_id, 'pr', 'Read the chosen screen.', (), None)
         baseline = [{'id': old.id, 'assertion': old.assertion, 'stage': old.stage}]
@@ -77,7 +77,7 @@ class ExpandedReview(unittest.TestCase):
             with patch('merge_review.gh_json', return_value=[page]):
                 return current_runs(REPO, PULL, HEAD, BASE, self.candidate, self.workflows)
 
-        self.assertEqual(len(list_runs(self.runs)), 5)
+        self.assertEqual(len(list_runs(self.runs)), 4)
         with self.assertRaisesRegex(AcceptanceError, 'no current run'):
             list_runs(self.runs[:-1])
         first = self.runs[0]

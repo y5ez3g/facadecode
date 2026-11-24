@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type { DaemonOperations, DaemonTopics } from '../../base/coreProtocol';
+import type { DaemonOperations, DaemonTopics } from '../../base/frameworkProtocol';
 import { normalizeName } from '../../core/names';
 import type { Location, LocationId, LocationPort, RunId } from '../../core/ports';
 import { COMMANDS } from '../catalog';
@@ -25,7 +25,7 @@ type ResumeCandidate = ResumeListResult['items'][number];
 type MachineInfo = DaemonTopics['machines']['snapshot'][number];
 type StartArgs = DaemonOperations['agent.start']['args'];
 
-export interface RustPickerDeps {
+export interface FrameworkPickerDeps {
 	readonly media: vscode.Uri;
 	readonly locations: LocationPort;
 	readonly hostMachineId: () => string;
@@ -43,7 +43,7 @@ export interface RustPickerDeps {
 }
 
 /** Orchestrator-backed commands use the same public candidates as Shell (RULES-6.2, 6.5). */
-export function createRustPickers(deps: RustPickerDeps): {
+export function createFrameworkPickers(deps: FrameworkPickerDeps): {
 	readonly newAgent: (startAt?: LocationId) => Promise<void>;
 	readonly goToAgent: () => Promise<void>;
 	readonly resumeAgent: () => Promise<void>;
@@ -73,7 +73,7 @@ interface LoadedRows<T> {
 }
 
 /** Shows the native picker while its request is pending, and ignores answers after it is dismissed. */
-function pickLoaded<T extends vscode.QuickPickItem>(flow: Flow, deps: RustPickerDeps, options: {
+function pickLoaded<T extends vscode.QuickPickItem>(flow: Flow, deps: FrameworkPickerDeps, options: {
 	readonly title: string;
 	readonly placeholder: string;
 	readonly load: () => Promise<LoadedRows<T>>;
@@ -107,7 +107,7 @@ function rowText(...parts: readonly (string | undefined)[]): string {
 	return plainText(parts.filter(Boolean).join(' · ').replace(/\r?\n/g, ' '));
 }
 
-async function goToAgent(deps: RustPickerDeps, flow: Flow): Promise<void> {
+async function goToAgent(deps: FrameworkPickerDeps, flow: Flow): Promise<void> {
 	const picked = await pickLoaded(flow, deps, {
 		title: vscode.l10n.t("Go to Agent"),
 		placeholder: vscode.l10n.t("Search by name, CLI, title, location, or ID"),
@@ -132,7 +132,7 @@ function resumeKey(candidate: ResumeCandidate): string {
 	return ref ? JSON.stringify([ref.machine_id, ref.agent_id]) : JSON.stringify([candidate.machine_id, candidate.cli, candidate.session]);
 }
 
-async function resumeAgent(deps: RustPickerDeps, flow: Flow): Promise<void> {
+async function resumeAgent(deps: FrameworkPickerDeps, flow: Flow): Promise<void> {
 	const picked = await pickLoaded(flow, deps, {
 		title: vscode.l10n.t("Resume Agent"),
 		placeholder: vscode.l10n.t("Search by title, name, CLI, or location"),
@@ -191,7 +191,7 @@ function initialLocation(locations: LocationPort, startAt: LocationId | undefine
 
 type CliRow = vscode.QuickPickItem & { readonly does?: 'start' | 'location' | 'name' | 'openFolder' | 'settings'; readonly cli?: CliInfo };
 
-function cliRows(deps: RustPickerDeps, place: LaunchPlace | undefined, name: string, result?: CliListResult): LoadedRows<CliRow> {
+function cliRows(deps: FrameworkPickerDeps, place: LaunchPlace | undefined, name: string, result?: CliListResult): LoadedRows<CliRow> {
 	const title = vscode.l10n.t("New Agent");
 	const options: CliRow = { label: vscode.l10n.t("Options"), kind: vscode.QuickPickItemKind.Separator };
 	if (!place || !result) {
@@ -225,7 +225,7 @@ function cliRows(deps: RustPickerDeps, place: LaunchPlace | undefined, name: str
 	};
 }
 
-async function newAgent(deps: RustPickerDeps, flow: Flow, startAt?: LocationId): Promise<void> {
+async function newAgent(deps: FrameworkPickerDeps, flow: Flow, startAt?: LocationId): Promise<void> {
 	let place: LaunchPlace | undefined;
 	let name = '';
 	let loaded = false;
@@ -279,7 +279,7 @@ async function newAgent(deps: RustPickerDeps, flow: Flow, startAt?: LocationId):
 	}
 }
 
-async function chooseWorkingLocation(deps: RustPickerDeps, flow: Flow, current?: LaunchPlace): Promise<LaunchPlace | typeof BACK | undefined> {
+async function chooseWorkingLocation(deps: FrameworkPickerDeps, flow: Flow, current?: LaunchPlace): Promise<LaunchPlace | typeof BACK | undefined> {
 	const host = deps.hostMachineId();
 	const machines = deps.machines();
 	const local = machines.find(machine => machine.machine_id === host);
@@ -308,7 +308,7 @@ async function chooseWorkingLocation(deps: RustPickerDeps, flow: Flow, current?:
 	}
 }
 
-async function chooseRemoteLocation(deps: RustPickerDeps, flow: Flow, machine: MachineInfo, current?: LaunchPlace): Promise<LaunchPlace | typeof BACK | undefined> {
+async function chooseRemoteLocation(deps: FrameworkPickerDeps, flow: Flow, machine: MachineInfo, current?: LaunchPlace): Promise<LaunchPlace | typeof BACK | undefined> {
 	type Row = vscode.QuickPickItem & { readonly place?: LaunchPlace };
 	const title = vscode.l10n.t("New Agent · Working Location");
 	const worktree = launchWorktreeButton();
@@ -356,7 +356,7 @@ async function chooseRemoteLocation(deps: RustPickerDeps, flow: Flow, machine: M
 }
 
 /** Ask the same machine about the entered directory before offering a new worktree (WORKTREES-5.1). */
-async function chooseEnteredPath(deps: RustPickerDeps, flow: Flow, title: string, machine: string, folder: string): Promise<boolean | typeof BACK | undefined> {
+async function chooseEnteredPath(deps: FrameworkPickerDeps, flow: Flow, title: string, machine: string, folder: string): Promise<boolean | typeof BACK | undefined> {
 	const picked = await pickLoaded<vscode.QuickPickItem & { readonly worktree: boolean }>(flow, deps, {
 		title, placeholder: vscode.l10n.t("Select a working location"), back: true,
 		load: async () => {

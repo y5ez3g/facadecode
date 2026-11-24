@@ -1,6 +1,6 @@
 # Locations and worktrees
 
-Group 5 covers worktrees in the Orchestrator-backed editor. Groups 1–4 cover the old-engine transition.
+Group 5 covers worktrees in the Orchestrator-backed editor. Groups 1–4 cover the legacy implementation transition.
 
 Layer 3. Ordinary folders are the baseline; Git and worktrees are optional under PRODUCT-5.4. This document owns location
 catalogs, native creation, the confirmed deletion of a linked worktree and observation of external location removal.

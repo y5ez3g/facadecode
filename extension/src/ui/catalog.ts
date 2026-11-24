@@ -25,7 +25,7 @@ export const COMMANDS = {
 	/** The selected card's details, for the keyboard (PANEL-1.5, UX-2.3). */
 	showAgentDetails: 'facade.showAgentDetails',
 	filter: 'facade.filter',
-	/** Open the Orchestrator's settings file, or the editor's Settings on the old engine (CONFIGURATION-7.1, 1.2). */
+	/** Open the Orchestrator's settings file, or the editor's Settings on the legacy implementation (CONFIGURATION-7.1, 1.2). */
 	openSettings: 'facade.openSettings',
 	/** Registered by the host: the settings file opened, made first where there is none (CONFIGURATION-1.2, 1.3). */
 	openSettingsFile: 'facade.openSettingsFile',

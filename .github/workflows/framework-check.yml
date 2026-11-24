@@ -1,0 +1,155 @@
+name: Framework checks
+
+on:
+  pull_request:
+    paths:
+      - 'framework/**'
+      - 'extension/src/base/names.ts'
+      - '.github/workflows/framework-check.yml'
+      - 'ci/acceptance.py'
+      - 'ci/catalog.py'
+      - 'ci/check_real_ssh_route.py'
+      - 'ci/evidence.py'
+      - 'ci/native_framework.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: framework-check-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: Framework on ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          - os: windows-latest
+            target: win32-x64
+          - os: windows-11-arm
+            target: win32-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+        working-directory: framework
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: framework
+      - name: Name the commits tests make
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+      - name: Format
+        if: matrix.target == 'linux-x64'
+        run: cargo fmt --check
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/facade-tests"
+          TMPDIR="$RUNNER_TEMP/facade-tests" scripts/test-all.sh
+      # Its temporary folder is .test-temp, beside the checkout
+      - name: Tests on Windows
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        shell: powershell
+        run: scripts\test-all.ps1
+      - name: Agents outlive an SSH login
+        if: ${{ !cancelled() && matrix.target == 'linux-x64' }}
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q openssh-server
+          sudo systemctl start ssh
+          mkdir -p ~/.ssh
+          chmod go-w ~ && chmod 700 ~/.ssh
+          ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519
+          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          ssh-keyscan -t ed25519 localhost >> ~/.ssh/known_hosts
+          mkdir -p "$RUNNER_TEMP/facade-tests"
+          TMPDIR="$RUNNER_TEMP/facade-tests" scripts/ssh-check.sh
+      - name: Route a Framework agent over real SSH
+        if: ${{ !cancelled() && matrix.target == 'linux-x64' }}
+        run: |
+          out="$RUNNER_TEMP/facade-ssh-route"
+          mkdir -p "$out"
+          bin="${FACADE_SSH_CHECK_BIN:-${CARGO_TARGET_DIR:-$PWD/target}/debug}"
+          python3 -B ../ci/check_real_ssh_route.py --bin-dir "$bin" --receipt "$out/receipt.json" 2>&1 | tee "$out/console.log"
+          python3 -B ../ci/acceptance.py verify-native-ssh --bin-dir "$bin" "$out/receipt.json" "$out/console.log"
+      - name: Keep the real SSH route evidence
+        if: ${{ always() && matrix.target == 'linux-x64' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: framework-ssh-route-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/facade-ssh-route/
+          if-no-files-found: ignore
+      - name: Collect the failed Windows run
+        if: ${{ failure() && runner.os == 'Windows' }}
+        shell: powershell
+        run: |
+          $log = 'target/test-all.log.full'
+          if (Test-Path -LiteralPath $log) {
+            Select-String -LiteralPath $log -Pattern "^thread .* panicked at " -Context 0,5 |
+              Select-Object -First 20
+          }
+          $runs = Join-Path (Split-Path $env:GITHUB_WORKSPACE) '.test-temp'
+          if (Test-Path -LiteralPath $runs) {
+            $out = Join-Path $env:RUNNER_TEMP 'facade-tests'
+            New-Item -ItemType Directory -Force $out | Out-Null
+            Get-ChildItem -LiteralPath $runs -Directory -Filter 'facade-test-all.*' |
+              ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $out -Recurse }
+          }
+      - name: Keep the failed run's files
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: framework-tests-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/facade-tests
+            framework/target/test-all.log
+            framework/target/test-all.log.full
+          if-no-files-found: ignore
+
+  each-commit:
+    name: Framework at each commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # check-each-commit.sh builds in a worktree of its own; this reuses the cached dependencies.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/framework/target
+    defaults:
+      run:
+        shell: bash
+        working-directory: framework
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || '' }}
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: framework
+      - name: Each commit builds and leaves Cargo.lock as it is
+        env:
+          BASE: origin/${{ github.base_ref || 'main' }}
+        run: scripts/check-each-commit.sh "$(git merge-base "$BASE" HEAD)"

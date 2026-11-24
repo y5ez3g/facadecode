@@ -1,4 +1,4 @@
-"""Review a same-repository PR with the complete Core and Extension matrix."""
+"""Review a same-repository PR with the complete Framework and Extension matrix."""
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 from zipfile import BadZipFile
 
 from acceptance import affected_products, baseline_cases, changed_paths, require_new_bindings
-from catalog import AcceptanceError, load
+from catalog import AcceptanceError, PRODUCTS, load
 from evidence import git
 from github_evidence import SHA, check_pull_run, run_artifacts, verify_hosted
 from github_timing import attempt_job_records, gh_json
@@ -25,55 +25,55 @@ TARGETS = {
     'darwin-x64': ('macOS', 'macos-15-intel'), 'darwin-arm64': ('macOS', 'macos-latest'),
     'win32-x64': ('Windows', 'windows-latest'), 'win32-arm64': ('Windows', 'windows-11-arm'),
 }
+IMPLEMENTATIONS = ('legacy', 'framework')
 SHADOW = 'ci-acceptance.yml'
-CORE = 'core-check.yml'
+FRAMEWORK = 'framework-check.yml'
 EXTENSION = 'extension-check.yml'
-COLD = 'core-compatibility.yml'
 REMOTE = 'extension-remote.yml'
 REQUIRED = {
     SHADOW: {
         'Shadow catalog and policy tests': ('Run python3 -B -m unittest discover -s ci',
                                             'Report catalog coverage', 'Check the generated acceptance table'),
-        'Shadow pilot (core)': ('Run and verify selected cases',),
+        'Shadow pilot (framework)': ('Run and verify selected cases',),
         'Shadow pilot (extension)': ('Run and verify selected cases',),
         'Shadow pilot evidence': ('Reconcile the selected pilots',),
     },
-    CORE: {
-        'Core at each commit': ('Each commit builds and leaves Cargo.lock as it is',),
-        **{f'Core on {target}': ('Lint', 'Tests on Windows' if os == 'Windows' else 'Tests')
+    FRAMEWORK: {
+        'Framework at each commit': ('Each commit builds and leaves Cargo.lock as it is',),
+        **{f'Framework on {target}': ('Lint', 'Tests on Windows' if os == 'Windows' else 'Tests')
            for target, (os, _) in TARGETS.items()},
     },
     EXTENSION: {
-        f'Extension on {target}, {engine} engine': (
+        f'Extension on {target}, {implementation} implementation': (
             'Run npm run compile', 'Build the isolated editor fixtures',
             'Download official VS Code for isolated tests',
             f'Isolated editor journeys on {os}', 'Keep editor test output',
-            *(('Run npm test', 'Run npm run test:package', 'Pack core from the native VSIX',
-               'Install the local core archive on Windows' if os == 'Windows'
-               else 'Install the local core archive on Linux and macOS',
-               'Record the tested native package digests', 'Keep tested packages') if engine == 'old' else ()),
+            *(('Run npm test', 'Run npm run test:package', 'Pack framework from the native VSIX',
+               'Install the local framework archive on Windows' if os == 'Windows'
+               else 'Install the local framework archive on Linux and macOS',
+               'Record the tested native package digests', 'Keep tested packages') if implementation == 'legacy' else ()),
         )
-        for target, (os, _) in TARGETS.items() for engine in ('old', 'rust')
+        for target, (os, _) in TARGETS.items() for implementation in IMPLEMENTATIONS
     },
-    COLD: {'Core cold migration (linux-x64)': ('Reopen the pinned v3 state in the candidate',
-                                               'Keep the prior and candidate evidence')},
     REMOTE: {'Extension Remote SSH connect (linux-x64)': ('Stage the verified official desktop editor',
                                                         'Observe ownership in the actual Remote SSH workspace',
                                                         'Keep Remote SSH runtime and cleanup evidence')},
 }
-REQUIRED[CORE]['Core on linux-x64'] += ('Format', 'Agents outlive an SSH login', 'Route a Core agent over real SSH',
-                                       'Keep the real SSH route evidence')
-REQUIRED[EXTENSION]['Extension on linux-x64, old engine'] += (
+REQUIRED[FRAMEWORK]['Framework on linux-x64'] += (
+    'Format', 'Agents outlive an SSH login', 'Route a Framework agent over real SSH',
+    'Keep the real SSH route evidence',
+)
+REQUIRED[EXTENSION]['Extension on linux-x64, legacy implementation'] += (
     'Verify the installed Linux x64 candidate', 'Keep the Linux x64 candidate install evidence',
     'Keep the checked-out source tree', 'Release script tests', 'Record the release fixture results',
     'Keep the release fixture output',
 )
 RUNNERS = {
-    **dict.fromkeys(REQUIRED[SHADOW] | REQUIRED[COLD] | REQUIRED[REMOTE], 'ubuntu-24.04'),
-    'Core at each commit': 'ubuntu-latest',
-    **{f'Core on {target}': runner for target, (_, runner) in TARGETS.items()},
-    **{f'Extension on {target}, {engine} engine': runner
-       for target, (_, runner) in TARGETS.items() for engine in ('old', 'rust')},
+    **dict.fromkeys(REQUIRED[SHADOW] | REQUIRED[REMOTE], 'ubuntu-24.04'),
+    'Framework at each commit': 'ubuntu-latest',
+    **{f'Framework on {target}': runner for target, (_, runner) in TARGETS.items()},
+    **{f'Extension on {target}, {implementation} implementation': runner
+       for target, (_, runner) in TARGETS.items() for implementation in IMPLEMENTATIONS},
 }
 
 
@@ -198,13 +198,12 @@ def verify_jobs(repo, workflow, run):
 def required_artifacts(repo, workflow, run):
     attempt = run['run_attempt']
     names = {
-        CORE: {f'core-ssh-route-{attempt}'},
-        COLD: {f'core-cold-migration-{attempt}'},
+        FRAMEWORK: {f'framework-ssh-route-{attempt}'},
         REMOTE: {f'extension-remote-ssh-{attempt}'},
         EXTENSION: {
             'tested-extension-tree', f'native-install-linux-x64-{attempt}', f'release-fixture-linux-x64-{attempt}',
             *(f'extension-{target}' for target in TARGETS),
-            *(f'editor-tests-{target}-{engine}' for target in TARGETS for engine in ('old', 'rust')),
+            *(f'editor-tests-{target}-{implementation}' for target in TARGETS for implementation in IMPLEMENTATIONS),
         },
     }
     return run_artifacts(f'repos/{repo}/actions/runs/{run["id"]}', run, names[workflow])
@@ -222,7 +221,7 @@ def review(root, repo, pull, head, base, output):
         raise AcceptanceError('the evidence validators require Python assertions enabled')
     candidate = current_candidate(repo, pull, head, base)
     require_checkout(root, head, candidate)
-    if affected_products(changed_paths(root, base)) != ('core', 'extension'):
+    if affected_products(changed_paths(root, base)) != PRODUCTS:
         raise AcceptanceError('expanded review requires a candidate with both shadow products selected')
     cases, _, _, _ = load(root)
     require_catalog_minimum(cases, baseline_cases(root, base))

@@ -229,10 +229,10 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 			l10n: { t: (value: string, ...args: unknown[]) => value.replace(/\{(\d+)\}/g, (_, n) => String(args[Number(n)])) },
 			env: { clipboard: { writeText: async (text: string) => { done.push(['copy', text]); } } }
 		};
-		const { AgentActions, registerRustAgentCommands } = withModules({ vscode: api, '../pickers/stepping': {
+		const { AgentActions, registerFrameworkAgentCommands } = withModules({ vscode: api, '../pickers/stepping': {
 			Flow: class { async text(options: unknown) { renames.push(options); return '  New name  '; } close() { } }
 		} })<typeof import('../ui/commands/agent')>(require.resolve('../ui/commands/agent'));
-		const registration = registerRustAgentCommands({
+		const registration = registerFrameworkAgentCommands({
 			agents: { get: id => entries.get(id) },
 			model: { selectedAgent: () => ({ run: local.id, ended: false }) } as never,
 			actions: {

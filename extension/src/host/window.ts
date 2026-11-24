@@ -41,7 +41,7 @@ async function serveHere(request: ServedRoute): Promise<unknown> {
 	}
 }
 
-/** The local component's terminal registry and the entry to its old-engine window services. */
+/** The local component's terminal registry and the entry to its legacy implementation window services. */
 export function activate(context: vscode.ExtensionContext): void {
 	const directory = context.logUri.fsPath;
 	const here = (session: unknown) => session === vscode.env.sessionId;

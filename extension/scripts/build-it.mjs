@@ -1,10 +1,10 @@
 // Assembles the integration suite's own extension in build/extension-it/: the shipped extension of build/extension/, built in test
-// mode with its test commands and the page's probe, core's programs as they ship (scripts/core.mjs), and ptyd as it ships
+// mode with its test commands and the page's probe, framework's programs as they ship (scripts/framework.mjs), and ptyd as it ships
 // (src/test/integration/ptydFixture.ts). Nothing of it reaches the shipped extension or a package (UX-3.2).
 import * as esbuild from 'esbuild';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { BIN, buildCore, coreTriple } from './core.mjs';
+import { BIN, buildFramework, frameworkTriple } from './framework.mjs';
 
 const root = path.join(import.meta.dirname, '..');
 const shipped = path.join(root, 'build', 'extension');
@@ -14,9 +14,9 @@ if (!['extension.js', 'ptyd.js'].every(file => fs.existsSync(path.join(shipped, 
 }
 fs.rmSync(stage, { recursive: true, force: true });
 fs.cpSync(shipped, stage, { recursive: true });
-// The Rust engine runs on core's programs, on every supported target
-if (coreTriple()) {
-	buildCore();
+// The Framework runs on framework's programs, on every supported target
+if (frameworkTriple()) {
+	buildFramework();
 	fs.cpSync(BIN, path.join(stage, 'bin'), { recursive: true });
 }
 // jsonc-parser's ES modules, as the shipped bundle has them (scripts/build.mjs)

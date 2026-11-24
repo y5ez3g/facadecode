@@ -67,7 +67,7 @@ function receipt(directory, source, node) {
 		'Release fixtures require the pinned Node major');
 	const tap = fs.readFileSync(path.join(directory, 'release.tap'));
 	const suite = fs.readFileSync(new URL('release.test.mjs', import.meta.url));
-	return { schemaVersion: 1, source, target: 'linux-x64', engine: 'old', node, ...observeReleaseFixture(tap, suite) };
+	return { schemaVersion: 1, source, target: 'linux-x64', implementation: 'legacy', node, ...observeReleaseFixture(tap, suite) };
 }
 
 function main(args) {

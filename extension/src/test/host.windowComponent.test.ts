@@ -76,7 +76,7 @@ suite('The window component as the workspace extension waits for it (ARCHITECTUR
 				return true;
 			});
 			const owner = await editor.component.optionalTerminalOwner({} as never, home.dir, { event: assert.fail });
-			assert.strictEqual(owner?.claim.owner, `rust-terminal:${IDENTITY.token}`);
+			assert.strictEqual(owner?.claim.owner, `framework-terminal:${IDENTITY.token}`);
 			assert.deepStrictEqual(editor.executed, [WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND]);
 			editor.handlers.set(WINDOW_TERMINAL_OWNER_COMMAND, () => ({ ...IDENTITY, session: 'session-0' }));
 			assert.strictEqual(await editor.component.optionalTerminalOwner({} as never, home.dir, { event: assert.fail }), undefined);

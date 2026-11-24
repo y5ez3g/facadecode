@@ -5,5 +5,5 @@ build/
 .DS_Store
 /.vscode/
 
-# Core's programs for the packages, built by scripts/core.mjs.
+# Framework programs built for the packages by scripts/framework.mjs.
 /bin/

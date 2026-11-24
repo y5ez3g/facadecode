@@ -452,7 +452,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		assert.deepStrictEqual(shown, Array(3).fill({ text: failure.message, items: ['Reload Window'] }));
 	});
 
-	test('the old engine uses the installation wait and missing-component explanation, without inventing an identity', async () => {
+	test('the legacy implementation uses the installation wait and missing-component explanation, without inventing an identity', async () => {
 		const vscode = api();
 		let missing = 0;
 		let disposed = 0;

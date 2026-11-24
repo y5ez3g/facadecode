@@ -1,6 +1,6 @@
 # Interaction and interface
 
-Group 6 covers controls for the Orchestrator-backed editor. Groups 1–5 retain the old-engine transition rules
+Group 6 covers controls for the Orchestrator-backed editor. Groups 1–5 retain the legacy implementation transition rules
 and the existing native appearance and accessibility details where applicable.
 
 Layer 3. [Product](PRODUCT.md) prioritizes capability, familiarity and simplicity; [Rules](RULES.md) owns status/notification meaning.
@@ -181,7 +181,7 @@ are validated against current state, without falling back to the selection.
 | ID after `facade.` | Title | Availability / other surface | Owner |
 | --- | --- | --- | --- |
 | `newAgent` | New Agent... | Always; panel/empty state | LIFECYCLE-1.1 |
-| `continueSession` | Continue Session... | Both engines; palette and empty panel. Old engine panel title | LIFECYCLE-3.2 |
+| `continueSession` | Continue Session... | Both implementations; palette and empty panel. Legacy implementation panel title | LIFECYCLE-3.2 |
 | `pinAgent` | Pin Agent | Unpinned agent whose CLI can resume its exact conversation, before it names one too; the card's Pin button | LIFECYCLE-3.4 |
 | `unpinAgent` | Unpin Agent | Pinned record; the card's Pin button | LIFECYCLE-3.4 |
 | `goToAgent` | Go to Agent... | Always; Command Palette | LIFECYCLE-2.3 |
@@ -191,7 +191,7 @@ are validated against current state, without falling back to the selection.
 | `showAgentDetails` | Show Agent Details | A selected record whose card the filter shows; the card's ⓘ | PANEL-1.5 |
 | `filter` | Filter by Working Location... | Panel title and Command Palette, except where every agent works in the window's one place to work and no filter is on | PANEL-2.3 |
 | `openSettings` | Open Settings | Always; panel `…` menu, New Agent's gear and configuration entries; opens the Settings section or remote facade.json under CONFIGURATION-1.2 | CONFIGURATION-1.2 |
-| `showAgentLaunch` | Show Agent Command Line... | Old engine; Command Palette | CLIS-4.1 |
+| `showAgentLaunch` | Show Agent Command Line... | Legacy implementation; Command Palette | CLIS-4.1 |
 | `showAgentsLog` | Show Agents Log | Always; Command Palette | ARCHITECTURE-3.3 |
 | `newWorktree` | New Worktree... | Menu-only: panel `…` when a workspace folder is open; hidden from Command Palette | WORKTREES-2.1, 4.3 |
 
@@ -320,18 +320,18 @@ agent. PANEL-4 owns the card menu, state, title and details.
 
 ### 6.2 Settings and languages
 
-**Use the shared [glossary](../core/GLOSSARY.md) and keep the product's command terms across locales.**
+**Use the shared [glossary](../framework/GLOSSARY.md) and keep the product's command terms across locales.**
 
 Pin, Resume, Go to Agent, Attach, YOLO and Guest keep their names in all translations. Mark `facade.home` as an
-old-engine setting. Open Settings opens the machine's `facade.json` directly under
+legacy implementation setting. Open Settings opens the machine's `facade.json` directly under
 CONFIGURATION-7.1. For a settings problem on that machine, Edit in facade.json opens the same file. For a
 settings problem on another machine, report the target and direct the person to the Shell and SSH steps in
 CONFIGURATION-7.1.
 
 Report agent and start errors using the machine or folder involved. Use window names for the editor and
-Attach viewers where relevant. If the editor falls back to the old engine, name the machine it runs on and
-the step that failed. Say that the window is using the old engine. Explain that after correcting the failure,
-the person can select `auto` in **Facade: Rust Engine** and reopen the window.
+Attach viewers where relevant. If the editor falls back to the legacy implementation, name the machine it runs on and
+the step that failed. Say that the window is using the legacy implementation. Explain that after correcting the failure,
+the person can select `auto` in **Facade: Framework** and reopen the window.
 
 ## Checks
 

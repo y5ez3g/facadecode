@@ -14,8 +14,8 @@ from threading import Event
 from evidence import clean_scope, execute
 
 
-def remove_stale_core_sockets(scope):
-    socket_dir = Path('/tmp') / f'facade-core-{os.getuid()}'
+def remove_stale_framework_sockets(scope):
+    socket_dir = Path('/tmp') / f'facade-framework-{os.getuid()}'
     homes = {config.parent for config in scope.glob('fdit-*/home/*/facade.json')}
     for home in homes:
         key = hashlib.sha256(os.fsencode(home)).hexdigest()[:10]
@@ -49,7 +49,7 @@ def main(args):
     runtime = scope / 'runtime'
     test_env = {
         **env, 'CI_ACCEPTANCE_ROOT': str(scope), 'TMPDIR': str(scope),
-        'XDG_RUNTIME_DIR': str(runtime), 'FACADE_IT_OVERLAP_CORE_IDLE': '1',
+        'XDG_RUNTIME_DIR': str(runtime), 'FACADE_IT_OVERLAP_FRAMEWORK_IDLE': '1',
     }
     cancelled = Event()
     received = None
@@ -76,7 +76,7 @@ def main(args):
             cleanup = clean_scope(root, scope, env, sys.stdout, True)
         if cleanup == 'pass':
             try:
-                remove_stale_core_sockets(scope)
+                remove_stale_framework_sockets(scope)
                 shutil.rmtree(scope)
                 print('Isolated editor profile cleanup finished.', flush=True)
             except OSError as error:

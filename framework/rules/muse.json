@@ -1,0 +1,44 @@
+{
+	"cli": "muse",
+	"display_name": "Muse Code",
+	"program": "muse",
+	"launch": { "agent_env": { "MUSE_NO_AUTO_UPDATE": "1" } },
+	"arguments": {"reserved": ["--disable-approval", "--disable-sandbox", "--yolo", "--approval-mode", "--trust-workspace", "--worktree", "-w", "--worktree-existing", "--worktree-base", "--no-session-log", "--continue", "--last", "--model", "--reasoning-effort", "--effort", "--permission-profile", "--approval-judge"], "attached": ["-w"], "clusters": ["-c", "-w"], "config": {"options": ["-c", "--config"], "reserved": ["mcpServers.facade", "model", "reasoning_effort", "model_reasoning_efforts"]}},
+	"choices": {"model": ["--model", "${value}"], "effort": ["-c", "reasoning_effort=${value_json}", "-c", "model_reasoning_efforts={}"], "spelling": {"model": ["--model"], "effort": ["--reasoning-effort", "--effort"], "config": {"model": "model", "effort": "reasoning_effort"}}},
+	"input": {
+		"mechanism": "frame",
+		"prompt": "❯",
+		"gap": " ",
+		"upper": "^(?:─+|─{2} [^─]+ ─+)$",
+		"lower": "^─+$",
+		"scrolled": { "position": "rows", "above": "^↑ (\\d+) more lines?$", "below": "^↓ (\\d+) more lines?$" },
+		"menus": [{ "selected": "^⟩ \\d+ +\\S", "next": "^ {2}\\d+ +\\S" }]
+	},
+	"paste": {
+		"enter_ms": 250,
+		"placeholders": [
+			{ "pattern": "^\\[PastedContent(\\d+)chars?\\]$", "count": "chars" },
+			{ "pattern": "^\\[PastedContent(\\d+)chars?\\]$", "count": "chars", "after_first_character": true }
+		]
+	},
+	"session": { "capture": "session_start", "resume": ["resume", "${session_id}"] },
+	"mcp": { "session_env_key": "MUSE_SESSION_ID" },
+	"status": {
+		"mechanism": "frame_transcript",
+		"footer": "^ {2}\\S.* · \\S.* · \\S.*$",
+		"working": "^[◈◆◇] \\S.*\\besc to interrupt\\)$",
+		"usage": "^⚠ Usage ",
+		"queued": "^◆ Queued input(?: ·|$)",
+		"queue_continuation": "└ ",
+		"header": "^ {2}Muse Code \\d+\\.\\d+\\.\\d+\\b",
+		"idle_marks": ["❯ ", "• "],
+		"answer": "◆ ",
+		"sign_in": ["^ *Log in with browser\\b", "^ *Set an API key\\b"],
+		"trust": "^Do you trust this workspace\\?$"
+	},
+	"yolo": {
+		"work": { "args": ["--disable-approval", "--disable-sandbox"] },
+		"startup": { "args": ["--trust-workspace"] }
+	},
+	"console": { "per_char_ms": 1, "records_above_bmp": true }
+}

@@ -7,7 +7,7 @@ from pathlib import Path
 from catalog import AcceptanceError, NATIVE_SSH_CASE
 from check_real_ssh_route import INPUT, PROGRAMS, REFUSE_UNKNOWN_MACHINE, SUCCESS_MARKER, ssh_success, verified_ssh
 from evidence import digest
-from native_core import hash_file, source_identity
+from native_framework import hash_file, source_identity
 
 
 def observations(scope):

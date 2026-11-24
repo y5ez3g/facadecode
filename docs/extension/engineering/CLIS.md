@@ -1,6 +1,6 @@
 # CLI integrations
 
-Group 6 defines the active editor integration boundary and the current CLI configuration. Groups 1–5 describe the old-engine transition and its
+Group 6 defines the active editor integration boundary and the current CLI configuration. Groups 1–5 describe the legacy implementation transition and its
 adapters.
 
 Layer 4. This document specifies the CLI adapters and the effective launch configuration: how each CLI is found,
@@ -278,7 +278,7 @@ ptyd that reads no input (ARCHITECTURE-2.4), gives no such text.
 
 **Use per-run launch files first; write project files only where the CLI requires them and preserve user content.**
 
-The table below describes the old-engine adapters. CLIS-6.2 describes the current Orchestrator configuration.
+The table below describes the legacy implementation adapters. CLIS-6.2 describes the current Orchestrator configuration.
 
 Each built-in receives the `facade` server, the skill and an approval of Facade's own tools as its CLI takes them:
 
@@ -573,11 +573,8 @@ unverified and reports that state. Antigravity's first task goes after what its 
 (COLLABORATION-2.2), as its first message. Do not wait for MCP or activity idle beyond that, send a confirmed prompt twice
 or synthesize a prompt to make MCP appear connected.
 
-A CLI whose startup update prompt would hold back the first task it is given starts without that prompt in Facade's
-launches: Codex with `-c check_for_update_on_startup=false`; the person's own sessions still prompt. The other built-ins
-update in the background, only note a new version or, for Muse Code's launcher, ask only to sign in, and keep that
-behavior, except that on Windows Facade starts Muse Code's native program directly, so its launcher's update check does
-not run (2.4).
+The legacy implementation starts Codex with `-c check_for_update_on_startup=false`. The Orchestrator's startup
+and updater policy depends on the initiator and YOLO (6.3).
 
 ### 3.3 Native configuration and trust
 
@@ -652,7 +649,7 @@ report its state stays unknown, not an integration error (CONFIGURATION-2.3).
 
 **Show Agent Command Line... displays the command line an agent would use, with its source and settings.**
 
-The old engine opens a read-only document titled `Agent Command Line` headed `Agent command line in {0}`.
+The legacy implementation opens a read-only document titled `Agent Command Line` headed `Agent command line in {0}`.
 The picker uses `Show Agent Command Line`, with ` · {folder}` appended at the second step.
 Show executable and environment sources, the folder, literal argument order, resulting YOLO, native sandbox and
 approval facts, folder trust and configuration errors. It includes the arguments and variables the Facade tools (2.2) and session
@@ -721,7 +718,7 @@ installed CLI is the runtime evidence.
 **The VS Code entry point obtains CLI choices, start results, titles and saved sessions from the Orchestrator.**
 
 The [product's CLI table](../../PRODUCT.md#cli-differences) summarizes CLI-specific behavior, including
-custom-program capabilities. The [rules implementation and specification](../../core/islands/rules.md) describe
+custom-program capabilities. The [rules implementation and specification](../../framework/islands/rules.md) describe
 adapter details. The editor uses RULES-6.6 for settings and LIFECYCLE-5.4 for Resume.
 
 ### 6.2 MCP configuration for Antigravity and OpenCode
@@ -735,6 +732,31 @@ plugin can be recognized as the same managed run.
 OpenCode receives its MCP configuration through `OPENCODE_CONFIG_CONTENT`. Another OpenCode process that
 inherits that configuration can be recognized as the same managed run. The product CLI table linked in 6.1
 summarizes the user-visible limits.
+
+### 6.3 Startup policy
+
+**Use the initiating operation and the target home's YOLO setting.**
+
+MCP `start_agent` starts a run as an agent. Shell and editor starts and both forms of resume use person policy.
+All managed runs receive the approvals for Facade's MCP tools and its Codex hook. The CLI keeps its own login,
+project hooks and other approvals with YOLO off. YOLO selects the CLI's native work permissions and sandbox mode.
+A person-started run keeps the CLI's initial trust, update and risk prompts. A YOLO agent-started run uses the
+applicable startup controls below.
+
+| CLI | Startup controls for agent plus YOLO |
+| --- | --- |
+| Claude Code | Suppress the bypass-permission warning in run settings and confirm the recognized folder-trust question. |
+| Codex | Trust the launch folder and suppress its startup update offer and recognized model-change notices. The run's `check_for_update_on_startup=false` takes precedence over ordinary overrides in this mode. |
+| Antigravity | Trust the launch folder in the run settings. |
+| Muse Code | Trust the launch folder. |
+| OpenCode | The per-run updater switch also suppresses its update check. |
+| Pi | Approve the folder's project resources and skip the startup version check. |
+
+An agent start disables automatic updates in Claude Code, Antigravity, OpenCode and the Muse Code launcher
+using their process environment. Automatic updater settings are applied independently of YOLO. Muse Code can
+still print a banner about a previous update. Its Windows native executable starts without the launcher (2.4).
+When a Facade launch reuses a running CLI's environment, it restores the updater inputs before applying the
+destination's CLI entry. This includes a person start issued from inside that run.
 
 ## Checks
 

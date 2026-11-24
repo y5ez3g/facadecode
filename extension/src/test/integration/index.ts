@@ -22,7 +22,7 @@ export async function run(): Promise<void> {
 		throw new Error('Expected distinct full acceptance test titles.');
 	}
 	return new Promise((resolve, reject) => {
-		const passed: { name: string; engine: unknown }[] = [];
+		const passed: { name: string; implementation: unknown }[] = [];
 		const runner = mocha.run(failures => {
 			if (failures) {
 				reject(new Error(String(failures) + ' integration tests failed.'));
@@ -34,8 +34,8 @@ export async function run(): Promise<void> {
 					reject(new Error('Expected exactly these observed passing tests: ' + selection));
 					return;
 				}
-				if (passed.some(test => !test.engine || test.engine !== process.env.FACADE_IT_ENGINE)) {
-					reject(new Error('An acceptance test did not observe the selected engine.'));
+				if (passed.some(test => !test.implementation || test.implementation !== process.env.FACADE_IT_IMPLEMENTATION)) {
+					reject(new Error('An acceptance test did not observe the selected implementation.'));
 					return;
 				}
 				for (const test of passed) {
@@ -46,9 +46,9 @@ export async function run(): Promise<void> {
 		});
 		if (Array.isArray(expected)) {
 			runner.on('test', test => {
-				if (test.ctx) { delete test.ctx.acceptanceEngine; }
+				if (test.ctx) { delete test.ctx.acceptanceImplementation; }
 			});
-			runner.on('pass', test => passed.push({ name: test.fullTitle(), engine: test.ctx?.acceptanceEngine }));
+			runner.on('pass', test => passed.push({ name: test.fullTitle(), implementation: test.ctx?.acceptanceImplementation }));
 		}
 	});
 }

@@ -8,7 +8,7 @@
 	"routes": [
 		{ "pattern": "facadecode.com/install.sh", "zone_name": "facadecode.com" },
 		{ "pattern": "facadecode.com/install.ps1", "zone_name": "facadecode.com" },
-		{ "pattern": "facadecode.com/facade-core-version.txt", "zone_name": "facadecode.com" },
+		{ "pattern": "facadecode.com/facade-framework-version.txt", "zone_name": "facadecode.com" },
 		{ "pattern": "facadecode.com/releases/*", "zone_name": "facadecode.com" }
 	],
 	"r2_buckets": [{ "binding": "RELEASES", "bucket_name": "facadecode-releases" }]

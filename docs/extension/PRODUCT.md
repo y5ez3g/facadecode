@@ -8,10 +8,10 @@ common behavior.
 
 ### 1.1 Working in the editor
 
-**The extension is Facade Code's VS Code entry point.**
+**Facade Code Extension is Facade Code's VS Code entry point.**
 
 It lets the person start agents, see their state, open their terminals, and pick up their work later. The extension
-includes the Orchestrator for the platform where its workspace host runs.
+includes Facade Code Framework for the platform where its workspace host runs.
 
 ### 1.2 People who use VS Code
 
@@ -54,7 +54,7 @@ Each extension host connects to its machine's Orchestrator. The CLI owns its mod
 
 **Use familiar VS Code surfaces and terminology.**
 
-The shared [glossary](../core/GLOSSARY.md) supplies terms. Pin, Resume, Go to Agent, Attach, YOLO and Guest keep these
+The shared [glossary](../framework/GLOSSARY.md) supplies terms. Pin, Resume, Go to Agent, Attach, YOLO and Guest keep these
 names across languages.
 
 ### 4.2 Simple feedback
@@ -105,6 +105,6 @@ See RULES-6.1 for the first-open upgrade behavior.
 
 ### 5.7 Transition
 
-**The old engine remains selectable during the transition.**
+**The legacy implementation remains selectable during the transition.**
 
-The editor behaviors here describe the Orchestrator-backed entry point. The old engine keeps its existing rules.
+The editor behaviors here describe the Orchestrator-backed entry point. The legacy implementation keeps its existing rules.
