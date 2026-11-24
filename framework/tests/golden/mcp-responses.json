@@ -38,7 +38,7 @@
               "idempotentHint": false,
               "openWorldHint": false
             },
-            "description": "Start a managed agent, a coding CLI in a terminal Facade holds; a prompt goes to it as a message from you.\nIt returns at launch: data.id is the agent's address and data.folder where it runs; readiness and the prompt's delivery are not confirmed. The prompt is the agent's first inbox message: Facade types it in once the start settles unless the agent has read it, and if its delivery fails, a notice numbered data.result_message says so. A reply, if the agent sends one, comes to you as a message; a Guest reads it with read_messages.",
+            "description": "Start a managed agent, a coding CLI in a terminal Facade holds; a prompt goes to it as a message from you.\nIt returns at launch: data.id is the agent's address and data.folder where it runs; readiness and the prompt's delivery are not confirmed. The prompt is the agent's first inbox message: Facade types it in once the start settles unless the agent has read it, and if its delivery fails, a notice says so. A reply, if the agent sends one, comes to you as a message; a Guest reads it with read_messages.",
             "inputSchema": {
               "type": "object",
               "properties": {

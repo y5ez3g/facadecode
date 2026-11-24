@@ -155,13 +155,16 @@ def exercise(scope, sockets, receipt, fake):
     def send(params):
         return query(endpoint, 'agent.send', params)[1]
 
-    def submitted(item, text):
+    def submitted(item, text, *, legacy_header=False):
         message = item['message']
         delivery = message['delivery']
         assert (item['recipient']['reference'], message['text'], delivery['status'],
                 delivery['text_written'], delivery['enter_written']) == (
             reference, text, 'success', 'full', True), item
-        return f'📨 Message from the command line · {message["message_id"]}\n{text}'
+        message_id = message['message_id']
+        if legacy_header:
+            return f'📨 Message from the command line · {message_id}\n{text}'
+        return f'📨 Message {message_id} from command line\n{text}'
 
     def submissions():
         return [json.loads(line)['message'] for line in transcript.read_text().splitlines()]
@@ -178,8 +181,9 @@ def exercise(scope, sockets, receipt, fake):
     original_request = request(ORIGINAL, 'packaged-upgrade-original')
     original = receipt['original_receipt'] = send(original_request)
     assert 'repeated' not in original, original
-    original_submission = submitted(original, ORIGINAL)
-    wait_for('the original submission', lambda: transcript.is_file() and submissions() == [original_submission])
+    prior_headers = [[submitted(original, ORIGINAL)], [submitted(original, ORIGINAL, legacy_header=True)]]
+    wait_for('the original submission', lambda: transcript.is_file() and submissions() in prior_headers)
+    original_submission = submissions()[0]
     original_keys = keys.read_bytes()
     assert original_keys.count(ORIGINAL.encode()) == 1, original_keys
 

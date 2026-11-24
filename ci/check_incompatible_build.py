@@ -267,8 +267,11 @@ def exercise(scope, output_dir, fake, sockets, processes, receipt):
     assert sent["id"] != original["id"]
     complete = [row["text"] for row in map(json.loads, (work / "fake.log").read_text().splitlines())
                 if isinstance(row.get("text"), str)]
-    assert complete == [f"📨 Message from the command line · {item['message']['message_id']}\n{body}"
-                        for item, body in ((original, ORIGINAL), (sent, FRESH))], complete
+    messages = ((original["message"]["message_id"], ORIGINAL), (sent["message"]["message_id"], FRESH))
+    assert complete in (
+        [f"📨 Message {message_id} from command line\n{body}" for message_id, body in messages],
+        [f"📨 Message from the command line · {message_id}\n{body}" for message_id, body in messages],
+    ), complete
     final_keys = keys.read_bytes()
     assert final_keys.startswith(old_keys) and final_keys[len(old_keys):].count(FRESH.encode()) == 1
     assert process_identity(agent_pid) == before["processes"]["cli"]

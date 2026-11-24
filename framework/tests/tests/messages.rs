@@ -224,15 +224,15 @@ fn a_message_is_typed_into_its_recipient_s_input_under_a_header_naming_its_sende
     assert_eq!(
         home.submitted_messages(),
         [
-            "📨 Message from the command line · m1\nhi from the command line".to_owned(),
-            format!("📨 Message from bob ({bob_address}) · m2\nhi ada"),
-            format!("📨 Message from ada ({ada_address}) · m3 · Reply to m2\nhi bob\nsecond line"),
+            "📨 Message m1 from command line\nhi from the command line".to_owned(),
+            format!("📨 Message m2 from bob ({bob_address})\nhi ada"),
+            format!("📨 Message m3 from ada ({ada_address}) · in reply to m2\nhi bob\nsecond line"),
         ]
     );
     let screen = home.screen("bob");
     assert!(
         screen.contains(&format!(
-            "> 📨 Message from ada ({ada_address}) · m3 · Reply to m2\n  hi bob\n  second line"
+            "> 📨 Message m3 from ada ({ada_address}) · in reply to m2\n  hi bob\n  second line"
         )),
         "the test CLI shows every line: {screen}"
     );
@@ -328,7 +328,7 @@ fn a_sender_s_name_cannot_break_out_of_its_message_s_header() {
     assert_eq!(
         home.submitted_messages(),
         [format!(
-            "📨 Message from evil [201~ INJECTED ({}) · m1\nhi",
+            "📨 Message m1 from evil [201~ INJECTED ({})\nhi",
             address(&home, &evil.id)
         )]
     );
@@ -380,7 +380,7 @@ fn a_message_waits_while_a_draft_holds_the_input_and_never_types_over_it() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from the command line · m1\nhello"],
+        ["📨 Message m1 from command line\nhello"],
         "the draft was never typed over"
     );
 }
@@ -421,8 +421,8 @@ fn a_read_delivers_a_waiting_message_so_it_is_never_typed() {
     assert_eq!(
         home.submitted_messages(),
         [
-            "📨 Message from the command line · m1\nnot for a1",
-            "📨 Message from the command line · m3\nnext"
+            "📨 Message m1 from command line\nnot for a1",
+            "📨 Message m3 from command line\nnext"
         ]
     );
     assert!(
@@ -483,7 +483,7 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
     assert_eq!(sent["status"], "success", "{sent}");
     assert_eq!(
         home.submitted_messages(),
-        [format!("📨 Message from Neo ({worker_address}) · m1\nhi")],
+        [format!("📨 Message m1 from Neo ({worker_address})\nhi")],
         "a message carries its sender's name when it was sent"
     );
     let blank = home.run_facade(&["rename", "a1", " "]);
@@ -580,7 +580,7 @@ fn a_command_in_an_agent_s_terminal_acts_as_the_command_line() {
     assert!(sent.status.success(), "{}", stderr(&sent));
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from the command line · m1\nfrom a terminal"]
+        ["📨 Message m1 from command line\nfrom a terminal"]
     );
 }
 
@@ -626,8 +626,8 @@ fn shell_send_saves_behind_a_draft_and_waits_for_delivery_when_requested() {
     assert_eq!(
         home.submitted_messages(),
         [
-            "📨 Message from the command line · m1\nsaved behind the draft",
-            "📨 Message from the command line · m2\nwaited for delivery",
+            "📨 Message m1 from command line\nsaved behind the draft",
+            "📨 Message m2 from command line\nwaited for delivery",
         ]
     );
 }
@@ -661,7 +661,7 @@ fn shell_receives_only_the_first_linked_reply_from_the_managed_recipient() {
     assert_eq!(
         home.submitted_messages(),
         [format!(
-            "📨 Message from the command line (#c1@desk) · m1\n{request}"
+            "📨 Message m1 from command line (#c1@desk)\n{request}"
         )]
     );
 
@@ -970,9 +970,7 @@ fn a_late_paste_is_erased_before_the_next_message() {
         .is_empty()));
     assert_eq!(
         home.submitted_messages(),
-        [format!(
-            "📨 Message from the command line · m2\n{second_text}"
-        )]
+        [format!("📨 Message m2 from command line\n{second_text}")]
     );
 
     let keys = std::fs::read(keys).unwrap();
@@ -1212,7 +1210,7 @@ fn a_message_waiting_when_its_daemon_crashes_is_typed_once_by_the_next() {
     assert_eq!(delivery_of(&receipt), typed_in(), "{receipt}");
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from the command line · m1\nhello"],
+        ["📨 Message m1 from command line\nhello"],
         "typed once"
     );
     let time = |field: &Value| facade_base::time::parse_iso_time(field.as_str().unwrap()).unwrap();
@@ -1301,7 +1299,7 @@ fn a_paste_in_the_input_when_its_daemon_crashes_gets_its_enter_from_the_next() {
     assert_eq!(delivery_of(&receipt), typed_in(), "{receipt}");
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from the command line · m1\nhello"],
+        ["📨 Message m1 from command line\nhello"],
         "submitted once"
     );
     assert!(
@@ -1341,8 +1339,8 @@ fn a_paste_in_the_input_when_its_daemon_crashes_goes_before_the_message_behind_i
         assert_eq!(delivery_of(&receipt), typed_in(), "{receipt}");
     }
     let pasted = [
-        format!("📨 Message from the command line · m1\n{long}"),
-        format!("📨 Message from the command line · m2\n{short}"),
+        format!("📨 Message m1 from command line\n{long}"),
+        format!("📨 Message m2 from command line\n{short}"),
     ];
     assert_eq!(home.submitted_messages(), pasted, "each once, in order");
 }
@@ -1413,7 +1411,7 @@ fn a_message_read_when_its_daemon_crashes_is_never_typed_by_the_next() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from the command line · m2\nnext"],
+        ["📨 Message m2 from command line\nnext"],
         "the read message is never typed"
     );
 }

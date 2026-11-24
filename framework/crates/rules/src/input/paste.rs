@@ -231,18 +231,18 @@ mod tests {
         );
         let claude = rule("claude");
         assert!(claude.lead);
-        let lead = Some("📨 Message from ");
+        let lead = Some("📨 Message ");
         assert!(is_own_draft(
             claude,
-            "📨 Message from [Pasted text #1 +1 lines]",
-            "#human · #m5\nhi",
+            "📨 Message [Pasted text #1 +1 lines]",
+            "m5 from command line\nhi",
             lead,
             None
         ));
         assert!(is_own_draft(
             claude,
-            "📨 Message from #human · #m5",
-            "#human · #m5",
+            "📨 Message m5 from command line",
+            "m5 from command line",
             lead,
             None
         ));

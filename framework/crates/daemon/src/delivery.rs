@@ -40,8 +40,8 @@ use crate::records::{OperationTarget, Reach};
 use crate::service::{Forwarded, sender_from};
 use crate::store::SendRoute;
 use crate::{
-    Cancel, Daemon, HUMAN, MAX_TERMINAL_SEND, Sender, delivery_limit, gate_for_test, log,
-    send_route_cutoff,
+    Cancel, Daemon, HUMAN, MAX_TERMINAL_SEND, MESSAGE_LEAD, PREVIOUS_MESSAGE_LEAD, Sender,
+    delivery_limit, gate_for_test, log, send_route_cutoff,
 };
 
 struct SendOrigin<'a> {
@@ -172,6 +172,15 @@ pub(crate) fn render_start_result(
 impl Daemon {
     /// Projects durable machine IDs into the references read on this machine's terminal.
     pub(crate) fn message_text(&self, message: &Message) -> String {
+        self.render_message_text(message, false)
+    }
+
+    /// The display text of a paste begun by a daemon before the message header changed.
+    pub(crate) fn previous_message_text(&self, message: &Message) -> String {
+        self.render_message_text(message, true)
+    }
+
+    fn render_message_text(&self, message: &Message, previous: bool) -> String {
         if message.from == FACADE {
             let projected = message.result.as_ref().and_then(|result| {
                 self.machine_identities()
@@ -179,23 +188,32 @@ impl Daemon {
                     .ok()
             });
             let text = projected.as_deref().unwrap_or(&message.text);
-            let (first, rest) = text.split_once('\n').unwrap_or((text, ""));
-            return if rest.is_empty() {
-                format!("🔔 {first} · {}", message.message_id)
-            } else {
-                format!("🔔 {first} · {}\n{rest}", message.message_id)
-            };
+            if previous {
+                let (first, rest) = text.split_once('\n').unwrap_or((text, ""));
+                let id = &message.message_id;
+                return if rest.is_empty() {
+                    format!("🔔 {first} · {id}")
+                } else {
+                    format!("🔔 {first} · {id}\n{rest}")
+                };
+            }
+            return format!("🔔 {text}");
         }
         let sender = if matches!(message.from.as_str(), "human" | "command_line") {
+            let command_line = if previous {
+                "the command line"
+            } else {
+                "command line"
+            };
             if message.command_line_reply && message.from == "command_line" {
                 let machine = self
                     .machine_address_part(&self.machine_id)
                     .unwrap_or_else(|_| self.machine_id.clone());
                 let address =
                     addresses::format_command_reply_address(&message.message_id, &machine);
-                format!("the command line ({address})")
+                format!("{command_line} ({address})")
             } else {
-                "the command line".to_owned()
+                command_line.to_owned()
             }
         } else {
             let from = AgentRef {
@@ -205,9 +223,13 @@ impl Daemon {
                     .clone()
                     .unwrap_or_else(|| self.machine_id.clone()),
             };
-            let address = self
-                .agent_address(&from)
-                .unwrap_or_else(|_| from.exact_address());
+            let address = self.agent_address(&from).unwrap_or_else(|_| {
+                if previous {
+                    from.exact_address()
+                } else {
+                    addresses::format_agent_address(&from.agent_id, &from.machine_id)
+                }
+            });
             message.from_name.as_ref().map_or_else(
                 || address.clone(),
                 |name| {
@@ -236,11 +258,18 @@ impl Daemon {
                         format!("{}@{}", reference.message_id, reference.machine_id)
                     })
                 };
-                format!(" · Reply to {address}")
+                let label = if previous { "Reply to" } else { "in reply to" };
+                format!(" · {label} {address}")
             })
             .unwrap_or_default();
+        if previous {
+            return format!(
+                "{PREVIOUS_MESSAGE_LEAD}{sender} · {}{reply}\n{}",
+                message.message_id, message.text
+            );
+        }
         format!(
-            "📨 Message from {sender} · {}{reply}\n{}",
+            "{MESSAGE_LEAD}{} from {sender}{reply}\n{}",
             message.message_id, message.text
         )
     }

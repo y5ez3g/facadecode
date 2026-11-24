@@ -207,7 +207,7 @@ pub fn console_typing(rule: &Rule) -> Option<ConsoleTyping> {
 #[serde(deny_unknown_fields)]
 pub struct PasteRule {
     /// The CLI takes a paste alone as material rather than a request, so a message's first header
-    /// words, `📨 Message from `, are typed before its paste.
+    /// words, `📨 Message `, are typed before its paste.
     #[serde(default)]
     pub lead: bool,
     /// How long a message shows as the input's own draft before submission, in milliseconds.

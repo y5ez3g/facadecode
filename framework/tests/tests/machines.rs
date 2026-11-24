@@ -2681,7 +2681,7 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
         "reply across machines"
     ));
     let expected = format!(
-        "📨 Message from worker ({id}@second) · m1 · Reply to m1@second\nreply across machines"
+        "📨 Message m1 from worker ({id}@second) · in reply to m1@second\nreply across machines"
     );
     assert_eq!(first.submitted_messages(), [expected]);
     let read = caller.call("read_messages", json!({ "last": 1 }));
@@ -2709,9 +2709,9 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     assert_eq!(
         second.submitted_messages(),
         [
-            format!("📨 Message from caller ({from}) · m1\nrequest across machines"),
+            format!("📨 Message m1 from caller ({from})\nrequest across machines"),
             format!(
-                "📨 Message from caller ({from}) · m2 · Reply to m1@first\ncopied both addresses"
+                "📨 Message m2 from caller ({from}) · in reply to m1@first\ncopied both addresses"
             ),
         ]
     );
@@ -3055,7 +3055,7 @@ fn an_idless_peer_cancel_withdraws_a_pending_forwarded_send() {
     assert_eq!(next["id"], "m2@peer", "{next}");
     assert_eq!(next["recipient"]["reference"], target, "{next}");
     assert_eq!(next["message"]["delivery"]["status"], "success", "{next}");
-    let expected = [format!("📨 Message from the command line · m2\n{fresh}")];
+    let expected = [format!("📨 Message m2 from command line\n{fresh}")];
     assert!(wait_until(secs(10), || peer.submitted_messages() == expected));
     let input = std::fs::read(&keys).unwrap();
     assert!(
@@ -3780,10 +3780,7 @@ fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
     assert!(body.lines().any(|line| line == summary), "{row}");
     let why = format!("{address} ended before the message was delivered.");
     assert!(body.lines().any(|line| line == why), "{row}");
-    assert_eq!(
-        origin.submitted_messages(),
-        [format!("🔔 {title} · {receipt_id}\n{body}")]
-    );
+    assert_eq!(origin.submitted_messages(), [format!("🔔 {title}\n{body}")]);
     assert!(holder.submitted_messages().is_empty());
     assert_eq!(
         std::fs::read_to_string(&launches)
@@ -3913,7 +3910,7 @@ fn a_remote_childs_wait_notice_reaches_its_creator_once() {
     );
     assert_eq!(row["from"], "facade", "{row}");
     assert_eq!(row["text"], format!("{title}\n{detail_text}"), "{row}");
-    let submitted = [format!("🔔 {title} · {notice_id}\n{detail_text}")];
+    let submitted = [format!("🔔 {title}\n{detail_text}")];
     assert!(
         wait_until(LOADED_TIMEOUT, || origin.submitted_messages() == submitted),
         "creator terminal submissions: {:?}",
@@ -4701,7 +4698,7 @@ fn shell_receives_a_linked_reply_from_a_managed_agent_across_machines() {
     assert_eq!(
         peer.submitted_messages(),
         [format!(
-            "📨 Message from the command line (#c1@peer) · m1\n{request}"
+            "📨 Message m1 from command line (#c1@peer)\n{request}"
         )]
     );
     let inbox = receiver.call("read_messages", json!({"last": 1}));

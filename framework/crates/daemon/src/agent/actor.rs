@@ -869,7 +869,10 @@ impl Actor {
         match input {
             Input::Typed(typing) => self.typist.push(typing),
             Input::Message(message) => self.typist.deliver(message),
-            Input::BegunPaste(messages) => self.typist.finish_paste(messages),
+            Input::BegunPaste {
+                messages,
+                previous_text,
+            } => self.typist.finish_paste(messages, Some(previous_text)),
             Input::Raw(_) => {}
         }
     }

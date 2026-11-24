@@ -57,15 +57,10 @@ fn a_guest_waits_for_the_reply_to_its_message() {
     assert_eq!(sent["data"]["delivery"], "typed_into_input", "{sent}");
     let original = sent["data"]["id"].as_str().expect("the send receipt ID");
     let (inbox_id, _) = original.split_once('@').expect("the full message address");
+    let guest_name = guest_row["name"].as_str().expect("the Guest's name");
+    let expected = format!("📨 Message {inbox_id} from {guest_name} ({guest_address})\n{request}");
     assert!(
-        wait_until(secs(10), || home.submitted_messages().iter().any(
-            |message| {
-                message.contains(request)
-                    && message.lines().next().is_some_and(|header| {
-                        header.contains(guest_address) && header.ends_with(inbox_id)
-                    })
-            }
-        )),
+        wait_until(secs(10), || home.submitted_messages().contains(&expected)),
         "the fake terminal did not accept the Guest's message: {}",
         home.screen(ada_address)
     );
@@ -727,7 +722,7 @@ fn a_started_agent_s_commands_act_for_it_not_for_the_guest_that_started_it() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from the command line · m1\nfrom-the-helper"],
+        ["📨 Message m1 from command line\nfrom-the-helper"],
         "the message is the command line's, not the Guest's"
     );
 }

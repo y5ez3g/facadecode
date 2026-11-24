@@ -2484,9 +2484,8 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
         );
     }
     let message_id = receipt["message"]["message_id"].as_str().unwrap();
-    let original = format!(
-        "📨 Message from the command line · {message_id}\nreceipt before the live takeover"
-    );
+    let original =
+        format!("📨 Message {message_id} from command line\nreceipt before the live takeover");
     assert_eq!(
         home.submitted_messages().as_slice(),
         std::slice::from_ref(&original)
@@ -2510,7 +2509,7 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
         home.submitted_messages(),
         [
             original,
-            format!("📨 Message from the command line · {fresh_id}\n{fresh_text}")
+            format!("📨 Message {fresh_id} from command line\n{fresh_text}")
         ]
     );
     assert_eq!(process_identity(agent.pid), agent.process);

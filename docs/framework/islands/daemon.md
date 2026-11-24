@@ -375,6 +375,17 @@ Post assigns a message number in the SQLite transaction that keeps it. The recei
 delivery state. A managed terminal confirms delivery when the submission key reaches it. A Guest confirms
 delivery by taking the message from its inbox. Both use the same deadline.
 
+A managed terminal sees `📨 Message mN from <sender>` above the body. Replies append
+` · in reply to mN`, with a machine selector when the original message is remote. A command-line
+sender has a `#c` address only while waiting for a reply. A notice begins with `🔔` followed by its
+text. Its record number is available in the inbox.
+
+When a daemon recovers an already begun paste, it checks the draft against the message formats
+before and after the header change. The matching format determines the paste lead and settling
+time. Recovery keeps the original deadline and submits the existing draft once. If both formats
+still match at the deadline and their lengths differ, recovery leaves the text in the input and
+reports unconfirmed submission.
+
 An explicit inbox-only send returns after storage commits, and delivery continues on its background deadline.
 For a send from an authenticated agent, the original admission stores `notify_failure` with the sender and
 delivery deadline. Pending rows carry that ownership through daemon recovery. Schema version 6 gives existing

@@ -427,7 +427,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			const original = await until(`${child.name} to accept its first task`, () =>
 				received(child.alias).find(text => text.endsWith(child.prompt)));
 			assert.strictEqual(normalizeDriveLetter(argsOf(child.alias).cwd), normalizeDriveLetter(folder));
-			const id = / · (m\d+)$/u.exec(original.split('\n')[0])?.[1];
+			const id = /^📨 Message (m\d+) from /u.exec(original.split('\n')[0])?.[1];
 			assert.ok(id && original.includes(address), original);
 			const sent = await script(child.alias, [{ tool: 'send_message', arguments: { to: address, text: child.reply, reply_to: id } }]);
 			const receipt = sent.content('send_message');
@@ -438,7 +438,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			assert.strictEqual(machine, address.split('@')[1], JSON.stringify(receipt));
 			const reply = await until(`${child.name}'s reply at the parent terminal`, () =>
 				received(alias).find(text => text.endsWith(child.reply)));
-			assert.strictEqual(reply, `📨 Message from ${child.name} (${child.address}) · ${replyId} · Reply to ${id}\n${child.reply}`);
+			assert.strictEqual(reply, `📨 Message ${replyId} from ${child.name} (${child.address}) · in reply to ${id}\n${child.reply}`);
 		}
 		const [reviewer, verifier] = references;
 		const typed = 'typed by its creator 中文 🚀';

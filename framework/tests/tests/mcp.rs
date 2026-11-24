@@ -912,7 +912,7 @@ fn a_start_prompt_is_delivered_at_the_30_second_startup_cutoff() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from the command line · m1\nsay hi"]
+        ["📨 Message m1 from command line\nsay hi"]
     );
     let row = home.agent_from_watch("ada").unwrap();
     assert_eq!(row["tools_state"], "unavailable", "{row}");
@@ -960,7 +960,7 @@ fn the_tools_connect_once_the_cli_has_asked_for_them() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from the command line · m1\nsay hi"]
+        ["📨 Message m1 from command line\nsay hi"]
     );
     assert_eq!(
         home.agent_from_watch("ada").unwrap()["tools_state"],
@@ -991,7 +991,7 @@ fn a_start_and_send_from_an_agent_s_terminal_come_from_the_command_line() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from the command line · m1\nfrom the boss"]
+        ["📨 Message m1 from command line\nfrom the boss"]
     );
     let child = wire.call("agent.inspect", json!({ "target": "child" }));
     assert_eq!(
@@ -1596,7 +1596,7 @@ fn a_start_prompt_to_antigravity_goes_once_its_tools_are_ready() {
         ],
     );
     assert!(started["result"].is_object(), "{started}");
-    let prompt = "📨 Message from the command line · m1\nsay hi";
+    let prompt = "📨 Message m1 from command line\nsay hi";
     assert!(
         wait_until(secs(30), || home
             .submitted_messages()

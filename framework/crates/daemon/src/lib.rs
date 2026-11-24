@@ -96,6 +96,9 @@ const REQUEST_HOUR: Duration = Duration::from_secs(60 * 60);
 /// The longest a message may take from its call reaching the daemon to its delivery.
 const DELIVERY_TIME: Duration = Duration::from_millis(29_500);
 const MAX_TERMINAL_SEND: Duration = Duration::from_secs(300);
+const MESSAGE_LEAD: &str = "📨 Message ";
+const PREVIOUS_MESSAGE_LEAD: &str = "📨 Message from ";
+const PASTE_SEPARATOR: &str = "\n\n";
 
 /// The time an hour before now, as request IDs look back to.
 fn an_hour_ago() -> String {

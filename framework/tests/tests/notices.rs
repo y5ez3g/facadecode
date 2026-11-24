@@ -89,13 +89,9 @@ fn a_startup_permission_wait_and_prompt_failure_share_the_reserved_notice() {
         "reported too soon: {terminal:?}"
     );
     assert_eq!(terminal.len(), 1, "{terminal:?}");
-    for fact in [
-        address,
-        reserved,
-        "Your prompt",
-        "permission",
-        "read_screen",
-    ] {
+    let heading = format!("🔔 child ({address}) has started.");
+    assert_eq!(terminal[0].lines().next(), Some(heading.as_str()));
+    for fact in ["Your prompt", "permission", "read_screen"] {
         assert!(terminal[0].contains(fact), "missing {fact:?}: {terminal:?}");
     }
     assert!(

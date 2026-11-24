@@ -1811,7 +1811,9 @@
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/reliability.rs:343",
-        "framework/tests/tests/recovery.rs"
+        "framework/tests/tests/recovery.rs",
+        "framework/crates/daemon/src/agent/typist/mod.rs:2869",
+        "framework/crates/daemon/src/agent/typist/mod.rs:2897"
       ],
       "test": {
         "runner": "framework-scenario",
