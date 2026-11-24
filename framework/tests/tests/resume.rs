@@ -325,52 +325,53 @@ fn a_session_counts_once_its_cli_saved_it() {
     );
 }
 
-/// Where a launch asks it, as Codex's does, the session hook prints the skill in the run's folder,
-/// which the run's start wrote, as the context its session starts with, and still records the
-/// session.
+/// A session hook from an earlier Codex run still records its session when it passes `--skill`.
 #[test]
-fn the_session_hook_gives_the_skill_where_asked_and_records_the_session() {
+fn the_session_hook_accepts_the_old_skill_flag_and_records_the_session() {
     let home = TestHome::new("hookskill");
     home.start_named_fake("worker", &[("FAKECLI_SESSION", FIRST)]);
     assert!(records_session(&home, "worker", Some(FIRST)));
     let file = session_file(&home, "a1");
-    // The skill beside the session file, as a Codex run's start writes it.
+    // An earlier run left its skill beside the session file.
     let skill = file.parent().unwrap().join("skills/facade/SKILL.md");
     std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
     std::fs::write(&skill, "The skill of the build that started the run.").unwrap();
-    let mut command = home.command(&test_binaries().facade);
-    command
-        .args(["hook", "session-start"])
-        .arg(&file)
-        .arg("--skill")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command.spawn().unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(
-            format!(r#"{{"hook_event_name":"SessionStart","session_id":"{SECOND}"}}"#).as_bytes(),
-        )
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success() && output.stderr.is_empty(),
-        "{output:?}"
-    );
-    let given: Value = serde_json::from_slice(&output.stdout).unwrap();
-    let context = "The skill of the build that started the run.";
-    assert_eq!(
-        given,
-        json!({
-            "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": context },
-        })
-    );
+    let report_session = |session: &str, background: bool| {
+        let mut command = home.command(&test_binaries().facade);
+        command
+            .args(["hook", "session-start"])
+            .arg(&file)
+            .arg("--skill")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if background {
+            command.env(facade_rules::hook::BACKGROUND_JOB_VARIABLE, home.folder());
+        }
+        let mut child = command.spawn().unwrap();
+        let written = child.stdin.take().unwrap().write_all(
+            format!(r#"{{"hook_event_name":"SessionStart","session_id":"{session}"}}"#).as_bytes(),
+        );
+        if !background {
+            written.unwrap();
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success() && output.stderr.is_empty() && output.stdout.is_empty(),
+            "{output:?}"
+        );
+    };
+    report_session(SECOND, false);
     assert!(
         records_session(&home, "worker", Some(SECOND)),
         "the session is still recorded"
+    );
+    let saved = std::fs::read(&file).unwrap();
+    report_session(FIRST, true);
+    assert_eq!(
+        std::fs::read(file).unwrap(),
+        saved,
+        "background session report"
     );
 }
 

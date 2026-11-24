@@ -140,7 +140,7 @@ fn a_send_repeated_by_its_request_id_answers_its_message_and_types_it_once() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from the command line · m1\nhello"],
+        ["📨 Message m1 from command line\nhello"],
         "typed once"
     );
     // Two agents' relays, both run by this test's process, give their first calls the same
@@ -328,7 +328,7 @@ fn calls_with_one_request_id_at_once_keep_one_message_and_both_answer_it() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from the command line · m1\nonce"]
+        ["📨 Message m1 from command line\nonce"]
     );
     assert_eq!(
         read_ids(&home, &worker.id, json!({ "last": 10 })),

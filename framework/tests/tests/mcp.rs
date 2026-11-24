@@ -54,10 +54,10 @@ fn mcp_zero_wait_sends_are_kept_and_invalid_waits_send_nothing() {
         assert_eq!(empty["data"]["messages"], json!([]), "{empty}");
         assert!(empty["data"].get("next").is_none(), "{empty}");
     }
-    let expired = recipient_mcp.call("read_messages", json!({ "timeout_seconds": 1 }));
-    assert_eq!(expired["status"], "failure", "{expired}");
-    assert_eq!(expired["reason"], "timeout", "{expired}");
-    assert!(expired["data"].get("next").is_none(), "{expired}");
+    let refused = recipient_mcp.call("read_messages", json!({ "timeout_seconds": 1 }));
+    assert_eq!(refused["status"], "failure", "{refused}");
+    assert_eq!(refused["reason"], "unsupported", "{refused}");
+    assert!(refused["data"].get("next").is_none(), "{refused}");
 
     let expected: Vec<_> = [
         ("omitted", json!({})),
@@ -222,6 +222,31 @@ fn mcp_cli_names_match_the_managed_and_guest_default_start_contexts() {
         assert_eq!(row["clis"], expected, "{roster}");
         assert!(row.get("cli_error").is_none(), "{roster}");
     }
+}
+
+#[test]
+fn an_opencode_start_refuses_model_and_effort_together() {
+    let home = TestHome::new("mcp-opencode-options");
+    std::fs::write(
+        home.path.join("facade.json"),
+        json!({ "clis": { "opencode": { "program": test_binaries().fakecli } } }).to_string(),
+    )
+    .unwrap();
+    let caller = home.start_named_fake("caller", &[]);
+    let mut tools = McpTestClient::open_configured(&home, &caller.id);
+    let refused = tools.call(
+        "start_agent",
+        json!({
+            "name": "worker", "cli": "opencode", "model": "example", "effort": "low",
+        }),
+    );
+    assert_eq!(refused["status"], "failure", "{refused}");
+    assert_eq!(refused["reason"], "unsupported", "{refused}");
+    assert_eq!(
+        refused["message"],
+        "OpenCode takes no explicit model or effort; leave `model` and `effort` out to use its defaults."
+    );
+    assert!(home.listed_agent("worker").is_none());
 }
 
 #[test]
@@ -887,7 +912,7 @@ fn a_start_prompt_is_delivered_at_the_30_second_startup_cutoff() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from the command line · m1\nsay hi"]
+        ["📨 Message m1 from command line\nsay hi"]
     );
     let row = home.agent_from_watch("ada").unwrap();
     assert_eq!(row["tools_state"], "unavailable", "{row}");
@@ -935,7 +960,7 @@ fn the_tools_connect_once_the_cli_has_asked_for_them() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from the command line · m1\nsay hi"]
+        ["📨 Message m1 from command line\nsay hi"]
     );
     assert_eq!(
         home.agent_from_watch("ada").unwrap()["tools_state"],
@@ -966,7 +991,7 @@ fn a_start_and_send_from_an_agent_s_terminal_come_from_the_command_line() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from the command line · m1\nfrom the boss"]
+        ["📨 Message m1 from command line\nfrom the boss"]
     );
     let child = wire.call("agent.inspect", json!({ "target": "child" }));
     assert_eq!(
@@ -1248,10 +1273,9 @@ fn a_daemon_that_starts_again_lets_go_of_a_plugin_its_predecessor_kept() {
 
 /// An Antigravity run gets Facade's plugin in the folder it starts in, the only file Facade writes
 /// into the person's project, and its start readies the tools through the CLI's MCP panel before
-/// its first turn. The plugin's hook gives the model its instructions, and the plugin holds the
-/// skill; the runs in a folder share the plugin, and it goes once the last of them ends. A plugin
-/// of the person's own there is left as it is, and the run starts without the tools. The test CLI
-/// draws Antigravity's screen.
+/// its first turn. The plugin's hook gives the model its instructions. Runs in a folder share the
+/// plugin. Facade keeps a same-version plugin with the old skill while a run uses it and replaces
+/// it on the next start once the folder is free. The test CLI draws Antigravity's screen.
 #[test]
 fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_turn() {
     let home = TestHome::new("agyplugin");
@@ -1263,8 +1287,12 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
         programs.display(),
         home.path_with_test_programs()
     );
+    let busy_roster = home.folder().join("busy-mcp-roster.json");
     let start = |name: &str| {
         let mut command = home.facade_in_an_empty_home();
+        if name == "busy" {
+            command.env("FAKECLI_MCP_ROSTER", &busy_roster);
+        }
         let started = command
             .env("PATH", &path)
             .env("FAKECLI_LOOK", "agy")
@@ -1282,15 +1310,7 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     files.sort_unstable();
-    assert_eq!(
-        files,
-        ["hooks.json", "mcp_config.json", "plugin.json", "skills"]
-    );
-    assert_eq!(
-        std::fs::read_to_string(plugin.join("skills/facade/SKILL.md")).unwrap(),
-        facade_base::skill::text(),
-        "and the skill"
-    );
+    assert_eq!(files, ["hooks.json", "mcp_config.json", "plugin.json"]);
     let servers: Value =
         serde_json::from_str(&std::fs::read_to_string(plugin.join("mcp_config.json")).unwrap())
             .unwrap();
@@ -1384,7 +1404,7 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
     let instructions = |messages: Vec<String>| {
         messages.iter().any(|message| {
             message.starts_with("PreInvocation ")
-                && message.contains(&format!("You are managed agent {address}, working in "))
+                && message.contains(&format!("Your address is {address}."))
         })
     };
     assert!(
@@ -1396,7 +1416,75 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
     start("bob");
     home.run_facade_ok(&["stop", "ada"]);
     assert!(plugin.join("mcp_config.json").exists(), "bob's run uses it");
+
+    // The old build wrote these same plugin files and also shipped a skill, at the same version.
+    let legacy_skill = plugin.join("skills/facade/SKILL.md");
+    std::fs::create_dir_all(legacy_skill.parent().unwrap()).unwrap();
+    std::fs::write(&legacy_skill, "The old Facade skill.\n").unwrap();
+    let old_plugin = [
+        "plugin.json",
+        "mcp_config.json",
+        "hooks.json",
+        "skills/facade/SKILL.md",
+    ]
+    .map(|file| (file, std::fs::read(plugin.join(file)).unwrap()));
+    start("busy");
+    if row("busy")["tools_reason"] == "not_given" {
+        // Antigravity can still open the existing plugin's server from its MCP panel.
+        home.run_facade_ok(&["type", "busy", "/mcp", "--enter"]);
+    }
+    let roster = || {
+        std::fs::read(&busy_roster)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+    };
+    assert!(
+        wait_until(LOADED_TIMEOUT, || roster().is_some()),
+        "the new run did not call its MCP server: {}",
+        home.screen("busy")
+    );
+    let reply = roster().unwrap();
+    let listed = &reply["result"]["structuredContent"];
+    assert_eq!(listed["status"], "success", "{reply}");
+    let agents = listed["data"]["agents"].as_array().unwrap();
+    let busy = row("busy");
+    assert!(
+        agents
+            .iter()
+            .any(|agent| agent["id"] == busy["address"] && agent["type"] == "managed")
+            && agents.iter().all(|agent| agent["type"] != "guest"),
+        "the new run must use the plugin as a managed agent: {listed}"
+    );
+    assert_eq!(busy["tools_state"], "available", "{busy}");
+    for (file, bytes) in old_plugin {
+        assert_eq!(std::fs::read(plugin.join(file)).unwrap(), bytes, "{file}");
+    }
+    home.run_facade_ok(&["stop", "busy"]);
     home.run_facade_ok(&["stop", "bob"]);
+    assert!(
+        wait_until(secs(10), || home
+            .daemon_log()
+            .contains("was changed since Facade wrote it")),
+        "{}",
+        home.daemon_log()
+    );
+    assert!(
+        legacy_skill.is_file(),
+        "cleanup leaves a same-version plugin"
+    );
+
+    start("replacement");
+    assert!(
+        !legacy_skill.exists(),
+        "a free folder gets the current plugin"
+    );
+    assert!(
+        wait_until(secs(15), || row("replacement")["tools_state"]
+            == "available"),
+        "{}",
+        row("replacement")
+    );
+    home.run_facade_ok(&["stop", "replacement"]);
     assert!(
         wait_until(secs(10), || !home.project.join(".agents").exists()),
         "the plugin goes with the folder's last run"
@@ -1508,7 +1596,7 @@ fn a_start_prompt_to_antigravity_goes_once_its_tools_are_ready() {
         ],
     );
     assert!(started["result"].is_object(), "{started}");
-    let prompt = "📨 Message from the command line · m1\nsay hi";
+    let prompt = "📨 Message m1 from command line\nsay hi";
     assert!(
         wait_until(secs(30), || home
             .submitted_messages()
@@ -1560,9 +1648,8 @@ fn run_hook(home: &TestHome, hook: &str, cli: &str, input: &str, env: &[(&str, &
 }
 
 /// The hook that gives the model of a CLI that shows it no server's instructions those its run's
-/// start wrote in the run's folder: Muse Code's to the session the run starts alone, not to one a
-/// subagent starts, followed by the skill there, and Antigravity's to each invocation, whose plugin
-/// holds the skill. Outside an agent's run, or without its run's files, it gives none.
+/// start wrote in the run's folder: Muse Code's to the session the run starts, and Antigravity's
+/// to each invocation. An existing run's old skill stays out of the hook output.
 #[test]
 fn the_instructions_hook_gives_the_run_s_own_session_its_agent_s_instructions() {
     let home = TestHome::new("instructionshook");
@@ -1577,12 +1664,13 @@ fn the_instructions_hook_gives_the_run_s_own_session_its_agent_s_instructions() 
     // The run's folder, as its start wrote it.
     let folder = home.path.join("framework/runs/a3/5a1f00d1c0ffee00");
     std::fs::create_dir_all(folder.join("skills/facade")).unwrap();
-    let (instructions, skill) = (
-        "You are Facade agent #a3, as your run began.",
-        "The skill of the build that started the run.",
-    );
+    let instructions = "You are Facade agent a3, as your run began.";
     std::fs::write(folder.join("instructions.md"), instructions).unwrap();
-    std::fs::write(folder.join("skills/facade/SKILL.md"), skill).unwrap();
+    std::fs::write(
+        folder.join("skills/facade/SKILL.md"),
+        "The old Facade skill.",
+    )
+    .unwrap();
     let given: Value = serde_json::from_str(&run_hook(
         &home,
         "instructions",
@@ -1596,9 +1684,8 @@ fn the_instructions_hook_gives_the_run_s_own_session_its_agent_s_instructions() 
         "{given}"
     );
     assert_eq!(
-        given["hookSpecificOutput"]["additionalContext"],
-        format!("{instructions}\n\n{skill}"),
-        "the instructions, then the skill"
+        given["hookSpecificOutput"]["additionalContext"], instructions,
+        "the run's instructions"
     );
     for (input, env) in [
         (starts("s2"), &run[..]),
@@ -1662,10 +1749,6 @@ fn the_instructions_hook_says_where_the_run_s_agent_works() {
         let id = record["reference"]["agent_id"].as_str().unwrap();
         let address = record["address"].as_str().unwrap();
         let (_, machine) = address.split_once('@').expect("a complete address");
-        let place = format!(
-            "You are managed agent {address}, working in {} on machine {machine}.",
-            record["cwd"].as_str().unwrap(),
-        );
         let run = [("FACADE_AGENT", id), ("MUSE_SESSION_ID", "s1")];
         let given: Value = serde_json::from_str(&run_hook(
             &home,
@@ -1679,12 +1762,14 @@ fn the_instructions_hook_says_where_the_run_s_agent_works() {
             .as_str()
             .or(given["injectSteps"][0]["ephemeralMessage"].as_str())
             .unwrap_or_default();
-        let started_by = format!("{place} You were started from the command line.");
-        assert!(
-            told.starts_with(&started_by)
-                && told
-                    .contains(" YOLO is on. Your tools reach agents on all reachable machines. "),
-            "{cli}: {told}"
+        assert_eq!(
+            told.lines().last().unwrap(),
+            format!(
+                "YOLO is on: your tools reach agents on all reachable machines. Your address is \
+                 {address}. You were started from the command line in {} on {machine}.",
+                record["cwd"].as_str().unwrap(),
+            ),
+            "{cli}: {told}",
         );
     }
 }
@@ -2558,13 +2643,12 @@ fn each_tool_responds_as_recorded(through: Through) {
         "read_messages",
         json!({}),
     );
-    // Ada waits for Bob's reply while a draft holds terminal delivery.
+    // Bob waits for delivery while a draft holds Ada's terminal. Ada takes the pending reply.
     type_draft(&home, "ada", "my draft");
     let waiting = json!({
         "name": "read_messages",
-        "arguments": { "timeout_seconds": 30, "reply_to": sent["data"]["id"] },
+        "arguments": { "reply_to": sent["data"]["id"] },
     });
-    let awaiting = ada.send("tools/call", waiting.clone());
     let reply = json!({
         "name": "send_message",
         "arguments": {
@@ -2573,6 +2657,10 @@ fn each_tool_responds_as_recorded(through: Through) {
         },
     });
     let replying = bob.send("tools/call", reply.clone());
+    assert!(wait_until(secs(10), || home
+        .daemon_log()
+        .contains("#a2 sent m2 to #a1")));
+    let awaiting = ada.send("tools/call", waiting.clone());
     let read = ada
         .answer(awaiting, secs(40))
         .expect("Ada's read is answered");
@@ -2581,7 +2669,7 @@ fn each_tool_responds_as_recorded(through: Through) {
         "{read}"
     );
     golden.record(
-        "read_messages waiting for a reply",
+        "read_messages of a linked reply",
         json!({ "method": "tools/call", "params": waiting }),
         &read,
     );

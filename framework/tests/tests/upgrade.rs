@@ -2484,9 +2484,8 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
         );
     }
     let message_id = receipt["message"]["message_id"].as_str().unwrap();
-    let original = format!(
-        "📨 Message from the command line · {message_id}\nreceipt before the live takeover"
-    );
+    let original =
+        format!("📨 Message {message_id} from command line\nreceipt before the live takeover");
     assert_eq!(
         home.submitted_messages().as_slice(),
         std::slice::from_ref(&original)
@@ -2510,7 +2509,7 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
         home.submitted_messages(),
         [
             original,
-            format!("📨 Message from the command line · {fresh_id}\n{fresh_text}")
+            format!("📨 Message {fresh_id} from command line\n{fresh_text}")
         ]
     );
     assert_eq!(process_identity(agent.pid), agent.process);
@@ -3152,10 +3151,9 @@ fn a_start_a_stop_and_a_type_under_way_finish_before_the_takeover_ends() {
 
 /// The test CLI under each of the six CLIs' names, through a v1 takeover: each keeps its process and
 /// its tools reconnect. Nothing its run was given names a build's folder, so once the new build
-/// proves healthy, the hook lines its CLI runs, which name the launcher, run the new build; what
-/// they give the model is the run's own, the skill and instructions of the build that started it,
-/// as Claude Code's, OpenCode's and Pi's files are. Pi's and OpenCode's runs report their sessions
-/// from code of their own, which runs no program of Facade's.
+/// proves healthy, the hook lines its CLI runs through the launcher use the new build. Muse Code
+/// and Antigravity still receive the instructions stored with the run. Pi and OpenCode report their
+/// sessions from their own run extensions.
 #[test]
 fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_run_the_new_build()
 {
@@ -3174,7 +3172,6 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
     let before = previous.hello("terminal", DAEMON_API_VERSIONS, json!({}));
     assert_eq!(before["result"]["api_version"], 1, "{before}");
     assert_eq!(before["result"]["build"], CURRENT, "{before}");
-    let old_version = CURRENT;
     let programs = home.folder().join("programs");
     std::fs::create_dir_all(&programs).unwrap();
     let path = format!(
@@ -3423,29 +3420,14 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         let context = given["hookSpecificOutput"]["additionalContext"]
             .as_str()
             .map(str::to_string);
-        let (skill, instructions) = ("skills/facade/SKILL.md", "instructions.md");
-        if hook.contains(" --skill") || script.contains("'--skill'") {
-            assert_eq!(context, Some(own(skill)), "{cli}'s hook `{hook}`");
-        } else if hook.contains(" hook instructions muse") {
-            assert_eq!(
-                context,
-                Some(format!("{}\n\n{}", own(instructions), own(skill))),
-                "{cli}'s hook `{hook}`"
-            );
+        let instructions = "instructions.md";
+        if hook.contains(" hook instructions muse") {
+            assert_eq!(context, Some(own(instructions)), "{cli}'s hook `{hook}`");
         } else if hook.contains(" hook instructions agy") {
             assert_eq!(
                 given["injectSteps"][0]["ephemeralMessage"].as_str(),
                 Some(own(instructions).as_str()),
                 "{cli}'s hook `{hook}`"
-            );
-        }
-        if matches!(cli.as_str(), "codex" | "muse") {
-            assert!(
-                own(skill).ends_with(&format!(
-                    "Written by Facade Code Framework {old_version}.\n"
-                )),
-                "{cli}'s skill is the build before's: {}",
-                own(skill)
             );
         }
     }

@@ -476,7 +476,8 @@ async function perform(action: Action): Promise<unknown> {
 				facade('screen', action.to, '--lines', '120').includes(action.text) || undefined);
 			const received = fs.readFileSync(`${process.env.FACADE_IT_RECORD}.received.#${agent.reference.agent_id}`, 'utf8')
 				.trimEnd().split(/\r?\n/u).map(line => JSON.parse(line) as string);
-			assert.strictEqual(received.filter(text => text.endsWith(` · ${message.split('@')[0]}\n${action.text}`)).length, 1);
+			const expected = `📨 Message ${message.split('@')[0]} from command line\n${action.text}`;
+			assert.strictEqual(received.filter(text => text === expected).length, 1, `exactly one terminal delivery of ${message}`);
 			return true;
 		}
 		case 'wait-for-exit':

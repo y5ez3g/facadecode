@@ -665,7 +665,7 @@ fn one_typed_call_carries_at_most_1_mib() {
     );
     assert_eq!(error_reason(&over), "capacity_exceeded", "{over}");
     assert_eq!(
-        over["error"]["message"], "agent.type accepts at most 1024 KiB of input",
+        over["error"]["message"], "input is limited to 1 MiB a call",
         "{over}"
     );
     let at_limit = wire.call(

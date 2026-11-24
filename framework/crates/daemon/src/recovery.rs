@@ -48,7 +48,7 @@ use crate::lifecycle::Work;
 use crate::messages::{self, Outcome, OwedResult, PromptWatch, Recipient, Settled, TakeUp};
 use crate::operations::exit_sink;
 use crate::store::{AgentRecord, KeptMessage};
-use crate::{Daemon, Sender, blocking_in_place};
+use crate::{Daemon, PASTE_SEPARATOR, Sender, blocking_in_place};
 
 /// How many agents recover at once: bounds the keeper's requests and the memory screen replays
 /// take.
@@ -98,6 +98,7 @@ type Delivering = (Message, watch::Receiver<Option<Settled>>);
 /// those still pending, and the earliest of their deadlines.
 struct BegunPaste {
     typings: Vec<MessageTyping>,
+    previous_text: String,
     pending: Vec<Delivering>,
     deadline: Instant,
 }
@@ -583,9 +584,13 @@ impl Daemon {
             return Ok(None);
         }
         let (paste, (deadline, pending)) = pastes.into_iter().next().expect("one paste");
-        let typings = self
-            .messages
-            .paste_messages(paste)?
+        let messages = self.messages.paste_messages(paste)?;
+        let previous_text = messages
+            .iter()
+            .map(|message| self.previous_message_text(message))
+            .collect::<Vec<_>>()
+            .join(PASTE_SEPARATOR);
+        let typings = messages
             .iter()
             .map(|message| {
                 let said = Submission {
@@ -605,6 +610,7 @@ impl Daemon {
             .collect();
         Ok(Some(BegunPaste {
             typings,
+            previous_text,
             pending,
             deadline,
         }))
@@ -645,6 +651,7 @@ impl Daemon {
     async fn finish_paste(self: &Arc<Self>, agent: &AgentHandle, begun: BegunPaste) {
         let BegunPaste {
             typings,
+            previous_text,
             pending,
             deadline,
         } = begun;
@@ -656,7 +663,10 @@ impl Daemon {
             deadline,
             self.hand_input(
                 agent,
-                Input::BegunPaste(typings),
+                Input::BegunPaste {
+                    messages: typings,
+                    previous_text,
+                },
                 crate::delivery::InputWait::Always,
             ),
         )

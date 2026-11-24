@@ -6,8 +6,7 @@
 //!   the services' sockets and start, installing programs, private files and the person's
 //!   console ([`system`], [`unix_process`], [`terminal`], [`terminal_lines`], [`sockets`],
 //!   [`service`], [`programs`], [`files`], [`console`], [`paths`]).
-//! - The settings file ([`settings`]), and the texts a model reads ([`instructions`], [`skill`],
-//!   [`tools`]).
+//! - The settings file ([`settings`]), and the texts a model reads ([`instructions`], [`tools`]).
 //! - Here: which build this is, the Facade home, timestamps and the log line.
 
 mod build;
@@ -32,7 +31,7 @@ pub use build::{
 };
 pub use platform::modules::*;
 pub use protocol::{address, api_v1, base64, jsonrpc, operations};
-pub use texts::{instructions, skill, tools};
+pub use texts::{instructions, tools};
 
 /// Eight random bytes from the operating system, for keys and names nobody may guess. Panics if
 /// the system cannot give them, which a supported system never fails to, as the standard library

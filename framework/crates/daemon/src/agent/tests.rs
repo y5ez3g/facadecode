@@ -805,10 +805,7 @@ async fn calls_cut_off_by_the_agent_s_end_say_what_was_typed() {
     let cut_off = answered(typing).await.unwrap_err();
     assert_eq!(
         (cut_off.data.reason, cut_off.message.as_str()),
-        (
-            Reason::PartialInput,
-            "#a1 ended; part of the text was typed"
-        )
+        (Reason::PartialInput, "a1 ended; part of the text was typed")
     );
     assert_eq!(
         (cut_off.data.text_written, cut_off.data.enter_written),
@@ -817,7 +814,7 @@ async fn calls_cut_off_by_the_agent_s_end_say_what_was_typed() {
     let waited = answered(waiting).await.unwrap_err();
     assert_eq!(
         (waited.data.reason, waited.message.as_str()),
-        (Reason::Ended, "#a1 ended; nothing was typed")
+        (Reason::Ended, "a1 ended; nothing was typed")
     );
     let refused = harness
         .type_call(Typing::keys(&["z".into()]).unwrap())

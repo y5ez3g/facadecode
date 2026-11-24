@@ -20,9 +20,9 @@ Other programs and protocols keep their own words: the standard library's `spawn
 | Facade Code Extension | The VS Code product that runs agents through Framework or the legacy implementation | — |
 | Orchestrator | The service that manages agents in one Facade home, with a keeper and a daemon | Framework (for the service) |
 | Facade | The three entry points to the Orchestrator on the local machine: Shell, the MCP entry point and VS Code | Orchestrator (for the entry points) |
-| Facade API v1 | The Orchestrator's operations for its clients at API version 1, such as `agent.start`. Shell and VS Code call them through the Daemon API, and agents and external apps through the MCP entry point. The Keeper API's operations are not part of it | v3 (for these operations, their tools or their skill) |
+| Facade API v1 | The Orchestrator's operations for its clients at API version 1, such as `agent.start`. Shell and VS Code call them through the Daemon API, and agents and external apps through the MCP entry point. The Keeper API's operations are not part of it | v3 (for these operations or their tools) |
 | Shell | The `facade` commands for people and scripts | command line (for the entry point) |
-| MCP entry point | Facade API v1's entry point for agents and external apps: the relay and the daemon's MCP server, with one tool table and one skill. Its tools call API v1 operations, as `start_agent` calls `agent.start` | MCP (alone, for the entry point), MCP entry, MCP server (for the whole entry point) |
+| MCP entry point | The relay forwards requests between the client and the daemon's MCP server. The server supplies Facade's instructions and tool definitions. The tools call API v1 operations, as `start_agent` calls `agent.start` | MCP (alone, for the entry point), MCP entry, MCP server (for the whole entry point) |
 | VS Code | The editor extension entry point for people | Orchestrator (for the extension) |
 
 ## Agents and runs
@@ -197,8 +197,7 @@ actions they offer.
 | hook | A command a CLI runs when something happens, such as `facade hook session-start` | — |
 | hook output | What a hook prints for the CLI to read; functions that make it are `*_output` | answer |
 | plugin, extension | A CLI's own way to extend it, by that CLI's own name | — |
-| skill | How to use Facade, written for each CLI's model | — |
-| instructions | What the MCP server or a hook tells a model about Facade | — |
+| instructions | What the MCP server or a run's hook or extension tells a model about Facade | — |
 | guide | The protocol's description for client authors, `DAEMON.md` | — |
 
 ## Services, builds and takeover

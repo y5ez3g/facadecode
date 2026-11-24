@@ -234,7 +234,7 @@ impl RunRegistry {
             let run = runs.get_mut(id).ok_or_else(|| {
                 ErrorBody::new(
                     Reason::NotFound,
-                    format!("agent #{id} has no terminal to stop; nothing was sent"),
+                    format!("agent {id} has no terminal to stop; nothing was sent"),
                 )
             })?;
             if run.exit.is_some() || run.number != number {

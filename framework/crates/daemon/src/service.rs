@@ -917,7 +917,7 @@ impl Daemon {
         let info = agent.info();
         let reach = Reach::from(caller);
         if !reach.reaches(&info) {
-            return Err(reach.refusal(&reference.agent_id));
+            return Err(Reach::refusal(&reference.agent_id));
         }
         records::lookup(
             facade_base::address::selector::AgentKey::Number(&reference.agent_id),
@@ -1296,10 +1296,7 @@ impl Daemon {
         if typing_bytes.unwrap_or_else(|| input.most_bytes()) > MAX_INPUT_BYTES {
             return Err(ErrorBody::new(
                 Reason::CapacityExceeded,
-                format!(
-                    "agent.type accepts at most {} KiB of input",
-                    MAX_INPUT_BYTES / 1024
-                ),
+                "input is limited to 1 MiB a call",
             ));
         }
         let wait = match when_full {
@@ -1624,7 +1621,7 @@ fn start_folder(
     };
     if !Path::new(&folder).is_absolute() {
         return Err(ErrorBody::invalid_argument(format!(
-            "cwd must be an absolute path, not {folder}"
+            "the folder must be an absolute path, not {folder}"
         )));
     }
     Ok(folder)

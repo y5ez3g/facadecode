@@ -149,26 +149,14 @@ fn initialize(relay: &Relay, params: &Value) -> Result<Value, Refused> {
     }))
 }
 
-/// The answer to `tools/list`. Each tool is marked to be loaded from the start, under the keys the
-/// CLIs' rules name, for the CLIs that otherwise load a server's tools on demand behind a search. No
-/// tool lists a result schema: every result is the same envelope (MCP-1.2), and a schema would cost
-/// every turn its bytes.
+/// The answer to `tools/list`: the shipped definitions. Every tool returns the same envelope
+/// (MCP-1.2), so the catalog omits result schemas.
 fn list_tools(relay: &Relay) -> Value {
     facade_base::service::gate_for_test("mcp-before-tools-list");
     // The client has the tools with this answer, so only now does the daemon learn they are there:
     // a start's prompt or a message it sends next finds them loaded.
     relay.hold_verified_presence();
-    let always_load: serde_json::Map<String, Value> = facade_rules::always_load_keys()
-        .map(|key| (key.to_string(), Value::Bool(true)))
-        .collect();
-    let tools: Vec<Value> = TOOLS
-        .iter()
-        .map(|entry| {
-            let mut tool = entry.definition.clone();
-            tool["_meta"] = Value::Object(always_load.clone());
-            tool
-        })
-        .collect();
+    let tools: Vec<&Value> = TOOLS.iter().map(|entry| &entry.definition).collect();
     json!({ "tools": tools })
 }
 
@@ -227,20 +215,33 @@ mod tests {
 
     /// A relay whose actor is verified, so that its calls get as far as their arguments, and whose
     /// tools must not reach the daemon.
-    fn rejecting_relay() -> Relay {
+    fn rejecting_relay(receives_terminal_messages: bool) -> Relay {
         let mut relay = Relay::for_test();
         let services = &mut relay.verified.services;
-        services.authenticate = Box::new(|_, _, _| {
+        services.authenticate = Box::new(move |_, _, _| {
             Ok(ActorIdentity {
                 reference: AgentRef {
                     machine_id: "00000000-0000-4000-8000-000000000001".into(),
                     agent_id: "a7".into(),
                 },
                 kind: AgentKind::Managed,
+                receives_terminal_messages,
             })
         });
         services.connect = Box::new(|_, _| panic!("a rejected tool call must not connect"));
         relay
+    }
+
+    #[test]
+    fn a_timed_read_is_refused_only_with_terminal_message_delivery() {
+        let request = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_messages","arguments":{"timeout_seconds":1}}}"#;
+        let arrived = Instant::now() - std::time::Duration::from_secs(2);
+        for (terminal_delivery, expected) in [(true, "unsupported"), (false, "timeout")] {
+            let answer = rejecting_relay(terminal_delivery)
+                .respond_verified(request, arrived)
+                .expect("a tool answer");
+            assert_eq!(answer["result"]["structuredContent"]["reason"], expected);
+        }
     }
 
     #[test]
@@ -275,70 +276,12 @@ mod tests {
         );
     }
 
-    /// Tool discovery serves the shipped catalog with only CLI loading metadata added.
+    /// Tool discovery serves the shipped catalog as is.
     #[test]
     fn the_tool_list_matches_the_shipped_catalog() {
-        let mut answer = answered(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
-        let tools = answer["result"]["tools"].as_array_mut().unwrap();
-        for tool in tools.iter_mut() {
-            tool.as_object_mut().unwrap().remove("_meta");
-        }
-        let shipped: Vec<Value> = serde_json::from_str(facade_base::tools::DEFINITIONS).unwrap();
-        assert_eq!(*tools, shipped);
-    }
-
-    /// The skill gives cross-tool examples and reference (MCP-6.2) without repeating sentences
-    /// from initialization instructions, tool descriptions or argument descriptions.
-    #[test]
-    fn the_skill_repeats_no_sentence_of_the_instructions_or_the_tools() {
-        use facade_base::instructions::{Creator, ManagedRun, for_connection, for_managed};
-
-        let skill = facade_base::skill::text();
-        let listed =
-            answered(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)["result"]["tools"]
-                .clone();
-        let mut texts = vec![for_connection()];
-        for yolo in [false, true] {
-            for creator in [
-                None,
-                Some(Creator::Agent {
-                    address: "a2@devbox",
-                    name: Some("Ada"),
-                }),
-            ] {
-                let run = ManagedRun {
-                    folder: "/work/app",
-                    machine: "devbox",
-                    creator,
-                    yolo,
-                };
-                texts.push(for_managed("a3@devbox", &run));
-            }
-        }
-        for tool in listed.as_array().unwrap() {
-            texts.push(tool["description"].as_str().unwrap().to_string());
-            let properties = tool["inputSchema"]["properties"].as_object().unwrap();
-            texts.extend(
-                properties
-                    .values()
-                    .filter_map(|property| property["description"].as_str().map(str::to_string)),
-            );
-        }
-        let mut sentences = 0;
-        for text in &texts {
-            for sentence in text
-                .split_inclusive(['.', ';', ':'])
-                .map(str::trim)
-                .filter(|sentence| sentence.len() > 16)
-            {
-                sentences += 1;
-                assert!(
-                    !skill.contains(sentence.trim_end_matches(['.', ';', ':'])),
-                    "the skill repeats {sentence:?}"
-                );
-            }
-        }
-        assert!(sentences > 30, "only {sentences} sentences were compared");
+        let answer = answered(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+        let shipped: Value = serde_json::from_str(facade_base::tools::DEFINITIONS).unwrap();
+        assert_eq!(answer["result"]["tools"], shipped);
     }
 
     #[test]
@@ -368,11 +311,7 @@ mod tests {
         for tool in tools.as_array().unwrap() {
             assert_eq!(tool["inputSchema"]["type"], "object");
             assert!(tool.get("outputSchema").is_none(), "{tool}");
-            assert_eq!(
-                tool["_meta"],
-                json!({ "anthropic/alwaysLoad": true, "antigravity/alwaysLoad": true }),
-                "loaded from the start by Claude Code and Antigravity"
-            );
+            assert!(tool.get("_meta").is_none(), "{tool}");
         }
     }
 
@@ -380,7 +319,7 @@ mod tests {
     /// content.
     #[test]
     fn a_tool_result_is_its_envelope_as_text_and_as_structured_content() {
-        let relay = rejecting_relay();
+        let relay = rejecting_relay(true);
         let answer = relay
             .respond_verified(
                 br##"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"send_message","arguments":{"to":"#a2"}}}"##,
@@ -416,7 +355,7 @@ mod tests {
 
     #[test]
     fn read_screen_refuses_last_before_connecting_to_the_daemon() {
-        let relay = rejecting_relay();
+        let relay = rejecting_relay(true);
         for arguments in [
             json!({ "agent": "#a7", "last": 4 }),
             json!({ "agent": "#a7", "last": 4, "lines": 4 }),

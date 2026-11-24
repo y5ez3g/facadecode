@@ -273,8 +273,8 @@ function argsOf(alias: string): { readonly cwd: string; readonly args: string[];
 const after = (args: readonly string[], option: string) => args[args.indexOf(option) + 1];
 
 /**
- * How the agent `alias` was given its Facade server and skill, as its CLI takes them (CLIS-2.2), and what keeps its tools from asking
- * with YOLO off (CLIS-1.3): checked by the files and arguments its launch had.
+ * Check the Facade server and approval settings the agent received at launch, including the legacy skill plugin.
+ * See CLIS-1.3 and CLIS-2.2.
  */
 function assertTools(alias: string): void {
 	const { cwd, args, env } = argsOf(alias);
@@ -296,11 +296,12 @@ function assertTools(alias: string): void {
 				assert.ok(path.isAbsolute(server.command));
 				assert.ok(server.args[0] === '--run-credential' && typeof server.args[1] === 'string' && server.args[1].length > 0,
 					'framework wrote the actual run credential into the private MCP configuration');
+				assert.ok(!args.includes('--plugin-dir'), 'framework launches without the Facade skill plugin');
 			} else {
 				assert.deepStrictEqual(Object.keys(server.env).sort(), ['ELECTRON_RUN_AS_NODE', 'FACADE_AGENT', 'FACADE_LAUNCH_CONTEXT', 'FACADE_PTYD', 'FACADE_RUN']);
 				assert.strictEqual(`#${server.env.FACADE_AGENT.replace(/^#/, '')}`, alias, 'the MCP child receives its own short ID explicitly');
+				assert.ok(fs.existsSync(path.join(after(args, '--plugin-dir'), 'skills', 'facade', 'SKILL.md')), 'its own skill plugin');
 			}
-			assert.ok(fs.existsSync(path.join(after(args, '--plugin-dir'), 'skills', 'facade', 'SKILL.md')), 'its own skill plugin');
 			assert.strictEqual(after(args, '--allowedTools'), 'mcp__facade', 'Facade\'s own tools never ask for approval (CLIS-2.2)');
 			break;
 		}
@@ -426,7 +427,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			const original = await until(`${child.name} to accept its first task`, () =>
 				received(child.alias).find(text => text.endsWith(child.prompt)));
 			assert.strictEqual(normalizeDriveLetter(argsOf(child.alias).cwd), normalizeDriveLetter(folder));
-			const id = / · (m\d+)$/u.exec(original.split('\n')[0])?.[1];
+			const id = /^📨 Message (m\d+) from /u.exec(original.split('\n')[0])?.[1];
 			assert.ok(id && original.includes(address), original);
 			const sent = await script(child.alias, [{ tool: 'send_message', arguments: { to: address, text: child.reply, reply_to: id } }]);
 			const receipt = sent.content('send_message');
@@ -437,7 +438,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			assert.strictEqual(machine, address.split('@')[1], JSON.stringify(receipt));
 			const reply = await until(`${child.name}'s reply at the parent terminal`, () =>
 				received(alias).find(text => text.endsWith(child.reply)));
-			assert.strictEqual(reply, `📨 Message from ${child.name} (${child.address}) · ${replyId} · Reply to ${id}\n${child.reply}`);
+			assert.strictEqual(reply, `📨 Message ${replyId} from ${child.name} (${child.address}) · in reply to ${id}\n${child.reply}`);
 		}
 		const [reviewer, verifier] = references;
 		const typed = 'typed by its creator 中文 🚀';

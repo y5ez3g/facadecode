@@ -163,7 +163,7 @@ pub(super) fn spawn(
         screen_status_at: None,
         typist: Typist::new(
             &info.agent_id,
-            rule.map(|rule| &rule.paste),
+            rule,
             rule.and_then(facade_rules::console_typing),
             deliveries,
         ),
@@ -869,7 +869,10 @@ impl Actor {
         match input {
             Input::Typed(typing) => self.typist.push(typing),
             Input::Message(message) => self.typist.deliver(message),
-            Input::BegunPaste(messages) => self.typist.finish_paste(messages),
+            Input::BegunPaste {
+                messages,
+                previous_text,
+            } => self.typist.finish_paste(messages, Some(previous_text)),
             Input::Raw(_) => {}
         }
     }
@@ -1027,7 +1030,7 @@ impl Actor {
             }
             TerminalEvent::WriteFailed(err) => {
                 self.stop_input(&format!(
-                    "#{}'s terminal stopped taking input: {err}",
+                    "{}'s terminal stopped taking input: {err}",
                     self.id
                 ));
             }
@@ -1270,7 +1273,7 @@ impl Actor {
         self.report_trouble();
         self.publish();
         self.viewers.note_exit(Instant::now());
-        self.stop_input(&format!("#{} ended", self.id));
+        self.stop_input(&format!("{} ended", self.id));
         self.readiness.end();
         self.ready_at = None;
         (self.awaits_prompt, self.prompt_ready) = (false, None);
@@ -1315,7 +1318,7 @@ impl Actor {
         // Input bound to the ended run is refused from now on, also for senders waiting for room.
         self.run = run;
         self.links.shared.run.store(run, Ordering::SeqCst);
-        self.stop_input(&format!("#{} is resuming", self.id));
+        self.stop_input(&format!("{} is resuming", self.id));
         self.pending_size = None;
         self.links.room.notify_waiters();
         self.next_run = Some((run, Size { cols, rows }));

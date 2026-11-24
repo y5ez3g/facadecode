@@ -18,7 +18,6 @@ use facade_base::model::terminal::DEFAULT_TERMINAL_SIZE;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use super::addresses::inbox_role;
 use super::daemon_calls::{CONNECT_TIMEOUT, failed, open_with};
 use super::{
     ActorIdentity, Relay, Tool, ToolCall, agent_tools, envelope, message_tools, optional,
@@ -147,19 +146,10 @@ fn start(
     match client.call_with_request_id::<AgentStart>(start, true) {
         Ok((started, _)) => {
             let agent = started.agent;
-            let mut data = json!({
+            envelope::success(json!({
                 "id": agent.address, "name": agent.name, "folder": agent.cwd,
                 "machine_id": agent.reference.machine_id,
-            });
-            if let (Some(id), Some(machine)) =
-                (started.result_message_id, started.result_message_machine_id)
-            {
-                match inbox_role(&id, &machine, &actor.reference.machine_id, &[]) {
-                    Ok(address) => data["result_message"] = json!(address),
-                    Err(error) => return envelope::refusal(&error),
-                }
-            }
-            envelope::success(data)
+            }))
         }
         Err(err) => match err.downcast_ref::<api_v1::ErrorBody>() {
             Some(error) => agent_tools::start_daemon_refused(error),
@@ -333,6 +323,13 @@ fn read(
         Err(error) => return Some(envelope::refusal(&error)),
     };
     let positive = args.timeout_seconds > 0;
+    if positive && actor.receives_terminal_messages {
+        return Some(envelope::failure(
+            "unsupported",
+            "read_messages cannot wait in this managed run. This call did not check your inbox. \
+             End this turn so Facade can deliver incoming messages to your input.",
+        ));
+    }
     let budget = if positive {
         Duration::from_secs(args.timeout_seconds)
     } else {
@@ -415,7 +412,7 @@ fn parse_read(
         .is_some_and(|address| address.machine.is_none())
     {
         return Err(ErrorBody::invalid_argument(
-            "reply_to takes the full message ID returned by send_message",
+            "reply_to takes the full address that send_message returned as data.id, such as m42@devbox",
         ));
     }
     Ok((after, reply_to))

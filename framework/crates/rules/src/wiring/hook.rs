@@ -25,15 +25,26 @@ pub struct RunStart<'a> {
     pub own_session: Option<&'a str>,
     /// The instructions of the agent the run is, as the run's start wrote them.
     pub instructions: Option<&'a str>,
-    /// The skill in the run's folder.
-    pub skill: Option<&'a str>,
+}
+
+impl<'a> RunStart<'a> {
+    pub fn new(
+        input: Option<&'a Value>,
+        own_session: Option<&'a str>,
+        instructions: Option<&'a str>,
+    ) -> Self {
+        Self {
+            input,
+            own_session,
+            instructions,
+        }
+    }
 }
 
 /// What `facade hook instructions <cli>` prints, for a CLI that shows its model no MCP server's
 /// instructions. Antigravity gets the instructions for each invocation alone, so that nothing piles
-/// up in its conversation, and an empty object without them. Muse Code gets the instructions and
-/// the skill as the run's own session starts, not one a subagent of it starts. None where the hook
-/// prints nothing.
+/// up in its conversation, and an empty object without them. Muse Code gets the instructions as
+/// the run's own session starts. None where the hook prints nothing.
 pub fn run_start_output(cli: &str, start: &RunStart<'_>) -> Option<String> {
     match cli {
         "agy" => Some(match start.instructions {
@@ -51,8 +62,7 @@ pub fn run_start_output(cli: &str, start: &RunStart<'_>) -> Option<String> {
             if !starts || !own {
                 return None;
             }
-            let context = format!("{}\n\n{}", start.instructions?, start.skill?);
-            Some(session_start_context(&context))
+            start.instructions.map(session_start_context)
         }
         _ => None,
     }
@@ -158,12 +168,6 @@ pub fn session_of(cli: &str, input: &Value) -> Option<NamedSession> {
 pub fn is_turn_cut_short(cli: &str, input: &Value) -> bool {
     let _ = cli;
     input["terminationReason"] == "USER_CANCELED"
-}
-
-/// What `facade hook session-start <file> --skill` prints: `skill` as the context the session
-/// starts with, for a CLI that reads no skill file of its own.
-pub fn skill_output(skill: &str) -> String {
-    session_start_context(skill)
 }
 
 /// Whether `session` is the run's own, by the CLI's environment `env`: a CLI that also runs the

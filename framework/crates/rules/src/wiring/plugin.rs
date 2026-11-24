@@ -37,7 +37,7 @@ pub fn uses_folder_plugin(cli: &str) -> bool {
 }
 
 /// What the manifest of a plugin `version` writes says of it.
-pub(super) fn plugin_description(version: &str) -> String {
+fn plugin_description(version: &str) -> String {
     format!(
         "{PLUGIN_MARKER}{version}: start agents, send and read messages, and read or type into \
          agent terminals."
@@ -46,8 +46,7 @@ pub(super) fn plugin_description(version: &str) -> String {
 
 /// The files of Antigravity's plugin, each its path in [`PLUGIN_FOLDER`] and its text: its
 /// manifest, which names this version; the MCP configuration of Facade's server, `program`; a
-/// `PreInvocation` hook that has `facade`, this program, give
-/// the model the instructions, as Antigravity shows it no server's; and the skill. The same for
+/// `PreInvocation` hook that has `facade`, this program, give the model the instructions. The same for
 /// every run of this version and Facade home, so that the runs in one folder share it. The server
 /// finds the daemon's socket from its Facade home. The launcher takes the current run's relay
 /// credential from the CLI's environment, so the files are shared by runs with different credentials.
@@ -84,7 +83,6 @@ exec "$1""#,
         ("plugin.json".into(), pretty(manifest)),
         ("mcp_config.json".into(), pretty(servers)),
         ("hooks.json".into(), pretty(hooks)),
-        (SKILL_FILE.into(), facade_base::skill::text()),
     ]
 }
 

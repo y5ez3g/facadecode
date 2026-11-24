@@ -45,7 +45,7 @@ impl BoundActor {
         }
     }
 
-    fn identity(&self) -> ActorIdentity {
+    fn identity(&self, handle: &AgentHandle) -> ActorIdentity {
         ActorIdentity {
             reference: self.reference.clone(),
             kind: if self.run.is_some() {
@@ -53,6 +53,11 @@ impl BoundActor {
             } else {
                 AgentKind::Guest
             },
+            receives_terminal_messages: self.run.is_some()
+                && handle
+                    .rule()
+                    .and_then(|name| facade_rules::find(name).ok().flatten())
+                    .is_some(),
         }
     }
 
@@ -152,8 +157,8 @@ impl Daemon {
                             }
                         }
                     };
-                    actor.current(&daemon, &evidence.process)?;
-                    let identity = actor.identity();
+                    let handle = actor.current(&daemon, &evidence.process)?;
+                    let identity = actor.identity(&handle);
                     bound.set(actor).ok();
                     Ok(identity)
                 },
@@ -234,6 +239,12 @@ impl Daemon {
                 };
                 let actor = BoundActor::managed(run, &daemon.machine_id);
                 let handle = actor.current(&daemon, &evidence.process)?;
+                if handle
+                    .rule()
+                    .is_some_and(facade_rules::managed_instructions_from_hook)
+                {
+                    return Ok(None);
+                }
                 let (_, info) = handle.installed_record();
                 let instructions = daemon.instructions_for_current_run(&info)?;
                 actor.current(&daemon, &evidence.process)?;
@@ -374,9 +385,7 @@ impl Daemon {
                     }
                 };
                 let result = match tokio::time::timeout_at(deadline, lookup).await {
-                    Err(_) => {
-                        Err("The CLI lookup did not finish before the roster deadline.".into())
-                    }
+                    Err(_) => Err("The CLI lookup did not finish in time.".into()),
                     Ok(Err(error)) => Err(error.message),
                     Ok(Ok(result)) => match result.settings_problem {
                         Some(problem) => Err(problem),

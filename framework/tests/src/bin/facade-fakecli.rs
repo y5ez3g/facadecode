@@ -1149,7 +1149,7 @@ fn configured_server(arguments: &[String]) -> anyhow::Result<Option<Command>> {
 
 /// Starts the configured MCP server and its MCP session, as a CLI does at its start: it initializes the
 /// session and asks for the server's tools. `answered` is set once the server answers the session's
-/// start; the rest of what it answers is read and dropped.
+/// start. When a test asks for a roster, save the response to its isolated file.
 fn start_server(
     mut command: Command,
     answered: Arc<AtomicBool>,
@@ -1162,6 +1162,8 @@ fn start_server(
         .stderr(Stdio::null())
         .spawn()?;
     let answers = server.stdout.take().expect("the server's output");
+    let roster = std::env::var_os("FAKECLI_MCP_ROSTER").map(PathBuf::from);
+    let ask_roster = roster.is_some();
     std::thread::spawn(move || {
         for line in std::io::BufReader::new(answers)
             .lines()
@@ -1169,6 +1171,12 @@ fn start_server(
         {
             if line.contains("\"id\":1") && line.contains("\"result\"") {
                 answered.store(true, Ordering::SeqCst);
+            }
+            if let Some(file) = &roster
+                && serde_json::from_str::<serde_json::Value>(&line)
+                    .is_ok_and(|reply| reply["id"] == 3)
+            {
+                let _ = write_whole(file, &line);
             }
         }
     });
@@ -1180,11 +1188,18 @@ fn start_server(
         r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
         "\n"
     );
-    server
-        .stdin
-        .as_mut()
-        .expect("the server's input")
-        .write_all(session.as_bytes())?;
+    let input = server.stdin.as_mut().expect("the server's input");
+    input.write_all(session.as_bytes())?;
+    if ask_roster {
+        writeln!(
+            input,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": { "name": "list_agents", "arguments": {} },
+            })
+        )?;
+    }
     Ok(server)
 }
 

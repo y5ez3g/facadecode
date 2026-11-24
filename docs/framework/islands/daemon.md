@@ -337,7 +337,7 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   Backspace to finish.
 - **Keeps:**
   - Each call goes in whole and in order; a pause counts from when its bytes reached the terminal.
-  - A message's bytes are written only after `DeliveryHandle::begin_paste` recorded the paste.
+  - `DeliveryHandle::begin_paste` records the paste before the typist writes the complete message in one paste.
   - The submission key goes once the input box shows this paste alone and stays still for the CLI's settle time.
     Codex queues an ordinary message with Tab while Working. The start prompt and recovered pastes use Enter.
   - A message is delivered once its submission key reaches the terminal. When the deadline expires before
@@ -346,7 +346,7 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   - The wait before submission counts the paste rate from `PASTE_BYTES_PER_MS`. With console typing, characters above U+FFFF go as key-down records and the wait adds `per_char` for each UTF-16 code unit.
   - An input whose row may be a hint or a draft (it reads unsure) is probed once a run, by its child `probe`: a space where the input starts, then, once the input is drawn still, Backspace, and a check that the input is as it was. Nothing else is typed meanwhile. The input is read every 100 ms; still means two equal readings in a row that show the row, for at most a second after each key. Backspace goes only where the space went in, no menu or question shows, and the person typed nothing since the probe read the input; after a failed check nothing more is pressed. What a probe finds, a hint, a draft or neither for sure, is kept for the row until the CLI's next run, so a row is never probed twice in a run.
 - **Never does:** write the terminal (it hands its bytes to the actor); read the screen except through the reading the actor gives it; take the person's keys; touch the database.
-- **Interface:** the daemon builds `Typing::text(text, enter, sender)`, `Typing::keys(names)` and `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses `new(agent, paste_rule, console_typing, DeliveryHandle)`, `push`, `deliver`, `deliver_first`, `finish_paste`, `fail_ended`, `fail_all(written, why)`, `hold_pastes()`, and `step(now, written, queued, modes, typed, read, read_screen) -> Step { write, wake }`, where `typed` counts the person's writes and `read_screen` reads the input as the screen shows it; for probes, `recall(reading)` (a row a probe found a hint reads as an empty input, a draft as a draft), `want_probe()` (the start waits on an unsure input) and `clear_probes()` (a new run starts); it reads `take_submitted()`, `take_entered()`, `held_bytes()`, `paste_rule()`, `busy()`, `pasting()`, `types_calls()`, `reads_input()`, `probing()`. Through `DeliveryHandle` it asks `still_to_type(number)`, records `begin_paste(numbers)` and `settle(numbers, outcome)`.
+- **Interface:** the daemon builds `Typing::text(text, enter, sender)`, `Typing::keys(names)` and `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses `new(agent, rule, console_typing, DeliveryHandle)`, `push`, `deliver`, `deliver_first`, `finish_paste`, `fail_ended`, `fail_all(written, why)`, `hold_pastes()`, and `step(now, written, queued, modes, typed, read, read_screen) -> Step { write, wake }`, where `typed` counts the person's writes and `read_screen` reads the input as the screen shows it; for probes, `recall(reading)` (a row a probe found a hint reads as an empty input, a draft as a draft), `want_probe()` (the start waits on an unsure input) and `clear_probes()` (a new run starts); it reads `take_submitted()`, `take_entered()`, `held_bytes()`, `paste_rule()`, `busy()`, `pasting()`, `types_calls()`, `reads_input()`, `probing()`. Through `DeliveryHandle` it asks `still_to_type(number)`, records `begin_paste(numbers)` and `settle(numbers, outcome)`.
 
 #### viewers
 
@@ -374,6 +374,18 @@ question stays available for the person.
 Post assigns a message number in the SQLite transaction that keeps it. The receiving machine owns
 delivery state. A managed terminal confirms delivery when the submission key reaches it. A Guest confirms
 delivery by taking the message from its inbox. Both use the same deadline.
+
+A managed terminal sees `📨 Message mN from <sender>` above the body. Replies append
+` · in reply to mN`, with a machine selector when the original message is remote. A command-line
+sender has a `#c` address only while waiting for a reply. A notice begins with `🔔` followed by its
+text. Its record number is available in the inbox.
+
+When a daemon recovers an already begun paste, it checks the draft against the message formats
+before and after the header change. An older Claude draft may show part of the header before its
+paste placeholder. Recovery recognizes that visible prefix with the matching placeholder. It keeps
+the original deadline and submits the existing draft once. If both formats
+still match at the deadline and their lengths differ, recovery leaves the text in the input and
+reports unconfirmed submission.
 
 An explicit inbox-only send returns after storage commits, and delivery continues on its background deadline.
 For a send from an authenticated agent, the original admission stores `notify_failure` with the sender and
@@ -510,6 +522,10 @@ A run's command line, environment, folder, plugin and session following.
   Facade Code Framework's, or a later version's, is never changed. Once the last start holding it and the last
   run using it have ended, preparation removes a plugin that matches the current template or has an
   earlier version. A plugin with the current version and different contents is logged and left in place.
+  A new run can register its own relay credential while a same-version Antigravity plugin is still
+  in use if the plugin has the old skill file and every current template file is a regular file with
+  matching bytes.
+  The files stay in place during the hold. Once the folder is free, the next start replaces the plugin.
   Only CLIs for which `facade_rules::uses_folder_plugin` holds use it. The session file is checked
   by its modified time and size a second after the run's terminal gives output, as a CLI saves its
   session while it works: at most once a second while output goes on, once more a quiet second
@@ -538,6 +554,9 @@ Records owns agent numbers, default names and target lookup within the caller's 
   Identical eligible names and numbers across machines can be ambiguous. Diagnostic labels
   describe only reachable records. `human`, `@Pixel` and a bare digit are names. A stable
   reference retains its machine ID and still passes the same operation checks.
+- An unqualified number or name and the literal reading of a name containing `@` use the same
+  reachable machines as `list_agents`. The lookup probes saved routes without waking them and
+  includes ended records. A numbered address with a machine goes directly to that machine.
 - `list_row` projects the shared `AgentListEntry`. Its public row contains the canonical address,
   name, kind, state, CLI, title, folder and latest start time. Shell, MCP and the editor use that row.
 
@@ -684,27 +703,37 @@ generation. A verified CLI-native session can also identify a matching live run.
 from protocol 2 may keep its earlier recognition rules until that run ends. Resume has a new
 credential scope even when it uses the same Agent ID.
 
-At initialization the parent can verify a managed run and render its instructions from the installed
-record. It uses the same address, creation source and run context as launch preparation. The parent
-checks the run again before returning the text. Connections whose run is still unknown receive the
-general tool instructions.
+At initialization the parent can verify a managed run and consult its installed CLI rule. A run
+whose rule supplies the managed instructions through a hook receives the general connection text,
+as does a connection whose run is still unknown. For other verified runs the parent renders the
+managed instructions from the installed record and checks the run again before returning the text.
+It uses the same address, creation source and run context as launch preparation.
 
 The parent hands the verified actor to the private daemon connection. Only the validated process
 can bring a run's tools online. The connection rechecks the run when it sends a new request. A
 waiting inbox read also ends with its bound run, and Post checks the bound actor while it settles
 the available page.
 
-One table defines the eight tools served by `tools/list` and dispatched by `tools/call`. They use
-the same targets, machine routing and operation requirements as other daemon clients. `list_agents`
+One table defines the eight tools served by `tools/list` and dispatched by `tools/call`. The
+catalog is sent as shipped, and a verified connection reports tools ready when it serves the list.
+The tools use the same targets, machine routing and operation requirements as other daemon clients. `list_agents`
 adds available CLI names on answered, reachable machines within the roster deadline.
 Local Managed discovery uses the verified run environment and working directory. Guest discovery and remote
 discovery use the target login context. Local Guest start still validates its authenticated relay environment.
 
+`start_agent` returns the agent's address, name, folder and machine ID. If the first prompt fails
+while the caller's inbox is available, the notice uses the message number reserved by the daemon's
+start receipt.
+
 `read_messages` filters its page before delivery and commits only complete returned messages. `reply_to`
-includes retained, delivered replies. A positive `timeout_seconds` waits for matches under the call's deadline.
+includes retained, delivered replies. Guests and agents without terminal message delivery can wait for matches
+under the call's deadline. A positive `timeout_seconds` for a managed agent with terminal message delivery is
+refused before its inbox is read.
 `send_message` saves by default. A result wait uses confirmed delivery and the first matching reply in the
 sender's own inbox, under the same budget. On timeout the reply can still be read through `read_messages`
-with the original send ID. A `#c` answer returns `returned_to_request` after the active command accepts it.
+with the original send ID. An unconfirmed managed submission names the recipient's full address
+from the receipt and points to its screen for any text left in its input. A withdrawn send says it
+can be sent again. A `#c` answer returns `returned_to_request` after the active command accepts it.
 
 ## Reading the code
 

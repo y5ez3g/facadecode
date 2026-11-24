@@ -86,7 +86,10 @@ pub(crate) enum Input {
     Message(MessageTyping),
     /// The messages of a paste an earlier daemon began, in their order: the typist finishes it
     /// without typing it again.
-    BegunPaste(Vec<MessageTyping>),
+    BegunPaste {
+        messages: Vec<MessageTyping>,
+        previous_text: String,
+    },
 }
 
 impl Input {
@@ -101,7 +104,7 @@ impl Input {
             Input::Typed(typing) => typing.most_bytes(),
             Input::Message(message) => message.most_bytes(),
             // What is left of a begun paste is its Enter.
-            Input::BegunPaste(_) => 1,
+            Input::BegunPaste { .. } => 1,
         }
     }
 }

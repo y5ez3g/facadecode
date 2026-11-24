@@ -65,8 +65,8 @@ pub(crate) fn configure(
         error
     })?;
     let (model, effort) = (args.model.as_deref(), args.effort.as_deref());
-    if let Some(asked) = entry.refused_choice(model, effort) {
-        return Err(refused_choice(entry.display_name(), asked, by_model));
+    if let Some(message) = entry.choice_refusal(model, effort, by_model) {
+        return Err(ErrorBody::new(Reason::Unsupported, message));
     }
     let options = entry.launch_options(model, effort, &args.args)?;
     Ok(Configured {
@@ -143,21 +143,6 @@ pub(crate) fn check_session(configured: &Configured, session: &str) -> Result<()
 fn by_entry(mut error: ErrorBody, entry: &Entry) -> ErrorBody {
     error.data.entry = Some(entry.name.clone());
     error
-}
-
-/// Refuses `asked`, a `model` or `effort`, that `cli` takes none of (CLIS-1.4): in the MCP tool's
-/// words for a start `by_model`, else in a command's.
-fn refused_choice(cli: &str, asked: &str, by_model: bool) -> ErrorBody {
-    let message = if by_model {
-        format!("{cli} takes no explicit {asked}; leave `{asked}` out to use its default.")
-    } else {
-        let what = match asked {
-            "model" => "a model",
-            _ => "an effort",
-        };
-        format!("{cli} has no supported way to set {what}; omit {asked} to use its own default")
-    };
-    ErrorBody::new(Reason::Unsupported, message)
 }
 
 /// What a resume runs (CONFIGURATION-3.4): the entry `cli` names in `settings` as they are now,

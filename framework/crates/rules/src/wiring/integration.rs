@@ -1784,7 +1784,7 @@ mod tests {
         );
         let extension = write(Kind::PiExtension, None, &PROGRAMS).unwrap();
         assert!(
-            extension.contains(r#"const SERVER = {"command":"/opt/facade/facade-mcp","args":["--guest","pi"],"env":{},"exposure":"direct""#),
+            extension.contains(r#"const SERVER = {"command":"/opt/facade/facade-mcp","args":["--guest","pi"],"env":{},"exposure":"deferred""#),
             "{extension}"
         );
         assert!(

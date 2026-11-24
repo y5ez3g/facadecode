@@ -1,5 +1,5 @@
 //! A `facade-mcp` line the person configured in a CLI themselves: a run Facade starts beside it
-//! keeps Facade's tools and skill. Each test's CLI settings folders and home are the test's own, so
+//! keeps Facade's tools. Each test's CLI settings folders and home are the test's own, so
 //! nothing of this computer's own configuration is read or written.
 
 use std::path::PathBuf;
@@ -46,11 +46,10 @@ fn own_facade_line(test: &TestHome, cli: &str) {
     }
 }
 
-/// A run Facade starts beside a `facade-mcp` line the person configured themselves keeps Facade's
-/// tools, the instructions they bring, and Facade's skill, on each of the six built-in CLIs: the
-/// person's own line does not get in its way. Each run is the test CLI under its CLI's name.
+/// A run Facade starts beside a `facade-mcp` line the person configured themselves gets Facade's
+/// tools on each of the six built-in CLIs. Each run is the test CLI under its CLI's name.
 #[test]
-fn a_run_beside_the_person_s_own_facade_line_keeps_facade_s_tools_and_skill() {
+fn a_run_beside_the_person_s_own_facade_line_gets_facade_s_tools() {
     for cli in ["claude", "codex", "opencode", "pi", "muse", "agy"] {
         let test = TestHome::new(&format!("beside-{cli}"));
         own_facade_line(&test, cli);
@@ -84,17 +83,14 @@ fn a_run_beside_the_person_s_own_facade_line_keeps_facade_s_tools_and_skill() {
             test.daemon_log()
         );
         assert!(
-            has_the_skill(&test, cli, &run),
-            "{cli}'s run was not given Facade's skill: {run}"
+            has_no_facade_skill(&test, cli, &run),
+            "{cli}'s run was given Facade's old skill: {run}"
         );
     }
 }
 
-/// Whether `cli`'s run has Facade's skill where its CLI takes it: Claude Code in the plugin
-/// `--plugin-dir` loads, Codex in a run file its session-start hook gives with `--skill`,
-/// Muse Code in a file of the run's its instructions hook gives, OpenCode and Pi in a file of the
-/// run's, and Antigravity in the plugin in its project.
-fn has_the_skill(test: &TestHome, cli: &str, run: &Value) -> bool {
+/// Detects the old skill where each CLI used to get it.
+fn has_no_facade_skill(test: &TestHome, cli: &str, run: &Value) -> bool {
     let runs = test
         .path
         .join("framework/runs")
@@ -105,9 +101,6 @@ fn has_the_skill(test: &TestHome, cli: &str, run: &Value) -> bool {
         .map(|entry| entry.path())
         .find(|path| path.is_dir())
         .expect("the run's folder");
-    let skill = |file: PathBuf| {
-        std::fs::read_to_string(file).is_ok_and(|text| text == facade_base::skill::text())
-    };
     let command = command_line_of(run["pid"].as_i64().unwrap() as i32);
     // On Windows with the scripts of its encoded PowerShell hooks, each word quoted `'…'`.
     #[cfg(windows)]
@@ -118,20 +111,18 @@ fn has_the_skill(test: &TestHome, cli: &str, run: &Value) -> bool {
             .collect();
         format!("{command} {}", scripts.join(" ")).replace('\'', "")
     };
+    let skill = "skills/facade/SKILL.md";
     match cli {
         "claude" => {
-            command.contains("--plugin-dir") && skill(folder.join("plugin/skills/facade/SKILL.md"))
+            !command.contains("--plugin-dir") && !folder.join("plugin").join(skill).exists()
         }
-        "codex" => command.contains("--skill") && skill(folder.join("skills/facade/SKILL.md")),
-        "muse" => {
-            command.contains("hook instructions muse")
-                && skill(folder.join("skills/facade/SKILL.md"))
-        }
-        "opencode" | "pi" => skill(folder.join("skills/facade/SKILL.md")),
-        "agy" => skill(
-            test.project
-                .join(".agents/plugins/facade/skills/facade/SKILL.md"),
-        ),
+        "codex" => !command.contains("--skill") && !folder.join(skill).exists(),
+        "muse" | "opencode" | "pi" => !folder.join(skill).exists(),
+        "agy" => !test
+            .project
+            .join(".agents/plugins/facade")
+            .join(skill)
+            .exists(),
         other => panic!("say where {other}'s run takes Facade's skill"),
     }
 }

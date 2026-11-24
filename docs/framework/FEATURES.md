@@ -73,6 +73,8 @@ gets a name and inbox when it first calls a tool. From that point it can receive
   `--machine <MACHINE>` queries the named machine and wakes it if needed. The `SESSION` column shows the latest
   saved native session name, the session preview when unnamed, or `-` when neither is available.
   Use `facade status <AGENT>` for the full session ID, working directory and attached viewers.
+- A bare agent name or number searches the machines in the reachable list. Use the full address shown in the list
+  to select an agent on a particular machine.
 - `facade stop <AGENT>...` ends one or more managed agents and keeps their records, screens and inboxes for 30 days.
   Their helpers keep running. Use `--local`, `--machine <MACHINE>` or `--all` to stop running managed agents in one
   scope. Scope stops skip Guests and probe remote machines without waking them. A partial failure returns 1 after
@@ -132,9 +134,10 @@ the total command budget from 1 to 300 seconds, with a default of 30. Each invoc
 When a reply wait expires, the command reports the outcome and exits with status 1.
 
 Managed agents and Guests use `send_message` with their own identity. The recipient's machine assigns each message
-an address such as `m17@devbox`. To answer a message, copy the sender address into `to` and the inbox message number
-into `reply_to`. A Shell request waiting for a reply has a sender address such as `#c17@devbox`. The original recipient
-can send one linked reply while that invocation waits.
+an address such as `m17@devbox`. A managed terminal shows `📨 Message m17 from Nova (a3@devbox)` above the body.
+An answer appends ` · in reply to m17` to its own header and includes a machine selector for a remote original.
+To answer a message, use the sender address in `to` and the message number in `reply_to`. A waiting Shell request
+shows `from command line (#c17@devbox)`. The original recipient can send one linked reply while the command waits.
 
 For a managed agent, the Orchestrator waits for an empty input box and checks the pasted draft before submitting it.
 Codex queues an ordinary message with Tab while Working. Idle delivery, startup prompts and recovered in-flight
@@ -149,7 +152,7 @@ message history for 30 days.
 | `start_agent` | Starts a CLI with machine, folder, worktree, model, effort and first prompt options |
 | `stop_agent` | Stops one managed agent while its helpers keep running |
 | `send_message` | Saves one message, with optional waiting for delivery or a linked reply |
-| `read_messages` | Reads the caller's inbox, with optional waiting for new messages or a linked reply |
+| `read_messages` | Reads the caller's inbox. Guests and agents without terminal message delivery can wait for new messages or a linked reply |
 | `read_screen` | Reads the text on a managed agent's terminal |
 | `type_text` | Types text into a running managed agent's terminal |
 | `press_keys` | Presses keys in a running managed agent's terminal |
@@ -164,12 +167,20 @@ this is the configuration when using `facade-mcp` on PATH.
 
 Pass `FACADE_HOME` in that server's environment to use a different home. For both message tools, `timeout_seconds`
 defaults to 0 and accepts up to 30 seconds. A send with a positive timeout requires `wait_for` set to `delivery`
-or `result`. After `reply_timeout`, an agent can call `read_messages` with the original full message address in
-`reply_to` and a positive timeout. Read pages with `after` or `last`. Tool results carry complete message text inline.
-Managed agents receive replies and background failures in their terminals. A first prompt's failure and its
-startup problem share one 🔔. The live agent creator also receives one notice per incident when its agent waits
+or `result`. After `reply_timeout`, use the original full message address in `read_messages`' `reply_to` filter.
+A managed agent with terminal message delivery can read immediately or end its turn to receive messages in its input.
+A positive read timeout for that agent is refused before touching its inbox. Read pages with `after` or `last`.
+Tool results carry complete message text inline.
+Managed agents receive replies and background failures in their terminals. A terminal notice begins with `🔔`.
+Its record number is available in the inbox. `start_agent` returns the agent's address, name, folder and machine ID.
+A first prompt's failure and its startup problem share one notice in the live caller's inbox.
+The live agent creator also receives one notice per incident when its agent waits
 for permission, an answer or login for 30 seconds, stays in Error for 30 seconds, or ends without its request.
 See the [MCP contract](../extension/engineering/MCP.md#7-mcp-through-the-orchestrator).
+
+Facade supplies the same eight tool definitions to managed agents and Guests. The MCP client controls when it
+exposes them to the model. Muse Code 1.4.25 includes all eight in its first request. Muse Code, Pi and Antigravity
+runs get their managed instructions from their run hook or extension.
 
 ## Access and settings
 

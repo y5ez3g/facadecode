@@ -30,7 +30,7 @@ pub(super) fn open_with(
                 continue;
             }
             Ok(None) => format!(
-                "the Orchestrator did not respond within {} seconds; nothing was done",
+                "Facade did not respond within {} seconds; nothing was done",
                 timeout.as_secs()
             ),
             Err(err) => {

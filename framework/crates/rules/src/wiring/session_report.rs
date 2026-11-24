@@ -15,9 +15,9 @@ use sha2::{Digest, Sha256};
 
 use facade_base::system::{SYSTEM, System, env_var};
 
+use super::Wiring;
 use super::config_files::config_home;
 use super::settings::{spans, values, without};
-use super::{SessionSkill, Wiring};
 use crate::Rule;
 use crate::args::ArgsGrammar;
 use crate::formats::{HookArg, facade_hook, inline_toml, merge_settings, parse_jsonc};
@@ -36,21 +36,20 @@ pub struct SessionReport<'a> {
 }
 
 impl SessionReport<'_> {
-    /// The command of a CLI's session-start hook. `SessionSkill::Include` adds `--skill` so
-    /// the hook also gives the model Facade's skill.
+    /// The command of a CLI's session-start hook.
     pub(super) fn hook<'a>(
         &self,
         cli: &str,
-        skill: SessionSkill,
         variables: impl IntoIterator<Item = (&'a str, &'a str)>,
     ) -> String {
         let file = self.file.to_string_lossy();
-        let args = [HookArg::Literal(&file), HookArg::Word("--skill")];
-        let args = match skill {
-            SessionSkill::Omit => &args[..1],
-            SessionSkill::Include => &args[..],
-        };
-        facade_hook(cli, self.facade, "session-start", args, variables)
+        facade_hook(
+            cli,
+            self.facade,
+            "session-start",
+            &[HookArg::Literal(&file)],
+            variables,
+        )
     }
 
     /// The run's folder, which the session file is in.
@@ -79,7 +78,7 @@ const OPENCODE_PLUGIN: &str = "facade-session";
 const PI_EXTENSION: &str = "facade-session.mjs";
 
 /// Has `rule`'s CLI report its session as `session` says, with what `wiring` gives the tools: its
-/// settings added to Claude Code's run settings, and the skill given by Codex's hook where it asks.
+/// settings added to Claude Code's run settings.
 /// `words` are the person's, `environment` the CLI's own. None for a CLI that reports none this way,
 /// and where the person's own settings that Facade adds to cannot be read.
 pub(crate) fn install_hook(
@@ -101,15 +100,10 @@ pub(crate) fn install_hook(
         "claude" => claude_settings(
             &rule.arguments,
             words,
-            &session.hook("claude", SessionSkill::Omit, []),
+            &session.hook("claude", []),
             wiring.settings.as_ref(),
         ),
-        "codex" => codex_hooks(
-            &rule.arguments,
-            words,
-            &session.hook("codex", wiring.session_skill, []),
-            SYSTEM,
-        ),
+        "codex" => codex_hooks(&rule.arguments, words, &session.hook("codex", []), SYSTEM),
         "opencode" => opencode_plugin(words, session, environment),
         "pi" => {
             let file = session.folder().join(PI_EXTENSION);
@@ -122,10 +116,7 @@ pub(crate) fn install_hook(
         }
         "fake" => adding(
             Vec::new(),
-            vec![(
-                FAKE_HOOK.into(),
-                session.hook("fake", SessionSkill::Omit, []),
-            )],
+            vec![(FAKE_HOOK.into(), session.hook("fake", []))],
             Vec::new(),
         ),
         _ => None,

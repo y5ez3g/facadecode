@@ -21,6 +21,7 @@ use crate::{
 pub(crate) struct ActorIdentity {
     pub(crate) reference: AgentRef,
     pub(crate) kind: AgentKind,
+    pub(crate) receives_terminal_messages: bool,
 }
 
 pub(crate) type Authenticate = Box<

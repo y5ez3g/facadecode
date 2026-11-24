@@ -21,5 +21,6 @@
 		]
 	},
 	"session": { "capture": "session_start", "resume": ["--session", "${session_id}"] },
+	"mcp": { "managed_instructions_from_hook": true },
 	"yolo": { "startup": { "args": ["--approve"], "env": { "PI_SKIP_VERSION_CHECK": "1" } } }
 }

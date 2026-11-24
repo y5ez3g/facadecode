@@ -54,6 +54,7 @@ files in `framework/rules/`. It is a library; it starts no program.
   `Entry::resolve_program` uses its effective environment and working folder. `Entry::launch_options`
   returns the literal arguments to save and replay, with their model and effort when known. Those
   values are separate from what a run adds for YOLO, session reporting and MCP.
+  `Entry::choice_refusal` names every unsupported choice in MCP or command-line wording.
 - `direct_command(rule: Option<&Rule>, program, env, cwd) -> Vec<String>`: what starts `program`,
   the file a start's command resolved to. On Windows, Pi's and Muse Code's installers' wrappers
   start the CLI's own program; everything else is as base's `programs::direct_command` has it.
@@ -61,13 +62,16 @@ files in `framework/rules/`. It is a library; it starts no program.
   console input records, the wait before submission for each UTF-16 code unit typed and whether
   characters above U+FFFF go as key-down records.
 - The input, state, sessions and wiring functions listed under each child below.
-- `session_meta_keys`, `always_load_keys`, `instructions_from_server`: what each CLI's MCP client
-  does that the daemon's MCP server responds to.
+- `session_meta_keys`: the keys in which CLI tool calls name their sessions.
+- `managed_instructions_from_hook(cli)` identifies the rules whose managed runs get their
+  instructions from a hook or extension.
 
 **facade** (`facade hook …`, and finding the agent of a command's terminal)
 - `hook`: what each CLI's hooks print and the keys their input uses, and `hook::title_command`,
   which runs the person's title command with the shell of the CLI that runs title hooks.
-- `session_from_hook`, `session_from_title`, `write_session_file`, `run_folder`, `SKILL_FILE`,
+  `hook::RunStart::new` supplies the start hook's input, own session and instructions to
+  `hook::run_start_output`.
+- `session_from_hook`, `session_from_title`, `write_session_file`, `run_folder`,
   `INSTRUCTIONS_FILE`, `session_variable`, `SESSION_VARIABLES`.
 
 **Scenario tests** (`framework/tests`): `session_variable`.
@@ -75,8 +79,8 @@ files in `framework/rules/`. It is a library; it starts no program.
 ## Depends on
 
 - `facade-base` provides `settings` for reading `facade.json`. The `daemon` module provides
-  `InputMechanism`, `InputInfo`, `InputState`, `HiddenRows` and `is_session_id`. The runtime files
-  and plugin use `skill::text` and `version()`. Rules uses `system` (`SYSTEM`, `env_var`, `home_folder_in`),
+  `InputMechanism`, `InputInfo`, `InputState`, `HiddenRows` and `is_session_id`. The Antigravity
+  plugin uses `version()`. Rules uses `system` (`SYSTEM`, `env_var`, `home_folder_in`),
   `programs` (`direct_command`, `on_path`) and `files` (`private_options`, `is_private`,
   `sync_folder`), and `base64` for encoded PowerShell hooks.
 - `facade-screen`: `ScreenView` and its cells, which the input and state readers read.
@@ -110,7 +114,7 @@ command line together. The children never use each other. They may use the layer
   On Windows, Muse Code's hooks, Codex's hooks, the test CLI's session hook and Antigravity's title
   command use encoded UTF-16LE PowerShell scripts. The outer command has no quotes and passes
   through the CLI's shell intact. The scripts quote each argument as a literal and preserve
-  Facade's exit code. Codex's session hook carries `--skill` inside the script where it needs it.
+  Facade's exit code.
 - `compose.rs` builds the command line for a start or resume in this order.
   1. wiring gives the tools (`wire_managed`), and YOLO's run settings are merged into the wiring's;
   2. wiring has the CLI report its session, through its settings (`report_session`) or a hook,
@@ -136,7 +140,7 @@ Rust regular expressions.
 | `status` | how Facade reads the CLI's state from its screen or a report's words |
 | `status_glyph` | the CLI's glyph for viewer titles once the CLI has reported its state. The `working` list holds one or more glyph frames, each shown for `frame_ms` milliseconds. The `resting` glyph is for Starting after a report, Idle, Just done, Waiting for you and Error. Every glyph must be nonempty, and `frame_ms` must be positive |
 | `ready_tools` | what to type so the CLI starts Facade's tools before its first turn |
-| `mcp` | the session `_meta` or environment key and the CLI's always-load key |
+| `mcp` | the session key in MCP metadata or the relay environment, and whether a run gets its instructions from a hook or extension |
 | `yolo` | `work` controls for native permissions, `startup` controls for YOLO agent starts, and the trust question to answer |
 | `console` | on Windows, for a CLI that reads console input records: `per_char_ms`, the wait before submission for each UTF-16 code unit, and `records_above_bmp` |
 
@@ -187,7 +191,7 @@ adds, the model and effort, the session a resume names, and the `clis` entries o
     `kind`, `program` and `args`, and these methods:
     - `display_name()`;
     - `takes("model" | "effort")`;
-    - `refused_choice(model, effort)`;
+    - `choice_refusal(model, effort, by_model)`;
     - `choices(model, effort, words)`;
     - `environment(env)`, which fills each `${env:NAME}` from the start's environment;
     - `program_setting()` names the key read or the preferred key for an unset program;
@@ -214,6 +218,10 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     capture counts from the upper and lower border rules. A frame with a marked upper rule can
     start on a continuation row.
   - Codex's `prompt` input accepts `›` and its `alternate_prompt`, `»` at Ultra effort.
+    A wrapped footer can end with a shortcuts row that may include aligned status, the
+    `tab to queue message` hint, or a standalone warning count ending in `f2 to view` with at least
+    20 leading spaces. The model line must start the contiguous, indented footer above the hint
+    and have a blank row above it.
     Its `last_column` position uses dim glyphs (`↑` and `↓`) in the last column of the first
     and last input rows. When the model line is absent, those glyphs anchor the scrolled composer.
     The draft omits the glyphs and the reading reports one hidden row for each marked side.
@@ -223,7 +231,7 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - Colored text alone where the input starts could be a hint or a draft. Claude can also draw hints without styling. For automatic delivery to a fresh input that has received no external edits, the reader marks a single unstyled row at the input start as `unknown` and unsure. Ordinary input reads identify that writing as a draft. A dim hint, or a mode placeholder shown above its footer, counts as empty only while the cursor is where the input starts.
   - A probe is judged from two readings, before its key and after, never from the time between them: whether its space went in by the cursor and the text, what the row was by the text alone, and whether Backspace put the box back by every cell and the cursor.
   - The evidence names the rows, never the draft's text. The draft's text leaves `read_draft` only as its second value and is never saved.
-  - A message's own draft is its text alone, after the message's lead when one was typed. Whitespace is ignored, because wrapping and indentation draw it differently. The draft may also be the CLI's placeholder for a paste of that size, counted the way that CLI counts. A draft scrolled out above only has to show the text's end.
+  - A message's own draft is its full text or the CLI's placeholder for a paste of that size. Whitespace is ignored because wrapping and indentation draw it differently. A draft scrolled out above only has to show the text's end.
   - OpenCode's `[Pasted ~N lines]` counts the lines after trimming whitespace from both ends of the paste.
     Claude Code's `[Pasted text #N]` matches a paste with no line break.
     Antigravity's `[Pasted text #N M chars]` counts Unicode scalar values, including line breaks.
@@ -242,9 +250,10 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     tracking when the CLI takes a person's draft.
   - `with_paste_text(&PasteRule, draft, pastes) -> String`: the agent actor uses it to give back the pasted text behind each placeholder in a draft the person submits.
   - For the typist:
-    - `is_own_draft(&PasteRule, draft, text, lead, hidden) -> bool` matches the message in the input box before submission.
+    - `is_own_draft(&PasteRule, draft, text, hidden) -> bool` matches the message in the input box before submission.
+    - `is_legacy_split_paste(&PasteRule, draft, prefix, pasted) -> bool` matches an older daemon's visible typed prefix and the paste placeholder during recovery.
     - `settle_time(&PasteRule, text) -> Duration` gives the base wait plus the wait for each line.
-    - `is_same_draft(draft, seen, text, lead, hidden) -> bool` compares the observed drafts, including the placeholder's paste number.
+    - `is_same_draft(draft, seen, text, hidden) -> bool` compares the observed drafts, including the placeholder's paste number.
     - `PasteRule::submission_key(working) -> Key` selects Tab for Codex while Working and Enter otherwise.
   - For the typist's probe, each from the row before its key and the reading after:
     - `space_taken(&InputLine, &BoxReading) -> bool`: whether its space went in: the cursor one column on, the row its space ahead of the text it held, or its space alone.
@@ -328,12 +337,16 @@ session. It also defines the formats of Facade's hooks.
   `PLUGIN_FOLDER` of the folder it starts in, shared by the runs there); how it approves one server's tools; where it
   reads its user and project settings; how it reports its session (a session-start hook, a title command, a
   plugin, an extension, or for the test CLI a variable); the files a run's folder holds for it (the server
-  settings, the skill at `SKILL_FILE`, the instructions at `INSTRUCTIONS_FILE`) and each CLI's
+  settings and the instructions at `INSTRUCTIONS_FILE`) and each CLI's
   hook input keys and hook output format.
 - **Keeps:**
   - Managed wiring puts `ManagedServer.args` into the run's MCP server arguments. The daemon
     supplies `--run-credential` with the token for that run. The wiring's debug output omits the
     command, environment and file contents.
+  - Managed instructions reach Muse Code through the run's own SessionStart hook, Pi through
+    its run extension, and Antigravity through its PreInvocation hook. Other managed clients
+    receive instructions from the MCP server. The Pi run extension registers its tools with
+    deferred exposure. The person's Pi configuration governs exposure for their own entries.
   - Facade reads and changes only entries it wrote. A server is Facade's when its program is `facade-mcp`, whatever its
     arguments; a hook when its command is `facade hook …` for that CLI; a whole file when it starts with Facade's
     marker line; a plugin when its manifest's description names Facade Code Framework and a version (`plugin_version`).
@@ -352,13 +365,15 @@ session. It also defines the formats of Facade's hooks.
     overlay with the environment. Facade removes the run's session plugin when it uses that
     environment to start another agent.
   - Antigravity keeps one plugin under the project for concurrent runs. A process that loads the
-    plugin and inherits another run's credential can attach to that run.
+    plugin and inherits another run's credential can attach to that run. The older plugin's skill
+    path remains in `PLUGIN_MEMBERS` so the daemon recognizes the whole plugin when replacing it.
   - Settings of the person's that Facade cannot read stay as they are, for the CLI to report; Facade then adds nothing
     to them, and the run reports no session that way.
   - The daemon writes managed settings into the run's folder. Antigravity's shared plugin is
     written and cleaned up by the daemon under the project's plugin lock.
   - `remove_wiring_environment` takes the run's tools and session-reporting entries out of the
-    environment Facade uses to start another agent.
+    environment Facade uses to start another agent. It also removes Facade's old OpenCode skill
+    path from inherited inline configuration.
   - Codex's session-start hook is trusted under its synthetic session-flags layer: `/<session-flags>/config.toml`
     on Unix and `C:\<session-flags>\config.toml` on Windows, with a literal `C:` regardless of the run's drive.
     Hooks already in `hooks.json` keep Codex's one-time review.
@@ -389,13 +404,13 @@ session. It also defines the formats of Facade's hooks.
   - Daemon run preparation supplies `ManagedServer` (the `Server` configuration and this run's
     MCP arguments) and `SessionReport` (`facade`, session file, cwd). It writes and cleans up
     Antigravity's folder plugin using `uses_folder_plugin(cli)`, `plugin_files(program, facade)`,
-    `plugin_version(manifest)`, `PLUGIN_FOLDER`, `PLUGIN_MEMBERS` and `SKILL_FILE`.
+    `plugin_version(manifest)`, `PLUGIN_FOLDER` and `PLUGIN_MEMBERS`.
   - `runs_start_guest_entry`, `guest_entry_serves_run` and `session_ends_with_process` support
     the older running-session paths.
   - For `facade hook` (the facade crate's hooks): `hook`, pure functions of a hook's input and output:
-    `run_start_output`, `approval_output`, `skill_output`, `context_output`, `block_output`, `empty_output`,
+    `run_start_output`, `approval_output`, `context_output`, `block_output`, `empty_output`,
     `begins_turn`, `is_turn_cut_short`, `session_of` (`NamedSession`), `is_run_own_session` and
-    `BACKGROUND_JOB_VARIABLE`; and `integration::session_status_file`, `INSTRUCTIONS_FILE`, `SKILL_FILE` and
+    `BACKGROUND_JOB_VARIABLE`; and `integration::session_status_file`, `INSTRUCTIONS_FILE` and
     `session_ends_with_process`.
 
 `mod.rs` selects the wiring for each CLI. `servers` and `run_tools` build the run's server entry

@@ -22,7 +22,7 @@ to speak of, so every other crate can depend on it and it depends on none of the
   build: symbolic links on Unix, copies on Windows.
 - The process-wide `FORK_LOCK`, under which children start.
 - Reading `facade.json`. Nothing in framework writes it.
-- The instructions, skill and tool definitions a model reads.
+- The instructions and tool definitions a model reads.
 
 ## Keeps
 
@@ -161,7 +161,7 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   the running machine.
 - `settings::{read, settings_file, shown, is_space, Settings, SourceLocation}`. The settings path
   is available before the file exists.
-- `instructions::{for_connection, for_managed, ManagedRun, Creator}`, `skill::text()` and
+- `instructions::{for_connection, for_managed, ManagedRun, Creator}` and
   `tools::DEFINITIONS` describe Facade API v1's MCP entry point and its eight tools.
 
 **The `facade` program**
@@ -200,8 +200,8 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 
 **Rules**
 - `settings::{Settings, Member, Json, is_space}`: rules reads the CLI entries of `clis`.
-- `skill::text()` and the shared input types in `model::terminal`. Rules uses
-  `model::agent::is_session_id` for session identifiers.
+- The shared input types in `model::terminal` and `model::agent::is_session_id` for session
+  identifiers.
 
 **The relay** uses nothing of base; see [relay.md](relay.md).
 
@@ -313,17 +313,18 @@ What Facade asks of the operating system. `framework/crates/base/src/platform/`.
 ### texts
 
 What a model reads at Facade API v1's MCP entry point in `framework/crates/base/src/texts/`.
-- **Owns** the instructions the daemon's MCP server returns from `initialize` (`instructions.rs`),
-  the skill (`skill.rs`), and the definitions of the eight tools (`tools.json`).
-- **Keeps** one skill and one table for `tools/list` and `tools/call`. `for_connection` describes
-  the tools before a new connection is associated with an actor. `for_managed` adds the run's
-  machine, folder, creator and saved YOLO. Both describe inbox acceptance, optional waits and
-  command-line replies. The skill explains how to find available CLIs, continue a reply wait
-  and use the terminal tools. It ends with the Framework version.
+- **Owns** the Guest and managed instructions (`instructions.rs`) and the
+  definitions of the eight tools (`tools.json`).
+- **Keeps** one table for `tools/list` and `tools/call`. `for_connection` tells a Guest how to read
+  its inbox and wait for delivery or one reply. `for_managed` explains how to answer a `📨 Message`
+  using `send_message` with the sender's address and the message number. It also explains the
+  unnumbered `🔔` notices. Its last line gives the run's reach under its saved YOLO setting, address,
+  creator, folder and machine.
 - **Never keeps** a text used only by tests.
-- **Input:** the daemon's MCP server supplies `ManagedRun` from the agent's authenticated run.
-- **Interface:** `instructions::{for_connection, for_managed, Creator, ManagedRun}`,
-  `skill::text()`, `tools::DEFINITIONS`.
+- **Input:** the daemon supplies `ManagedRun` from the agent's run. MCP `initialize` and run hooks
+  use the instructions according to the CLI's rule.
+- **Interface:** `instructions::{for_connection, for_managed, Creator, ManagedRun}` and
+  `tools::DEFINITIONS`.
   The [Framework MCP contract](../../extension/engineering/MCP.md#7-mcp-through-the-orchestrator)
   describes the tools and their results.
 

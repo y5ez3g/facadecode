@@ -2053,6 +2053,102 @@ fn two_framework_builds_cold_dial_each_other() {
     }
 }
 
+#[test]
+fn bare_agent_names_find_peers_over_a_saved_route() {
+    saved_route_agent_names(&test_binaries().facade);
+}
+
+#[test]
+#[ignore = "requires the separately built 146 Framework CLI in FACADE_TEST_FRAMEWORK_PEER"]
+fn bare_agent_names_find_a_146_peer_over_a_saved_route() {
+    let peer = std::path::PathBuf::from(
+        std::env::var_os("FACADE_TEST_FRAMEWORK_PEER").expect("the 146 Framework artifact"),
+    );
+    assert!(peer.is_absolute() && peer.is_file() && peer != test_binaries().facade);
+    assert!(
+        std::fs::read(&peer).unwrap() != std::fs::read(&test_binaries().facade).unwrap(),
+        "provide a separately built 146 program"
+    );
+    saved_route_agent_names(&peer);
+}
+
+/// An unqualified name uses the same passive reach as the roster. Automatic naming only looks
+/// at agents already visible, and a name containing "@" can match both ways.
+fn saved_route_agent_names(holder: &Path) {
+    let caller = TestHome::new("saved-name-caller");
+    let remote = TestHome::new("saved-name-holder");
+    let programs = test_binaries();
+    install_machine_ssh_with_programs(&[
+        ("caller", &caller, &programs.facade),
+        ("holder", &remote, holder),
+    ]);
+    name_machine(&caller, "caller");
+    let caller_hello = caller.hello_result().unwrap();
+
+    run_using_ok(&remote, holder, &["machine", "list"]);
+    let holder_hello = remote.hello_result().unwrap();
+    let holder_id = holder_hello["machine_id"].as_str().unwrap();
+    run_using_ok(&remote, holder, &["machine", "rename", holder_id, "holder"]);
+    assert_eq!(caller_hello["api_version"], 1);
+    assert_eq!(holder_hello["api_version"], 1);
+    let holder_pid = holder_hello["pid"].clone();
+
+    remote.add_custom_cli("qa-fake", &programs.fakecli);
+    let start_remote = |name| {
+        let out = run_using_ok(&remote, holder, &["start", "-d", "-n", name, "qa-fake"]);
+        started_ref(&out).to_owned()
+    };
+    let worker = start_remote("PeerWorker");
+    let literal = start_remote("Literal@unlisted");
+    let remote_pixel = start_remote("Pixel@caller");
+    add_saved(&caller, "holder", &remote);
+    assert!(!ssh_attempts(&remote).is_empty());
+    caller.kill_home_processes();
+    assert_eq!(remote.hello_result().unwrap()["pid"], holder_pid);
+
+    let attempts = ssh_attempts(&remote);
+    caller.run_facade_ok(&["start", "-d", "fake"]);
+    assert_eq!(
+        ssh_attempts(&remote),
+        attempts,
+        "automatic naming dialed SSH"
+    );
+    caller.kill_home_processes();
+
+    for (selector, address) in [("PeerWorker", worker), ("Literal@unlisted", literal)] {
+        let before = ssh_serves(&remote);
+        let inspected = connect(&caller).call_ok("agent.inspect", json!({ "target": selector }));
+        assert_eq!(inspected["agent"]["address"], address, "{inspected}");
+        assert_eq!(
+            ssh_serves(&remote),
+            format!("{before}no-start\n"),
+            "{selector}"
+        );
+        caller.kill_home_processes();
+    }
+
+    let local_pixel = caller.start_named_fake("Pixel", &[]);
+    let before = ssh_serves(&remote);
+    let refused = connect(&caller).call("agent.inspect", json!({ "target": "Pixel@caller" }));
+    assert_eq!(error_reason(&refused), "ambiguous_reference", "{refused}");
+    let candidates = refused["error"]["data"]["details"]["candidates"]
+        .as_array()
+        .unwrap();
+    assert_eq!(candidates.len(), 2, "{refused}");
+    assert!(
+        candidates.contains(&json!(local_pixel.address)),
+        "{refused}"
+    );
+    assert!(candidates.contains(&json!(remote_pixel)), "{refused}");
+    assert_eq!(ssh_serves(&remote), format!("{before}no-start\n"));
+    assert_eq!(remote.hello_result().unwrap()["pid"], holder_pid);
+    println!(
+        "API v1 caller {} and holder {} resolved names over the passive saved route; holder daemon kept PID {holder_pid}",
+        programs.facade.display(),
+        holder.display(),
+    );
+}
+
 #[cfg(unix)]
 mod authorization {
     use super::*;
@@ -2585,7 +2681,7 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
         "reply across machines"
     ));
     let expected = format!(
-        "📨 Message from worker ({id}@second) · m1 · Reply to m1@second\nreply across machines"
+        "📨 Message m1 from worker ({id}@second) · in reply to m1@second\nreply across machines"
     );
     assert_eq!(first.submitted_messages(), [expected]);
     let read = caller.call("read_messages", json!({ "last": 1 }));
@@ -2613,9 +2709,9 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     assert_eq!(
         second.submitted_messages(),
         [
-            format!("📨 Message from caller ({from}) · m1\nrequest across machines"),
+            format!("📨 Message m1 from caller ({from})\nrequest across machines"),
             format!(
-                "📨 Message from caller ({from}) · m2 · Reply to m1@first\ncopied both addresses"
+                "📨 Message m2 from caller ({from}) · in reply to m1@first\ncopied both addresses"
             ),
         ]
     );
@@ -2959,7 +3055,7 @@ fn an_idless_peer_cancel_withdraws_a_pending_forwarded_send() {
     assert_eq!(next["id"], "m2@peer", "{next}");
     assert_eq!(next["recipient"]["reference"], target, "{next}");
     assert_eq!(next["message"]["delivery"]["status"], "success", "{next}");
-    let expected = [format!("📨 Message from the command line · m2\n{fresh}")];
+    let expected = [format!("📨 Message m2 from command line\n{fresh}")];
     assert!(wait_until(secs(10), || peer.submitted_messages() == expected));
     let input = std::fs::read(&keys).unwrap();
     assert!(
@@ -3286,8 +3382,20 @@ fn peers_keep_the_wait_and_start_result_notice_shapes() {
         }),
     );
     assert_eq!(start["status"], "success", "{start}");
-    let reserved = start["data"]["result_message"].as_str().unwrap();
     let first_prompt = start["data"]["id"].as_str().unwrap();
+    let request = observed_frame(
+        &bridge.from_front,
+        "the start with a first prompt",
+        |frame| {
+            frame["params"]["params"]["op"] == "agent.start"
+                && frame["params"]["params"]["args"]["name"] == "first-prompt"
+        },
+    );
+    let reserved = &request["params"]["start_result"];
+    assert_eq!(reserved["machine_id"], origin_id, "{request}");
+    let notice_id = reserved["message_id"]
+        .as_str()
+        .expect("the reserved notice number");
     peer.wait_for_gate("before-prompt-delivery");
     peer.run_facade_ok(&["stop", first_prompt]);
     peer.release_gate("before-prompt-delivery");
@@ -3299,7 +3407,7 @@ fn peers_keep_the_wait_and_start_result_notice_shapes() {
     assert_eq!(args.as_object().unwrap().len(), 2, "{args}");
     assert_eq!(args["recipient"], boss_ref);
     let message = &args["message"];
-    assert_eq!(message["message_id"], reserved, "{message}");
+    assert_eq!(message["message_id"], notice_id, "{message}");
     assert_eq!(message["from"], "facade", "{message}");
     let outcome = &message["result"];
     assert_eq!(outcome["agent"]["process"], "ended", "{outcome}");
@@ -3580,8 +3688,18 @@ fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
         start["params"]["params"]["args"]["prompt"], prompt,
         "{start}"
     );
-    let receipt = &started["data"]["result_message"];
-    let expected_receipt = json!({ "machine_id": origin_id, "message_id": receipt });
+    let start_reply = observed_frame(&bridge.from_peer, "the holder's start receipt", |frame| {
+        frame["id"] == start["id"] && frame.get("method").is_none()
+    });
+    let receipt = &start_reply["result"];
+    assert_eq!(
+        receipt["result_message_machine_id"], origin_id,
+        "{start_reply}"
+    );
+    let receipt_id = receipt["result_message_id"]
+        .as_str()
+        .expect("the reserved receipt ID");
+    let expected_receipt = json!({ "machine_id": origin_id, "message_id": receipt_id });
     assert_eq!(start["params"]["start_result"], expected_receipt, "{start}");
     let address = started["data"]["id"].as_str().expect("the child's address");
     assert_eq!(address, format!("{}@holder", creator.id), "{started}");
@@ -3622,7 +3740,7 @@ fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
     assert_eq!(args["recipient"], creator_ref, "{args}");
     let message = &args["message"];
     assert_eq!(message["message_ref"], expected_receipt, "{message}");
-    assert_eq!(message["message_id"], *receipt, "{message}");
+    assert_eq!(message["message_id"], receipt_id, "{message}");
     assert_eq!(message["from"], "facade", "{message}");
     assert_eq!(message["to"], creator.id, "{message}");
     let outcome = &message["result"];
@@ -3669,10 +3787,9 @@ fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
     let prompt_id = outcome["prompt"]["message_id"]
         .as_str()
         .expect("the prompt's ID");
-    let receipt_id = receipt.as_str().expect("the reserved receipt ID");
     let title = format!("child ({address}) has started.");
     let summary = format!(
-        "Your initial message {prompt_id}@holder could not be delivered. Nothing was entered in the terminal."
+        "Your prompt {prompt_id}@holder could not be delivered. Nothing was entered in the terminal."
     );
     assert_eq!(row["id"], receipt_id, "{row}");
     assert_eq!(row["from"], "facade", "{row}");
@@ -3684,10 +3801,7 @@ fn a_remote_childs_first_prompt_result_reaches_its_creator_once() {
     assert!(body.lines().any(|line| line == summary), "{row}");
     let why = format!("{address} ended before the message was delivered.");
     assert!(body.lines().any(|line| line == why), "{row}");
-    assert_eq!(
-        origin.submitted_messages(),
-        [format!("🔔 {title} · {receipt_id}\n{body}")]
-    );
+    assert_eq!(origin.submitted_messages(), [format!("🔔 {title}\n{body}")]);
     assert!(holder.submitted_messages().is_empty());
     assert_eq!(
         std::fs::read_to_string(&launches)
@@ -3817,7 +3931,7 @@ fn a_remote_childs_wait_notice_reaches_its_creator_once() {
     );
     assert_eq!(row["from"], "facade", "{row}");
     assert_eq!(row["text"], format!("{title}\n{detail_text}"), "{row}");
-    let submitted = [format!("🔔 {title} · {notice_id}\n{detail_text}")];
+    let submitted = [format!("🔔 {title}\n{detail_text}")];
     assert!(
         wait_until(LOADED_TIMEOUT, || origin.submitted_messages() == submitted),
         "creator terminal submissions: {:?}",
@@ -4605,7 +4719,7 @@ fn shell_receives_a_linked_reply_from_a_managed_agent_across_machines() {
     assert_eq!(
         peer.submitted_messages(),
         [format!(
-            "📨 Message from the command line (#c1@peer) · m1\n{request}"
+            "📨 Message m1 from command line (#c1@peer)\n{request}"
         )]
     );
     let inbox = receiver.call("read_messages", json!({"last": 1}));

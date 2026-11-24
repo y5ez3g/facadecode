@@ -35,9 +35,9 @@ pub use compose::{
 };
 pub use formats::shell_word;
 pub use input::{
-    BoxReading, InputLine, LineCell, ProbeVerdict, is_own_draft, is_same_draft, read_box,
-    read_box_for_typing, read_draft, read_input, restored, settle_time, shape_of, space_taken,
-    verdict_of, with_paste_text,
+    BoxReading, InputLine, LineCell, ProbeVerdict, is_legacy_split_paste, is_own_draft,
+    is_same_draft, read_box, read_box_for_typing, read_draft, read_input, restored, settle_time,
+    shape_of, space_taken, verdict_of, with_paste_text,
 };
 pub use sessions::{
     Reported, SESSION_FILE, SESSION_VARIABLES, SavedSession, SessionFile, WriteFailure,
@@ -141,14 +141,9 @@ pub struct McpRule {
     /// A variable the CLI supplies to each of its stdio servers for the server's own session.
     #[serde(default)]
     pub session_env_key: Option<String>,
-    /// The CLI's guests take Facade's instructions and skill from the MCP server alone, as its
-    /// session-start hook gives them nothing. Every other CLI's hooks give both and its MCP server
-    /// neither, so each guest's model is told once.
+    /// The CLI gets a managed run's instructions from its hook or extension.
     #[serde(default)]
-    pub instructions_from_server: bool,
-    /// The `_meta` key that has the CLI load a tool from the start rather than on demand.
-    #[serde(default)]
-    pub always_load_key: Option<String>,
+    pub managed_instructions_from_hook: bool,
 }
 
 /// What a run's start types to ready the CLI's tools: `text` once the input first reads empty,
@@ -211,10 +206,6 @@ pub fn console_typing(rule: &Rule) -> Option<ConsoleTyping> {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PasteRule {
-    /// The CLI takes a paste alone as material rather than a request, so a message's first header
-    /// words, `📨 Message from `, are typed before its paste.
-    #[serde(default)]
-    pub lead: bool,
     /// How long a message shows as the input's own draft before submission, in milliseconds.
     #[serde(default)]
     pub enter_ms: u64,
@@ -346,6 +337,9 @@ pub struct Prompt {
     #[serde(default)]
     pub alternate_prompt: Option<String>,
     pub model_line: Pattern,
+    /// A bottom hint that can follow several indented rows of the model footer.
+    #[serde(default)]
+    pub wrapped_footer_hint: Option<Pattern>,
     pub scrolled: Scrolled,
     pub menus: Vec<Menu>,
 }
@@ -953,15 +947,9 @@ pub fn session_meta_keys() -> impl Iterator<Item = &'static str> {
     mcp_rules().filter_map(|mcp| mcp.session_meta_key.as_deref())
 }
 
-/// Whether `cli`'s guests take Facade's instructions from its MCP server alone (see
-/// [`McpRule::instructions_from_server`]).
-pub fn instructions_from_server(cli: &str) -> bool {
-    matches!(find(cli), Ok(Some(rule)) if rule.mcp.instructions_from_server)
-}
-
-/// The `_meta` keys that have the CLIs load a tool from the start.
-pub fn always_load_keys() -> impl Iterator<Item = &'static str> {
-    mcp_rules().filter_map(|mcp| mcp.always_load_key.as_deref())
+/// Whether this CLI gets a managed run's instructions from its hook or extension.
+pub fn managed_instructions_from_hook(cli: &str) -> bool {
+    matches!(find(cli), Ok(Some(rule)) if rule.mcp.managed_instructions_from_hook)
 }
 
 #[cfg(test)]
@@ -1400,8 +1388,7 @@ mod tests {
     }
 
     /// What each CLI's MCP client does that Facade's server answers to: where a tool call names its
-    /// session, whose guests take Facade's instructions from the server, and the keys that load its
-    /// tools from the start.
+    /// session and which managed runs get their instructions through a hook or extension.
     #[test]
     fn each_cli_s_rule_says_what_its_mcp_client_does() {
         assert_eq!(
@@ -1412,16 +1399,12 @@ mod tests {
                 "ai.opencode/sessionID"
             ]
         );
-        let from_server: Vec<&str> = rules()
+        let from_hook: Vec<&str> = rules()
             .unwrap()
             .iter()
             .map(|rule| rule.cli.as_str())
-            .filter(|cli| instructions_from_server(cli))
+            .filter(|cli| managed_instructions_from_hook(cli))
             .collect();
-        assert_eq!(from_server, ["opencode"]);
-        assert_eq!(
-            always_load_keys().collect::<Vec<_>>(),
-            ["anthropic/alwaysLoad", "antigravity/alwaysLoad"]
-        );
+        assert_eq!(from_hook, ["agy", "muse", "pi"]);
     }
 }

@@ -12,7 +12,7 @@ use regex::Regex;
 
 use crate::{BoxInput, CountedScroll, Editor, Frame, InputRule, Menu, Prompt, Scrolled};
 
-pub use paste::{is_own_draft, is_same_draft, settle_time, with_paste_text};
+pub use paste::{is_legacy_split_paste, is_own_draft, is_same_draft, settle_time, with_paste_text};
 pub use probe::{ProbeVerdict, restored, shape_of, space_taken, verdict_of};
 
 /// Reads the input box `rule` describes from `view`. Never waits. An open synchronized update, a
@@ -558,11 +558,24 @@ impl<'a> Screen<'a> {
         let Some(bottom) = (0..self.height()).rev().find(|&y| !self.blank(y)) else {
             return missing_model();
         };
+        let model_at = |y: usize| y >= 2 && rule.model_line.is_match(&self.lines[y]);
         let model = [Some(bottom), bottom.checked_sub(1)]
             .into_iter()
             .flatten()
-            .find(|&y| y >= 2 && rule.model_line.is_match(&self.lines[y]))
-            .filter(|&y| self.blank(y - 1));
+            .find(|&y| model_at(y))
+            .filter(|&y| self.blank(y - 1))
+            .or_else(|| {
+                let hint = rule.wrapped_footer_hint.as_ref()?;
+                if !hint.is_match(self.lines[bottom].trim_end()) {
+                    return None;
+                }
+                // A wrapped footer begins at the top of the indented block before the hint.
+                (0..bottom)
+                    .rev()
+                    .take_while(|&y| self.wrapped(y) && !self.blank(y))
+                    .last()
+                    .filter(|&y| model_at(y) && self.blank(y - 1))
+            });
         // The input ends before the blank row above the model line, or after the last row with text.
         let last = model.map_or(bottom, |model| model - 2);
         let end = last + 1;

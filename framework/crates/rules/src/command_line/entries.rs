@@ -312,20 +312,39 @@ impl Entry {
         rule.is_some_and(|rule| rule.choices.takes(choice))
     }
 
-    /// Which of the start's choices its type cannot accept, if any (CLIS-1.4). The model is
-    /// checked before the effort.
-    pub fn refused_choice(
+    /// Explains all the choices this start cannot use, in MCP or command-line wording.
+    pub fn choice_refusal(
         &self,
         model: Option<&str>,
         effort: Option<&str>,
-    ) -> Option<&'static str> {
-        if model.is_some() && !self.takes("model") {
-            Some("model")
-        } else if effort.is_some() && !self.takes("effort") {
-            Some("effort")
+        by_model: bool,
+    ) -> Option<String> {
+        let cli = self.display_name();
+        let (choice, what) = match (
+            model.is_some() && !self.takes("model"),
+            effort.is_some() && !self.takes("effort"),
+        ) {
+            (false, false) => return None,
+            (true, false) => ("model", "a model"),
+            (false, true) => ("effort", "an effort"),
+            (true, true) if by_model => {
+                return Some(format!(
+                    "{cli} takes no explicit model or effort; leave `model` and `effort` out to use its defaults."
+                ));
+            }
+            (true, true) => {
+                return Some(format!(
+                    "{cli} has no supported way to set a model or an effort; omit model and effort to use its own defaults"
+                ));
+            }
+        };
+        Some(if by_model {
+            format!("{cli} takes no explicit {choice}; leave `{choice}` out to use its default.")
         } else {
-            None
-        }
+            format!(
+                "{cli} has no supported way to set {what}; omit {choice} to use its own default"
+            )
+        })
     }
 
     /// The arguments that pass its model and effort (CONFIGURATION-3.3). For each one the start's
@@ -361,14 +380,8 @@ impl Entry {
         effort: Option<&str>,
         args: &[String],
     ) -> Result<LaunchOptions, ErrorBody> {
-        if let Some(asked) = self.refused_choice(model, effort) {
-            return Err(self.error(
-                Reason::Unsupported,
-                format!(
-                    "{} takes no explicit {asked}; leave `{asked}` out to use its default.",
-                    self.display_name()
-                ),
-            ));
+        if let Some(message) = self.choice_refusal(model, effort, true) {
+            return Err(self.error(Reason::Unsupported, message));
         }
         let mut words = self.choices(model, effort, args);
         words.extend_from_slice(&self.args);
@@ -1454,7 +1467,7 @@ mod tests {
                 "model_reasoning_effort=\"low\""
             ]
         );
-        assert_eq!(codex.refused_choice(Some("m"), Some("low")), None);
+        assert_eq!(codex.choice_refusal(Some("m"), Some("low"), true), None);
         // The start's own words choose: they carry the choice, and the entry's for it is not added
         let words = |words: &[&str]| {
             words
@@ -1480,13 +1493,16 @@ mod tests {
             ]
         );
         assert_eq!(
-            entry("opencode", "{}").refused_choice(None, Some("low")),
-            Some("effort")
+            entry("opencode", "{}")
+                .choice_refusal(None, Some("low"), true)
+                .as_deref(),
+            Some("OpenCode takes no explicit effort; leave `effort` out to use its default.")
         );
         assert_eq!(
             entry("tool", r#"{"tool": {"type": "custom", "command": "tool"}}"#)
-                .refused_choice(Some("m"), None),
-            Some("model")
+                .choice_refusal(Some("m"), None, false)
+                .as_deref(),
+            Some("tool has no supported way to set a model; omit model to use its own default")
         );
 
         let replay = codex.launch_options(None, Some("low"), &[]).unwrap();

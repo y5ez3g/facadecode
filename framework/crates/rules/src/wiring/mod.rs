@@ -21,7 +21,6 @@ mod settings;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use facade_base::skill::text;
 use serde_json::Value;
 
 use crate::{ManagedServer, RUN_CREDENTIAL_ARG, Rule};
@@ -30,8 +29,7 @@ pub use plugin::{PLUGIN_FOLDER, PLUGIN_MEMBERS, plugin_files, plugin_version, us
 pub use session_report::SessionReport;
 pub(crate) use session_report::{Hooked, install_hook};
 
-/// Where a folder of Facade's holds its skill: a run's own folder, the plugin Claude Code loads for
-/// a run, and Antigravity's plugin.
+/// The old skill path, still recognized in Antigravity plugins and inherited OpenCode settings.
 pub const SKILL_FILE: &str = "skills/facade/SKILL.md";
 /// Where a run's own folder holds its instructions, for a CLI that takes them from a hook: Muse
 /// Code's and Antigravity's.
@@ -77,14 +75,6 @@ pub enum Tools {
     NotGiven(String),
 }
 
-/// Whether the session-start hook also gives the model Facade's skill.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum SessionSkill {
-    #[default]
-    Omit,
-    Include,
-}
-
 /// What giving a run's CLI the tools adds to its command line.
 #[derive(Default, PartialEq, Eq)]
 pub(crate) struct Wiring {
@@ -105,9 +95,6 @@ pub(crate) struct Wiring {
     pub(crate) plugin: Vec<(String, String)>,
     /// The Facade program and session file for Antigravity's title command.
     pub(crate) title: Option<(String, PathBuf)>,
-    /// The session-start hook that reports the run's session also gives the model the skill, as
-    /// Codex has no place of the run's own for one.
-    session_skill: SessionSkill,
 }
 
 /// The managed run's wiring and how it gets Facade's tools.
@@ -158,13 +145,10 @@ pub(crate) fn wire_managed(
     };
     let uses_credential = credential.is_some();
     let (wiring, uses_run_credential) = match cli {
-        "claude" => (
-            run_tools::claude_run(server, &entry, text()),
-            uses_credential,
-        ),
-        "codex" => (run_tools::codex_run(&entry, text())?, uses_credential),
+        "claude" => (run_tools::claude_run(server, &entry), uses_credential),
+        "codex" => (run_tools::codex_run(&entry)?, uses_credential),
         "opencode" => (
-            run_tools::opencode_run(server, &entry, environment, text())?,
+            run_tools::opencode_run(&entry, environment)?,
             uses_credential,
         ),
         "pi" => {
@@ -173,16 +157,13 @@ pub(crate) fn wire_managed(
             } else {
                 servers::SERVER
             };
-            (
-                run_tools::pi_run(server, &entry, name, text()),
-                uses_credential,
-            )
+            (run_tools::pi_run(server, &entry, name), uses_credential)
         }
         "muse" => {
             let configured = conflicts::muse_config(server.cwd, environment)?;
             let entry = (!configured).then_some(&entry);
             (
-                run_tools::muse_run(server, entry, text()),
+                run_tools::muse_run(server, entry),
                 uses_credential && !configured,
             )
         }
@@ -213,7 +194,7 @@ pub(crate) fn report_session(
             let variables = server
                 .into_iter()
                 .flat_map(|managed| managed.server.hook_variables());
-            let command = session.hook(cli, SessionSkill::Omit, variables);
+            let command = session.hook(cli, variables);
             wiring.hooks.push(("SessionStart".into(), command));
         }
         "agy" => wiring.title = Some((session.facade.into(), session.file.into())),

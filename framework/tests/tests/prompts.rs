@@ -101,14 +101,14 @@ fn crash(home: &TestHome) {
 
 /// boss's prompt as the child's CLI takes it.
 fn prompt(host: &str) -> String {
-    format!("📨 Message from boss (a1@{host}) · m1\nfix the bug")
+    format!("📨 Message m1 from boss (a1@{host})\nfix the bug")
 }
 
 /// The delivery facts in the result of a prompt the child ended before receiving.
 fn ended_result_prefix(host: &str) -> String {
     format!(
-        "🔔 child (a2@{host}) has started. · m2\nIts Facade tools are unavailable: its CLI \
-         ended.\nYour initial message m1@{host} could not be delivered. Nothing was entered in the \
+        "🔔 child (a2@{host}) has started.\nIts Facade tools are unavailable: its CLI \
+         ended.\nYour prompt m1@{host} could not be delivered. Nothing was entered in the \
          terminal.\na2@{host} ended before the message was delivered."
     )
 }
@@ -135,7 +135,7 @@ fn start_agent_s_prompt_goes_first_without_a_success_notice() {
         (&json!(format!("a2@{host}")), &json!("child")),
         "{started}"
     );
-    assert_eq!(started["data"]["result_message"], "m2", "{started}");
+    assert!(started["data"].get("result_message").is_none(), "{started}");
     assert!(wait_for_submission(&home, &prompt(&host)));
     // The second delivered message confirms that the typist has settled the prompt.
     let next = home.run_facade_ok(&["send", "child", "next", "-w"]);
@@ -147,7 +147,7 @@ fn start_agent_s_prompt_goes_first_without_a_success_notice() {
         home.submitted_messages(),
         [
             prompt(&host),
-            "📨 Message from the command line · m3\nnext".into()
+            "📨 Message m3 from command line\nnext".into()
         ]
     );
 }
@@ -157,8 +157,7 @@ fn a_child_reading_its_initial_prompt_settles_it_silently() {
     let home = TestHome::new("promptreadsits");
     home.start_facade_with(&[("FACADE_TEST_GATES", "before-prompt-delivery")]);
     let (mut boss, here) = boss(&home);
-    let started = start_child(&mut boss, &here, "fix the bug");
-    assert_eq!(started["data"]["result_message"], "m2", "{started}");
+    start_child(&mut boss, &here, "fix the bug");
     home.wait_for_gate("before-prompt-delivery");
     let mut child = McpTestClient::open(&home, "a2");
     let read = child.call("read_messages", json!({}));
@@ -173,7 +172,7 @@ fn a_child_reading_its_initial_prompt_settles_it_silently() {
     assert_eq!(inbox["data"]["messages"], json!([]), "{inbox}");
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from the command line · m3\nafter the read"]
+        ["📨 Message m3 from command line\nafter the read"]
     );
 }
 
@@ -196,7 +195,7 @@ fn a_message_sent_while_the_prompt_waits_goes_after_it() {
     home.release_gate("before-prompt-delivery");
     let sent = send.wait_with_output().unwrap();
     assert!(sent.status.success(), "{}", stderr(&sent));
-    let message = "📨 Message from the command line · m3\nand then this";
+    let message = "📨 Message m3 from command line\nand then this";
     assert!(
         wait_for_submission(&home, message),
         "{:?}",
@@ -289,8 +288,8 @@ fn start_from_the_guest(home: &TestHome, guest: &mut McpTestClient, prompt: &str
 /// Whether the child's CLI took the guest's prompt, under the guest's address.
 fn prompted_by(home: &TestHome, guest: &str) -> bool {
     home.submitted_messages().iter().any(|text| {
-        text.starts_with("📨 Message from ")
-            && text.ends_with(&format!(" ({guest}) · m1\nhello child"))
+        text.starts_with("📨 Message m1 from ")
+            && text.ends_with(&format!(" ({guest})\nhello child"))
     })
 }
 
@@ -420,7 +419,9 @@ fn a_failure_result_read_before_it_is_typed_is_never_typed() {
     home.release_gate("before-prompt-delivery");
     home.wait_for_gate("before-result-delivery");
     let read = boss.call("read_messages", json!({}));
-    let row = &read["data"]["messages"][0];
+    let [row] = read["data"]["messages"].as_array().unwrap().as_slice() else {
+        panic!("expected exactly one start result: {read}");
+    };
     assert_eq!(
         (&row["id"], &row["from"]),
         (&json!("m2"), &json!("facade")),
@@ -466,7 +467,7 @@ fn a_prompt_waiting_for_the_tools_outlives_its_daemon_and_succeeds_silently() {
         home.submitted_messages(),
         [
             prompt(&host),
-            "📨 Message from the command line · m3\nafter the prompt".into()
+            "📨 Message m3 from command line\nafter the prompt".into()
         ]
     );
 }
@@ -543,7 +544,7 @@ fn a_terminal_start_s_prompt_comes_from_the_command_line_and_owes_no_result() {
     home.start_named_fake("boss", &[]);
     let solo = home.start_with_prompt("solo", "fake", "from the person", &[]);
     assert!(solo["result"].is_object(), "{solo}");
-    let person = "📨 Message from the command line · m1\nfrom the person";
+    let person = "📨 Message m1 from command line\nfrom the person";
     assert!(
         wait_for_submission(&home, person),
         "{:?}",
@@ -556,7 +557,7 @@ fn a_terminal_start_s_prompt_comes_from_the_command_line_and_owes_no_result() {
         &[("FACADE_AGENT", "a1")],
     );
     assert!(child["result"].is_object(), "{child}");
-    let boss = "📨 Message from the command line · m2\nfrom the boss's terminal";
+    let boss = "📨 Message m2 from command line\nfrom the boss's terminal";
     assert!(
         wait_for_submission(&home, boss),
         "{:?}",
