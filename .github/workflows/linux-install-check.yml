@@ -33,7 +33,7 @@ jobs:
       GNOME_SHELL_SESSION_MODE: ubuntu
     steps:
       - name: Check out the source icon
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           sparse-checkout: ide/resources/linux/code.png
           sparse-checkout-cone-mode: false
