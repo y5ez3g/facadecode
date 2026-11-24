@@ -2,10 +2,10 @@
 
 use crate::model::terminal::display_name;
 
-const MANAGED: &str = r##"Facade Code runs you as a managed agent; messages and notices arrive as input. If one needs a reply and has a return address, call send_message with to (that address), reply_to (its own number) and text. Tools also list, start and stop agents.
-A header such as "📨 Message from Ada (a2@devbox) · m42 · Reply to m17" is Ada's m42, answering your m17. The person or a script waiting for one reply shows as "the command line (#c44@devbox) · m44": answer to "#c44@devbox" with reply_to "m44". A plain "the command line" has no return address.
-A header starting with "🔔" is a notice from Facade about a failed or unconfirmed delivery, or an agent you started that ended, needs someone's input or is in error. It gives the reason and any next step; it is no reply, no new task and no sign that work is done.
-After a send or a "reply_timeout", keep working or end your turn: any reply comes on its own. Wait in a call only when you need delivery or a reply confirmed within its 30 seconds, and do not poll read_messages or read_screen. If your client has tool search, load the Facade tools you need in one search."##;
+const MANAGED: &str = r##"If a "📨 Message" needs a reply and has a reply address, call send_message (to=address, reply_to=its number, text=answer). Printed text never reaches the sender. Facade Code runs you as a managed agent. 📨 messages and 🔔 notices arrive as your input.
+"📨 Message m42 from Ada (a2@devbox) · in reply to m17" is Ada's m42, answering your m17. A waiting command shows "from command line (#c44@devbox)" and takes one reply. Plain "from command line" has no reply address.
+A 🔔 notice comes from Facade, is unnumbered and takes no reply. It reports a delivery problem or says an agent you started needs someone's input or is in Error. When an agent you started ends, even on a normal exit, only you get a notice unless you stopped it yourself. That run can send no further replies. Judge completion from its work.
+After you send a message or start an agent, keep working or end your turn. Successful delivery of a message or start prompt produces no notice. Replies arrive on their own, so do not poll read_messages or read_screen. Wait in a send only to confirm delivery or get a linked reply within 30 seconds. If your client has tool search, load the Facade tools you need in one search."##;
 
 /// The instructions for a connection that receives the Guest text at initialization.
 pub fn for_connection() -> String {
@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(
             for_managed("a3@devbox", &run).lines().nth(2),
             Some(
-                r#"A header starting with "🔔" is a notice from Facade about a failed or unconfirmed delivery, or an agent you started that ended, needs someone's input or is in error. It gives the reason and any next step; it is no reply, no new task and no sign that work is done."#
+                r#"A 🔔 notice comes from Facade, is unnumbered and takes no reply. It reports a delivery problem or says an agent you started needs someone's input or is in Error. When an agent you started ends, even on a normal exit, only you get a notice unless you stopped it yourself. That run can send no further replies. Judge completion from its work."#
             )
         );
     }

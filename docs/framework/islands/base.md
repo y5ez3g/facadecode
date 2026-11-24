@@ -316,9 +316,10 @@ What a model reads at Facade API v1's MCP entry point in `framework/crates/base/
 - **Owns** the Guest and managed instructions (`instructions.rs`) and the
   definitions of the eight tools (`tools.json`).
 - **Keeps** one table for `tools/list` and `tools/call`. `for_connection` tells a Guest how to read
-  its inbox and wait for delivery or one reply. `for_managed` tells a managed agent how to answer
-  messages and recognize notices. Its last line gives the run's reach under its saved YOLO setting,
-  address, creator, folder and machine.
+  its inbox and wait for delivery or one reply. `for_managed` explains how to answer a `📨 Message`
+  using `send_message` with the sender's address and the message number. It also explains the
+  unnumbered `🔔` notices. Its last line gives the run's reach under its saved YOLO setting, address,
+  creator, folder and machine.
 - **Never keeps** a text used only by tests.
 - **Input:** the daemon supplies `ManagedRun` from the agent's run. MCP `initialize` and run hooks
   use the instructions according to the CLI's rule.

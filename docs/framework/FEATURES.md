@@ -134,9 +134,10 @@ the total command budget from 1 to 300 seconds, with a default of 30. Each invoc
 When a reply wait expires, the command reports the outcome and exits with status 1.
 
 Managed agents and Guests use `send_message` with their own identity. The recipient's machine assigns each message
-an address such as `m17@devbox`. To answer a message, copy the sender address into `to` and the inbox message number
-into `reply_to`. A Shell request waiting for a reply has a sender address such as `#c17@devbox`. The original recipient
-can send one linked reply while that invocation waits.
+an address such as `m17@devbox`. A managed terminal shows `📨 Message m17 from Nova (a3@devbox)` above the body.
+An answer appends ` · in reply to m17` to its own header and includes a machine selector for a remote original.
+To answer a message, use the sender address in `to` and the message number in `reply_to`. A waiting Shell request
+shows `from command line (#c17@devbox)`. The original recipient can send one linked reply while the command waits.
 
 For a managed agent, the Orchestrator waits for an empty input box and checks the pasted draft before submitting it.
 Codex queues an ordinary message with Tab while Working. Idle delivery, startup prompts and recovered in-flight
@@ -168,14 +169,15 @@ Pass `FACADE_HOME` in that server's environment to use a different home. For bot
 defaults to 0 and accepts up to 30 seconds. A send with a positive timeout requires `wait_for` set to `delivery`
 or `result`. After `reply_timeout`, an agent can call `read_messages` with the original full message address in
 `reply_to` and a positive timeout. Read pages with `after` or `last`. Tool results carry complete message text inline.
-Managed agents receive replies and background failures in their terminals. A first prompt's failure and its
-startup problem share one 🔔. The live agent creator also receives one notice per incident when its agent waits
+Managed agents receive replies and background failures in their terminals. A terminal notice begins with `🔔`.
+Its record number is available in the inbox. A first prompt's failure and its startup problem share one notice.
+The live agent creator also receives one notice per incident when its agent waits
 for permission, an answer or login for 30 seconds, stays in Error for 30 seconds, or ends without its request.
 See the [MCP contract](../extension/engineering/MCP.md#7-mcp-through-the-orchestrator).
 
 Facade supplies the same eight tool definitions to managed agents and Guests. The MCP client controls when it
-exposes them to the model. Muse Code, Pi and Antigravity runs get their managed instructions from their run hook or
-extension.
+exposes them to the model. Muse Code 1.4.25 includes all eight in its first request. Muse Code, Pi and Antigravity
+runs get their managed instructions from their run hook or extension.
 
 ## Access and settings
 
