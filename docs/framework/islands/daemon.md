@@ -510,6 +510,10 @@ A run's command line, environment, folder, plugin and session following.
   Facade Code Framework's, or a later version's, is never changed. Once the last start holding it and the last
   run using it have ended, preparation removes a plugin that matches the current template or has an
   earlier version. A plugin with the current version and different contents is logged and left in place.
+  A new run can register its own relay credential while a same-version Antigravity plugin is still
+  in use if the plugin has the old skill file and every current template file is a regular file with
+  matching bytes.
+  The files stay in place during the hold. Once the folder is free, the next start replaces the plugin.
   Only CLIs for which `facade_rules::uses_folder_plugin` holds use it. The session file is checked
   by its modified time and size a second after the run's terminal gives output, as a CLI saves its
   session while it works: at most once a second while output goes on, once more a quiet second

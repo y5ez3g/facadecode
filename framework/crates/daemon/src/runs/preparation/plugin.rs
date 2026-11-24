@@ -107,12 +107,13 @@ impl Plugins {
         let folder = project.join(facade_rules::PLUGIN_FOLDER);
         let busy =
             usage.starts.contains_key(project) || usage.runs.values().any(|cwd| cwd == project);
-        let replace = match inspect(&folder, files) {
+        let plugin = inspect(&folder, files);
+        let replace = match plugin {
             Plugin::Foreign(why) => {
                 return Err(format!("{why}; Facade leaves the plugin as it is"));
             }
             Plugin::Matching => Some(false),
-            Plugin::Earlier | Plugin::Edited if !busy => Some(true),
+            Plugin::Earlier | Plugin::Edited { .. } if !busy => Some(true),
             _ => None,
         };
         if let Some(replace) = replace {
@@ -123,7 +124,13 @@ impl Plugins {
         Ok(PluginHold {
             plugins: self.clone(),
             project: project.to_owned(),
-            installed: replace.is_some(),
+            installed: replace.is_some()
+                || matches!(
+                    plugin,
+                    Plugin::Edited {
+                        compatible_legacy_skill: true
+                    }
+                ),
         })
     }
 
@@ -137,7 +144,7 @@ impl Plugins {
         }
         let left = match inspect(&folder, files) {
             Plugin::Matching | Plugin::Earlier => None,
-            Plugin::Edited => Some(format!(
+            Plugin::Edited { .. } => Some(format!(
                 "{} was changed since Facade wrote it; Facade leaves it as it is",
                 folder.display()
             )),
@@ -179,21 +186,23 @@ impl Plugins {
 enum Plugin {
     Matching,
     Earlier,
-    Edited,
+    Edited { compatible_legacy_skill: bool },
     Later,
     Foreign(String),
 }
 
 fn inspect(folder: &Path, files: &[(String, String)]) -> Plugin {
-    let scan = || -> std::io::Result<Result<bool, String>> {
+    let scan = || -> std::io::Result<Result<(bool, bool), String>> {
         let mut pending = vec![(folder.to_path_buf(), String::new())];
         let mut matching = true;
+        let mut matching_regular_files = 0;
+        let mut legacy_skill = false;
         while let Some((at, prefix)) = pending.pop() {
             for item in std::fs::read_dir(at)? {
                 let item = item?;
                 let name = format!("{prefix}{}", item.file_name().to_string_lossy());
-                let is_folder = item.file_type()?.is_dir();
-                let known = if is_folder {
+                let file_type = item.file_type()?;
+                let known = if file_type.is_dir() {
                     let prefix = format!("{name}/");
                     facade_rules::PLUGIN_MEMBERS
                         .iter()
@@ -207,27 +216,40 @@ fn inspect(folder: &Path, files: &[(String, String)]) -> Plugin {
                         folder.display()
                     )));
                 }
-                if is_folder {
+                if file_type.is_dir() {
                     pending.push((item.path(), format!("{name}/")));
                 } else {
-                    let contents = std::fs::read(item.path()).ok();
-                    matching &= files.iter().any(|(file, text)| {
-                        file == &name && contents.as_deref() == Some(text.as_bytes())
-                    });
+                    match files.iter().find(|(file, _)| file == &name) {
+                        Some((_, text))
+                            if std::fs::read(item.path())
+                                .is_ok_and(|bytes| bytes == text.as_bytes()) =>
+                        {
+                            matching_regular_files += usize::from(file_type.is_file());
+                        }
+                        None if name == facade_rules::SKILL_FILE && file_type.is_file() => {
+                            legacy_skill = true;
+                        }
+                        _ => matching = false,
+                    }
                 }
             }
         }
-        Ok(Ok(matching))
+        // An ordinary match can be completed by put_files. A held legacy plugin must
+        // already have every current file because it cannot be changed during the hold.
+        Ok(Ok((
+            matching && !legacy_skill,
+            matching && legacy_skill && matching_regular_files == files.len(),
+        )))
     };
-    match scan() {
+    let compatible_legacy_skill = match scan() {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Plugin::Matching,
         Err(error) => {
             return Plugin::Foreign(format!("{} could not be read: {error}", folder.display()));
         }
         Ok(Err(why)) => return Plugin::Foreign(why),
-        Ok(Ok(true)) => return Plugin::Matching,
-        Ok(Ok(false)) => {}
-    }
+        Ok(Ok((true, _))) => return Plugin::Matching,
+        Ok(Ok((false, compatible_legacy_skill))) => compatible_legacy_skill,
+    };
     let manifest = std::fs::read_to_string(folder.join("plugin.json")).ok();
     let version = manifest.as_deref().and_then(facade_rules::plugin_version);
     let own = files
@@ -237,7 +259,9 @@ fn inspect(folder: &Path, files: &[(String, String)]) -> Plugin {
     match version.zip(own).map(|(found, own)| found.cmp(&own)) {
         Some(std::cmp::Ordering::Less) => Plugin::Earlier,
         Some(std::cmp::Ordering::Greater) => Plugin::Later,
-        Some(std::cmp::Ordering::Equal) => Plugin::Edited,
+        Some(std::cmp::Ordering::Equal) => Plugin::Edited {
+            compatible_legacy_skill,
+        },
         None => Plugin::Foreign(format!(
             "{} is not a Facade Code Framework plugin",
             folder.display()

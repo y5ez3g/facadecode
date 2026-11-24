@@ -1287,8 +1287,12 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
         programs.display(),
         home.path_with_test_programs()
     );
+    let busy_roster = home.folder().join("busy-mcp-roster.json");
     let start = |name: &str| {
         let mut command = home.facade_in_an_empty_home();
+        if name == "busy" {
+            command.env("FAKECLI_MCP_ROSTER", &busy_roster);
+        }
         let started = command
             .env("PATH", &path)
             .env("FAKECLI_LOOK", "agy")
@@ -1417,8 +1421,44 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
     let legacy_skill = plugin.join("skills/facade/SKILL.md");
     std::fs::create_dir_all(legacy_skill.parent().unwrap()).unwrap();
     std::fs::write(&legacy_skill, "The old Facade skill.\n").unwrap();
+    let old_plugin = [
+        "plugin.json",
+        "mcp_config.json",
+        "hooks.json",
+        "skills/facade/SKILL.md",
+    ]
+    .map(|file| (file, std::fs::read(plugin.join(file)).unwrap()));
     start("busy");
-    assert!(legacy_skill.is_file(), "bob's run still holds the plugin");
+    if row("busy")["tools_reason"] == "not_given" {
+        // Antigravity can still open the existing plugin's server from its MCP panel.
+        home.run_facade_ok(&["type", "busy", "/mcp", "--enter"]);
+    }
+    let roster = || {
+        std::fs::read(&busy_roster)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+    };
+    assert!(
+        wait_until(LOADED_TIMEOUT, || roster().is_some()),
+        "the new run did not call its MCP server: {}",
+        home.screen("busy")
+    );
+    let reply = roster().unwrap();
+    let listed = &reply["result"]["structuredContent"];
+    assert_eq!(listed["status"], "success", "{reply}");
+    let agents = listed["data"]["agents"].as_array().unwrap();
+    let busy = row("busy");
+    assert!(
+        agents
+            .iter()
+            .any(|agent| agent["id"] == busy["address"] && agent["type"] == "managed")
+            && agents.iter().all(|agent| agent["type"] != "guest"),
+        "the new run must use the plugin as a managed agent: {listed}"
+    );
+    assert_eq!(busy["tools_state"], "available", "{busy}");
+    for (file, bytes) in old_plugin {
+        assert_eq!(std::fs::read(plugin.join(file)).unwrap(), bytes, "{file}");
+    }
     home.run_facade_ok(&["stop", "busy"]);
     home.run_facade_ok(&["stop", "bob"]);
     assert!(
