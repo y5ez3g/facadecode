@@ -941,7 +941,7 @@ impl Typist {
         let settles = self
             .paste_rule()
             .map_or(Duration::ZERO, |rule| facade_rules::settle_time(rule, text));
-        now + PASTE_DELAY + console_time(self.console, text) + settles + SLOWEST_DRAW
+        now + console_time(self.console, text) + settles + SLOWEST_DRAW
     }
 
     fn record_write(&mut self, offset: u64, length: usize, delay: Duration) {
@@ -1148,7 +1148,9 @@ impl Typist {
                     draft,
                     phase: DeliveryPhase::Draft,
                 });
-                self.record_write(offset, write.len(), PASTE_DELAY);
+                // Its submission key waits for its own draft to show for the CLI's settle time, and
+                // for no pause of its own.
+                self.record_write(offset, write.len(), Duration::ZERO);
                 return Step {
                     write,
                     wake: Some(wake),
@@ -3062,6 +3064,30 @@ mod tests {
         assert_eq!(terminal.write_all(), b"\x1b[200~the next\x1b[201~");
     }
 
+    /// A message's submission key goes once its own draft has shown for the CLI's settle time: no
+    /// other pause follows its paste.
+    #[test]
+    fn a_message_gets_its_enter_once_its_draft_showed_for_the_settle_time() {
+        let post = test_messages();
+        let mut terminal = Terminal::default();
+        let start = Instant::now();
+        let times = (start, start + Duration::from_secs(30));
+        let (mut typist, _, _) = pasted(&post, &mut terminal, "hello", times);
+        terminal.reading = input(InputState::Draft, Some("hello"));
+        let shown = start + Duration::from_millis(1);
+        terminal.step(&mut typist, shown, ANY);
+        assert!(
+            terminal.write_all().is_empty(),
+            "its draft has not stayed yet"
+        );
+        terminal.step(&mut typist, shown + Duration::from_millis(80), ANY);
+        assert_eq!(
+            terminal.write_all(),
+            b"\r",
+            "its settle time is all it waits"
+        );
+    }
+
     /// Keys wait for a message until it left the input, and no longer than a slow CLI takes.
     #[test]
     fn keys_wait_for_a_message_until_it_left_the_input() {
@@ -3070,7 +3096,7 @@ mod tests {
         let start = Instant::now();
         let times = (start, start + Duration::from_secs(30));
         let own = input(InputState::Draft, Some("hello"));
-        let until = start + PASTE_DELAY + Duration::from_millis(80) + SLOWEST_DRAW;
+        let until = start + Duration::from_millis(80) + SLOWEST_DRAW;
         for slow in [false, true] {
             let (mut typist, number, _) = pasted(&post, &mut terminal, "hello", times);
             assert_eq!(typist.paste_hold_until(), Some(until));
