@@ -90,6 +90,12 @@
 //! once it answered the start of its MCP session, and a turn that begins before that is logged as
 //! `turn without Facade's server`. `FAKECLI_PANEL_DELAY_MS` starts the server that long after the
 //! panel opens, as a server that starts slowly does.
+//!
+//! For `facade-storm`: `FAKECLI_TAPE=<folder>` appends to `<folder>/<agent>.tape`, named after
+//! `FACADE_AGENT`, a JSON line for each read of its input, each change of its draft and each
+//! submission (`Tape`). `FAKECLI_MOUSE=1` asks its terminal for mouse and focus reports, as Claude
+//! Code does. `FAKECLI_DRAW_MS` is how long it takes to draw what it read. `FAKECLI_BUSY_MS` is how
+//! long it prints lines after each message it takes, one each `FAKECLI_BUSY_EVERY_MS` (50).
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -107,6 +113,38 @@ const PASTE_END: &[u8] = b"\x1b[201~";
 enum InputSegment {
     Text(String),
     Paste { number: usize, text: String },
+}
+
+/// `FAKECLI_TAPE`: what the fake CLI read, showed in its input and submitted, in order, one JSON
+/// line each with its time in microseconds since 1970: `{"us", "in"}` with the bytes of one read in
+/// base64, `{"us", "drawn"}` after its first frame, `{"us", "box"}` with the draft its frame shows,
+/// `{"us", "menu"}` where a question takes its input's place or gives it back, and `{"us", "submit", "key"}` with the draft's pieces, each
+/// `{"text"}` as typed or `{"paste"}` as pasted, and the key that submitted it.
+#[derive(Clone)]
+struct Tape(Arc<std::sync::Mutex<std::fs::File>>);
+
+impl Tape {
+    fn open() -> Option<Tape> {
+        let folder = PathBuf::from(std::env::var_os("FAKECLI_TAPE")?);
+        let agent = std::env::var("FACADE_AGENT").unwrap_or_else(|_| "none".into());
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(folder.join(format!("{agent}.tape")))
+            .ok()?;
+        Some(Tape(Arc::new(std::sync::Mutex::new(file))))
+    }
+
+    fn note(&self, mut entry: serde_json::Value) {
+        let at = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|since| since.as_micros() as u64)
+            .unwrap_or(0);
+        entry["us"] = serde_json::json!(at);
+        if let Ok(mut file) = self.0.lock() {
+            let _ = file.write_all(format!("{entry}\n").as_bytes());
+        }
+    }
 }
 
 /// The session-start hook the fake CLI was given, if any.
@@ -288,6 +326,15 @@ struct FakeCli {
     space_suggests: Option<String>,
     /// When the hint shows again after a message it took: once the message's turn has ended.
     hint_after: Option<Instant>,
+    /// `FAKECLI_TAPE`.
+    tape: Option<Tape>,
+    /// The draft the tape last noted.
+    taped_draft: String,
+    /// Whether the tape last noted a menu in place of the input.
+    taped_menu: bool,
+    /// `FAKECLI_BUSY_MS`: how long it prints after each message it takes, and until when it does.
+    busy: Duration,
+    busy_until: Option<Instant>,
 }
 
 impl FakeCli {
@@ -385,7 +432,25 @@ impl FakeCli {
         }
     }
 
-    fn submit(&mut self) {
+    /// Notes the draft's pieces that `key` submits.
+    fn tape_submission(&self, key: &str) {
+        let Some(tape) = &self.tape else { return };
+        let mut pieces: Vec<serde_json::Value> = self
+            .draft
+            .iter()
+            .map(|piece| match piece {
+                InputSegment::Text(text) => serde_json::json!({ "text": text }),
+                InputSegment::Paste { text, .. } => serde_json::json!({ "paste": text }),
+            })
+            .collect();
+        if !self.after_cursor.is_empty() {
+            pieces.push(serde_json::json!({ "text": self.after_cursor }));
+        }
+        tape.note(serde_json::json!({ "submit": pieces, "key": key }));
+    }
+
+    fn submit(&mut self, key: &str) {
+        self.tape_submission(key);
         let text = self.draft_text() + &std::mem::take(&mut self.after_cursor);
         self.draft.clear();
         if self.hint.is_some() {
@@ -397,6 +462,9 @@ impl FakeCli {
         }
         if text.trim().is_empty() {
             return;
+        }
+        if !self.busy.is_zero() {
+            self.busy_until = Some(Instant::now() + self.busy);
         }
         self.queries.extend(console_title_back());
         let mut lines = text.lines();
@@ -667,6 +735,12 @@ impl FakeCli {
             frame.push_str("\r\n");
         }
         let input_row = rows.saturating_sub(3);
+        if let Some(tape) = &self.tape
+            && self.menu.is_some() != self.taped_menu
+        {
+            self.taped_menu = self.menu.is_some();
+            tape.note(serde_json::json!({ "menu": self.taped_menu }));
+        }
         if let Some(question) = self.menu.as_ref() {
             // A question and its menu, Antigravity's under its look, where the input was; no
             // cursor, as no input shows.
@@ -707,6 +781,12 @@ impl FakeCli {
             "─".repeat(cols)
         ));
         let shown = self.displayed_draft();
+        if let Some(tape) = &self.tape
+            && shown != self.taped_draft
+        {
+            tape.note(serde_json::json!({ "box": shown }));
+            self.taped_draft.clone_from(&shown);
+        }
         let (prompt, footer) = if self.agy {
             (">", "? for shortcuts")
         } else if self.codex_input {
@@ -1369,6 +1449,11 @@ fn run() -> anyhow::Result<()> {
         no_leading_space: std::env::var("FAKECLI_NO_LEADING_SPACE").is_ok_and(|v| v == "1"),
         space_suggests: std::env::var("FAKECLI_SPACE_SUGGESTS").ok(),
         hint_after: None,
+        tape: Tape::open(),
+        taped_draft: String::new(),
+        taped_menu: false,
+        busy: milliseconds("FAKECLI_BUSY_MS").unwrap_or_default(),
+        busy_until: None,
     };
     let resumed = arguments
         .iter()
@@ -1404,7 +1489,15 @@ fn run() -> anyhow::Result<()> {
         }
     }
     let _ = out.write_all(b"\x1b[?2004h");
+    if std::env::var("FAKECLI_MOUSE").as_deref() == Ok("1") {
+        let _ = out.write_all(b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?1004h");
+    }
+    let draw_takes = milliseconds("FAKECLI_DRAW_MS").unwrap_or_default();
+    let busy_every = milliseconds("FAKECLI_BUSY_EVERY_MS").unwrap_or(Duration::from_millis(50));
     app.draw(&mut out);
+    if let Some(tape) = &app.tape {
+        tape.note(serde_json::json!({ "drawn": true }));
+    }
 
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     let reads_input = std::env::var("FAKECLI_IGNORE_INPUT").is_err();
@@ -1420,6 +1513,7 @@ fn run() -> anyhow::Result<()> {
     let (ignore_space, ignore_backspace) = (ignores("space"), ignores("backspace"));
     let takes_enter = std::env::var("FAKECLI_IGNORE_ENTER").is_err();
     let read_gate = std::env::var_os("FAKECLI_READ_GATE").map(std::path::PathBuf::from);
+    let tape = app.tape.clone();
     std::thread::spawn(move || {
         if !reads_input {
             // Hold the channel open without reading, so the CLI keeps running.
@@ -1440,6 +1534,9 @@ fn run() -> anyhow::Result<()> {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     note_key_time("in", n);
+                    if let Some(tape) = &tape {
+                        tape.note(serde_json::json!({ "in": base64(&buffer[..n]) }));
+                    }
                     if tx.send(buffer[..n].to_vec()).is_err() {
                         break;
                     }
@@ -1466,7 +1563,11 @@ fn run() -> anyhow::Result<()> {
         // terminal reads it.
         let mut quiet = false;
         let mut typed = false;
-        match rx.recv_timeout(Duration::from_millis(50)) {
+        let tick = match app.busy_until.is_some_and(|until| Instant::now() < until) {
+            true => busy_every,
+            false => Duration::from_millis(50),
+        };
+        match rx.recv_timeout(tick) {
             Ok(bytes) => {
                 if let Some(keys) = keys.as_mut() {
                     let _ = keys.write_all(&bytes);
@@ -1514,8 +1615,8 @@ fn run() -> anyhow::Result<()> {
                     app.menu = None;
                     dirty = true;
                 }
-                b'\r' | b'\n' if takes_enter => app.submit(),
-                b'\t' if app.codex_input && app.menu.is_none() => app.submit(),
+                b'\r' | b'\n' if takes_enter => app.submit("enter"),
+                b'\t' if app.codex_input && app.menu.is_none() => app.submit("tab"),
                 0x7f | 0x08 if ignore_backspace => {}
                 0x7f | 0x08 => app.backspace(),
                 0x03 => app.draft.clear(),
@@ -1562,12 +1663,15 @@ fn run() -> anyhow::Result<()> {
                     dirty = true;
                 }
                 0x1b => {
-                    // Skip the complete key escape sequence.
+                    // Skip the complete key escape sequence, once it is complete.
                     let mut j = i + 1;
                     if j < pending.len() && (pending[j] == b'[' || pending[j] == b'O') {
                         j += 1;
                         while j < pending.len() && !(0x40..=0x7e).contains(&pending[j]) {
                             j += 1;
+                        }
+                        if j == pending.len() && !quiet {
+                            break;
                         }
                     }
                     i = j.min(pending.len().saturating_sub(1));
@@ -1599,6 +1703,12 @@ fn run() -> anyhow::Result<()> {
             crossterm::terminal::disable_raw_mode()?;
             std::process::exit(code);
         }
+        if app.busy_until.is_some_and(|until| Instant::now() < until) {
+            let number = app.transcript.len();
+            app.transcript
+                .push(format!("working {number} {}", "·".repeat(number % 60)));
+            dirty = true;
+        }
         dirty |= app.tick();
         app.start_delayed_server();
         dirty |= app.start_plugin_server();
@@ -1619,6 +1729,9 @@ fn run() -> anyhow::Result<()> {
                 .as_ref()
                 .is_some_and(|status| !status.reports.is_empty())
         {
+            if typed && !draw_takes.is_zero() {
+                std::thread::sleep(draw_takes);
+            }
             app.draw(&mut out);
             if typed {
                 note_key_time("out", 0);

@@ -1,0 +1,873 @@
+//! Reconciles four accounts of one storm, message by message: what the senders were told, what the
+//! store keeps, what each CLI submitted, and the bytes each CLI read. Each rule it judges is named
+//! as the storm's specification names it, I1 to I15.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use facade_scenarios::serde_json::{Value, json};
+
+use crate::lab::Row;
+use crate::person::Did;
+use crate::tape::{Piece, Submission, Tape, Token, is_facades};
+
+/// One send as its sender saw it.
+#[derive(Clone, Debug)]
+pub struct Sent {
+    pub seq: usize,
+    pub from: String,
+    /// Its sender is a fake CLI, which shows its notices as submissions.
+    pub from_managed: bool,
+    pub to: String,
+    pub text: String,
+    /// The wait it asked for: `inbox`, `delivery` or `result`.
+    pub wait: &'static str,
+    pub called_us: u64,
+    /// When its answer was read; none came where 0.
+    pub answered_us: u64,
+    pub took_ms: f64,
+    pub number: Option<u64>,
+    pub succeeded: bool,
+    pub said: String,
+    /// The whole answer where it was not a success.
+    pub failure: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Violation {
+    pub rule: &'static str,
+    pub what: String,
+    /// What already explains it, such as another violation in the same window.
+    pub class: Option<&'static str>,
+}
+
+impl Sent {
+    pub fn to_json(&self) -> Value {
+        json!({
+            "seq": self.seq, "from": self.from, "to": self.to, "number": self.number,
+            "wait": self.wait, "called_us": self.called_us, "answered_us": self.answered_us,
+            "took_ms": self.took_ms, "said": self.said, "failure": self.failure,
+            "text": self.text,
+        })
+    }
+}
+
+impl Violation {
+    pub fn to_json(&self) -> Value {
+        json!({ "rule": self.rule, "what": self.what, "class": self.class })
+    }
+}
+
+/// What one submission held.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// One message alone, with its number and body.
+    Message(u64, String),
+    /// One notice of Facade's alone.
+    Notice(String),
+    /// Nothing of Facade's.
+    Person(String),
+    /// Facade's text with other text, or two of Facade's texts.
+    Mixed(Vec<u64>, String),
+}
+
+/// `text` with the line ends a CLI shows.
+pub fn plain(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+/// The numbers of the messages whose headers `text` holds.
+pub fn headers(text: &str) -> Vec<u64> {
+    text.split("📨 Message m")
+        .skip(1)
+        .filter_map(|rest| {
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            let after = &rest[digits.len()..];
+            (after.starts_with(" from ") || after.starts_with('@'))
+                .then(|| digits.parse().ok())
+                .flatten()
+        })
+        .collect()
+}
+
+fn message_of(text: &str) -> Option<(u64, String)> {
+    let rest = text.strip_prefix("📨 Message m")?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    let (_, body) = text.split_once('\n')?;
+    Some((digits.parse().ok()?, body.to_string()))
+}
+
+pub fn kind(submission: &Submission) -> Kind {
+    let all: String = submission
+        .pieces
+        .iter()
+        .map(|piece| match piece {
+            Piece::Typed(text) | Piece::Pasted(text) => plain(text),
+        })
+        .collect();
+    let numbers = headers(&all);
+    let notices = all.matches("🔔 ").count();
+    // Facade pastes its text whole: a second piece is someone else's.
+    let alone = submission.pieces.len() == 1;
+    match (numbers.len(), notices) {
+        (0, 0) => Kind::Person(all),
+        (1, 0) if alone && all.starts_with("📨 Message m") => match message_of(&all) {
+            Some((number, body)) => Kind::Message(number, body),
+            None => Kind::Mixed(numbers, all),
+        },
+        (0, 1) if alone && all.starts_with("🔔 ") => Kind::Notice(all),
+        _ => Kind::Mixed(numbers, all),
+    }
+}
+
+/// One agent whose input the storm watched, and the person in its window, if any.
+pub struct Window {
+    pub agent: String,
+    pub tape: Tape,
+    pub person: Option<Did>,
+    /// The state of its input at the end, as the daemon reads it.
+    pub end_state: String,
+    /// How long its CLI takes to draw what it read.
+    pub draw_ms: u64,
+    /// The least time one message takes in its input.
+    pub service_ms: u64,
+    /// Times a viewer the storm did not open was seen.
+    pub strangers: usize,
+    /// When the storm ended it, if it did.
+    pub ended_us: Option<u64>,
+}
+
+/// One `read_messages` call of an agent's or guest's.
+#[derive(Clone, Debug)]
+pub struct Read {
+    pub agent: String,
+    pub began_us: u64,
+    pub ended_us: u64,
+    /// It asked for replies to one message alone.
+    pub filtered: bool,
+    /// The messages it returned for the first time: those waiting, and no page of earlier ones.
+    pub numbers: Vec<u64>,
+    /// Each returned message's text.
+    pub texts: Vec<String>,
+}
+
+pub struct Case<'a> {
+    pub sent: &'a [Sent],
+    pub rows: &'a BTreeMap<u64, Row>,
+    pub windows: &'a [Window],
+    pub reads: &'a [Read],
+    /// Lines of the daemon's and keeper's logs that are warnings or worse.
+    pub warnings: &'a [String],
+    pub ended_us: u64,
+}
+
+#[derive(Default)]
+pub struct Verdict {
+    pub violations: Vec<Violation>,
+    /// Failures the storm proved to be reasonable, by their kind, L1 to L5.
+    pub reasonable: BTreeMap<&'static str, usize>,
+    pub stats: Value,
+    /// Agents a person other than the storm's was in.
+    pub strangers: Vec<String>,
+}
+
+/// How long a message has to be delivered.
+const LIMIT_US: u64 = 29_500_000;
+/// How long a message's own text may stay in an input beyond what its CLI takes to draw it.
+const STAYS_MS: u64 = 1000;
+/// What the typist takes by itself: the paste's delay and the fake CLI's settle time.
+const TYPIST_MS: u64 = 180;
+
+pub fn judge(case: &Case<'_>) -> Verdict {
+    let mut verdict = Verdict::default();
+    let mut reasonable: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut say = |rule: &'static str, what: String, class: Option<&'static str>| {
+        verdict.violations.push(Violation { rule, what, class });
+    };
+    // Where each message was submitted: (agent, when, body).
+    let mut arrived: HashMap<u64, Vec<(String, u64, String)>> = HashMap::new();
+    // Each agent's notices.
+    let mut notices: HashMap<String, Vec<String>> = HashMap::new();
+    for window in case.windows {
+        for submission in &window.tape.submissions {
+            match kind(submission) {
+                Kind::Message(number, body) => arrived.entry(number).or_default().push((
+                    window.agent.clone(),
+                    submission.us,
+                    body,
+                )),
+                Kind::Notice(text) => notices.entry(window.agent.clone()).or_default().push(text),
+                Kind::Person(_) => {}
+                Kind::Mixed(numbers, text) => {
+                    say(
+                        "I4",
+                        format!(
+                            "{} submitted Facade's text with {}, messages {numbers:?}: {}",
+                            window.agent,
+                            match (submission.pieces.first(), submission.pieces.len()) {
+                                (Some(Piece::Typed(_)), _) => "text typed before it",
+                                (_, 2..) => "text after it",
+                                _ => "other text in one paste",
+                            },
+                            short(&text)
+                        ),
+                        None,
+                    );
+                    for number in numbers {
+                        arrived.entry(number).or_default().push((
+                            window.agent.clone(),
+                            submission.us,
+                            "<mixed>".into(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // Windows Facade's own text stayed in: what waited behind it failed because of that.
+    let mut stays: HashMap<&str, u64> = HashMap::new();
+    let mut stuck: BTreeSet<&str> = BTreeSet::new();
+    for window in case.windows {
+        let (longest, kept) = leftovers(case, window, &mut say);
+        stays.insert(&window.agent, longest);
+        if kept {
+            stuck.insert(&window.agent);
+        }
+    }
+
+    let mut delivered = 0usize;
+    let mut failed: BTreeMap<String, usize> = BTreeMap::new();
+    let mut waits: Vec<f64> = Vec::new();
+    for sent in case.sent {
+        let Some(number) = sent.number else {
+            failed
+                .entry(format!("refused: {}", sent.said))
+                .and_modify(|count| *count += 1)
+                .or_insert(1);
+            // Nothing was kept: nothing of it may arrive.
+            if case.windows.iter().any(|window| {
+                window.tape.submissions.iter().any(|submission| {
+                    matches!(kind(submission), Kind::Message(_, body) if body == plain(&sent.text))
+                })
+            }) {
+                say(
+                    "I3",
+                    format!(
+                        "send {} from {} was refused ({}) and its text arrived",
+                        sent.seq,
+                        sent.from,
+                        sent.failure.as_deref().unwrap_or(&sent.said)
+                    ),
+                    None,
+                );
+            }
+            continue;
+        };
+        let row = case.rows.get(&number);
+        let here = arrived.get(&number).map_or(&[][..], Vec::as_slice);
+        let status = row.map_or("gone", |row| {
+            if row.withdrawn {
+                "withdrawn"
+            } else {
+                row.status.as_str()
+            }
+        });
+        let read = row.is_some_and(|row| row.delivered_via.as_deref() == Some("read_by_recipient"));
+        let who = format!("m{number} ({} to {})", sent.from, sent.to);
+        if here.len() > 1 {
+            say(
+                "I2",
+                format!("{who} was submitted {} times", here.len()),
+                None,
+            );
+        }
+        if let Some((agent, _, _)) = here.iter().find(|(agent, _, _)| *agent != sent.to) {
+            say("I4", format!("{who} was submitted by {agent}"), None);
+        }
+        match status {
+            "success" if read => {
+                delivered += 1;
+                // Read, and so never typed; and returned by one read of its own recipient's.
+                if !here.is_empty() {
+                    say("I2", format!("{who} was read and also submitted"), None);
+                }
+                let reads: Vec<&Read> = case
+                    .reads
+                    .iter()
+                    .filter(|read| read.numbers.contains(&number))
+                    .collect();
+                if case.reads.iter().any(|read| read.agent == sent.to) && reads.len() != 1 {
+                    say(
+                        if reads.is_empty() { "I1" } else { "I2" },
+                        format!(
+                            "{who} is recorded as read and {} reads returned it",
+                            reads.len()
+                        ),
+                        None,
+                    );
+                }
+                for read in reads {
+                    let text = read
+                        .numbers
+                        .iter()
+                        .position(|each| *each == number)
+                        .and_then(|at| read.texts.get(at));
+                    if read.agent != sent.to
+                        || text.is_none_or(|text| plain(text) != plain(&sent.text))
+                    {
+                        say(
+                            "I1",
+                            format!("{who} was returned to {} as {text:?}", read.agent),
+                            None,
+                        );
+                    }
+                }
+            }
+            "success" => {
+                delivered += 1;
+                match here {
+                    [] => say(
+                        "I1",
+                        format!("{who} is recorded as delivered and was never submitted"),
+                        None,
+                    ),
+                    [(_, us, body), ..] => {
+                        if *body != plain(&sent.text) && body != "<mixed>" {
+                            say(
+                                "I1",
+                                format!(
+                                    "{who} arrived changed: sent {}, arrived {}",
+                                    short(&sent.text),
+                                    short(body)
+                                ),
+                                None,
+                            );
+                        }
+                        waits.push((us.saturating_sub(sent.called_us)) as f64 / 1000.0);
+                    }
+                }
+            }
+            "pending" => say("I15", format!("{who} is still pending at the end"), None),
+            _ => {
+                let reason = row
+                    .and_then(|row| row.reason.clone())
+                    .unwrap_or_else(|| status.to_string());
+                let row_says = row.map_or_else(String::new, |row| {
+                    format!(
+                        " text_written={} enter_written={:?}",
+                        row.text_written, row.enter_written
+                    )
+                });
+                failed
+                    .entry(reason.clone())
+                    .and_modify(|count| *count += 1)
+                    .or_insert(1);
+                if !here.is_empty() {
+                    say(
+                        "I3",
+                        format!(
+                            "{who} is recorded as failed ({reason}{row_says}) and was submitted"
+                        ),
+                        None,
+                    );
+                }
+                // Reasonable only where what is not Facade's held the input for so long that what
+                // was left could not take this message and those before it (L1, L2).
+                let window = case.windows.iter().find(|window| window.agent == sent.to);
+                let held = window.map_or(0, |window| {
+                    window
+                        .tape
+                        .held_ms(sent.called_us, sent.called_us + LIMIT_US)
+                });
+                let free = (LIMIT_US / 1000).saturating_sub(held);
+                let ahead = case
+                    .sent
+                    .iter()
+                    .filter(|other| {
+                        other.to == sent.to
+                            && other.number.is_some_and(|other| other < number)
+                            && still_waiting(other, sent.called_us, &arrived)
+                    })
+                    .count() as u64;
+                let service = window.map_or(0, |window| window.service_ms);
+                let needed = (ahead + 1) * service * 12 / 10;
+                let ended = window.and_then(|window| window.ended_us);
+                let unread = window.is_none()
+                    && !case.reads.iter().any(|read| {
+                        read.agent == sent.to
+                            && !read.filtered
+                            && read.began_us < sent.called_us + LIMIT_US
+                            && read.ended_us > sent.called_us
+                    });
+                if ended.is_some_and(|us| us < sent.called_us + LIMIT_US + 1_000_000) {
+                    *reasonable.entry("L4").or_default() += 1;
+                } else if unread {
+                    *reasonable.entry("L3").or_default() += 1;
+                } else if window.is_some_and(|window| removed_by_person(window, number)) {
+                    *reasonable.entry("L6").or_default() += 1;
+                } else if held > 0 && free < needed {
+                    let kind = if reason == "input_interaction" {
+                        "L2"
+                    } else {
+                        "L1"
+                    };
+                    *reasonable.entry(kind).or_default() += 1;
+                } else {
+                    say(
+                        "I15",
+                        format!(
+                            "{who} was not delivered: {reason}{row_says}; the input was free for \
+                             {free} ms of its 29.5 s and {ahead} before it and itself need \
+                             {needed} ms"
+                        ),
+                        stuck
+                            .contains(sent.to.as_str())
+                            .then_some("behind Facade's own text"),
+                    );
+                }
+            }
+        }
+        // What the caller was told agrees with the store.
+        if sent.wait == "delivery" && sent.succeeded != (status == "success") {
+            say(
+                "I3",
+                format!(
+                    "{who}: its sender was told {} and the store says {status}",
+                    sent.said
+                ),
+                None,
+            );
+        }
+        if sent.wait == "inbox" && sent.from_managed {
+            let named = notices.get(&sent.from).map_or(0, |texts| {
+                texts
+                    .iter()
+                    .filter(|text| {
+                        text.contains(&format!("Message m{number}@"))
+                            || text.contains(&format!("Message m{number} "))
+                    })
+                    .count()
+            });
+            let expected = usize::from(!matches!(status, "success" | "pending"));
+            if named != expected {
+                say(
+                    "I8",
+                    format!("{who} ended as {status}; its sender got {named} notices"),
+                    None,
+                );
+            }
+        }
+    }
+
+    // A notice of a failure is a message too.
+    for row in case.rows.values().filter(|row| row.from == "facade") {
+        if row.withdrawn || row.status == "failure" {
+            say(
+                "I8",
+                format!(
+                    "m{}, a notice to {}, was not delivered: {:?}: {}",
+                    row.number,
+                    row.to,
+                    row.reason,
+                    short(&row.text)
+                ),
+                stuck
+                    .contains(row.to.as_str())
+                    .then_some("behind Facade's own text"),
+            );
+        }
+    }
+    // Submissions no send accounts for.
+    let known: BTreeSet<u64> = case.sent.iter().filter_map(|sent| sent.number).collect();
+    for number in arrived.keys().filter(|number| !known.contains(number)) {
+        let expected = case.rows.contains_key(number);
+        if !expected {
+            say(
+                "I3",
+                format!("m{number} was submitted and neither a send nor the store names it"),
+                None,
+            );
+        }
+    }
+
+    order(case, &arrived, &mut say);
+    let mut people = Vec::new();
+    for window in case.windows {
+        let keys = keys(window, &mut say);
+        people.push(json!({
+            "agent": window.agent, "longest_stay_ms": stays[window.agent.as_str()], "keys": keys,
+        }));
+    }
+    for line in case.warnings {
+        say("I12", format!("the log: {line}"), None);
+    }
+
+    verdict.reasonable = reasonable.clone();
+    verdict.strangers = case
+        .windows
+        .iter()
+        .filter(|window| window.strangers > 0)
+        .map(|window| window.agent.clone())
+        .collect();
+    verdict.stats = json!({
+        "sent": case.sent.len(),
+        "delivered": delivered,
+        "failed": failed,
+        "called_to_submitted_ms": summary(waits),
+        "send_call_ms": summary(case.sent.iter().map(|sent| sent.took_ms).collect()),
+        "reasonable": reasonable,
+        "notices": notices.values().map(Vec::len).sum::<usize>(),
+        "windows": people.into_iter().filter(|window| {
+            window["longest_stay_ms"].as_u64().is_some_and(|stay| stay > 0)
+                || !window["keys"].is_null()
+        }).collect::<Vec<_>>(),
+    });
+    verdict
+}
+
+/// Whether the CLI read message `number`'s paste and then a key of the person's that removes text,
+/// before the message was submitted.
+fn removed_by_person(window: &Window, number: u64) -> bool {
+    let Some(person) = &window.person else {
+        return false;
+    };
+    if !person.controls.contains(&0x7f) {
+        return false;
+    }
+    let pasted = window.tape.tokens.iter().position(
+        |(_, token)| matches!(token, Token::Paste(text) if headers(text).contains(&number)),
+    );
+    pasted.is_some_and(|at| {
+        window.tape.tokens[at + 1..]
+            .iter()
+            .take_while(|(_, token)| !matches!(token, Token::Paste(_)))
+            .any(|(_, token)| matches!(token, Token::Control(0x7f | 0x08)))
+    })
+}
+
+/// Whether `other` was still to be delivered at `us`.
+fn still_waiting(
+    other: &Sent,
+    us: u64,
+    arrived: &HashMap<u64, Vec<(String, u64, String)>>,
+) -> bool {
+    let submitted = other
+        .number
+        .and_then(|number| arrived.get(&number))
+        .and_then(|here| here.first())
+        .map(|(_, at, _)| *at);
+    other.called_us + LIMIT_US > us && submitted.is_none_or(|at| at > us)
+}
+
+/// I5: messages of one sender to one recipient, each called after the last was answered, arrive in
+/// that order.
+fn order(
+    case: &Case<'_>,
+    arrived: &HashMap<u64, Vec<(String, u64, String)>>,
+    say: &mut dyn FnMut(&'static str, String, Option<&'static str>),
+) {
+    let mut pairs: HashMap<(&str, &str), Vec<&Sent>> = HashMap::new();
+    for sent in case.sent {
+        pairs.entry((&sent.from, &sent.to)).or_default().push(sent);
+    }
+    for ((from, to), mut sends) in pairs {
+        sends.sort_by_key(|sent| sent.called_us);
+        let mut last: Option<(&Sent, u64)> = None;
+        for sent in sends {
+            let Some(us) = sent
+                .number
+                .and_then(|number| arrived.get(&number))
+                .and_then(|here| here.first())
+                .map(|(_, us, _)| *us)
+            else {
+                continue;
+            };
+            if let Some((before, before_us)) = last
+                && before.answered_us != 0
+                && before.answered_us <= sent.called_us
+                && us < before_us
+            {
+                say(
+                    "I5",
+                    format!(
+                        "{from} to {to}: m{} was sent after m{} was answered and arrived {:.1} ms before it",
+                        sent.number.unwrap_or_default(),
+                        before.number.unwrap_or_default(),
+                        (before_us - us) as f64 / 1000.0
+                    ),
+                    None,
+                );
+            }
+            if last.is_none_or(|(_, before_us)| us > before_us) {
+                last = Some((sent, us));
+            }
+        }
+    }
+}
+
+/// I6 and I7: nothing of Facade's stays in an input. Returns the longest stay in milliseconds, and
+/// whether one was too long.
+fn leftovers(
+    case: &Case<'_>,
+    window: &Window,
+    say: &mut dyn FnMut(&'static str, String, Option<&'static str>),
+) -> (u64, bool) {
+    let mut longest = 0;
+    let mut kept = false;
+    let allowed = STAYS_MS + TYPIST_MS + 4 * window.draw_ms;
+    for (us, token) in &window.tape.tokens {
+        let Token::Paste(text) = token else { continue };
+        let text = plain(text);
+        if !is_facades(&text) {
+            continue;
+        }
+        let submitted = window
+            .tape
+            .submissions
+            .iter()
+            .find(|submission| {
+                submission.us >= *us
+                    && submission.pieces.iter().any(|piece| match piece {
+                        Piece::Pasted(pasted) | Piece::Typed(pasted) => {
+                            plain(pasted).contains(&text)
+                        }
+                    })
+            })
+            .map(|submission| submission.us);
+        let end = window.ended_us.unwrap_or(case.ended_us);
+        if submitted.is_none() && *us > end {
+            continue;
+        }
+        let stay = submitted.unwrap_or(end).saturating_sub(*us) / 1000;
+        longest = longest.max(stay);
+        if stay > allowed {
+            kept = true;
+            let how = match submitted {
+                Some(_) => "before it was submitted",
+                None => "and was not submitted",
+            };
+            say(
+                "I7",
+                format!(
+                    "{}: Facade's text stayed in the input {stay} ms {how}: {}",
+                    window.agent,
+                    short(&text)
+                ),
+                None,
+            );
+        }
+    }
+    if window.ended_us.is_some() {
+        return (longest, kept);
+    }
+    let expected = window
+        .person
+        .as_ref()
+        .map_or("", |person| person.draft.as_str());
+    let last = window.tape.last_box();
+    if last.trim_end() != expected.trim_end() {
+        say(
+            "I6",
+            format!(
+                "{}'s input ends with {:?}, not {expected:?}; the daemon reads it as {}",
+                window.agent,
+                short(last),
+                window.end_state
+            ),
+            None,
+        );
+        kept |= headers(last).len() + last.matches("[Pasted text").count() > 0;
+    }
+    (longest, kept)
+}
+
+/// I9 and I13: every key of the person's reached the CLI once, in order, and their lines were
+/// submitted as they were.
+fn keys(window: &Window, say: &mut dyn FnMut(&'static str, String, Option<&'static str>)) -> Value {
+    let Some(person) = &window.person else {
+        return Value::Null;
+    };
+    if let Some(failed) = &person.failed {
+        say(
+            "I13",
+            format!("{}: the person's write failed: {failed}", window.agent),
+            None,
+        );
+    }
+    let read: Vec<(char, u64)> = window
+        .tape
+        .tokens
+        .iter()
+        .filter_map(|(us, token)| match token {
+            Token::Char(ch) => Some((*ch, *us)),
+            _ => None,
+        })
+        .collect();
+    let given: String = person.chars.iter().map(|(ch, _)| ch).collect();
+    let got: String = read.iter().map(|(ch, _)| ch).collect();
+    let mut late = Vec::new();
+    if given == got {
+        late = person
+            .chars
+            .iter()
+            .zip(&read)
+            .map(|((_, sent), (_, read))| (read.saturating_sub(*sent)) as f64 / 1000.0)
+            .collect();
+        let worst = late.iter().copied().fold(0.0, f64::max);
+        if worst > 200.0 {
+            say(
+                "I13",
+                format!("{}: a key reached the CLI {worst:.0} ms late", window.agent),
+                None,
+            );
+        }
+    } else {
+        let at = given
+            .chars()
+            .zip(got.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let near =
+            |text: &str| -> String { text.chars().skip(at.saturating_sub(12)).take(40).collect() };
+        say(
+            "I13",
+            format!(
+                "{}: the person typed {} characters and the CLI read {}; they part at {at}: typed \
+                 {:?}, read {:?}",
+                window.agent,
+                given.chars().count(),
+                got.chars().count(),
+                near(&given),
+                near(&got)
+            ),
+            None,
+        );
+    }
+    let pastes: Vec<String> = window
+        .tape
+        .tokens
+        .iter()
+        .filter_map(|(_, token)| match token {
+            Token::Paste(text) => Some(plain(text)),
+            _ => None,
+        })
+        .filter(|text| !is_facades(text))
+        .collect();
+    if pastes != person.pastes {
+        say(
+            "I13",
+            format!(
+                "{}: the person pasted {} times and the CLI read {} pastes that are not Facade's; \
+                 first unlike: {:?}",
+                window.agent,
+                person.pastes.len(),
+                pastes.len(),
+                pastes
+                    .iter()
+                    .find(|paste| !person.pastes.contains(paste))
+                    .map(|paste| short(paste))
+            ),
+            None,
+        );
+    }
+    // I10: a question stays until the person answers it.
+    for (us, open) in &window.tape.menus {
+        if !open
+            && !person
+                .answers
+                .iter()
+                .any(|at| *us + 5_000 >= *at && *us < *at + 2_000_000)
+        {
+            say(
+                "I10",
+                format!(
+                    "{}: a question was answered, and not by the person",
+                    window.agent
+                ),
+                None,
+            );
+        }
+    }
+    // Keys that type nothing reached the CLI too.
+    for (byte, name) in [(0x7f, "Backspace"), (b'\t', "Tab"), (0x1b, "Escape")] {
+        let pressed = person.controls.iter().filter(|each| **each == byte).count();
+        let read = window
+            .tape
+            .tokens
+            .iter()
+            .filter(|(_, token)| match token {
+                Token::Control(read) => *read == byte || (byte == 0x7f && *read == 0x08),
+                Token::Escape(read) => byte == 0x1b && read.len() == 1,
+                _ => false,
+            })
+            .count();
+        if read < pressed {
+            say(
+                "I13",
+                format!(
+                    "{}: the person pressed {name} {pressed} times and the CLI read {read}",
+                    window.agent
+                ),
+                None,
+            );
+        }
+    }
+    // A line submitted as typed, alone.
+    let lines: Vec<String> = window
+        .tape
+        .submissions
+        .iter()
+        .filter_map(|submission| match kind(submission) {
+            Kind::Person(text) if !text.trim().is_empty() => Some(text),
+            _ => None,
+        })
+        .collect();
+    let mut wanted: Vec<String> = person.lines.clone();
+    wanted.extend(person.pastes.iter().cloned());
+    for line in &wanted {
+        let times = lines
+            .iter()
+            .filter(|got| got.trim_end() == line.trim_end())
+            .count();
+        if times != 1 {
+            say(
+                "I9",
+                format!(
+                    "{}: the person's line {:?} was submitted {times} times as it was",
+                    window.agent,
+                    short(line)
+                ),
+                None,
+            );
+        }
+    }
+    json!({
+        "habit_writes": person.writes, "others": person.others,
+        "typed": person.chars.len(), "lines": person.lines.len(), "pastes": person.pastes.len(),
+        "key_to_cli_ms": summary(late),
+    })
+}
+
+pub fn summary(mut values: Vec<f64>) -> Value {
+    if values.is_empty() {
+        return Value::Null;
+    }
+    values.sort_by(f64::total_cmp);
+    let at = |p: f64| values[((values.len() as f64 * p) as usize).min(values.len() - 1)];
+    json!({
+        "count": values.len(), "p50": round(at(0.5)), "p95": round(at(0.95)),
+        "p99": round(at(0.99)), "max": round(at(1.0)),
+    })
+}
+
+fn round(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+pub fn short(text: &str) -> String {
+    let mut out: String = text.chars().take(90).collect();
+    if text.chars().count() > 90 {
+        out.push('…');
+    }
+    out
+}
