@@ -538,6 +538,9 @@ Records owns agent numbers, default names and target lookup within the caller's 
   Identical eligible names and numbers across machines can be ambiguous. Diagnostic labels
   describe only reachable records. `human`, `@Pixel` and a bare digit are names. A stable
   reference retains its machine ID and still passes the same operation checks.
+- An unqualified number or name and the literal reading of a name containing `@` use the same
+  reachable machines as `list_agents`. The lookup probes saved routes without waking them and
+  includes ended records. A numbered address with a machine goes directly to that machine.
 - `list_row` projects the shared `AgentListEntry`. Its public row contains the canonical address,
   name, kind, state, CLI, title, folder and latest start time. Shell, MCP and the editor use that row.
 
@@ -684,18 +687,20 @@ generation. A verified CLI-native session can also identify a matching live run.
 from protocol 2 may keep its earlier recognition rules until that run ends. Resume has a new
 credential scope even when it uses the same Agent ID.
 
-At initialization the parent can verify a managed run and render its instructions from the installed
-record. It uses the same address, creation source and run context as launch preparation. The parent
-checks the run again before returning the text. Connections whose run is still unknown receive the
-general tool instructions.
+At initialization the parent can verify a managed run and consult its installed CLI rule. A run
+whose rule supplies the managed instructions through a hook receives the general connection text,
+as does a connection whose run is still unknown. For other verified runs the parent renders the
+managed instructions from the installed record and checks the run again before returning the text.
+It uses the same address, creation source and run context as launch preparation.
 
 The parent hands the verified actor to the private daemon connection. Only the validated process
 can bring a run's tools online. The connection rechecks the run when it sends a new request. A
 waiting inbox read also ends with its bound run, and Post checks the bound actor while it settles
 the available page.
 
-One table defines the eight tools served by `tools/list` and dispatched by `tools/call`. They use
-the same targets, machine routing and operation requirements as other daemon clients. `list_agents`
+One table defines the eight tools served by `tools/list` and dispatched by `tools/call`. The
+catalog is sent as shipped, and a verified connection reports tools ready when it serves the list.
+The tools use the same targets, machine routing and operation requirements as other daemon clients. `list_agents`
 adds available CLI names on answered, reachable machines within the roster deadline.
 Local Managed discovery uses the verified run environment and working directory. Guest discovery and remote
 discovery use the target login context. Local Guest start still validates its authenticated relay environment.
@@ -704,7 +709,9 @@ discovery use the target login context. Local Guest start still validates its au
 includes retained, delivered replies. A positive `timeout_seconds` waits for matches under the call's deadline.
 `send_message` saves by default. A result wait uses confirmed delivery and the first matching reply in the
 sender's own inbox, under the same budget. On timeout the reply can still be read through `read_messages`
-with the original send ID. A `#c` answer returns `returned_to_request` after the active command accepts it.
+with the original send ID. An unconfirmed managed submission names the recipient's full address
+from the receipt and points to its screen for any text left in its input. A withdrawn send says it
+can be sent again. A `#c` answer returns `returned_to_request` after the active command accepts it.
 
 ## Reading the code
 

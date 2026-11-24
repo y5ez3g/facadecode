@@ -32,9 +32,8 @@ use crate::{HUMAN, agent_number};
 pub(crate) enum Reach {
     /// Every agent: the person's reach, and that of an agent whose run has YOLO on.
     All,
-    /// The agents of the creation tree whose first agent is `root`: the reach of `agent`, whose run
-    /// has YOLO off.
-    Tree { agent: AgentRef, root: AgentRef },
+    /// The agents of the creation tree whose first agent is `root`, for a caller with YOLO off.
+    Tree { root: AgentRef },
 }
 
 impl From<&Caller> for Reach {
@@ -44,11 +43,8 @@ impl From<&Caller> for Reach {
                 Self::All
             }
             Caller::Agent {
-                agent,
-                root,
-                yolo: false,
+                root, yolo: false, ..
             } => Self::Tree {
-                agent: crate::api::agent_ref(agent.clone()),
                 root: crate::api::agent_ref(root.clone()),
             },
         }
@@ -64,24 +60,17 @@ impl Reach {
     fn reaches_root(&self, root_id: &str, root_machine: &str) -> bool {
         match self {
             Reach::All => true,
-            Reach::Tree { root, .. } => root_id == root.agent_id && root_machine == root.machine_id,
+            Reach::Tree { root } => root_id == root.agent_id && root_machine == root.machine_id,
         }
     }
 
     /// The refusal of a call about agent `id`, which the client does not reach.
-    pub(crate) fn refusal(&self, id: &str) -> ErrorBody {
-        let caller = match self {
-            Reach::All => None,
-            Reach::Tree { agent, .. } => Some(agent.agent_id.as_str()),
-        };
-        let reason = caller.map_or_else(String::new, |agent| {
-            format!(
-                ": #{agent}'s run has YOLO off, so it reaches only the agents of its creation tree"
-            )
-        });
+    pub(crate) fn refusal(id: &str) -> ErrorBody {
         ErrorBody::new(
             Reason::Refused,
-            format!("#{id} is out of reach{reason}; nothing was done"),
+            format!(
+                "{id} is out of reach: with YOLO off you reach only your creation tree; nothing was done"
+            ),
         )
     }
 }
@@ -435,7 +424,7 @@ pub(crate) fn resolve(
     if let Some(info) = agents.iter().find(|info| info.agent_id == id) {
         return match reach.reaches(info) {
             true => Ok(Named::Agent(id)),
-            false => Err(reach.refusal(&id)),
+            false => Err(Reach::refusal(&id)),
         };
     }
     if id_at_end.is_some() {
@@ -728,8 +717,7 @@ mod tests {
         assert_eq!(refused.data.reason, Reason::Refused);
         assert_eq!(
             refused.message,
-            "#a4 is out of reach: #a3's run has YOLO off, so it reaches only the agents of its \
-             creation tree; nothing was done"
+            "a4 is out of reach: with YOLO off you reach only your creation tree; nothing was done"
         );
         let unknown = resolve(&agents, "@Dan", &cy, false).expect_err("not found");
         assert_eq!(unknown.data.reason, Reason::NotFound);

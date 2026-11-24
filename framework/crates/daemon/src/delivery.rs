@@ -837,7 +837,7 @@ impl Daemon {
                 "the original message came from the command line, which has no reply address",
             )),
             FACADE => Err(ErrorBody::invalid_argument(
-                "the original message is a Facade notification, which has no reply address",
+                "the original message is a Facade notice, which takes no reply",
             )),
             _ => Ok(Some((
                 reference.clone(),
@@ -1609,7 +1609,8 @@ async fn finish_command_send(
 fn send_unconfirmed() -> ErrorBody {
     let mut error = ErrorBody::new(
         Reason::Unavailable,
-        "the original send's delivery outcome is unknown",
+        "whether the message was delivered is not known; send it again only if you establish \
+         that it did not arrive",
     );
     error.data.unavailable = Some(facade_base::model::machine::Unavailable {
         execution: ExecutionOutcome::OutcomeUnknown,

@@ -254,8 +254,7 @@ impl KeeperLink {
             ErrorBody::new(
                 Reason::Unavailable,
                 format!(
-                    "the keeper did not become ready within 10 seconds; #{id} was not \
-                         stopped yet"
+                    "the keeper did not become ready within 10 seconds; {id} was not stopped yet"
                 ),
             )
         })?;

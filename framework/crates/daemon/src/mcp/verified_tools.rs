@@ -415,7 +415,7 @@ fn parse_read(
         .is_some_and(|address| address.machine.is_none())
     {
         return Err(ErrorBody::invalid_argument(
-            "reply_to takes the full message ID returned by send_message",
+            "reply_to takes the full address that send_message returned as data.id, such as m42@devbox",
         ));
     }
     Ok((after, reply_to))

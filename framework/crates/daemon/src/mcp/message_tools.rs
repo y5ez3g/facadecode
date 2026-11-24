@@ -7,14 +7,14 @@ use std::time::{Duration, Instant};
 use facade_base::address::selector;
 use facade_base::api_v1;
 use facade_base::api_v1::daemon::{
-    AgentSend, AgentTarget, ReplyTo, SendArgs, SendResult, SendWait, cancel_line,
+    AgentKind, AgentSend, AgentTarget, ReplyTo, SendArgs, SendResult, SendWait, cancel_line,
 };
 use facade_base::api_v1::daemon_client::{Cut, DaemonClient, upgrading};
 use facade_base::model::agent::AgentRef;
 use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::model::machine::{ExecutionOutcome, Unavailable};
 use facade_base::model::message::{
-    DeliveredVia, DeliveryFailure, DeliveryStatus, MessageRef, check_message_text,
+    DeliveredVia, DeliveryFailure, DeliveryStatus, MessageRef, TextWritten, check_message_text,
 };
 use serde_json::{Map, Value, json};
 
@@ -179,7 +179,8 @@ fn receive(client: &mut DaemonClient, id: u64, deadline: Instant) -> anyhow::Res
 fn send_unconfirmed() -> Value {
     let mut error = ErrorBody::new(
         Reason::Unavailable,
-        "the original send's delivery outcome is unknown",
+        "whether the message was delivered is not known; send it again only if you establish \
+         that it did not arrive",
     );
     error.data.unavailable = Some(Unavailable {
         execution: ExecutionOutcome::OutcomeUnknown,
@@ -233,7 +234,12 @@ fn sent_result(
         return envelope::success(data);
     }
     if delivery.status != DeliveryStatus::Success {
-        let mut failure = envelope::failure("unavailable", "delivery was not confirmed");
+        let mut failure = envelope::failure(
+            "unavailable",
+            "delivery was not confirmed: at the last receipt the message was waiting in the \
+             recipient's inbox and may still arrive, so send it again only if you establish \
+             that it did not",
+        );
         failure["data"] = data;
         return failure;
     }
@@ -289,8 +295,11 @@ fn sent_result(
         Ok(None) => envelope::failure(
             "reply_timeout",
             format!(
-                "No reply to {} within {seconds} seconds. The message was delivered.",
-                sent.id
+                "No reply to {id} within {seconds} seconds. The message was delivered: do not \
+                 send it again. A managed agent gets any later reply in its input; a Guest keeps \
+                 waiting in read_messages with timeout_seconds 30, adding reply_to \"{id}\" for \
+                 this reply alone.",
+                id = sent.id,
             ),
         ),
         Err(error) => envelope::failure(
@@ -329,7 +338,8 @@ fn send_failure(err: &anyhow::Error, outcome_unknown: bool) -> Value {
         }
         return failed(
             err,
-            "whether the message was sent is not known: it may arrive",
+            "whether the message was sent is not known: it may still arrive, so send it again \
+             only if you establish that it did not",
         );
     };
     let mut error = envelope::tool_error(wire);
@@ -353,7 +363,18 @@ fn send_failure(err: &anyhow::Error, outcome_unknown: bool) -> Value {
 
 fn delivery_failed(sent: &SendResult) -> Value {
     let delivery = &sent.message.delivery;
-    let to = &sent.message.to;
+    let submission_unconfirmed = delivery.status != DeliveryStatus::Success
+        && (delivery.enter_written != Some(true)
+            || delivery.reason == Some(DeliveryFailure::SubmissionUnconfirmed));
+    let unconfirmed = sent.recipient.as_ref().filter(|recipient| {
+        !sent.withdrawn
+            && recipient.kind == AgentKind::Managed
+            && delivery.text_written != TextWritten::None
+            && submission_unconfirmed
+    });
+    let to = unconfirmed.map_or(sent.message.to.as_str(), |recipient| {
+        recipient.address.as_str()
+    });
     let mut words = delivery.failure_words(to);
     if sent.withdrawn {
         words +=
@@ -365,6 +386,11 @@ fn delivery_failed(sent: &SendResult) -> Value {
                  again with reply_to: {message}."
             );
         }
+    } else if unconfirmed.is_some() {
+        words += &format!(
+            ". You can look at {to}'s screen for text still in its input; send the message again \
+             only if you establish that it did not arrive."
+        );
     }
     let reason = serde_json::to_value(delivery.reason.unwrap_or(DeliveryFailure::Unknown))
         .ok()

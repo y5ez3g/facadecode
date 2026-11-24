@@ -64,7 +64,7 @@ impl Daemon {
                     agents: rows,
                     machines,
                     ..
-                } = self.query_agents(caller, None, false).await?;
+                } = self.reachable_lookup_records(caller).await?;
                 let found = resolve(key, &rows);
                 if found
                     .as_ref()
@@ -90,7 +90,7 @@ impl Daemon {
                             agents: rows,
                             machines,
                             ..
-                        } = self.query_agents(caller, None, false).await?;
+                        } = self.reachable_lookup_records(caller).await?;
                         let found = resolve(literal, &rows);
                         if found
                             .as_ref()
@@ -117,13 +117,13 @@ impl Daemon {
                     return resolve(agent, &selected);
                 };
                 let QueriedAgents {
-                    agents: awake,
-                    machines: states,
+                    agents: rows,
+                    machines,
                     ..
-                } = self.query_agents(caller, None, false).await?;
+                } = self.reachable_lookup_records(caller).await?;
                 let literal = AgentKey::Name(literal);
-                if let Some(error) = unanswered_lookup(&states)
-                    && resolve(literal, &awake)
+                if let Some(error) = unanswered_lookup(&machines)
+                    && resolve(literal, &rows)
                         .is_err_and(|error| error.data.reason == Reason::NotFound)
                 {
                     return Err(error);
@@ -135,10 +135,18 @@ impl Daemon {
                     selected
                         .iter()
                         .filter(|candidate| candidate.matches(agent))
-                        .chain(awake.iter().filter(|candidate| candidate.matches(literal))),
+                        .chain(rows.iter().filter(|candidate| candidate.matches(literal))),
                 )
             }
         }
+    }
+
+    async fn reachable_lookup_records(
+        self: &Arc<Self>,
+        caller: &Caller,
+    ) -> Result<QueriedAgents, ErrorBody> {
+        let rows = self.probe_machine_queries(None, caller).await?;
+        self.read_agent_records(caller, rows, false, false).await
     }
 
     pub(crate) async fn query_agents(

@@ -2285,7 +2285,7 @@ mod tests {
         let start = Instant::now();
         let (result, result_number) = message(
             &post,
-            "🔔 Nova (#a2) has started. · #m6\nYour initial message #m4 has been passed on.",
+            "🔔 Nova (a2@devbox) has started. · m6\nYour prompt m4@devbox has been passed on.",
             start + Duration::from_secs(30),
         );
         let (later, later_number) = message(
@@ -2298,7 +2298,7 @@ mod tests {
         terminal.step(&mut typist, start, ANY);
         terminal.reading = input(InputState::Usable, None);
         terminal.step(&mut typist, start + Duration::from_secs(1), ANY);
-        let pasted = "\x1b[200~🔔 Nova (#a2) has started. · #m6\rYour initial message #m4 has been \
+        let pasted = "\x1b[200~🔔 Nova (a2@devbox) has started. · m6\rYour prompt m4@devbox has been \
                       passed on.\x1b[201~";
         assert_eq!(String::from_utf8(terminal.write_all()).unwrap(), pasted);
         assert_eq!(

@@ -234,6 +234,12 @@ impl Daemon {
                 };
                 let actor = BoundActor::managed(run, &daemon.machine_id);
                 let handle = actor.current(&daemon, &evidence.process)?;
+                if handle
+                    .rule()
+                    .is_some_and(facade_rules::managed_instructions_from_hook)
+                {
+                    return Ok(None);
+                }
                 let (_, info) = handle.installed_record();
                 let instructions = daemon.instructions_for_current_run(&info)?;
                 actor.current(&daemon, &evidence.process)?;
@@ -374,9 +380,7 @@ impl Daemon {
                     }
                 };
                 let result = match tokio::time::timeout_at(deadline, lookup).await {
-                    Err(_) => {
-                        Err("The CLI lookup did not finish before the roster deadline.".into())
-                    }
+                    Err(_) => Err("The CLI lookup did not finish in time.".into()),
                     Ok(Err(error)) => Err(error.message),
                     Ok(Ok(result)) => match result.settings_problem {
                         Some(problem) => Err(problem),
