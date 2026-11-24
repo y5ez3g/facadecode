@@ -971,19 +971,52 @@ fn keys(window: &Window, say: &mut dyn FnMut(&'static str, String, Option<&'stat
     let given: String = person.chars.iter().map(|(ch, _)| ch).collect();
     let got: String = read.iter().map(|(ch, _)| ch).collect();
     let mut late = Vec::new();
+    // Facade's pastes, each with how long the CLI took to show it: the time it took to read it.
+    let pastes: Vec<(u64, u64)> = window
+        .tape
+        .tokens
+        .iter()
+        .filter_map(|(us, token)| match token {
+            Token::Paste(text) if is_facades(text) => Some(*us),
+            _ => None,
+        })
+        .map(|us| {
+            let shown = window
+                .tape
+                .boxes
+                .iter()
+                .find(|(at, shown)| *at >= us && !shown.is_empty())
+                .map_or(us, |(at, _)| *at);
+            (us, shown - us)
+        })
+        .collect();
     if given == got {
-        late = person
-            .chars
-            .iter()
-            .zip(&read)
-            .map(|((_, sent), (_, read))| (read.saturating_sub(*sent)) as f64 / 1000.0)
-            .collect();
-        let worst = late.iter().copied().fold(0.0, f64::max);
-        // A delivery may keep a key for its settle time and 200 ms: the fake CLI reads a paste at once.
-        if worst > 280.0 {
+        let mut worst = (0.0, 0.0);
+        for ((_, sent), (_, read)) in person.chars.iter().zip(&read) {
+            let delay = read.saturating_sub(*sent) as f64 / 1000.0;
+            late.push(delay);
+            // I13: what the CLI took to read a message of Facade's that went in meanwhile, its settle
+            // time and 200 ms.
+            let reading = pastes
+                .iter()
+                .filter(|(us, _)| *us + 1_000_000 >= *sent && *us <= *read)
+                .map(|(_, took)| *took)
+                .max()
+                .unwrap_or(0) as f64
+                / 1000.0;
+            let allowed = reading + STAYS_MS as f64 + 200.0;
+            if delay - allowed > worst.0 - worst.1 {
+                worst = (delay, allowed);
+            }
+        }
+        if worst.0 > worst.1 {
             say(
                 "I13",
-                format!("{}: a key reached the CLI {worst:.0} ms late", window.agent),
+                format!(
+                    "{}: a key reached the CLI {:.0} ms late, beyond the {:.0} ms the CLI's reading \
+                     of a message, its settle time and 200 ms allow",
+                    window.agent, worst.0, worst.1
+                ),
                 None,
             );
         }
