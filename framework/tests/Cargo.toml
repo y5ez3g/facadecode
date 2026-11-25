@@ -20,6 +20,7 @@ serde_json.workspace = true
 rusqlite.workspace = true
 
 [dev-dependencies]
+facade-daemon.workspace = true
 tokio.workspace = true
 
 [target.'cfg(unix)'.dependencies]

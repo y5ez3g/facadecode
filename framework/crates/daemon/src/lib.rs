@@ -81,6 +81,9 @@ use runs::{FoundKeeper, RunEvent, Runs};
 use store::Store;
 use windows::Windows;
 
+#[doc(hidden)]
+pub use store::SCHEMA_VERSION as STORE_SCHEMA_VERSION;
+
 #[cfg(test)]
 pub(crate) use testing::test_folder;
 

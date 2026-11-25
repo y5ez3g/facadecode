@@ -447,6 +447,7 @@ dependencies = [
  "anyhow",
  "crossterm",
  "facade-base",
+ "facade-daemon",
  "facade-rules",
  "facade-screen",
  "libc",

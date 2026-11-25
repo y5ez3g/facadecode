@@ -2704,7 +2704,7 @@ fn a_v4_store_keeps_its_routes_sessions_and_receipts_when_reopened() {
     assert!(local.submitted_messages().is_empty());
 
     let db = Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-    assert_eq!(schema(&db), 6);
+    assert_eq!(schema(&db), facade_daemon::STORE_SCHEMA_VERSION);
     assert_eq!(migrated_columns(&db), 2);
     let saved: (i64, i64, String) = db
         .query_row(

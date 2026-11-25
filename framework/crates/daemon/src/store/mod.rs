@@ -47,7 +47,8 @@ pub(crate) use messages::{
 #[cfg(test)]
 use windows::WindowTable;
 
-const SCHEMA_VERSION: i64 = 7;
+/// The schema version written to SQLite's `user_version` after migration.
+pub const SCHEMA_VERSION: i64 = 7;
 const FILE_NAME: &str = "facade.db";
 
 const SCHEMA: &str = "
