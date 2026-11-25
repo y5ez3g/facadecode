@@ -296,16 +296,30 @@ fn foreground_exit_keeps_primary_output_after_the_shell_page() {
             guest_lines,
         );
         if short_output {
-            let rows = term.viewport_rows();
+            let view = term.view();
+            let rows: Vec<String> = view
+                .rows
+                .iter()
+                .map(|row| row.iter().map(|cell| cell.text.as_str()).collect())
+                .collect();
             let last = guest_lines.last().expect("a final guest line");
             let following = rows
                 .iter()
                 .rposition(|row| row.trim() == *last)
-                .and_then(|row| rows.get(row + 1));
+                .map(|row| row + 1)
+                .filter(|&row| view.continues.get(row) == Some(&false))
+                .map(|start| {
+                    // A long machine address can wrap the receipt onto the next physical row.
+                    let end = (start + 1..rows.len())
+                        .find(|&row| !view.continues[row])
+                        .unwrap_or(rows.len());
+                    rows[start..end].concat()
+                });
             assert_eq!(
-                following.map(|row| row.trim_end()),
+                following.as_deref().map(|line| line.trim_end_matches(' ')),
                 Some(receipt.as_str()),
-                "{name}: expected the receipt immediately below {last:?}: {rows:?}"
+                "{name}: expected the receipt immediately below {last:?}: {:?}",
+                rows.iter().map(|row| row.trim_end()).collect::<Vec<_>>()
             );
         }
         if alternate {
