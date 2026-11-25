@@ -53,3 +53,26 @@ To move to a newer alacritty_terminal: vendor the new release the same way, carr
 `Facade (memory)`, name the release in `tests/upstream_ref.rs`, then run `cargo test -p alacritty_terminal`, which runs the ref
 tests, and `cargo test -p facade-screen`, whose tests compare a screen that keeps its older rows compact with one that keeps
 every row in alacritty.
+
+## vte 0.15.0
+
+The crates.io release (upstream commit `3b3da71c34cc1256c7e20981cf03f8eb95e08ffc`, see `.cargo_vcs_info.json`), the parser of
+alacritty_terminal, used through `[patch.crates-io]` in `framework/Cargo.toml`. It is a workspace member so that
+`cargo test -p vte` runs its own tests with Facade's. `vendor/rustfmt.toml` keeps its upstream formatting.
+
+Facade changes it so that each agent's screen stays within its memory bound (`docs/framework/islands/screen.md`).
+Every change in the source is marked `// Facade (memory)`:
+
+| File | Change | Why |
+|---|---|---|
+| `src/ansi.rs` | `SyncState::default` starts with an empty buffer | Upstream allocates the 2 MiB a synchronized update may hold back with each parser. Windows commits memory as it is allocated, so each screen cost 2 MiB more than its cells. |
+| `src/ansi.rs` | `advance_sync` allocates the existing 2 MiB limit on the first buffered byte | The buffer never reallocates during an update. |
+| `src/ansi.rs` | `stop_sync_internal` replaces the buffer as an update ends, where upstream clears it | The memory is taken only while an update is open. |
+| `src/lib.rs` | `#![allow(clippy::useless_borrows_in_formatting)]` | Clippy 1.98, the pinned toolchain, finds one case in `ansi.rs`; upstream lints its own code. |
+| `Cargo.toml` | `readme` and the `parselog` example removed | The original vendor omitted both files. |
+
+The upstream `README.md` is included unchanged. The vendor omits `examples/`, `doc/`, `tests/demo.vte`, `rustfmt.toml`
+and the crate's `Cargo.lock`.
+
+To move to a newer vte: vendor the new release the same way, carry over each change marked `Facade (memory)`, then run
+`cargo test -p vte` and `cargo test -p facade-screen`, whose `memory` tests count what a screen allocates.
