@@ -31,6 +31,13 @@ const ST = `${ESC}\\`;
 const ANSWER = `${ESC}]7501;?:`;
 
 const record = process.env.FACADE_IT_RECORD!;
+const legacyPidsFile = `${record}.legacy-pids`;
+const legacyPidsAlive = fs.existsSync(legacyPidsFile)
+	? (JSON.parse(fs.readFileSync(legacyPidsFile, 'utf8')) as number[]).filter(pid => {
+		try { process.kill(pid, 0); return true; }
+		catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
+	})
+	: undefined;
 // The legacy implementation says `#a1`, framework `a1`: the files this fixture leaves, and the tests that read them, name it `#a1` on both
 const agent = `#${process.env.FACADE_AGENT!.replace(/^#/, '').split('@')[0]}`;
 const args = process.argv.slice(2);
@@ -47,13 +54,6 @@ fs.renameSync(nextLaunch, launchRecord);
 fs.writeFileSync(`${record}.${agent}`, `${process.pid}\n`);
 fs.appendFileSync(`${record}.starts.${agent}`, `${process.pid}\n`, { mode: 0o600 });
 // Every launch of the run in one append-only file: implementations number their agents alike, and a later `#a1` replaces the files above
-const legacyPidsFile = `${record}.legacy-pids`;
-const legacyPidsAlive = fs.existsSync(legacyPidsFile)
-	? (JSON.parse(fs.readFileSync(legacyPidsFile, 'utf8')) as number[]).filter(pid => {
-		try { process.kill(pid, 0); return true; }
-		catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
-	})
-	: undefined;
 fs.appendFileSync(`${record}.launches`, `${JSON.stringify({
 	at: Date.now(), cwd: process.cwd(), agent, pid: process.pid, args: recordedArgs, legacyPidsAlive,
 })}\n`, { mode: 0o600 });

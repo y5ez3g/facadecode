@@ -260,11 +260,19 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 	const suspended: number[] = [];
 	const evidence: { [key: string]: unknown } = { variant, prior: prior.version, candidate: candidate.version, facade,
 		windows: windows.map(({ role, folder, profile }) => ({ role, folder, user: profile.user })) };
+	const assertInstalledPair = (win: TestWindow, phase: Line, version: string) => {
+		assert.deepStrictEqual([phase.version, phase.component], [version, version]);
+		for (const installed of [phase.mainPath, phase.componentPath]) {
+			assert.strictEqual(typeof installed, 'string');
+			assert.strictEqual(canonical(path.dirname(String(installed))), canonical(path.join(win.profile.env.VSCODE_PORTABLE, 'extensions')),
+				'both packages activated from the exact isolated install');
+		}
+	};
 
 	const launchedLegacy = async (win: TestWindow): Promise<LegacyWorkspace> => {
 		open(win);
 		const started = await phase('started', win) as LegacyStart;
-		assert.deepStrictEqual([started.version, started.component], [prior.version, prior.version], 'both published packages activated');
+		assertInstalledPair(win, started, prior.version);
 		const [pinned, unpinned] = started.agents;
 		assert.ok(pinned && unpinned && pinned.session !== unpinned.session, 'two distinct legacy sessions');
 		const initialLaunches = launches();
@@ -294,7 +302,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		until(`the original PIDs ${workspace.pids.join(', ')} to exit`, () => workspace.pids.every(pid => !alive(pid)) || undefined, 60_000);
 	const candidateLoaded = async (win: TestWindow) => {
 		const loaded = await phase('candidate-loaded', win);
-		assert.deepStrictEqual([loaded.version, loaded.component], [candidate.version, candidate.version], 'both candidate packages activated');
+		assertInstalledPair(win, loaded, candidate.version);
 		return loaded;
 	};
 	const verifySettings = async (win: TestWindow, mode: 'framework' | 'pending') => {
@@ -532,7 +540,11 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		evidence.windowLoads = lines().filter(line => line.phase === 'candidate-loaded');
 		console.log(`  ✔ legacy cutover (${variant}) from ${prior.version} to ${candidate.version}: ${JSON.stringify(evidence)}`);
 	} catch (error) {
-		console.error(`Cutover evidence so far: ${JSON.stringify({ ...evidence, latestJournal: journal(facade), launches: launches() })}\nDriver lines: ${JSON.stringify(lines())}\nEditor output:\n${editorOutput}`);
+		const read = (file: string) => {
+			try { return fs.readFileSync(file, 'utf8'); }
+			catch (readError) { return String(readError); }
+		};
+		console.error(`Cutover evidence so far: ${JSON.stringify(evidence)}\nJournal: ${read(path.join(extensionHome, 'legacy-cutover.json'))}\nLaunches: ${read(`${record}.launches`)}\nDriver lines: ${read(out)}\nEditor output:\n${editorOutput}`);
 		throw error;
 	} finally {
 		for (const pid of suspended) { try { process.kill(pid, 'SIGCONT'); } catch { /* ended */ } }

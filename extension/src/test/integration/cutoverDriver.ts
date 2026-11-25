@@ -42,6 +42,13 @@ function version(extension: string): string | undefined {
 	return (vscode.extensions.getExtension(`facade.${extension}`)?.packageJSON as { version?: string } | undefined)?.version;
 }
 
+function installedPair() {
+	const main = vscode.extensions.getExtension('facade.facadecode');
+	const component = vscode.extensions.getExtension('facade.facadecode-window');
+	return { version: version('facadecode'), component: version('facadecode-window'),
+		mainPath: main?.extensionPath, componentPath: component?.extensionPath };
+}
+
 /** The legacy agents the fake CLI says started, by the files `<record>.#aN` holding their process IDs. */
 function started(): string[] {
 	const dir = path.dirname(RECORD), prefix = `${path.basename(RECORD)}.`;
@@ -114,7 +121,7 @@ async function legacy(): Promise<void> {
 		return undefined;
 	});
 	const uri = vscode.workspace.workspaceFolders?.[0]?.uri.toString();
-	write({ phase: 'started', version: version('facadecode'), component: version('facadecode-window'), hostPid: process.pid, uri, agents, saved });
+	write({ phase: 'started', ...installedPair(), hostPid: process.pid, uri, agents, saved });
 	for (;;) {
 		const step = await until('a runner request for the released window', () =>
 			['reload', 'stop', 'scope', 'input'].find(each => fs.existsSync(`${OUT}.${ROLE}.${each}`)), 300_000);
@@ -154,7 +161,7 @@ async function legacy(): Promise<void> {
 /** In the candidate: report which packages and host are active, even while the host is waiting on cutover. */
 async function candidate(): Promise<void> {
 	await activated();
-	write({ phase: 'candidate-loaded', version: version('facadecode'), component: version('facadecode-window'), hostPid: process.pid });
+	write({ phase: 'candidate-loaded', ...installedPair(), hostPid: process.pid });
 	for (;;) {
 		const step = await until('a runner request for the candidate window', () =>
 			['showlist', 'settings'].find(each => fs.existsSync(`${OUT}.${ROLE}.${each}`)), 300_000).catch(() => undefined);
