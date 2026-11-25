@@ -30,14 +30,28 @@ function terminalRecord(file: string): { readonly epoch: string; readonly retire
 	return value as unknown as { readonly epoch: string; readonly retired: readonly RetiredTerminals[] };
 }
 
-/** Consume a graceful predecessor's record once, and fence all later writes by that older incarnation. */
+/** Consume old tab names once, while carrying the predecessor claim until that owner registers a successor. */
 export function beginWindowTerminals(directory: string): { readonly epoch: string; readonly retired: readonly RetiredTerminals[] } {
 	const file = path.join(directory, 'terminals.json');
 	return withFileLock(file, () => {
-		const previous = terminalRecord(file);
+		const retired = terminalRecord(file)?.retired ?? [];
 		const epoch = crypto.randomUUID();
-		replaceFile(file, `${JSON.stringify({ version: 1, epoch, retired: [] })}\n`);
-		return { epoch, retired: previous?.retired ?? [] };
+		const handoffs = retired.map(({ claim }) => ({ claim, runs: [] }));
+		replaceFile(file, `${JSON.stringify({ version: 1, epoch, retired: handoffs })}\n`);
+		return { epoch, retired };
+	}, { keepLive: true });
+}
+
+export function claimRetiredTerminals(directory: string, epoch: string, owner: string): boolean {
+	const file = path.join(directory, 'terminals.json');
+	return withFileLock(file, () => {
+		const record = terminalRecord(file);
+		if (record?.epoch !== epoch) { return false; }
+		const retired = record.retired.filter(each => each.claim.owner !== owner);
+		if (retired.length !== record.retired.length) {
+			replaceFile(file, `${JSON.stringify({ version: 1, epoch, retired })}\n`);
+		}
+		return true;
 	}, { keepLive: true });
 }
 
@@ -45,8 +59,11 @@ export function beginWindowTerminals(directory: string): { readonly epoch: strin
 export function retireWindowTerminals(directory: string, epoch: string, retired: readonly RetiredTerminals[]): void {
 	const file = path.join(directory, 'terminals.json');
 	withFileLock(file, () => {
-		if (terminalRecord(file)?.epoch === epoch) {
-			replaceFile(file, `${JSON.stringify({ version: 1, epoch, retired })}\n`);
+		const record = terminalRecord(file);
+		if (record?.epoch === epoch) {
+			const registered = new Set(retired.map(owner => owner.claim.owner));
+			const handoffs = [...record.retired.filter(owner => !registered.has(owner.claim.owner)), ...retired];
+			replaceFile(file, `${JSON.stringify({ version: 1, epoch, retired: handoffs })}\n`);
 		}
 	}, { keepLive: true });
 }

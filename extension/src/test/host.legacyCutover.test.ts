@@ -12,6 +12,8 @@ import type { AgentInfo } from '../base/frameworkProtocol';
 import { processStartTimeAsync } from '../base/system';
 import { approveLegacyCutover, checkLegacyCutover, legacyPinMigration } from '../host/legacyCutover';
 import type { LegacySessionPin } from '../host/legacyPins';
+import { PTYD_PROTOCOL, ptydSocketPath } from '../host/migration/supervisor';
+import { beginWindowTerminals, retireWindowTerminals } from '../record/windowTerminals';
 import { TestEmitter, withModules } from './withModules';
 
 const A = 'aaaaaaaaaaaaaaaa';
@@ -25,28 +27,36 @@ function pin(id: string, sessionId = 'shared'): LegacySessionPin {
 	return { id, cwd: '/work/a', location: '/work/a', name: 'Fixture', conversation: { cli: 'codex', environment: 'local', sessionId } };
 }
 
-async function fixture() {
+async function fixture(published = true) {
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-cutover-'));
 	const registry = path.join(home, 'ptyd', 'sockets');
 	const journal = path.join(home, 'legacy-cutover.json');
 	const claimFile = path.join(home, 'claims', `${createHash('sha256').update(A).digest('hex')}.json`);
-	const socketFile = path.join(home, 'legacy.sock');
 	const pid = process.pid;
 	const startedAt = await processStartTimeAsync(pid, true) ?? Date.now();
-	const build = 'abcd1234';
+	const build = 'abcd123456';
+	const socketFile = ptydSocketPath(home, PTYD_PROTOCOL, build);
+	const registryFile = path.join(registry, 'current.json');
+	const lockFile = process.platform === 'win32' ? path.join(os.tmpdir(), `${path.win32.basename(socketFile)}.lock`) : `${socketFile}.lock`;
 	fs.chmodSync(home, 0o700);
-	fs.mkdirSync(registry, { recursive: true });
 	fs.mkdirSync(path.dirname(claimFile));
 	fs.writeFileSync(claimFile, JSON.stringify(CLAIM));
-	fs.writeFileSync(path.join(registry, 'current.json'), JSON.stringify({ protocol: 17, build, socket: socketFile, pid }));
+	if (process.platform !== 'win32') { fs.mkdirSync(path.dirname(socketFile), { recursive: true, mode: 0o700 }); }
+	if (published) {
+		fs.mkdirSync(registry, { recursive: true });
+		fs.writeFileSync(registryFile, JSON.stringify({ protocol: PTYD_PROTOCOL, build, socket: socketFile, pid }));
+	} else {
+		fs.writeFileSync(lockFile, String(pid), { flag: 'wx', mode: 0o600 });
+	}
 	const rows = [
 		{ owner: A, run: RUN_A, session: 'scope-a', cwd: '/work/a', pin: 'pin-a', attached: false },
 		{ owner: B, run: RUN_B, session: 'shared', cwd: '/work/b', pin: 'pin-b', attached: true },
-	].map(row => ({ ...row, ended: false }));
+	].map(row => ({ ...row, pid, uncertain: false, ended: false }));
 	const effects: { method: string; params: unknown; journal: unknown }[] = [];
 	const sockets = new Set<net.Socket>();
 	let termination: 'terminated' | 'already_exited' = 'terminated';
 	let claimAction: (() => void) | undefined;
+	let refuseClaim = false;
 	const server = net.createServer(socket => {
 		sockets.add(socket);
 		socket.on('close', () => sockets.delete(socket));
@@ -62,13 +72,17 @@ async function fixture() {
 					result = { protocol: 17, pid, build };
 				} else if (method === 'list') {
 					result = rows.map(row => ({
-						owner: row.owner, run: row.run, pid, cwd: row.cwd, startedAt,
+						owner: row.owner, run: row.run, pid: row.pid, cwd: row.cwd, startedAt,
 						claimedElsewhere: row.attached, ...(row.ended ? { exited: { exitCode: 0 } } : {}),
+						...(row.uncertain ? { uncertain: true } : {}),
 						meta: { environment: 'local', cli: 'codex', builtIn: 'codex', sessionId: row.session, pin: row.pin },
 					}));
 				} else if (method === 'claim' || method === 'terminate') {
 					effects.push({ method, params, journal: JSON.parse(fs.readFileSync(journal, 'utf8')) });
-					if (method === 'claim') { claimAction?.(); }
+					if (method === 'claim') {
+						claimAction?.();
+						if (refuseClaim) { socket.write(JSON.stringify({ id, error: 'Interrupted before dispatch' }) + '\n'); continue; }
+					}
 					if (method === 'terminate') {
 						const run = rows.find(row => row.run === params.run);
 						if (run && termination === 'terminated') { run.ended = true; }
@@ -83,9 +97,10 @@ async function fixture() {
 	});
 	await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(socketFile, resolve); });
 	return {
-		home, journal, claimFile, registry, rows, effects,
+		home, journal, claimFile, registry, registryFile, lockFile, rows, effects,
 		unconfirmedStop: () => { termination = 'already_exited'; },
 		onClaim: (action: () => void) => { claimAction = action; },
+		refuseClaim: (refuse: boolean) => { refuseClaim = refuse; },
 		savePins(owner: string, pins: unknown[]) {
 			const workspace = path.join(home, 'workspaces', owner);
 			fs.mkdirSync(workspace, { recursive: true });
@@ -94,12 +109,125 @@ async function fixture() {
 		async dispose() {
 			for (const socket of sockets) { socket.destroy(); }
 			await new Promise<void>(resolve => server.close(() => resolve()));
+			fs.rmSync(lockFile, { force: true });
 			fs.rmSync(home, { recursive: true, force: true });
 		},
 	};
 }
 
 suite('Scoped legacy cutover', () => {
+	test('discovers the released home-suffixed supervisor without any registry (ARCHITECTURE-1.4)', async () => {
+		const f = await fixture(false);
+		const other = await fixture(false);
+		try {
+			const scope = { owner: A, retired: CLAIM };
+			const saved = pin('pin-a', 'scope-a');
+			assert.ok(!fs.existsSync(f.registry));
+			assert.deepStrictEqual(await legacyPinMigration(f.home, A).recover(saved, () => false,
+				async () => assert.fail('the unpublished supervisor still holds this session')), { kind: 'deferred' });
+			const offered = (await checkLegacyCutover(f.home, scope)).plan;
+			assert.ok(offered);
+			assert.deepStrictEqual(offered.runs.map(run => run.run), [RUN_A]);
+			assert.ok(await approveLegacyCutover(f.home, scope, offered));
+			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
+			assert.deepStrictEqual(f.effects.map(effect => effect.method), ['claim', 'terminate']);
+			assert.strictEqual(other.rows[0].ended, false, 'identical run IDs on a different resolved home are outside the scope');
+			assert.deepStrictEqual(other.effects, []);
+		} finally {
+			await f.dispose();
+			await other.dispose();
+		}
+	});
+
+	test('reloads before consent and before dispatch with the same retired claim and approved scope (ARCHITECTURE-1.4)', async () => {
+		const f = await fixture();
+		try {
+			const directory = path.join(f.home, 'native-window');
+			const predecessor = beginWindowTerminals(directory);
+			retireWindowTerminals(directory, predecessor.epoch, [{ claim: CLAIM, runs: [] }]);
+			let current = beginWindowTerminals(directory);
+			const scope = () => ({ owner: A, retired: current.retired.find(entry => entry.claim.owner === A)?.claim });
+			const reload = () => {
+				retireWindowTerminals(directory, current.epoch, []);
+				current = beginWindowTerminals(directory);
+				assert.deepStrictEqual(scope().retired, CLAIM);
+			};
+			const offered = (await checkLegacyCutover(f.home, scope())).plan;
+			assert.ok(offered);
+			reload();
+			assert.deepStrictEqual((await checkLegacyCutover(f.home, scope())).plan, offered);
+			assert.ok(await approveLegacyCutover(f.home, scope(), offered));
+			assert.strictEqual(f.effects.length, 0);
+			reload();
+			f.refuseClaim(true);
+			const pending = await checkLegacyCutover(f.home, scope());
+			assert.strictEqual(pending.ready, false);
+			assert.strictEqual(pending.plan, undefined);
+			assert.strictEqual(pending.unconfirmed, 1);
+			assert.deepStrictEqual(f.effects.map(effect => effect.method), ['claim']);
+			assert.strictEqual(JSON.parse(fs.readFileSync(f.journal, 'utf8')).runs[0].stop, undefined);
+			assert.strictEqual((await checkLegacyCutover(f.home, { owner: B })).plan?.runs[0].owner, B);
+			f.refuseClaim(false);
+			assert.strictEqual((await checkLegacyCutover(f.home, scope())).ready, true);
+			assert.deepStrictEqual(f.effects.filter(effect => effect.method === 'terminate').map(effect => effect.params),
+				[{ run: RUN_A, graceMs: 2_000 }]);
+			assert.strictEqual(f.rows[1].ended, false);
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	test('settles a missing queued run only on its exact supervisor’s verified list (ARCHITECTURE-1.4)', async () => {
+		const f = await fixture();
+		try {
+			const scope = { owner: A, retired: CLAIM };
+			const a = legacyPinMigration(f.home, A);
+			const saved = pin('pin-a', 'scope-a');
+			const neverStart = async () => assert.fail('a legacy holder was not cleared');
+			const priorPublication = new Date(Date.now() - 10_000);
+			fs.utimesSync(f.registryFile, priorPublication, priorPublication);
+			f.rows[0].pid = 0;
+			const offered = (await checkLegacyCutover(f.home, scope)).plan;
+			assert.ok(offered);
+			assert.ok(await approveLegacyCutover(f.home, scope, offered));
+			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, false);
+			assert.deepStrictEqual(await a.recover(saved, () => false, neverStart), { kind: 'deferred' });
+			f.rows.splice(0, 1);
+			fs.renameSync(f.registryFile, `${f.registryFile}.hidden`);
+			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, false);
+			assert.deepStrictEqual(await a.recover(saved, () => false, neverStart), { kind: 'deferred' });
+			fs.renameSync(`${f.registryFile}.hidden`, f.registryFile);
+			fs.writeFileSync(f.lockFile, String(process.pid), { flag: 'wx', mode: 0o600 });
+			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, false, 'a newer listener cannot settle the old queue');
+			assert.deepStrictEqual(await a.recover(saved, () => false, neverStart), { kind: 'deferred' });
+			fs.unlinkSync(f.lockFile);
+			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
+			assert.deepStrictEqual(await a.recover(saved, () => false, async () => REFERENCE), { kind: 'confirmed', reference: REFERENCE });
+			assert.deepStrictEqual(f.effects, []);
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	test('keeps an exact uncertain local exit pending without sending a second stop (ARCHITECTURE-1.4)', async () => {
+		const f = await fixture();
+		try {
+			const scope = { owner: A, retired: CLAIM };
+			f.rows[0].uncertain = true;
+			const offered = (await checkLegacyCutover(f.home, scope)).plan;
+			assert.ok(offered);
+			assert.ok(await approveLegacyCutover(f.home, scope, offered));
+			const state = await checkLegacyCutover(f.home, scope);
+			assert.strictEqual(state.ready, false);
+			assert.strictEqual(state.unconfirmed, 1);
+			assert.strictEqual(f.effects.length, 0);
+			f.rows[0].ended = true;
+			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
+		} finally {
+			await f.dispose();
+		}
+	});
+
 	test('approves and stops A only and durably writes intent before the request (ARCHITECTURE-1.4)', async function () {
 		if (process.platform === 'win32') { this.skip(); }
 		const f = await fixture();
@@ -135,7 +263,7 @@ suite('Scoped legacy cutover', () => {
 		try {
 			f.unconfirmedStop();
 			fs.writeFileSync(path.join(f.registry, 'unavailable.json'), JSON.stringify({
-				protocol: 16, build: 'aaaa', pid: process.pid, socket: path.join(f.home, 'unavailable.sock'),
+				protocol: 16, build: 'abcd123456', pid: process.pid, socket: ptydSocketPath(f.home, 16, 'abcd123456'),
 			}));
 			const scope = { owner: A, retired: CLAIM };
 			const offered = (await checkLegacyCutover(f.home, scope)).plan;
@@ -271,8 +399,11 @@ suite('Scoped legacy cutover', () => {
 			assert.deepStrictEqual(recoveries.map(item => item.reference), [REFERENCE]);
 			assert.strictEqual(recoveries[0].runs.length, 1);
 			assert.ok(recoveries[0].runs[0].includes(RUN_A), 'the recovery is tied to the exact stopped run');
+			fs.writeFileSync(path.join(f.registry, 'unreadable.json'), '{');
 			assert.deepStrictEqual(await legacyPinMigration(f.home, B).recover(pinB, () => false,
 				async () => assert.fail('the saved recovery was launched again')), confirmed);
+			assert.deepStrictEqual(await b.recover(pin('different', 'different-session'), () => false,
+				async () => assert.fail('incomplete inventory authorized a new start')), { kind: 'deferred' });
 		} finally {
 			await f.dispose();
 		}

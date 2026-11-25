@@ -163,7 +163,8 @@ export async function prepareFramework(context: vscode.ExtensionContext, home: s
 		try {
 			const verified = await resolvePredecessor(home);
 			if (disposed) { return; }
-			current = await checkLegacyCutover(home, verified?.scope);
+			const latestScope = verified?.scope;
+			current = await checkLegacyCutover(home, scope && (latestScope?.owner === scope.owner ? latestScope : { owner: scope.owner }));
 			if (disposed) { return; }
 			if (current.ready) {
 				await vscode.commands.executeCommand('workbench.action.reloadWindow');

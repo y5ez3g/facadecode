@@ -15,7 +15,9 @@ import { ptydRecords } from '../base/ptydRegistry';
 import { isSameStart, processStartTimeAsync, processStartTimeOfAsync } from '../base/system';
 import type { Pin } from '../core/ports';
 import { isCurrentOwner, writeAsOwner } from '../record/ownership';
-import { EARLIER_PROTOCOLS, PTYD_PROTOCOL, PtydClient, ptydSocketPath, within, type RunInfo } from './migration/supervisor';
+import {
+	EARLIER_PROTOCOLS, PTYD_PROTOCOL, PtydClient, ptydListenerLockedAt, ptydSocketPath, releasedPtydSockets, within, type RunInfo,
+} from './migration/supervisor';
 import {
 	isLegacyWorkspaceKey, legacyStateFile, readLegacyPins, type LegacyPinInput, type LegacyPinMigration,
 	type LegacyPinOutcome, type LegacyResumeAttempt, type LegacySessionPin, type SharedPinRecovery,
@@ -23,6 +25,7 @@ import {
 import { isPin } from './pins';
 
 const PROTOCOLS = [...EARLIER_PROTOCOLS, PTYD_PROTOCOL];
+const RELEASED_RUN_ID = /^run-[0-9a-f]{32}$/u;
 const TERMINATE_GRACE_MS = 2_000;
 const JOURNAL_WAIT_MS = 16_000;
 
@@ -66,6 +69,7 @@ interface ObservedRun {
 	readonly identity?: LegacyRunIdentity;
 	readonly stop?: 'requested' | 'confirmed';
 	readonly nativeStop?: true;
+	readonly uncertain?: true;
 }
 
 interface CutoverRecord {
@@ -100,6 +104,8 @@ export interface CutoverPlan {
 interface Listing {
 	readonly endpoint: Endpoint;
 	readonly client?: PtydClient;
+	readonly incarnation?: string;
+	readonly publishedIncarnation?: string;
 	readonly runs: readonly RunInfo[];
 	readonly unavailable?: string;
 }
@@ -140,7 +146,8 @@ function isObservedRun(value: unknown): value is ObservedRun {
 		&& (value.startedAt === undefined || typeof value.startedAt === 'number' && Number.isFinite(value.startedAt))
 		&& (value.identity === undefined || isLegacyRunIdentity(value.identity))
 		&& typeof value.approved === 'boolean' && (value.stop === undefined || value.stop === 'requested' || value.stop === 'confirmed')
-		&& (value.nativeStop === undefined || value.nativeStop === true && value.approved && value.stop !== undefined);
+		&& (value.nativeStop === undefined || value.nativeStop === true && value.approved && value.stop !== undefined)
+		&& (value.uncertain === undefined || value.uncertain === true);
 }
 
 function isRecoveryRecord(value: unknown): value is RecoveryRecord {
@@ -201,10 +208,21 @@ function inventory(home: string, previous: readonly ObservedRun[]): Inventory {
 		const socket = ptydSocketPath(home, protocol);
 		return [socket, { socket, protocol }] as const;
 	}));
+	try {
+		for (const endpoint of releasedPtydSockets(home)) {
+			found.set(endpoint.socket, { ...endpoint, protocol: PTYD_PROTOCOL });
+		}
+	} catch (error) {
+		unavailable.push(messageOf(error));
+	}
 	for (const name of files) {
 		const file = path.join(directory, name);
 		try {
 			const endpoint = readEndpoint(file);
+			if (endpoint.socket !== ptydSocketPath(home, endpoint.protocol, endpoint.build)
+				&& endpoint.socket !== ptydSocketPath(home, endpoint.protocol)) {
+				throw new Error('The legacy supervisor registry names an endpoint outside this Facade home.');
+			}
 			found.set(endpoint.socket, endpoint);
 		} catch (error) {
 			// A supervisor can unpublish while we scan. The remaining failures make saved-session evidence incomplete.
@@ -212,7 +230,12 @@ function inventory(home: string, previous: readonly ObservedRun[]): Inventory {
 		}
 	}
 	for (const { socket, protocol } of previous) {
-		if (!found.has(socket)) { found.set(socket, { socket, protocol: protocol ?? PTYD_PROTOCOL }); }
+		if (found.has(socket)) { continue; }
+		const speaks = protocol ?? PTYD_PROTOCOL;
+		const build = /extension-ptyd-\d+-([0-9a-f]{10})-[0-9a-f]{12}(?:\.sock)?$/u.exec(socket)?.[1];
+		if (build && socket === ptydSocketPath(home, speaks, build)) {
+			found.set(socket, { socket, protocol: speaks, build });
+		}
 	}
 	return { endpoints: [...found.values()], unavailable };
 }
@@ -249,6 +272,7 @@ async function list(client: PtydClient): Promise<readonly RunInfo[]> {
 		&& isLegacyWorkspaceKey(run.owner) && validPid(run.pid)
 		&& typeof run.claimedElsewhere === 'boolean' && nonempty(run.cwd) && Number.isFinite(run.startedAt)
 		&& isJsonObject(run.meta)
+		&& (run.uncertain === undefined || run.uncertain === true)
 		&& (run.exited === undefined || isJsonObject(run.exited) && typeof run.exited.exitCode === 'number' && Number.isFinite(run.exited.exitCode)))
 		|| new Set(runs.map(run => run.run)).size !== runs.length) {
 		throw new Error('Legacy ptyd returned an invalid run list.');
@@ -266,31 +290,50 @@ async function open(endpoint: Endpoint): Promise<Listing> {
 			}
 			return { endpoint, runs: [] };
 		}
-		if (!PROTOCOLS.includes(endpoint.protocol) || endpoint.build !== undefined && endpoint.build !== client.build
-			|| endpoint.pid !== undefined && endpoint.pid !== client.pid) {
+		if (!PROTOCOLS.includes(endpoint.protocol) || endpoint.build !== undefined && endpoint.build !== client.build) {
 			throw new Error('The legacy supervisor protocol or build could not be verified.');
 		}
-		return { endpoint, client, runs: await list(client) };
+		const { socket, pid, build, recordedAt } = endpoint;
+		const released = build !== undefined && endpoint.protocol === PTYD_PROTOCOL;
+		const lockedAt = released && client.pid !== undefined ? await verifiedListenerLock(socket, client.pid).catch(() => undefined) : undefined;
+		const listenerIncarnation = lockedAt === undefined ? undefined : JSON.stringify([client.pid, build, lockedAt, 'listener']);
+		// The released supervisor creates the lock first. A registry row older than the viable lock names a prior listener.
+		const publishedIncarnation = pid !== undefined && pid === client.pid && build && recordedAt !== undefined
+			&& (lockedAt === undefined || lockedAt <= recordedAt) ? JSON.stringify([pid, build, recordedAt]) : undefined;
+		if ((released || pid !== undefined) && !listenerIncarnation && !publishedIncarnation) {
+			throw new Error('The legacy supervisor has no verified listener lock or registry record.');
+		}
+		return { endpoint, client, incarnation: listenerIncarnation ?? publishedIncarnation, publishedIncarnation, runs: await list(client) };
 	} catch (error) {
 		client?.dispose();
 		return { endpoint, runs: [], unavailable: `${endpoint.socket}: ${messageOf(error)}` };
 	}
 }
 
-function observed({ endpoint }: Listing, { run, owner, pid, startedAt, cwd, meta }: RunInfo): ObservedRun {
-	const { socket, protocol, build, pid: supervisor, recordedAt } = endpoint;
-	const incarnation = supervisor && build && recordedAt !== undefined
-		? JSON.stringify([supervisor, build, recordedAt]) : undefined;
+async function verifiedListenerLock(socket: string, pid: number): Promise<number | undefined> {
+	const lockedAt = ptydListenerLockedAt(socket, pid);
+	if (lockedAt === undefined) { return; }
+	const start = await processStartTimeAsync(pid, true);
+	return start !== undefined && (start <= lockedAt || isSameStart(start, lockedAt)) ? lockedAt : undefined;
+}
+
+function observed({ endpoint, incarnation }: Listing, { run, owner, pid, startedAt, cwd, meta, uncertain }: RunInfo): ObservedRun {
+	const { socket, protocol } = endpoint;
 	const { environment, cli, builtIn, pin, sessionId } = meta;
 	const identity = { environment, cli, cwd: nonempty(meta.cwd) ? meta.cwd : cwd, builtIn, pin, sessionId };
 	return { socket, protocol, run, owner, pid, startedAt: pid > 0 ? startedAt : undefined, incarnation, approved: false,
-		identity: isLegacyRunIdentity(identity) ? identity : undefined };
+		identity: isLegacyRunIdentity(identity) ? identity : undefined, uncertain: uncertain ? true : undefined };
 }
 
-function sameRun(old: ObservedRun, current: ObservedRun): boolean {
-	return runKey(old) === runKey(current)
-		&& (old.protocol === undefined || old.protocol === current.protocol)
-		&& (old.incarnation === undefined || old.incarnation === current.incarnation)
+function sameSupervisor(old: ObservedRun, listing: Listing): boolean {
+	return old.socket === listing.endpoint.socket && old.protocol === listing.endpoint.protocol
+		&& old.incarnation !== undefined && (old.incarnation === listing.incarnation || old.incarnation === listing.publishedIncarnation);
+}
+
+function sameRun(old: ObservedRun, listing: Listing, current: RunInfo): boolean {
+	return old.socket === listing.endpoint.socket && old.owner === current.owner && old.run === current.run
+		&& (old.protocol === undefined || old.protocol === listing.endpoint.protocol)
+		&& (old.incarnation === undefined || sameSupervisor(old, listing))
 		&& (!old.pid || old.pid === current.pid)
 		&& (!old.pid || old.startedAt === undefined || old.startedAt === current.startedAt);
 }
@@ -345,17 +388,18 @@ function close(scan: Scan): void {
 /** Keep old rows and fences even when an endpoint goes away. Only exact evidence advances a row. */
 async function reconcile(before: CutoverRecord, scan: Scan, relevant: (row: ObservedRun) => boolean): Promise<CutoverRecord> {
 	const runs = new Map(before.runs.map(row => [runKey(row), row]));
-	const rows = scan.listings.flatMap(listing => listing.runs.map(row => ({ row, current: observed(listing, row) })));
+	const rows = scan.listings.flatMap(listing => listing.runs.map(row => ({ listing, row, current: observed(listing, row) })));
 	const keys = new Set<string>();
-	for (const { row, current } of rows) {
+	for (const { listing, row, current } of rows) {
 		const key = runKey(current);
 		const previous = runs.get(key);
 		if (!relevant(current) && !(previous && relevant(previous))) { continue; }
 		keys.add(key);
-		if (previous && (!sameRun(previous, current) || previous.stop === 'confirmed')) { continue; }
+		if (previous && (!sameRun(previous, listing, row) || previous.stop === 'confirmed')) { continue; }
 		runs.set(key, {
 			...previous,
 			...current,
+			incarnation: previous?.incarnation ?? current.incarnation,
 			approved: previous?.approved ?? false,
 			identity: current.identity ?? previous?.identity,
 			processStartedAt: await observedStart(row, previous),
@@ -363,24 +407,26 @@ async function reconcile(before: CutoverRecord, scan: Scan, relevant: (row: Obse
 		});
 	}
 	for (const [key, row] of runs) {
-		if (relevant(row) && !keys.has(key) && row.stop !== 'confirmed' && await processGone(row.pid, row.processStartedAt)) {
+		if (!relevant(row) || keys.has(key) || row.stop === 'confirmed') { continue; }
+		// Protocol 17's complete list retains uncertain exits and removes failed queued spawns.
+		const queueCleared = row.pid === 0 && !row.uncertain && !row.stop && row.protocol === PTYD_PROTOCOL
+			&& scan.listings.some(listing => listing.client && sameSupervisor(row, listing));
+		if (queueCleared || await processGone(row.pid, row.processStartedAt)) {
 			runs.set(key, { ...row, stop: 'confirmed' });
 		}
 	}
 	return { ...before, runs: [...runs.values()] };
 }
 
-function activeScope(scan: Scan, owner: string): readonly ObservedRun[] {
-	return scan.listings.flatMap(listing => listing.runs.filter(row => row.owner === owner && !row.exited)
-		.map(row => observed(listing, row)));
+function isActiveRun(scan: Scan, run: ObservedRun): boolean {
+	return scan.listings.some(listing => listing.runs.some(row => !row.exited && sameRun(run, listing, row)));
 }
 
 function consentPlan(home: string, before: CutoverRecord, scan: Scan, owner: string): CutoverPlan | undefined {
 	// A still-active older window can start more work after consent. The approved snapshot and run set remain fixed.
 	if (frozenPins(before, owner)) { return undefined; }
-	const live = activeScope(scan, owner);
 	const runs = before.runs.filter(run => run.owner === owner && !run.approved && run.stop !== 'confirmed'
-		&& live.some(row => sameRun(run, row)));
+		&& isActiveRun(scan, run));
 	return runs.length ? planFor(home, before, owner, runs) : undefined;
 }
 
@@ -410,14 +456,31 @@ export async function approveLegacyCutover(home: string, scope: LegacyCutoverSco
 
 const READY: CutoverState = { ready: true, unavailable: [], waitingForOwner: 0, unconfirmed: 0 };
 
-function stopStatus(record: CutoverRecord, fresh: Scan, owner: string): CutoverState {
-	// Our dispatched stops still gate this workspace after a reload loses the native retirement reply.
-	const pending = record.runs.filter(run => run.owner === owner && run.nativeStop && run.stop === 'requested');
+function currentRetirement(home: string, scope: LegacyCutoverScope): OwnerClaim | undefined {
+	const retired = scope.retired;
+	return retired?.owner === scope.owner && retired.local !== false && isCurrentOwner(retired, home) ? retired : undefined;
+}
+
+function otherCustody(row: RunInfo): boolean {
+	return row.claimedElsewhere || row.meta.environment !== 'local';
+}
+
+function stopStatus(record: CutoverRecord, fresh: Scan, scope: LegacyCutoverScope, duplicate: ReadonlySet<string>, home: string): CutoverState {
+	const retired = currentRetirement(home, scope);
+	const pending = record.runs.filter(run => {
+		if (run.owner !== scope.owner || run.stop === 'confirmed') { return false; }
+		// Dispatch is durable even when this native window's handoff is no longer available.
+		if (run.nativeStop && run.stop === 'requested') { return true; }
+		if (!retired || !run.approved || run.stop || !run.incarnation || run.protocol !== PTYD_PROTOCOL
+			|| run.identity?.environment !== 'local' || duplicate.has(run.run) || !RELEASED_RUN_ID.test(run.run)) { return false; }
+		const listing = fresh.listings.find(each => each.endpoint.socket === run.socket);
+		// If another live window holds this owner at the exact listener, leave custody there.
+		return !listing?.runs.some(row => row.owner === scope.owner && !row.exited && otherCustody(row));
+	});
 	if (!pending.length) { return READY; }
-	const live = activeScope(fresh, owner);
 	const unavailable = fresh.listings.flatMap(listing => listing.unavailable
 		&& pending.some(run => run.socket === listing.endpoint.socket) ? [listing.unavailable] : []);
-	const pendingExits = pending.filter(run => !live.some(row => sameRun(run, row)))
+	const pendingExits = pending.filter(run => !isActiveRun(fresh, run))
 		.map(run => `${run.run} (${run.socket}, PID ${run.pid})`);
 	return { ready: false, unavailable, unconfirmed: pending.length, pendingExits, waitingForOwner: 0 };
 }
@@ -450,7 +513,7 @@ export async function checkLegacyCutover(home: string, scope?: LegacyCutoverScop
 					save(home, checked, next);
 					checked = next;
 				})));
-			return stopStatus(checked, fresh, scope.owner);
+			return stopStatus(checked, fresh, scope, duplicate, home);
 		} finally {
 			close(fresh);
 		}
@@ -463,23 +526,21 @@ export async function checkLegacyCutover(home: string, scope?: LegacyCutoverScop
 async function stopApproved(home: string, scope: LegacyCutoverScope, listing: Listing, duplicate: ReadonlySet<string>,
 	progress: () => readonly ObservedRun[], advance: (run: ObservedRun, stop: 'requested' | 'confirmed') => void): Promise<void> {
 	const { client, endpoint } = listing;
-	const retired = scope.retired;
-	if (!client || !retired || endpoint.protocol !== PTYD_PROTOCOL || retired.owner !== scope.owner
-		|| retired.local === false || !isCurrentOwner(retired, home)) { return; }
+	const retired = currentRetirement(home, scope);
+	if (!client || !retired || endpoint.protocol !== PTYD_PROTOCOL) { return; }
 	const retiredOwnerRows = (rows: readonly RunInfo[]) => rows.filter(row => row.owner === scope.owner && !row.exited);
-	const unclaimed = (rows: readonly RunInfo[]) => rows.every(row => row.meta.environment === 'local' && !row.claimedElsewhere);
 	const targets = (rows: readonly RunInfo[]) => progress().filter(run => run.owner === scope.owner && run.incarnation
 		&& run.approved && !run.stop && run.pid > 0 && run.processStartedAt !== undefined
-		&& !duplicate.has(run.run) && /^run-[0-9a-f]{32}$/u.test(run.run)
-		&& rows.some(row => sameRun(run, observed(listing, row))));
+		&& !duplicate.has(run.run) && RELEASED_RUN_ID.test(run.run)
+		&& rows.some(row => !row.uncertain && sameRun(run, listing, row)));
 	const rows = retiredOwnerRows(listing.runs);
-	if (!unclaimed(rows) || !targets(rows).length) { return; }
+	if (rows.some(otherCustody) || !targets(rows).length) { return; }
 	const requests: Promise<void>[] = [];
 	let lost = false;
 	client.onDidLoseOwner(owner => { if (owner === scope.owner) { lost = true; } });
 	try {
 		const beforeClaim = retiredOwnerRows(await list(client));
-		if (!unclaimed(beforeClaim) || !targets(beforeClaim).length) { return; }
+		if (beforeClaim.some(otherCustody) || !targets(beforeClaim).length) { return; }
 		// The released host can close every terminal view before recording retirement. Its claim still
 		// identifies the local owner, while the supervisor supplies the exact run and process identities.
 		let claim: Promise<void> | undefined;
@@ -487,7 +548,7 @@ async function stopApproved(home: string, scope: LegacyCutoverScope, listing: Li
 		if (!claim) { return; }
 		await claim;
 		const beforeStop = retiredOwnerRows(await list(client));
-		if (!unclaimed(beforeStop)) { return; }
+		if (beforeStop.some(otherCustody)) { return; }
 		for (const run of targets(beforeStop)) {
 			if (lost || client.isClosed) { break; }
 			const sent = writeAsOwner(retired, home, () => {
@@ -548,32 +609,42 @@ export function legacyPinMigration(home: string, owner: string): LegacyPinMigrat
 	return {
 		snapshot: () => frozenPins(readCutover(home), owner),
 		async recover(pin, previousAttempt, perform, reconcileAttempt): Promise<LegacyPinOutcome> {
+			const select = (record: CutoverRecord) => {
+				const exact = record.runs.filter(row => exactPinRun(pin, row));
+				if (!pin.conversation.sessionId && exact.length > 1) { return; }
+				const key = recoveryKey(pin, owner, exact[0]);
+				const runs = exact.map(run => JSON.stringify([run.incarnation, runKey(run)]));
+				return { key, runs, reference: record.recoveries?.[key]?.reference };
+			};
 			const observe = async () => withLongFileLock(file, async () => {
 				const before = readCutover(home);
+				const existing = select(before);
+				// The workspace inspects an already confirmed reference before adoption. No legacy effect is needed.
+				if (existing?.reference) { return existing; }
 				const fresh = await scan(home, before);
 				try {
 					const relevant = (row: ObservedRun) => affectsPin(pin, owner, row);
 					const checked = await reconcile(before, fresh, relevant);
 					save(home, before, checked);
+					const current = select(checked);
+					if (current?.reference) { return current; }
 					const live = fresh.listings.some(listing => listing.runs.some(row =>
 						!row.exited && relevant(observed(listing, row))));
 					const pending = checked.runs.some(row => row.stop !== 'confirmed' && relevant(row));
 					if (live || pending || fresh.unavailable.length || fresh.listings.some(row => row.unavailable)) { return; }
-					const exact = checked.runs.filter(row => exactPinRun(pin, row));
-					if (!pin.conversation.sessionId && exact.length > 1) { return; }
-					const key = recoveryKey(pin, owner, exact[0]);
-					const runs = exact.map(run => JSON.stringify([run.incarnation, runKey(run)]));
-					return { key, runs };
+					return current;
 				} finally {
 					close(fresh);
 				}
 			}, JOURNAL_WAIT_MS);
 			const selection = await observe();
 			if (!selection) { return { kind: 'deferred' }; }
+			if (selection.reference) { return { kind: 'confirmed', reference: selection.reference }; }
 			const lockKey = createHash('sha256').update(selection.key).digest('hex');
 			return withLongFileLock(path.join(home, 'claims', `legacy-pin-${lockKey}`), async () => {
 				const current = await observe();
 				if (!current || current.key !== selection.key) { return { kind: 'deferred' }; }
+				if (current.reference) { return { kind: 'confirmed', reference: current.reference }; }
 				const { key, runs } = current;
 				const update = (edit: (before: RecoveryRecord) => RecoveryRecord) => withLongFileLock(file, async () => {
 					const record = readCutover(home);
@@ -601,7 +672,7 @@ export function legacyPinMigration(home: string, owner: string): LegacyPinMigrat
 				const reservation: SharedPinRecovery = {
 					async begin(target) {
 						const latest = await observe();
-						if (latest?.key !== key) { throw new LegacyPinHeld(); }
+						if (latest?.key !== key || latest.reference) { throw new LegacyPinHeld(); }
 						await update(() => ({
 							pending: true, runs: latest.runs,
 							attempt: target && Number.isFinite(Date.parse(target.startedAt))

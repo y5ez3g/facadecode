@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { isWindowIdentity, isWindowToken } from '../base/windowIdentity';
 import { DamagedWindowRecord, windowToken } from '../record/windowIdentity';
-import { beginWindowTerminals, retireWindowTerminals } from '../record/windowTerminals';
+import { beginWindowTerminals, claimRetiredTerminals, retireWindowTerminals } from '../record/windowTerminals';
 import { keepWindowKey, workspaceRecord } from '../record/workspace';
 import { tempDir } from './util';
 
@@ -53,13 +53,18 @@ suite('Record: local window handover identity', () => {
 		}
 	});
 
-	test('a graceful terminal record is consumed once and a late older incarnation cannot write over its successor', () => {
+	test('an unclaimed terminal handoff survives empty reloads and only the current epoch can consume it', () => {
 		const first = beginWindowTerminals(temp.dir);
 		const retired = [{ claim: { owner: 'workspace', generation: 1, token: 'one' }, runs: [{ run: 'run-a', title: '' }] }];
 		retireWindowTerminals(temp.dir, first.epoch, retired);
 		const second = beginWindowTerminals(temp.dir);
 		assert.deepStrictEqual(second.retired, retired);
-		retireWindowTerminals(temp.dir, first.epoch, retired);
+		retireWindowTerminals(temp.dir, second.epoch, []);
+		const third = beginWindowTerminals(temp.dir);
+		assert.deepStrictEqual(third.retired, [{ claim: retired[0].claim, runs: [] }]);
+		assert.strictEqual(claimRetiredTerminals(temp.dir, second.epoch, 'workspace'), false);
+		assert.strictEqual(claimRetiredTerminals(temp.dir, third.epoch, 'workspace'), true);
+		retireWindowTerminals(temp.dir, second.epoch, retired);
 		assert.deepStrictEqual(beginWindowTerminals(temp.dir).retired, []);
 	});
 });

@@ -44,11 +44,61 @@ interface Requests {
 	terminate: { args: { readonly run: string; readonly graceMs: number }; result: 'terminated' | 'already_exited' | 'unconfirmed' | 'failed' };
 }
 
-export function ptydSocketPath(home: string, protocol: number): string {
-	const key = createHash('sha256').update(home).digest('hex').slice(0, 12);
-	const name = `${protocol}-${key}`;
-	return process.platform === 'win32' ? `\\\\.\\pipe\\facade-extension-ptyd-${name}`
-		: path.join('/tmp', `facade-ptyd-${os.userInfo().uid}`, `extension-ptyd-${name}.sock`);
+const PIPE_DIRECTORY = '\\\\.\\pipe\\';
+
+function homeKey(home: string): string {
+	return createHash('sha256').update(home).digest('hex').slice(0, 12);
+}
+
+function socketDirectory(): string {
+	return path.join('/tmp', `facade-ptyd-${os.userInfo().uid}`);
+}
+
+export function ptydSocketPath(home: string, protocol: number, build?: string): string {
+	const name = `${protocol}-${build ? `${build}-` : ''}${homeKey(home)}`;
+	return process.platform === 'win32' ? `${PIPE_DIRECTORY}facade-extension-ptyd-${name}`
+		: path.join(socketDirectory(), `extension-ptyd-${name}.sock`);
+}
+
+/** The released build hash includes its script's installation path and mtime. Discover the installed suffix. */
+export function releasedPtydSockets(home: string): readonly { readonly socket: string; readonly build: string }[] {
+	const windows = process.platform === 'win32';
+	const directory = windows ? PIPE_DIRECTORY : socketDirectory();
+	const pattern = new RegExp(`^${windows ? 'facade-' : ''}extension-ptyd-${PTYD_PROTOCOL}-([0-9a-f]{10})-${homeKey(home)}${windows ? '' : '\\.sock'}$`, windows ? 'i' : '');
+	try {
+		if (!windows) { assertPrivateDirectory(directory); }
+		return fs.readdirSync(directory).sort().flatMap(name => {
+			const build = pattern.exec(name)?.[1].toLowerCase();
+			return build ? [{ socket: ptydSocketPath(home, PTYD_PROTOCOL, build), build }] : [];
+		});
+	} catch (error) {
+		// A missing Unix directory has no listeners. An unreadable pipe namespace leaves discovery incomplete.
+		if (!windows && codeOf(error) === 'ENOENT') { return []; }
+		throw error;
+	}
+}
+
+function assertPrivateDirectory(directory: string): void {
+	const stat = fs.lstatSync(directory);
+	if (!stat.isDirectory() || stat.uid !== os.userInfo().uid || (stat.mode & 0o077) !== 0) {
+		throw new Error('The legacy supervisor socket directory is not private.');
+	}
+}
+
+/** The released supervisor takes this listener lock before publishing its socket and registry row. */
+export function ptydListenerLockedAt(socket: string, pid: number): number | undefined {
+	const windows = process.platform === 'win32';
+	const lock = windows ? path.join(os.tmpdir(), `${path.win32.basename(socket)}.lock`) : `${socket}.lock`;
+	const entry = fs.lstatSync(lock);
+	if (!entry.isFile() || !Number.isFinite(entry.mtimeMs)
+		|| !windows && (entry.uid !== os.userInfo().uid || (entry.mode & 0o077) !== 0)) { return; }
+	const fd = fs.openSync(lock, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+	try {
+		const stat = fs.fstatSync(fd);
+		if (entry.dev !== stat.dev || entry.ino !== stat.ino || entry.mtimeMs !== stat.mtimeMs
+			|| stat.size < 1 || stat.size > 16 || fs.readFileSync(fd, 'utf8').trim() !== String(pid)) { return; }
+		return stat.mtimeMs;
+	} finally { fs.closeSync(fd); }
 }
 
 function privateSocket(socket: string): boolean {
@@ -59,11 +109,8 @@ function privateSocket(socket: string): boolean {
 		return true;
 	}
 	try {
-		const dir = fs.lstatSync(path.dirname(socket));
 		const uid = os.userInfo().uid;
-		if (!dir.isDirectory() || dir.uid !== uid || (dir.mode & 0o077) !== 0) {
-			throw new Error('The legacy supervisor socket directory is not private.');
-		}
+		assertPrivateDirectory(path.dirname(socket));
 		const entry = fs.lstatSync(socket);
 		if (!entry.isSocket() || entry.uid !== uid) {
 			throw new Error('The legacy supervisor socket has the wrong owner or file type.');

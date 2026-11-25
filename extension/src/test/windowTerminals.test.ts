@@ -247,6 +247,20 @@ suite('Window terminal registration: actual objects across workspace host genera
 		assert.strictEqual(terminals.length, 1);
 	});
 
+	test('a native claim survives reloads without registration and is consumed by an exact successor (ARCHITECTURE-2.2)', () => {
+		const { WindowTerminals: Registry } = load<typeof import('../host/windowTerminals')>(require.resolve('../host/windowTerminals'));
+		const claim = owner.claim;
+		for (let reload = 0; reload < 2; reload++) {
+			registry.dispose();
+			registry = new Registry({ directory: storage.dir, log: assert.fail });
+			assert.deepStrictEqual(registry.retiredClaim(claim.owner), claim);
+			assert.strictEqual(registry.request({ ...owner, kind: 'activate', claim: { ...claim, token: 'different' } }), false);
+			assert.deepStrictEqual(registry.retiredClaim(claim.owner), claim);
+		}
+		nextHost(true);
+		assert.strictEqual(registry.retiredClaim(claim.owner), undefined);
+	});
+
 	test('local runtime supplies the actual object and never a title-shaped reconstruction', async () => {
 		const runtime = manager(false); const handle = runtime.create({ run: 'run-a', name: 'Ada', cli: 'claude' }, false);
 		handle.open(false); await clock.tick(0);
