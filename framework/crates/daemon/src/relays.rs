@@ -140,7 +140,7 @@ impl Daemon {
         let relay = Arc::new(self.relay(hello, evidence));
         if relay.reconnect() {
             let relay = relay.clone();
-            tokio::spawn(async move { relay.hold_verified_presence() });
+            tokio::spawn(async move { relay.hold_verified_presence().await });
         }
         let lines = RelayConnection {
             daemon: self.clone(),
@@ -165,8 +165,7 @@ impl Daemon {
                     let (daemon, evidence, bound) =
                         (daemon.clone(), evidence.clone(), bound.clone());
                     Box::pin(async move {
-                        let run =
-                            blocking_in_place(|| daemon.relay_run(&evidence, credential, meta))?;
+                        let run = daemon.relay_run(&evidence, credential, meta).await?;
                         let actor = match run {
                             Some(run) => BoundActor::managed(run, &daemon.machine_id),
                             None => {
@@ -285,46 +284,49 @@ impl Daemon {
                 })
             })
         };
-        let managed_instructions = {
+        let managed_instructions: mcp::verified::ManagedInstructions = {
             let daemon = self.clone();
             let evidence = evidence.clone();
             Box::new(move |credential: Option<&str>| {
-                let Some(run) =
-                    blocking_in_place(|| daemon.relay_run(&evidence, credential, None))?
-                else {
-                    return Ok(None);
-                };
-                let actor = BoundActor::managed(run, &daemon.machine_id);
-                let current = actor.current(&daemon, &evidence.process)?;
-                if current
-                    .handle
-                    .rule()
-                    .is_some_and(facade_rules::managed_instructions_from_hook)
-                {
-                    return Ok(None);
-                }
-                let instructions = daemon.instructions_for_current_run(&current.info)?;
-                actor.current(&daemon, &evidence.process)?;
-                Ok(Some(instructions))
+                let (daemon, evidence) = (daemon.clone(), evidence.clone());
+                Box::pin(async move {
+                    let Some(run) = daemon.relay_run(&evidence, credential, None).await? else {
+                        return Ok(None);
+                    };
+                    let actor = BoundActor::managed(run, &daemon.machine_id);
+                    let current = actor.current(&daemon, &evidence.process)?;
+                    if current
+                        .handle
+                        .rule()
+                        .is_some_and(facade_rules::managed_instructions_from_hook)
+                    {
+                        return Ok(None);
+                    }
+                    let instructions =
+                        blocking_in_place(|| daemon.instructions_for_current_run(&current.info))?;
+                    actor.current(&daemon, &evidence.process)?;
+                    Ok(Some(instructions))
+                })
             })
         };
-        let ready = {
+        let ready: mcp::verified::Ready = {
             let daemon = self.clone();
             Box::new(move |credential: Option<&str>| {
-                let Some(run) =
-                    blocking_in_place(|| daemon.relay_run(&evidence, credential, None))?
-                else {
-                    return Ok(None);
-                };
-                let generation = run.run;
-                let actor = BoundActor::managed(run, &daemon.machine_id);
-                let handle = actor.current(&daemon, &evidence.process)?.handle;
-                let tools = handle.tools_connected();
-                let held: ToolsPresence = Box::new(RelayTools(tokio::spawn(async move {
-                    let _tools = tools;
-                    run_ended(&handle, generation).await;
-                })));
-                Ok(Some(held))
+                let (daemon, evidence) = (daemon.clone(), evidence.clone());
+                Box::pin(async move {
+                    let Some(run) = daemon.relay_run(&evidence, credential, None).await? else {
+                        return Ok(None);
+                    };
+                    let generation = run.run;
+                    let actor = BoundActor::managed(run, &daemon.machine_id);
+                    let handle = actor.current(&daemon, &evidence.process)?.handle;
+                    let tools = handle.tools_connected();
+                    let held: ToolsPresence = Box::new(RelayTools(tokio::spawn(async move {
+                        let _tools = tools;
+                        run_ended(&handle, generation).await;
+                    })));
+                    Ok(Some(held))
+                })
             })
         };
         let services = ActorServices {
@@ -477,7 +479,7 @@ impl Daemon {
         results
     }
 
-    fn relay_run(
+    async fn relay_run(
         &self,
         evidence: &RelayEvidence,
         credential: Option<&str>,
@@ -487,8 +489,16 @@ impl Daemon {
             return Ok(None);
         }
         if let Some(credential) = credential {
-            return self.runs.verify_credential(credential);
+            return self.runs.verify_credential(credential).await;
         }
+        blocking_in_place(|| self.legacy_relay_run(evidence, meta))
+    }
+
+    fn legacy_relay_run(
+        &self,
+        evidence: &RelayEvidence,
+        meta: Option<&Value>,
+    ) -> Result<Option<RunIdentity>, ErrorBody> {
         let process = &evidence.process;
         let legacy_id = system::env_var(&evidence.env, "FACADE_AGENT");
         let parent = unix_process::parent(process.pid).ok().flatten();

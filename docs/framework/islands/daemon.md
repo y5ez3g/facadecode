@@ -786,8 +786,9 @@ its daemon connection with the `relay:1` handshake. MCP negotiates its own date-
 `protocolVersion` during `initialize`. Initialization and tool discovery are available before a
 Guest is listed. The first tool call locks the identity of its connection.
 Runs generate a private, unpredictable credential for each new run and Rules put it in that launch's
-MCP arguments. The verifier waits for that run's installation and uses its keeper PID, birth and run
-generation. A verified CLI-native session can also identify a matching live run. A run recovered
+MCP arguments. Authentication, initialization and tool discovery await that run's installation on
+the daemon runtime and verify its keeper PID, birth and run generation. A verified CLI-native
+session can also identify a matching live run. A run recovered
 from protocol 2 may keep its earlier recognition rules until that run ends. Resume has a new
 credential scope even when it uses the same Agent ID.
 
@@ -797,11 +798,10 @@ as does a connection whose run is still unknown. For other verified runs the par
 managed instructions from the installed record and checks the run again before returning the text.
 It uses the same address, creation source and run context as launch preparation.
 
-The parent hands the verified actor to the private daemon connection. Only the validated process
-can bring a run's tools online. The connection rechecks the run when it sends a new request. A
-waiting inbox read also ends with its bound run, and Post checks the bound actor while it settles
-the available page. A managed run's private connections end with the run: what they have under way
-is answered, then they close.
+The daemon dispatches tools for the verified actor through its typed operation registry. The
+validated process brings a run's tools online. The daemon rechecks the run for each new request.
+A waiting inbox read ends with its bound run, and Post checks the bound actor while it settles
+the available page. When a run ends, the daemon releases its tools readiness guard.
 
 One table defines the eight tools served by `tools/list` and dispatched by `tools/call`. The
 catalog is sent as shipped, and a verified connection reports tools ready when it serves the list.

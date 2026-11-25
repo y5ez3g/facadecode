@@ -299,12 +299,11 @@ impl Runs {
     }
 
     /// Verifies a relay credential, waiting for its run to be installed if it is starting.
-    /// Call on a blocking worker with no daemon lock held.
-    pub(crate) fn verify_credential(
+    pub(crate) async fn verify_credential(
         &self,
         credential: &str,
     ) -> Result<Option<RunIdentity>, ErrorBody> {
-        tokio::runtime::Handle::current().block_on(self.link.verify_credential(credential))
+        self.link.verify_credential(credential).await
     }
 
     /// Asks the keeper to stop agent `id`'s run, waiting up to 10 seconds for a ready keeper.
@@ -554,6 +553,16 @@ mod tests {
         let held = Arc::new(Held::open(&source.join("facade"), "test").unwrap());
         let runs = Runs::new(&home.join("framework"), held, mpsc::unbounded_channel().0);
         (runs, home)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn verifying_a_relay_credential_uses_the_daemon_runtime() {
+        let (runs, _home) = runs("runs-verify-credential");
+        let result = runs
+            .verify_credential("unknown-test-credential")
+            .await
+            .unwrap();
+        assert!(result.is_none());
     }
 
     /// A removed agent leaves nothing of its runs: not the task that saved its exit either.

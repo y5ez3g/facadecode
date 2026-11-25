@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::PoisonError;
 use std::time::Instant;
 
 use facade_base::api_v1;
@@ -14,7 +13,7 @@ use facade_base::model::error::ErrorBody;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::{InboxAnswer, InboxOutput, ManagedInstructions, Relay};
+use super::{InboxAnswer, InboxOutput, Relay};
 use crate::{
     Cancel,
     delivery::SendControl,
@@ -86,9 +85,19 @@ pub(crate) type DiscoverClis = Box<
 
 pub(crate) type ToolsPresence = Box<dyn Send + Sync>;
 
+/// The instructions for the managed run the daemon verifies during initialization.
+pub(crate) type ManagedInstructions = Box<
+    dyn for<'a> Fn(Option<&'a str>) -> ActorFuture<'a, Result<Option<String>, ErrorBody>>
+        + Send
+        + Sync,
+>;
+
 /// Holds tools readiness for a run the daemon can verify without joining a Guest.
-pub(crate) type Ready =
-    Box<dyn Fn(Option<&str>) -> anyhow::Result<Option<ToolsPresence>> + Send + Sync>;
+pub(crate) type Ready = Box<
+    dyn for<'a> Fn(Option<&'a str>) -> ActorFuture<'a, anyhow::Result<Option<ToolsPresence>>>
+        + Send
+        + Sync,
+>;
 
 pub(crate) struct ActorServices {
     pub(crate) authenticate: Authenticate,
@@ -132,7 +141,7 @@ impl Verified {
                 connection.client_name = client_name.map(str::to_string);
             }
         }
-        (self.services.managed_instructions)(credential(relay))
+        (self.services.managed_instructions)(credential(relay)).await
     }
 
     pub(super) async fn actor(
@@ -154,13 +163,10 @@ impl Verified {
         Ok(actor)
     }
 
-    pub(super) fn hold_presence(&self, relay: &Relay) {
-        let mut presence = relay
-            .presence
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+    pub(super) async fn hold_presence(&self, relay: &Relay) {
+        let mut presence = relay.presence.lock().await;
         if presence.is_none() {
-            match (self.services.ready)(credential(relay)) {
+            match (self.services.ready)(credential(relay)).await {
                 Ok(held) => *presence = held,
                 // The callback can inspect private run material. Keep it out of logs.
                 Err(_) => facade_base::log::write(
