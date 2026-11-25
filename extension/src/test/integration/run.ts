@@ -145,7 +145,7 @@ async function main(): Promise<void> {
 	let observedDriver: { name: AcceptanceDriver; implementation: ServingImplementation } | undefined;
 	const driverPassed = (name: AcceptanceDriver, actual: ServingImplementation) => {
 		if (expectedDriver === name) {
-			const serving = name === 'activation-failure' || name === 'incompatible-activation' || name === 'cutover-uncertain' ? 'none' : implementation;
+			const serving = name === 'activation-failure' || name === 'incompatible-activation' ? 'none' : implementation;
 			assert.strictEqual(actual, serving, 'the completed driver exercised its expected serving implementation');
 			assert.ok(!observedDriver, 'the exact driver runs once');
 			observedDriver = { name, implementation: actual };
@@ -918,7 +918,7 @@ async function main(): Promise<void> {
 				cleanUpFramework: facade => cleanUpFramework(facade)
 			});
 			driverPassed(only === 'upgrade-pair' ? 'upgrade-pair' : `cutover-${cutover}` as `cutover-${CutoverVariant}`,
-				cutover === 'uncertain' ? 'none' : 'framework');
+				'framework');
 		}
 		if (only === 'install-pair') {
 			await installPair();

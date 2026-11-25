@@ -404,12 +404,14 @@ Component. Use isolated profiles for the supporting legacy implementation checks
 
 For ARCHITECTURE-1.4, start from a previous legacy build and save two distinct sessions, one pinned. Verify
 automatic recovery of the Pin after confirmed prior exit, the one acknowledged cutover when legacy processes
-are live, and that an uncertain stop defers recovery. Verify exact session IDs, original process exits, and one
+are live, and that an unavailable supervisor defers the affected Pin while Framework serves the window. Verify
+exact session IDs, original process exits, and one
 recovery across two windows that share an agent. On one Facade home, upgrade two independent workspaces in
 sequence. The other workspace retains its original live processes and can send input until its own upgrade.
 For a live upgrade, remove only the isolated supervisor's registry entry and verify discovery of its released listener.
-Reload once before consent and again after approval while the generation lock holds dispatch. The same retired claim
-survives both reloads. The scope and frozen Pins remain fixed, and recovery waits for the confirmed stops.
+Reload once before consent and again after approval. The scope and frozen Pins remain fixed, and recovery waits
+for confirmed exit under the released supervisor's own grace period. Exercise the interval after a legacy owner
+claims a connection and before it attaches a run. The active owner keeps its connection and the Pin stays deferred.
 An ordinary compatible restart keeps the original agent reference, process and screen.
 
 Run `npm run test:integration` from `extension/` with `FACADE_IT_IMPLEMENTATION=framework` and the
@@ -420,7 +422,7 @@ Use Framework builds from the QA handoff, including their native companions. Rec
 | `FACADE_IT_ONLY` | Additional inputs | Paired-build proof |
 | --- | --- | --- |
 | `shared-attach` | `FACADE_IT_FAKECLI` and a higher compatible `FACADE_IT_ATTACH_UPGRADE` | Replace the daemon while the same Keeper, CLI and open pane survive. Check shared input and size after reconnect. |
-| `cutover-exited`, `cutover-live`, `cutover-uncertain` | `FACADE_IT_RELEASED` and `FACADE_IT_CURRENT` | Install the released 0.1.5 pair and the candidate pair in the same test profile. Observe recovery after confirmed exit, native consent for a live stop, and deferred recovery when a dispatched stop is uncertain. |
+| `cutover-exited`, `cutover-live`, `cutover-uncertain` | `FACADE_IT_RELEASED` and `FACADE_IT_CURRENT` | Install the released 0.1.5 pair and the candidate pair in the same test profile. Observe recovery after confirmed exit, native consent with live legacy processes, and deferred recovery while their supervisor cannot confirm exit. |
 | `cutover-two-windows`, `cutover-prior-owner`, `cutover-separate-workspaces` | Same released and candidate pairs | Check recovery once for a shared workspace, continued custody for a live prior window, and sequential upgrade of independent workspaces on one home. |
 
 See the [runner's input checks](../../../extension/src/test/integration/run.ts#L766) and

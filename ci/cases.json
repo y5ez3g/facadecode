@@ -280,19 +280,6 @@
       }
     },
     {
-      "id": "extension/legacy-cutover/request/claim",
-      "assertion": "Pass the exact retired generation when taking verified custody of an old workspace.",
-      "stage": "pr",
-      "existing_tests": [
-        "extension/src/test/legacySupervisor.test.ts"
-      ],
-      "test": {
-        "runner": "extension-unit",
-        "target": "legacySupervisor.test",
-        "name": "Legacy supervisor transport (ARCHITECTURE-1.4) retirement uses the five released requests and reports loss of custody"
-      }
-    },
-    {
       "id": "extension/legacy-cutover/request/conversations",
       "assertion": "Read the published supervisor session holds through the released protocol.",
       "stage": "pr",
@@ -302,7 +289,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "legacySupervisor.test",
-        "name": "Legacy supervisor transport (ARCHITECTURE-1.4) retirement uses the five released requests and reports loss of custody"
+        "name": "Legacy supervisor transport (ARCHITECTURE-1.4) observes the released supervisor with read-only requests"
       }
     },
     {
@@ -315,7 +302,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "legacySupervisor.test",
-        "name": "Legacy supervisor transport (ARCHITECTURE-1.4) retirement uses the five released requests and reports loss of custody"
+        "name": "Legacy supervisor transport (ARCHITECTURE-1.4) observes the released supervisor with read-only requests"
       }
     },
     {
@@ -328,20 +315,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "legacySupervisor.test",
-        "name": "Legacy supervisor transport (ARCHITECTURE-1.4) retirement uses the five released requests and reports loss of custody"
-      }
-    },
-    {
-      "id": "extension/legacy-cutover/request/terminate",
-      "assertion": "Pass the exact run identity and report the released supervisor termination result.",
-      "stage": "pr",
-      "existing_tests": [
-        "extension/src/test/legacySupervisor.test.ts"
-      ],
-      "test": {
-        "runner": "extension-unit",
-        "target": "legacySupervisor.test",
-        "name": "Legacy supervisor transport (ARCHITECTURE-1.4) retirement uses the five released requests and reports loss of custody"
+        "name": "Legacy supervisor transport (ARCHITECTURE-1.4) observes the released supervisor with read-only requests"
       }
     },
     {
@@ -696,7 +670,7 @@
     },
     {
       "id": "extension/p0/vsix-upgrade/cutover-live",
-      "assertion": "Upgrade the pinned prior pair with two live legacy processes. Confirm both survive until consent, then verify both exits and exactly one restored Pin.",
+      "assertion": "Upgrade the pinned prior pair with two live legacy processes. Confirm consent and both reloads preserve the frozen Pin, then verify the old supervisor retires both processes and Framework restores the Pin once.",
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/cutover.ts",
@@ -712,7 +686,7 @@
     },
     {
       "id": "extension/p0/vsix-upgrade/cutover-uncertain",
-      "assertion": "Withhold confirmation after an approved legacy stop. Verify the candidate stays pending and does not start a replacement while a recorded legacy process is still alive.",
+      "assertion": "Suspend the released supervisor after consent. Verify Framework serves the window and the saved Pin stays deferred while exit remains unconfirmed.",
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/cutover.ts",
@@ -720,7 +694,7 @@
       ],
       "test": {
         "runner": "extension-editor",
-        "implementation": "none",
+        "implementation": "framework",
         "journey": "cutover-uncertain",
         "built_in": "claude",
         "name": "cutover-uncertain"
@@ -1228,19 +1202,6 @@
         "runner": "extension-unit",
         "target": "host.activation.test",
         "name": "A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-2.4) the identity command answers the current session with the persisted window token and component version, refuses stale sessions and leaves damaged records intact (ARCHITECTURE-2.2)"
-      }
-    },
-    {
-      "id": "extension/window-component-framework/command/facade.window.legacyHandoff",
-      "assertion": "Return the exact legacy claim retired by the same native window for the verified owner.",
-      "stage": "pr",
-      "existing_tests": [
-        "extension/src/test/host.activation.test.ts"
-      ],
-      "test": {
-        "runner": "extension-unit",
-        "target": "host.activation.test",
-        "name": "A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-2.4) the native handoff returns the local retired claim after the old terminal views close (ARCHITECTURE-1.4)"
       }
     },
     {

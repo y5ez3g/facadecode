@@ -14,7 +14,6 @@ import type { FrameworkPin } from '../core/ports';
 import { approveLegacyCutover, checkLegacyCutover, legacyPinMigration } from '../host/legacyCutover';
 import type { LegacySessionPin } from '../host/legacyPins';
 import { PTYD_PROTOCOL, ptydSocketPath } from '../host/migration/supervisor';
-import { beginWindowTerminals, retireWindowTerminals } from '../record/windowTerminals';
 import { TestEmitter, withModules } from './withModules';
 
 const A = 'aaaaaaaaaaaaaaaa';
@@ -53,11 +52,8 @@ async function fixture(published = true) {
 		{ owner: A, run: RUN_A, session: 'scope-a', cwd: '/work/a', pin: 'pin-a', attached: false },
 		{ owner: B, run: RUN_B, session: 'shared', cwd: '/work/b', pin: 'pin-b', attached: true },
 	].map(row => ({ ...row, pid, uncertain: false, ended: false }));
-	const effects: { method: string; params: unknown; journal: unknown }[] = [];
+	const effects: string[] = [];
 	const sockets = new Set<net.Socket>();
-	let termination: 'terminated' | 'already_exited' = 'terminated';
-	let claimAction: (() => void) | undefined;
-	let refuseClaim = false;
 	const server = net.createServer(socket => {
 		sockets.add(socket);
 		socket.on('close', () => sockets.delete(socket));
@@ -67,7 +63,7 @@ async function fixture(published = true) {
 			const lines = (pending + data).split('\n');
 			pending = lines.pop() ?? '';
 			for (const line of lines) {
-				const { id, method, params } = JSON.parse(line);
+				const { id, method } = JSON.parse(line);
 				let result: unknown;
 				if (method === 'hello') {
 					result = { protocol: 17, pid, build };
@@ -79,16 +75,9 @@ async function fixture(published = true) {
 						meta: { environment: 'local', cli: 'codex', builtIn: 'codex', sessionId: row.session, pin: row.pin },
 					}));
 				} else if (method === 'claim' || method === 'terminate') {
-					effects.push({ method, params, journal: JSON.parse(fs.readFileSync(journal, 'utf8')) });
-					if (method === 'claim') {
-						claimAction?.();
-						if (refuseClaim) { socket.write(JSON.stringify({ id, error: 'Interrupted before dispatch' }) + '\n'); continue; }
-					}
-					if (method === 'terminate') {
-						const run = rows.find(row => row.run === params.run);
-						if (run && termination === 'terminated') { run.ended = true; }
-						result = termination;
-					}
+					effects.push(method);
+					socket.write(JSON.stringify({ id, error: 'Scope must remain read-only' }) + '\n');
+					continue;
 				} else {
 					assert.fail(`Unexpected legacy request ${method}`);
 				}
@@ -99,9 +88,6 @@ async function fixture(published = true) {
 	await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(socketFile, resolve); });
 	return {
 		home, journal, claimFile, registry, registryFile, lockFile, rows, effects,
-		unconfirmedStop: () => { termination = 'already_exited'; },
-		onClaim: (action: () => void) => { claimAction = action; },
-		refuseClaim: (refuse: boolean) => { refuseClaim = refuse; },
 		savePins(owner: string, pins: unknown[]) {
 			const workspace = path.join(home, 'workspaces', owner);
 			fs.mkdirSync(workspace, { recursive: true });
@@ -184,7 +170,7 @@ suite('Scoped legacy cutover', () => {
 		const f = await fixture(false);
 		const other = await fixture(false);
 		try {
-			const scope = { owner: A, retired: CLAIM };
+			const scope = { owner: A };
 			const saved = pin('pin-a', 'scope-a');
 			assert.ok(!fs.existsSync(f.registry));
 			assert.deepStrictEqual(await legacyPinMigration(f.home, A).recover(saved, () => ({ attempted: false }),
@@ -194,7 +180,8 @@ suite('Scoped legacy cutover', () => {
 			assert.deepStrictEqual(offered.runs.map(run => run.run), [RUN_A]);
 			assert.ok(await approveLegacyCutover(f.home, scope, offered));
 			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
-			assert.deepStrictEqual(f.effects.map(effect => effect.method), ['claim', 'terminate']);
+			assert.deepStrictEqual(f.effects, []);
+			assert.strictEqual(f.rows[0].ended, false);
 			assert.strictEqual(other.rows[0].ended, false, 'identical run IDs on a different resolved home are outside the scope');
 			assert.deepStrictEqual(other.effects, []);
 		} finally {
@@ -236,39 +223,22 @@ suite('Scoped legacy cutover', () => {
 		}
 	});
 
-	test('reloads before consent and before dispatch with the same retired claim and approved scope (ARCHITECTURE-1.4)', async () => {
+	test('preserves exact consent and the frozen Pin across reloads (ARCHITECTURE-1.4)', async () => {
 		const f = await fixture();
 		try {
-			const directory = path.join(f.home, 'native-window');
-			const predecessor = beginWindowTerminals(directory);
-			retireWindowTerminals(directory, predecessor.epoch, [{ claim: CLAIM, runs: [] }]);
-			let current = beginWindowTerminals(directory);
-			const scope = () => ({ owner: A, retired: current.retired.find(entry => entry.claim.owner === A)?.claim });
-			const reload = () => {
-				retireWindowTerminals(directory, current.epoch, []);
-				current = beginWindowTerminals(directory);
-				assert.deepStrictEqual(scope().retired, CLAIM);
-			};
-			const offered = (await checkLegacyCutover(f.home, scope())).plan;
+			const saved = pin('pin-a', 'scope-a');
+			f.savePins(A, [saved]);
+			const offered = (await checkLegacyCutover(f.home, { owner: A })).plan;
 			assert.ok(offered);
-			reload();
-			assert.deepStrictEqual((await checkLegacyCutover(f.home, scope())).plan, offered);
-			assert.ok(await approveLegacyCutover(f.home, scope(), offered));
-			assert.strictEqual(f.effects.length, 0);
-			reload();
-			f.refuseClaim(true);
-			const pending = await checkLegacyCutover(f.home, scope());
-			assert.strictEqual(pending.ready, false);
-			assert.strictEqual(pending.plan, undefined);
-			assert.strictEqual(pending.unconfirmed, 1);
-			assert.deepStrictEqual(f.effects.map(effect => effect.method), ['claim']);
-			assert.strictEqual(JSON.parse(fs.readFileSync(f.journal, 'utf8')).runs[0].stop, undefined);
+			assert.deepStrictEqual((await checkLegacyCutover(f.home, { owner: A })).plan, offered);
+			assert.ok(await approveLegacyCutover(f.home, { owner: A }, offered));
+			f.savePins(A, []);
+			const reloaded = await checkLegacyCutover(f.home, { owner: A });
+			assert.strictEqual(reloaded.ready, true);
+			assert.strictEqual(reloaded.plan, undefined);
+			assert.deepStrictEqual(legacyPinMigration(f.home, A).snapshot(), offered.snapshots[A]);
 			assert.strictEqual((await checkLegacyCutover(f.home, { owner: B })).plan?.runs[0].owner, B);
-			f.refuseClaim(false);
-			assert.strictEqual((await checkLegacyCutover(f.home, scope())).ready, true);
-			assert.deepStrictEqual(f.effects.filter(effect => effect.method === 'terminate').map(effect => effect.params),
-				[{ run: RUN_A, graceMs: 2_000 }]);
-			assert.strictEqual(f.rows[1].ended, false);
+			assert.deepStrictEqual(f.effects, []);
 		} finally {
 			await f.dispose();
 		}
@@ -277,7 +247,7 @@ suite('Scoped legacy cutover', () => {
 	test('settles a missing queued run only on its exact supervisor’s verified list (ARCHITECTURE-1.4)', async () => {
 		const f = await fixture();
 		try {
-			const scope = { owner: A, retired: CLAIM };
+			const scope = { owner: A };
 			const a = legacyPinMigration(f.home, A);
 			const saved = pin('pin-a', 'scope-a');
 			const neverStart = async () => assert.fail('a legacy holder was not cleared');
@@ -287,16 +257,15 @@ suite('Scoped legacy cutover', () => {
 			const offered = (await checkLegacyCutover(f.home, scope)).plan;
 			assert.ok(offered);
 			assert.ok(await approveLegacyCutover(f.home, scope, offered));
-			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, false);
+			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
 			assert.deepStrictEqual(await a.recover(saved, () => ({ attempted: false }), neverStart), { kind: 'deferred' });
 			f.rows.splice(0, 1);
 			fs.renameSync(f.registryFile, `${f.registryFile}.hidden`);
-			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, false);
 			assert.deepStrictEqual(await a.recover(saved, () => ({ attempted: false }), neverStart), { kind: 'deferred' });
 			fs.renameSync(`${f.registryFile}.hidden`, f.registryFile);
 			fs.writeFileSync(f.lockFile, String(process.pid), { flag: 'wx', mode: 0o600 });
-			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, false, 'a newer listener cannot settle the old queue');
-			assert.deepStrictEqual(await a.recover(saved, () => ({ attempted: false }), neverStart), { kind: 'deferred' });
+			assert.deepStrictEqual(await a.recover(saved, () => ({ attempted: false }), neverStart), { kind: 'deferred' },
+				'a newer listener cannot settle the old queue');
 			fs.unlinkSync(f.lockFile);
 			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
 			assert.deepStrictEqual(await a.recover(saved, () => ({ attempted: false }), async () => REFERENCE), { kind: 'confirmed', reference: REFERENCE });
@@ -306,32 +275,34 @@ suite('Scoped legacy cutover', () => {
 		}
 	});
 
-	test('keeps an exact uncertain local exit pending without sending a second stop (ARCHITECTURE-1.4)', async () => {
+	test('opens Framework while an exact uncertain local exit keeps its Pin pending (ARCHITECTURE-1.4)', async () => {
 		const f = await fixture();
 		try {
-			const scope = { owner: A, retired: CLAIM };
+			const scope = { owner: A };
+			const migration = legacyPinMigration(f.home, A);
+			const saved = pin('pin-a', 'scope-a');
 			f.rows[0].uncertain = true;
 			const offered = (await checkLegacyCutover(f.home, scope)).plan;
 			assert.ok(offered);
 			assert.ok(await approveLegacyCutover(f.home, scope, offered));
-			const state = await checkLegacyCutover(f.home, scope);
-			assert.strictEqual(state.ready, false);
-			assert.strictEqual(state.unconfirmed, 1);
+			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
+			assert.deepStrictEqual(await migration.recover(saved, () => ({ attempted: false }),
+				async () => assert.fail('the uncertain exit released the Pin')), { kind: 'deferred' });
 			assert.strictEqual(f.effects.length, 0);
 			f.rows[0].ended = true;
-			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
+			assert.deepStrictEqual(await migration.recover(saved, () => ({ attempted: false }), async () => REFERENCE),
+				{ kind: 'confirmed', reference: REFERENCE });
 		} finally {
 			await f.dispose();
 		}
 	});
 
-	test('approves and stops A only and durably writes intent before the request (ARCHITECTURE-1.4)', async function () {
-		if (process.platform === 'win32') { this.skip(); }
+	test('leaves a claimed workspace alone before its run attaches (ARCHITECTURE-1.4)', async () => {
 		const f = await fixture();
 		try {
 			const saved = pin('pin-a', 'scope-a');
 			f.savePins(A, [saved, { opaque: true }]);
-			const scope = { owner: A, retired: CLAIM };
+			const scope = { owner: A };
 			f.rows[0].attached = true;
 			const offered = (await checkLegacyCutover(f.home, scope)).plan;
 			assert.ok(offered);
@@ -342,11 +313,9 @@ suite('Scoped legacy cutover', () => {
 			assert.strictEqual(f.effects.length, 0);
 			f.rows[0].attached = false;
 			assert.ok((await checkLegacyCutover(f.home, scope)).ready);
-			assert.deepStrictEqual(f.effects.map(effect => effect.method), ['claim', 'terminate']);
-			assert.deepStrictEqual(f.effects[0].params, { ...CLAIM, local: true });
-			assert.deepStrictEqual(f.effects[1].params, { run: RUN_A, graceMs: 2_000 });
-			assert.deepStrictEqual((f.effects[1].journal as { runs: { stop?: string }[] }).runs.map(run => run.stop), ['requested']);
+			assert.deepStrictEqual(f.effects, []);
 			assert.deepStrictEqual(JSON.parse(fs.readFileSync(f.claimFile, 'utf8')), CLAIM);
+			assert.strictEqual(f.rows[0].ended, false);
 			assert.strictEqual(f.rows[1].ended, false);
 			assert.deepStrictEqual(legacyPinMigration(f.home, A).snapshot(), offered.snapshots[A]);
 		} finally {
@@ -358,28 +327,31 @@ suite('Scoped legacy cutover', () => {
 		if (process.platform === 'win32') { this.skip(); }
 		const f = await fixture();
 		try {
-			f.unconfirmedStop();
 			fs.writeFileSync(path.join(f.registry, 'unavailable.json'), JSON.stringify({
 				protocol: 16, build: 'abcd123456', pid: process.pid, socket: ptydSocketPath(f.home, 16, 'abcd123456'),
 			}));
-			const scope = { owner: A, retired: CLAIM };
+			const scope = { owner: A };
 			const offered = (await checkLegacyCutover(f.home, scope)).plan;
 			assert.ok(offered);
 			assert.ok(await approveLegacyCutover(f.home, scope, offered));
+			const prior = JSON.parse(fs.readFileSync(f.journal, 'utf8'));
+			// A build that could send a stop wrote this receipt before asking the supervisor.
+			Object.assign(prior.runs[0], { stop: 'requested', nativeStop: true });
+			fs.writeFileSync(f.journal, JSON.stringify(prior));
 			const waiting = await checkLegacyCutover(f.home, scope);
 			assert.strictEqual(waiting.ready, false);
 			assert.strictEqual(waiting.unconfirmed, 1);
 			assert.deepStrictEqual(waiting.unavailable, [], 'an unrelated endpoint does not change the pending status');
-			assert.strictEqual((await checkLegacyCutover(f.home, { owner: A })).ready, false, 'reload without native proof stays pending');
+			assert.strictEqual((await checkLegacyCutover(f.home, { owner: A })).ready, false, 'reload preserves the dispatch fence');
 			assert.strictEqual((await checkLegacyCutover(f.home, { owner: 'cccccccccccccccc' })).ready, true);
-			assert.deepStrictEqual(f.effects.map(effect => effect.method), ['claim', 'terminate']);
+			assert.deepStrictEqual(f.effects, []);
 			const progress = JSON.parse(fs.readFileSync(f.journal, 'utf8'));
 			assert.deepStrictEqual([progress.runs[0].stop, progress.runs[0].nativeStop], ['requested', true]);
 			assert.deepStrictEqual(await legacyPinMigration(f.home, A).recover(pin('pin-a', 'scope-a'), () => ({ attempted: false }),
 				async () => assert.fail('unconfirmed stop released recovery')), { kind: 'deferred' });
 			f.rows[0].ended = true;
 			assert.strictEqual((await checkLegacyCutover(f.home, { owner: A })).ready, true);
-			assert.deepStrictEqual(f.effects.map(effect => effect.method), ['claim', 'terminate']);
+			assert.deepStrictEqual(f.effects, []);
 		} finally {
 			await f.dispose();
 		}
@@ -407,20 +379,20 @@ suite('Scoped legacy cutover', () => {
 		}
 	});
 
-	test('keeps consent fixed and drops stop authority when the disk generation changes (ARCHITECTURE-1.4)', async function () {
-		if (process.platform === 'win32') { this.skip(); }
+	test('keeps the approved scope fixed when a prior owner starts another run (ARCHITECTURE-1.4)', async () => {
 		const f = await fixture();
 		try {
-			const scope = { owner: A, retired: CLAIM };
+			const scope = { owner: A };
 			const offered = (await checkLegacyCutover(f.home, scope)).plan;
 			assert.ok(offered);
 			assert.ok(await approveLegacyCutover(f.home, scope, offered));
-			f.onClaim(() => fs.writeFileSync(f.claimFile, JSON.stringify({ ...CLAIM, generation: 2, token: 'new-owner' })));
-			assert.ok((await checkLegacyCutover(f.home, scope)).ready);
-			assert.deepStrictEqual(f.effects.map(effect => effect.method), ['claim']);
 			f.rows.push({ ...f.rows[0], run: 'run-cccccccccccccccccccccccccccccccc', pin: 'late' });
-			assert.ok((await checkLegacyCutover(f.home, scope)).ready);
-			assert.deepStrictEqual(f.effects.map(effect => effect.method), ['claim']);
+			const state = await checkLegacyCutover(f.home, scope);
+			assert.strictEqual(state.ready, true);
+			assert.strictEqual(state.plan, undefined);
+			const journal = JSON.parse(fs.readFileSync(f.journal, 'utf8')) as { runs: { approved: boolean }[] };
+			assert.deepStrictEqual(journal.runs.map(run => run.approved), [true, false]);
+			assert.deepStrictEqual(f.effects, []);
 			assert.ok(f.rows.every(row => !row.ended));
 		} finally {
 			await f.dispose();
@@ -456,7 +428,7 @@ suite('Scoped legacy cutover', () => {
 		}
 	});
 
-	test('two workspace Pins for an exact legacy run share one stop and a durable recovery (ARCHITECTURE-1.4)', async function () {
+	test('two workspace Pins for an exact legacy run share a durable recovery after exit (ARCHITECTURE-1.4)', async function () {
 		if (process.platform === 'win32') { this.skip(); }
 		const f = await fixture();
 		try {
@@ -466,7 +438,7 @@ suite('Scoped legacy cutover', () => {
 			f.savePins(B, [pinB]);
 			const a = legacyPinMigration(f.home, A);
 			const b = legacyPinMigration(f.home, B);
-			const scope = { owner: A, retired: CLAIM };
+			const scope = { owner: A };
 			const offered = (await checkLegacyCutover(f.home, scope)).plan;
 			assert.ok(offered);
 			let started = 0;
@@ -479,10 +451,10 @@ suite('Scoped legacy cutover', () => {
 			assert.strictEqual(started, 0);
 			assert.ok(await approveLegacyCutover(f.home, scope, offered));
 			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
-			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
-			assert.deepStrictEqual(f.effects.filter(effect => effect.method === 'terminate').map(effect => effect.params),
-				[{ run: RUN_A, graceMs: 2_000 }]);
+			assert.deepStrictEqual(await a.recover(pinA, () => ({ attempted: false }), convert), { kind: 'deferred' });
+			assert.deepStrictEqual(f.effects, []);
 			assert.strictEqual(f.rows[1].ended, false, 'the second workspace’s unrelated agent is still live');
+			f.rows[0].ended = true;
 			const confirmed = { kind: 'confirmed', reference: REFERENCE };
 			assert.deepStrictEqual(await Promise.all([
 				a.recover(pinA, () => ({ attempted: false }), convert),

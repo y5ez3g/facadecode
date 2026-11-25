@@ -169,8 +169,7 @@ class ExpandedReview(unittest.TestCase):
                 'candidate': candidate_sha,
             }))
             for variant in RELEASED_CUTOVER_CASES:
-                serving = 'none' if variant == 'uncertain' else 'framework'
-                report = json.dumps({'name': f'cutover-{variant}', 'implementation': serving})
+                report = json.dumps({'name': f'cutover-{variant}', 'implementation': 'framework'})
                 (folder / f'{variant}.log').write_text(
                     f'✔ legacy cutover ({variant}) from 0.1.5 to 0.1.6: {{}}\n'
                     f'Facade acceptance test {report}\nIsolated editor profile cleanup finished.\n'
@@ -183,6 +182,6 @@ class ExpandedReview(unittest.TestCase):
                 check_published_cutover(folder, '0.1.6', candidate)
             changed.write_bytes(original)
             path = folder / 'uncertain.log'
-            path.write_text(path.read_text().replace('"none"', '"framework"'))
+            path.write_text(path.read_text().replace('"framework"', '"none"'))
             with self.assertRaises(AcceptanceError):
                 check_published_cutover(folder, '0.1.6', candidate)

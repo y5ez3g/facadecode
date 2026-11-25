@@ -77,11 +77,10 @@ def check_published_cutover(folder, version, candidate):
     for variant in RELEASED_CUTOVER_CASES:
         path = folder / f'{variant}.log'
         lines = path.read_text().splitlines()
-        serving = 'none' if variant == 'uncertain' else 'framework'
         reports = [json.loads(line.removeprefix('Facade acceptance test '))
                    for line in lines if line.startswith('Facade acceptance test ')]
         passed = any(line.strip().startswith(f'✔ legacy cutover ({variant}) from 0.1.5 to {version}: ') for line in lines)
-        if (not passed or reports != [{'name': f'cutover-{variant}', 'implementation': serving}]
+        if (not passed or reports != [{'name': f'cutover-{variant}', 'implementation': 'framework'}]
                 or lines.count('Isolated editor profile cleanup finished.') != 1):
             raise AcceptanceError(f'{path}: absent, failed or incomplete published cutover evidence')
     return CUTOVER_TYPED_CASES

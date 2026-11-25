@@ -11,9 +11,8 @@ import { connectWithin } from '../../base/connect';
 import { codeOf, messageOf } from '../../base/errors';
 import { isJsonObject } from '../../base/json';
 import { lineReader } from '../../base/lines';
-import type { OwnerClaim } from '../../base/ownership';
 
-// Read-only observation and retirement for the released TypeScript supervisor.
+// Read-only observation of the released TypeScript supervisor.
 export const PTYD_PROTOCOL = 17;
 export const EARLIER_PROTOCOLS = [8, 9, 10, 11, 12, 13, 14, 15, 16] as const;
 const WAIT_MS = 2_000;
@@ -40,8 +39,6 @@ interface Requests {
 	hello: { args: { readonly protocol: number }; result: { readonly protocol: number; readonly pid: number; readonly build?: string } };
 	list: { args: { readonly owner?: string }; result: readonly RunInfo[] };
 	conversations: { args: Record<string, never>; result: readonly Conversation[] };
-	claim: { args: OwnerClaim; result: void };
-	terminate: { args: { readonly run: string; readonly graceMs: number }; result: 'terminated' | 'already_exited' | 'unconfirmed' | 'failed' };
 }
 
 const PIPE_DIRECTORY = '\\\\.\\pipe\\';
@@ -136,8 +133,6 @@ export async function within<T>(answer: Promise<T>, ms = WAIT_MS): Promise<T> {
 export class PtydClient {
 	private nextId = 1;
 	private readonly pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
-	private readonly owners = new Set<(owner: string) => void>();
-	private readonly closing = new Set<() => void>();
 	private greeted?: Requests['hello']['result'];
 
 	private constructor(private readonly socket: Socket) {
@@ -147,9 +142,6 @@ export class PtydClient {
 		socket.once('close', () => {
 			for (const waiting of this.pending.values()) { waiting.reject(new Error('ptyd closed the connection.')); }
 			this.pending.clear();
-			for (const listener of this.closing) { listener(); }
-			this.closing.clear();
-			this.owners.clear();
 		});
 	}
 
@@ -177,10 +169,9 @@ export class PtydClient {
 
 	get build(): string | undefined { return this.greeted?.build; }
 	get pid(): number | undefined { return this.greeted?.pid; }
-	get isClosed(): boolean { return this.socket.destroyed; }
 
 	request<M extends keyof Requests>(method: M, params: Requests[M]['args']): Promise<Requests[M]['result']> {
-		if (this.isClosed) { return Promise.reject(new Error('ptyd is not connected.')); }
+		if (this.socket.destroyed) { return Promise.reject(new Error('ptyd is not connected.')); }
 		const id = this.nextId++;
 		const answer = new Promise<Requests[M]['result']>((resolve, reject) => {
 			this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
@@ -188,20 +179,16 @@ export class PtydClient {
 				if (error && this.pending.delete(id)) { reject(new Error(`Could not confirm the request to ptyd: ${messageOf(error)}`)); }
 			});
 		});
-		return within(answer, method === 'terminate' || method === 'claim' ? 8_000 : WAIT_MS).finally(() => this.pending.delete(id));
+		return within(answer).finally(() => this.pending.delete(id));
 	}
 
-	onDidClose(listener: () => void): void { this.closing.add(listener); }
-	onDidLoseOwner(listener: (owner: string) => void): void { this.owners.add(listener); }
 	dispose(): void { this.socket.destroy(); }
 
 	private read(line: string): void {
 		let frame: unknown;
 		try { frame = JSON.parse(line); } catch { return; }
 		if (!isJsonObject(frame)) { return; }
-		if (frame.event === 'ownerLost' && typeof frame.owner === 'string') {
-			for (const listener of this.owners) { listener(frame.owner); }
-		} else if (typeof frame.id === 'number' && Number.isSafeInteger(frame.id)) {
+		if (typeof frame.id === 'number' && Number.isSafeInteger(frame.id)) {
 			const waiting = this.pending.get(frame.id);
 			this.pending.delete(frame.id);
 			if (typeof frame.error === 'string') { waiting?.reject(new Error(frame.error)); }

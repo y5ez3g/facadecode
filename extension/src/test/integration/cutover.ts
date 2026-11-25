@@ -8,9 +8,8 @@
 //
 //   exited       the legacy agents' processes ended before the update: the saved Pin is recovered once, by its exact session,
 //                without an action, and the unpinned session is not resumed
-//   live         the legacy agents still run: nothing is recovered until the cutover's one action; accepting it ends both original
-//                processes, then the Pin is recovered once by its exact session
-//   uncertain    the legacy execution owner cannot confirm the stop (its ptyd is suspended): accepting leaves recovery pending
+//   live         the cutover's one action freezes the Pin, and recovery follows the released supervisor's grace period
+//   uncertain    the legacy supervisor cannot confirm exit: Framework serves the window while its Pin stays pending
 //   two-windows  as `exited`, with a second window of the same workspace in its own profile: still exactly one recovery
 //   prior-owner  a second profile enters Framework after consent while the released window still owns its runs. The Pin recovers
 //                once after the old window ends its own runs
@@ -22,10 +21,8 @@
 
 import * as assert from 'assert';
 import { spawn, spawnSync } from 'child_process';
-import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { withLongFileLock } from '../../base/lock';
 import type { AgentInfo, AgentRef, DaemonHelloResult } from '../../base/frameworkProtocol';
 import type { FrameworkPin } from '../../core/ports';
 import { Workbench, freePort } from './cdpInput';
@@ -302,7 +299,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		return result;
 	};
 	const waitExited = (workspace: LegacyWorkspace) =>
-		until(`the original PIDs ${workspace.pids.join(', ')} to exit`, () => workspace.pids.every(pid => !alive(pid)) || undefined, 60_000);
+		until(`the original PIDs ${workspace.pids.join(', ')} to exit`, () => workspace.pids.every(pid => !alive(pid)) || undefined, 120_000);
 	const candidateLoaded = async (win: TestWindow, after?: number) => {
 		const loaded = await phase('candidate-loaded', win, after);
 		assertInstalledPair(win, loaded, candidate.version);
@@ -315,16 +312,12 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		assert.notStrictEqual(loaded.hostPid, previous.hostPid, 'the reload started a new candidate extension host');
 		return loaded;
 	};
-	const verifySettings = async (win: TestWindow, mode: 'framework' | 'pending') => {
+	const verifySettings = async (win: TestWindow) => {
 		request(win, 'settings');
 		const result = await phase('settings', win);
 		evidence[`settings-${win.role}`] = result;
-		if (mode === 'pending') {
-			assert.strictEqual(result.opened, undefined, 'the pending command left the Settings file closed');
-		} else {
-			assert.strictEqual(normalizeDriveLetter(String(result.opened)), normalizeDriveLetter(path.join(facade, 'facade.json')),
-				'this window opened the live Framework settings file');
-		}
+		assert.strictEqual(normalizeDriveLetter(String(result.opened)), normalizeDriveLetter(path.join(facade, 'facade.json')),
+			'this window opened the live Framework settings file');
 		return result;
 	};
 	const scoped = (workspace: LegacyWorkspace, snapshot = journal(facade)) =>
@@ -415,46 +408,40 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		for (const { file } of indexed) { fs.unlinkSync(file); }
 		evidence.removedSupervisorIndex = indexed;
 	};
-	const interruptBeforeDispatch = async (win: TestWindow, workspace: LegacyWorkspace, since: number, initial: Line) => {
-		const claimFile = path.join(extensionHome, 'claims', `${createHash('sha256').update(workspace.saved.key).digest('hex')}.json`);
-		const originalClaim: unknown = JSON.parse(fs.readFileSync(claimFile, 'utf8'));
-		const readHandoff = (loaded: Line) => {
-			const handoff = loaded.handoff as { readonly key?: string; readonly reply?: { readonly claim: unknown } } | undefined;
-			assert.strictEqual(handoff?.key, workspace.saved.key);
-			assert.deepStrictEqual(handoff?.reply?.claim, originalClaim, 'the native component still has this workspace’s exact retired claim');
-		};
-		readHandoff(initial);
-		await shownOffer(win);
-		const beforeConsent = await reloadCandidate(win, initial);
-		readHandoff(beforeConsent);
-		return withLongFileLock(claimFile, async () => {
-			await consent(win, workspace, since);
-			assert.ok(scoped(workspace).every(row => row.approved && !row.stop), 'approval is durable while the generation lock holds dispatch');
-			const approved = journal(facade);
-			const afterApproval = await reloadCandidate(win, beforeConsent);
-			readHandoff(afterApproval);
-			assertExactRows(workspace, scoped(workspace), true);
-			assert.ok(workspace.pids.every(alive), 'the same released processes survive the pre-dispatch reload');
-			assert.strictEqual(frameworkListens(facade), false, 'the owning workspace still waits for its authorized stops');
-			assert.deepStrictEqual(launches().slice(since), [], 'no replacement launched while the claim lock was held');
-			assert.deepStrictEqual(journal(facade)?.snapshots, approved?.snapshots, 'the frozen Pins survive both reloads');
-			evidence.beforeDispatchReload = { initial, beforeConsent, afterApproval, approved };
-			return afterApproval;
-		}, 10_000);
-	};
 	const migrateLive = async (win: TestWindow, workspace: LegacyWorkspace, since: number, stillAlive: readonly number[] = []) => {
 		await install(win, candidate.files);
 		request(win, 'reload');
-		let pendingHost = await candidateLoaded(win);
-		if (variant === 'live') { pendingHost = await interruptBeforeDispatch(win, workspace, since, pendingHost); }
-		else { await consent(win, workspace, since); }
+		const initial = await candidateLoaded(win);
+		let beforeConsent = initial;
+		if (variant === 'live') {
+			await shownOffer(win);
+			beforeConsent = await reloadCandidate(win, initial);
+		}
+		const beforeApproval = lines().length;
+		await consent(win, workspace, since);
+		const approved = journal(facade);
+		let servingHost = await candidateLoaded(win, beforeApproval);
+		assert.notStrictEqual(servingHost.hostPid, beforeConsent.hostPid, 'the editor entered Framework after consent');
+		if (variant === 'live') {
+			servingHost = await reloadCandidate(win, servingHost);
+			evidence.reloads = { initial, beforeConsent, servingHost };
+		}
+		assert.deepStrictEqual(journal(facade)?.snapshots, approved?.snapshots, 'the frozen Pins survive reload');
+		assert.ok(workspace.pids.every(alive), 'original processes survive while Framework starts');
+		assert.ok(scoped(workspace).every(row => row.approved && !row.nativeStop && !row.stop), 'approval did not take supervisor custody');
+		assert.deepStrictEqual(launches().slice(since), [], 'the live session kept the Pin queued');
+		await verifySettings(win);
 		await waitExited(workspace);
+		const log = fs.readFileSync(path.join(extensionHome, 'ptyd', 'ptyd.log'), 'utf8');
+		for (const agent of workspace.agents) {
+			assert.ok(log.includes(`Ending run ${agent.run}: its owner connection was absent past its grace period.`),
+				`the released supervisor retired ${agent.run} through its grace period`);
+		}
 		const recovered = await recoveredExactly(win, workspace, since, stillAlive);
 		const completed = scoped(workspace);
 		assertExactRows(workspace, completed, true);
-		assert.ok(completed.every(row => row.stop === 'confirmed' && row.nativeStop), 'both native stop results were durably confirmed');
-		const readyHost = await verifySettings(win, 'framework');
-		assert.notStrictEqual(readyHost.hostPid, pendingHost.hostPid, 'the editor reloaded after the native stops were confirmed');
+		assert.ok(completed.every(row => !row.nativeStop), 'the candidate dispatched no stops');
+		assert.strictEqual(completed.find(row => row.run === workspace.agents[0].run)?.stop, 'confirmed', 'the retired session has a durable exit');
 		return recovered;
 	};
 
@@ -520,7 +507,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 			if (second) { await candidateLoaded(second); }
 			await recoveredExactly(primary, original, since);
 			for (const win of windows) {
-				await verifySettings(win, 'framework');
+				await verifySettings(win);
 				request(win, 'showlist');
 				await pause(500);
 				const seen = await notices(win);
@@ -533,7 +520,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 			await candidateLoaded(second);
 			await consent(second, original, since);
 			await until('Framework to serve the candidate of the same workspace', () => frameworkListens(facade) || undefined, 60_000);
-			await verifySettings(second, 'framework');
+			await verifySettings(second);
 			const held = scoped(original);
 			assert.ok(held.every(row => !row.stop && !row.nativeStop), 'no native stop was dispatched while the released window held custody');
 			assert.ok(original.pids.every(alive), 'the released window still owns both original processes while Framework serves the candidate');
@@ -547,53 +534,42 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 			await recoveredExactly(second, original, since);
 		} else {
 			assert.strictEqual(variant, 'uncertain');
-			for (const agent of original.agents) {
-				fs.writeFileSync(`${record}.quirks.${agent.alias}`, JSON.stringify({ keepOnHangup: true }));
-			}
 			await install(primary, candidate.files);
 			request(primary, 'reload');
-			const pendingHost = await candidateLoaded(primary);
+			await candidateLoaded(primary);
+			const beforeApproval = lines().length;
 			await consent(primary, original, since);
-			// The fake CLI attests a dispatched hangup. Suspend only this fixture's ptyd before it escalates that stop.
-			const deadline = Date.now() + 30_000;
-			let sent: Journal | undefined;
-			while (!sent && Date.now() < deadline) {
-				const current = journal(facade);
-				if (scoped(original, current).some(row => row.stop === 'requested' && row.nativeStop)
-					&& original.agents.some(agent => fs.existsSync(`${record}.hangups.${agent.alias}`))) {
-					sent = current;
-				} else {
-					await pause(20);
-				}
-			}
-			assert.ok(sent, 'the fixture received a native stop while its journal still marked it requested');
+			// Suspend only this fixture's supervisor before its grace period can retire these runs.
 			const owners = legacyOwners(facade);
 			assert.ok(owners.length > 0, 'the scoped execution owner is running');
 			for (const pid of owners) { process.kill(pid, 'SIGSTOP'); suspended.push(pid); }
-			evidence.requested = { journal: sent, suspendedOwners: owners };
+			evidence.suspended = { journal: journal(facade), suspendedOwners: owners };
+			const servingHost = await candidateLoaded(primary, beforeApproval);
+			const settings = await verifySettings(primary);
+			assert.strictEqual(settings.hostPid, servingHost.hostPid, 'the candidate serves Framework after the consent reload');
+			await until('the saved Pin to remain in the workspace import sidecar', () => {
+				const progress = legacyPinProgress(facade)[original.saved.key] as { pending: readonly unknown[] } | undefined;
+				return progress?.pending.length === 1 ? true : undefined;
+			});
 			await pause(30_000);
 			const after = journal(facade);
 			const waiting = scoped(original, after);
-			const settings = await verifySettings(primary, 'pending');
-			request(primary, 'showlist');
-			await pause(500);
-			const seen = await notices(primary);
-			evidence.pending = { pids: original.pids.map(pid => ({ pid, alive: alive(pid) })), journal: after, notices: seen,
-				progress: legacyPinProgress(facade), launches: launches().slice(since), frameworkListens: frameworkListens(facade) };
-			assert.strictEqual(settings.hostPid, pendingHost.hostPid, 'the candidate stayed in the host that presented consent');
-			assert.ok(seen.some(notice => /^(Could not verify legacy agent processes|Waiting to confirm that \d+ legacy agent processes have exited)/u.test(notice.message)),
-				'the settings action reported the pending stop in the native editor');
+			const progress = legacyPinProgress(facade)[original.saved.key];
+			evidence.pending = { pids: original.pids.map(pid => ({ pid, alive: alive(pid) })), journal: after,
+				progress, launches: launches().slice(since), frameworkListens: frameworkListens(facade) };
+			assert.deepStrictEqual((progress as { pending: readonly unknown[] }).pending, original.saved.pins, 'the Pin stayed deferred');
 			assert.ok(original.pids.every(alive), 'both unconfirmed legacy processes are still live');
 			assert.ok(after);
 			assertExactRows(original, waiting, true);
 			assertSnapshot(original, after);
-			assert.ok(waiting.some(row => row.stop === 'requested' && row.nativeStop), 'the unresolved native stop stays requested');
-			assert.strictEqual(frameworkListens(facade), false, 'the candidate remained pending without a Framework daemon');
+			assert.ok(waiting.every(row => !row.stop && !row.nativeStop), 'no stop or exit was assumed');
+			assert.ok(frameworkListens(facade), 'Framework serves this window while the legacy Pin waits');
+			assert.deepStrictEqual(await managed(), [], 'Framework holds no replacement agent');
 			assert.deepStrictEqual(launches().slice(since), [], 'the candidate launched no replacement while exit was uncertain');
 		}
 		const workspaces = path.join(extensionHome, 'workspaces');
 		const rosterOwners = fs.readdirSync(workspaces).filter(owner => fs.existsSync(path.join(workspaces, owner, 'orchestrator-workspace.json')));
-		const expectedOwners = variant === 'uncertain' ? [] : [original.saved.key, ...(other ? [other.saved.key] : [])];
+		const expectedOwners = [original.saved.key, ...(other ? [other.saved.key] : [])];
 		assert.deepStrictEqual(rosterOwners.sort(), expectedOwners.sort(), 'each workspace that entered Framework has one canonical roster');
 		evidence.rosterOwners = rosterOwners;
 		evidence.windowLoads = lines().filter(line => line.phase === 'candidate-loaded');

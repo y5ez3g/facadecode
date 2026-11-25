@@ -49,24 +49,6 @@ function installedPair() {
 		mainPath: main?.extensionPath, componentPath: component?.extensionPath };
 }
 
-/** Observe the installed Window Component's reply before the runner clicks consent. */
-async function observedHandoff(): Promise<unknown> {
-	const uri = vscode.workspace.workspaceFolders?.[0]?.uri.toString();
-	const home = process.env.FACADE_HOME;
-	if (!home || !uri) { return undefined; }
-	const file = path.join(home, 'extension', 'workspace-uris.json');
-	if (!fs.existsSync(file)) { return undefined; }
-	const ledger = JSON.parse(fs.readFileSync(file, 'utf8')) as { bindings: Record<string, string> };
-	const key = ledger.bindings[process.platform === 'linux' ? uri : uri.toLowerCase()];
-	if (!key) { return undefined; }
-	try {
-		const reply = await vscode.commands.executeCommand('facade.window.legacyHandoff', vscode.env.sessionId, key);
-		return { key, reply: reply ?? null };
-	} catch (error) {
-		return { key, error: String(error) };
-	}
-}
-
 /** The legacy agents the fake CLI says started, by the files `<record>.#aN` holding their process IDs. */
 function started(): string[] {
 	const dir = path.dirname(RECORD), prefix = `${path.basename(RECORD)}.`;
@@ -179,7 +161,7 @@ async function legacy(): Promise<void> {
 /** In the candidate: report which packages and host are active, even while the host is waiting on cutover. */
 async function candidate(): Promise<void> {
 	await activated();
-	write({ phase: 'candidate-loaded', ...installedPair(), hostPid: process.pid, handoff: await observedHandoff() });
+	write({ phase: 'candidate-loaded', ...installedPair(), hostPid: process.pid });
 	for (;;) {
 		const step = await until('a runner request for the candidate window', () =>
 			['reload', 'showlist', 'settings'].find(each => fs.existsSync(`${OUT}.${ROLE}.${each}`)), 300_000).catch(() => undefined);

@@ -110,7 +110,6 @@
 			"Window identity": ["withFileLock"]
 		},
 		"base/ownership.ts": {
-			"Legacy migration": ["OwnerClaim", "isOwnerClaim"],
 			"Stale tab cleanup": ["OwnerClaim", "isOwnerClaim"],
 			"Window identity": ["OwnerClaim", "isOwnerClaim"]
 		},
@@ -127,7 +126,7 @@
 		},
 		"base/windowIdentity.ts": {
 			"Editor tabs": ["TERMINAL_REGISTRATION_MS", "TerminalOwner", "TerminalRegistration", "WINDOW_TERMINALS_COMMAND"],
-			"Legacy migration": ["WINDOW_IDENTITY_COMMAND", "WINDOW_LEGACY_HANDOFF_COMMAND", "WindowIdentity", "isWindowIdentity"],
+			"Legacy migration": ["WINDOW_IDENTITY_COMMAND", "WindowIdentity", "isWindowIdentity"],
 			"Stale tab cleanup": ["TERMINAL_REGISTRATION_MS", "isTerminalRegistration", "isWindowToken"]
 		},
 		"core/errors.ts": {
@@ -258,9 +257,6 @@
 		},
 		"host/windowTerminals.ts": {
 			"Window identity": ["WindowTerminals"]
-		},
-		"record/ownership.ts": {
-			"Legacy migration": ["isCurrentOwner", "writeAsOwner"]
 		},
 		"record/paths.ts": {
 			"Git worktrees": ["facadeHome"],

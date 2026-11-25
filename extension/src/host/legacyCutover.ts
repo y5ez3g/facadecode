@@ -10,11 +10,9 @@ import { isSameFolder, realFolderOf, replaceFile } from '../base/files';
 import type { AgentRef } from '../base/frameworkProtocol';
 import { isJsonObject } from '../base/json';
 import { withLongFileLock } from '../base/lock';
-import type { OwnerClaim } from '../base/ownership';
 import { ptydRecords } from '../base/ptydRegistry';
 import { isSameStart, processStartTimeAsync, processStartTimeOfAsync } from '../base/system';
 import type { Pin } from '../core/ports';
-import { isCurrentOwner, writeAsOwner } from '../record/ownership';
 import {
 	EARLIER_PROTOCOLS, PTYD_PROTOCOL, PtydClient, ptydListenerLockedAt, ptydSocketPath, releasedPtydSockets, within, type RunInfo,
 } from './migration/supervisor';
@@ -25,8 +23,6 @@ import {
 import { isPin } from './pins';
 
 const PROTOCOLS = [...EARLIER_PROTOCOLS, PTYD_PROTOCOL];
-const RELEASED_RUN_ID = /^run-[0-9a-f]{32}$/u;
-const TERMINATE_GRACE_MS = 2_000;
 const JOURNAL_WAIT_MS = 16_000;
 
 interface Endpoint {
@@ -53,7 +49,6 @@ interface LegacyRunIdentity {
 
 export interface LegacyCutoverScope {
 	readonly owner: string;
-	readonly retired?: OwnerClaim;
 }
 
 interface ObservedRun {
@@ -68,6 +63,7 @@ interface ObservedRun {
 	readonly startedAt?: number;
 	readonly identity?: LegacyRunIdentity;
 	readonly stop?: 'requested' | 'confirmed';
+	/** A previously dispatched stop recorded by an older cutover adapter. */
 	readonly nativeStop?: true;
 	readonly uncertain?: true;
 }
@@ -103,7 +99,6 @@ export interface CutoverPlan {
 
 interface Listing {
 	readonly endpoint: Endpoint;
-	readonly client?: PtydClient;
 	readonly incarnation?: string;
 	readonly publishedIncarnation?: string;
 	readonly runs: readonly RunInfo[];
@@ -303,10 +298,11 @@ async function open(endpoint: Endpoint): Promise<Listing> {
 		if ((released || pid !== undefined) && !listenerIncarnation && !publishedIncarnation) {
 			throw new Error('The legacy supervisor has no verified listener lock or registry record.');
 		}
-		return { endpoint, client, incarnation: listenerIncarnation ?? publishedIncarnation, publishedIncarnation, runs: await list(client) };
+		return { endpoint, incarnation: listenerIncarnation ?? publishedIncarnation, publishedIncarnation, runs: await list(client) };
 	} catch (error) {
-		client?.dispose();
 		return { endpoint, runs: [], unavailable: `${endpoint.socket}: ${messageOf(error)}` };
+	} finally {
+		client?.dispose();
 	}
 }
 
@@ -381,10 +377,6 @@ async function scan(home: string, before: CutoverRecord): Promise<Scan> {
 	return { listings: await Promise.all(discovered.endpoints.map(endpoint => open(endpoint))), unavailable: discovered.unavailable };
 }
 
-function close(scan: Scan): void {
-	for (const { client } of scan.listings) { client?.dispose(); }
-}
-
 /** Keep old rows and fences even when an endpoint goes away. Only exact evidence advances a row. */
 async function reconcile(before: CutoverRecord, scan: Scan, relevant: (row: ObservedRun) => boolean): Promise<CutoverRecord> {
 	const runs = new Map(before.runs.map(row => [runKey(row), row]));
@@ -410,7 +402,7 @@ async function reconcile(before: CutoverRecord, scan: Scan, relevant: (row: Obse
 		if (!relevant(row) || keys.has(key) || row.stop === 'confirmed') { continue; }
 		// Protocol 17's complete list retains uncertain exits and removes failed queued spawns.
 		const queueCleared = row.pid === 0 && !row.uncertain && !row.stop && row.protocol === PTYD_PROTOCOL
-			&& scan.listings.some(listing => listing.client && sameSupervisor(row, listing));
+			&& scan.listings.some(listing => sameSupervisor(row, listing));
 		if (queueCleared || await processGone(row.pid, row.processStartedAt)) {
 			runs.set(key, { ...row, stop: 'confirmed' });
 		}
@@ -435,48 +427,25 @@ export async function approveLegacyCutover(home: string, scope: LegacyCutoverSco
 	return withLongFileLock(journal(home), async () => {
 		const before = readCutover(home);
 		const observed = await scan(home, before);
-		try {
-			const checked = await reconcile(before, observed, row => row.owner === scope.owner);
-			const latest = consentPlan(home, checked, observed, scope.owner);
-			if (!latest || cutoverPlanIdentity(latest) !== cutoverPlanIdentity(offered)) { return false; }
-			const source = latest.snapshots[scope.owner];
-			const approved = new Set(latest.runs.map(runKey));
-			save(home, before, {
-				...checked,
-				snapshots: { ...checked.snapshots, [scope.owner]: source.pins },
-				unrecognizedPins: { ...checked.unrecognizedPins, [scope.owner]: source.unrecognized },
-				runs: checked.runs.map(run => approved.has(runKey(run)) ? { ...run, approved: true } : run),
-			});
-			return true;
-		} finally {
-			close(observed);
-		}
+		const checked = await reconcile(before, observed, row => row.owner === scope.owner);
+		const latest = consentPlan(home, checked, observed, scope.owner);
+		if (!latest || cutoverPlanIdentity(latest) !== cutoverPlanIdentity(offered)) { return false; }
+		const source = latest.snapshots[scope.owner];
+		const approved = new Set(latest.runs.map(runKey));
+		save(home, before, {
+			...checked,
+			snapshots: { ...checked.snapshots, [scope.owner]: source.pins },
+			unrecognizedPins: { ...checked.unrecognizedPins, [scope.owner]: source.unrecognized },
+			runs: checked.runs.map(run => approved.has(runKey(run)) ? { ...run, approved: true } : run),
+		});
+		return true;
 	}, JOURNAL_WAIT_MS);
 }
 
 const READY: CutoverState = { ready: true, unavailable: [], waitingForOwner: 0, unconfirmed: 0 };
 
-function currentRetirement(home: string, scope: LegacyCutoverScope): OwnerClaim | undefined {
-	const retired = scope.retired;
-	return retired?.owner === scope.owner && retired.local !== false && isCurrentOwner(retired, home) ? retired : undefined;
-}
-
-function otherCustody(row: RunInfo): boolean {
-	return row.claimedElsewhere || row.meta.environment !== 'local';
-}
-
-function stopStatus(record: CutoverRecord, fresh: Scan, scope: LegacyCutoverScope, duplicate: ReadonlySet<string>, home: string): CutoverState {
-	const retired = currentRetirement(home, scope);
-	const pending = record.runs.filter(run => {
-		if (run.owner !== scope.owner || run.stop === 'confirmed') { return false; }
-		// Dispatch is durable even when this native window's handoff is no longer available.
-		if (run.nativeStop && run.stop === 'requested') { return true; }
-		if (!retired || !run.approved || run.stop || !run.incarnation || run.protocol !== PTYD_PROTOCOL
-			|| run.identity?.environment !== 'local' || duplicate.has(run.run) || !RELEASED_RUN_ID.test(run.run)) { return false; }
-		const listing = fresh.listings.find(each => each.endpoint.socket === run.socket);
-		// If another live window holds this owner at the exact listener, leave custody there.
-		return !listing?.runs.some(row => row.owner === scope.owner && !row.exited && otherCustody(row));
-	});
+function previousStopStatus(record: CutoverRecord, fresh: Scan, owner: string): CutoverState {
+	const pending = record.runs.filter(run => run.owner === owner && run.nativeStop && run.stop === 'requested');
 	if (!pending.length) { return READY; }
 	const unavailable = fresh.listings.flatMap(listing => listing.unavailable
 		&& pending.some(run => run.socket === listing.endpoint.socket) ? [listing.unavailable] : []);
@@ -491,81 +460,17 @@ export async function checkLegacyCutover(home: string, scope?: LegacyCutoverScop
 	return withLongFileLock(journal(home), async () => {
 		const before = readCutover(home);
 		const fresh = await scan(home, before);
-		try {
-			let checked = await reconcile(before, fresh, row => row.owner === scope.owner);
-			save(home, before, checked);
-			const plan = consentPlan(home, checked, fresh, scope.owner);
-			if (plan) { return { ...READY, ready: false, plan }; }
-
-			const seen = new Set<string>();
-			const duplicate = new Set<string>();
-			for (const listing of fresh.listings) {
-				for (const { owner, run } of listing.runs) {
-					if (owner !== scope.owner) { continue; }
-					if (seen.has(run)) { duplicate.add(run); }
-					seen.add(run);
-				}
-			}
-			await Promise.all(fresh.listings.map(listing =>
-				stopApproved(home, scope, listing, duplicate, () => checked.runs, (run, stop) => {
-					const next = { ...checked, runs: checked.runs.map(each =>
-						runKey(each) === runKey(run) ? { ...each, nativeStop: true as const, stop } : each) };
-					save(home, checked, next);
-					checked = next;
-				})));
-			return stopStatus(checked, fresh, scope, duplicate, home);
-		} finally {
-			close(fresh);
-		}
+		const checked = await reconcile(before, fresh, row => row.owner === scope.owner);
+		save(home, before, checked);
+		const plan = consentPlan(home, checked, fresh, scope.owner);
+		if (plan) { return { ...READY, ready: false, plan }; }
+		// Protocol 17 reports run attachment, never whether another socket holds the workspace claim.
+		// Keep the supervisor's own grace period intact and leave live sessions fenced during Pin recovery.
+		return previousStopStatus(checked, fresh, scope.owner);
 	}, JOURNAL_WAIT_MS).catch(error => {
 		if (error instanceof InvalidCutoverRecord) { return READY; }
 		throw error;
 	});
-}
-
-async function stopApproved(home: string, scope: LegacyCutoverScope, listing: Listing, duplicate: ReadonlySet<string>,
-	progress: () => readonly ObservedRun[], advance: (run: ObservedRun, stop: 'requested' | 'confirmed') => void): Promise<void> {
-	const { client, endpoint } = listing;
-	const retired = currentRetirement(home, scope);
-	if (!client || !retired || endpoint.protocol !== PTYD_PROTOCOL) { return; }
-	const retiredOwnerRows = (rows: readonly RunInfo[]) => rows.filter(row => row.owner === scope.owner && !row.exited);
-	const targets = (rows: readonly RunInfo[]) => progress().filter(run => run.owner === scope.owner && run.incarnation
-		&& run.approved && !run.stop && run.pid > 0 && run.processStartedAt !== undefined
-		&& !duplicate.has(run.run) && RELEASED_RUN_ID.test(run.run)
-		&& rows.some(row => !row.uncertain && sameRun(run, listing, row)));
-	const rows = retiredOwnerRows(listing.runs);
-	if (rows.some(otherCustody) || !targets(rows).length) { return; }
-	const requests: Promise<void>[] = [];
-	let lost = false;
-	client.onDidLoseOwner(owner => { if (owner === scope.owner) { lost = true; } });
-	try {
-		const beforeClaim = retiredOwnerRows(await list(client));
-		if (beforeClaim.some(otherCustody) || !targets(beforeClaim).length) { return; }
-		// The released host can close every terminal view before recording retirement. Its claim still
-		// identifies the local owner, while the supervisor supplies the exact run and process identities.
-		let claim: Promise<void> | undefined;
-		writeAsOwner(retired, home, () => { claim = client.request('claim', { ...retired, local: true }); });
-		if (!claim) { return; }
-		await claim;
-		const beforeStop = retiredOwnerRows(await list(client));
-		if (beforeStop.some(otherCustody)) { return; }
-		for (const run of targets(beforeStop)) {
-			if (lost || client.isClosed) { break; }
-			const sent = writeAsOwner(retired, home, () => {
-				advance(run, 'requested');
-				const answer = client.request('terminate', { run: run.run, graceMs: TERMINATE_GRACE_MS });
-				requests.push(answer.then(result => {
-					// A bare already_exited also means an unknown ID. The next inventory or the original PID can prove exit.
-					if (result === 'terminated') { advance(run, 'confirmed'); }
-				}));
-			});
-			if (!sent) { break; }
-		}
-	} catch {
-		// An unavailable endpoint or an ownership transfer cannot authorize retrying a dispatched stop.
-	} finally {
-		await Promise.allSettled(requests);
-	}
 }
 
 function normalizedFolder(folder: string): string {
@@ -637,20 +542,16 @@ export function legacyPinMigration(home: string, owner: string): LegacyPinMigrat
 				// The workspace inspects an already confirmed reference before adoption. No legacy effect is needed.
 				if (existing?.reference) { return existing; }
 				const fresh = await scan(home, before);
-				try {
-					const relevant = (row: ObservedRun) => affectsPin(pin, owner, row);
-					const checked = await reconcile(before, fresh, relevant);
-					save(home, before, checked);
-					const current = select(checked);
-					if (current?.reference) { return current; }
-					const live = fresh.listings.some(listing => listing.runs.some(row =>
-						!row.exited && relevant(observed(listing, row))));
-					const pending = checked.runs.some(row => row.stop !== 'confirmed' && relevant(row));
-					if (live || pending || fresh.unavailable.length || fresh.listings.some(row => row.unavailable)) { return; }
-					return current;
-				} finally {
-					close(fresh);
-				}
+				const relevant = (row: ObservedRun) => affectsPin(pin, owner, row);
+				const checked = await reconcile(before, fresh, relevant);
+				save(home, before, checked);
+				const current = select(checked);
+				if (current?.reference) { return current; }
+				const live = fresh.listings.some(listing => listing.runs.some(row =>
+					!row.exited && relevant(observed(listing, row))));
+				const pending = checked.runs.some(row => row.stop !== 'confirmed' && relevant(row));
+				if (live || pending || fresh.unavailable.length || fresh.listings.some(row => row.unavailable)) { return; }
+				return current;
 			}, JOURNAL_WAIT_MS);
 			const selection = readHistorical() ?? await observe();
 			if (!selection) { return { kind: 'deferred' }; }

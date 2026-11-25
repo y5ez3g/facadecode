@@ -9,8 +9,7 @@ import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { withLongFileLock } from '../base/lock';
 import { isJsonObject } from '../base/json';
-import { isOwnerClaim } from '../base/ownership';
-import { isWindowIdentity, WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_HANDOFF_COMMAND } from '../base/windowIdentity';
+import { isWindowIdentity, WINDOW_IDENTITY_COMMAND } from '../base/windowIdentity';
 import { resolveWorkspaceRecord } from '../record/workspace';
 import { COMMANDS, PANEL_VIEW } from '../ui/catalog';
 import { FACADE_PROGRAM } from './framework/daemonTypes';
@@ -25,22 +24,16 @@ async function resolvePredecessor(home: string): Promise<
 	const folders = (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.toString());
 	const session = vscode.env.sessionId;
 	const uri = (vscode.workspace.workspaceFile ?? vscode.workspace.workspaceFolders?.[0]?.uri)?.toString() ?? `untitled:${session}`;
-	const identify = async (command: string, ...args: string[]): Promise<unknown> => {
-		try { return await vscode.commands.executeCommand(command, session, ...args); }
-		catch { return undefined; }
-	};
-	const reply = await identify(WINDOW_IDENTITY_COMMAND);
+	let reply: unknown;
+	try { reply = await vscode.commands.executeCommand(WINDOW_IDENTITY_COMMAND, session); }
+	catch { /* The URI ledger can still verify this workspace. */ }
 	const window = isWindowIdentity(reply, session) ? reply : undefined;
 	const record = resolveWorkspaceRecord(uri, home, undefined,
 		window ? { token: window.token, folders } : undefined);
 	const owner = record.handedOver ?? record.binding.key ?? (window && !folders.length
 		? folderlessOwner(home, window.token, uri) : undefined);
 	if (!owner) { return undefined; }
-	const handoff = window && window.remote === undefined && vscode.env.remoteName === undefined
-		? await identify(WINDOW_LEGACY_HANDOFF_COMMAND, owner) : undefined;
-	const retired = isJsonObject(handoff) && handoff.version === 1 && handoff.session === session && handoff.token === window?.token
-		&& isOwnerClaim(handoff.claim) && handoff.claim.owner === owner ? handoff.claim : undefined;
-	return { predecessor: { owner, window }, scope: { owner, retired } };
+	return { predecessor: { owner, window }, scope: { owner } };
 }
 
 function folderlessOwner(home: string, token: string, uri: string): string | undefined {

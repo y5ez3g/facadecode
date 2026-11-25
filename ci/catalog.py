@@ -53,7 +53,7 @@ REQUIRED_EDITOR_ROUTES = {
 EDITOR_DRIVERS = {
     'activation-failure': ('none', 'claude'),
     'cutover-live': ('framework', 'claude'),
-    'cutover-uncertain': ('none', 'claude'),
+    'cutover-uncertain': ('framework', 'claude'),
     'incompatible-activation': ('none', 'claude'),
     'install-pair': ('framework', 'claude'),
     'lifetime': ('framework', 'claude'),

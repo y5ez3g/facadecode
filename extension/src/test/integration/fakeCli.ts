@@ -214,8 +214,6 @@ interface Quirks {
 	readonly reportedTitle?: string;
 	/** Questions to its terminal - its cursor, the device attributes, its colours - written once, as the quirk is given (ARCHITECTURE-2.3). */
 	readonly ask?: string;
-	/** Keeps running on a hangup, as a CLI that ignores it does: only a stronger signal ends it. */
-	readonly keepOnHangup?: boolean;
 }
 const QUIRKS = `${record}.quirks.${agent}`;
 function quirks(): Quirks {
@@ -225,14 +223,7 @@ function quirks(): Quirks {
 		return {};
 	}
 }
-// A hangup ends it as it ends a process with no handler, unless its quirk keeps it
-process.on('SIGHUP', () => {
-	if (quirks().keepOnHangup) {
-		fs.appendFileSync(`${record}.hangups.${agent}`, `${Date.now()}\n`);
-		return;
-	}
-	process.exit(129);
-});
+process.on('SIGHUP', () => process.exit(129));
 
 /** Redraws the whole screen in one synchronized update, so that no reading ever sees half of it. */
 function draw(): void {

@@ -7,7 +7,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { isWindowIdentity, WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_HANDOFF_COMMAND, WINDOW_LEGACY_INSTANCE_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
+import { isWindowIdentity, WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_INSTANCE_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
 import { withModules } from './withModules';
 
 suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-2.4)', () => {
@@ -78,7 +78,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 
 	function assertOnlyTerminalCommands(): void {
 		assert.deepStrictEqual([...commands.keys()].sort(), [
-			WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_HANDOFF_COMMAND, WINDOW_LEGACY_INSTANCE_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND
+			WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_INSTANCE_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND
 		].sort());
 	}
 
@@ -161,25 +161,6 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 			restarted.dispose();
 			initial.dispose();
 			if (before === undefined) { delete process.env.FACADE_HOME; } else { process.env.FACADE_HOME = before; }
-		}
-	});
-
-	test('the native handoff returns the local retired claim after the old terminal views close (ARCHITECTURE-1.4)', async () => {
-		const token = '03fded10-d96f-4f93-a0e9-ed8553af5606';
-		const claim = { owner: '0123456789abcdef', token: 'old-claim', generation: 1 };
-		fs.writeFileSync(path.join(temp, 'handover.json'), JSON.stringify({ version: 1, token }));
-		fs.writeFileSync(path.join(temp, 'terminals.json'), JSON.stringify({
-			version: 1, epoch: token, retired: [{ claim, runs: [] }]
-		}));
-		const window = activateWindowComponent(temp);
-		try {
-			assert.strictEqual(await window.command(WINDOW_LEGACY_HANDOFF_COMMAND, 'older-session', claim.owner), undefined);
-			assert.strictEqual(await window.command(WINDOW_LEGACY_HANDOFF_COMMAND, session, 'different-owner'), undefined);
-			assert.deepStrictEqual(await window.command(WINDOW_LEGACY_HANDOFF_COMMAND, session, claim.owner), {
-				version: 1, token, session, claim
-			});
-		} finally {
-			window.dispose();
 		}
 	});
 

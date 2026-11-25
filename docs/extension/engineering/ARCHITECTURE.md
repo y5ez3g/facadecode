@@ -80,27 +80,25 @@ three bundle graphs and both VSIX contents. Only the entry points, host and UI i
 
 A compatible Framework activation reconnects to existing agents. To upgrade a legacy workspace, resolve its
 execution home and predecessor identity. When its legacy agents still run, show the existing confirmation with
-the counts of affected runs and saved Pins. Approval covers those exact runs. Freeze the saved Pins before asking
-the supervisor to stop a run, and wait for confirmed exit before restoring its Pin.
+the counts of affected runs and saved Pins. Approval freezes the saved Pins for those exact runs. Restore each
+Pin after confirmed exit of the legacy process that can hold it.
 
 An independent old workspace retains ownership of its agents and can upgrade later. Its processes do not hold
-the current workspace at the cutover screen. Successors of the same workspace share the durable approval,
-stop outcome and Pin recovery result. The first approved claimant that can legitimately obtain custody stops the
-exact run and publishes the confirmed Framework reference after recovery. An old window still holding custody
-can finish or stop its own agents. A successor that cannot obtain custody can activate Framework and defer
-the affected recovery. Defer recovery while the exact old session may still be in use. Keep uncertain outcomes
-fenced. A window waiting for its authorized stops reloads when they are confirmed. When there is no such stop to
-wait for, it activates Framework immediately. Framework activation failure reports the error and offers a reload.
+the current workspace at the cutover screen. An old window can finish or stop its own agents. When the legacy
+workspace host disconnects, its supervisor ends disconnected local runs after its 90-second grace period,
+or after five minutes for a remote owner. The successor activates Framework after approval and defers the
+affected recovery until it observes affirmative exit. Successors share the durable approval, exit evidence
+and one confirmed Framework reference for the same saved session. Keep uncertain outcomes fenced.
+When a prior cutover has already dispatched an authorized stop, wait for confirmed exit or process proof
+and reload into Framework once it arrives. Framework activation failure reports the error and offers a reload.
 Group 6 owns Framework connection and workspace recovery.
 
-For a local successor, the Window Component supplies its predecessor's retired workspace claim. The released
-component records the owner generation even when it has already disposed of all terminal views. The migration
-adapter discovers that release's listener for the exact execution home, including when its registry entry is missing.
-It corroborates the listener and named run with the supervisor protocol and process identity. The local component
-carries the retired claim through reloads before consent or dispatch. The adapter reuses the claim only while its
-generation and token still match the persisted owner and no live row of that owner on the supervisor is attached
-elsewhere. Claim validation and dispatch share the generation lock. Each stop names an approved, unambiguous run
-and its confirmed process identity.
+The migration adapter uses read-only queries on the released supervisor. A native retirement record describes
+the terminal registry. The released protocol reports run attachment and leaves workspace socket custody unknown.
+An owner may already have reconnected by the time the adapter observes an unattached run. Issuing a claim can
+replace that live connection even with the same generation and token. The adapter discovers the released listener
+for the exact execution home, including when its registry entry is missing, and corroborates the listener and
+run with the supervisor protocol and process identity.
 
 A full list from the same verified supervisor can settle a queued run that failed before receiving a PID.
 A committed shared reference can be inspected and adopted while an unrelated supervisor is unavailable.
@@ -134,8 +132,7 @@ terminal registry retires only verified predecessor handles (6.3). VERIFICATION-
 
 The workspace host uses the typed daemon protocol for exact starts, stops, resumes, subscriptions and terminal input.
 The owner of each operation projects an unavailable answer separately from a confirmed end. Terminal closure updates
-the view and the roster manages membership, Pins and hiding. Published supervisor stops use the process and custody
-evidence in 1.4.
+the view and the roster manages membership, Pins and hiding. The adapter observes published supervisor exits as in 1.4.
 
 ### 2.4 Journals, pressure and upgrades
 
@@ -146,8 +143,8 @@ replacement. A compatible replacement preserves the process, exact session and t
 leaves its outcome uncertain and reports the connection failure (6.1).
 
 The migration adapter observes the published legacy supervisor registry and workspace records. It persists scoped
-consent and stop intent before asking for retirement, verifies ownership and process identity, and defers a Pin while
-its session may still be held. After confirmed exit, Pin recovery uses Framework (1.4, 6.2).
+consent and the frozen Pins, verifies run and process identity, and defers a Pin while its session may still be held.
+After confirmed exit, Pin recovery uses Framework (1.4, 6.2).
 
 ## 3 Data and safety
 
@@ -162,7 +159,7 @@ its session may still be held. After confirmed exit, Pin recovery uses Framework
 | Framework state | Process, session, machine, and delivery records under the Framework home. See [Framework architecture](../../framework/ARCHITECTURE.md). |
 | Released TypeScript state | Supervisor registry and exact run inventory, URI ledger, native handover, old ownership generations and saved Pins under the execution home's extension directory. The old release owns its active records. |
 | Framework workspace roster | Roster and Pins owns v1 membership, Pins, hidden agents and import markers in orchestrator-workspace.json. All writes use the roster lock. Windows observe the file through a directory watch. If the watch is lost or unavailable, reread the file immediately and poll for the rest of that opening, including after a transient read failure. |
-| Legacy cutover record, `<Facade home>/extension/legacy-cutover.json` | The cutover owner records consent for the exact affected runs and keeps the Pin snapshots until the earlier workspaces can import them. Confirmed exits leave the active inventory. The migration adapter holds scoped notice and custody locks and keeps shared recovery attempts and confirmed references. Retain the snapshots for the legacy compatibility period. |
+| Legacy cutover record, `<Facade home>/extension/legacy-cutover.json` | The cutover owner records exact consent, exit evidence and historical stop requests, and keeps the Pin snapshots until the earlier workspaces can import them. Confirmed exits leave the active inventory. The migration adapter holds scoped notice and shared recovery locks and keeps recovery attempts and confirmed references. Retain the snapshots for the legacy compatibility period. |
 | Workspace legacy Pin recovery, `<Facade home>/extension/workspaces/<key>/orchestrator-legacy-pins.json` | Roster and Pins owns the record. It holds unresolved saved sessions and preserves unrecognized input. Accept the confirmed Pin in the roster before consuming the corresponding recovery entry. Retain the import marker for the legacy compatibility period. |
 | Editor workspace storage | Workspace key (2.2), Panel preferences and launch location history. Earlier versions mirrored legacy workspace state here. |
 | Vendor CLI store | Its own conversations, credentials and settings |

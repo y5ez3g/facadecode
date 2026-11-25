@@ -38,12 +38,12 @@ Roster and Pins is the sole writer of the workspace roster. Its Pin-order input 
 the Panel's existing move operation. The Panel keeps visual card order in editor workspace preferences. Workspace
 agent operations project the watch's running records and classify temporary unavailability before reconciliation.
 A workspace change synchronizes the roster and Pin intent. The root wires activation to a migration adapter.
-The adapter owns the released supervisor reader, exact stop capability and home-level cutover journal. Roster
+The adapter owns the read-only released supervisor queries and home-level cutover journal. Roster
 and Pins owns each workspace's migration sidecar and final roster write.
 A terminal view close leaves workspace membership and
 agent lifetime to their owners. Framework stop and resume results come from the exact target operation. An ordinary
-compatible upgrade reconnects to the existing process. A planned cutover confirms the affected legacy stops before
-asking the Pin owner to recover any saved session. The worktree action hands the observed result to the location
+compatible upgrade reconnects to the existing process. A planned cutover confirms the matching legacy exit before
+asking the Pin owner to recover its saved session. The worktree action hands the observed result to the location
 catalog after Git has created it.
 
 ### Changes in the current layout

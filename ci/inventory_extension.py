@@ -191,8 +191,8 @@ def _legacy_migration(root: Path, rows: dict[str, str]) -> None:
     source = _read(root, LEGACY_SUPERVISOR)
     requests = _section(source, r"^interface Requests {\n", r"^}", LEGACY_SUPERVISOR)
     names = _keys(requests, LEGACY_SUPERVISOR, "legacy migration requests")
-    if names != {"hello", "list", "conversations", "claim", "terminate"}:
-        raise ValueError(f"{LEGACY_SUPERVISOR}: expected the released retirement interface")
+    if names != {"hello", "list", "conversations"}:
+        raise ValueError(f"{LEGACY_SUPERVISOR}: expected read-only released supervisor requests")
     _add(rows, "legacy-cutover", "request", names, LEGACY_SUPERVISOR)
 
 

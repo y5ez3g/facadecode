@@ -8,7 +8,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import {
-	WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_HANDOFF_COMMAND, WINDOW_LEGACY_INSTANCE_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND,
+	WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_INSTANCE_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND,
 	type DamagedWindowIdentity, type LegacyWindowInstance, type UnreadableWindowIdentity, type WindowIdentity, type WindowTerminalIdentity
 } from '../base/windowIdentity';
 import { DamagedWindowRecord, windowToken } from '../record/windowIdentity';
@@ -45,12 +45,6 @@ export function activate(context: vscode.ExtensionContext): void {
 			if (!here(session)) { return undefined; }
 			if (!token && fs.existsSync(path.join(directory, 'handover.json'))) { handover(); }
 			return token && previousInstance ? { version: 1, token, session: vscode.env.sessionId, instanceId: previousInstance } : undefined;
-		}),
-		vscode.commands.registerCommand(WINDOW_LEGACY_HANDOFF_COMMAND, (session: unknown, owner: unknown) => {
-			if (!here(session) || vscode.env.remoteName !== undefined || typeof owner !== 'string') { return undefined; }
-			const token = handover();
-			const claim = previousInstance && terminals.retiredClaim(owner);
-			return claim ? { version: 1, token, session: vscode.env.sessionId, claim } : undefined;
 		}),
 		vscode.commands.registerCommand(WINDOW_IDENTITY_COMMAND, (session: unknown): WindowIdentity | DamagedWindowIdentity | UnreadableWindowIdentity | undefined => {
 			if (!here(session)) { return undefined; }
