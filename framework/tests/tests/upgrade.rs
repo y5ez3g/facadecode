@@ -1508,7 +1508,7 @@ fn a_call_made_while_the_daemon_before_drains_is_refused_and_repeated_at_the_nex
     let typed = || {
         home.submitted_messages()
             .iter()
-            .filter(|submitted| submitted.ends_with("during the drain"))
+            .filter(|submitted| submitted.ends_with("during the drain "))
             .count()
             == 1
     };
@@ -1571,7 +1571,7 @@ fn a_message_entered_as_a_newer_facade_takes_over_is_settled_by_the_daemon_befor
     let typed = || {
         home.submitted_messages()
             .iter()
-            .filter(|submitted| submitted.ends_with("entered as it takes over"))
+            .filter(|submitted| submitted.ends_with("entered as it takes over "))
             .count()
             == 1
     };
@@ -1668,7 +1668,7 @@ fn a_message_waiting_as_the_daemon_before_drains_is_typed_by_the_next_daemon_alo
     let typed = || {
         home.submitted_messages()
             .iter()
-            .filter(|submitted| submitted.ends_with("waits through the drain"))
+            .filter(|submitted| submitted.ends_with("waits through the drain "))
             .count()
             == 1
     };
@@ -2116,7 +2116,7 @@ fn sends_waiting_through_a_takeover_are_typed_once_and_answered() {
         home.submitted_messages()
             .iter()
             .flat_map(|submitted| submitted.lines())
-            .filter(|line| *line == text)
+            .filter(|line| line.trim_end() == text)
             .count()
     };
     assert!(
@@ -2513,7 +2513,7 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
     }
     let message_id = receipt["message"]["message_id"].as_str().unwrap();
     let original =
-        format!("📨 Message {message_id} from command line\nreceipt before the live takeover");
+        format!("📨 Message {message_id} from command line\nreceipt before the live takeover ");
     assert_eq!(
         home.submitted_messages().as_slice(),
         std::slice::from_ref(&original)
@@ -2533,12 +2533,13 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
     assert_eq!(fresh["message"]["text"], fresh_text, "{fresh}");
     let fresh_id = fresh["message"]["message_id"].as_str().unwrap();
     assert_ne!(fresh["id"], receipt["id"], "{fresh}");
+    let submitted = home.submitted_messages();
+    assert_eq!(submitted.len(), 2, "{submitted:?}");
+    assert_eq!(submitted[0], original);
+    // The supplied peer may use a version of the terminal rules without completion padding.
     assert_eq!(
-        home.submitted_messages(),
-        [
-            original,
-            format!("📨 Message {fresh_id} from command line\n{fresh_text}")
-        ]
+        submitted[1].strip_suffix(' ').unwrap_or(&submitted[1]),
+        format!("📨 Message {fresh_id} from command line\n{fresh_text}")
     );
     assert_eq!(process_identity(agent.pid), agent.process);
     println!(
@@ -3429,7 +3430,7 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
             .filter(|entry| {
                 entry["text"]
                     .as_str()
-                    .is_some_and(|typed| typed.ends_with(&format!("\n{text}")))
+                    .is_some_and(|typed| typed.ends_with(&format!("\n{text} ")))
             })
             .count()
     };

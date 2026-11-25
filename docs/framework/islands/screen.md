@@ -176,7 +176,10 @@ which replays at most `REDRAW_SCROLLBACK_ROWS` (1,000) scrollback rows. A redraw
 
 **Rules** (`rules/src/state.rs`, `rules/src/input/`): `ScreenView { rows, cols, continues, cursor,
 cursor_visible, synchronized_update }` and each cell's `text()`, `column`, and attributes identify
-a CLI's input box and state on screen.
+a CLI's input box and state on screen. `observe_paint` tracks changes from a
+caller's output boundary. `painted_at`, `printed_space_at`, and `line_feed_at` report their order
+in the current observation after a complete frame. `output_frame_complete` also covers the case
+where only the start of a synchronized update has arrived.
 
 **Scenario tests** (`framework/tests`): a `Screen` per viewer, to check what a viewer would show.
 

@@ -101,7 +101,7 @@ fn a_run_s_hooks_record_its_session_and_join_no_guest() {
         wait_until(secs(10), || home
             .submitted_messages()
             .iter()
-            .any(|text| text.ends_with("\nfor the typist"))),
+            .any(|text| text.ends_with("\nfor the typist "))),
         "the hooks took nothing: {:?}",
         home.submitted_messages()
     );

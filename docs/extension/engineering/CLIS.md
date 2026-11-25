@@ -238,11 +238,16 @@ sentence (or the CLI's width-truncated prefix ending in `...`) only inside its o
 footer hint and remain a draft, even with the cursor moved back to the start. Neither its color nor matching words alone
 prove the input empty; its captures may later establish its hint's color under the rule above, which then reads it too.
 
-Each reader also reports a draft as it is drawn, so that a delivery knows its own (RULES-1.6): its rows' text, or the
+Each reader reports the draft as it is drawn. A live delivery that starts in a verified empty input owns the
+draft while it is the only writer. To identify a recovered draft, the reader reports its rows' text or the
 placeholder its CLI draws for a long paste - Claude Code's `[Pasted text #1 +N lines]` counting the lines after the
 first, Antigravity's `[Pasted text #1 +N lines]` and Pi's `[paste #1 +N lines]` counting every line, Codex's and Muse
 Code's `[Pasted Content N chars]`, OpenCode's `[Pasted ~N lines]` from three lines on. The reader compares the text
 without logging it. The Orchestrator pastes the complete header and body together for each supported CLI.
+When the body ends in a non-whitespace character, the paste carries an ASCII space to end completion.
+Antigravity can append its own `/compact` when it recognizes a command reference in the body.
+OpenCode can restore a submitted draft after its server rejects it. The restored draft remains in
+the input for the person, and new deliveries wait for a usable input.
 Claude Code wraps a long paste, including its complete header, in `<pasted_content>` tags. In
 Windows win32 input mode a character outside the Basic Multilingual Plane goes as its two UTF-16 halves in two key-down
 records together, with no key release for either half: Codex and Muse Code pair a half with a release and lose the
@@ -266,12 +271,10 @@ has 2 seconds and that time to show - on Windows a character (UTF-16 code unit) 
 Code, which read console input one key at a time: 21.1 s for 9,249 characters, and 4.9 s for 7,533. Enter goes only over
 that draft - for Antigravity, which takes seconds to expand a long paste, 45 ms a line after the draft shows; for Muse
 Code 250 ms after, as it takes an Enter that soon after its paste for a line break in it (it did 15 ms after, and
-submitted 100 ms after) - and delivery is confirmed once the input box is empty again, within 3 seconds and the paste's
-time. These times decide whether an attempt's paste fits within what remains of its delivery's budget; they never extend
-it (RULES-1.5). type_text keeps them as its wait before its Enter (MCP-5.2), Muse Code's 250 ms included, so that its
-Enter after a typed text submits too. State actual full/partial/unknown effects. A
-later attempt never types the text again; it presses Enter only over the message's own draft (RULES-1.6). Do not require
-a reconciliation API. An unknown version still starts its terminal, and its activity can still be verified per run under
+submitted 100 ms after). Delivery is confirmed when a complete frame drawn after submission shows
+the empty input, within the original delivery budget (RULES-1.5). The `type_text` wait before its Enter
+includes Muse Code's 250 ms (MCP-5.2). Report the actual text and key effects (RULES-1.6).
+An unknown version still starts its terminal, and its activity can still be verified per run under
 2.3. A CLI that never shows its activity is red, with its reason, once the run's startup bound passed (2.3). Every CLI
 advertised as fully supported must actually demonstrate the required capabilities on its stated platform.
 

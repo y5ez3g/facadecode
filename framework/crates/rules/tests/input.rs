@@ -10,8 +10,9 @@ use std::ops::Range;
 
 use facade_base::model::terminal::{HiddenRows, InputState};
 use facade_rules::{
-    ProbeVerdict, find, is_own_draft, read_box, read_box_for_typing, read_draft, read_input,
-    restored, space_taken, verdict_of,
+    PasteDrawing, ProbeVerdict, find, is_own_draft, read_box, read_box_for_screen,
+    read_box_for_typing, read_draft, read_input, restored, shows_paste_end, space_taken,
+    verdict_of,
 };
 use facade_screen::{ScreenView, VisibleCell};
 use recorded::view_of;
@@ -763,6 +764,84 @@ fn an_input_a_small_window_cuts_reads_as_nothing_else() {
     });
     for asked in [permission, trust] {
         assert_eq!(asked.state, InputState::Interaction, "{}", asked.evidence);
+    }
+}
+
+#[test]
+fn a_painted_unicode_tail_can_finish_a_draft_cut_at_the_top() {
+    let rule = find("codex").unwrap().unwrap();
+    let screen = screen_of("codex", "codex-0.170.0/draft-24-lines-default-effort");
+    let mut reading = read_box(&rule.input, &view_of(&screen));
+    assert_eq!(
+        reading.draft_hidden(),
+        Some(HiddenRows { above: 1, below: 0 })
+    );
+    let visible = reading.draft.as_deref().unwrap();
+    let text = format!("hidden header\n{visible}\u{a0}");
+    let repeated = format!("{visible}\n{visible}\u{a0}");
+
+    reading.paste_drawing = Some(PasteDrawing::default());
+    assert!(
+        !shows_paste_end(&reading, &text),
+        "the visible last glyph precedes its tail"
+    );
+    reading.paste_drawing = Some(PasteDrawing {
+        final_spaces: 1,
+        final_line_breaks: 0,
+    });
+    assert!(
+        shows_paste_end(&reading, &text),
+        "the painted tail follows the unique visible end"
+    );
+    assert!(
+        !shows_paste_end(&reading, &repeated),
+        "the visible end also matches an earlier prefix"
+    );
+
+    reading.info.hidden = Some(HiddenRows { above: 1, below: 1 });
+    assert!(
+        !shows_paste_end(&reading, &text),
+        "rows below are still hidden"
+    );
+}
+
+#[test]
+fn a_unicode_paste_tail_is_counted_after_the_last_drawn_grapheme() {
+    let rule = find("fake").unwrap().unwrap();
+    let shows_end = |text: &str, chunks: &[&str]| {
+        let mut screen = facade_screen::Screen::new(80, 24, 0);
+        screen.feed("\u{276f} ".as_bytes());
+        screen.observe_paint(true);
+        for chunk in chunks {
+            screen.feed(chunk.as_bytes());
+        }
+        shows_paste_end(&read_box_for_screen(&rule.input, &screen, false), text)
+    };
+
+    let final_space = "\u{a0}";
+    for (text, displayed) in [
+        ("done \u{200b}\u{a0}", &["done ", "done \u{200b}"][..]),
+        (
+            "done \u{200b} \u{2060}\u{a0}",
+            &["done  ", "done \u{200b} "][..],
+        ),
+        (
+            "done \u{200b} \u{200b}\u{a0}",
+            &["done \u{200b} ", "done  \u{200b}", "done \u{200b} \u{200b}"][..],
+        ),
+    ] {
+        for &body in displayed {
+            let complete = format!("{body}{final_space}");
+            assert!(!shows_end(text, &[body]), "missing NBSP after {body:?}");
+            assert!(
+                shows_end(text, &[&complete]),
+                "complete drawing {complete:?}"
+            );
+            assert!(
+                shows_end(text, &[body, final_space]),
+                "split drawing {complete:?}"
+            );
+        }
     }
 }
 

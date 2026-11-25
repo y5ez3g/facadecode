@@ -122,11 +122,12 @@ fn a_matching_read_finds_a_reply_already_typed_into_a_managed_terminal() {
     );
     assert_eq!(replied["status"], "success", "{replied}");
     assert_eq!(replied["data"]["delivery"], "typed_into_input", "{replied}");
+    let pasted = format!("{text} ");
     assert!(
         wait_until(secs(10), || home
             .submitted_messages()
             .iter()
-            .any(|message| { message.lines().skip(1).eq([text]) })),
+            .any(|message| message.lines().skip(1).eq([pasted.as_str()]))),
         "the reply did not reach the fake terminal: {}",
         home.screen(&ada.address)
     );
@@ -991,7 +992,7 @@ fn a_start_and_send_from_an_agent_s_terminal_come_from_the_command_line() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message m1 from command line\nfrom the boss"]
+        ["📨 Message m1 from command line\nfrom the boss "]
     );
     let child = wire.call("agent.inspect", json!({ "target": "child" }));
     assert_eq!(

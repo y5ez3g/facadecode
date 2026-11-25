@@ -59,10 +59,11 @@ outcome goes into the start's own result (MCP-2.3). B's answer is a separate ord
 
 **A message is delivered when the target CLI accepted the complete instruction or read_messages handed the complete record to its recipient.**
 
-For terminal delivery, confirm the complete text and Enter submission: the CLI's input box empties after Enter, at that
-attempt or a later one of the same delivery (1.6). Text without Enter is not delivery. For a native interactive startup prompt, confirm acceptance through the adapter's native
-launch path; no synthetic Enter is required. Passing arguments to an unstarted process is not acceptance. A
-read_messages result that is handed back to the recipient delivers every record it contains (COLLABORATION-3.1).
+For terminal delivery, a complete frame drawn after the current submission key is issued confirms that
+the input emptied before any intervening edit (1.6). An unfinished redraw or a draft drawn back in
+the same output leaves confirmation pending. A CLI can accept the message into its own queue. Confirm a native
+interactive startup prompt through the adapter's native launch path after the process starts.
+A read_messages result that is handed back to the recipient delivers every record it contains (COLLABORATION-3.1).
 Busy/idle transitions or unrelated output are not evidence that this particular instruction was submitted. The adapter
 reports actual effects; uncertainty remains explicit. Never truncate content and report full success.
 Each message has one delivery state: being delivered, delivered, not delivered, or unconfirmed where native prompt
@@ -132,16 +133,17 @@ Window-close handling is 1.9 and does not extend a deadline.
 
 ### 1.6 A message is typed at most once
 
-**Once a message's text went into the input whole, later attempts never type it again; they press Enter only over the message's own draft.**
+**A message owns the input from its paste through submission confirmation or cleanup.**
 
-A submission the CLI takes slowly is not lost, and typing a prompt again before the CLI has processed it would deliver it
-twice. A later attempt of the same delivery reads the input: the message's
-own draft alone - its text, or the placeholder its CLI draws for a paste of its size (CLIS-2.1) - gets Enter; an empty input after an Enter of
-this delivery confirms the submission; anything else is waited for under 1.4 and 1.5. A paste that never showed in the
-input is not typed again either: a CLI busy with its turn draws it late, and its own draft then gets Enter. A paste whose
-answer was lost on its way counts as written with no Enter after it, so an empty input confirms nothing. A delivery's
-own text in the input - its paste, or its CLI's placeholder for it - is the delivery's to finish while its stage lasts:
-its later attempts press Enter over it, and no later delivery is pasted before it is confirmed or its stage ends (1.10).
+A live paste that began in an empty input owns the draft that appears while Facade is its only writer.
+A CLI that reads the paste as individual console keys has to draw its draft after the paste's first
+write and show an unambiguous logical end or paste marker. A changed last grapheme uses the freshly
+printed tail of the paste, including spaces across a soft wrap and any final line breaks.
+Recovery matches the text or the CLI's paste placeholder (CLIS-2.1). A current frame drawn after the key
+must show the same owned draft for a retry. The CLI rule can allow up to three submission keys in total.
+An owned draft that changes can be erased once when its full range is readable. Pasting it again requires
+a complete empty frame drawn after the erase write is issued. A paste that has yet to appear stays pending
+under the same deadline. A late frame can authorize cleanup of a paste that timed out. Other deliveries wait for the input to become usable (1.10).
 Once its stage ends unconfirmed it is a draft like any other: no later delivery submits, extends or erases it, and that
 stage's own outcome reports its effects as unconfirmed. Once a paste
 showed as its CLI's placeholder, a later Enter goes only over that same placeholder, its paste number included, as a

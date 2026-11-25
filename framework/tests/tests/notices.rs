@@ -1143,7 +1143,7 @@ fn codex_uses_tab_only_for_an_ordinary_delivery_while_working() {
 
     let delivered = home.run_facade_ok(&["send", "codex", "queue while working", "-w"]);
     assert!(delivered.contains("Delivered"), "{delivered}");
-    assert!(submitted("\nqueue while working"));
+    assert!(submitted("\nqueue while working "));
     assert_eq!(
         submission_keys(),
         b"\r\t",
@@ -1160,7 +1160,7 @@ fn codex_uses_tab_only_for_an_ordinary_delivery_while_working() {
     }));
     let delivered = home.run_facade_ok(&["send", "codex", "send at rest", "-w"]);
     assert!(delivered.contains("Delivered"), "{delivered}");
-    assert!(submitted("\nsend at rest"));
+    assert!(submitted("\nsend at rest "));
     assert_eq!(
         submission_keys(),
         b"\r\t\r\r",

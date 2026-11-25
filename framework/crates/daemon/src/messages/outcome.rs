@@ -13,7 +13,7 @@ use crate::{DELIVERY_TIME, delivery_limit};
 /// How a delivery ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {
-    /// Typed and submitted.
+    /// The CLI took the submitted message out of its input.
     Typed,
     /// The terminal cleared this message's own paste before submitting it.
     Withdrawn {

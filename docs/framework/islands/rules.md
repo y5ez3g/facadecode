@@ -282,6 +282,7 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     reading is unsure. `BoxReading::logical_draft(paste)` joins display wraps and maps the caret
     to an offset in the logical text, including when the cells and paste have equivalent Unicode
     spellings. Final spaces or tabs in the paste are presentation padding for this comparison.
+    A caret on a blank soft continuation can be in that padding.
     The `InputLine` includes the
     input's starting column and cursor, its cells and styling, and whether the box has more rows.
     `BoxReading::draft_hidden() -> Option<HiddenRows>` gives the draft's rows out of sight for
@@ -311,7 +312,24 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
       reaches the terminal. Set `submit_clear_ms` to the p99.9 time from key write to a complete empty
       input under load. The built-in rules use twice the maximum observed on a quiet machine until
       the loaded measurements are available.
+    - `PasteRule::retry_submit_time() -> Option<Duration>` gives the wait before checking a retained
+      draft for another submission. Enable it where a submission key on an empty input is harmless.
+      The real CLI rules use twice the quiet maximum until the loaded measurements are
+      available.
     - `is_same_draft(draft, seen, text, hidden) -> bool` compares the observed drafts, including the placeholder's paste number.
+    - `is_paste_placeholder(&PasteRule, draft)` identifies any configured paste marker.
+      `shows_paste_placeholder(&PasteRule, draft, text)` additionally checks its size against the paste.
+      The typist uses its observed marker to retain the paste's identity.
+    - `shows_paste_end(&BoxReading, text)` identifies the logical end for incremental input.
+      `read_box_for_screen` attaches evidence from cells painted since the paste began. Soft
+      wraps join one logical line. Painted horizontal blanks, including Unicode spaces, and
+      line feeds can prove the tail after the last glyph. The reader compares canonical text
+      using the draft summary's logical layout rules. A unique visible suffix and its painted
+      tail can locate the original last glyph with the start of the draft scrolled out.
+      The blank count starts after the actual final grapheme, including a retained zero-width one.
+      The caller establishes ownership of the box.
+    - `draft_backspace_count(&PasteRule, &BoxReading)` gives the observed size of a complete
+      plain draft with the cursor at the end, including trailing cells. The caller establishes ownership.
     - `shows_whole(draft, text, hidden) -> bool`: a draft shows all of a message, alone or among other text. A placeholder or a scrolled draft does not.
     - `PasteRule::submission_key(working) -> Key` selects Tab for Codex while Working and Enter otherwise.
   - For the typist's probe, each from the row before its key and the reading after:

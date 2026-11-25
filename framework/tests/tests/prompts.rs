@@ -147,7 +147,7 @@ fn start_agent_s_prompt_goes_first_without_a_success_notice() {
         home.submitted_messages(),
         [
             prompt(&host),
-            "📨 Message m3 from command line\nnext".into()
+            "📨 Message m3 from command line\nnext ".into()
         ]
     );
 }
@@ -172,7 +172,7 @@ fn a_child_reading_its_initial_prompt_settles_it_silently() {
     assert_eq!(inbox["data"]["messages"], json!([]), "{inbox}");
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message m3 from command line\nafter the read"]
+        ["📨 Message m3 from command line\nafter the read "]
     );
 }
 
@@ -195,7 +195,7 @@ fn a_message_sent_while_the_prompt_waits_goes_after_it() {
     home.release_gate("before-prompt-delivery");
     let sent = send.wait_with_output().unwrap();
     assert!(sent.status.success(), "{}", stderr(&sent));
-    let message = "📨 Message m3 from command line\nand then this";
+    let message = "📨 Message m3 from command line\nand then this ";
     assert!(
         wait_for_submission(&home, message),
         "{:?}",
@@ -438,7 +438,7 @@ fn a_recovered_multiline_prompt_is_bracketed_even_without_the_saved_mode() {
         home.submitted_messages(),
         [
             prompts[0].clone(),
-            "📨 Message m3 from command line\nnext\nmessage".into()
+            "📨 Message m3 from command line\nnext\nmessage ".into()
         ],
         "the recovered prompt and next message were each submitted once"
     );
@@ -509,7 +509,7 @@ fn a_prompt_waiting_for_the_tools_outlives_its_daemon_and_succeeds_silently() {
         home.submitted_messages(),
         [
             prompt(&host),
-            "📨 Message m3 from command line\nafter the prompt".into()
+            "📨 Message m3 from command line\nafter the prompt ".into()
         ]
     );
 }

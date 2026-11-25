@@ -5,6 +5,7 @@ use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 
 use nix::fcntl::{FcntlArg, OFlag};
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
 
@@ -114,6 +115,18 @@ impl Io {
     }
 
     pub(super) fn queued_output_bytes(&self) -> io::Result<usize> {
+        let mut fds = [PollFd::new(self.0.get_ref().as_fd(), PollFlags::POLLIN)];
+        poll(&mut fds, PollTimeout::ZERO)?;
+        if fds[0]
+            .revents()
+            .is_some_and(|flags| flags.contains(PollFlags::POLLHUP))
+        {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        self.output_byte_count()
+    }
+
+    fn output_byte_count(&self) -> io::Result<usize> {
         let mut bytes: libc::c_int = 0;
         nix::ioctl_read_bad!(queued, libc::FIONREAD, libc::c_int);
         // SAFETY: the descriptor stays open and bytes is writable count storage.
@@ -140,7 +153,7 @@ impl Io {
         loop {
             let mut ready = self.0.writable().await?;
             let attempt = |file: &AsyncFd<File>| {
-                let before = check.and_then(|_| self.queued_output_bytes().ok());
+                let before = check.and_then(|_| self.output_byte_count().ok());
                 if check.is_some_and(|check| !check.permits(before)) {
                     return Ok(None);
                 }

@@ -342,10 +342,29 @@ pub struct Term<T> {
     /// Information about damaged cells.
     damage: TermDamageState,
     /// Facade: cells explicitly written or erased during an input observation.
-    painted: Option<Vec<bool>>,
+    painted: Option<PaintObservation>,
 
     /// Config directly for the terminal.
     config: Config,
+}
+
+struct PaintObservation {
+    cells: Vec<CellPaint>,
+    order: u32,
+}
+
+impl PaintObservation {
+    fn next_order(&mut self) -> u32 {
+        self.order = self.order.saturating_add(1);
+        self.order
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CellPaint {
+    Unseen,
+    Changed(u32),
+    PrintedSpace(u32),
 }
 
 /// Configuration options for the [`Term`].
@@ -689,48 +708,96 @@ impl<T> Term<T> {
     /// Facade: start a new cell observation, or stop tracking it. Cursor movement and visual
     /// damage do not establish which text the application has drawn.
     pub fn observe_paint(&mut self, enabled: bool) {
-        self.painted = enabled.then(|| vec![false; self.columns() * self.screen_lines()]);
+        // The final entry of each row records an actual line feed into it.
+        self.painted = enabled.then(|| PaintObservation {
+            cells: vec![CellPaint::Unseen; (self.columns() + 1) * self.screen_lines()],
+            order: 0,
+        });
+    }
+
+    /// Facade: whether cell painting is being tracked for an active input.
+    pub fn observes_paint(&self) -> bool {
+        self.painted.is_some()
     }
 
     /// Facade: forget the current frame, keeping the observation open for subsequent output.
     pub fn discard_observed_paint(&mut self) {
         if let Some(painted) = &mut self.painted {
-            painted.fill(false);
+            painted.cells.fill(CellPaint::Unseen);
         }
     }
 
     /// Facade: whether the application explicitly set each cell in the range on this row.
     pub fn has_painted(&self, row: usize, columns: Range<usize>) -> bool {
-        self.painted.as_ref().is_some_and(|cells| {
+        self.painted.as_ref().is_some_and(|painted| {
             row < self.screen_lines()
                 && !columns.is_empty()
                 && columns.end <= self.columns()
-                && cells[row * self.columns()..][columns].iter().all(|painted| *painted)
+                && painted.cells[row * (self.columns() + 1)..][columns]
+                    .iter()
+                    .all(|painted| !matches!(painted, CellPaint::Unseen))
         })
     }
 
+    /// Facade: the last time the application drew or erased this cell, in output order.
+    pub fn painted_at(&self, row: usize, column: usize) -> Option<u32> {
+        if column >= self.columns() {
+            return None;
+        }
+        match self.paint_at(row, column)? {
+            CellPaint::Changed(at) | CellPaint::PrintedSpace(at) => Some(at),
+            CellPaint::Unseen => None,
+        }
+    }
+
+    /// Facade: when the application printed a space at this position.
+    pub fn printed_space_at(&self, row: usize, column: usize) -> Option<u32> {
+        if column < self.columns()
+            && let Some(CellPaint::PrintedSpace(at)) = self.paint_at(row, column)
+        {
+            return Some(at);
+        }
+        None
+    }
+
+    /// Facade: when a printed line feed advanced the cursor to this row.
+    pub fn line_feed_at(&self, row: usize) -> Option<u32> {
+        match self.paint_at(row, self.columns())? {
+            CellPaint::Changed(at) => Some(at),
+            _ => None,
+        }
+    }
+
+    fn paint_at(&self, row: usize, column: usize) -> Option<CellPaint> {
+        if row >= self.screen_lines() {
+            return None;
+        }
+        Some(self.painted.as_ref()?.cells[row * (self.columns() + 1) + column])
+    }
+
     #[inline]
-    fn mark_paint(&mut self, line: Line, columns: Range<usize>, value: bool) {
-        let start = line.0 as usize * self.columns();
+    fn mark_paint(&mut self, line: Line, columns: Range<usize>, paint: impl FnOnce(u32) -> CellPaint) {
+        let start = line.0 as usize * (self.columns() + 1);
         if let Some(painted) = &mut self.painted {
-            painted[start..][columns].fill(value);
+            let order = painted.next_order();
+            painted.cells[start..][columns].fill(paint(order));
         }
     }
 
     fn scroll_paint(&mut self, region: &Range<Line>, lines: usize, up: bool) {
-        let columns = self.columns();
+        let columns = self.columns() + 1;
         if let Some(painted) = &mut self.painted {
             let start = region.start.0 as usize * columns;
             let end = region.end.0 as usize * columns;
-            let rows = &mut painted[start..end];
+            let rows = &mut painted.cells[start..end];
             let count = (lines * columns).min(rows.len());
             if up {
                 rows.rotate_left(count);
                 let start = rows.len() - count;
-                rows[start..].fill(false);
+                rows[start..].fill(CellPaint::Unseen);
             } else {
                 rows.rotate_right(count);
-                rows[..count].fill(false);
+                rows[..count].fill(CellPaint::Unseen);
             }
         }
     }
@@ -1061,11 +1128,12 @@ impl<T> Term<T> {
 
         self.grid.cursor_cell().flags.insert(Flags::WRAPLINE);
 
-        if self.grid.cursor.point.line + 1 >= self.scroll_region.end {
-            self.linefeed();
-        } else {
+        let next = self.grid.cursor.point.line + 1;
+        if next < self.scroll_region.end {
             self.damage_cursor();
-            self.grid.cursor.point.line += 1;
+            self.grid.cursor.point.line = next;
+        } else {
+            self.advance_line();
         }
 
         self.grid.cursor.point.column = Column(0);
@@ -1073,17 +1141,41 @@ impl<T> Term<T> {
         self.damage_cursor();
     }
 
+    fn advance_line(&mut self) -> bool
+    where
+        T: EventListener,
+    {
+        let next = self.grid.cursor.point.line + 1;
+        if next == self.scroll_region.end {
+            self.scroll_up(1);
+        } else if next < self.screen_lines() {
+            self.damage_cursor();
+            self.grid.cursor.point.line = next;
+            self.damage_cursor();
+        } else {
+            return false;
+        }
+        true
+    }
+
     /// Write `c` to the cell at the cursor position.
     #[inline(always)]
     fn write_at_cursor(&mut self, c: char) {
-        if self.painted.is_some() {
-            let point = self.grid.cursor.point;
-            self.mark_paint(point.line, point.column.0..point.column.0 + 1, true);
-        }
         let c = self.grid.cursor.charsets[self.active_charset].map(c);
         let fg = self.grid.cursor.template.fg;
         let bg = self.grid.cursor.template.bg;
         let flags = self.grid.cursor.template.flags;
+        if self.painted.is_some() {
+            let point = self.grid.cursor.point;
+            let paint: fn(u32) -> CellPaint = if c.is_whitespace()
+                && !flags.intersects(Flags::LEADING_WIDE_CHAR_SPACER | Flags::WIDE_CHAR_SPACER)
+            {
+                CellPaint::PrintedSpace
+            } else {
+                CellPaint::Changed
+            };
+            self.mark_paint(point.line, point.column.0..point.column.0 + 1, paint);
+        }
         let extra = self.grid.cursor.template.extra.clone();
 
         let mut cursor_cell = self.grid.cursor_cell();
@@ -1181,6 +1273,7 @@ impl<T: EventListener> Handler for Term<T> {
             }
 
             self.grid[line][column].push_zerowidth(c);
+            self.mark_paint(line, column.0..column.0 + 1, CellPaint::Changed);
             self.damage.wrote_cells(line.0 as usize, column.0, column.0);
             return;
         }
@@ -1195,7 +1288,7 @@ impl<T: EventListener> Handler for Term<T> {
         if self.mode.contains(TermMode::INSERT) && self.grid.cursor.point.column + width < columns {
             let line = self.grid.cursor.point.line;
             let col = self.grid.cursor.point.column;
-            self.mark_paint(line, col.0..columns, false);
+            self.mark_paint(line, col.0..columns, |_| CellPaint::Unseen);
             let row = &mut self.grid[line][..];
 
             for col in (col.0..(columns - width)).rev() {
@@ -1298,7 +1391,7 @@ impl<T: EventListener> Handler for Term<T> {
         let num_cells = self.columns() - destination;
 
         let line = cursor.point.line;
-        self.mark_paint(line, source.0..self.columns(), false);
+        self.mark_paint(line, source.0..self.columns(), |_| CellPaint::Unseen);
         self.damage.wrote_cells(line.0 as usize, 0, self.columns() - 1);
 
         let row = &mut self.grid[line][..];
@@ -1525,13 +1618,9 @@ impl<T: EventListener> Handler for Term<T> {
     #[inline]
     fn linefeed(&mut self) {
         trace!("Linefeed");
-        let next = self.grid.cursor.point.line + 1;
-        if next == self.scroll_region.end {
-            self.scroll_up(1);
-        } else if next < self.screen_lines() {
-            self.damage_cursor();
-            self.grid.cursor.point.line += 1;
-            self.damage_cursor();
+        if self.advance_line() && self.painted.is_some() {
+            let column = self.columns();
+            self.mark_paint(self.grid.cursor.point.line, column..column + 1, CellPaint::Changed);
         }
     }
 
@@ -1630,7 +1719,7 @@ impl<T: EventListener> Handler for Term<T> {
         // Cleared cells have current background color set.
         let bg = self.grid.cursor.template.bg;
         let line = cursor.point.line;
-        self.mark_paint(line, start.0..end.0, true);
+        self.mark_paint(line, start.0..end.0, CellPaint::Changed);
         self.damage.wrote_cells(line.0 as usize, start.0, end.0);
         let row = &mut self.grid[line];
         for cell in &mut row[start..end] {
@@ -1652,7 +1741,7 @@ impl<T: EventListener> Handler for Term<T> {
         let num_cells = columns - end;
 
         let line = cursor.point.line;
-        self.mark_paint(line, start..columns, false);
+        self.mark_paint(line, start..columns, |_| CellPaint::Unseen);
         self.damage.wrote_cells(line.0 as usize, 0, self.columns() - 1);
         let row = &mut self.grid[line][..];
 
@@ -1751,7 +1840,7 @@ impl<T: EventListener> Handler for Term<T> {
             ansi::LineClearMode::All => (Column(0), Column(self.columns())),
         };
 
-        self.mark_paint(point.line, left.0..right.0, true);
+        self.mark_paint(point.line, left.0..right.0, CellPaint::Changed);
         self.damage.wrote_cells(point.line.0 as usize, left.0, right.0 - 1);
 
         let row = &mut self.grid[point.line];
@@ -1870,13 +1959,13 @@ impl<T: EventListener> Handler for Term<T> {
                     self.grid.reset_region(..cursor.line);
                     self.damage.cell_writes[..cursor.line.0 as usize].fill(true);
                     for row in 0..cursor.line.0 {
-                        self.mark_paint(Line(row), 0..columns, true);
+                        self.mark_paint(Line(row), 0..columns, CellPaint::Changed);
                     }
                 }
 
                 // Clear up to the current column in the current line.
                 let end = cmp::min(cursor.column + 1, Column(self.columns()));
-                self.mark_paint(cursor.line, 0..end.0, true);
+                self.mark_paint(cursor.line, 0..end.0, CellPaint::Changed);
                 for cell in &mut self.grid[cursor.line][..end] {
                     *cell = bg.into();
                 }
@@ -1887,7 +1976,7 @@ impl<T: EventListener> Handler for Term<T> {
             },
             ansi::ClearMode::Below => {
                 let cursor = self.grid.cursor.point;
-                self.mark_paint(cursor.line, cursor.column.0..columns, true);
+                self.mark_paint(cursor.line, cursor.column.0..columns, CellPaint::Changed);
                 for cell in &mut self.grid[cursor.line][cursor.column..] {
                     *cell = bg.into();
                 }
@@ -1895,7 +1984,7 @@ impl<T: EventListener> Handler for Term<T> {
                 if (cursor.line.0 as usize) < screen_lines - 1 {
                     self.grid.reset_region((cursor.line + 1)..);
                     for row in cursor.line.0 + 1..screen_lines as i32 {
-                        self.mark_paint(Line(row), 0..columns, true);
+                        self.mark_paint(Line(row), 0..columns, CellPaint::Changed);
                     }
                 }
                 self.damage.cell_writes[cursor.line.0 as usize..].fill(true);
@@ -1905,7 +1994,11 @@ impl<T: EventListener> Handler for Term<T> {
             },
             ansi::ClearMode::All => {
                 if let Some(painted) = &mut self.painted {
-                    painted.fill(true);
+                    let order = painted.next_order();
+                    for row in painted.cells.chunks_exact_mut(columns + 1) {
+                        row[..columns].fill(CellPaint::Changed(order));
+                        row[columns] = CellPaint::Unseen;
+                    }
                 }
                 if self.mode.contains(TermMode::ALT_SCREEN) {
                     self.grid.reset_region(..);

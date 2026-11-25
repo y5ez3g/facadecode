@@ -145,8 +145,10 @@ environment. Daemon status gives the home, settings path, build, PIDs and local 
 `agent.send` delivers to an eligible managed agent or Guest.
 The public receipt identifies the assigning machine in a message address such as
 `m42@devbox`. Replies can carry an address or a full message reference. Each reply target
-is verified at entry. Terminal delivery is confirmed when the submission key reaches
-the terminal. The receipt field `delivery.enter_written` reports that write.
+is verified at entry. Terminal delivery is confirmed by a complete empty frame drawn
+after the submission write is issued and before a key that could edit the input.
+The receipt field
+`delivery.enter_written` reports whether the submission key reached the terminal.
 Codex uses Tab to queue ordinary messages while Working. Initial prompts and recovered
 drafts use Enter, as does ordinary delivery outside that Codex path. A Guest can read
 complete messages inline.

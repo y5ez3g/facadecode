@@ -337,7 +337,7 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 - **Owns:** the `PtyIo` (none between runs or once the run's output ended), the input queue, the last output read, the bytes written so far and when.
 - **Keeps:** Input is written in order, at most 64 KiB at a time; a read takes at most 64 KiB. The count of bytes written never resets, across runs too: the typist finds its own bytes by it. Letting go of the terminal, as a read that finds the end of its output does, drops the queued input and the last output. `ready` can be cancelled safely. A write under way is given the same head of the queue until it returns; clearing the queue keeps those bytes. `stop_reading` leaves no read under way.
 - **Never does:** parse output, decide what input may wait, or select a submission key.
-- **Interface:** `new(Option<PtyMaster>)`, `install(PtyMaster)`, `detach()`, `stop_reading() -> Option<usize>` (async), `let_go_before_stop()`; `ready(TerminalWait) -> TerminalEvent` (`Read`, `Closed`, `Wrote`, `WriteFailed`), `read_now() -> Option<usize>`, `output() -> &[u8]`; `push(&[u8])`, `clear()`, `queued()`, `written()`, `written_at()`; `is_open()`, `is_closed()`, `set_size(cols, rows)`.
+- **Interface:** `new(Option<PtyMaster>)`, `install(PtyMaster)`, `detach()`, `stop_reading() -> Option<usize>` (async), `let_go_before_stop()`; `ready(TerminalWait) -> TerminalEvent` (`Read`, `Closed`, `ReadFailed`, `Wrote`, `WriteFailed`), `read_now() -> Option<usize>`, `output() -> &[u8]`; `push(&[u8])`, `clear()`, `queued()`, `written()`, `written_at()`; `is_open()`, `is_closed()`, `set_size(cols, rows)`.
 
 #### screen
 
@@ -396,22 +396,40 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   - `DeliveryHandle::begin_paste` records the paste before the typist writes the complete message in one paste.
     Automatic delivery takes its paste brackets from the CLI rule, including after a daemon restart.
     A direct text call follows the screen's bracketed paste mode.
-  - The submission key goes over a reading of the moment that shows this paste alone in the input box, once it
-    has shown for the CLI's settle time. Unread readings in between, as in the middle of a frame, keep that
-    time running; a reading of anything else starts it again. Where somebody typed into the input since the
-    paste, only the message's whole text is its draft: a placeholder may stand for a paste of theirs.
+  - An ordinary message paste carries one trailing ASCII space when the message ends in a non-whitespace
+    character. The stored message and initial prompt use their original text.
+  - The submission key goes over a complete reading of the draft once it has shown for the CLI's settle
+    time. A live paste into a verified empty input owns what appears while the typist is its only writer.
+    Console input needs the visible draft painted after the first paste write, with a logical
+    ending or a paste marker. The typist takes that evidence from Rules, including the written
+    tail when a changed last glyph needs a following space or line break. Recovery matches
+    the text or paste placeholder. An external edit ends automatic submission and cleanup authority.
+    A person's Enter can still prove that they submitted the whole message. Unread frames keep
+    settle time running. A readable change restarts the wait.
     Codex queues an ordinary message with Tab while Working. The start prompt and recovered pastes use Enter.
   - What the typist put into the input box is its own from the paste through submission or cleanup.
     No other paste or probe begins meanwhile. After the submission key goes in, the typist keeps
     that ownership until a complete frame reads as an empty input. A menu, question, unread frame
     or cropped draft keeps the paste under the typist's care.
     Cleanup keeps the last paste number it observed through a menu or an ambiguous row.
-  - A message is delivered once its submission key reaches the terminal, or once a person's Enter submitted the
-    whole of it. One that somebody else takes out of the input ends unconfirmed once the input has read empty
-    for the CLI's settle time.
-  - After its deadline the typist erases its paste once where a current reading shows the same draft alone,
-    nobody typed since it went in and its length is known. It remembers a displayed paste's placeholder number
-    through menus and unread frames. It follows the erased draft until a complete reading shows that the paste
+  - Automatic Enter, Tab and erase keys use the terminal's output boundary at write issue. A complete
+    empty frame after the submission boundary and before any external editing key can confirm
+    delivery. Before settling, the actor drains the finite PTY prefix sampled when the empty frame
+    is considered. A disconnected peer is read through EOF, with write boundaries retained until
+    the receipt has been settled. A read error stops input and the pending receipt fails. The actor
+    waits through an unfinished update. A redraw of this draft or its same-numbered paste marker
+    invalidates the pending empty frame. A person's Enter applies the same finite-prefix check to
+    the whole-message evidence described under the actor. Evidence established before an edit
+    remains available.
+  - Repeating the submission key requires the current draft to have been drawn after that key's
+    write boundary and still belong to the typist. The CLI rule can allow up to three submission keys
+    at its retry interval. A fully readable changed draft with an established erase range can be
+    erased once and pasted again after a complete frame drawn empty after the erase write boundary.
+    Both actions use the original deadline and hold limit.
+  - After its deadline the typist erases its own paste once when the current reading establishes its
+    erase range and the paste still owns the box. The same ownership covers a display variant whose
+    text and cursor establish its range. It remembers the paste's placeholder number through menus
+    and unread frames. It follows the erased draft until a complete reading shows that the paste
     left the input. What a person typed into is theirs. Where the input box showed the paste last and the
     deadline falls on an unread reading, the receipt waits for the next frame, for at most `RESPONSE_GRACE`. A receipt is given
     once, by two `RESPONSE_GRACE` after the deadline, and says what is known then; erasing later changes none.
@@ -480,8 +498,9 @@ question stays available for the person.
 ### messages
 
 Post assigns a message number in the SQLite transaction that keeps it. The receiving machine owns
-delivery state. A managed terminal confirms delivery when the submission key reaches it. A Guest confirms
-delivery by taking the message from its inbox. Both use the same deadline.
+delivery state. A managed terminal confirms delivery when the CLI takes the message out of the
+input after submission. A Guest confirms delivery by taking the message from its inbox.
+Both use the same deadline.
 
 A managed terminal sees `📨 Message mN from <sender>` above the body. Replies append
 ` · in reply to mN`, with a machine selector when the original message is remote. A command-line
@@ -491,7 +510,9 @@ text. Its record number is available in the inbox.
 At paste start, the daemon records the header version alongside the paste number. Version 1 puts the
 message number before the sender and omits the number on notices. Recovery uses the stored format
 to compare the rendered draft with the paste. Older or revoked observations provide no authority
-to press a key.
+to press a key. A Claude draft from an older run can show a typed header prefix before its
+paste placeholder. The recovery reader recognizes the prefix and matching placeholder as one
+draft for comparison with the saved proof.
 
 Recovery requires a matching digest of the full draft the original typist saw after writing it.
 The digest includes the logical text in Unicode NFC, the placeholder number where shown, and

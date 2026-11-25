@@ -104,6 +104,9 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   reads and writes one, with `stop_reading` and `let_go_before_stop`. A caller can ask `write` for the
   readable output prefix at the start of its native write. On Windows that includes output a
   completed read has collected. An overlapped write records this position once, when it is issued.
+  `queued_output_bytes()` samples the readable prefix without waiting. On Windows it uses
+  `PeekNamedPipe` and includes completed or retained read bytes. On Unix it uses a zero-timeout poll
+  for hangup and `FIONREAD` for the byte count. A closed peer can still leave bytes to read to EOF.
   `PASTE_BYTES_PER_MS` estimates paste time.
   `KeyRecord` and `key_down_records` encode console keys. `KeyRecord::press_len` and
   `key_down_records_len` count the encoded bytes. `test_terminal` gives tests both sides of a terminal.

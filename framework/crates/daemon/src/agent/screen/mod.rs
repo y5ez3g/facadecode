@@ -446,6 +446,7 @@ impl LoggedScreen {
             screen.observe_paint(false);
         }
     }
+
     pub(crate) fn title(&self) -> Option<&str> {
         self.title.as_deref()
     }

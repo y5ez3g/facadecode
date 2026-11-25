@@ -413,7 +413,8 @@ impl Screen {
         !self.on_alternate_screen() && self.output_frame_complete()
     }
 
-    fn output_frame_complete(&self) -> bool {
+    /// Whether no control sequence or synchronized update is open, even if it holds no text yet.
+    pub fn output_frame_complete(&self) -> bool {
         !self.has_unfinished_unit() && self.synchronized_update_deadline().is_none()
     }
 
@@ -439,11 +440,45 @@ impl Screen {
         }
     }
 
+    /// Whether this screen is tracking output for an active input.
+    pub fn observes_paint(&self) -> bool {
+        self.terminal.term.observes_paint()
+    }
+
     /// Whether the CLI painted the entire range since the boundary, in the visible frame.
     pub fn has_painted(&self, row: usize, columns: std::ops::Range<usize>) -> bool {
         !self.paint_waits_for_frame
             && self.output_frame_complete()
             && self.terminal.term.has_painted(row, columns)
+    }
+
+    /// When the CLI painted a cell in this observation, in output order.
+    pub fn painted_at(&self, row: usize, column: usize) -> Option<u32> {
+        if self.paint_waits_for_frame || !self.output_frame_complete() {
+            return None;
+        }
+        self.terminal.term.painted_at(row, column)
+    }
+
+    /// When the CLI last printed a space here in this observation.
+    pub fn printed_space_at(&self, row: usize, column: usize) -> Option<u32> {
+        if self.paint_waits_for_frame || !self.output_frame_complete() {
+            return None;
+        }
+        self.terminal.term.printed_space_at(row, column)
+    }
+
+    /// When a line feed advanced to this row in this observation.
+    pub fn line_feed_at(&self, row: usize) -> Option<u32> {
+        if self.paint_waits_for_frame || !self.output_frame_complete() {
+            return None;
+        }
+        self.terminal.term.line_feed_at(row)
+    }
+
+    /// Whether the insertion point is already past the last cell, waiting to wrap.
+    pub fn cursor_wrap_pending(&self) -> bool {
+        self.terminal.grid().cursor.input_needs_wrap
     }
 
     /// Whether pasted text must be bracketed.

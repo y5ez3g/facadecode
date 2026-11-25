@@ -36,10 +36,12 @@ pub use compose::{
 };
 pub use formats::shell_word;
 pub use input::{
-    BoxReading, InputLine, LineCell, ProbeVerdict, canonical_text, could_be_paste_prefix,
-    is_legacy_split_paste, is_own_draft, is_own_recovered_draft, is_same_draft, read_box,
-    read_box_after_paint, read_box_for_typing, read_draft, read_input, restored, settle_time,
-    shape_of, shows_whole, space_taken, verdict_of, with_paste_text,
+    BoxReading, InputLine, LineCell, PasteDrawing, ProbeVerdict, canonical_text,
+    could_be_paste_prefix, draft_backspace_count, is_legacy_split_paste, is_own_draft,
+    is_own_recovered_draft, is_paste_placeholder, is_same_draft, read_box, read_box_after_paint,
+    read_box_for_screen, read_box_for_typing, read_draft, read_input, restored, settle_time,
+    shape_of, shows_original_text, shows_paste_end, shows_paste_placeholder, shows_whole,
+    space_taken, verdict_of, with_paste_text,
 };
 pub use sessions::{
     Reported, SESSION_FILE, SESSION_VARIABLES, SavedSession, SessionFile, WriteFailure,
@@ -245,6 +247,12 @@ pub struct PasteRule {
     /// The measured upper bound from the submission key to an empty input, in milliseconds.
     #[serde(default)]
     submit_clear_ms: Option<u64>,
+    /// Delay before repeating a submission key proven harmless on an empty input.
+    #[serde(default)]
+    retry_submit_ms: Option<u64>,
+    /// The CLI can draw the paste in pieces on Windows even without console input settings.
+    #[serde(default)]
+    check_paste_end_on_windows: bool,
     /// What the input shows in place of a long paste.
     #[serde(default)]
     pub placeholders: Vec<PastePlaceholder>,
@@ -757,6 +765,16 @@ impl PasteRule {
     /// How long this CLI has to show an empty input after its submission key reaches it.
     pub fn submit_clear_time(&self) -> Option<Duration> {
         self.submit_clear_ms.map(Duration::from_millis)
+    }
+
+    /// How long to wait before repeating a submission key over the same draft.
+    pub fn retry_submit_time(&self) -> Option<Duration> {
+        self.retry_submit_ms.map(Duration::from_millis)
+    }
+
+    /// Whether delivery on this platform must see the end of the paste before submitting.
+    pub fn checks_paste_end(&self) -> bool {
+        cfg!(windows) && self.check_paste_end_on_windows
     }
 
     /// Which key submits a checked message draft.

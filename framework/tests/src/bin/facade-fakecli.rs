@@ -8,7 +8,8 @@
 //! start, its arguments as a JSON list; `FAKECLI_ENV` names a JSON output file for the variables
 //! listed in `FAKECLI_ENV_KEYS` (comma-separated); `FAKECLI_IGNORE_INPUT=1` makes it read no input, so
 //! its terminal's input fills up; `FAKECLI_IGNORE_ENTER=1` makes it keep its draft on Enter, as a
-//! CLI does that does not take it. `FAKECLI_HOOKS=1` makes it run hooks given as arguments
+//! CLI does that does not take it; `FAKECLI_IGNORE_FIRST_ENTER=1` skips only the first Enter.
+//! `FAKECLI_HOOKS=1` makes it run hooks given as arguments
 //! instead, as Antigravity runs them (`run_hooks`). On Windows `FAKECLI_IGNORE_CLOSE=<file>` makes
 //! it hold its console's closing up and start a child outside the console, writing the child's
 //! process ID to `<file>`. `FAKECLI_KEYLOG=<file>` notes when each read of input arrives and when
@@ -1433,6 +1434,7 @@ fn run() -> anyhow::Result<()> {
     let ignores = |key: &str| ignored.split(',').any(|each| each.trim() == key);
     let (ignore_space, ignore_backspace) = (ignores("space"), ignores("backspace"));
     let takes_enter = std::env::var("FAKECLI_IGNORE_ENTER").is_err();
+    let mut ignore_first_enter = std::env::var_os("FAKECLI_IGNORE_FIRST_ENTER").is_some();
     let console_keys = app.console_keys;
     let read_gate = std::env::var_os("FAKECLI_READ_GATE").map(std::path::PathBuf::from);
     std::thread::spawn(move || {
@@ -1543,6 +1545,7 @@ fn run() -> anyhow::Result<()> {
                     dirty = true;
                 }
                 LINE_BREAK if app.console_keys => app.push_text("\n"),
+                b'\r' | b'\n' if ignore_first_enter => ignore_first_enter = false,
                 b'\r' | b'\n' if takes_enter => app.submit(),
                 b'\t' if app.codex_input && app.menu.is_none() => app.submit(),
                 0x7f | 0x08 if ignore_backspace => {}

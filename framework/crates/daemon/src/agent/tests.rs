@@ -1772,7 +1772,7 @@ async fn a_start_prompt_waits_for_the_tools_and_messages_sent_meanwhile_wait_beh
         status(prompt_number),
         facade_base::model::message::DeliveryStatus::Success
     );
-    let paste = b"\x1b[200~a message\x1b[201~";
+    let paste = b"\x1b[200~a message \x1b[201~";
     assert_eq!(harness.cli_reads(paste.len()), paste, "then the message");
     assert_eq!(
         status(message_number),
@@ -1991,7 +1991,7 @@ async fn a_start_readies_antigravity_s_tools_before_its_first_turn() {
     harness.agy_panel(true);
     assert_eq!(harness.cli_reads(1), b"\x1b");
     harness.agy_input("");
-    let paste = "\x1b[200~📨 hello\x1b[201~".as_bytes();
+    let paste = "\x1b[200~📨 hello \x1b[201~".as_bytes();
     assert_eq!(
         harness.cli_reads(paste.len()),
         paste,
@@ -2548,7 +2548,7 @@ async fn a_message_gets_its_enter_while_its_cli_draws_frame_after_frame() {
         let message = harness
             .queue_probe_message("a message", Duration::from_secs(20))
             .await;
-        let paste = b"\x1b[200~a message\x1b[201~";
+        let paste = b"\x1b[200~a message \x1b[201~";
         assert_eq!(harness.cli_reads(paste.len()), paste);
         let border = "─".repeat(80);
         let until = Instant::now() + Duration::from_secs(3);
@@ -2695,7 +2695,7 @@ async fn a_claude_draft_matching_a_probed_hint_holds_the_next_message() {
     harness.plain_claude_input(" ", "");
     assert_eq!(harness.cli_reads(1), b"\x7f");
     harness.plain_claude_input("", hint);
-    let paste = b"\x1b[200~first message\x1b[201~";
+    let paste = b"\x1b[200~first message \x1b[201~";
     assert_eq!(harness.cli_reads(paste.len()), paste);
     harness.plain_claude_input("first message", "");
     assert_eq!(harness.cli_reads(1), b"\r");
@@ -2804,7 +2804,7 @@ impl Harness {
     }
 
     fn cli_reads_paste(&mut self, text: &str) {
-        let paste = format!("\x1b[200~{text}\x1b[201~");
+        let paste = format!("\x1b[200~{text} \x1b[201~");
         let read = self.cli_reads(paste.len());
         assert_eq!(String::from_utf8_lossy(&read), paste);
     }
@@ -3301,7 +3301,7 @@ async fn a_message_follows_the_person_s_submission_at_once() {
     harness.type_bytes(b"\r").await.unwrap();
     assert_eq!(harness.cli_reads(1), b"\r");
     harness.plain_claude_input("", "");
-    let paste = b"\x1b[200~a message\x1b[201~";
+    let paste = b"\x1b[200~a message \x1b[201~";
     assert_eq!(
         harness.cli_reads_within(paste.len(), Duration::from_millis(250)),
         paste,
@@ -3333,6 +3333,7 @@ async fn a_report_before_the_first_message_leaves_the_hint_to_the_probe() {
     harness.cli_reads_paste("a message");
     harness.plain_claude_input("a message", "");
     assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
     assert_delivered(message).await;
     harness.stop().await;
     std::fs::remove_dir_all(&home).unwrap();
@@ -3715,6 +3716,17 @@ async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
         expected_keys,
         after_redraw,
     } = case;
+    let wire = format!("{text} ");
+    // The first Backspace deletes the delivery's transport space before the message body.
+    let written = if written == 0 { 0 } else { written + 1 };
+    let (redraw, expected_keys) = if written == 0 {
+        (
+            format!("{redraw} "),
+            expected_keys + usize::from(expected_keys != 0),
+        )
+    } else {
+        (redraw.to_owned(), expected_keys)
+    };
     let home = home("issued-cleanup");
     let (master, mut cli) = raw_terminal(80, 24);
     let mut terminal = Terminal::new(Some(master.try_clone().unwrap())).unwrap();
@@ -3757,6 +3769,8 @@ async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
             InputObservation {
                 current: facade_rules::read_box(&rule.input, &screen.view()),
                 submitted: None,
+                after_write: false,
+                empty_after_write: false,
                 awaiting_after_interaction: false,
             }
         })
@@ -3766,7 +3780,7 @@ async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
     old.deliver(typing(deadline));
     screen.feed(draw("").as_bytes());
     let paste = step(&mut old, start, &mut terminal, &screen);
-    assert_eq!(paste, format!("\x1b[200~{text}\x1b[201~").as_bytes());
+    assert_eq!(paste, format!("\x1b[200~{wire}\x1b[201~").as_bytes());
     terminal.push(&paste);
     assert!(matches!(
         terminal
@@ -3777,7 +3791,7 @@ async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
     ));
     assert_eq!(cli.reads_within(paste.len(), Duration::from_secs(5)), paste);
 
-    screen.feed(draw(text).as_bytes());
+    screen.feed(draw(&wire).as_bytes());
     assert!(
         step(
             &mut old,
@@ -3790,7 +3804,7 @@ async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
     let cleanup = step(&mut old, deadline, &mut terminal, &screen);
     assert_eq!(
         cleanup,
-        vec![0x7f; initial_keys.unwrap_or_else(|| text.chars().count())]
+        vec![0x7f; initial_keys.unwrap_or_else(|| text.chars().count()) + 1]
     );
     if written != 0 {
         terminal.push(&cleanup[..written]);
@@ -3822,7 +3836,7 @@ async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
     // The CLI has taken the write, but the screen log still shows the full old draft.
     if outside_draw {
         // A partial repaint was in the old snapshot, before the new actor could read the box.
-        screen.feed(draw(redraw).as_bytes());
+        screen.feed(draw(&redraw).as_bytes());
     }
     if unfinished_title.is_some() {
         screen.feed(b"\x1b]2;old title");
@@ -3882,10 +3896,10 @@ async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
     if redraw_after_ms == 100 {
         assert!(settled.borrow().is_none(), "the receipt still has time");
     } else {
-        assert!(
-            settled.borrow().is_some(),
-            "the receipt has already settled"
-        );
+        tokio::time::timeout(Duration::from_secs(5), settled.wait_for(Option::is_some))
+            .await
+            .expect("the receipt settles before the redraw")
+            .unwrap();
     }
     if outside_draw {
         cli.write_all(b"\x1b7\x1b[20;1H*\x1b8").unwrap();
@@ -3910,7 +3924,7 @@ async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
     } else {
         ""
     };
-    cli.write_all(format!("{close}{}", draw(redraw)).as_bytes())
+    cli.write_all(format!("{close}{}", draw(&redraw)).as_bytes())
         .unwrap();
     if expected_keys == 0 {
         assert!(cli.reads_within(5, Duration::from_millis(40)).is_empty());
@@ -3923,7 +3937,7 @@ async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
     if let Some((remaining, keys)) = after_redraw {
         cli.write_all(b"\x1b]2;cleanup in progress\x07").unwrap();
         assert!(cli.reads_within(1, Duration::from_millis(100)).is_empty());
-        cli.write_all(draw(redraw).as_bytes()).unwrap();
+        cli.write_all(draw(&redraw).as_bytes()).unwrap();
         assert!(
             cli.reads_within(1, Duration::from_millis(100)).is_empty(),
             "a repaint of the old text cannot confirm the new keys' effect"
@@ -3935,13 +3949,30 @@ async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
             "the current drawing proves the rest of the same paste"
         );
     }
-    cli.write_all(draw("").as_bytes()).unwrap();
+    let empty = draw("");
+    if cli_rule == "pi" && receipt_before_redraw.is_some() {
+        // Split the redraw before it can paint the empty box.
+        let prefix = "\x1b[1;";
+        let rest = empty.strip_prefix(prefix).unwrap();
+        cli.write_all(prefix.as_bytes()).unwrap();
+        assert!(cli.reads_within(5, Duration::from_millis(100)).is_empty());
+        assert!(post.paste_messages(number).unwrap().draft.is_some());
+        cli.write_all(rest.as_bytes()).unwrap();
+    } else {
+        cli.write_all(empty.as_bytes()).unwrap();
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while post.paste_messages(number).unwrap().draft.is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("a complete empty frame retires the saved cleanup");
     tokio::time::timeout(Duration::from_secs(5), settled.wait_for(Option::is_some))
         .await
         .unwrap()
         .unwrap();
     assert!(cli.reads_within(5, Duration::from_millis(100)).is_empty());
-    assert_eq!(post.paste_messages(number).unwrap().draft, None);
     if let Some(before) = receipt_before_redraw {
         assert_eq!(before, delivery());
     }
@@ -3991,7 +4022,7 @@ async fn an_ended_run_is_in_its_record_before_a_message_being_typed_learns_it_en
         })
         .await;
     assert!(taken.await.unwrap().is_ok());
-    let paste = b"\x1b[200~a message\x1b[201~";
+    let paste = b"\x1b[200~a message \x1b[201~";
     assert_eq!(harness.cli_reads(paste.len()), paste);
     // The CLI does not draw the draft: the typist waits for it, the message being typed. The
     // actor waits for its next command.

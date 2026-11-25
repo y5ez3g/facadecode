@@ -19,8 +19,9 @@ use crate::{
 };
 
 pub use paste::{
-    could_be_paste_prefix, is_legacy_split_paste, is_own_draft, is_own_recovered_draft,
-    is_same_draft, settle_time, shows_whole, with_paste_text,
+    could_be_paste_prefix, draft_backspace_count, is_legacy_split_paste, is_own_draft,
+    is_own_recovered_draft, is_paste_placeholder, is_same_draft, settle_time, shows_original_text,
+    shows_paste_end, shows_paste_placeholder, shows_whole, with_paste_text,
 };
 pub use probe::{ProbeVerdict, restored, shape_of, space_taken, verdict_of};
 
@@ -61,9 +62,18 @@ pub struct BoxReading {
     pub draft_cursor: Option<(usize, usize)>,
     /// The input's first row and the cursor, where the reader found the input.
     pub line: Option<InputLine>,
+    /// The visible draft and its logical end were painted during this paste.
+    pub paste_drawing: Option<PasteDrawing>,
     /// Unknown because the only input row may be a hint or a draft. A space typed and taken back
     /// tells them apart.
     pub unsure: bool,
+}
+
+/// The end of an input the CLI painted during a paste.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PasteDrawing {
+    pub final_spaces: usize,
+    pub final_line_breaks: usize,
 }
 
 impl BoxReading {
@@ -186,27 +196,53 @@ pub fn read_box_for_typing(
     view: &ScreenView,
     untouched_input: bool,
 ) -> BoxReading {
-    read_box_in_frame(rule, view, untouched_input, None)
+    read_box_in_frame(rule, view, untouched_input, BoxPaint::None)
 }
 
 /// Reads a cleanup response only where the CLI has painted the displayed input since the write.
 pub fn read_box_after_paint(rule: &InputRule, screen: &facade_screen::Screen) -> BoxReading {
-    read_box_in_frame(rule, &screen.view(), false, Some(screen))
+    read_box_in_frame(rule, &screen.view(), false, BoxPaint::Cleanup(screen))
+}
+
+enum BoxPaint<'a> {
+    None,
+    Paste(&'a facade_screen::Screen),
+    Cleanup(&'a facade_screen::Screen),
+}
+
+/// Reads the current frame with any input painting tracked from the paste's write.
+pub fn read_box_for_screen(
+    rule: &InputRule,
+    screen: &facade_screen::Screen,
+    untouched_input: bool,
+) -> BoxReading {
+    let paint = if screen.observes_paint() {
+        BoxPaint::Paste(screen)
+    } else {
+        BoxPaint::None
+    };
+    read_box_in_frame(rule, &screen.view(), untouched_input, paint)
 }
 
 fn read_box_in_frame(
     rule: &InputRule,
     view: &ScreenView,
     untouched_input: bool,
-    painted: Option<&facade_screen::Screen>,
+    paint: BoxPaint<'_>,
 ) -> BoxReading {
     let screen = Screen::new(view, rule.menus());
     let mut reading = screen.read(rule, view, untouched_input);
-    if let Some(painted) = painted
-        && !reading.painted(rule, view, painted)
-    {
-        reading = unknown("the CLI has not redrawn the input box after the cleanup write");
-    }
+    let wrapped_cursor = reading.wrapped_padding_cursor(view);
+    let paste_drawing = match paint {
+        BoxPaint::Paste(paint) => reading.paste_drawing(view, paint),
+        BoxPaint::Cleanup(paint) => {
+            if !reading.painted(rule, view, paint, wrapped_cursor.is_some()) {
+                reading = unknown("the CLI has not redrawn the input box after the cleanup write");
+            }
+            None
+        }
+        BoxPaint::None => None,
+    };
     let Reading {
         state,
         evidence,
@@ -215,6 +251,7 @@ fn read_box_in_frame(
         draft_start,
         line,
         unsure,
+        ..
     } = reading;
     let info = InputInfo {
         state,
@@ -223,8 +260,11 @@ fn read_box_in_frame(
         hidden,
     };
     let draft_cursor = draft_start.and_then(|(left, top)| {
+        if let Some(cursor) = wrapped_cursor {
+            return Some(cursor);
+        }
         let (column, row) = view.cursor;
-        if column < left {
+        if column < left || (matches!(rule, InputRule::PromptRow { .. }) && row != top) {
             return None;
         }
         let before = view
@@ -242,6 +282,7 @@ fn read_box_in_frame(
         draft,
         draft_cursor,
         line,
+        paste_drawing,
         unsure,
     }
 }
@@ -260,13 +301,64 @@ struct Reading {
 }
 
 impl Reading {
-    fn painted(&self, rule: &InputRule, view: &ScreenView, screen: &facade_screen::Screen) -> bool {
+    /// A blank soft continuation places the caret in the previous logical line's padding.
+    /// A hard line or more text on the continuation has no such position.
+    fn wrapped_padding_cursor(&self, view: &ScreenView) -> Option<(usize, usize)> {
+        let ((_, top), draft) = self.draft_start.zip(self.draft.as_deref())?;
+        let (column, row) = view.cursor;
+        if row <= top || column == 0 {
+            return None;
+        }
+        let mut lines = draft.rsplit('\n');
+        let last_line = lines.next()?;
+        let last_offset = lines.count();
+        let last_row = top + last_offset;
+        let continuation = last_row + 1..=row;
+        if row <= last_row
+            || view.continues.get(row + 1) == Some(&true)
+            || !view
+                .continues
+                .get(continuation.clone())?
+                .iter()
+                .all(|&wraps| wraps)
+            || !view
+                .rows
+                .get(continuation)?
+                .iter()
+                .all(|cells| cells.iter().all(|cell| cell.text() == " "))
+        {
+            return None;
+        }
+        let trailing_cells = view
+            .rows
+            .get(last_row)?
+            .iter()
+            .rev()
+            .take_while(|cell| cell.text() == " ")
+            .count();
+        let padding = trailing_cells + (row - last_row - 1) * view.cols + column;
+        Some((last_line.len() + padding, last_offset))
+    }
+
+    fn painted(
+        &self,
+        rule: &InputRule,
+        view: &ScreenView,
+        screen: &facade_screen::Screen,
+        wrapped_padding: bool,
+    ) -> bool {
         match self.state {
             InputState::Draft => {
                 let Some(((start, top), draft)) = self.draft_start.zip(self.draft.as_deref())
                 else {
                     return false;
                 };
+                if matches!(rule, InputRule::PromptRow { .. })
+                    && view.cursor.1 != top
+                    && !wrapped_padding
+                {
+                    return false;
+                }
                 draft.split('\n').enumerate().all(|(index, line)| {
                     let row = top + index;
                     let Some(cells) = view.rows.get(row) else {
@@ -303,6 +395,42 @@ impl Reading {
             }
             _ => true,
         }
+    }
+
+    fn paste_drawing(
+        &self,
+        view: &ScreenView,
+        screen: &facade_screen::Screen,
+    ) -> Option<PasteDrawing> {
+        let ((start, top), draft) = self.draft_start.zip(self.draft.as_deref())?;
+        let mut end = None;
+        for (index, line) in draft.split('\n').enumerate() {
+            let row = top + index;
+            let cells = view.rows.get(row)?;
+            let mut bytes = line.len();
+            let last = cells
+                .iter()
+                .skip_while(|cell| cell.column < start)
+                .take_while(|cell| {
+                    let remains = bytes != 0;
+                    bytes = bytes.saturating_sub(cell.text().len());
+                    remains
+                })
+                .last();
+            let column = last.map_or(start, |cell| cell.column + 1);
+            let painted = if column == start {
+                screen.line_feed_at(row).is_some() || screen.has_painted(row, start..start + 1)
+            } else {
+                screen.has_painted(row, start..column)
+            };
+            if bytes != 0 || !painted {
+                return None;
+            }
+            if let Some(last) = last {
+                end = Some((column, row, screen.painted_at(row, last.column)?));
+            }
+        }
+        painted_paste_end(view, screen, start, end?)
     }
 
     fn with_line(self, line: InputLine) -> Reading {
@@ -403,6 +531,60 @@ fn drafted(
         draft_start: Some(start),
         ..reading(InputState::Draft, format!("{place} holds text{scrolled}"))
     }
+}
+
+/// Counts printed blanks and actual line feeds after the last glyph. Soft wraps join the same
+/// logical line. Earlier padding and cursor motion supply neither witness.
+fn painted_paste_end(
+    view: &ScreenView,
+    screen: &facade_screen::Screen,
+    left: usize,
+    end: (usize, usize, u32),
+) -> Option<PasteDrawing> {
+    let (column, row) = view.cursor;
+    let (last_column, last_row, mut after) = end;
+    if row < last_row || (row == last_row && column.saturating_add(1) < last_column) {
+        return None;
+    }
+    let mut drawing = PasteDrawing::default();
+    let mut beginning = (last_column, last_row);
+    for following in last_row + 1..=row {
+        if !view.continues.get(following).copied()? {
+            after = screen
+                .line_feed_at(following)
+                .filter(|&order| order > after)?;
+            drawing.final_line_breaks += 1;
+            beginning = (left, following);
+        }
+    }
+    for current in beginning.1..=row {
+        let from = if current == beginning.1 {
+            beginning.0
+        } else {
+            0
+        };
+        let to = if current == row {
+            column + usize::from(screen.cursor_wrap_pending())
+        } else {
+            view.cols
+        };
+        for cell in view
+            .rows
+            .get(current)?
+            .iter()
+            .filter(|cell| (from..to).contains(&cell.column))
+        {
+            let Some(order) = screen
+                .printed_space_at(current, cell.column)
+                .filter(|&order| order > after)
+            else {
+                return Some(drawing);
+            };
+            after = order;
+            drawing.final_spaces += 1;
+        }
+    }
+    Some(drawing)
 }
 
 fn joined(cells: &Cells) -> String {
@@ -1288,12 +1470,16 @@ impl<'a> Screen<'a> {
             bytes += cell.text().len();
             at == start
         });
-        Reading {
+        let draft_start = column.map(|cell| (cell.column, y));
+        let reading = Reading {
             draft: Some(typed.to_owned()),
-            draft_start: column
-                .filter(|_| self.cursor.1 == y)
-                .map(|cell| (cell.column, y)),
+            draft_start,
             ..reading(InputState::Draft, format!("{place} holds text"))
+        };
+        if let Some((start, _)) = draft_start {
+            reading.with_line(line_of(self.row(y), y, start, false, self.cursor))
+        } else {
+            reading
         }
     }
 }
