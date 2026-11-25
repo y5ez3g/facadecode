@@ -20,12 +20,13 @@ import remote_editor_evidence as remote
 
 
 NATIVE_EDITOR_MINIMUM = 61
-LEGACY_WINDOW_GRACE_CASE = 'extension/p0/pin-reload/legacy-last-window-grace'
+RELEASED_CUTOVER_CASES = ('exited', 'live', 'uncertain', 'two-windows', 'prior-owner')
+CUTOVER_TYPED_CASES = (
+    'extension/p0/vsix-upgrade/upgrade-pair', 'extension/p0/vsix-upgrade/cutover-live',
+    'extension/p0/vsix-upgrade/cutover-uncertain',
+)
 TYPED_NATIVE_CASES = sorted((*NATIVE_INSTALL_CASES, NATIVE_REMOTE_EDITOR_CASE,
-                             NATIVE_SSH_CASE, KEEPER_CASE, LEGACY_WINDOW_GRACE_CASE))
-LEGACY_IMMEDIATE_REOPEN = '✔ claude: real window close and immediate reopen preserve Pin, exact session and process, with one terminal: '
-LEGACY_EXPIRED_REOPEN = '✔ claude: real window close and reopen after its grace restore the exact pinned session in a new process, with one terminal: '
-LEGACY_NATURAL_EXIT = re.compile(r"✔ claude: the closed window's process ended after (\d+) ms, using the production grace period")
+                             NATIVE_SSH_CASE, KEEPER_CASE, *CUTOVER_TYPED_CASES))
 
 
 def file_digests(recorded, names):
@@ -65,36 +66,18 @@ def editor_passes(path):
     return sum(counts)
 
 
-def check_legacy_window_grace(path):
-    lines = path.read_text().splitlines()
-    immediate = [(index, line.strip().removeprefix(LEGACY_IMMEDIATE_REOPEN)) for index, line in enumerate(lines)
-                 if line.strip().startswith(LEGACY_IMMEDIATE_REOPEN)]
-    expired = [(index, line.strip().removeprefix(LEGACY_EXPIRED_REOPEN)) for index, line in enumerate(lines)
-               if line.strip().startswith(LEGACY_EXPIRED_REOPEN)]
-    natural_exit = [(index, int(match[1])) for index, line in enumerate(lines)
-                    if (match := LEGACY_NATURAL_EXIT.fullmatch(line.strip()))]
-    cleanup = [index for index, line in enumerate(lines) if line.strip() == 'Isolated editor profile cleanup finished.']
-    if not all(len(events) == 1 for events in (immediate, expired, natural_exit, cleanup)):
-        raise AcceptanceError(f'{path}: missing or duplicate legacy window grace observations or cleanup')
-    if (not immediate[0][0] < natural_exit[0][0] < expired[0][0] < cleanup[0] or natural_exit[0][1] < 60_000):
-        raise AcceptanceError(f'{path}: legacy window grace did not end naturally between the two reopens')
-    try:
-        for keep_process, (_, payload) in ((True, immediate[0]), (False, expired[0])):
-            records = json.loads(payload)
-            if not isinstance(records, list) or len(records) != 3:
-                raise AcceptanceError(f'{path}: invalid legacy window grace transcript')
-            before, closed, after = records
-            if ([item['phase'] for item in (before, closed, after)] != ['folder', 'closed', 'reopened']
-                    or not all(type(pid) is int and pid > 0 for pid in (before['pid'], closed['host'], after['pid']))
-                    or not all(re.fullmatch(r'run-[0-9a-f]{32}', item['runId']) for item in (before, after))
-                    or not isinstance(before['session'], str) or not before['session']
-                    or before['session'] != after['session'] or type(after['terminals']) is not int
-                    or after['terminals'] != 1 or (before['pid'] == after['pid']) != keep_process
-                    or (before['runId'] == after['runId']) != keep_process):
-                raise AcceptanceError(f'{path}: wrong process, run or pinned session after legacy window close')
-    except (KeyError, TypeError, json.JSONDecodeError) as error:
-        raise AcceptanceError(f'{path}: invalid legacy window grace transcript') from error
-    return LEGACY_WINDOW_GRACE_CASE
+def check_published_cutover(folder):
+    for variant in RELEASED_CUTOVER_CASES:
+        path = folder / f'{variant}.log'
+        lines = path.read_text().splitlines()
+        serving = 'none' if variant == 'uncertain' else 'framework'
+        reports = [json.loads(line.removeprefix('Facade acceptance test '))
+                   for line in lines if line.startswith('Facade acceptance test ')]
+        passed = any(line.strip().startswith(f'✔ legacy cutover ({variant}) from 0.1.5 to 0.1.6: ') for line in lines)
+        if (not passed or reports != [{'name': f'cutover-{variant}', 'implementation': serving}]
+                or lines.count('Isolated editor profile cleanup finished.') != 1):
+            raise AcceptanceError(f'{path}: absent, failed or incomplete published cutover evidence')
+    return CUTOVER_TYPED_CASES
 
 
 def verify_node_evidence(root, script, folder, source, *arguments):
@@ -157,7 +140,7 @@ def replay_native(root, repo, candidate, records, output):
                      install / 'output.log', installed_source['run'], source=installed_source,
                      producer_checkout=Path('/home/runner/work') / project / project)
     observed.extend(NATIVE_INSTALL_CASES)
-    observed.append(check_legacy_window_grace(paths['editor-tests-linux-x64-legacy'] / 'integration.log'))
+    observed.extend(check_published_cutover(paths['published-cutover-linux-x64']))
 
     return {
         'typed_cases': sorted(observed),

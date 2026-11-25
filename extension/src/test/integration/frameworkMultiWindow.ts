@@ -6,17 +6,12 @@ import * as assert from 'assert';
 import { execFile, execFileSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
-import * as os from 'os';
 import * as path from 'path';
 import { createInterface } from 'readline';
 import { isDeepStrictEqual } from 'util';
 import type { AgentInfo, AgentRef, DaemonHelloResult, HelloParams, HelloResult, InspectResult } from '../../base/frameworkProtocol';
 import { isProcessRunning } from '../../base/system';
-import type { OwnerClaim } from '../../base/ownership';
-import { ptydRecords, recordedPtyds } from '../../base/ptydRegistry';
-import { PtydClient } from '../../host/execution/ptydClient';
-import { isCurrentOwner, writeAsOwner } from '../../record/ownership';
-import type { Pin, FrameworkPin } from '../../core/ports';
+import type { FrameworkPin } from '../../core/ports';
 import { freePort, Workbench } from './cdpInput';
 import { callInFramework, frameworkCall, frameworkListens, frameworkSocket, detachedStartReference, endEditors, helloInFramework, normalizeDriveLetter, until } from './editors';
 import type { AttachView, SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './frameworkMultiWindowDriver';
@@ -125,80 +120,6 @@ export async function withFrameworkWindows(files: WindowFiles, start: StartEdito
 	}
 }
 
-/** Two actual legacy implementation windows replace the active claim for one workspace and keep both original agents. */
-export async function staleOwner(open: OpenWindow, folder: string, env: NodeJS.ProcessEnv): Promise<void> {
-	const home = path.join(env.FACADE_HOME!, 'extension');
-	const claim = () => {
-		const directory = path.join(home, 'claims');
-		const files = fs.readdirSync(directory).filter(file => file.endsWith('.json'));
-		assert.strictEqual(files.length, 1, 'exactly this fixture workspace has a claim');
-		return JSON.parse(fs.readFileSync(path.join(directory, files[0]), 'utf8')) as OwnerClaim;
-	};
-	const first = await open(folder, 'legacy');
-	assert.strictEqual(first.ready.machineId, null, 'the legacy implementation owns the agents');
-	const start = () => first.act<{ runId: string; alias: string }>({ kind: 'start-fallback' });
-	const agents = [await start(), await start()] as const;
-	const runs = [agents[0].runId, agents[1].runId] as const;
-	assert.notStrictEqual(runs[0], runs[1]);
-	for (const run of runs) { await first.act({ kind: 'pin-owned', run }); }
-	const oldPage = await first.act<string>({ kind: 'panel-generation' });
-	const previous = claim();
-	const stateFile = path.join(home, 'workspaces', previous.owner, 'workspace-state.json');
-	const savedPins = (): readonly string[] => {
-		const state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as { readonly 'facade.pins'?: readonly Pick<Pin, 'id'>[] };
-		return (state['facade.pins'] ?? []).map(pin => pin.id);
-	};
-	const services = recordedPtyds(ptydRecords(path.join(home, 'ptyd')));
-	assert.strictEqual(services.length, 1, 'the two actual fake CLIs use one legacy supervisor');
-	const service = services[0];
-	const ptyd = await PtydClient.connect(service.socket, '', path.join(home, 'ptyd', 'unused.log'), { start: false, protocol: service.protocol });
-	const list = () => ptyd.request('list', { owner: previous.owner });
-	const snapshot = async () => (await list()).map(row => ({
-		run: row.run, pid: row.pid, cwd: row.cwd, startedAt: row.startedAt, exited: row.exited, name: row.meta.name
-	})).sort((a, b) => a.run.localeCompare(b.run));
-	try {
-		const original = await snapshot();
-		assert.deepStrictEqual(original.map(row => row.run), [...runs].sort((a, b) => a.localeCompare(b)));
-		for (const agent of agents) {
-			const recorded = Number(fs.readFileSync(`${env.FACADE_IT_RECORD}.${agent.alias}`, 'utf8').trim());
-			assert.ok(recorded > 0 && isProcessRunning(recorded));
-			assert.strictEqual(original.find(row => row.run === agent.runId)?.pid, recorded);
-		}
-		const pins = await until('both runs’ durable Pins', async () => {
-			const saved = savedPins();
-			const live = await list();
-			const linked = runs.map(run => live.find(row => row.run === run)?.meta.pin);
-			return saved.length === runs.length && new Set(linked).size === runs.length
-				&& linked.every(id => typeof id === 'string' && saved.includes(id)) ? saved : undefined;
-		});
-		await first.close({ waitForExit: true });
-		assert.deepStrictEqual(savedPins(), pins, 'the predecessor saved both exact Pins through normal shutdown');
-		console.log(`  ✔ Both original Pins survived the predecessor’s clean exit (${pins.join(', ')})`);
-		const successor = await open(folder, 'new');
-		assert.strictEqual(successor.ready.machineId, null);
-		assert.notStrictEqual(successor.ready.hostPid, first.ready.hostPid);
-		const current = claim();
-		assert.strictEqual(current.owner, previous.owner);
-		assert.strictEqual(current.generation, previous.generation + 1);
-		assert.notStrictEqual(current.token, previous.token);
-		assert.strictEqual(isCurrentOwner(current, home), true);
-		const before = fs.readFileSync(stateFile);
-		assert.strictEqual(writeAsOwner(previous, home, () => assert.fail('a stale writer reached the current workspace record')), false);
-		assert.deepStrictEqual(fs.readFileSync(stateFile), before);
-		await assert.rejects(ptyd.request('claim', previous), /ownership was transferred or expired/i);
-		for (const run of runs) {
-			await assert.rejects(ptyd.request('input', { run, data: 'unexpected stale input' }), /ownership was transferred or expired/i);
-			await assert.rejects(ptyd.request('terminate', { run, graceMs: 0 }), /ownership was transferred or expired/i);
-		}
-		const replay = await successor.act<{ page: string; refusedActions: number }>({ kind: 'stale-owner', previous, current, page: oldPage, runs });
-		assert.deepStrictEqual(await snapshot(), original, 'both exact fake CLI processes survived stale effects');
-		assert.strictEqual(replay.refusedActions, 2);
-		console.log(`  ✔ Stale claim ${previous.generation} lost to ${current.generation}; stale page ${oldPage} changed neither run; current page ${replay.page} unpinned only ${runs[0]}; original fake PIDs ${original.map(row => row.pid).join(', ')}`);
-		for (const runId of runs) { await successor.act({ kind: 'stop-fallback', runId }); }
-		await successor.close();
-	} finally { ptyd.dispose(); }
-}
-
 async function expectListed(window: DrivenWindow, id: string): Promise<void> {
 	await until(`${id}'s running card with no terminal in ${window.ready.folder}`, async () => {
 		const { cards, terminals } = await window.act<WindowView>({ kind: 'snapshot' });
@@ -298,48 +219,27 @@ export async function missingSessionUnpin(open: OpenWindow, folder: string, env:
 		JSON.stringify({ home, expired: missing.id, unpinned: unpinned.id, notice, launches: original }));
 }
 
-/** A present but unlaunchable staged Framework falls back to one usable legacy implementation panel. */
+/** A Framework startup refusal reports the cause and leaves every launch unavailable. */
 export async function activationFailure(open: OpenWindow, folder: string, env: NodeJS.ProcessEnv, faultProgram: string): Promise<void> {
 	const home = env.FACADE_HOME!;
 	const record = env.FACADE_IT_RECORD!;
-	const launches = () => fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`));
 	const window = await open(folder, 'fault');
 	assert.strictEqual(normalizeDriveLetter(window.ready.home), normalizeDriveLetter(home));
 	assert.deepStrictEqual([window.ready.remote, window.ready.machineId], [null, null]);
-	assert.ok(!frameworkListens(home), 'there is no Framework daemon for this fixture');
-	assert.deepStrictEqual(await window.act<WindowView>({ kind: 'snapshot' }), { cards: [], terminals: 0 });
-	assert.deepStrictEqual(launches(), [], 'activation did not launch an agent');
-	const warningStart = `The legacy implementation is active on ${os.hostname()}. Could not connect to the Orchestrator. Could not run ${faultProgram}: `;
-	const warningEnd = 'Fix the problem, set facade.framework to `auto`, and reload the window to try Facade Code Framework again.';
+	assert.ok(!frameworkListens(home));
 	const workbench = await window.workbench();
-	let warning: string;
 	try {
 		await window.act({ kind: 'show-notifications' });
-		const warningText = `Array.from(document.querySelectorAll('.notification-list-item-message'))
-			.map(node => node.textContent?.trim()).find(text => text?.startsWith(${JSON.stringify(warningStart)})
-				&& text.endsWith(${JSON.stringify(warningEnd)}))`;
-		warning = await until('the startup warning naming the failed Framework executable and recovery', async () =>
-			await workbench.cdp.evaluate<string | undefined>(warningText));
+		const message = await until('the startup failure naming the Framework executable', async () =>
+			workbench.cdp.evaluate<string | undefined>(`Array.from(document.querySelectorAll('.notification-list-item-message'))
+				.map(node => node.textContent?.trim()).find(text => text?.includes(${JSON.stringify(faultProgram)}))`));
+		assert.match(message, /Could not start|Could not run/u);
 	} finally {
 		workbench.cdp.close();
 	}
-	const agent = await window.act<{ runId: string; alias: string; name: string }>({ kind: 'start-fallback' });
-	const launchFile = `${record}.starts.${agent.alias}`;
-	const pids = () => fs.readFileSync(launchFile, 'utf8').trim().split(/\r?\n/u).map(Number);
-	const pid = await until('the legacy implementation fake CLI PID', () => fs.existsSync(launchFile) ? pids()[0] || undefined : undefined);
-	assert.ok(isProcessRunning(pid), 'the fake CLI is alive');
-	const view = await window.act<WindowView>({ kind: 'snapshot' });
-	assert.deepStrictEqual(view.cards.map(card => [card.id, card.name]), [[agent.alias, agent.name]]);
-	assert.strictEqual(view.terminals, 1);
-	assert.ok(!frameworkListens(home));
-	await window.act({ kind: 'stop-fallback', runId: agent.runId });
-	await until('the one legacy implementation fake CLI to stop', () => !isProcessRunning(pid) || undefined);
+	assert.deepStrictEqual(fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`)), []);
 	await window.close();
-	assert.deepStrictEqual(launches(), [path.basename(launchFile)]);
-	assert.deepStrictEqual(pids(), [pid], 'the one requested legacy run launched exactly one process');
-	assert.ok(!frameworkListens(home));
-	console.log('  ✔ Framework startup failed visibly. The legacy panel served one requested agent and its process stopped. ' +
-		JSON.stringify({ home, warning, before: 0, after: { alias: agent.alias, pids: pids() }, cliStopped: true }));
+	console.log('  ✔ Framework startup failed visibly and started no agent.');
 }
 
 /** An incompatible hello refuses activation, including the actual Facade webview and commands. */

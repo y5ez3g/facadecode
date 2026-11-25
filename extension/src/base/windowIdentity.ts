@@ -9,6 +9,7 @@ import { isOwnerClaim, type OwnerClaim } from './ownership';
 export const WINDOW_IDENTITY_COMMAND = 'facade.window.identity';
 export const WINDOW_TERMINAL_OWNER_COMMAND = 'facade.window.terminalOwner';
 export const WINDOW_LEGACY_INSTANCE_COMMAND = 'facade.window.legacyInstance';
+export const WINDOW_LEGACY_HANDOFF_COMMAND = 'facade.window.legacyHandoff';
 export const WINDOW_TERMINALS_COMMAND = 'facade.window.terminals';
 
 /** Bounds an abandoned registration; it is not an owner lease or a process lifetime. */

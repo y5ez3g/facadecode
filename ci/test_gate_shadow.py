@@ -240,7 +240,7 @@ class GateShadowTests(GateFixture, unittest.TestCase):
         self.assertEqual(self.plan['route'], 'expanded')
         self.assertEqual(set(self.plan['workflows']), {SHADOW, FRAMEWORK, EXTENSION, REMOTE})
         self.assertEqual(sum(len(jobs) for jobs in self.plan['workflows'].values()), 24)
-        self.assertIn('Extension on linux-x64, legacy implementation', self.plan['workflows'][EXTENSION])
+        self.assertNotIn('Extension on linux-x64, legacy implementation', self.plan['workflows'][EXTENSION])
         self.assertIn('Extension on linux-x64, framework implementation', self.plan['workflows'][EXTENSION])
         self.evaluate('success')
         workflows = self.snapshot['workflows']

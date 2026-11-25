@@ -9,7 +9,7 @@ import { MouseReports } from '../../base/mouseReports';
 import { TerminalReplies } from '../../base/terminalReplies';
 import { SPINNER_FRAMES as FRAMES, spunName } from '../../base/tabSpinner';
 import type { Disposable } from '../../core/ports';
-import type { TerminalColours } from '../../ptyd/protocol';
+import type { TerminalColours } from './terminalColours';
 import { HiddenAnswers, type RunScreen } from './hiddenAnswers';
 
 /** The most output an unopened terminal keeps for its first draw; beyond it, the run's screen is taken anew as it opens. */

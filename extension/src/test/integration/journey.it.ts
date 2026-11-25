@@ -8,7 +8,6 @@ import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { DatabaseSync } from 'node:sqlite';
 import * as vscode from 'vscode';
-import { piSessionFolderName } from '../../clis/history/pi';
 import { BUILT_IN_NAMES } from '../../base/names';
 import type { PanelState } from '../../webview/protocol';
 import type { Pin } from '../../core/ports';
@@ -16,7 +15,7 @@ import { linesOf } from '../detailLines';
 import { unspun } from '../../base/tabSpinner';
 import { observeAcceptanceImplementation } from './acceptanceImplementation';
 import { frameworkSocket } from './editors';
-import { fixturePid, legacyStopResult, pidGone, windowsProcessStart } from './journeyProcess';
+import { fixturePid, pidGone, windowsProcessStart } from './journeyProcess';
 import { RESUME_PICKER_STATE, type ResumePickerState } from './resumePickerFixture';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
@@ -38,6 +37,11 @@ const ARGUMENTS: { readonly [cli: string]: readonly string[] } = {
 	'my-cli': ['--from-custom', 'two words']
 };
 /** Whether the windows run on the Framework: framework starts each CLI with its own wiring rather than the extension's run files. */
+// Session fixture layout read by the Rust Pi integration.
+function piSessionFolderName(cwd: string): string {
+	return `--${path.resolve(cwd).replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
+}
+
 const FRAMEWORK = process.env.FACADE_IT_IMPLEMENTATION === 'framework';
 /** Whether this run's CLI is the suite's program rather than a built-in. */
 const CUSTOM = CLI === 'my-cli';
@@ -288,8 +292,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			});
 		} catch (error) {
 			const identity = windowsLegacy ? ` Windows creation before Stop ${creation ?? 'unavailable'}, last ${lastCreation ?? 'unavailable'}.` : '';
-			const cleanup = !FRAMEWORK ? ` Stop result ${legacyStopResult(process.env.FACADE_HOME, card.runId) ?? 'unavailable'}.` : '';
-			throw new Error(`${error.message}. Run ${card.runId}, fixture PID ${pid}.${identity}${cleanup}`, { cause: error });
+			throw new Error(`${error.message}. Run ${card.runId}, fixture PID ${pid}.${identity}`, { cause: error });
 		}
 		if (FRAMEWORK) {
 			await until('Stop to retain the ended card', async () => (await state()).cards.find(each => each.runId === card.runId && each.orchestrator?.running === false));

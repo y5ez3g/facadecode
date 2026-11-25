@@ -22,7 +22,7 @@ medium island each. Shared value types, presentation helpers and generated proto
 | Terminal view | Editor tabs, Terminal data and input | A tab's view lifetime and the associated Attach subscription, frame, input and capacity. Closing a tab releases its view. |
 | Launch and locations | Directory catalog and history, Git worktrees, New Agent flow | The selected machine and directory, its catalog and history, standalone Git effects, and the launch selection up to the exact request. |
 | Panel and pickers | Card model and filtering, Webview, Agent pickers | Card order, filters and selection preferences, the host/page contract, and native selection of exact agent and session targets. |
-| Local Window Component | Window identity, Stale tab cleanup | Identity, window registration and legacy routes on the UI host, plus native handles and cleanup across workspace-host generations. |
+| Local Window Component | Window identity, Stale tab cleanup | Session-validated native identity, predecessor records, terminal handles and cleanup across workspace-host generations. |
 
 ### Public interfaces and effects
 
@@ -37,8 +37,9 @@ identity and terminal retirement may call the Local Window Component through its
 Roster and Pins is the sole writer of the workspace roster. Its Pin-order input is a sequence of Pin IDs from
 the Panel's existing move operation. The Panel keeps visual card order in editor workspace preferences. Workspace
 agent operations project the watch's running records and classify temporary unavailability before reconciliation.
-A workspace change synchronizes the roster and Pin intent. The root's temporary legacy cutover uses
-`host/implementation.ts` and `host/legacyCutover.ts`; Workspace agents owns the migration record for each workspace.
+A workspace change synchronizes the roster and Pin intent. The root wires activation to a migration adapter.
+The adapter owns the released supervisor reader, exact stop capability and home-level cutover journal. Roster
+and Pins owns each workspace's migration sidecar and final roster write.
 A terminal view close leaves workspace membership and
 agent lifetime to their owners. Framework stop and resume results come from the exact target operation. An ordinary
 compatible upgrade reconnects to the existing process. A planned cutover confirms the affected legacy stops before
@@ -47,13 +48,17 @@ catalog after Git has created it.
 
 ### Changes in the current layout
 
-**Use the island boundary for changed behavior and the existing layer rules for imports.**
+**Every production module belongs to exactly one owner and exposes only declared cross-island interfaces.**
 
-One logical island can use files in multiple current layers. An island's owner names its current paths and the
-input and output of each cross-island change before implementation. Keep the current host/page separation,
-one-directional imports, and independent test seams under ARCHITECTURE-1.3. Physical directory moves and a complete
-island import check belong to their own change. Bar Raiser reviews each delivery against its declared ownership and
-the public interface rules.
+[The source ownership map](../../../extension/islands.json) assigns modules to the root, small islands, migration
+adapter or shared contracts. A foreign import names a public export and its permitted consumer. Shared contracts carry
+data and low-level functions. State and product effects stay with the corresponding island. The map follows the existing
+layer rules and names public entry modules even when an island spans more than one layer.
+
+The extension checks ownership, permitted imports and cycles through its TypeScript source graph, including type
+imports, re-exports and directory entrypoints. The package check inspects the emitted workspace host, window host
+and page graphs and their packaged contents. The Bar Raiser reviews state writers, public interface changes and
+entrypoint wiring as part of each delivery.
 
 ## Team workflow
 

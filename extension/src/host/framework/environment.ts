@@ -7,7 +7,7 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { composeEnvironment, setVariable, variableOf } from '../../clis/environment';
+import { composeEnvironment, setVariable, variableOf } from '../../base/terminalEnvironment';
 import type { Location } from '../../core/ports';
 import { FACADE_HOME_VARIABLE } from '../../record/paths';
 import { destinationEnvironment } from '../terminals';

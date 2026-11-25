@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { Terminal } from '@xterm/headless';
-import type { TerminalColours } from '../../ptyd/protocol';
+import type { TerminalColours } from './terminalColours';
 
 // Loaded as the first hidden tab of a run of an earlier supervisor needs them: every other run has ptyd's answers
 const loadXterm = () => require('@xterm/headless') as typeof import('@xterm/headless');

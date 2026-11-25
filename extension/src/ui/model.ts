@@ -4,9 +4,10 @@
 
 import { homeRelative } from '../base/files';
 import type { Agents, Catalog, Disposable, Event, Location, LocationId, LocationPort, RunChange, RunFacts, RunId } from '../core/ports';
+import { placeKindOf } from '../core/locations/catalog';
 import { repeatedNames } from '../core/names';
 import { canDismiss } from '../core/ports';
-import type { CardMenu, DirectoryFilter, DisplayFilter, FilterChoice, PanelFilter, PanelState, PlaceKind } from '../webview/protocol';
+import type { CardMenu, DirectoryFilter, DisplayFilter, FilterChoice, PanelFilter, PanelState } from '../webview/protocol';
 import { cardOf, CardPlace, CardWords, folderPrefixOf, frameworkStateOf, frameworkStateText, isAgentRunning, locationLabel, onePlaceOf } from './cardView';
 import { agentFilter, arranged, atEnd, atStart, filterCategory, filterChoiceKey, FILTER_STATES, moved, PanelPrefs, withNew } from './order';
 
@@ -614,12 +615,4 @@ function same(a: readonly string[], b: readonly string[]): boolean {
 /** The last name of a path in any environment's separators. */
 function baseName(path: string): string {
 	return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-}
-
-/**
- * A location's kind as its icon says it (PANEL-1.5, WORKTREES-1.2): a checkout's root is a main checkout or a worktree; a folder - one
- * opened inside a checkout among them - is a folder. Resolve a Resume cwd to its anchor first.
- */
-export function placeKindOf(location: Pick<Location, 'kind' | 'isMain' | 'subfolder'> | undefined): PlaceKind {
-	return location?.kind !== 'checkout' || location.subfolder ? 'folder' : location.isMain ? 'repo' : 'worktree';
 }

@@ -17,7 +17,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	}
 }
 
-/** Detaches from the agents' processes: they keep running in ptyd, and a reload finds them again (RULES-4.1). */
+/** Detaches from the agents' processes: they keep running in Framework and can reconnect on reload (RULES-4.1). */
 export function deactivate(): Promise<void> | undefined {
 	return deactivating?.();
 }

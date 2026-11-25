@@ -6,7 +6,6 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ROBOTS } from '../base/robot';
-import { LEGACY_SETTINGS } from '../clis/migration';
 import { COMMANDS, CONTEXT } from '../ui/catalog';
 import { TestEmitter, withModules } from './withModules';
 
@@ -51,8 +50,7 @@ const HIDDEN: readonly [string, string, string?][] = [
  * Registered by the host itself rather than the panel: New Worktree, Show Agent Command Line and Show Agents Log beside the CLIs and the log,
  * and Open Settings File beside the settings file.
  */
-const HOST_COMMANDS = ['facade.newWorktree', 'facade.showAgentLaunch', 'facade.showAgentsLog', 'facade.openSettingsFile'];
-const RUST_ONLY = ['facade.resumeAgent', 'facade.openTerminal', 'facade.deleteAgent', 'facade.copyAgentReference'];
+const OUTSIDE_PANEL = new Set(['facade.newWorktree', 'facade.showAgentsLog', 'facade.openSettingsFile', 'facade.showAgentLaunch', 'facade.dismissAgent', 'facade.continueSession']);
 const TEST_COMMANDS = ['facade.state', 'facade.selectRow', 'facade.probe'];
 
 suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)', () => {
@@ -149,7 +147,6 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			+ '[Edit in facade.json](command:facade.openSettingsFile) to change YOLO, suggested names, and how CLIs start.');
 		assert.strictEqual(english('%config.home.pattern%'), 'The path must start with ~/ or be absolute.');
 		assert.deepStrictEqual(Object.keys(settings), ['facade.home']);
-		assert.deepStrictEqual(LEGACY_SETTINGS.filter(key => key in settings), []);
 		// facade.json is checked against its schema wherever the Facade home is: the file's name is Facade's own
 		assert.deepStrictEqual(contributes.jsonValidation, [{ fileMatch: ['**/facade.json'], url: './media/settings.schema.json' }]);
 		assert.ok(fs.existsSync(path.join(ROOT, 'media', 'settings.schema.json')));
@@ -163,7 +160,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 	});
 
 	suite('what the panel registers', () => {
-		/** The commands `registerUi` registers, its build's test mode as `testMode` says. */
+		/** The active panel's command registry and the integration-only additions. */
 		const registered = (testMode: boolean): string[] => {
 			const ids: string[] = [];
 			const none = { dispose: () => undefined };
@@ -178,23 +175,19 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			};
 			(globalThis as { FACADE_TEST_MODE?: boolean }).FACADE_TEST_MODE = testMode;
 			try {
-				const { registerUi } = withModules({ vscode: api })<typeof import('../ui/commands/index')>(require.resolve('../ui/commands/index'));
+				const { registerOrchestratorUi } = withModules({ vscode: api })<typeof import('../ui/commands/index')>(require.resolve('../ui/commands/index'));
 				const emitter = new TestEmitter<never>();
-				const disposables = registerUi({
-					savedName: () => undefined,
-					agents: { requested: () => undefined, started: async () => ({ state: 'closed' }), warmedUp: async () => undefined, list: () => [], get: () => undefined, onDidChange: emitter.event, resume: () => '', holding: () => undefined, refreshConversations: async () => {}, pin: () => {}, unpin: () => {}, pins: () => [], reorderPins: () => {}, restorePins: async () => {},
-			launch: () => '', stop: async () => 'already_ended', dismiss: async () => undefined, close: async () => 'already_ended', rename: () => undefined },
-					worktrees: { availability: async () => ({ available: false, reason: 'none' }), plan: async () => { throw new Error('none'); }, create: async () => { throw new Error('none'); }, remove: async () => { throw new Error('none'); } },
-					locations: { snapshot: () => ({ locations: [], folders: [], pending: false }), resolve: () => undefined, refresh: async () => undefined, onDidChange: emitter.event, onDidRemove: emitter.event, removalOf: () => undefined },
-					clis: { list: async () => ({ clis: [], problems: [] }) },
-					history: { last: () => ({}), remember: () => undefined },
-					execution: { reveal: async () => false, tabOpen: () => false, onDidActivate: emitter.event },
-					workspaceState: { get: () => undefined, update: async () => undefined, keys: () => [] } as never,
-					extensionUri: { path: '/extension' } as never,
-					log: { event: () => undefined },
-					notifyError: () => undefined,
-					openSettings: async () => undefined,
-					ready: Promise.resolve()
+				const disposables = registerOrchestratorUi({
+					agents: { list: () => [], get: () => undefined, onDidChange: emitter.event, pins: () => [], reorderPins: () => undefined,
+						open: async () => false, stop: async () => undefined, remove: async () => undefined,
+						setPinned: async () => undefined, rename: async () => undefined },
+					locations: { snapshot: () => ({ locations: [], folders: [], pending: false }), resolve: () => undefined,
+						refresh: async () => undefined, onDidChange: emitter.event, onDidRemove: emitter.event, removalOf: () => undefined },
+					pickers: {} as never,
+					onDidActivate: emitter.event, openSettings: async () => undefined,
+					workspaceState: { get: () => undefined, update: async () => undefined },
+					extensionUri: { path: '/extension' } as never, log: { event: () => undefined },
+					notifyError: assert.fail, ready: Promise.resolve(), motion: () => undefined
 				});
 				disposables.forEach(each => each.dispose());
 			} finally {
@@ -203,9 +196,9 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			return ids;
 		};
 
-		test('the legacy implementation registers exactly its UI commands from the manifest (UX-3.2, E03)', () => {
-			const manifested = contributes.commands.map((each: { command: string }) => each.command).filter((id: string) => !HOST_COMMANDS.includes(id) && !RUST_ONLY.includes(id));
-			assert.deepStrictEqual(registered(false).sort(), manifested.sort());
+		test('the Framework panel registers exactly its UI commands from the manifest (UX-3.2, E03)', () => {
+			const expected = [...PUBLIC, ...HIDDEN].map(([id]) => id).filter(id => !OUTSIDE_PANEL.has(id));
+			assert.deepStrictEqual(registered(false).sort(), expected.sort());
 		});
 
 		test('the integration build adds only state, selectRow and probe, which no manifest lists (UX-3.2)', () => {

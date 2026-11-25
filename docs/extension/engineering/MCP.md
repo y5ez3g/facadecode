@@ -470,7 +470,7 @@ own its use, effects and success/retry boundaries; the skill provides cross-tool
 Necessary facts remain local to a tool that a client loads alone, especially inbox delivery acknowledgment, raw input's
 lack of draft protection, and the consequences of unknown input. The skill does not duplicate the eight argument
 schemas.
-The legacy implementation's tool definitions and descriptions live in [schema/tools.ts](../../../extension/src/schema/tools.ts). The MCP annotations are:
+The published 0.1.5 tag contains the legacy tool definitions. The current editor uses the [Framework tool catalog](../../../framework/crates/base/src/texts/tools.json). The MCP annotations are:
 
 | Tools | readOnlyHint | destructiveHint | idempotentHint | openWorldHint |
 | --- | --- | --- | --- | --- |

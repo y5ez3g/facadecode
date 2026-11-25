@@ -12,9 +12,8 @@ import type { OwnerClaim } from '../base/ownership';
 import { ptydRecords } from '../base/ptydRegistry';
 import { isSameStart, processStartTimeAsync, processStartTimeOfAsync } from '../base/system';
 import type { Pin } from '../core/ports';
-import { EARLIER_PROTOCOLS, PTYD_PROTOCOL, type RunInfo } from '../ptyd/protocol';
 import { isCurrentOwner, nextOwnerClaim } from '../record/ownership';
-import { PtydClient, ptydSocketPath, within } from './execution/ptydClient';
+import { EARLIER_PROTOCOLS, PTYD_PROTOCOL, PtydClient, ptydSocketPath, within, type RunInfo } from './migration/supervisor';
 import { isLegacyWorkspaceKey, legacyStateFile, readLegacyPins, type LegacyPinInput } from './legacyPins';
 import { isPin } from './pins';
 
@@ -251,7 +250,8 @@ async function open(endpoint: Endpoint, held?: PtydClient): Promise<Listing> {
 			}
 			return { endpoint, runs: [] };
 		}
-		if (!PROTOCOLS.includes(endpoint.protocol) || endpoint.build !== undefined && endpoint.build !== client.build) {
+		if (!PROTOCOLS.includes(endpoint.protocol) || (endpoint.build !== undefined && endpoint.build !== client.build)
+			|| (endpoint.pid !== undefined && endpoint.pid !== client.pid)) {
 			throw new Error('The legacy supervisor protocol or build could not be verified.');
 		}
 		return { endpoint, client, runs: await list(client) };

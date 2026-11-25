@@ -42,7 +42,6 @@
 		"watch": "node scripts/build.mjs --watch",
 		"bundle": "node scripts/build.mjs",
 		"test": "mocha --ui tdd --timeout 30000 --require build/out/test/setup.js \"build/out/test/**/*.test.js\"",
-		"measure:mcp": "node scripts/measure-mcp.mjs",
 		"package": "node scripts/package.mjs",
 		"test:package": "node --test scripts/package.test.mjs",
 		"test:integration": "node scripts/build-it.mjs && node ./build/out/test/integration/run.js",
@@ -509,12 +508,9 @@
 		]
 	},
 	"dependencies": {
-		"@xterm/addon-serialize": "^0.14.0",
 		"@xterm/addon-unicode11": "^0.9.0",
 		"@xterm/headless": "^6.0.0",
-		"jsonc-parser": "3.3.1",
-		"node-pty": "1.2.0-beta.15",
-		"smol-toml": "1.9.1"
+		"jsonc-parser": "3.3.1"
 	},
 	"devDependencies": {
 		"@types/mocha": "^10.0.10",
@@ -525,6 +521,7 @@
 		"esbuild": "^0.28.2",
 		"js-yaml": "4.3.2",
 		"mocha": "^11.8.0",
+		"node-pty": "1.2.0-beta.15",
 		"typescript": "^5.9.3"
 	},
 	"l10n": "./l10n",

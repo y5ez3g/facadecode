@@ -11,7 +11,7 @@ from merge_review import (
     ACTIONS_APP, REMOTE, REQUIRED, RUNNERS, current_candidate, current_runs, listed, require_catalog_minimum, require_jobs,
 )
 from merge_review_native import (
-    LEGACY_EXPIRED_REOPEN, LEGACY_IMMEDIATE_REOPEN, LEGACY_WINDOW_GRACE_CASE, check_legacy_window_grace, editor_passes,
+    CUTOVER_TYPED_CASES, RELEASED_CUTOVER_CASES, check_published_cutover, editor_passes,
 )
 
 
@@ -152,26 +152,18 @@ class ExpandedReview(unittest.TestCase):
                 with self.subTest(output=output), self.assertRaises(AcceptanceError):
                     editor_passes(path)
 
-    def test_legacy_window_grace_requires_both_reopens_the_natural_exit_and_cleanup(self):
-        before = {'phase': 'folder', 'runId': 'run-' + '1' * 32, 'pid': 40, 'session': 'native-session'}
-        closed = {'phase': 'closed', 'host': 38}
-        after = {**before, 'phase': 'reopened', 'terminals': 1}
-        reopened = {**after, 'runId': 'run-' + '2' * 32, 'pid': 41}
-        early = LEGACY_IMMEDIATE_REOPEN + json.dumps([before, closed, after])
-        timing = "✔ claude: the closed window's process ended after 89605 ms, using the production grace period"
-        late = LEGACY_EXPIRED_REOPEN + json.dumps([before, closed, reopened])
-        cleanup = 'Isolated editor profile cleanup finished.'
+    def test_cutover_requires_each_published_upgrade_and_cleanup(self):
         with TemporaryDirectory() as directory:
-            path = Path(directory) / 'integration.log'
-            path.write_text('\n'.join((early, timing, late, cleanup)))
-            self.assertEqual(check_legacy_window_grace(path), LEGACY_WINDOW_GRACE_CASE)
-            for observation in ((early, late, cleanup), (late, timing, early, cleanup), (early, timing, late),
-                                (early, timing.replace('89605', '1200'), late, cleanup),
-                                (early, timing, late.replace('"pid": 41', '"pid": 40'), cleanup),
-                                (early, timing, late.replace('"terminals": 1', '"terminals": 2'), cleanup),
-                                (early, timing, late.replace('"phase": "reopened"', '"phase": "other"'), cleanup),
-                                (early, timing, late.replace('"session": "native-session", "terminals"',
-                                                             '"session": "other-session", "terminals"'), cleanup)):
-                path.write_text('\n'.join(observation))
-                with self.subTest(observation=observation), self.assertRaises(AcceptanceError):
-                    check_legacy_window_grace(path)
+            folder = Path(directory)
+            for variant in RELEASED_CUTOVER_CASES:
+                serving = 'none' if variant == 'uncertain' else 'framework'
+                report = json.dumps({'name': f'cutover-{variant}', 'implementation': serving})
+                (folder / f'{variant}.log').write_text(
+                    f'✔ legacy cutover ({variant}) from 0.1.5 to 0.1.6: {{}}\n'
+                    f'Facade acceptance test {report}\nIsolated editor profile cleanup finished.\n'
+                )
+            self.assertEqual(check_published_cutover(folder), CUTOVER_TYPED_CASES)
+            path = folder / 'uncertain.log'
+            path.write_text(path.read_text().replace('"none"', '"framework"'))
+            with self.assertRaises(AcceptanceError):
+                check_published_cutover(folder)

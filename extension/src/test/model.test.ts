@@ -5,7 +5,8 @@
 import * as assert from 'assert';
 import type { Catalog, Pin, Location, LocationRemoval, RunChange, RunFacts, WorkspaceFolderInfo } from '../core/ports';
 import type { CardWords } from '../ui/cardView';
-import { locationOfFilter, PanelModel, placeKindOf, REPORT_COALESCE_MS, Timers } from '../ui/model';
+import { placeKindOf } from '../core/locations/catalog';
+import { locationOfFilter, PanelModel, REPORT_COALESCE_MS, Timers } from '../ui/model';
 import { agentFilter, PanelPrefs, Storage } from '../ui/order';
 import type { PanelState } from '../webview/protocol';
 import { TestEmitter } from './withModules';

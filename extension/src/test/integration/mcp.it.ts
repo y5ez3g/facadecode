@@ -3,31 +3,22 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { execFileSync } from 'child_process';
-import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
-import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import type { Response, DaemonHelloParams, InspectResult, ScreenText } from '../../base/frameworkProtocol';
 import { lineReader } from '../../base/lines';
 import { unspun } from '../../base/tabSpinner';
-import { isWindowIdentity, WINDOW_IDENTITY_COMMAND } from '../../base/windowIdentity';
-import { AGENTS_ROUTE_COMMAND, type Directory, type RouteResponse, WINDOW_DIRECTORY_COMMAND, WINDOW_ROUTE_COMMAND } from '../../base/windowNetwork';
-import type { GuestCaller, RoutedCall } from '../../contract/network';
-import { TOOL_PROTOCOL } from '../../schema/protocol';
-import type { Result } from '../../schema/result';
 import { linesOf as cardLines } from '../detailLines';
-import { frameworkCall, frameworkSocket, localFolderIdentity, normalizeDriveLetter } from './editors';
-import { BUILT_IN_ADAPTERS } from '../../clis/catalog';
+import { frameworkCall, frameworkSocket, normalizeDriveLetter } from './editors';
+import { BUILT_IN_NAMES } from '../../base/names';
 import type { Card, PanelState } from '../../webview/protocol';
 import { observeAcceptanceImplementation } from './acceptanceImplementation';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
 /** Whether the windows run on the Framework: Facade's tools are framework's, with framework's arguments and results. */
-const FRAMEWORK = process.env.FACADE_IT_IMPLEMENTATION === 'framework';
-const DELIVERY_WAIT = FRAMEWORK ? { wait_for: 'delivery', timeout_seconds: 30 } : {};
+const DELIVERY_WAIT = { wait_for: 'delivery', timeout_seconds: 30 };
 const CLI = process.env.FACADE_IT_CLI ?? 'claude';
 /** The label of the other editor window of a cross-window run, and its folder: none in a run of one window. */
 const PEER = process.env.FACADE_IT_PEER;
@@ -36,7 +27,6 @@ const PEER_DIR = process.env.FACADE_IT_PEER_DIR;
  * Whether the other window's agents run on another computer - one window local, the other over SSH: what they record stays there,
  * and what they did is read through the tools alone.
  */
-const PEER_ELSEWHERE = !!process.env.FACADE_IT_PEER_ELSEWHERE;
 
 async function state(): Promise<PanelState> {
 	return await vscode.commands.executeCommand<PanelState>('facade.state');
@@ -56,14 +46,7 @@ async function until<T>(what: string, probe: () => Promise<T | undefined> | T | 
 	}
 }
 
-function alive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch {
-		return false;
-	}
-}
+
 
 interface Answer {
 	readonly result?: { readonly isError?: boolean; readonly structuredContent?: any; readonly serverInfo?: { name: string }; readonly instructions?: string; readonly tools?: { name: string }[]; readonly content?: { text: string }[] };
@@ -146,7 +129,7 @@ async function personAgent(): Promise<{ readonly card: Card; readonly alias: str
 	// The picker shows once its CLIs are found: accepted as soon as it is there, however long that takes
 	const card = await until('a new card', async () => {
 		const mine = (await state()).cards.find(each => !before.has(each.runId) && !cardLines(each).some(line => line.startsWith('Started by')));
-		if (mine && (FRAMEWORK ? mine.alias : /#a\d+/.test(cardLines(mine).join(' ')))) {
+		if (mine && (mine.alias)) {
 			return mine;
 		}
 		if (!mine) {
@@ -154,15 +137,15 @@ async function personAgent(): Promise<{ readonly card: Card; readonly alias: str
 		}
 		return undefined;
 	});
-	const address = FRAMEWORK ? await until(`${card.name} in the shared roster`, async () => {
+	const address = await until(`${card.name} in the shared roster`, async () => {
 		const { agents } = await frameworkCall(process.env.FACADE_HOME!, 'agent.list', {});
 		return agents.find(row => row.type === 'managed' && row.name === card.name && row.reference.agent_id === card.alias)?.address;
-	}) : cardLines(card).join(' ').match(/#a\d+/)![0];
-	const alias = FRAMEWORK ? fakeAlias(address) : address;
+	});
+	const alias = fakeAlias(address);
 	// Its server answered: the agent's Facade tools are there
 	await until(`${alias}'s Facade server`, () => linesOf(alias).some(line => line.step === 'tools/list') ? true : undefined)
 		.catch(async (error: Error) => {
-			if (FRAMEWORK && CLI === 'agy') {
+			if (CLI === 'agy') {
 				try { await frameworkAgentRecord(alias, address); }
 				catch (diagnostic) { console.error(`Framework agy startup diagnostics unavailable: ${diagnostic}`); }
 				throw error;
@@ -273,12 +256,12 @@ function argsOf(alias: string): { readonly cwd: string; readonly args: string[];
 const after = (args: readonly string[], option: string) => args[args.indexOf(option) + 1];
 
 /**
- * Check the Facade server and approval settings the agent received at launch, including the legacy skill plugin.
+ * Check the Facade server and approval settings the agent received at launch, and the access to the Rust relay.
  * See CLIS-1.3 and CLIS-2.2.
  */
 function assertTools(alias: string): void {
-	const { cwd, args, env } = argsOf(alias);
-	if (FRAMEWORK && CLI !== 'claude') {
+	const { args, env } = argsOf(alias);
+	if (CLI !== 'claude') {
 		// Framework wires each CLI its own way (a hook, a plugin, an extension, per-start overrides): what every one has is framework's relay or a file of
 		// the run's own folder in what the CLI was given
 		const given = `${args.join('\n')}\n${Object.values(env).join('\n')}\n${[...args.entries()].flatMap(([at, arg]) => ['-e', '--settings'].includes(args[at - 1] ?? '') && fs.existsSync(arg) ? [fs.readFileSync(arg, 'utf8')] : []).join('\n')}`;
@@ -286,68 +269,18 @@ function assertTools(alias: string): void {
 		assert.ok(/facade-mcp|[\\/]framework[\\/]runs[\\/]/.test(given), `${CLI} is given framework's relay or its run's files: ${args.join(' ')}`);
 		return;
 	}
-	const routes = (variables: { readonly [name: string]: string }) => ['FACADE_PTYD', 'FACADE_RUN'].every(name => typeof variables[name] === 'string' && variables[name] !== '');
-	switch (CLI) {
-		case 'claude': {
-			const server = JSON.parse(fs.readFileSync(after(args, '--mcp-config'), 'utf8')).mcpServers.facade;
-			if (FRAMEWORK) {
-				assert.deepStrictEqual(Object.keys(server.env), ['FACADE_HOME']);
-				assert.strictEqual(server.env.FACADE_HOME, process.env.FACADE_HOME);
-				assert.ok(path.isAbsolute(server.command));
-				assert.ok(server.args[0] === '--run-credential' && typeof server.args[1] === 'string' && server.args[1].length > 0,
-					'framework wrote the actual run credential into the private MCP configuration');
-				assert.ok(!args.includes('--plugin-dir'), 'framework launches without the Facade skill plugin');
-			} else {
-				assert.deepStrictEqual(Object.keys(server.env).sort(), ['ELECTRON_RUN_AS_NODE', 'FACADE_AGENT', 'FACADE_LAUNCH_CONTEXT', 'FACADE_PTYD', 'FACADE_RUN']);
-				assert.strictEqual(`#${server.env.FACADE_AGENT.replace(/^#/, '')}`, alias, 'the MCP child receives its own short ID explicitly');
-				assert.ok(fs.existsSync(path.join(after(args, '--plugin-dir'), 'skills', 'facade', 'SKILL.md')), 'its own skill plugin');
-			}
-			assert.strictEqual(after(args, '--allowedTools'), 'mcp__facade', 'Facade\'s own tools never ask for approval (CLIS-2.2)');
-			break;
-		}
-		case 'codex':
-			assert.ok(args.includes('mcp_servers.facade.default_tools_approval_mode="approve"'), args.join(' '));
-			assert.ok(args.some(arg => arg.startsWith('mcp_servers.facade.env=') && arg.includes('FACADE_RUN')), args.join(' '));
-			assert.ok(fs.existsSync(path.join(cwd, '.agents', 'skills', 'facade', 'SKILL.md')), 'the skill in its folder');
-			break;
-		case 'agy': {
-			// Its session's settings are a file of the run, given by its path, never inline (CONFIGURATION-4.2)
-			assert.ok(JSON.parse(fs.readFileSync(after(args, '--settings'), 'utf8')).permissions.allow.includes('mcp(facade_facade/*)'), args.join(' '));
-			const plugin = path.join(cwd, '.agents', 'plugins', 'facade');
-			assert.deepStrictEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(plugin, 'mcp_config.json'), 'utf8')).mcpServers.facade.env), ['ELECTRON_RUN_AS_NODE']);
-			assert.ok(fs.existsSync(path.join(plugin, 'skills', 'facade', 'SKILL.md')) && routes(env), 'the plugin, and the run\'s variables in its environment');
-			// Its MCP panel was opened before its first turn: that turn has the tools (COLLABORATION-2.2)
-			assert.ok(fs.existsSync(`${RECORD}.panel.${alias}`), 'its MCP panel opened before its first turn');
-			break;
-		}
-		case 'muse': {
-			// For the run alone by -c, optional, on Windows too, where its program starts directly (CLIS-2.2)
-			const entry = JSON.parse(args.find(arg => arg.startsWith('mcpServers.facade='))!.slice('mcpServers.facade='.length));
-			assert.deepStrictEqual([entry.env.FACADE_RUN, entry.mode], ['${FACADE_RUN}', 'optional']);
-			assert.ok(args.includes('--trust-workspace') && routes(env), args.join(' '));
-			assert.ok(fs.existsSync(path.join(cwd, '.agents', 'skills', 'facade', 'SKILL.md')), 'the skill in its folder');
-			break;
-		}
-		case 'opencode': {
-			const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT);
-			assert.deepStrictEqual([config.permission['facade_*'], args[0]], ['allow', '--standalone']);
-			assert.ok(fs.existsSync(config.instructions.at(-1)) && routes(config.mcp.facade.environment), JSON.stringify(config));
-			break;
-		}
-		case 'pi':
-			assert.ok(fs.readFileSync(after(args, '-e'), 'utf8').includes('"exposure":"direct"'), 'its own extension');
-			assert.ok(!args.includes('--skill'), 'the native resource hook avoids a duplicate project skill');
-			assert.ok(fs.existsSync(path.join(path.dirname(after(args, '-e')), 'skills', 'facade', 'SKILL.md')), 'its private skill remains available to the hook');
-			break;
-		default:
-			assert.fail(`no check for ${CLI}`);
-	}
+	const server = JSON.parse(fs.readFileSync(after(args, '--mcp-config'), 'utf8')).mcpServers.facade;
+	assert.deepStrictEqual(Object.keys(server.env), ['FACADE_HOME']);
+	assert.strictEqual(server.env.FACADE_HOME, process.env.FACADE_HOME);
+	assert.ok(path.isAbsolute(server.command));
+	assert.ok(server.args[0] === '--run-credential' && typeof server.args[1] === 'string' && server.args[1].length > 0,
+		'framework wrote the actual run credential into the private MCP configuration');
+	assert.ok(!args.includes('--plugin-dir'), 'framework launches without the Facade skill plugin');
+	assert.strictEqual(after(args, '--allowedTools'), 'mcp__facade', "Facade's own tools never ask for approval (CLIS-2.2)");
 }
 
 /** How a creation prompt goes in for this CLI (COLLABORATION-2.2): natively, the option before it, or after startup for Antigravity. */
-const NATIVE: { readonly [cli: string]: string | undefined } = { claude: '--', codex: '--', muse: '--', pi: '--', opencode: '--prompt', agy: undefined };
 /** The reader of each built-in's input (CLIS-2.1), as the diagnostics report names it. */
-const INPUT: { readonly [cli: string]: string } = { claude: 'claude-frame', codex: 'codex-prompt', agy: 'agy-frame', muse: 'muse-frame', opencode: 'opencode-frame', pi: 'pi-frame' };
 
 /**
  * A message block as a CLI is given it (COLLABORATION-2.1): its header and the whole text. The window's label is escaped
@@ -359,27 +292,23 @@ function block(id: string, from: string, window: string, text: string): RegExp {
 	return new RegExp(String.raw`📨 Message from [^\n]*\(${escaped(from)}\) · ${escaped(id)}(?: · From ${escaped(label)})?\n${escaped(text)}$`);
 }
 
-/** The discovery and start steps for each implementation. The Framework address goes back into tool calls. */
-const discover = (): Step => FRAMEWORK
-	? { tool: 'list_agents', arguments: {} }
-	: { tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } };
-const startChild = (name: string, prompt: string): Step => FRAMEWORK
-	? { tool: 'start_agent', arguments: { name, cli: CLI, prompt }, save: { child: 'data.id' } }
-	: { tool: 'start_agent', arguments: { name, window_id: '$window', location_id: '$location', cli: CLI, prompt }, save: { child: 'data.agent_id', childAlias: 'data.agent_id' } };
+/** The Framework address goes back into tool calls. */
+const discover = (): Step => ({ tool: 'list_agents', arguments: {} });
+const startChild = (name: string, prompt: string): Step => ({ tool: 'start_agent', arguments: { name, cli: CLI, prompt }, save: { child: 'data.id' } });
 /** The alias the fake CLI uses for evidence about the child. */
-const childOf = (started: { data: { id?: string; agent_id?: string } }): string => FRAMEWORK ? fakeAlias(started.data.id!) : started.data.agent_id!;
+const childOf = (started: { data: { id?: string; agent_id?: string } }): string => fakeAlias(started.data.id!);
 
 const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'];
 
 // A custom CLI starts exactly as configured and has no MCP injection; its launch is checked by journey.it.ts.
-(!PEER && BUILT_IN_ADAPTERS.some(adapter => adapter.id === CLI) ? suite : suite.skip)(`Journey: ${CLI} uses its Facade tools in this window (J10, M02, M03, M07, M15, M17)`, () => {
+(!PEER && BUILT_IN_NAMES.some(builtIn => builtIn === CLI) ? suite : suite.skip)(`Journey: ${CLI} uses its Facade tools in this window (J10, M02, M03, M07, M15, M17)`, () => {
 	suiteSetup(async () => {
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();
 		await until('the panel state', async () => (await state())?.loading === false ? true : undefined);
 	});
 
 	test('two helpers appear in their creator\'s workspace and reply through MCP', async function () {
-		if (!FRAMEWORK) { this.skip(); }
+
 		this.timeout(120_000);
 		const { card, alias, address } = await personAgent();
 		observeAcceptanceImplementation(this, card);
@@ -477,7 +406,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 
 	// MCP-7.1, RULES-6.7
 	test('cancels the original pending Framework MCP send on its relay without a paste or inbox entry', async function () {
-		if (!FRAMEWORK || CLI !== 'claude') { this.skip(); }
+		if (CLI !== 'claude') { this.skip(); }
 		this.timeout(120_000);
 		const sender = await personAgent();
 		const agents = [sender];
@@ -550,187 +479,6 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		}
 	});
 
-	test('its CLI gets the Facade server; it lists, starts a child with a first task, reads and types into it and stops it', async function () {
-		this.timeout(120_000);
-		if (FRAMEWORK) { this.skip(); }
-		const { card, alias } = await personAgent();
-		observeAcceptanceImplementation(this, card);
-		assertTools(alias);
-		const lines = linesOf(alias);
-		const initialize = lines.find(line => line.step === 'initialize')?.answer?.result;
-		assert.strictEqual(initialize?.serverInfo?.name, 'facade');
-		assert.ok(initialize?.instructions?.includes(alias), 'the instructions name the agent');
-		assert.ok(initialize?.instructions?.includes('Launch IDs: window_id='));
-		assert.ok(initialize?.instructions?.includes('Facade history log ('));
-		assert.deepStrictEqual(lines.find(line => line.step === 'tools/list')?.answer?.result?.tools?.map(tool => tool.name), EIGHT);
-
-		const window = vscode.workspace.name!;
-		const ran = await script(alias, [
-			{ tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
-			{ tool: 'start_agent', arguments: { name: 'Reviewer', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Review the README.' }, save: { child: 'data.agent_id' } },
-			{ tool: 'list_agents', arguments: { details: true } },
-			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Review the README.', wait: 30_000 },
-			{ tool: 'type_text', arguments: { agent: '$child', text: 'typed by its creator' } },
-			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'typed by its creator' },
-			{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } },
-			// Keys sent is not a redraw barrier: wait for the CLI to consume Ctrl+U and paint its now-empty input.
-			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Review the README.', untilAbsent: 'typed by its creator' }
-		]);
-		const options = ran.content('list_agents');
-		assert.strictEqual(options?.status, 'success', JSON.stringify(options));
-		assert.deepStrictEqual(options.data.windows.map((each: { label: string }) => each.label), [window]);
-		assert.strictEqual(options.data.scope, 'all');
-		const logFile = options.data.windows[0].history_log.path as string;
-		const events = () => fs.readFileSync(logFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-		for (const event of ['window_attached', 'locations_scanned', 'cli_scan']) { assert.ok(events().some(each => each.event === event), event); }
-
-		const started = ran.content('start_agent');
-		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
-		// These fixtures run directly, including the Node-backed Muse fixture on Windows. The adapter's unknown-batch-wrapper
-		// fallback is checked separately; it must not change what this direct launch can carry as a native prompt.
-		const native = NATIVE[CLI];
-		assert.deepStrictEqual([started.data.prompt.path, started.data.yolo, started.data.creator], [native ? 'native' : 'post_start', true, card.runId]);
-		// A native argument alone does not verify acceptance. Post-start delivery may still be under way (MCP-2.3).
-		if (native) {
-			assert.deepStrictEqual([started.data.prompt.capability.state, started.data.prompt.status, started.data.prompt.effects.outcome], ['unverified', 'unknown', 'unknown']);
-			assert.strictEqual(started.data.prompt.delivered_via, undefined);
-		} else {
-			assert.ok(['success', 'pending'].includes(started.data.prompt.status), JSON.stringify(started.data.prompt));
-		}
-		const child = started.data.agent_id as string;
-		const childAlias = started.data.agent_id as string;
-		for (const event of ['agent_start_requested', 'agent_started']) { assert.ok(events().some(each => each.event === event && each.alias === childAlias), event); }
-		assert.ok(!fs.readFileSync(logFile, 'utf8').includes('Review the README.'), 'history excludes prompt bodies');
-		// The prompt is the caller's message as any message goes: its header, the whole text and its footer (COLLABORATION-2.1)
-		const prompt = new RegExp(`^${block(started.data.prompt.message_id, alias, window, 'Review the README.').source}$`);
-		if (native) {
-			const [option, given] = argsOf(childAlias).args.slice(-2);
-			assert.strictEqual(option, native);
-			assert.match(given, prompt, 'the prompt went in with the native argument');
-		} else {
-			// As its first message after startup - Antigravity's once its tools are ready: pasted and submitted
-			await until('its first message', () => received(childAlias).some(each => prompt.test(each)) ? true : undefined, 30_000);
-		}
-		// The child's card opens in the background, says who started it, and the person's focus stays (LIFECYCLE-2.2, PANEL-1.5)
-		const childCard = (await state()).cards.find(each => each.alias === child);
-		assert.ok(childCard, 'the child has a card in this window');
-		assert.ok(cardLines(childCard).includes(`Started by: ${card.name} ${alias}`), cardLines(childCard).join(' | '));
-		const listed = ran.content('list_agents', 1)?.data.agents as { agent_id: string; creator?: string; root: string }[];
-		assert.deepStrictEqual(listed.filter(each => each.agent_id === child).map(each => [each.creator, each.root]), [[card.runId, card.runId]], 'the child joins its creator\'s tree');
-
-		const initialScreen = ran.content('read_screen');
-		assert.strictEqual(initialScreen?.status, 'success', JSON.stringify(initialScreen));
-		assert.deepStrictEqual([initialScreen.data.agent_id, initialScreen.data.text_format], [childCard.alias, 'facade-styled']);
-		assert.ok(initialScreen.data.text.includes('Review the README.'), 'its screen is read, its first task on it');
-		assert.deepStrictEqual([ran.content('type_text')?.status, ran.content('type_text')?.effects.text_written, ran.content('type_text')?.effects.enter_written], ['success', 'full', false]);
-		assert.ok(JSON.stringify(ran.content('read_screen', 1)).includes('typed by its creator'), 'direct text is a draft in its box');
-		assert.strictEqual(terminalInputOf(childAlias).split('typed by its creator').length - 1, 1, 'the selected process received the text once');
-		assert.ok(!received(childAlias).some(text => text.includes('typed by its creator')), 'the typed text was never submitted');
-		assert.deepStrictEqual([ran.content('press_keys')?.status, ran.content('press_keys')?.effects.keys_sent], ['success', 1], JSON.stringify(ran.content('press_keys')));
-		assert.strictEqual(ran.content('read_screen', 2)?.status, 'success', JSON.stringify(ran.content('read_screen', 2)));
-		assert.ok(JSON.stringify(ran.content('read_screen', 2)).includes('Review the README.'), 'the completed screen keeps its earlier output');
-		assert.ok(!JSON.stringify(ran.content('read_screen', 2)).includes('typed by its creator'), 'Ctrl+U cleared it');
-
-		// What the diagnostics report holds, with both agents running (ARCHITECTURE-3.3): the versions, each agent with what its
-		// input reads and its last rows, and the log with each tool call, the home folder written ~
-		const inputLine = (each: string) => new RegExp(`^- @\\S+ ${each} run-\\w+: .*\\n {2}running, .*; tools available; input reader ${INPUT[CLI]}, reads usable\\n {2}\\| `, 'm');
-		let diagnostics = '';
-		// The background terminal can still receive its first resize after the child prints its task. During that redraw
-		// an unknown input is correct; judge the completed screen and tool connection, not an arbitrary startup instant.
-		await until('both agents\' completed diagnostic screens', async () => {
-			diagnostics = await vscode.commands.executeCommand<string>('facade.diagnostics');
-			return [alias, childAlias].every(each => inputLine(each).test(diagnostics)) ? true : undefined;
-		}, 10_000).catch(error => { throw new Error(`${String(error)}\n${diagnostics}`); });
-		const version = vscode.extensions.getExtension('facade.facadecode')!.packageJSON.version as string;
-		assert.ok(diagnostics.startsWith('Facade Code diagnostics, ') && diagnostics.includes(`\nFacade Code ${version}; window component ${version}; `), diagnostics.slice(0, 400));
-		for (const each of [alias, childAlias]) {
-			assert.match(diagnostics, inputLine(each), diagnostics);
-		}
-		for (const tool of ['start_agent', 'list_agents', 'read_screen', 'type_text', 'press_keys']) {
-			assert.match(diagnostics, new RegExp(`^\\S+ Tool ${tool} by ${alias}: success in \\d+ ms; `, 'm'), `${tool} is logged`);
-		}
-		assert.ok(!diagnostics.includes(os.homedir()), 'the home folder is written ~');
-
-		const stop = await script(alias, [{ tool: 'stop_agent', arguments: { agent: child } }, { tool: 'list_agents', arguments: {} }]);
-		assert.strictEqual(stop.content('stop_agent')?.status, 'success', JSON.stringify(stop.content('stop_agent')));
-		await until('the child card to go', async () => (await state()).cards.some(each => each.alias === child) ? undefined : true);
-		assert.ok(!(stop.content('list_agents')?.data.agents as { agent_id: string }[]).some(each => each.agent_id === child), 'a stopped child is no longer listed');
-
-		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
-	});
-
-	test('the legacy supervisor serves editor terminal input and starts an MCP child in a linked worktree', async function () {
-		if (FRAMEWORK || CLI !== 'claude') { this.skip(); }
-		this.timeout(90_000);
-		const folder = vscode.workspace.workspaceFolders![0].uri.fsPath;
-		const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 10_000 }).trim();
-		const original = git(folder, 'rev-parse', 'HEAD');
-		const status = git(folder, 'status', '--porcelain');
-		const branch = 'editor-acceptance';
-		const checkout = path.join(`${folder}.worktrees`, branch);
-		git(folder, 'worktree', 'add', '-b', branch, checkout, original);
-		assert.strictEqual(git(checkout, 'rev-parse', 'HEAD'), original);
-		assert.strictEqual(git(checkout, 'branch', '--show-current'), branch);
-		assert.strictEqual(git(folder, 'branch', '--show-current'), 'main');
-		assert.strictEqual(git(folder, 'status', '--porcelain'), status, 'worktree creation leaves the original checkout unchanged');
-		const { card, alias } = await personAgent();
-		let child: string | undefined;
-		try {
-			observeAcceptanceImplementation(this, card);
-			assertTools(alias);
-			const component = vscode.extensions.getExtension('facade.facadecode-window');
-			assert.ok(component?.isActive, 'the local Window Component activates in the workspace');
-			const session = vscode.env.sessionId;
-			const identity: unknown = await vscode.commands.executeCommand(WINDOW_IDENTITY_COMMAND, session);
-			assert.ok(isWindowIdentity(identity, session));
-			assert.strictEqual(identity.component, component.packageJSON.version);
-			assert.strictEqual(await vscode.commands.executeCommand(WINDOW_IDENTITY_COMMAND, `${session}-stale`), undefined);
-			const windowId = `win-${createHash('sha256').update(`facade-window:${identity.token}`).digest('hex').slice(0, 16)}`;
-			await until('the local Window Component publishes the creator under this session', async () => {
-				const directory = await vscode.commands.executeCommand<Directory>(WINDOW_DIRECTORY_COMMAND, session);
-				assert.strictEqual(directory.self, windowId);
-				assert.strictEqual(directory.windows[0].window, windowId);
-				return directory.windows[0].agents.some(agent => agent.alias === alias && agent.run === card.runId) || undefined;
-			});
-			const terminal = vscode.window.terminals.find(each => unspun(each.name) === card.name);
-			assert.ok(terminal, 'the creator has its editor terminal');
-			const text = 'worktree fixture input';
-			terminal.sendText(text, false);
-			await until('the legacy supervisor terminal input at the fake CLI', () => {
-				const bytes = `${RECORD}.bytes.${alias}`;
-				return fs.existsSync(bytes) && fs.readFileSync(bytes).includes(Buffer.from(text)) || undefined;
-			});
-
-			const { window, location } = await until('the linked worktree is available as an MCP location', async () => {
-				const listing = (await script(alias, [{ tool: 'list_agents', arguments: {} }])).content('list_agents');
-				assert.strictEqual(listing?.status, 'success');
-				const window = listing.data.windows[0];
-				const location = (window.locations as { path?: string; location_id: string }[]).find(each =>
-					each.path && normalizeDriveLetter(each.path) === normalizeDriveLetter(checkout));
-				return location ? { window, location } : undefined;
-			}, 15_000);
-			assert.deepStrictEqual(vscode.workspace.workspaceFolders!.map(each => each.uri.fsPath), [folder]);
-
-			const prompt = 'Read this worktree';
-			const ran = await script(alias, [
-				{ tool: 'start_agent', arguments: { name: 'Worktree helper', cli: CLI, window_id: window.window_id, location_id: location.location_id, prompt }, save: { worktreeChild: 'data.agent_id' } },
-				{ tool: 'read_screen', arguments: { agent: '$worktreeChild' }, until: prompt, wait: 30_000 }
-			]);
-			const started = ran.content('start_agent');
-			assert.strictEqual(started?.status, 'success', JSON.stringify(started));
-			child = started.data.agent_id as string;
-			assert.match(child, /^#a\d+$/u);
-			assert.strictEqual(started.data.creator, card.runId);
-			assert.strictEqual(normalizeDriveLetter(fs.realpathSync(argsOf(child).cwd)), normalizeDriveLetter(fs.realpathSync(checkout)));
-			const screen = ran.content('read_screen');
-			assert.strictEqual(screen?.status, 'success', JSON.stringify(screen));
-			assert.ok(JSON.stringify(screen).includes(prompt), 'the selected legacy supervisor child drew its prompt');
-		} finally {
-			if (child) { await closePublicAgent(child); }
-			await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
-		}
-	});
-
 	test('messages: one paste and Enter into the input box; a draft there is waited for, never typed over, and the send fails within its thirty seconds, nothing coming after; an input it cannot read fails the same; reading delivers it once', async function () {
 		this.timeout(180_000);
 		const { card, alias } = await personAgent();
@@ -747,9 +495,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const childAlias = childOf(started);
 		// A first task that goes in after startup holds the agent's other messages until it went in (RULES-1.10): the start's one later
 		// result, its outcome, says when an ordinary message can go in (RULES-1.4)
-		if (!FRAMEWORK && started.data.prompt?.path === 'post_start') {
-			await script(alias, [{ tool: 'read_messages', arguments: { all: true }, until: 'after startup', wait: 30_000 }]);
-		}
+
 		const greeting = 'Hello from your creator.\nTwo lines, one message.';
 		const forbidden = 'Second message.';
 		const drafting: Step[] = [
@@ -761,7 +507,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		];
 		const askHuman: Step = { tool: 'send_message', arguments: { to: '#human', text: 'Please look at this.' } };
 
-		if (FRAMEWORK) {
+		{
 			const drafted = await script(alias, drafting);
 			const delivered = drafted.content('send_message');
 			await expectSent(delivered, childAlias, started.data.id);
@@ -926,9 +672,9 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			const before = input().length;
 			fs.writeFileSync(quirks, JSON.stringify(quirk));
 			const sent = (await script(alias, [{ tool: 'send_message', arguments: { to: '$child', text, ...DELIVERY_WAIT } }])).content('send_message');
-			await expectSent(sent, childAlias, FRAMEWORK ? started.data.id : undefined);
+			await expectSent(sent, childAlias, started.data.id);
 			await new Promise(resolve => setTimeout(resolve, 5_000));
-			const missed = FRAMEWORK && 'swallow' in quirk;
+			const missed = 'swallow' in quirk;
 			assert.strictEqual(input().slice(before).split(text).length - 1, 1, 'the message was pasted once');
 			assert.strictEqual(once(text), missed ? 0 : 1, JSON.stringify(received(childAlias)));
 			if (missed) {
@@ -937,15 +683,13 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			}
 			fs.rmSync(quirks, { force: true });
 		}
-		if (FRAMEWORK) {
+		{
 			const stopped = await script(alias, [{ tool: 'stop_agent', arguments: { agent: '$child' } }]);
 			const receipt = stopped.content('stop_agent');
 			if (receipt?.status !== 'success') {
 				await frameworkAgentRecord(childAlias, started.data.id).catch(error => console.error(`Framework MCP stop diagnostics unavailable: ${error}`));
 			}
 			assert.strictEqual(receipt?.status, 'success', JSON.stringify(receipt));
-		} else {
-			await closePublicAgent(childAlias);
 		}
 		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 	});
@@ -958,7 +702,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 	});
 
 	test('the Orchestrator starts in the other workspace folder and shows the child in its creator\'s workspace', async function () {
-		if (!FRAMEWORK) { this.skip(); }
+
 		this.timeout(120_000);
 		const { alias, card } = await personAgent();
 		observeAcceptanceImplementation(this, card);
@@ -987,189 +731,5 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		assert.strictEqual(stopped.content('stop_agent')?.status, 'success');
 		assert.ok(!(stopped.content('list_agents')?.data.agents as { id: string }[]).some(each => each.id === child), 'the stopped child leaves the active roster');
 		await vscode.commands.executeCommand('facade.deleteAgent', { run_id: card.runId });
-	});
-
-	if (!FRAMEWORK && !PEER_ELSEWHERE) {
-		test('the actual Window Component routes to the exact peer and refuses stale sessions and malformed calls', async function () {
-			this.timeout(90_000);
-			const { card, alias } = await personAgent();
-			observeAcceptanceImplementation(this, card);
-			let child: { run: string; pid: number } | undefined;
-			try {
-				const session = vscode.env.sessionId;
-				const directory = await until('this component’s peer and exact local agent', async () => {
-					const now = await vscode.commands.executeCommand<Directory>(WINDOW_DIRECTORY_COMMAND, session);
-					return now?.windows.some(window => window.window === now.self && window.agents.some(agent => agent.run === card.runId)) &&
-						now.windows.some(window => window.label === PEER) ? now : undefined;
-				});
-				const peer = directory.windows.find(window => window.label === PEER)!;
-				const local = directory.windows.find(window => window.window === directory.self)!.agents.find(agent => agent.run === card.runId)!;
-				const caller: GuestCaller = { id: local.run, alias: local.alias, name: local.name, root: local.root, yolo: false, window: directory.self };
-				const response = (tool: string, args: unknown, id: string): RoutedCall =>
-					({ protocol: TOOL_PROTOCOL, tool, arguments: args, caller, callId: id, elapsedMs: 0, inline: true });
-				const route = async (op: string, args: unknown) => {
-					const answer = await vscode.commands.executeCommand<RouteResponse>(WINDOW_ROUTE_COMMAND, session, { to: peer.window, op, args, deadlineMs: 30_000 });
-					assert.ok(answer?.ok, JSON.stringify(answer));
-					return answer.result;
-				};
-				const received = async <T>(tool: string, args: unknown, id: string): Promise<Result<T>> =>
-					(await route('call', response(tool, args, id)) as { result: Result<T> }).result;
-				const snapshot = await route('agents', { caller }) as {
-					window: {
-						window_id: string;
-						folders: { path: string; uri: string }[];
-						locations: { location_id: string; path: string; opened: boolean; folder_uris: string[] }[];
-					};
-				};
-				assert.strictEqual(snapshot.window.window_id, peer.window);
-				const expected = localFolderIdentity(PEER_DIR);
-				assert.ok(expected, `the fixture peer folder exists: ${PEER_DIR}`);
-				const source = vscode.workspace.workspaceFolders![0].uri;
-				const sourceFolder = localFolderIdentity(source.fsPath);
-				assert.ok(sourceFolder, `the fixture source folder exists: ${source.toString()}`);
-				assert.notStrictEqual(sourceFolder, expected, 'the two workspaces have distinct folders');
-
-				const folders = snapshot.window.folders.filter(each => localFolderIdentity(each.path) === expected);
-				assert.strictEqual(folders.length, 1, `the receiving window opened the exact fixture folder: ${JSON.stringify({ expected: PEER_DIR, folders: snapshot.window.folders })}`);
-				const folder = folders[0];
-				const uri = vscode.Uri.parse(folder.uri, true);
-				assert.deepStrictEqual([uri.scheme, uri.authority], [source.scheme, source.authority], 'the receiving workspace URI is on this host');
-				assert.strictEqual(localFolderIdentity(uri.fsPath), expected, `the receiving workspace URI names the fixture folder: ${folder.uri}`);
-				const locations = snapshot.window.locations.filter(each =>
-					each.opened && each.folder_uris.includes(folder.uri) && localFolderIdentity(each.path) === expected);
-				assert.strictEqual(locations.length, 1, `the receiving workspace supplies its own exact launch location: ${JSON.stringify({ folder, locations: snapshot.window.locations })}`);
-				const location = locations[0];
-				const launches = () => fs.readdirSync(path.dirname(RECORD))
-					.filter(file => file.startsWith(path.basename(RECORD) + '.starts.')).sort();
-				const original = new Set(launches());
-				const startArgs = { name: 'Exact window route', cli: 'claude', window_id: peer.window, location_id: location.location_id };
-				const request = { to: peer.window, op: 'call', args: response('start_agent', startArgs, 'stale-fixture-route'), deadlineMs: 30_000 };
-				assert.strictEqual(await vscode.commands.executeCommand(WINDOW_ROUTE_COMMAND, session + '-stale', request), undefined);
-				const { deadlineMs: _, ...malformed } = request;
-				assert.strictEqual(await vscode.commands.executeCommand(WINDOW_ROUTE_COMMAND, session, malformed), undefined);
-				await assert.rejects(Promise.resolve(vscode.commands.executeCommand(AGENTS_ROUTE_COMMAND, {
-					op: 'call', args: response('stop_agent', { agent: local.run }, 'incomplete-fixture-route'), deadlineMs: 30_000
-				})), /The routed request was incomplete/);
-				const sourcePid = Number(fs.readFileSync(RECORD + '.' + alias, 'utf8').trim());
-				assert.ok(alive(sourcePid));
-				assert.deepStrictEqual(launches(), [...original], 'invalid requests start no agent');
-				const started = await received<{ agent_id: string; alias: string; window_id: string; cwd: string; root: string; creator: string }>(
-					'start_agent', startArgs, 'valid-fixture-route');
-				assert.strictEqual(started.status, 'success', JSON.stringify(started));
-				const facts = started.data;
-				assert.match(facts.alias, /^#a\d+$/u);
-				assert.notStrictEqual(facts.alias, alias);
-				const launchLog = RECORD + '.starts.' + facts.alias;
-				const pid = await until('the actual peer CLI to record its start', () => {
-					if (!fs.existsSync(launchLog)) { return undefined; }
-					const text = fs.readFileSync(launchLog, 'utf8').trim();
-					return /^\d+$/u.test(text) ? Number(text) : undefined;
-				});
-				child = { run: facts.agent_id, pid };
-				assert.deepStrictEqual([facts.window_id, facts.root, facts.creator], [peer.window, local.root, local.run]);
-				assert.strictEqual(localFolderIdentity(facts.cwd), expected, `the routed start records the receiving folder: ${facts.cwd}`);
-				const fakeCwd = argsOf(facts.alias).cwd;
-				assert.strictEqual(localFolderIdentity(fakeCwd), expected, `the actual fake process runs in the receiving folder: ${fakeCwd}`);
-				assert.ok(pid > 0 && alive(pid));
-				assert.deepStrictEqual(launches().filter(name => !original.has(name)), [path.basename(RECORD) + '.starts.' + facts.alias]);
-				assert.deepStrictEqual(fs.readFileSync(RECORD + '.starts.' + facts.alias, 'utf8').trim().split(/\r?\n/u).map(Number), [pid]);
-				await until('the screen from the exact peer agent', async () => {
-					const screen = await received<{ text: string; agent_id: string; window_id: string }>('read_screen', { agent: facts.agent_id }, 'read-fixture-route');
-					assert.strictEqual(screen.status, 'success', JSON.stringify(screen));
-					assert.deepStrictEqual([screen.data.agent_id, screen.data.window_id], [facts.agent_id, peer.window]);
-					return screen.data.text.includes('Try a task') || undefined;
-				});
-				const blocked = await route('call', {
-					...response('stop_agent', { agent: facts.agent_id }, 'blocked-fixture-route'), caller: { ...caller, root: 'run-' + '0'.repeat(32) }
-				}) as { result: Result };
-				assert.deepStrictEqual([blocked.result.status, blocked.result.error?.reason, blocked.result.effects.outcome], ['failure', 'out_of_tree', 'none']);
-				assert.ok(alive(pid) && alive(sourcePid), 'an out-of-tree stop leaves both original processes');
-				const stopped = await received('stop_agent', { agent: child.run }, 'stop-fixture-route');
-				assert.strictEqual(stopped.status, 'success', JSON.stringify(stopped));
-				await until('the exact peer process to stop', () => !alive(pid) || undefined);
-				child = undefined;
-				console.log('  Window route observation ' + JSON.stringify({
-					source: { window: directory.self, run: local.run, pid: sourcePid },
-					peer: { window: facts.window_id, run: facts.agent_id, cwd: facts.cwd, pid },
-					folders: { fixture: PEER_DIR, workspace: folder.path, uri: folder.uri, location: location.path, process: fakeCwd },
-					refused: ['stale-session', 'malformed-window-request', 'incomplete-workspace-request', 'out_of_tree']
-				}));
-			} finally {
-				try {
-					if (child && alive(child.pid)) {
-						await script(alias, [{ tool: 'stop_agent', arguments: { agent: child.run } }]);
-					}
-				} finally {
-					await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
-				}
-			}
-		});
-	}
-
-	test('it lists the other window, starts an agent there, messages it, reads its screen and stops it', async function () {
-		this.timeout(120_000);
-		if (FRAMEWORK) { this.skip(); }
-		const { card, alias } = await personAgent();
-		observeAcceptanceImplementation(this, card);
-		const window = vscode.workspace.name!;
-		// Listed and available: a window that is still starting is listed as unavailable
-		const found = await script(alias, [{ tool: 'list_agents', arguments: {}, until: `"label":${JSON.stringify(PEER)},"environment"`, wait: 30_000 }]);
-		const options = found.content('list_agents');
-		const peer = (options?.data.windows as { window_id: string; label: string; environment: string; counts: { agents: number }; clis: { cli: string; available: boolean }[]; locations: { location_id: string; path: string }[] }[]).find(each => each.label === PEER);
-		assert.ok(peer, `the other window is listed: ${JSON.stringify(options)}`);
-		assert.strictEqual(peer.counts.agents, 0, 'an empty window remains a launch destination');
-		assert.ok(peer.clis.some(each => each.cli === 'claude' && each.available), 'the destination supplies its own CLI availability');
-		const location = peer.locations.find(each => each.path === PEER_DIR) ?? peer.locations[0];
-		assert.ok(location, JSON.stringify(peer));
-		if (process.env.FACADE_IT_EXPECT_TESTS) {
-			assert.strictEqual(location.path, PEER_DIR, 'the exact local journey selects the advertised peer folder');
-		}
-
-		const ran = await script(alias, [
-			{ tool: 'start_agent', arguments: { name: 'Remote helper', window_id: peer.window_id, location_id: location.location_id, cli: 'claude', prompt: 'Help from afar.' }, save: { child: 'data.agent_id' } },
-			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Try a task' },
-			{ tool: 'send_message', arguments: { to: '$child', text: 'Hello across windows.' } }
-		], 90_000);
-		const started = ran.content('start_agent');
-		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
-		assert.strictEqual(started.data.window_id, peer.window_id, 'it started in the other window');
-		// Submitted within its thirty seconds, the other window's time included, its outcome in its answer (RULES-1.2)
-		const sent = ran.content('send_message');
-		assert.strictEqual(sent?.status, 'success', JSON.stringify(sent));
-		assert.strictEqual(sent.data.window_id, peer.window_id);
-		assert.deepStrictEqual([sent.effects.text_written, sent.effects.enter_written], ['full', true]);
-		const after = await script(alias, [
-			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Hello across windows.' },
-			{ tool: 'list_agents', arguments: { details: true } },
-			{ tool: 'stop_agent', arguments: { agent: '$child' } },
-			{ tool: 'list_agents', arguments: {} }
-		], 90_000);
-		const child = childOf(started);
-		const childAlias = childOf(started);
-		assert.ok(!(await state()).cards.some(each => each.alias === child), 'its card is in its own window, not this one');
-		const listed = after.content('list_agents')?.data.agents as { agent_id: string; window_id: string; cwd: string; environment: string }[];
-		assert.deepStrictEqual(listed.filter(each => each.agent_id === child).map(each => [each.window_id, each.cwd, each.environment]), [[peer.window_id, location.path, peer.environment]],
-			'its CLI runs in the other window\'s folder and environment');
-		// Its first task and the message, each whole, on its screen as this window reads it
-		const first = JSON.stringify(ran.content('read_screen'));
-		assert.ok(first.includes('Help from afar.') && first.includes(started.data.prompt.message_id), first);
-
-		const screen = JSON.stringify(after.content('read_screen'));
-		assert.ok(screen.includes('Hello across windows.') && screen.includes(sent.data.message_id), screen);
-		if (!PEER_ELSEWHERE) {
-			const launch = argsOf(childAlias);
-			assert.strictEqual(launch.cwd, location.path, 'its CLI runs in the other window\'s folder');
-			const [dash, given] = launch.args.slice(-2);
-			assert.strictEqual(dash, '--');
-			assert.match(given, block(started.data.prompt.message_id, alias, window, 'Help from afar.'), 'its first task names its sender\'s window');
-			assert.ok(received(childAlias).some(each => block(sent.data.message_id, alias, window, 'Hello across windows.').test(each)), JSON.stringify(received(childAlias)));
-		}
-
-		assert.strictEqual(after.content('stop_agent')?.status, 'success', JSON.stringify(after.content('stop_agent')));
-		assert.ok(!(after.content('list_agents', 1)?.data.agents as { agent_id: string }[]).some(each => each.agent_id === child), 'a stopped agent is no longer listed');
-		if (!PEER_ELSEWHERE) {
-			const pid = Number(fs.readFileSync(`${RECORD}.${childAlias}`, 'utf8').trim());
-			await until('its process to end', () => alive(pid) ? undefined : true);
-		}
 	});
 });

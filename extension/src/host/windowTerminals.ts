@@ -8,7 +8,7 @@ import { messageOf } from '../base/errors';
 import type { OwnerClaim } from '../base/ownership';
 import { unspun } from '../base/tabSpinner';
 import { isTerminalRegistration, TERMINAL_REGISTRATION_MS } from '../base/windowIdentity';
-import { beginWindowTerminals, retireWindowTerminals, type RetiredTerminals } from '../record/windowIdentity';
+import { beginWindowTerminals, retireWindowTerminals, type RetiredTerminals } from '../record/windowTerminals';
 
 interface Registration {
 	claim: OwnerClaim;
@@ -54,6 +54,11 @@ export class WindowTerminals implements vscode.Disposable {
 				}
 			})
 		];
+	}
+
+	/** Read the exact owner and runs retired by this native window's graceful predecessor. */
+	retiredOwner(owner: string): RetiredTerminals | undefined {
+		return this.retired.get(owner);
 	}
 
 	/** A same-host caller may supply its real reference; a cross-host caller sends only the plain request. */

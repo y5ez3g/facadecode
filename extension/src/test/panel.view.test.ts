@@ -4,11 +4,16 @@
 
 import * as assert from 'assert';
 import type { RunFacts } from '../core/ports';
-import { runFacts } from './contractFakes';
 import type { PanelActions, PanelView } from '../ui/panel';
 import type { SelectedAgent } from '../ui/model';
 import type { PanelState } from '../webview/protocol';
 import { TestEmitter, withModules } from './withModules';
+
+function runFacts(facts: Pick<RunFacts, 'id' | 'alias' | 'name'>): RunFacts {
+	return { ...facts, cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'folder', cwd: '/work', environment: 'local',
+		yolo: true, createdAt: 0, lifecycle: 'running', phase: 'running', activity: 'not_working', reporting: true,
+		root: facts.id, origin: 'human', tools: 'not_injected' };
+}
 
 /** The panel's view and its webview's page, with no editor behind them: what the extension posts, and what the page says to it. */
 suite('The panel\'s view: what it takes from its webview, and which page it answers (PANEL-1.1, 3.1, 3.2)', () => {
@@ -235,8 +240,8 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	test('the Framework host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)', async () => {
 		panel.dispose();
 		orchestrator = true;
-		const local = runFacts(1, { id: 'workstation/a1', alias: 'a1', name: 'Gauge' });
-		const peer = runFacts(1, { id: 'devbox/a1', alias: 'a1', name: 'Gauge' });
+		const local = runFacts({ id: 'workstation/a1', alias: 'a1', name: 'Gauge' });
+		const peer = runFacts({ id: 'devbox/a1', alias: 'a1', name: 'Gauge' });
 		const runs = new Map([[local.id, local], [peer.id, peer]]);
 		const selected: string[] = [];
 		make(false, target => {

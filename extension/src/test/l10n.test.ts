@@ -107,15 +107,12 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 		assert.deepStrictEqual(wrong, []);
 	});
 
-	test('Continue Session, Resume and Pin use the same session terminology in each language', () => {
+	test('Resume and Pin use the same session terminology in each language', () => {
 		const sessionWords = {
-			'zh-cn': /会话/, 'zh-tw': /工作階段/, 'pt-br': /sess(?:ão|ões)/i, es: /sesi(?:ón|ones)/i,
 			ru: /бесед/i, de: /Sitzung/, ja: /セッション/, fr: /session/i, ko: /세션/, tr: /oturum/i, pl: /sesj/i,
 		};
 		const ids = new Set([
 			'Untitled session',
-			"No saved sessions in this window's folders",
-			'Could not read the saved sessions: {0}',
 			"{0} runs another CLI now, but this session is {1}'s; it cannot be resumed with it",
 			'{0} is no longer in clis of {1}, so this session cannot be resumed with it.',
 			'Its CLI cannot resume this exact session, so it cannot be pinned.',
@@ -130,9 +127,6 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 				assert.match(each.text, sessionWords[locale], shown(each));
 			}
 		}
-		const traditional = textsOf('zh-tw');
-		assert.strictEqual(traditional.find(each => each.id === 'Open a folder to continue a saved session.')!.text,
-			'請開啟資料夾以接續已儲存的工作階段。');
 	});
 
 	test('settings repairs keep the quoted type and say which line or item to remove in Chinese and Korean', () => {
@@ -347,21 +341,6 @@ suite('Localization: the words each language has for Facade\'s things (UX-2.4)',
 			}
 		}
 		assert.deepStrictEqual(wrong, []);
-	});
-
-	test('the command line preview names the commands as they appear in the palette', () => {
-		const missing = 'Working location {0} is no longer available. Run Show Agent Command Line again to choose another.';
-		const off = 'State: off; {0}.enabled is false, so New Agent does not offer it';
-		for (const locale of ['', ...LOCALES]) {
-			const suffix = locale ? `.${locale}` : '';
-			const nls = readJson(path.join(ROOT, 'l10n', `package.nls${suffix}.json`));
-			const bundle = readJson(path.join(ROOT, 'l10n', `bundle.l10n${suffix}.json`));
-			for (const [command, text] of [['showAgentLaunch', missing], ['newAgent', off]]) {
-				const title = textOf(nls[`command.${command}`]);
-				assert.ok(title.endsWith('...'), title);
-				assert.ok(textOf(bundle[text]).includes(title.slice(0, -3)), `package.nls${suffix}.json: ${title}`);
-			}
-		}
 	});
 
 	test('the machine labels name a Facade home and the SSH caption calls for a login', () => {

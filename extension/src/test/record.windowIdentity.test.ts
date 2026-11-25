@@ -6,7 +6,8 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { isWindowIdentity, isWindowToken } from '../base/windowIdentity';
-import { beginWindowTerminals, DamagedWindowRecord, retireWindowTerminals, windowToken } from '../record/windowIdentity';
+import { DamagedWindowRecord, windowToken } from '../record/windowIdentity';
+import { beginWindowTerminals, retireWindowTerminals } from '../record/windowTerminals';
 import { keepWindowKey, workspaceRecord } from '../record/workspace';
 import { tempDir } from './util';
 

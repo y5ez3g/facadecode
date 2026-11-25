@@ -229,3 +229,11 @@ export function isWithin(inner: string, outer: string): boolean {
 	const relative = path.relative(outer, inner);
 	return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
+
+/**
+ * A location's kind as its icon says it (PANEL-1.5, WORKTREES-1.2): a checkout's root is a main checkout or a worktree; a folder - one
+ * opened inside a checkout among them - is a folder. Resolve a Resume cwd to its anchor first.
+ */
+export function placeKindOf(location: Pick<Location, 'kind' | 'isMain' | 'subfolder'> | undefined): 'folder' | 'repo' | 'worktree' {
+	return location?.kind !== 'checkout' || location.subfolder ? 'folder' : location.isMain ? 'repo' : 'worktree';
+}

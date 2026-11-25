@@ -44,28 +44,23 @@ NATIVE_ROUTES = {binding['runner'] for binding in NATIVE_BINDINGS.values()}
 REQUIRED_EDITOR_ROUTES = {
     'framework/p0/remote-execution/remote-worktree': 'remote-worktree',
     'extension/p0/activation-shell/activation-failure': 'incompatible-activation',
-    'extension/p0/window-replacement/replacement-in-flight': 'replacement-in-flight',
-    'extension/p0/window-replacement/stale-owner': 'stale-owner',
+    'extension/p0/activation-shell/startup-failure': 'activation-failure',
     'extension/p0/vsix-upgrade/install-pair': 'install-pair',
     'extension/p0/vsix-upgrade/upgrade-pair': 'upgrade-pair',
     'extension/p0/vsix-upgrade/cutover-live': 'cutover-live',
     'extension/p0/vsix-upgrade/cutover-uncertain': 'cutover-uncertain',
 }
 EDITOR_DRIVERS = {
-    'activation-failure': ('legacy', 'claude'),
-    'conversion': ('legacy', 'claude'),
+    'activation-failure': ('none', 'claude'),
     'cutover-live': ('framework', 'claude'),
     'cutover-uncertain': ('none', 'claude'),
-    'expiry': ('legacy', 'claude'),
     'incompatible-activation': ('none', 'claude'),
     'install-pair': ('framework', 'claude'),
     'lifetime': ('framework', 'claude'),
     'missing-session-unpin': ('framework', 'claude'),
     'multi-window': ('framework', 'claude'),
     'remote-worktree': ('framework', 'fake'),
-    'replacement-in-flight': ('legacy', 'claude'),
     'shell-handoff': ('framework', 'codex'),
-    'stale-owner': ('legacy', 'claude'),
     'upgrade-pair': ('framework', 'claude'),
 }
 

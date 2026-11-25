@@ -3,13 +3,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type { TerminalColours } from '../../ptyd/protocol';
 
 /**
  * Each kind of theme's terminal colours, as VS Code's own themes of that kind draw them: what ptyd answers a program asking its
  * terminal's colours until the window's editor terminals have reported their own (ARCHITECTURE-2.3). A program that asks wants to
  * know whether its terminal is light or dark, and that these say right.
  */
+/** Colors reported by the editor terminal in OSC query responses. */
+export interface TerminalColours {
+	readonly foreground?: string;
+	readonly background?: string;
+	readonly cursor?: string;
+}
+
 const BY_KIND: Readonly<Record<number, Required<TerminalColours>>> = {
 	[1]: { foreground: '3b3b/3b3b/3b3b', background: 'ffff/ffff/ffff', cursor: '3b3b/3b3b/3b3b' },
 	[2]: { foreground: 'cccc/cccc/cccc', background: '1f1f/1f1f/1f1f', cursor: 'cccc/cccc/cccc' },

@@ -6,9 +6,6 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ROBOT_ICONS, ROBOTS } from '../base/robot';
-import { BUILT_IN_ADAPTERS } from '../clis/catalog';
-import { activityOf } from '../clis/activity';
-import { parseStatus } from '../ptyd/status';
 import type { RunFacts } from '../core/ports';
 import { avatarOf, cardOf, CardPlace, CardWords, statusOf } from '../ui/cardView';
 import type * as PresentationModule from '../ui/presentation';
@@ -88,21 +85,6 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 			'Ada, a1, Claude Code, Idle, Last submission'
 		]);
 		assert.strictEqual(workspaceCard.details.description.place, 'Path: /app');
-	});
-
-	test('all CLIs retain a blocker without a recognized kind, its full reason on its second line and in its label', () => {
-		const message = `Please review ${'a long explanation '.repeat(30)}👨‍👩‍👧‍👦`;
-		for (const cli of [...BUILT_IN_ADAPTERS.map(adapter => adapter.id), 'custom']) {
-			for (const kind of ['', ':kind=future']) {
-				const report = parseStatus(`state=blocked${kind}:msg=${Buffer.from(message).toString('base64')}`);
-				assert.ok(report && report !== 'query' && report.state === 'blocked');
-				const { activity, reporting, blocker } = activityOf({ ...report, state: 'blocked' });
-				const facts = run({ cli, activity, reporting, blocker });
-				const card = cardOf(facts, { place, selected: false, menu, words: WORDS });
-				assert.deepStrictEqual([card.dot, card.stateText, card.line], ['none', 'Attention needed', `Attention needed · ${message}`], cli);
-				assert.ok(card.label.endsWith(`Claude Code, Attention needed · ${message}`), cli);
-			}
-		}
 	});
 
 	test('RULES-3.2, RULES-6.2: both implementations expose state in color and in words; Framework details prioritize errors and blockers', () => {
@@ -523,7 +505,6 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		assert.deepStrictEqual(builtIns.map(icon => avatarOf(icon)), [
 			{ file: 'avatar-claude.png' }, { file: 'avatar-codex.png' }, { file: 'avatar-antigravity.png' }, { file: 'avatar-muse.png' }, { file: 'avatar-opencode.png' }, { file: 'avatar-pi.png' }
 		]);
-		assert.deepStrictEqual(BUILT_IN_ADAPTERS.map(adapter => adapter.id), builtIns);
 		// A robot: its face, and its eyes over it, which look toward the pointer
 		assert.deepStrictEqual(ROBOT_ICONS.map(icon => avatarOf(icon)), ROBOTS.map(robot => ({ file: `robot-${robot}-face.svg`, eyes: 'robot-eyes.svg' })));
 		const media = path.join(__dirname, '..', '..', '..', 'media');

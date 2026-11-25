@@ -15,7 +15,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import type { WindowIdentity } from '../../base/windowIdentity';
-import type { Directory } from '../../base/windowNetwork';
+import type { Directory } from './legacyDirectory';
 
 const OUT = process.env.FACADE_IT_CUTOVER!;
 const RECORD = process.env.FACADE_IT_RECORD!;

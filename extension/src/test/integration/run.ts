@@ -15,16 +15,15 @@ import * as os from 'os';
 import * as path from 'path';
 import { parse as parseJsonc, ParseError } from 'jsonc-parser';
 import { isDeepStrictEqual } from 'util';
-import { frameworkCall, frameworkListens, frameworkProgram, EDITOR_FLAGS, editorProfile, endFramework, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
+import { frameworkCall, frameworkListens, frameworkProgram, EDITOR_FLAGS, editorProfile, endFramework, endEditors, fakeClis, newRepository, officialEditor, sanitizedEnvironment, testProcessCleanup } from './editors';
 import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { runRemoteWorktree } from './remoteWorktree';
 import { assertTemporaryState, probeEnvironment } from './probeState';
-import { replacementInFlight } from './replacementInFlight';
 import { installLocalVsixes, runEditorCli } from './vsixInstall';
 import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
 import { CUTOVER_VARIANTS, legacyCutover, type CutoverVariant } from './cutover';
-import { activationFailure, incompatibleActivation, missingSessionUnpin, multiWindowDriverFiles, frameworkMultiWindow, sharedAttachJourney, shellHandoff, staleOwner, withFrameworkWindows } from './frameworkMultiWindow';
+import { activationFailure, incompatibleActivation, missingSessionUnpin, multiWindowDriverFiles, frameworkMultiWindow, sharedAttachJourney, shellHandoff, withFrameworkWindows } from './frameworkMultiWindow';
 
 /** An entry of Facade's settings file, by its fields (CONFIGURATION-2.2). */
 type Entry = { readonly [field: string]: unknown };
@@ -44,22 +43,18 @@ const BUILT_INS: readonly { readonly id: string; readonly segment: string; reado
 
 const ACCEPTANCE_DRIVERS = new Map([
 	['activation-failure', { implementation: 'framework', cli: 'claude' }],
-	['conversion', { implementation: 'legacy', cli: 'claude' }],
 	['cutover-exited', { implementation: 'framework', cli: 'claude' }],
 	['cutover-live', { implementation: 'framework', cli: 'claude' }],
 	['cutover-prior-owner', { implementation: 'framework', cli: 'claude' }],
 	['cutover-two-windows', { implementation: 'framework', cli: 'claude' }],
 	['cutover-uncertain', { implementation: 'framework', cli: 'claude' }],
-	['expiry', { implementation: 'legacy', cli: 'claude' }],
 	['incompatible-activation', { implementation: 'framework', cli: 'claude' }],
 	['install-pair', { implementation: 'framework', cli: 'claude' }],
 	['lifetime', { implementation: 'framework', cli: 'claude' }],
 	['missing-session-unpin', { implementation: 'framework', cli: 'claude' }],
 	['multi-window', { implementation: 'framework', cli: 'claude' }],
 	['remote-worktree', { implementation: 'framework', cli: 'fake' }],
-	['replacement-in-flight', { implementation: 'legacy', cli: 'claude' }],
 	['shell-handoff', { implementation: 'framework', cli: 'codex' }],
-	['stale-owner', { implementation: 'legacy', cli: 'claude' }],
 	['upgrade-pair', { implementation: 'framework', cli: 'claude' }]
 ] as const);
 type AcceptanceDriver = typeof ACCEPTANCE_DRIVERS extends ReadonlyMap<infer Name, unknown> ? Name : never;
@@ -114,8 +109,8 @@ async function main(): Promise<void> {
 	const attachUpgrade = process.env.FACADE_IT_ATTACH_UPGRADE;
 	// Current builds activate Framework. The legacy selector is only for fixtures using earlier packages.
 	const implementation = process.env.FACADE_IT_IMPLEMENTATION ?? 'framework';
-	if (implementation !== 'legacy' && implementation !== 'framework') {
-		throw new Error('FACADE_IT_IMPLEMENTATION is legacy or framework.');
+	if (implementation !== 'framework') {
+		throw new Error('Run legacy execution through the published VSIX cutover fixtures.');
 	}
 	// Real agents, for `real` alone: the built-in FACADE_IT_REAL (Claude Code by default) at FACADE_IT_REAL_PATH - FACADE_IT_CLAUDE
 	// for Claude Code - and Claude Code's temporary configuration folder FACADE_IT_CLAUDE_CONFIG, signed in for testing. Its terminals
@@ -142,10 +137,6 @@ async function main(): Promise<void> {
 	const nativeLifecycle = only === 'real-lifecycle';
 	const realState = process.env.FACADE_IT_REAL_STATE;
 	const realHome = process.env.FACADE_IT_REAL_HOME === 'keep';
-	// YOLO is off for the real journey, unless FACADE_IT_REAL_YOLO=on: Muse Code, whose approvals have no rule for one server's tools,
-	// asks before each of Facade's with YOLO off, and on Windows first sets up its sandbox, which a new home has not
-	const realYolo = process.env.FACADE_IT_REAL_YOLO === 'on';
-	const modelDecisions = process.env.FACADE_IT_REAL_DECISIONS === '1';
 	// The update journey's packages: a released build's, FACADE_IT_RELEASED, and the ones it updates to, FACADE_IT_CURRENT - else this build's
 	const released = process.env.FACADE_IT_RELEASED;
 	const current = process.env.FACADE_IT_CURRENT;
@@ -161,12 +152,11 @@ async function main(): Promise<void> {
 			throw new Error('An exact acceptance driver requires the matching isolated mode, implementation and fake CLI.');
 		}
 	}
-	type ServingImplementation = 'legacy' | 'framework' | 'none';
+	type ServingImplementation = 'framework' | 'none';
 	let observedDriver: { name: AcceptanceDriver; implementation: ServingImplementation } | undefined;
 	const driverPassed = (name: AcceptanceDriver, actual: ServingImplementation) => {
 		if (expectedDriver === name) {
-			const serving = name === 'activation-failure' ? 'legacy'
-				: name === 'incompatible-activation' || name === 'cutover-uncertain' ? 'none' : implementation;
+			const serving = name === 'activation-failure' || name === 'incompatible-activation' || name === 'cutover-uncertain' ? 'none' : implementation;
 			assert.strictEqual(actual, serving, 'the completed driver exercised its expected serving implementation');
 			assert.ok(!observedDriver, 'the exact driver runs once');
 			observedDriver = { name, implementation: actual };
@@ -226,8 +216,7 @@ async function main(): Promise<void> {
 		'window.restoreWindows': 'none',
 		'update.mode': 'none',
 		'extensions.autoUpdate': false,
-		'extensions.autoCheckUpdates': false,
-		...(implementation === 'legacy' ? { 'facade.framework': 'off' } : {})
+		'extensions.autoCheckUpdates': false
 	};
 	/**
 	 * Facade's settings file in the Facade root `facade` (CONFIGURATION-1.1): every built-in's command a fake - the suite never starts
@@ -334,7 +323,7 @@ async function main(): Promise<void> {
 		}
 		// The fake runtime registry keys leases by PID. A different journey's fixture must not reuse a stale lease.
 		const more = nativeLifecycle ? terminalEnv(realEnv)
-			: implementation === 'legacy' && cli.id === 'muse' ? terminalEnv({ XDG_DATA_HOME: path.join(facade, 'agent-data') }) : {};
+			: {};
 		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, ...more }));
 		facadeSettings(facade, { ...alone(cli.id), ...nativeLifecycle ? { [cli.id]: { command: realPath, args: realArgs } } : {} }, nativeLifecycle ? false : undefined);
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'conversion-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
@@ -356,7 +345,6 @@ async function main(): Promise<void> {
 		};
 		const editorEnv = { ...process.env, ...passed, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_IMPLEMENTATION: implementation,
 			// The first built-in's journey reloads a busy window: twenty agents beside its own (VERIFICATION G2)
-			...implementation === 'legacy' && !reopening && !nativeLifecycle && cli === BUILT_INS[0] ? { FACADE_IT_LOAD: '20' } : {},
 			FACADE_IT_SECOND: second, FACADE_IT_REOPEN: reopening ? '1' : '0', FACADE_IT_NATIVE: nativeLifecycle ? cli.id : '', CLAUDE_CONFIG_DIR: realConfig ?? claudeConfig };
 		let editor = spawn(executable, [solo, '--new-window', '--disable-extensions', ...profile.args,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
@@ -419,7 +407,6 @@ async function main(): Promise<void> {
 				console.log(`  ✔ ${cli.id}: real window close and ${expiry ? 'reopen after its grace restore the exact pinned session in a new process' : 'immediate reopen preserve Pin, exact session and process'}, with one terminal: ${JSON.stringify(lines())}`);
 				if (expectedDriver === 'expiry') {
 					assert.match(String(before.runId), /^run-/u, 'the previously pinned run has a legacy implementation identity');
-					if (expiry) { driverPassed('expiry', 'legacy'); }
 				}
 				return;
 			}
@@ -441,7 +428,6 @@ async function main(): Promise<void> {
 			}
 			if (expectedDriver === 'conversion') {
 				assert.match(before.runId, /^run-/u, 'the reloaded pinned run has a legacy implementation identity');
-				driverPassed('conversion', 'legacy');
 			}
 		} catch (error) {
 			console.error(`Editor output for ${suffix} (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
@@ -578,9 +564,7 @@ async function main(): Promise<void> {
 		});
 		try {
 			// The other window is there once its component registered it on this computer
-			if (implementation === 'legacy' && await registeredWindow(facade, label => label === 'peer') === undefined) {
-				throw new Error('The second editor window did not join this computer\'s Facade windows.');
-			}
+
 			await run('cross', repo, { FACADE_IT_CLI: 'claude', FACADE_IT_PEER: 'peer', FACADE_IT_PEER_DIR: fs.realpathSync(peer) });
 		} finally {
 			try {
@@ -599,8 +583,7 @@ async function main(): Promise<void> {
 	 * once: with its tab open by the editor, the window passing the answer on; hidden, by the window's headless terminal; open again,
 	 * by the editor once more (ARCHITECTURE-2.3, LIFECYCLE-3.5). It needs the released packages and runs only when asked.
 	 */
-	const update = async (mode: 'update' | 'replacement-in-flight' | 'install-pair' = 'update') => {
-		const replacement = mode === 'replacement-in-flight';
+	const update = async (mode: 'update' | 'install-pair' = 'update') => {
 		const installPair = mode === 'install-pair';
 		if (installPair && !current) {
 			throw new Error(mode + ' requires a candidate pair directory in FACADE_IT_CURRENT.');
@@ -610,7 +593,7 @@ async function main(): Promise<void> {
 		}
 		const packages = (dir: string) => {
 			const files = fs.readdirSync(dir, { withFileTypes: true }).filter(file => file.name.endsWith('.vsix'));
-			if ((replacement || installPair) && (files.length !== 2 || files.some(file => !file.isFile()))) {
+			if (installPair && (files.length !== 2 || files.some(file => !file.isFile()))) {
 				throw new Error(`${dir} must contain exactly two regular VSIX files.`);
 			}
 			const component = files.find(file => file.name.includes('-window-'));
@@ -642,11 +625,6 @@ async function main(): Promise<void> {
 		}
 		const env = { ...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_UPDATE: out, CLAUDE_CONFIG_DIR: claudeConfig,
 			...(installPair ? { FACADE_IT_UPDATE_ROLE: 'install' } : {}) };
-		if (replacement) {
-			await replacementInFlight({ root, facade, folder, record, executable, driver, from, to, receiver: profile, env, endMatching });
-			driverPassed('replacement-in-flight', 'legacy');
-			return;
-		}
 		const install = (files: readonly string[]) => installLocalVsixes(executable, profile, files, env, 30_000);
 		const pairVersion = (pair: string[]): string => {
 			const files = pair.map(file => path.basename(file));
@@ -783,41 +761,6 @@ async function main(): Promise<void> {
 		}
 	};
 	/**
-	 * Real agents of one built-in working together (VERIFICATION G3): YOLO off, the suite's real journey alone. Each launch trusts its
-	 * folder in the CLI's own configuration where it keeps trust in a file (CLIS-3.3) - Claude Code's, or Antigravity's in the home folder
-	 * its terminals have: the run takes that back, Antigravity's file restored as it was.
-	 */
-	const real = async () => {
-		const added = realEntry as { readonly name: string; readonly [field: string]: unknown } | null;
-		const cli = BUILT_INS.find(each => each.id === realCli);
-		if (!cli || !realPath) {
-			throw new Error('FACADE_IT_ONLY=real starts a real CLI: set FACADE_IT_REAL to a built-in and FACADE_IT_REAL_PATH to its executable (FACADE_IT_CLAUDE for Claude Code), and give it a configuration signed in for testing.');
-		}
-		// A real CLI updates nothing of its own while it is tested: Claude Code would download its next version at every start
-		const terminals = terminalEnv({ DISABLE_AUTOUPDATER: '1', ...realEnv });
-		const agySettings = path.join(agentsHome, '.gemini', 'antigravity-cli', 'settings.json');
-		const agyBefore = cli.id === 'agy' ? (fs.existsSync(agySettings) ? fs.readFileSync(agySettings) : null) : undefined;
-		try {
-			// The other built-ins not installed: the real one is the one New Agent preselects - for an added entry, every built-in, the
-			// entry its program
-			const others = Object.fromEntries(BUILT_INS.filter(each => added || each !== cli).map(each => [each.id, { command: path.join(root, `unavailable-${each.id}`) }]));
-			const { name, ...fields } = added ?? { name: cli.id };
-			const started = { [name]: { ...added ? { type: cli.id } : {}, command: realPath, args: realArgs, ...fields } };
-			await run('real', repo, { FACADE_IT_REAL: name, FACADE_IT_REAL_BUILTIN: cli.id, FACADE_IT_GREP: 'Journey: real', ...realYolo ? { FACADE_IT_REAL_YOLO: 'on' } : {}, ...modelDecisions ? { FACADE_IT_REAL_DECISIONS: '1' } : {}, ...passed },
-				{ ...others, ...started }, terminals, cli.id === 'claude' ? realConfig ?? claudeConfig : claudeConfig, realYolo);
-		} finally {
-			if (cli.id === 'claude') {
-				untrust(path.join(realConfig ?? claudeConfig, '.claude.json'), root);
-			}
-			if (agyBefore === null) {
-				fs.rmSync(agySettings, { force: true });
-			} else if (agyBefore !== undefined) {
-				fs.writeFileSync(agySettings, agyBefore);
-				console.log(`Restored ${agySettings} as it was before the run.`);
-			}
-		}
-	};
-	/**
 	 * The Framework's acceptance on the extension's side, in one window on it (framework.it.ts): the window runs on framework of its Facade
 	 * root, its terminal's `facade list` shows the editor's agent, Resume Agent restores the record Stop Agent retained, and a program
 	 * is told the theme's colours.
@@ -873,7 +816,7 @@ async function main(): Promise<void> {
 			await cleanUpFramework(facade);
 		}
 	};
-	const frameworkWindows = async (runName: 'multi' | 'handoff' | 'attach' | 'missing-session-unpin' | 'activation-failure' | 'incompatible-activation' | 'stale-owner') => {
+	const frameworkWindows = async (runName: 'multi' | 'handoff' | 'attach' | 'missing-session-unpin' | 'activation-failure' | 'incompatible-activation') => {
 		const driver = path.join(root, `driver-${runName}`);
 		const facade = path.join(home, runName);
 		const peer = path.join(root, `${runName}-peer`);
@@ -920,14 +863,13 @@ async function main(): Promise<void> {
 			fs.mkdirSync(faultProgram);
 		}
 		const start = (folder: string, name: string, control: string, port: number) => {
-			const legacyImplementation = runName === 'stale-owner';
-			const withComponent = runName === 'multi' || legacyImplementation || fallback || incompatible;
+			const withComponent = runName === 'multi' || fallback || incompatible;
 			const profile = editorProfile(root, `${runName[0]}-${name}`);
 			const userSettings = path.join(profile.user, 'User', 'settings.json');
 			if (!fs.existsSync(userSettings)) {
 				fs.mkdirSync(path.dirname(userSettings), { recursive: true });
 				fs.writeFileSync(userSettings, JSON.stringify({
-					...settings, 'window.dialogStyle': 'custom', ...legacyImplementation ? { 'facade.framework': 'off' } : {}
+					...settings, 'window.dialogStyle': 'custom'
 				}));
 			}
 			return spawn(executable, [folder, '--new-window', '--disable-extensions', ...profile.args,
@@ -945,7 +887,7 @@ async function main(): Promise<void> {
 					return frameworkMultiWindow(open, { folder: repo, peer, shared, home: facade, remote: null, files });
 				}
 				if (runName === 'missing-session-unpin') { return missingSessionUnpin(open, repo, env); }
-				if (runName === 'stale-owner') { return staleOwner(open, repo, env); }
+
 				if (fallback) { return activationFailure(open, repo, env, faultProgram); }
 				if (incompatible) { return incompatibleActivation(open, repo, env); }
 				const shellEnv = {
@@ -960,15 +902,15 @@ async function main(): Promise<void> {
 			if (runName === 'multi') { driverPassed('multi-window', 'framework'); }
 			if (runName === 'handoff') { driverPassed('shell-handoff', 'framework'); }
 			if (runName === 'missing-session-unpin') { driverPassed('missing-session-unpin', 'framework'); }
-			if (fallback) { driverPassed('activation-failure', 'legacy'); }
+			if (fallback) { driverPassed('activation-failure', 'none'); }
 			if (incompatible) { driverPassed('incompatible-activation', 'none'); }
-			if (runName === 'stale-owner') { driverPassed('stale-owner', 'legacy'); }
+
 		} finally {
 			await cleanUpFramework(facade);
 			if (runName === 'attach') {
 				endMatching(facade);
 			}
-			if (fallback || incompatible || runName === 'stale-owner') { endMatching(path.join(facade, 'extension', 'ptyd')); }
+			if (fallback || incompatible) { endMatching(path.join(facade, 'extension', 'ptyd')); }
 		}
 	};
 	let suiteFailure: unknown;
@@ -1005,15 +947,6 @@ async function main(): Promise<void> {
 		if (!only || only === 'reopen') {
 			for (const cli of BUILT_INS) { await conversion(cli, true); }
 		}
-		if (implementation === 'legacy' && (!only || only === 'expiry')) {
-			// The shared supervisor's real local grace, not a shortened fixture timer.
-			if (expectedDriver === 'expiry') { await conversion(BUILT_INS[0], true); }
-			await conversion(BUILT_INS[0], true, true);
-		}
-		// The Framework's acceptance on the extension's side: with the implementation on, a run of the whole suite has it, and each is asked for alone
-		if (['activation-failure', 'framework', 'incompatible-activation', 'lifetime', 'multi-window', 'missing-session-unpin', 'remote-worktree', 'shell-handoff', 'shared-attach'].includes(only ?? '') && implementation !== 'framework') {
-			throw new Error(`FACADE_IT_ONLY=${only} runs on the Framework: set FACADE_IT_IMPLEMENTATION=framework.`);
-		}
 		if (only === 'framework' || (!only && implementation === 'framework')) {
 			await frameworkJourneys();
 		}
@@ -1031,10 +964,6 @@ async function main(): Promise<void> {
 		}
 		if (only === 'incompatible-activation') {
 			await frameworkWindows('incompatible-activation');
-		}
-		if (only === 'stale-owner') {
-			assert.strictEqual(implementation, 'legacy', 'stale-owner uses the old window owner');
-			await frameworkWindows('stale-owner');
 		}
 		if (only === 'remote-worktree') {
 			driverPassed('remote-worktree', runRemoteWorktree(home, executable));
@@ -1055,11 +984,8 @@ async function main(): Promise<void> {
 				facadeSettings: facade => facadeSettings(facade, alone('claude')) });
 		}
 		// Never unasked: it installs a released build's packages
-		if (only === 'update') {
-			await update();
-		}
-		// Never unasked: the released legacy pair to the candidate across the cutover (ARCHITECTURE-1.4, VERIFICATION-5.2)
-		const cutover = only === 'upgrade-pair' ? 'exited' : CUTOVER_VARIANTS.find(variant => only === `cutover-${variant}`);
+				// Never unasked: the released legacy pair to the candidate across the cutover (ARCHITECTURE-1.4, VERIFICATION-5.2)
+		const cutover = only === 'upgrade-pair' ? 'exited' : only === 'update' ? 'live' : CUTOVER_VARIANTS.find(variant => only === `cutover-${variant}`);
 		if (cutover) {
 			assert.strictEqual(implementation, 'framework', 'the cutover journeys run the candidate on Framework');
 			await legacyCutover({
@@ -1077,13 +1003,8 @@ async function main(): Promise<void> {
 			driverPassed(only === 'upgrade-pair' ? 'upgrade-pair' : `cutover-${cutover}` as `cutover-${CutoverVariant}`,
 				cutover === 'uncertain' ? 'none' : 'framework');
 		}
-		if (only === 'replacement-in-flight' || only === 'install-pair') {
-			assert.strictEqual(implementation, only === 'install-pair' ? 'framework' : 'legacy');
+		if (only === 'install-pair') {
 			await update(only);
-		}
-		// Never unasked: it signs in and uses an account's usage
-		if (only === 'real') {
-			await real();
 		}
 		if (nativeLifecycle) {
 			const cli = BUILT_INS.find(each => each.id === realCli);
@@ -1091,7 +1012,7 @@ async function main(): Promise<void> {
 			try {
 				await conversion(cli);
 				await conversion(cli, true);
-				if (implementation === 'legacy') { await conversion(cli, true, true); }
+
 			} finally {
 				if (cli.id === 'claude') { untrust(path.join(realConfig ?? claudeConfig, '.claude.json'), root); }
 			}

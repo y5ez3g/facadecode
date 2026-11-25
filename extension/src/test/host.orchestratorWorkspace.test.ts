@@ -9,7 +9,7 @@ import { randomUUID } from 'crypto';
 import type { AgentInfo, AgentRef } from '../base/frameworkProtocol';
 import { withLongFileLock } from '../base/lock';
 import { WINDOW_LEGACY_INSTANCE_COMMAND } from '../base/windowIdentity';
-import { windowAddress } from '../host/windowNetwork';
+import { createHash } from 'crypto';
 import { keepWindowKey, workspaceRecord } from '../record/workspace';
 import { tempDir } from './util';
 import { TestEmitter, withModules } from './withModules';
@@ -32,7 +32,7 @@ async function bringsBackFolderlessWorkspace(home: string, withPin: boolean): Pr
 	if (withPin) {
 		fs.writeFileSync(path.join(previous.dir, 'workspace-state.json'), JSON.stringify({ 'facade.pins': [pin] }));
 	}
-	const instanceId = windowAddress(token);
+	const instanceId = 'win-' + createHash('sha256').update('facade-window:' + token).digest('hex').slice(0, 16);
 	const state = new Map<string, unknown>();
 	if (withPin) { state.set('facade.workspaceKey', previous.key); }
 	const open = (sessionId: string, withComponent = true, storage = state) => {

@@ -21,67 +21,15 @@ evidence.
 
 ### 1.1 Separate client routing from workspace execution
 
-**Local window components connect this computer's windows while a workspace component runs agents in each window's execution environment.**
+**Use the Framework execution host and a local editor component.**
 
-```mermaid
-flowchart LR
-    CA["Window component A (local)"] <--> CB["Window component B (local)"]
-    CA <--> R["Client registry: open windows and their sockets"]
-    CB <--> R
-    CA <--> WA["Workspace runtime A: local / SSH / WSL / container"]
-    CB <--> WB["Workspace runtime B: local / SSH / WSL / container"]
-    WA <--> PA["Execution supervisor + PTYs A"]
-    WB <--> PB["Execution supervisor + PTYs B"]
-    PA <--> XA["Interactive CLIs + run-scoped MCP shims"]
-    PB <--> XB["Interactive CLIs + run-scoped MCP shims"]
-```
+The workspace extension connects to Framework for its resolved execution home. Framework owns agent records, execution,
+machine routing, input delivery and terminal streams. The local Window Component supplies identity and native terminal
+registration. The workspace extension owns the roster, Pins, launch selection and editor projections. A remote workspace selects
+its execution host's Facade home, and the local component uses its own editor storage.
 
-Components are extension infrastructure, not a hosted service or separate user-facing application. The workspace runtime
-owns local-to-that-environment program discovery, folders, native Git integration, process/terminal adapters and its
-window's Facade tools. A supervisor in each execution environment, ptyd, holds PTYs and rendered screens across
-extension-host reload. A per-run stdio shim supplies the launch run ID for routing and normal tree scope; it does not
-authenticate the caller.
-
-Deployment targets: `facade.facadecode` is the workspace extension. Its companion `facade.facadecode-window` runs in
-the local UI extension host, keeps the current window's handover identity and registered native terminal objects, and
-is the window's client component. It exports no API (`api: none`). The two components exchange validated requests
-through extension commands that appear in no menu or palette: `facade.window.identity`, `facade.window.terminals`,
-`facade.window.directory`, `facade.window.route`, `facade.window.publish` and `facade.window.allocate`, registered by the
-window component, and `facade.workspace.republish` and `facade.agents.route`, registered by the workspace component.
-Cross-host requests contain only plain data; a same-host request may validate an actual public Terminal object. The
-local component owns no workspace files, agent process or PTY data transport.
-
-The client network has no central process. Each window component listens on its own local socket - a Unix domain
-socket, or a named pipe on Windows - and records its window in the client registry under the client Facade directory
-(3.1): its routing ID, label, environment, socket, network protocol, process ID and process start, the component start
-that wrote the entry, and the window's agents as its workspace component publishes them - who each is, its creation
-tree, CLI, YOLO setting and lifecycle, never what it is doing. Other windows resolve references to those agents from the
-registry without asking (RULES-2.3). The workspace component publishes its agents and the window's name as they change,
-changes within 150 ms told once, and again whenever its window component starts; the answer says whether other windows
-can reach the window, and the agents log says when they cannot. Each start of a window component listens on a socket of
-its own, registers only once it listens, tries a failed listen again after one second, doubling up to a minute, and on
-shutdown deletes only the entry it wrote, never a successor's. An entry whose process is gone is deleted. One whose
-process start the system reads otherwise - its process ID another process's now - is deleted, if unchanged, once its
-socket proves nothing listens there, as a clock step or a start read to the second proves nothing alone. One whose
-socket proves absent when a request is routed to it - no such socket, or on POSIX one that refuses - is deleted too. A
-socket that only fails to answer in time proves nothing: its window stays listed, and requests to it report it
-unavailable. Windows whose components speak another network protocol are listed as unavailable,
-`protocol_incompatible`.
-
-A window component reaches another window by connecting to the socket the registry names; the receiving component hands
-the request to its own workspace component and returns the answer. The caller's window handles every tool call: its own
-agents directly, other windows' agents through these routes. The recipient's window performs message delivery and
-serializes terminal input, and results return to the sender's window over the same route. A send to another window
-keeps half a second of its answer's time for the way back (RULES-1.2).
-
-Agent `#aN` and message `#mN` numbers come from client-wide counters in the client Facade directory, taken under their
-file locks, because each execution environment's own counter would repeat them. A window takes them in blocks ahead of
-need - 16 at a time in a local window, 32 in a remote one - so numbers can skip, but none is given twice. Every window,
-local or remote, takes its numbers only from these counters: a window that cannot take one - its counter unreadable, or
-its window component too old to carry requests - refuses the start or send before any effect, so no number is ever given
-twice. The client counters continue past the numbers the environment counters of the same Facade root gave - 0.0.1
-numbered its agents there - for agents and messages alike. Gate G1 verifies this design, its installation and its
-replacement on update.
+The editor sends exact machine-qualified references to Framework. Its machine routes and MCP tools use the same engine and
+identities as Shell. The published 0.1.5 client and supervisor records are inputs to the cutover in 1.4.
 
 ### 1.2 Public editor APIs and explicit dependencies
 
@@ -109,343 +57,85 @@ and keeps usable existing records.
 
 ### 1.3 Boundaries and code structure
 
-**Business rules depend on ports, not on VS Code, sockets or vendor screen parsers.**
+**Use plain ports and explicit island interfaces.**
 
-[ISLANDS](ISLANDS.md) assigns engineering ownership and defines interface review in this layout.
+[ISLANDS](ISLANDS.md) defines the owners and the [source map](../../../extension/islands.json) names each file, public
+export and permitted consumer. The activation root composes the islands. The workspace host supplies editor and operating
+system effects. The panel owns its projections, commands and pickers, and the webview uses the plain host/page contract.
+The local Window Component talks to the workspace host through session-validated native commands.
 
-`core`, `record`, `clis` and `base` remain independently testable. `ui` contains panel models, commands and pickers;
-`host` implements editor/environment ports, with terminal adaptation and the PTY client together under `host/execution`;
-`webview` has no extension or Node imports; `ptyd` owns terminal/process/effect state, including screen reading, key
-encoding and input-box readers. `schema` owns the one source of MCP tool definitions, wire types, validators, the result
-envelope and the bundled skill; `contract` implements the eight tools on core ports; `transport` owns the run's shim, its
-MCP stdio server and its link to the supervisor. The client network has no layer of its own: the window component's
-entry is `host/window.ts`, its sockets and routing are `host/windowNetwork.ts`, which imports no `vscode`, the workspace
-component's side is `host/client.ts`, the registry and client counters are `record/windowRegistry.ts` and the plain
-messages between them are `base/windowNetwork.ts`. Only extension entrypoints, `host` and `ui` import `vscode`.
-
-Cross-layer source imports follow this table; imports within one layer remain allowed. Layer checks enforce the table,
-and production modules have no import cycles, type-only imports included. The only `webview` module another layer
-imports is `webview/protocol`, the plain host/page contract.
-
-| Source layer | May import these other source layers |
+| Source layer | Other source layers it may import |
 | --- | --- |
-| `extension.ts` | `host` |
-| `host` | `ui`, `contract`, `core`, `record`, `clis`, `ptyd`, `transport`, `schema`, `base` |
-| `ui` | `core`, `webview/protocol`, `base` |
-| `contract` | `core`, `schema`, `base` |
-| `core` | `base` |
-| `transport` | `ptyd`, `schema`, `base` |
-| `record`, `clis`, `ptyd`, `schema` | `base` |
-| `base`, `webview` | None |
+| extension.ts | host |
+| host | ui, core, record, base |
+| ui | core, webview/protocol, base |
+| core, record | base |
+| base, webview | None |
 
-Modules group one cohesive responsibility rather than one helper per file. The panel's manual-order algorithms and
-persisted order share `ui/order.ts`. Small shared contracts and independently tested failure boundaries remain separate:
-JSON shape checks, disposal, notification sanitization, owner identity, record paths and socket ownership are examples.
-UI does not import PTY transport or durable-record implementations; `contract` reaches durable stores through core
-ports. There are no forwarding modules: source and test imports name each module where it lives.
-
-Within `host/execution`, terminal management owns native terminals, tab correlation, focus, names and disposal; the
-execution session owns the PTY connection, ownership claim, connection loss and recovery scheduling; the execution
-coordinator owns each run's launch, attach, reports and cleanup. Their boundaries follow state ownership, resource
-lifetime and failure handling. Shared CLI presentation and theme-logo mappings belong to a presentation module used by
-pickers and terminal management, not to the New Agent picker. Execution does not import a picker or a command page.
-`ui/presentation.ts` owns native CLI icons and shared launch-failure wording; name normalization is in `core/names.ts`.
-Worktree input and planning are shared under WORKTREES-4.3 rather than copied into each entry flow.
+The source graph resolves type and runtime dependencies, directory entry points and re-exports. It rejects cycles, private
+imports and unowned files. The window and page entry points cannot reach the legacy supervisor. Package tests inspect all
+three bundle graphs and both VSIX contents. Only the entry points, host and UI import the editor API.
 
 ### 1.4 Framework activation and legacy cutover
 
-**Use Framework for new agents and keep legacy access for a planned cutover.**
+**Framework owns execution. Retire the published TypeScript implementation one verified workspace at a time.**
 
-A compatible Framework activation reconnects to existing agents. A known legacy cutover checks for live processes
-under the resolved legacy home. When their exit is confirmed, import and recover saved Pins. When legacy agents
-still run, show the count of affected runs and saved Pins with one action to switch and resume Pins. A person
-accepting that action authorizes stopping the listed legacy runs. Keep their Pin state first, act through their
-current execution owners, and wait for confirmed exit. Only then activate Framework and restore the saved Pins.
-Leave uncertain exits pending. An older window that still owns its legacy processes can finish or stop them
-there. Its successor can complete the approved stop after acquiring ownership. When the shared exit check
-succeeds, the windows waiting for the cutover reload into Framework. An opening that already confirms exit
-can activate Framework immediately. Framework activation failure reports the error and offers a reload.
+A compatible Framework activation reconnects to existing agents. To upgrade a legacy workspace, resolve its
+execution home and predecessor identity. When its legacy agents still run, show the existing confirmation with
+the counts of affected runs and saved Pins. Approval covers those exact runs. Freeze the saved Pins before asking
+the supervisor to stop a run, and wait for confirmed exit before restoring its Pin.
+
+An independent old workspace retains ownership of its agents and can upgrade later. Its processes do not hold
+the current workspace at the cutover screen. Successors of the same workspace share the durable approval,
+stop outcome and Pin recovery result. The first approved claimant that can legitimately obtain custody stops the
+exact run and publishes the confirmed Framework reference after recovery. An old window still holding custody
+can finish or stop its own agents. A successor that cannot obtain custody can activate Framework and defer
+the affected recovery. Defer recovery while the exact old session may still be in use. Keep uncertain outcomes
+fenced. A window waiting for its authorized stops reloads when they are confirmed. When there is no such stop to
+wait for, it activates Framework immediately. Framework activation failure reports the error and offers a reload.
 Group 6 owns Framework connection and workspace recovery.
 
 ## 2 Ownership and recovery
 
 ### 2.1 Routes without shared-remote-home assumptions
 
-**The client registry is an address book; window components route requests directly; run IDs are addresses, not credentials.**
+**Use Framework's machine routes and the exact execution environment of each agent.**
 
-Window components register current windows and their execution environments. Route requests to the actual destination
-window's runtime, preserving caller/target IDs, content, protocol and deadline. Remote paths remain in their remote
-environment; equal SSH labels or folder text do not establish the same execution owner. Open windows without agents
-still register. Use ordinary local IPC and the editor's cross-host command channel; Facade adds no cloud relay or public
-product. Validate schemas and distinguish absent, disconnected and incompatible destinations. Allocate unique IDs
-without reuse from the client-wide counters (1.1); cryptographic identity and unforgeability are not requirements. The
-normal shim supplies its launch run ID. Apply YOLO/tree policy from that record. Do not add authentication, tokens,
-enrollment credentials, origin-binding proofs, scoped delegation, human credentials or anti-impersonation checks.
-Deliberately spoofing another ID is outside this operating policy. Keep accurate effects and routing regardless. Each
-request and answer between Facade's processes travels as one line of newline-delimited JSON of at most 64 MiB: a call
-larger than that is RULES-5.3's capacity failure, refused as `capacity_exceeded` before any effect and never cut - a
-limit of the runtime buffer, not of the text (MCP-5.2) - and a generated result too long to return inline goes to a file
-(COLLABORATION-4.2). Registry location, socket naming and stale-entry cleanup are engineering choices verified under G1,
-not a product workflow.
+Framework discovers and routes agents independently of the editors that view them. The workspace hosts send machine-qualified
+references to their execution connection. The Window Component owns native identity and retirement of terminal handles.
 
 ### 2.2 Window lifetime is a proof obligation
 
-**Demonstrate reattachment of a window's runs under RULES-4.1 across reload, extension-host restart and temporary disconnect.**
+**Verify the native window identity and keep it separate from Framework process lifetime.**
 
-The execution supervisor applies RULES-4.1's grace from the moment the owning extension host's connection closes - 90
-seconds where the claim says its window is local, five minutes otherwise; a successor activation's claim cancels it, and
-a remote network outage that leaves the remote extension host connected starts no timer. Each claim says whether its
-window is local; one that does not is taken for a remote window's. A claim of the workspace within the grace takes its
-runs over, whichever window makes it: no claim ends another window's runs. A run the grace ended whose cleanup failed or
-is unconfirmed stays listed as uncertain, holding its conversation (LIFECYCLE-3.5), rather than dropped. A stable
-workspace key is not enough to identify a particular live window; two windows can share it. Route-staleness timers can
-detect loss, not prove closure. A window ID is the routing address the window component derives from the window's
-handover identity when it registers the window: the same across the window's reloads while that identity's record lasts,
-and another where it is gone and replaced (below). The runtime reattaches the original runs, with the same run IDs, to
-the reloaded window. RULES-2.2's window instance is the conceptual identity. Record enough current
-window/run association to reconnect the actual process. No durable message handover is required solely for a closing
-sender; RULES-1.9 permits natural termination of work still owned by that side. The workspace key that runs are claimed
-under is derived from the workspace's URI once and then kept in the editor's workspace storage for reloads.
-Folder-to-multi-root conversion and Save Workspace As can replace extension workspace state; remote conversion also
-reloads the window and changes `env.sessionId`. Session ID alone cannot carry this state.
+The editor window obtains its existing token from the Window Component's native log directory. The component checks the
+current editor session before returning it. A workspace may recover its exact prior URI binding from the published ledger
+and handover records. A remembered workspace key by itself grants no custody.
 
-The local window component keeps a random handover identity in its own directory supplied by public
-`ExtensionContext.logUri`. It neither parses the URI nor reads editor storage internals. On the verified desktop editor,
-that directory remains the same for this native window across these transitions and differs for a separate window,
-including one opening a copied workspace. This lifecycle is a platform evidence requirement, not a guarantee inferred
-from the API's name. Deletion or replacement of that directory cannot justify a folder-based search for another window's
-identity. A record gone is replaced by a new identity unnoticed. A damaged one is not replaced: Facade does not start in
-that window and says to close it and open its folder or workspace again, or restart the editor - not to reload, which
-reads the same record. One that cannot be read now but is not damaged - a file the system holds - is answered as
-unreadable, and the workspace component says to reload rather than to install the component.
-
-The workspace component requests the identity through a public command, including its current `env.sessionId`; the UI
-component rejects a request from a different session. Its answer also names the component's own version, which a remote
-extension host cannot see otherwise, for the diagnostics report (3.3), and in a remote window the window's remote
-authority, which only the local component sees and by which the environment is named (LIFECYCLE-1.1). Each activation
-records its key, folders and workspace URI under that identity in the execution Facade directory, where such a record
-is kept 30 days. The same window that retains its original first folder takes that key and the current window's saved
-state - order, locations and choices - even if the destination workspace has stale state. Another window does not
-inherit it merely by opening the same folders or copying a workspace file. The execution environment keeps one atomic
-exact-workspace-URI ledger, including each owner's current URI. Resolution prefers a valid current-window handover, then
-the canonical URI binding, then an old saved key only if it has no ledger entry or still owns that exact URI, then an
-independent URI-derived key. Owner claims fence all ledger and window-record writes. Same-URI reload cannot use an
-obsolete window record to override a newer canonical binding; a changing URI can carry an owner only while that owner
-still owns the window record's previous URI. No same-folder search guesses identity. A window with no folder or
-workspace keeps no ledger entry: its key stays in its own storage for its reloads. Save Workspace As A to B atomically
-moves that owner's binding to B and drops its A binding. Reopening A, including with its old saved key, selects an
-independent owner; copying B to another URI also does not acquire B's runs. An owner that has moved cannot be recovered
-through its old default URI hash. This makes a fresh profile opening the exact B URI claim B's existing runs without
-merging all historical workspace URIs.
-
-When the local component survives, native terminal replacement uses its live run-to-Terminal object registrations,
-never a title, PID, private ID or an activation snapshot guess. Current session and monotonically increasing owner
-claims fence operations so that a late request from an older host cannot replace or dispose a newer binding of the
-same window. On the legacy implementation, an activation whose workspace a newer activation claimed detaches its cards and
-terminals without ending a process (RULES-4.1).
-Normal close drops the exact object's binding. The workspace runtime serializes terminal creation: begin a
-capture bounded to ten seconds, create its terminal, wait for that object's public open event, then finish. The local
-component accepts only one still-live object opened during that capture; every extra open makes it ambiguous even if
-that extra object closes before finish. Older objects' late close events do not contaminate the capture. Same-host
-completion additionally validates the actual Terminal reference. Only successful registration replaces and disposes the
-prior registered object for that run - or, for a run its restoration brings back with its tab hidden, the end of that
-restoration's pinned sequence (LIFECYCLE-3.5), as its old tab would stay, dead. A registration a restarted local component refuses, as it knows no owner yet,
-sends the activation's current claim again and retries once. Names, empty names and, from earlier builds, CLI titles may repeat freely.
-Cancellation, expiration, an old claim or ambiguous events do not guess an association. An editor can replace its
-public Tab objects when rebuilding the tab-group model. Discard bindings to Tab objects the current model does not hold,
-then correlate the active terminal and tab through public activation/group events again; never recover them by title or
-index. A pending native Pin change goes on once its tab is known, by bringing that exact tab to the front of its group
-(LIFECYCLE-3.4).
-
-Queued creation retains only the latest explicit reveal request and cancels it on closure, so an agent queued first
-cannot steal focus after a later selection. The pinned tabs LIFECYCLE-3.5's procedure opens one after another - after a reload,
-an extension-host restart or Pin restoration - wait up to ten seconds each for their terminal to open before the next
-opens, so a terminal the editor never opens does not hold up the others; its card and process are kept. Once the ten
-seconds pass the sequence goes on to the next tab and is not opened again: a tab that becomes ready later takes its mark
-by LIFECYCLE-3.4's ordinary repair - as a mark that did not go on does, once its tab is known or comes to the front -
-and changes neither the order nor the final selection.
-
-A remote workspace-host restart can retain these registrations while its local companion lives. A graceful local
-component shutdown synchronously records only its registered owner/run IDs and the actual final complete terminal
-names, without a busy tab's spinner frame (LIFECYCLE-2.2), in its own log directory. A new registry incarnation consumes
-that record once; an incarnation fence prevents a late old shutdown from replacing a newer record. There is no
-per-output persistence or polling.
-
-Only a proven same-window handover into that recreated registry may dispose of an old UI resource set after
-restoration. This is a bounded heuristic cleanup, not terminal identity: it never binds an old object to any run. It
-examines only the activation snapshot, excluding current PTYs and every shell/cwd/environment field, and requires known
-nonpositive PIDs. The creation-time name may differ from the final displayed title: a current name by a rename or by the short
-ID its duplicate shows (LIFECYCLE-2.2), and - historical compatibility input from builds whose tabs took a CLI's title -
-an empty original name followed by a CLI title. No current displayed title comes from a terminal (CLIS-2.3). It is not compared with the final title; the shutdown record's complete title defines the old
-resource group. For each complete-title group in the shutdown record, every recorded run must have been brought back in
-this restoration batch - reattached, or shown again as a retained or uncertain card - its tab open again or hidden (LIFECYCLE-3.5), and the old eligible group count must exactly agree. Then the entire old
-group is disposed of once. Empty and duplicate names are valid groups; new CLI titles do not stand in for the recorded
-old titles. An extra matching third-party object, missing run or uncertain PID leaves that group untouched.
-Canonical-only new-window takeover does not enable this path. If a missing owned object is replaced by an
-indistinguishable third-party object with the exact same title and shape, public APIs cannot tell the sets apart; this
-residual heuristic risk is explicit.
-
-A strong UI-host termination without a shutdown record, or an update from an implementation that registered no
-terminals, cannot identify unknown old terminals. This mechanism does not close gate G2. The integration suite drives
-workspace conversion outside test mode, which refuses to enter a workspace.
-
-Gate G2 needs isolated traces for reload, extension-host restart, remote loss, close-one, close-last and immediate
-reopen. Deactivation, terminal closure, `sessionId`, a missing-heartbeat timer, a hidden terminal's death, the
-Shutdown exit reason and another window's claim alone provide too little evidence to report closure. The legacy implementation
-uses RULES-4.1's grace for cleanup. A mechanism proven on the editor can take the place of a
-derived design; it cannot silently redefine RULES-4.1's behavior. This rule is a proof obligation, not a claim that
-every supported editor supplies a complete mechanism.
+A reload reconciles the existing roster with Framework records. Hosts sharing a workspace share its locked roster and
+recovery round. Closing a view releases its stream. An explicit Stop targets the selected managed process. The local
+terminal registry retires only verified predecessor handles (6.3). VERIFICATION-5 covers native window lifetime evidence.
 
 ### 2.3 Execution ownership and input deadlines
 
-**The execution owner keeps process/screen facts and serializes input independently of the visible card.**
+**Framework owns process, input and deadline effects.**
 
-Keep process/run identity, screen snapshot/output sequence and actual input effects across extension-host reload. Attach
-without duplicating output; retain a dated final screen after exit where available. A snapshot or a read waits until
-everything written to the headless terminal is drawn, on the last write's own callback, as the terminal may drop an
-empty write's. A screen snapshot carries the terminal modes its program set, so that a terminal drawing it anew behaves
-as before: besides the serializer's own, the mouse encoding, a hidden cursor, the kitty keyboard flags of the screen it
-is on and win32 input mode, each followed through the program's resets. A terminal query a program asks is answered at
-most once. A colour query is answered as it arrives and never later - not at all where ptyd's thread was held up just
-before: a program waits a moment only for its colours - Codex 200 to 300 ms - and reads a later answer as typed keys, an
-Escape that interrupts a turn, then text in its input. Other queries that ptyd's headless terminal handles are answered
-as it parses them; the colour-query delay check does not suppress those answers. An editor terminal answers a query only
-as it draws it, which for a tab behind others is when the tab is opened, and its answer comes back through the window
-and ptyd, which on a busy machine can pass that moment. So ptyd answers whether or not a window claims the run: its
-headless terminal what it can - the cursor position, the device attributes, the terminal's status, a
-mode, a setting - and a colour query (OSC 10, 11, 12) with the colours the window that claims the run, or claimed it
-last, told it - its theme kind's until one of its editor terminals reports its own, answering the window's question as
-it opens or a program's - and not at all where none was told, the program then using its own. A program may pick its light
-or dark look from those colours once, as it starts, so ptyd also implements colour scheme reports (mode 2031), which the
-editor's terminal does not:
-
-| Program sends | ptyd |
-| --- | --- |
-| `CSI ? 2031 h` | subscribes the run to scheme reports |
-| `CSI ? 2031 l`, or a full reset | unsubscribes it |
-| `CSI ? 2031 $ p` (DECRQM) | answers `CSI ? 2031 ; 1 $ y` while subscribed, `CSI ? 2031 ; 2 $ y` otherwise |
-| `CSI ? 996 n` (DSR) | answers `CSI ? 997 ; 1 n` for a dark window's colours, `CSI ? 997 ; 2 n` for a light one's, nothing while the scheme is unknown - no window has told its colours |
-
-Once the colours the window tells it turn dark or light, a subscribed run is sent that report, `CSI ? 997 ; 1 n` or
-`CSI ? 997 ; 2 n`, as its terminal would send it, and the program asks its colours again. Subscription and reset follow
-the order of the program's output as it arrives, across chunks and split sequences, whatever its drawing has caught up
-with: an answer or report uses the state of the output before it. Scheme queries, subscriptions and reports - mode 2031 and DSR 996 - are
-protocol 16's; colour updates, and ptyd's ownership of the answers to the terminal queries above - the colour queries
-OSC 10, 11 and 12 among them - start at protocol 15. A run of a protocol-15 supervisor therefore receives updated
-colours and answers its OSC 10, 11 and 12 queries with them, but has no scheme-query support and sends no automatic
-scheme report: it has the new colours if it asks again. The window
-tells its colours to each supervisor that holds its runs and takes them (protocol 15 on), whichever of these
-capabilities it has: its own as it connects, an earlier build's as it joins one - a reload into an update leaves its
-agents there - and each of them again as its theme changes. The editor's answers to
-those terminal queries - the colour queries OSC 10, 11 and 12 and mode requests (DECRQM), mode 2031's among them -
-reach no program of a supervisor that answers them (protocol 15 on); for a run of an earlier supervisor (2.4),
-which leaves its queries to a window that shows the run, the window passes its terminal's answers on as it did, but for
-those to the window's own colour questions, which reach no program; what
-only the editor knows - its kitty keyboard flags, its name, its size in pixels - reaches the program where the editor
-answers within 150 ms of the query being written to it. A terminal draws a run's output only while open: output that
-comes before it opens is not kept for it, and it opens on the run's screen taken anew, which holds no query. A run's
-pseudoterminal lives from its acceptance to its removal; its editor tab is created as the person opens it and released
-as it is hidden (LIFECYCLE-2.2), the pseudoterminal and the run's process untouched, and each opening draws the run's
-screen taken anew. A run whose tab is hidden has ptyd's answers alone, what only the editor knows going unanswered. A
-run of an earlier supervisor, which leaves its queries to the window, has them answered while its tab is hidden by a
-headless terminal the window keeps for it, starting from the run's screen as its tab is hidden and following the output
-it hears, as its editor terminal would - what only an editor knows aside - so that hiding it changes its view alone; the
-tab and that terminal hand the answering over between two pieces of output, each query answered once, and the window
-lets that terminal go as the tab opens. Propagate RULES-1.5's remaining message budget to the input owner; internal hops
-cannot restart it. Do not compare independent host wall clocks as if synchronized. Check whether input can still start
-before writing; ptyd takes a text and its Enter in separate requests, never both in one (MCP-5.2). Uncertain effects
-stay uncertain; ordinary-message retries follow RULES-1.6's single paste and owned-draft Enter. No exactly-once write
-protocol or operation-query service is required.
-
-A run's shim connects to its execution environment's supervisor and names the run it speaks for; a shim of another
-protocol is refused and its connection closed. The supervisor forwards each call to the connection that currently owns
-that run's workspace and returns the answer to the shim that asked. A call waits at most two seconds from the shim's
-ingress for a window to hold its run, and a query at most its ten-second route deadline (MCP-1.3); otherwise
-it is refused as window unavailable with no effects. Once forwarded, a query keeps its route deadline for the answer,
-and any other call waits for the window's answer under MCP-1.3. A call that reached a window which then went away
-reports unknown effects. At most 256 calls of one run are under way at once; another is refused as `capacity_exceeded`
-with no effect. For each call the shim waits at most two seconds for its connection to the supervisor, failing with no
-effect, while the connection itself has 30 seconds to be taken and answered and is kept for the calls after, so that a
-busy supervisor does not make a run's tools look gone. A window learns from the supervisor when its run's shim
-connects, which is the run's tool connection fact (RULES-3.1), and when no shim of the run is connected any more, or none
-is as the window claims the run: its tools are then unavailable until one connects again. A starting supervisor takes
-over its socket only from one proven gone - no such socket, or on POSIX one that refuses - as a timeout or another error
-proves nothing, and never deletes a socket another supervisor made at its path.
-
-Explicit close immediately removes card/terminal and invalidates further input. Process cleanup uses the owning handle
-or process group in the background - a hang-up, then a kill where the process has not ended within three seconds - and
-the UI never waits for it. On Windows a console is ended once, as a second end reaches a console already freed, and a
-console node-pty never made ready is ended through its agent. A run is let go of one way, whatever ends or drops it - a
-failed start, a close or an exit - so nothing of it stays held. If remote cleanup is unreachable, record the pending
-outcome and reconcile the original run on reconnect; do not claim a proven remote exit or kill an unrelated process. The
-pending close is recorded beside the window's runs, in `workspaces/<key>/closing.json` under its ownership claim, so
-that a reload ends that run rather than showing it again. A window starts its ptyd only where none is there - no socket,
-or on POSIX one nothing listens on; a ptyd slow to take a connection, as a busy Windows pipe can be, is waited for up to
-five seconds and never replaced, as a second ptyd would leave every run of the first unclaimed. A ptyd exits five
-minutes after its last live run and its last window - a connection that claimed a workspace - went; a connection that
-claims nothing, listing runs or finding none of its window's there, neither keeps it nor starts its five minutes again.
-A window starts one again when it needs it.
-
-A run is there as soon as its start is asked for; the supervisor creates one run's program at a time, in the order the
-starts were asked, each start's ten-second wait for its program counting from its turn: on Windows node-pty creates a
-program on the supervisor's own thread, and a check of a new command line can hold that thread for most of a second.
-Until its turn a run is listed, claimed and closable and keeps its details, size and the person's input; it takes no
-automated input, has no process ID and counts its start from the moment it was seen, which a window reloaded meanwhile
-keeps for it. One closed meanwhile ends with no program ever created. A start reads what the supervisor heard before it
-gives up its wait, so that a busy supervisor never takes a program that started for one that did not. Do not add
-expiring security leases or automatic process killing on temporary disconnection; RULES-4.1's grace after the owning
-extension host disconnects is the only timed cleanup. Native preparation jobs are not owned by this cleanup.
+The workspace host uses the typed daemon protocol for exact starts, stops, resumes, subscriptions and terminal input.
+The owner of each operation projects an unavailable answer separately from a confirmed end. Terminal closure updates
+the view and the roster manages membership, Pins and hiding. Published supervisor stops use the process and custody
+evidence in 1.4.
 
 ### 2.4 Journals, pressure and upgrades
 
-**Use simple bounded runtime storage, preserve observed effects across reload, and report real capacity failures.**
+**Reconnect to compatible running agents and read the published legacy state for cutover.**
 
-Keep current process/message records and sequence information needed for reconnect, actual results and history.
-Request-bearing run metadata is persisted before startup effects and retained for MCP-1.1's one-hour period after its
-pair is closed. Such request-only records are validated on reading, never restore a card or process, and expire
-without deleting a failed launch that the person has not closed. There is no caller request-key ledger, durable
-human-notification claim protocol or authenticated cleanup authority. Atomic updates and a single writer for each record
-are ordinary implementation tools, not new API promises. Closing a run does not replay its mail on a later run.
-Changing protocol does not convert old pending messages into new deliveries.
+Framework negotiates the editor connection and owns process lifetime, backpressure and reconnect across a compatible
+replacement. A compatible replacement preserves the process, exact session and terminal stream. An incompatible reply
+leaves its outcome uncertain and reports the connection failure (6.1).
 
-
-Bound output buffers at 8 MiB per run and 32 MiB per window; headless scrollback is 10,000 logical lines / 8 MiB.
-The headless terminal reflows the cursor's line with the text during resize. Narrowing and restoring a window must
-keep the cursor attached to its logical input position; an input reader must not compensate by guessing past a frame.
-Report scrollback beyond the bound as unavailable instead of truncating a requested current result silently. Keep
-current screen/UI usable during output flood using ordinary backpressure and snapshots. An output buffer bound is not a
-direct-input limit. Real disk/memory/storage exhaustion fails the requesting operation; there is no product cap of 100
-agents or a lifetime operation-count quota that disables an otherwise usable session.
-
-Existing processes are not killed because the extension or its protocol is updated. A ptyd of protocol 14 or earlier
-keeps its own lifetime policy for the runs it holds - five minutes after their window's connection closes, and a
-takeover by any window that opens their workspace - whichever window held them (RULES-4.1). Compatible reconnect
-preserves their actual identity; incompatible tools report unavailable. A window starts runs only in its own build's
-ptyd. That ptyd's socket is named by its protocol, the Facade directory and its build - the installation's version, the
-path of its ptyd script and that file's modification time - so that the windows of one installation share one ptyd while
-an update, a second installation of the same version or a script rebuilt in place has a ptyd of its own, and no run
-starts in a ptyd whose installation an update removed. A ptyd records its protocol, build, socket and process ID in
-`ptyd/sockets/` while it listens and removes the record as it exits; a window that finds nothing listening at a recorded
-socket removes that record. A build speaks every protocol a released build used, dropping none. Every other ptyd - each
-earlier protocol's, each recorded one of another build of this protocol or an earlier one, and one at the name a
-protocol's ptyd had before ptyds were named by build, which is never this build's - a window joins where it holds runs
-of its workspace, never starting one, claims them there, and shows and operates them through it as its own: cards,
-terminals, input, resizing, closing, ends and their agents' Facade tool calls, which it answers on that ptyd's own
-connection, at the first join and at every reconnect; a tool protocol it does not speak is refused as
-`protocol_incompatible`, with no effect (MCP-6.2). A request a later protocol added goes to no older ptyd: 0.0.1's,
-protocol 8, takes no screen read, typing, keys or input reading, and they fail before anything is sent. A run whose
-other ptyd is gone ended with it, how is not known. A run whose kept details name no creation tree is a root of its own,
-its Facade tools not injected. Agents and messages started after an update are numbered past the older build's numbers
-(1.1). Once none of the window's runs is left in such a ptyd, or it holds none as the window finds it, the window lets
-it go and no longer joins it for its runs, so that it can exit once idle. A window's listing of every workspace's runs -
-as it activates, releasing the project files of agents gone everywhere (CLIS-2.2), and as Continue Session lists what it may
-start - asks every other ptyd anew, so that no conversation an agent holds is started twice (LIFECYCLE-3.2). A ptyd of a
-build from before ptyds were named by build exits after five minutes with no live run and no connection, a wait every
-connection to it - a listing's too - starts again. New starts use current settings/protocol, in the window's own ptyd. A
-change of ptyd's behavior or of its packaged native backend still advances its protocol even where requests keep their
-shape, so that a window knows how each ptyd it joins behaves. A ptyd whose installation is gone - its script, or on
-Windows node-pty's console worker - starts no program and says that its installation was removed - Facade's own reason
-(UX-2.4) - never that a process could not be created.
+The migration adapter observes the published legacy supervisor registry and workspace records. It persists scoped
+consent and stop intent before asking for retirement, verifies ownership and process identity, and defers a Pin while
+its session may still be held. After confirmed exit, Pin recovery uses Framework (1.4, 6.2).
 
 ## 3 Data and safety
 
@@ -457,13 +147,12 @@ Windows node-pty's console worker - starts no program and says that its installa
 | --- | --- |
 | Execution settings file, `<Facade home>/facade.json` | User configuration, owned by CONFIGURATION; shared by windows in that execution environment |
 | Window Component global storage on the client computer, `home.json` | The resolved local Facade: Home, written by local windows and read by remote windows' local components; absent when no local setting is set |
-| Client Facade directory, `<Facade home>/extension` on the client computer | Window registry in `network/` - one entry for each open window (1.1) - and the client-wide counters `client-agent-numbers.json` and `client-message-numbers.json` |
-| Execution supervisor's memory | Processes, screens, output sequences and input effects, and the details each window keeps with its runs - among them whether a run's tab is open and in which editor group, which LIFECYCLE-3.5's restoration needs - for as long as ptyd runs (2.3) |
-| Execution Facade directory, `<Facade home>/extension` in that execution environment | Per-run launch files, the injection record (CLIS-2.2), message records, long results in `results/` (at most 30 days), location metadata, Facade conversation names/locations, the workspace URI ledger `workspace-uris.json` and window records in `windows/` (30 days, 2.2), owner claims in `claims/`, the environment's own counters `agent-aliases.json` and `message-aliases.json` (1.1), ptyd's log `ptyd/ptyd.log` (3.3), each listening ptyd's record in `ptyd/sockets/` (2.4), and in `workspaces/<key>/` each workspace's agents log and structured history (3.3), the copy of its workspace state, its retained failed launches - with whether each one's tab is open and in which group (LIFECYCLE-3.5) - and request records (2.4) and its closes ptyd has not confirmed (`closing.json`, 2.3) |
-| Legacy cutover record, `<Facade home>/extension/legacy-cutover.json` | The cutover owner records consent for the exact affected runs and keeps the Pin snapshots until the earlier workspaces can import them. Confirmed exits leave the active inventory. The same owner holds the transient `legacy-cutover-notice` and `claims/legacy-cutover-<owner>` locks. Retain the snapshots for the legacy compatibility period. |
+| Framework state | Process, session, machine, and delivery records under the Framework home. See [Framework architecture](../../framework/ARCHITECTURE.md). |
+| Released TypeScript state | Supervisor registry and exact run inventory, URI ledger, native handover, old ownership generations and saved Pins under the execution home's extension directory. The old release owns its active records. |
+| Framework workspace roster | Roster and Pins owns v1 membership, Pins, hidden agents and import markers in orchestrator-workspace.json. All writes use the roster lock. |
+| Legacy cutover record, `<Facade home>/extension/legacy-cutover.json` | The cutover owner records consent for the exact affected runs and keeps the Pin snapshots until the earlier workspaces can import them. Confirmed exits leave the active inventory. The migration adapter holds scoped notice and custody locks and keeps shared recovery attempts and confirmed references. Retain the snapshots for the legacy compatibility period. |
 | Workspace legacy Pin recovery, `<Facade home>/extension/workspaces/<key>/orchestrator-legacy-pins.json` | Roster and Pins owns the record. It holds unresolved saved sessions and preserves unrecognized input. Accept the confirmed Pin in the roster before consuming the corresponding recovery entry. Retain the import marker for the legacy compatibility period. |
 | Editor workspace storage | Workspace key (2.2), Panel preferences and launch location history. Earlier versions mirrored legacy workspace state here. |
-| Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing original cwd, Facade name and the associated CLI entry name/type; no transcript or environment-value copy (CONFIGURATION-3.4) |
 | Vendor CLI store | Its own conversations, credentials and settings |
 | Beside the main checkout | New worktrees under WORKTREES-2.2 |
 
@@ -489,7 +178,7 @@ home. When no setting was set, setting it to the folder already supplied by `FAC
 nothing.
 This reload offer also applies after an unusable value stopped the window: the listener is registered before
 validation, so correcting the value offers the reload. A running window keeps its chosen home until then. When set,
-the resolved setting goes into the extension host's `FACADE_HOME`, inherited by ptyd and agents, and into the window's terminals. Only windows with the same Facade home
+the resolved setting goes into the extension host's `FACADE_HOME`, used by the Framework connection and its agents, and into the window's terminals. Only windows with the same Facade home
 reach each other's agents. Choosing Reload Window after the component has been disposed does nothing.
 
 A local window's Window Component writes its Facade: Home to `home.json` in its own global storage on this computer,
@@ -507,12 +196,9 @@ start or stopped later, the new home applies at the next reload. The remote exec
 
 The home is shared with the Facade Code IDE. Extension runtime data uses its `extension/` subfolder;
 configuration uses `facade.json` at the home level (CONFIGURATION-1.1). This does not integrate the IDE's old extension.
-A counter of agent or message numbers that cannot be read is an error, never a count that starts again at `#a1` or `#m1`. Directories are interpreted
-in their own environment, never an assumed shared remote home. Sockets are outside the Facade directory: on POSIX in
-`/tmp/facade-ptyd-<uid>/` and `/tmp/facade-window-<uid>/`, which must be private folders this user owns or Facade does
-not use them, and named pipes on Windows. Use normal application storage; no ACL security protocol is required.
-Reconcile stale process records before cleanup and avoid deleting arbitrary files. Thirty-day message/log retention
-does not delete vendor history.
+The adapter reads old private POSIX supervisor sockets in the published temporary directory and the old named pipes
+on Windows. Preserve user histories. A missing or unreachable endpoint requires the evidence in 1.4 before it can
+authorize recovery.
 
 ### 3.2 Files, Git and untrusted text
 
@@ -585,8 +271,7 @@ replace the isolated test profiles in group 5. `docs/extension/` at the reposito
 documentation, including normative rules and audit data. `src/`: code/tests by layers; `l10n/`: all translations;
 `media/`: shipped assets; `scripts/`: build/audit tooling; `window/`: the window component's manifest and README.
 Generated code/package/test output goes under `build/`, never source folders. Component packaging uses
-`build/extension/` (execution, including ptyd and the run shim) and `build/window/` (local window component, including
-its network code); native artifacts have explicit platform ownership. The window component has no native backend and
+`build/extension/` for the workspace host and Framework programs. The local Window Component stages in build/window/. Native artifacts have explicit platform ownership. The window component has no native backend and
 ships as a separate universal VSIX.
 
 Use Node 24 from `.nvmrc`. Clean checkout/CI dependency installation uses `npm ci` with the committed lockfile;
@@ -624,18 +309,11 @@ never rewritten by staging. This keeps repository setup instructions out of the 
 
 ### 4.2 Released settings and development state
 
-**Released extension settings move through CONFIGURATION-6; development-build state is not migrated.**
+**Read the released state through its declared compatibility contract.**
 
-Settings, command IDs and stored workspace state of development builds are not read into the current catalog and get
-no aliases; the `facadeDots.*` and `facade.agents.*` settings and the `~/.facade-dots` directory are among them. Their
-MCP tools and arguments fail explicitly; they do not widen tree reach or replay old mail. Records such builds stored,
-such as filters, card order and known locations, are ignored with one line in the agents log. They are never translated
-or replayed. Discoverable worktrees remain available because Git discovers them. Never delete vendor history, user work
-or another Facade data directory. Explicit settings from released standalone-extension versions move only when the
-new file is missing, with CONFIGURATION-6's conversions, conflict handling and one notice. They stop controlling
-launches after the move; old IDE settings are outside this migration. Released runtime protocols remain supported
-under 2.4. Released commands in UX-3.1 and UX-3.2 keep their IDs; other commands gain no aliases. Unknown
-launch-group, trust or settings-template fields are configuration errors, not a second compatibility implementation.
+The released settings file and vendor CLI state stay in their execution home. Framework reads its documented settings
+schema and the cutover reads the released supervisor and saved Pin records described in 1.4. Ambiguous prior identities
+and unrecognized input stay pending. Development state and old IDE settings have no migration path.
 
 ### 4.3 Packaging and version support
 
@@ -657,7 +335,7 @@ in `bin/` that has no trusted signature - ConPTY's come signed by Microsoft - an
 Unsigned, the 0.1.6 `facade.exe` was quarantined by Microsoft Defender as `Trojan:Win32/Bearfoos.A!ml`, which ended the
 running Framework and every agent with it, and Smart App Control refuses an unsigned program outright. Pull request checks
 package them unsigned. Third-party notices name the Framework's ConPTY, Microsoft.Windows.Console.ConPTY 1.25.260303002, as
-they name node-pty's. Release candidates target darwin-x64, darwin-arm64, linux-x64, linux-arm64, win32-x64 and
+required by Framework. Release candidates target darwin-x64, darwin-arm64, linux-x64, linux-arm64, win32-x64 and
 win32-arm64, together with the window component. Publication requires each platform's build and verification evidence
 from the release run. The version advances when preparing a release; already published versions retain their original
 artifacts. [Official manifest reference](https://code.visualstudio.com/api/references/extension-manifest).
@@ -670,7 +348,7 @@ The extension checks workflow builds candidate packages for darwin-x64, darwin-a
 win32-x64 and win32-arm64. It uses `macos-15-intel` for Intel Macs, `ubuntu-24.04-arm` for Linux ARM64 and
 `windows-11-arm` for Windows ARM64. Each job verifies its requested target against its native host before
 installation, passes that target to packaging, and runs the same unit, package-content and isolated editor suites,
-with the Framework built by its pinned toolchain on every target and the editor journeys run on both implementations (1.4).
+with the Framework built by its pinned toolchain on every target and the editor journeys use Framework. Linux x64 also tests the published 0.1.5 to 0.1.6 cutover with both VSIX pairs (1.4).
 Artifacts and editor logs name the target. A configured CI target does not establish verified or published support;
 that requires the corresponding results and release evidence under VERIFICATION-2.1.
 

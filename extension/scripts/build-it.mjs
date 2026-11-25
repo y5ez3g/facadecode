@@ -1,6 +1,6 @@
 // Assembles the integration suite's own extension in build/extension-it/: the shipped extension of build/extension/, built in test
-// mode with its test commands and the page's probe, framework's programs as they ship (scripts/framework.mjs), and ptyd as it ships
-// (src/test/integration/ptydFixture.ts). Nothing of it reaches the shipped extension or a package (UX-3.2).
+// mode with its test commands and the page's probe, and Framework's programs as they ship (scripts/framework.mjs).
+// Nothing of the test code reaches the shipped extension or a package (UX-3.2).
 // --framework-package DIRECTORY --framework-package-evidence-sha256 DIGEST stages Framework from a verified native package artifact.
 // DIGEST is the independently verified SHA-256 of the artifact's native-package-evidence.json.
 import * as esbuild from 'esbuild';
@@ -20,7 +20,7 @@ if ((packageDir === undefined) !== (evidenceDigest === undefined)) {
 const root = path.join(import.meta.dirname, '..');
 const shipped = path.join(root, 'build', 'extension');
 const stage = path.join(root, 'build', 'extension-it');
-if (!['extension.js', 'ptyd.js'].every(file => fs.existsSync(path.join(shipped, 'dist', file)))) {
+if (!fs.existsSync(path.join(shipped, 'dist', 'extension.js'))) {
 	throw new Error('build/extension is not built: run `npm run bundle` first.');
 }
 const packagedFramework = packageDir === undefined ? undefined
@@ -57,8 +57,6 @@ const observeResumePicker = {
 };
 await Promise.all([
 	esbuild.build({ ...common, entryPoints: { extension: path.join(root, 'src', 'extension.ts') }, external: ['vscode'], plugins: [observeResumePicker] }),
-	esbuild.build({ ...common, entryPoints: { ptyd: path.join(root, 'src', 'test', 'integration', 'ptydFixture.ts') }, external: ['node-pty'] }),
-	esbuild.build({ ...common, entryPoints: { shim: path.join(root, 'src', 'transport', 'shim.ts') } }),
 	// The page with its test probe, which the shipped page compiles out (UX-3.2)
 	esbuild.build({ ...common, entryPoints: { webview: path.join(root, 'src', 'webview', 'panel.ts') }, outdir: path.join(stage, 'dist', 'webview'), platform: 'browser', format: 'iife', target: 'es2022',
 		inject: [path.join(root, 'src', 'test', 'integration', 'panelGenerationFixture.ts')] })
