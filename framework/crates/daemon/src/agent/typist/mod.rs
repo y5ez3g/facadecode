@@ -1296,17 +1296,15 @@ mod tests {
 
     /// An input reading: its state and a draft's text.
     fn input(state: InputState, draft: Option<&str>) -> BoxReading {
-        BoxReading {
-            info: InputInfo {
+        BoxReading::new(
+            InputInfo {
                 state,
                 evidence: String::new(),
                 mechanism: None,
                 hidden: None,
             },
-            draft: draft.map(str::to_string),
-            line: None,
-            unsure: false,
-        }
+            draft.map(str::to_string),
+        )
     }
 
     impl Terminal {

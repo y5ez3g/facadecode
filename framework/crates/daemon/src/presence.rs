@@ -103,5 +103,6 @@ pub(crate) fn terminal_colors(
         foreground: color("foreground", &colors.foreground)?,
         background: color("background", &colors.background)?,
         cursor: color("cursor", &colors.cursor)?,
+        ..facade_screen::TerminalColors::default()
     })
 }

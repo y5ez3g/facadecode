@@ -568,7 +568,7 @@ impl Evidence {
             Some(StateRule::TurnError(_)) => {
                 matches!(self.base, Some(EvidenceState::Idle | EvidenceState::Done))
             }
-            Some(StateRule::BackgroundReport(_)) | None => false,
+            _ => false,
         }
     }
 

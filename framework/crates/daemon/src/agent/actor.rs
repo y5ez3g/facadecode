@@ -1411,17 +1411,15 @@ impl Actor {
         let untouched_input = self.untouched_input;
         let read_screen = || read_box(rule, ended, undrawn, screen.screen(), untouched_input);
         let read = || match first {
-            Some(evidence) => BoxReading {
-                info: InputInfo {
+            Some(evidence) => BoxReading::new(
+                InputInfo {
                     state: InputState::Draft,
                     evidence: evidence.to_string(),
                     mechanism: rule.map(InputRule::mechanism),
                     hidden: None,
                 },
-                draft: None,
-                line: None,
-                unsure: false,
-            },
+                None,
+            ),
             None => read_screen(),
         };
         let step = self.typist.step(
@@ -1854,16 +1852,16 @@ fn read_box(
     screen: &facade_screen::Screen,
     untouched_input: bool,
 ) -> BoxReading {
-    let unknown = |evidence: &str, rule: Option<&InputRule>| BoxReading {
-        info: InputInfo {
-            state: InputState::Unknown,
-            evidence: evidence.to_string(),
-            mechanism: rule.map(InputRule::mechanism),
-            hidden: None,
-        },
-        draft: None,
-        line: None,
-        unsure: false,
+    let unknown = |evidence: &str, rule: Option<&InputRule>| {
+        BoxReading::new(
+            InputInfo {
+                state: InputState::Unknown,
+                evidence: evidence.to_string(),
+                mechanism: rule.map(InputRule::mechanism),
+                hidden: None,
+            },
+            None,
+        )
     };
     match (rule, undrawn) {
         (None, _) => unknown("the agent has no CLI rule to read its input by", None),
