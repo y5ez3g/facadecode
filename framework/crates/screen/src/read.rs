@@ -10,8 +10,17 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
 use crate::Screen;
-use crate::compact::{SHOWS, WRAPPED, shows};
+use crate::compact::{CARRIES, SHOWS, WRAPPED, carries, shows};
 use crate::store::{Store, lock};
+
+/// The readable retained primary rows in one Screen's current coordinate system.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrimaryHistory {
+    /// Changes when primary history is cleared or the canonical grid is resized.
+    pub epoch: u64,
+    /// Half-open source positions ending at the top of the primary viewport.
+    pub rows: Range<usize>,
+}
 
 /// The last lines of the screen and scrollback as a reader is shown them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,9 +115,30 @@ impl Screen {
     /// The compact store counts the rows dropped at its front, keeping positions usable across
     /// feeds at the same size until history is cleared. The alternate grid has an empty range.
     pub fn scrollback_range(&self) -> Range<usize> {
-        let rows = self.readable_rows();
-        let start = rows.store.as_deref().map_or(0, Store::discarded) + rows.left_out;
-        start..start + rows.scrollback()
+        self.readable_rows().scrollback_range()
+    }
+
+    /// Gives retained primary positions, including when the alternate grid is active.
+    /// An open synchronized update or a screen without a compact store has no available span.
+    pub fn primary_history(&self) -> Option<PrimaryHistory> {
+        self.primary_history_rows().map(|(history, _)| history)
+    }
+
+    pub(crate) fn primary_history_rows(&self) -> Option<(PrimaryHistory, AllRows<'_>)> {
+        if self.synchronized_update_deadline().is_some() {
+            return None;
+        }
+        let store = lock(self.scrollback.store.as_deref()?);
+        let epoch = store.epoch();
+        let mut rows = AllRows::new(self.terminal.main_grid(), Some(store));
+        rows.keep_newest_scrollback(self.scrollback.readable);
+        Some((
+            PrimaryHistory {
+                epoch,
+                rows: rows.scrollback_range(),
+            },
+            rows,
+        ))
     }
 
     /// Every row, oldest first: the store's, alacritty's scrollback, the screen. The alternate
@@ -117,14 +147,14 @@ impl Screen {
         let grid = self.terminal.grid();
         let store = self.scrollback.store.as_deref();
         let store = store.filter(|_| !self.on_alternate_screen()).map(lock);
-        AllRows {
-            grid,
-            stored: store.as_ref().map_or(0, |store| store.len()),
-            store,
-            held: grid.history_size(),
-            left_out: 0,
-            cached: RefCell::new(None),
-        }
+        AllRows::new(grid, store)
+    }
+
+    /// Only the primary viewport, including when the alternate grid is active.
+    pub(crate) fn primary_viewport_rows(&self) -> AllRows<'_> {
+        let mut rows = AllRows::new(self.terminal.main_grid(), None);
+        rows.keep_newest_scrollback(0);
+        rows
     }
 
     /// The visible rows and the scrollback within the configured readable limit.
@@ -214,10 +244,26 @@ pub(crate) struct AllRows<'a> {
     cached: RefCell<Option<(usize, Vec<Row<Cell>>)>>,
 }
 
-impl AllRows<'_> {
+impl<'a> AllRows<'a> {
+    fn new(grid: &'a Grid<Cell>, store: Option<MutexGuard<'a, Store>>) -> Self {
+        Self {
+            grid,
+            stored: store.as_ref().map_or(0, |store| store.len()),
+            store,
+            held: grid.history_size(),
+            left_out: 0,
+            cached: RefCell::new(None),
+        }
+    }
+
     /// The scrollback rows included.
     pub(crate) fn scrollback(&self) -> usize {
         self.stored + self.held - self.left_out
+    }
+
+    fn scrollback_range(&self) -> Range<usize> {
+        let start = self.store.as_deref().map_or(0, Store::discarded) + self.left_out;
+        start..start + self.scrollback()
     }
 
     /// The first row of a viewport `offset` rows above the live grid.
@@ -266,6 +312,14 @@ impl AllRows<'_> {
             return store.marks(index) & WRAPPED != 0;
         }
         self.with_row(y, |row| wraps(row, self.grid.columns()))
+    }
+
+    /// Whether reflow can carry this row into the next one.
+    pub(crate) fn carries(&self, y: usize) -> bool {
+        if let Some((store, index)) = self.stored_index(y) {
+            return store.marks(index) & CARRIES != 0;
+        }
+        self.with_row(y, carries)
     }
 
     /// Whether a reader sees anything in row `y`.

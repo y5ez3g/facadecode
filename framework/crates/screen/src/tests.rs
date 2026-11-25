@@ -96,6 +96,21 @@ fn replies_to_device_queries_pass_none_on_and_guess_no_colour() {
 }
 
 #[test]
+fn indexed_color_replies_keep_the_query_order_and_terminator() {
+    let mut screen = Screen::new(20, 5, 0);
+    let mut colors = TerminalColors::default();
+    colors.ansi[0] = Some([0x11, 0x22, 0x33]);
+    colors.ansi[15] = Some([0xaa, 0xbb, 0xcc]);
+    screen.set_colors(colors);
+    let fed = screen.feed(b"a\x1b]4;15;?\x1b\\b\x1b]4;7;?\x07c\x1b]4;0;?\x07d\x1b[c");
+    assert_eq!(
+        fed.query_replies,
+        b"\x1b]4;15;rgb:aaaa/bbbb/cccc\x1b\\\x1b]4;0;rgb:1111/2222/3333\x07\x1b[?6c",
+    );
+    assert_eq!(fed.viewer_output, b"abcd");
+}
+
+#[test]
 fn a_status_query_is_answered_in_order_and_status_sequences_reach_only_the_daemon() {
     let mut screen = Screen::new(20, 5, 0);
     let fed =

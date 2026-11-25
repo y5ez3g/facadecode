@@ -11,8 +11,9 @@ use alacritty_terminal::vte::ansi::{CharsetIndex, Color, NamedColor, StandardCha
 
 use crate::kept_modes::{ActiveCharset, ModifyOtherKeys};
 use crate::program_status::STATUS_QUERY;
-use crate::read::{AllRows, cell_text, is_blank, is_spacer};
+use crate::read::{AllRows, cell_text, is_blank, is_spacer, wraps};
 use crate::sequences::TitleNegotiation;
+use crate::store;
 use crate::{REDRAW_SCROLLBACK_ROWS, Screen, title_has_text, write_title_body};
 
 /// Plain pen, ASCII in G0 and G1 with G0 in use, whole-screen scrolling region, origin mode off,
@@ -24,6 +25,15 @@ const DRAW_SETTINGS: &[u8] = b"\x1b[0m\x1b]8;;\x1b\\\x1b(B\x1b)B\x0f\x1b[r\
 pub(crate) const HELD_VIEW_START: &[u8] =
     b"\x1b[?2026l\x1b[?25l\x1b[0m\x1b]8;;\x1b\\\x1b(B\x0f\x1b[?6l\x1b[H\x1b[J";
 pub(crate) const RESET_PEN: &[u8] = b"\x1b[0m\x1b]8;;\x1b\\";
+
+/// The source rows and bytes to stage in a host's selected primary buffer.
+#[derive(Debug, PartialEq, Eq)]
+pub struct HistoryAppend {
+    /// Half-open primary positions represented by the output, before host reflow.
+    pub rows: Range<usize>,
+    /// Writes the rows into host scrollback, followed by the repaint if requested.
+    pub output: Vec<u8>,
+}
 
 /// DEC private modes a redraw sets as the CLI left them, on or off.
 const DEC_MODES: [(u16, TermMode); 4] = [
@@ -87,6 +97,70 @@ impl Screen {
         redraw
             .draw(replayed_scrollback(include_scrollback), layout)
             .with_viewer_title()
+    }
+
+    /// Stages the retained primary suffix from `next` for a fitting host of `columns` by `rows`.
+    /// The caller selects the host's primary buffer and repaints its live cells after this output.
+    /// A trailing soft-wrapped line waits until its end is in the retained history.
+    pub fn append_primary_history(
+        &self,
+        epoch: u64,
+        next: usize,
+        columns: u16,
+        rows: u16,
+    ) -> Option<HistoryAppend> {
+        if columns < self.cols() || rows < self.rows() {
+            return None;
+        }
+        let (history, cells) = self.primary_history_rows()?;
+        if epoch != history.epoch {
+            return None;
+        }
+        let oldest = history.rows.start;
+        let start = next.max(oldest);
+        let last = (start..history.rows.end)
+            .rev()
+            .find(|&position| !cells.carries(position - oldest))?;
+        let rendered = (start - oldest..=last - oldest).map(|y| cells.with_row(y, Row::clone));
+        let output = stage_history(
+            rendered,
+            cells.grid.columns(),
+            usize::from(columns),
+            usize::from(rows),
+        );
+        Some(HistoryAppend {
+            rows: start..last + 1,
+            output,
+        })
+    }
+
+    /// Stages primary history and restores the primary viewport under the active alternate grid.
+    /// The host must still be on its primary buffer. The caller switches it to alternate after
+    /// writing this output.
+    pub fn append_primary_history_before_alternate(
+        &self,
+        epoch: u64,
+        next: usize,
+        columns: u16,
+        rows: u16,
+    ) -> Option<HistoryAppend> {
+        if !self.on_alternate_screen() {
+            return None;
+        }
+        let mut append = self.append_primary_history(epoch, next, columns, rows)?;
+        let viewport = self.primary_viewport_rows();
+        let out = &mut append.output;
+        if (columns, rows) == (self.cols(), self.rows()) {
+            out.extend_from_slice(b"\x1b[H");
+            write_rows(out, &viewport);
+        } else {
+            write_positioned_rows(out, &viewport, 0, false);
+        }
+        let cursor = &viewport.grid.cursor;
+        let (line, column) = (cursor.point.line.0 + 1, cursor.point.column.0 + 1);
+        write!(out, "\x1b[{line};{column}H").unwrap();
+        write_pen(out, &cursor.template);
+        Some(append)
     }
 
     /// Overwrites the visible rows in the active buffer of a terminal at least as large as the
@@ -163,6 +237,42 @@ fn replayed_scrollback(include_scrollback: bool) -> usize {
     } else {
         0
     }
+}
+
+fn stage_history(
+    rows: impl Iterator<Item = Row<Cell>>,
+    source_columns: usize,
+    columns: usize,
+    height: usize,
+) -> Vec<u8> {
+    let mut out = RESET_PEN.to_vec();
+    // Clear the old page without scrolling it. Use the whole host, with wrapping and plain ASCII.
+    out.extend_from_slice(b"\x1b(B\x0f\x1b[?6l\x1b[r\x1b[?7h\x1b[4l\x1b[20l\x1b[H\x1b[J");
+    let mut written = 0;
+    let mut continues = false;
+    store::reflow(rows, source_columns, columns, |row| {
+        if written > 0 && !continues {
+            out.extend_from_slice(RESET_PEN);
+            out.extend_from_slice(b"\r\n");
+        }
+        let wraps = wraps(row, columns);
+        // A continuation with no visible cells still needs one cell to trigger the pending wrap.
+        let minimum = if wraps {
+            columns
+        } else {
+            usize::from(continues)
+        };
+        write_row(&mut out, row, columns, minimum, Layout::Viewport, 0..0);
+        continues = wraps;
+        written += 1;
+    });
+    out.extend_from_slice(RESET_PEN);
+    // Natural wraps and line breaks have already scrolled anything beyond the physical page.
+    write!(out, "\x1b[{height};1H").unwrap();
+    for _ in 0..written.min(height) {
+        out.extend_from_slice(b"\x1bD");
+    }
+    out
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -337,7 +447,8 @@ fn write_rows(out: &mut Vec<u8>, rows: &AllRows<'_>) {
         // A row the one above wrapped into starts with a character, even a space, to make the wrap.
         let to_margin = wraps || wrapped_into;
         rows.with_row(y, |row| {
-            write_row(out, row, cols, to_margin, Layout::SameSize, 0..0)
+            let minimum = if to_margin { cols } else { 0 };
+            write_row(out, row, cols, minimum, Layout::SameSize, 0..0)
         });
         if !wraps && y + 1 < rows.len() {
             out.extend_from_slice(b"\x1b[0m\x1b]8;;\x1b\\\r\n");
@@ -355,7 +466,7 @@ fn write_viewport_rows(out: &mut Vec<u8>, rows: &AllRows<'_>, erase_tail: bool) 
     for y in 0..scrollback {
         out.extend_from_slice(b"\x1b[H");
         rows.with_row(y, |row| {
-            write_row(out, row, cols, false, Layout::Viewport, 0..0)
+            write_row(out, row, cols, 0, Layout::Viewport, 0..0)
         });
         // CUP clamps the row to the physical bottom, where Index scrolls the full screen.
         out.extend_from_slice(b"\x1b[0m\x1b[65535;1H\x1bD");
@@ -387,7 +498,7 @@ pub(crate) fn write_positioned_row(
     highlighted: Range<usize>,
 ) -> usize {
     write!(out, "\x1b[{};1H", line + 1).unwrap();
-    write_row(out, row, cols, false, Layout::Viewport, highlighted)
+    write_row(out, row, cols, 0, Layout::Viewport, highlighted)
 }
 
 /// One row, with pen and link changes only where they change: to the margin, or to its last
@@ -396,15 +507,17 @@ fn write_row(
     out: &mut Vec<u8>,
     row: &Row<Cell>,
     cols: usize,
-    to_margin: bool,
+    minimum: usize,
     layout: Layout,
     highlighted: Range<usize>,
 ) -> usize {
-    let end = match to_margin {
-        true => cols,
-        false => (0..cols)
+    let end = if minimum == cols {
+        cols
+    } else {
+        (0..cols)
             .rposition(|x| highlighted.contains(&x) || !is_blank(&row[Column(x)]))
-            .map_or(0, |x| x + 1),
+            .map_or(0, |x| x + 1)
+            .max(minimum)
     };
     let mut pen = String::new();
     let mut link: Option<Hyperlink> = None;

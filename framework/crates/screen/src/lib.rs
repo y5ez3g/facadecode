@@ -40,7 +40,8 @@ mod store_tests;
 mod tests;
 
 pub use program_status::{BlockKind, ReportedState, StatusEvent, StatusReport};
-pub use read::Reading;
+pub use read::{PrimaryHistory, Reading};
+pub use redraw::HistoryAppend;
 pub use selection::SelectionView;
 pub use store::SCROLLBACK_BUDGET;
 pub use view::{ScreenView, VisibleCell};
@@ -61,12 +62,14 @@ pub const REDRAW_SCROLLBACK_ROWS: usize = 1000;
 /// How many scrollback rows alacritty itself holds, as full cells. Any older ones are kept compact.
 pub const SHORT_HISTORY: usize = 100;
 
-/// Colors supplied for replies to OSC 10, 11 and 12 queries. An omitted color gets no reply.
+/// Colors supplied for replies to OSC 4, 10, 11 and 12 queries. An omitted color gets no reply.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TerminalColors {
     pub foreground: Option<[u8; 3]>,
     pub background: Option<[u8; 3]>,
     pub cursor: Option<[u8; 3]>,
+    /// The first 16 indexed colors.
+    pub ansi: [Option<[u8; 3]>; 16],
 }
 
 /// What one call to [`Screen::feed`] produced.
@@ -121,7 +124,7 @@ impl Screen {
         }
     }
 
-    /// Sets the colors used to reply to subsequent OSC 10, 11 and 12 queries.
+    /// Sets the colors used to reply to subsequent OSC 4, 10, 11 and 12 queries.
     pub fn set_colors(&mut self, colors: TerminalColors) {
         self.terminal.colors = colors;
     }

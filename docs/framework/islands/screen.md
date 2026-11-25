@@ -14,8 +14,8 @@ All of it in memory, one set per `Screen`:
   open synchronized update holds back.
 - **The unit being written**: the bytes of a character, escape sequence or control string the CLI
   has started and not finished.
-- **Supplied terminal colors**: optional foreground, background and cursor RGB values, used for
-  replies to OSC 10, 11 and 12 queries.
+- **Supplied terminal colors**: optional RGB values for the foreground, background, cursor and the
+  16 colors of the ANSI palette, used for replies to OSC 10, 11, 12 and 4 queries.
 - **The native title**. The last title change reported by the terminal parser, used for
   `title_change` and checkpoint redraws.
 - **The status glyph**. The value supplied by the agent actor. Viewer output and viewer redraws
@@ -64,8 +64,8 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
   states.
 - Touch the disk, start processes or threads, or read the clock. The only time it handles is the
   deadline alacritty puts on a synchronized update.
-- Reply with a color it was not given, reply to other color queries such as OSC 4, the kitty
-  keyboard query, or ENQ.
+- Reply with a color it was not given, or reply to an OSC 4 query above index 15, any other color
+  query, the kitty keyboard query, or ENQ.
 - Show a frame that an open synchronized update is still holding back.
 
 ## Interface
@@ -77,9 +77,10 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 - `Screen::new(cols, rows, scrollback) -> Screen`; the daemon uses 10,000 rows.
 - `feed(&mut self, &[u8]) -> ParsedOutput`, `resize(&mut self, cols, rows)`.
 - `set_colors(&mut self, colors: TerminalColors)` replaces the colors used for subsequent queries.
-  `TerminalColors { foreground, background, cursor }` has three `Option<[u8; 3]>` fields; its
-  default leaves all three `None`. OSC 10, 11 and 12 replies use `rgb:rrrr/gggg/bbbb`, each 8-bit
-  channel written twice, and the query's BEL or ST ending. No supplied colors means no color replies.
+  `TerminalColors { foreground, background, cursor, ansi }` has three `Option<[u8; 3]>` fields and
+  `ansi: [Option<[u8; 3]>; 16]`, indexed by OSC 4 color number; its default leaves every color
+  `None`. OSC 4, 10, 11 and 12 replies use `rgb:rrrr/gggg/bbbb`, each 8-bit channel written twice,
+  and the query's BEL or ST ending. No supplied colors means no color replies.
 - `at_clean_point()`, then `redraw_with_all_scrollback() -> Vec<u8>` for a checkpoint;
   `on_alternate_screen()` and `has_unfinished_unit()` to say what a forced checkpoint loses.
 - `restore_title(&mut self, title: &str)` seeds the title saved alongside a restored redraw before
@@ -132,6 +133,21 @@ which replays at most `REDRAW_SCROLLBACK_ROWS` (1,000) scrollback rows. A redraw
   the live viewport. It excludes the extra retained row used to detect trimmed reads. The compact
   store counts dropped rows so Shell can keep a row selected across feeds at the same size. Shell
   resets the selection on a redraw or explicit scrollback clear.
+- `primary_history() -> Option<PrimaryHistory>` gives a local epoch and half-open readable
+  positions for retained primary rows, including while the alternate grid is active. The oldest
+  position advances as rows leave retention. Actual primary history clears, terminal resets and
+  effective canonical resizes advance the epoch. A screen without a compact store or with an open
+  synchronized update has no available span.
+- `append_primary_history(epoch, next, columns, rows) -> Option<HistoryAppend>` gives the
+  represented source positions and the bytes to append them to native primary history in a host
+  that fits the canonical grid. It clips to readable retention and holds a trailing soft-wrapped
+  line until its end is retained. Shell selects the host buffer, writes the append with its live
+  repaint, and owns the position through which that write succeeded.
+- `append_primary_history_before_alternate(epoch, next, columns, rows) -> Option<HistoryAppend>`
+  adds the saved primary viewport, cursor and pen to a complete append while the alternate grid
+  is active. It writes wrapped rows at an exact fit and positions rows in a larger host. Shell
+  writes and flushes this output with the host still on its primary buffer, then switches to
+  alternate.
 - `selection_view(offset) -> SelectionView` captures one viewport of styled cells at the same
   offset as `redraw_scrollback_view`. `SelectionView::redraw(selected)` paints that capture with
   optional selection endpoints. `SelectionView::text(anchor, end)` copies the highlighted cells,
@@ -212,7 +228,8 @@ The files:
    opened again after, so the cursor is right and a redraw still waits for the whole frame.
 3. `OSC 7501 ; ?` queues its reply among alacritty's. Then the screen takes alacritty's replies,
    color queries and title changes in order. Supplied colors go through alacritty's formatter into
-   the same replies; other color queries get no reply. The screen remembers the latest title and
+   the same replies: OSC 10, 11 and 12 by their named colors, OSC 4 by its index in `ansi`. Other
+   color queries get no reply. The screen remembers the latest title and
    returns the replies and title changes with the viewer output and status events.
 
 ### resize
@@ -259,6 +276,11 @@ and below stays blank. Scrollback replays one canonical row per console row. The
 cursor at its grid position and applies the screen's scrolling region within the shared height.
 Steady viewport updates use that same explicit row placement. They write each row's content and
 erase its remaining tail with the default pen. They finish with the cursor, modes and known title.
+
+A primary history append reflows the retained suffix to the physical host width and draws it
+with the same cell pens and hyperlinks. Automatic wrapping keeps soft lines joined for native
+selection. The append erases the old live page in place, then moves the staged rows into native
+history by scrolling from the physical bottom. The remaining live area is clear for Shell's repaint.
 
 A scrollback view ends any synchronized update on the host and clears the selected buffer's
 visible area. It uses the same explicit row placement and cell drawing, starting in the active

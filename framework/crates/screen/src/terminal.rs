@@ -157,7 +157,7 @@ impl Terminal {
                         index if index == NamedColor::Foreground as usize => self.colors.foreground,
                         index if index == NamedColor::Background as usize => self.colors.background,
                         index if index == NamedColor::Cursor as usize => self.colors.cursor,
-                        _ => None,
+                        _ => self.colors.ansi.get(index).copied().flatten(),
                     };
                     if let Some([r, g, b]) = color {
                         requests

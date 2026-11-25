@@ -29,6 +29,8 @@ pub(crate) struct Store {
     gone_in_first: usize,
     /// Rows let go of at the front since the scrollback was last cleared.
     discarded: usize,
+    /// The coordinate system for retained primary rows.
+    epoch: u64,
     rows: usize,
     max_rows: usize,
     max_bytes: usize,
@@ -46,6 +48,7 @@ impl Store {
             blocks: VecDeque::new(),
             gone_in_first: 0,
             discarded: 0,
+            epoch: 0,
             rows: 0,
             max_rows,
             max_bytes,
@@ -61,6 +64,14 @@ impl Store {
 
     pub(crate) fn discarded(&self) -> usize {
         self.discarded
+    }
+
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    pub(crate) fn invalidate_positions(&mut self) {
+        self.epoch += 1;
     }
 
     /// What the store takes: its blocks, by capacity, and the queue of them.
@@ -127,11 +138,13 @@ impl Store {
         self.let_go_of_all();
         self.trimmed = false;
         self.discarded = 0;
+        self.invalidate_positions();
     }
 
     fn let_go_of_all(&mut self) {
         *self = Store {
             discarded: self.discarded,
+            epoch: self.epoch,
             trimmed: self.trimmed,
             dropping: self.dropping,
             ..Store::new(self.max_rows, self.max_bytes)
@@ -254,14 +267,13 @@ pub(crate) struct TakenRows {
 }
 
 impl TakenRows {
-    /// Builds every row back, oldest first, and gives it to `each`.
-    fn for_each(self, mut each: impl FnMut(Row<Cell>)) {
+    /// Builds the rows back, oldest first.
+    pub(crate) fn into_rows(self) -> impl Iterator<Item = Row<Cell>> {
         let skips = std::iter::once(self.gone_in_first).chain(std::iter::repeat(0));
-        for (block, skip) in self.blocks.into_iter().zip(skips) {
-            for place in skip..block.len() {
-                each(block.row(place));
-            }
-        }
+        self.blocks
+            .into_iter()
+            .zip(skips)
+            .flat_map(|(block, skip)| (skip..block.len()).map(move |place| block.row(place)))
     }
 }
 
@@ -293,7 +305,18 @@ pub(crate) fn lock(store: &Mutex<Store>) -> MutexGuard<'_, Store> {
 /// alacritty reflows each line of scrollback by itself, so batches of whole lines, about
 /// [`REFLOW_ROWS`] rows each, go through a scratch grid: one screen line high, the cursor at its
 /// start, the batch in its scrollback, where the reflow cannot reach anything else.
-pub(crate) fn reflow(rows: TakenRows, old: usize, new: usize, mut each: impl FnMut(&Row<Cell>)) {
+pub(crate) fn reflow(
+    rows: impl Iterator<Item = Row<Cell>>,
+    old: usize,
+    new: usize,
+    mut each: impl FnMut(&Row<Cell>),
+) {
+    if old == new {
+        for row in rows {
+            each(&row);
+        }
+        return;
+    }
     let mut reflow_batch = |batch: Vec<Row<Cell>>| {
         if batch.is_empty() {
             return;
@@ -309,7 +332,7 @@ pub(crate) fn reflow(rows: TakenRows, old: usize, new: usize, mut each: impl FnM
         (top..0).for_each(|line| each(&scratch[Line(line)]));
     };
     let mut batch = Vec::with_capacity(REFLOW_ROWS);
-    rows.for_each(|row| {
+    for row in rows {
         let line_ends = !carries(&row);
         batch.push(row);
         if line_ends && batch.len() >= REFLOW_ROWS {
@@ -318,6 +341,6 @@ pub(crate) fn reflow(rows: TakenRows, old: usize, new: usize, mut each: impl FnM
                 Vec::with_capacity(REFLOW_ROWS),
             ));
         }
-    });
+    }
     reflow_batch(batch);
 }
