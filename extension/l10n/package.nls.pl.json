@@ -4,11 +4,9 @@
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "Nowy agent...",
-	"command.goToAgent": "Go to Agent...",
 	"command.openTerminal": "Otwórz terminal",
-	"command.hideAgent": "Ukryj",
 	"command.renameAgent": "Zmień nazwę agenta...",
-	"command.stopAgent": "Zatrzymaj agenta",
+	"command.stopAgent": "Zatrzymaj agenta...",
 	"command.deleteAgent": "Usuń",
 	"command.copyAgentReference": "Kopiuj odwołanie do agenta",
 	"command.dismissAgent": "Ukryj agenta",
@@ -28,7 +26,7 @@
 	"config.pi.title": "Pi",
 	"windowDisplayName": "Składnik okna Facade Code",
 	"windowDescription": "Zamyka pozostawione karty terminali Facade Code po ponownym połączeniu okna zdalnego lub ponownym uruchomieniu rozszerzenia.",
-	"command.filter": "Filtruj według lokalizacji roboczej...",
+	"command.filter": "Filtruj agentów...",
 	"command.showAgentLaunch": "Pokaż wiersz polecenia agenta...",
 	"command.showAgentsLog": "Pokaż dziennik agentów",
 	"icon.newAgent": "Ikona polecenia „Nowy agent”",
@@ -37,7 +35,6 @@
 	"command.continueSession": "Kontynuuj sesję...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "Tylko dla dotychczasowej implementacji. Ten folder zawiera jego ustawienia, historię agentów i wiadomości. Podana tutaj ścieżka ma pierwszeństwo przed `FACADE_HOME` i ścieżką domyślną `~/.facade`.\n\n[Edytuj w facade.json](command:facade.openSettingsFile) aby zmienić YOLO, sugerowane nazwy i sposób uruchamiania CLI.",
-	"config.home.pattern": "Ścieżka musi zaczynać się od ~/ lub być bezwzględna.",
-	"config.framework": "Określa, która implementacja uruchamia Twoje agenty.\n\n- `auto`: używaj Facade Code Framework. Okno przełącza się na niego, gdy na tym komputerze nie działa już żaden agent dotychczasowej implementacji. Facade nigdy nie przerywa działania uruchomionych agentów, a gdy tylko przełączenie będzie możliwe, zaproponuje ponowne załadowanie okna.\n- `off`: używaj dotychczasowej implementacji. Jeśli Facade Code Framework sprawia problemy, wybierz `off`, załaduj ponownie okno i [zgłoś problem na GitHubie](https://github.com/y5ez3g/facadecode/issues).\n\nW oknie zdalnym obowiązuje ustawienie maszyny zdalnej."
+	"config.home": "Folder Facade używany w tym oknie do przechowywania ustawień i danych agentów oraz migracji ze starszych wersji. Podana tutaj ścieżka ma pierwszeństwo przed `FACADE_HOME` i ścieżką domyślną `~/.facade`.\n\n[Edytuj w facade.json](command:facade.openSettingsFile) aby zmienić YOLO, sugerowane nazwy i sposób uruchamiania CLI.",
+	"config.home.pattern": "Ścieżka musi zaczynać się od ~/ lub być bezwzględna."
 }

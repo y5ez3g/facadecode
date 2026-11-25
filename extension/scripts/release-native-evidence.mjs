@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { frameworkArchive } from '../../framework/scripts/package-framework.mjs';
+import { filesOfZip } from './native.mjs';
 import { compareVersions, fileFor, nativeTargets, sha256 } from './release-assets.mjs';
 
 const digestPattern = /^[a-f0-9]{64}$/u;
@@ -41,12 +42,12 @@ function verifyFrameworkInstall(lines, build, target) {
 	assert.equal(lines.at(-1), `facade ${build}`, `${target}: Framework install did not report the installed Shell BUILD`);
 }
 
-function verifyEditorTest(lines, check, target) {
+function verifyEditorTest(lines, check, target, implementation) {
 	const results = lines.filter(line => line.startsWith(editorPass));
 	assert.equal(results.length, 1, `${target}/${check}: missing or conflicting editor results`);
 	const cleanup = lines.filter(line => line === editorCleanup);
 	assert.equal(cleanup.length, 1, `${target}/${check}: missing or repeated editor cleanup`);
-	assert.deepStrictEqual(lines.slice(-2), [editorCleanup, editorPass + JSON.stringify({ name: check, implementation: 'legacy' })],
+	assert.deepStrictEqual(lines.slice(-2), [editorCleanup, editorPass + JSON.stringify({ name: check, implementation })],
 		`${target}/${check}: missing exact installed editor result after cleanup`);
 }
 
@@ -83,9 +84,13 @@ export function verifyNativeTestEvidence(directory, evidence, tag, version, buil
 		const archive = inputs(frameworkArchive(target), target.startsWith('win32-') ? 'install.ps1' : 'install.sh');
 		const install = readTestLog(logsDirectory, 'framework-install', { ...context, inputs: archive }, logs['framework-install']);
 		verifyFrameworkInstall(install, build, target);
-		const pair = inputs(fileFor(version, target), fileFor(version, 'universal'));
+		const nativeFile = fileFor(version, target);
+		const pair = inputs(nativeFile, fileFor(version, 'universal'));
+		const vsix = assets.find(asset => asset.file === nativeFile);
+		const legacy = filesOfZip(vsix.path).some(entry => entry.name === 'extension/dist/ptyd.js');
+		const implementation = legacy ? 'legacy' : 'framework';
 		for (const check of ['install-pair', 'upgrade-pair']) {
-			verifyEditorTest(readTestLog(logsDirectory, check, { ...context, inputs: pair }, logs[check]), check, target);
+			verifyEditorTest(readTestLog(logsDirectory, check, { ...context, inputs: pair }, logs[check]), check, target, implementation);
 		}
 		const { editor, prior } = logs['upgrade-pair'];
 		verifyEditorInputs(editor, prior, version, target);

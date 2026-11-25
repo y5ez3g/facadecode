@@ -158,7 +158,7 @@ fn a_muse_code_run_outside_the_default_facade_home_records_its_session_and_resum
     let choices = facade(&["resume"], None);
     let table = Table::parse(&choices);
     let row = table
-        .row("REF", &agent.address)
+        .row("REFERENCE", &agent.address)
         .unwrap_or_else(|| panic!("the ended Muse Code agent is not listed: {choices}"));
     assert_eq!(table.cell(row, "STATE"), "Ended", "{choices}");
     let status = facade(&["status", &agent.address], None);
@@ -684,7 +684,7 @@ fn resume_lists_a_stopped_agent_and_reuses_its_launch_choices() {
     let choices = home.run_facade_ok(&["resume"]);
     let table = Table::parse(&choices);
     let row = table
-        .row("REF", address)
+        .row("REFERENCE", address)
         .expect("the stopped agent is listed");
     assert_eq!(table.cell(row, "STATE"), "Ended", "{choices}");
     assert_eq!(table.cell(row, "SESSION"), "-", "{choices}");
@@ -1501,7 +1501,7 @@ fn resuming_a_saved_session_after_removal_creates_a_new_agent() {
         );
         let table = Table::parse(&stdout(&listed));
         assert_eq!(table.column("TYPE"), ["Session"]);
-        assert_eq!(table.column("REF"), [&session[..8]]);
+        assert_eq!(table.column("REFERENCE"), [&session[..8]]);
         assert_eq!(table.column("STATE"), ["Saved"]);
         assert_eq!(table.column("SESSION"), ["resume this saved conversation"]);
     }
@@ -1612,7 +1612,7 @@ fn claude_and_pi_show_current_native_names_through_resume() {
             let text = home.run_facade_ok(&["resume", "--local"]);
             let table = Table::parse(&text);
             let row = table
-                .row("REF", reference)
+                .row("REFERENCE", reference)
                 .unwrap_or_else(|| panic!("{cli}: {text}"));
             assert_eq!(table.cell(row, "STATE"), state, "{cli}: {text}");
             assert_eq!(table.cell(row, "SESSION"), label, "{cli}: {text}");
@@ -1671,11 +1671,11 @@ fn claude_and_pi_show_current_native_names_through_resume() {
         let row = active
             .row("CLI", cli)
             .unwrap_or_else(|| panic!("{active:?}"));
-        let reference = active.cell(row, "REF").to_string();
+        let reference = active.cell(row, "REFERENCE").to_string();
         let list_cell = |reference, label| {
             let table = home.list_table();
             let row = table
-                .row("REF", reference)
+                .row("REFERENCE", reference)
                 .unwrap_or_else(|| panic!("{cli}: {table:?}"));
             assert_eq!(table.cell(row, "SESSION"), label, "{cli}: {table:?}");
         };
@@ -1702,7 +1702,7 @@ fn claude_and_pi_show_current_native_names_through_resume() {
         session(&reference, "First native name", FIRST);
         assert!(
             Table::parse(&home.run_facade_ok(&["resume", "--local"]))
-                .row("REF", first_ref)
+                .row("REFERENCE", first_ref)
                 .is_none()
         );
 
@@ -1720,7 +1720,7 @@ fn claude_and_pi_show_current_native_names_through_resume() {
             &home, &reference
         )["process"]
             == "ended"));
-        assert!(home.list_table().row("REF", &reference).is_none());
+        assert!(home.list_table().row("REFERENCE", &reference).is_none());
         resume_cell(&reference, ended_state, "Latest native name");
         status(&reference, "State", status_state);
         session(&reference, "Latest native name", FIRST);
@@ -1732,7 +1732,7 @@ fn claude_and_pi_show_current_native_names_through_resume() {
         start_session(empty_ref, SECOND, "unnamed-args");
         let active = home.list_table();
         let unnamed = active
-            .column("REF")
+            .column("REFERENCE")
             .into_iter()
             .find(|other| *other != reference)
             .unwrap_or_else(|| panic!("{cli}: {active:?}"));
@@ -1746,10 +1746,10 @@ fn claude_and_pi_show_current_native_names_through_resume() {
     }
 }
 
-/// A `Saved` row's REF selects its session alone among every saved session of the folder,
+/// A `Saved` row's `REFERENCE` selects its session alone among every saved session of the folder,
 /// the ones managed agents use included: a prefix one of them shares gives the full ID, and an
-/// unshared one stays eight characters. Either REF, copied into `facade resume -d`, resumes that
-/// session, and no managed session is listed twice.
+/// unshared one stays eight characters. Either value, copied into `facade resume -d`, resumes
+/// that session, and no managed session is listed twice.
 #[test]
 fn a_saved_row_s_reference_resumes_its_session_where_managed_sessions_share_its_prefix() {
     const VISIBLE: &str = "c0ffee00-2bae-4a45-b193-a5664c198261";
@@ -1798,7 +1798,7 @@ fn a_saved_row_s_reference_resumes_its_session_where_managed_sessions_share_its_
         let row = active
             .row("SESSION", label)
             .unwrap_or_else(|| panic!("{label}: {active:?}"));
-        active.cell(row, "REF").to_string()
+        active.cell(row, "REFERENCE").to_string()
     };
     let (ended, running) = (
         agent("the ended agent's conversation"),
@@ -1820,7 +1820,7 @@ fn a_saved_row_s_reference_resumes_its_session_where_managed_sessions_share_its_
             [
                 table.cell(row, "SESSION"),
                 table.cell(row, "STATE"),
-                table.cell(row, "REF"),
+                table.cell(row, "REFERENCE"),
             ]
         })
         .collect();
@@ -1839,6 +1839,6 @@ fn a_saved_row_s_reference_resumes_its_session_where_managed_sessions_share_its_
         ("the unique conversation", FIRST, "unique.args"),
     ] {
         let row = table.row("SESSION", label).unwrap();
-        resume_in_background(table.cell(row, "REF"), session, args);
+        resume_in_background(table.cell(row, "REFERENCE"), session, args);
     }
 }

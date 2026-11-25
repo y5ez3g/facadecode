@@ -4,7 +4,7 @@
 
 import { messageOf } from '../base/errors';
 import type { LogPort, RunFacts } from '../core/ports';
-import type { PanelFilter } from '../webview/protocol';
+import type { AgentFilter, DisplayFilter, FilterChoice } from '../webview/protocol';
 
 /** What the panel keeps in workspace storage (ARCHITECTURE-3.1): `vscode.Memento`'s shape. */
 export interface Storage {
@@ -16,6 +16,44 @@ const ORDER = 'facade.panel.order';
 const FILTER = 'facade.panel.filter';
 const SELECTION = 'facade.panel.selection';
 
+export const FILTER_STATES = ['starting', 'working', 'waiting_for_you', 'just_done', 'idle', 'error', 'ended', 'unknown'] as const;
+
+export function filterCategory(choice: FilterChoice): 'location' | 'machine' | 'cli' | 'state' | 'pin' {
+	return choice.kind === 'folder' || choice.kind === 'directory' ? 'location' : choice.kind;
+}
+
+export function filterChoiceKey(choice: FilterChoice): string {
+	return choice.kind === 'directory' ? JSON.stringify([choice.kind, choice.machineId, choice.folder])
+		: JSON.stringify([choice.kind, choice.id]);
+}
+
+export function agentFilter(choices: readonly FilterChoice[]): AgentFilter | undefined {
+	const unique = new Map(choices.map(choice => [filterChoiceKey(choice), choice]));
+	return unique.size ? { kind: 'agents', choices: [...unique.keys()].sort().map(key => unique.get(key)!) } : undefined;
+}
+
+function readChoice(value: unknown): FilterChoice | undefined {
+	if (typeof value !== 'object' || value === null) {
+		return undefined;
+	}
+	const { kind, id, label, machineId, folder } = value as Record<string, unknown>;
+	if (typeof label !== 'string') {
+		return undefined;
+	}
+	if (kind === 'directory' && typeof machineId === 'string' && machineId && typeof folder === 'string' && folder) {
+		return { kind, machineId, folder, label };
+	}
+	if (typeof id !== 'string' || !id) {
+		return undefined;
+	}
+	if (kind === 'location' || kind === 'folder' || kind === 'machine' || kind === 'cli'
+		|| (kind === 'state' && FILTER_STATES.some(state => state === id))
+		|| (kind === 'pin' && (id === 'pinned' || id === 'unpinned'))) {
+		return { kind, id, label };
+	}
+	return undefined;
+}
+
 /** Run IDs as RULES-2.2 makes them. */
 const RUN_ID = /^run-[0-9a-f]{32}$/;
 const AGENT_ID = /^a\d+$/;
@@ -26,9 +64,8 @@ function frameworkRunId(run: string): boolean {
 }
 
 /**
- * The panel's preferences in this workspace: the card order by run ID or AgentRef (PANEL-2.1, RULES-6.1), and the display filter by its
- * environment-qualified location ID or folder URI, with its last label (PANEL-2.3). A value of another shape - an earlier
- * development build's - is ignored, never translated, with one line in the agents log (ARCHITECTURE-4.2).
+ * The panel's workspace preferences: card order by run ID or AgentRef, and the display filter's stable values and last labels
+ * (PANEL-2.1, PANEL-4.3). An unsupported shape is ignored with one line in the agents log (ARCHITECTURE-4.2).
  */
 export class PanelPrefs {
 	/** The keys whose stored value was ignored already: each is logged once. */
@@ -75,22 +112,28 @@ export class PanelPrefs {
 		}
 	}
 
-	filter(): PanelFilter | undefined {
+	filter(): DisplayFilter | undefined {
 		const value = this.storage.get<unknown>(FILTER);
 		if (value === undefined) {
 			return undefined;
 		}
-		const { kind, id, label } = (value && typeof value === 'object' ? value : {}) as { kind?: unknown; id?: unknown; label?: unknown };
-		if ((kind === 'location' || kind === 'folder') && typeof id === 'string' && id && typeof label === 'string') {
-			return { kind, id, label };
+		if (this.logicalWindow && typeof value === 'object' && value !== null && 'kind' in value && value.kind === 'agents'
+			&& 'choices' in value && Array.isArray(value.choices)) {
+			const choices = value.choices.map(readChoice).filter((choice): choice is FilterChoice => choice !== undefined);
+			if (choices.length !== value.choices.length) { this.ignore(FILTER, 'filter'); }
+			return agentFilter(choices);
+		}
+		const choice = readChoice(value);
+		if (choice?.kind === 'location' || choice?.kind === 'folder') {
+			return choice;
 		}
 		this.ignore(FILTER, 'filter');
 		return undefined;
 	}
 
-	setFilter(filter: PanelFilter | undefined): void {
+	setFilter(filter: DisplayFilter | undefined): void {
 		// The filter shown remains in effect when workspace storage cannot persist it.
-		this.save(FILTER, filter ? { kind: filter.kind, id: filter.id, label: filter.label } : undefined, 'filter');
+		this.save(FILTER, filter, 'filter');
 	}
 
 	private save(key: string, value: unknown, what: string): void {

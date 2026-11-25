@@ -682,7 +682,7 @@ fn cold_roster_and_local_lists_never_use_a_saved_ssh_route() {
         "Resume one with 'facade resume <REFERENCE>'.\n"
     );
     let table = Table::parse(&stdout(&resumed));
-    assert_eq!(table.column("REF"), [saved.address.as_str()]);
+    assert_eq!(table.column("REFERENCE"), [saved.address.as_str()]);
     assert_eq!(table.column("TYPE"), ["Managed"]);
     assert_eq!(ssh_attempts(&remote), attempts);
 
@@ -759,7 +759,7 @@ fn reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones() {
     let listed = local.run_facade(&["list"]);
     assert_eq!(listed.status.code(), Some(0), "{}", stderr(&listed));
     let table = Table::parse(&stdout(&listed));
-    assert_eq!(table.column("REF"), [&pixel.address, &worker.address]);
+    assert_eq!(table.column("REFERENCE"), [&pixel.address, &worker.address]);
     let warning = stderr(&listed);
     assert!(
         warning.starts_with("warning: ") && warning.contains("gpu"),
@@ -781,7 +781,7 @@ fn reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones() {
         (Some(0), String::new())
     );
     let remote_only = Table::parse(&stdout(&remote_only));
-    assert_eq!(remote_only.column("REF"), [worker.address.as_str()]);
+    assert_eq!(remote_only.column("REFERENCE"), [worker.address.as_str()]);
     assert_eq!(remote_only.column("NAME"), ["Worker"]);
     assert_eq!(remote_only.column("STATE"), ["Idle"]);
     assert!(alive(&worker.process) && alive(&pixel.process));
@@ -821,7 +821,7 @@ fn reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones() {
     let reachable = local.run_facade(&["resume"]);
     assert_eq!(reachable.status.code(), Some(0), "{}", stderr(&reachable));
     let table = Table::parse(&stdout(&reachable));
-    assert!(table.column("REF").contains(&worker.address.as_str()));
+    assert!(table.column("REFERENCE").contains(&worker.address.as_str()));
     assert_eq!(ssh_serves(&awake), format!("{previous}no-start\n"));
 
     let resumable = local.run_facade(&["resume", "--machine", "devbox"]);
@@ -832,7 +832,7 @@ fn reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones() {
     );
     let table = Table::parse(&stdout(&resumable));
     assert_eq!(table.column("TYPE"), ["Managed"]);
-    assert_eq!(table.column("REF"), [worker.address.as_str()]);
+    assert_eq!(table.column("REFERENCE"), [worker.address.as_str()]);
     // Query each eligible stopped run from the same caller, changing only the machine.
     let folder = real_path(&awake.project).unwrap();
     let mut client = connect(&local);
@@ -878,7 +878,7 @@ fn reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones() {
         println!("agent.resume_list selected {selector} {machine_id}: {item}");
     }
 
-    let resumed = local.run_facade(&["resume", "-d", table.column("REF")[0]]);
+    let resumed = local.run_facade(&["resume", "-d", table.column("REFERENCE")[0]]);
     assert_eq!(resumed.status.code(), Some(0), "{}", stderr(&resumed));
     assert!(resumed.stderr.is_empty(), "{}", stderr(&resumed));
     assert_eq!(
@@ -2037,7 +2037,13 @@ fn two_framework_builds_cold_dial_each_other() {
 
         let output = run_using_ok(&source, caller, &["list", "--machine", "holder"]);
         let table = Table::parse(&output);
-        assert_eq!(table.column("REF"), [address], "{output}");
+        let reference_column = if caller == peer && table.header.iter().any(|label| label == "REF")
+        {
+            "REF"
+        } else {
+            "REFERENCE"
+        };
+        assert_eq!(table.column(reference_column), [address], "{output}");
         assert_eq!(table.column("NAME"), ["PeerWorker"], "{output}");
         assert!(
             ssh_attempts(&remote).len() > before.len(),
@@ -2521,7 +2527,7 @@ fn agent_lists_are_newest_first_across_machines() {
         "a1@first",
     ];
     let table = first.list_table();
-    assert_eq!(table.column("REF"), expected);
+    assert_eq!(table.column("REFERENCE"), expected);
     let listed = first.agent_list();
     let mut agents = listed["agents"].as_array().unwrap().clone();
     let ids: Vec<_> = agents

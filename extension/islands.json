@@ -1,0 +1,344 @@
+{
+	"root": ["extension.ts", "host/framework/index.ts", "host/service.ts", "ui/commands/index.ts"],
+	"migration": ["base/ptydRegistry.ts", "host/implementation.ts", "host/legacyCutover.ts", "host/legacyPins.ts", "host/migration/supervisor.ts", "host/pins.ts"],
+	"shared": ["base/async.ts", "base/connect.ts", "base/errors.ts", "base/files.ts", "base/json.ts", "base/jsonc.ts", "base/lifecycle.ts", "base/lines.ts", "base/lock.ts", "base/names.ts", "base/ownership.ts", "base/robot.ts", "base/system.ts", "base/tabSpinner.ts", "core/errors.ts", "core/names.ts", "core/ports.ts", "record/paths.ts", "ui/catalog.ts", "ui/pickers/search.ts", "ui/pickers/stepping.ts", "ui/presentation.ts"],
+	"islands": {
+		"Framework connection": {
+			"Connection and reconnect": ["host/framework/connection.ts", "host/framework/daemonTypes.ts", "host/framework/rpc.ts"],
+			"Typed queries and subscriptions": ["base/frameworkProtocol.ts", "host/framework/types.ts"]
+		},
+		"Workspace agents": {
+			"Roster and Pins": ["host/framework/workspace.ts", "record/workspace.ts"],
+			"Agent operations": ["host/framework/agentFacts.ts", "host/framework/agents.ts"],
+			"Pin recovery": ["host/editorEnvironment.ts", "host/framework/legacyRecovery.ts", "host/framework/pinRestore.ts"]
+		},
+		"Terminal view": {
+			"Editor tabs": ["host/framework/terminals.ts", "host/terminal/agentTerminals.ts"],
+			"Terminal data and input": ["base/mouseModes.ts", "base/mouseReports.ts", "base/terminalReplies.ts", "host/terminal/agentPty.ts", "host/terminal/hiddenAnswers.ts", "host/terminal/terminalColours.ts"]
+		},
+		"Launch and locations": {
+			"Directory catalog and history": ["core/locations/catalog.ts", "host/framework/catalog.ts", "host/locations/gitEvents.ts", "host/locations/service.ts", "ui/pickers/launchLocation.ts"],
+			"Git worktrees": ["core/locations/destination.ts", "core/locations/problems.ts", "host/locations/gitRead.ts", "host/locations/index.ts", "host/locations/nativeGit.ts", "host/locations/workspaceFolders.ts", "host/locations/worktrees.ts", "ui/commands/worktree.ts", "ui/pickers/location.ts"],
+			"New Agent flow": ["base/terminalEnvironment.ts", "host/framework/environment.ts", "host/terminals.ts", "ui/pickers/newAgent.ts"]
+		},
+		"Panel and pickers": {
+			"Card model and filtering": ["core/status.ts", "ui/cardView.ts", "ui/model.ts", "ui/order.ts", "ui/pickers/filter.ts"],
+			"Webview": ["ui/panel.ts", "webview/cardLayout.ts", "webview/dom.ts", "webview/panel.ts", "webview/protocol.ts", "webview/scrollbar.ts", "webview/viewport.ts", "webview/wheel.ts"],
+			"Agent pickers": ["host/framework/settings.ts", "host/human.ts", "host/notify.ts", "ui/commands/agent.ts", "ui/pickers/orchestrator.ts"]
+		},
+		"Local Window Component": {
+			"Window identity": ["base/windowIdentity.ts", "host/home.ts", "host/window.ts", "host/windowComponent.ts", "record/ownership.ts", "record/windowIdentity.ts"],
+			"Stale tab cleanup": ["host/windowTerminals.ts", "record/windowTerminals.ts"]
+		}
+	},
+	"interfaces": {
+		"base/async.ts": {
+			"Connection and reconnect": ["timeout"],
+			"Editor tabs": ["timeout"]
+		},
+		"base/connect.ts": {
+			"Connection and reconnect": ["Reached", "connectWithin"],
+			"Legacy migration": ["connectWithin"]
+		},
+		"base/errors.ts": {
+			"Agent operations": ["messageOf"],
+			"Agent pickers": ["messageOf"],
+			"Card model and filtering": ["clauseOf", "messageOf"],
+			"Connection and reconnect": ["messageOf"],
+			"Directory catalog and history": ["codeOf", "messageOf"],
+			"Editor tabs": ["messageOf"],
+			"Git worktrees": ["clauseOf", "messageOf"],
+			"Legacy migration": ["codeOf", "messageOf"],
+			"New Agent flow": ["messageOf"],
+			"Root": ["messageOf"],
+			"Roster and Pins": ["codeOf", "messageOf"],
+			"Stale tab cleanup": ["messageOf"],
+			"Terminal data and input": ["messageOf"],
+			"Window identity": ["messageOf"]
+		},
+		"base/files.ts": {
+			"Agent operations": ["folderKeyOf", "isSameFolder"],
+			"Card model and filtering": ["homeRelative"],
+			"Directory catalog and history": ["folderKeyOf", "isEqualPath", "isInsideFolder"],
+			"Git worktrees": ["compactPath", "folderKeyOf", "homeRelative", "isInsideFolder"],
+			"Legacy migration": ["isSameFolder", "realFolderOf", "replaceFile"],
+			"New Agent flow": ["isEqualPath"],
+			"Pin recovery": ["isSameFolder"],
+			"Roster and Pins": ["isSameFolder", "replaceFile"],
+			"Stale tab cleanup": ["replaceFile"],
+			"Window identity": ["isSameFolder", "replaceFile"]
+		},
+		"base/frameworkProtocol.ts": {
+			"Agent operations": ["AgentRef", "DaemonOperations", "DaemonTopics"],
+			"Agent pickers": ["AgentRef", "DaemonOperations"],
+			"Connection and reconnect": ["ChangedParams", "DAEMON_API_VERSIONS", "DaemonHelloParams", "DaemonHelloResult", "DaemonTopics", "ErrorBody", "ErrorData", "WatchEndedParams", "WatchResult"],
+			"Directory catalog and history": ["DaemonOperations", "LocationInfo", "LocationListArgs", "LocationListResult", "MachineInfo"],
+			"Editor tabs": ["AgentRef", "DaemonTopics"],
+			"Legacy migration": ["AgentRef"],
+			"New Agent flow": ["DaemonOperations"],
+			"Pin recovery": ["AgentInfo", "DaemonOperations", "DaemonTopics", "ResumeCandidateTarget"],
+			"Root": ["DaemonTopics"],
+			"Roster and Pins": ["AgentRef", "DaemonTopics"],
+			"Shared contracts": ["AgentRef", "AgentState"]
+		},
+		"base/json.ts": {
+			"Directory catalog and history": ["isJsonObject"],
+			"Git worktrees": ["isJsonObject"],
+			"Legacy migration": ["isJsonObject"],
+			"New Agent flow": ["isJsonObject", "setOwn"],
+			"Roster and Pins": ["isJsonObject"],
+			"Stale tab cleanup": ["isJsonObject"],
+			"Webview": ["JsonObject", "isJsonObject"],
+			"Window identity": ["isJsonObject"]
+		},
+		"base/jsonc.ts": {
+			"Pin recovery": ["JsonNode", "parseJsonc"]
+		},
+		"base/lifecycle.ts": {
+			"Agent operations": ["disposeAll"],
+			"Root": ["disposeAll"]
+		},
+		"base/lines.ts": {
+			"Connection and reconnect": ["lineReader"],
+			"Legacy migration": ["lineReader"]
+		},
+		"base/lock.ts": {
+			"Git worktrees": ["withLongFileLock"],
+			"Legacy migration": ["withLongFileLock"],
+			"Roster and Pins": ["withFileLock", "withLongFileLock"],
+			"Stale tab cleanup": ["withFileLock"],
+			"Window identity": ["withFileLock"]
+		},
+		"base/ownership.ts": {
+			"Stale tab cleanup": ["OwnerClaim", "isOwnerClaim"],
+			"Window identity": ["OwnerClaim", "isOwnerClaim"]
+		},
+		"base/robot.ts": {
+			"Card model and filtering": ["PROGRAM_ICON", "robotOf"]
+		},
+		"base/system.ts": {
+			"Legacy migration": ["isSameStart", "processStartTimeAsync", "processStartTimeOfAsync"],
+			"Roster and Pins": ["isProcessRunning", "isSameStart", "processStartTime", "processStartTimeOf", "processStartedAt"]
+		},
+		"base/tabSpinner.ts": {
+			"Stale tab cleanup": ["unspun"],
+			"Terminal data and input": ["SPINNER_FRAMES", "spunName"]
+		},
+		"base/windowIdentity.ts": {
+			"Editor tabs": ["TERMINAL_REGISTRATION_MS", "TerminalOwner", "TerminalRegistration", "WINDOW_TERMINALS_COMMAND"],
+			"Legacy migration": ["WINDOW_IDENTITY_COMMAND", "WindowIdentity", "isWindowIdentity"],
+			"Stale tab cleanup": ["TERMINAL_REGISTRATION_MS", "isTerminalRegistration", "isWindowToken"]
+		},
+		"core/errors.ts": {
+			"Agent pickers": ["invalid"],
+			"Git worktrees": ["invalid"]
+		},
+		"core/locations/catalog.ts": {
+			"Card model and filtering": ["placeKindOf"],
+			"Git worktrees": ["isDeletableWorktree", "isWithin", "placeKindOf", "runsLaunchedIn"]
+		},
+		"core/names.ts": {
+			"Agent pickers": ["labelOf", "normalizeName"],
+			"Card model and filtering": ["repeatedNames"],
+			"New Agent flow": ["normalizeName"]
+		},
+		"core/ports.ts": {
+			"Agent operations": ["FrameworkPin", "Location", "LocationPort", "LogPort", "Pin", "PinLaunch", "RunChange", "RunError", "RunFacts", "RunId"],
+			"Agent pickers": ["Agents", "HumanFailure", "HumanPort", "LogPort", "RunFacts", "RunId"],
+			"Card model and filtering": ["ActivityUnknown", "Agents", "Catalog", "Disposable", "Event", "Location", "LocationId", "LocationPort", "LogPort", "RunChange", "RunFacts", "RunId", "ToolsProblem", "WorkspaceFolderInfo", "canDismiss"],
+			"Connection and reconnect": ["Disposable", "Event"],
+			"Directory catalog and history": ["Catalog", "Disposable", "Event", "GitState", "Location", "LocationId", "LocationPort", "LocationRemoval", "LogPort", "RunFacts", "WorkspaceFolderInfo"],
+			"Editor tabs": ["Disposable", "PairFacts", "RunId"],
+			"Git worktrees": ["Agents", "Catalog", "HumanPort", "Location", "LocationId", "LocationPort", "LogPort", "WorkspaceFolderInfo", "WorktreeCreationEffects", "WorktreeError", "WorktreePlan", "WorktreePort"],
+			"Legacy migration": ["FrameworkPin", "Pin"],
+			"New Agent flow": ["Catalog", "Location", "LocationId", "LocationPort", "RunId"],
+			"Pin recovery": ["FrameworkPin"],
+			"Root": ["Agents", "Event", "HumanPort", "LocationPort", "LogPort", "RunId", "WorkspaceFolderInfo"],
+			"Roster and Pins": ["Disposable", "Event", "FrameworkPin", "LogPort"],
+			"Terminal data and input": ["Disposable"],
+			"Typed queries and subscriptions": ["Disposable", "Event"],
+			"Webview": ["LogPort"],
+			"Window identity": ["LogPort"]
+		},
+		"host/editorEnvironment.ts": {
+			"Git worktrees": ["editorEnvironment"]
+		},
+		"host/framework/agentFacts.ts": {
+			"Root": ["agentKey"]
+		},
+		"host/framework/agents.ts": {
+			"Root": ["OrchestratorAgents"]
+		},
+		"host/framework/catalog.ts": {
+			"Root": ["LaunchLocationHistory", "OrchestratorLocations"]
+		},
+		"host/framework/connection.ts": {
+			"Root": ["connectOrchestrator"]
+		},
+		"host/framework/daemonTypes.ts": {
+			"Legacy migration": ["FACADE_PROGRAM"],
+			"Root": ["FACADE_PROGRAM"],
+			"Typed queries and subscriptions": ["DaemonError", "WatchListener", "encodeTerminalInput"]
+		},
+		"host/framework/environment.ts": {
+			"Root": ["facadeInTerminals", "startEnvironment"]
+		},
+		"host/framework/legacyRecovery.ts": {
+			"Agent operations": ["confirmsLegacyResume", "matchesLegacyPin", "recoverLegacyPin"]
+		},
+		"host/framework/pinRestore.ts": {
+			"Agent operations": ["restoreFrameworkPins"]
+		},
+		"host/framework/rpc.ts": {
+			"Agent operations": ["errorOf", "unavailable"],
+			"Root": ["startDaemon"]
+		},
+		"host/framework/settings.ts": {
+			"Root": ["frameworkSettings", "openFacadeSettings", "openSettingsOf"]
+		},
+		"host/framework/terminals.ts": {
+			"Agent operations": ["OrchestratorTerminals"],
+			"Root": ["OrchestratorTerminals"]
+		},
+		"host/framework/types.ts": {
+			"Agent operations": ["DaemonError", "OrchestratorLink"],
+			"Connection and reconnect": ["AttachListener", "AttachWatchArgs", "DaemonError", "EditorCalls", "EditorTopic", "OrchestratorLink", "RawInputArgs", "ResizeAttach", "WatchListener"],
+			"Editor tabs": ["OrchestratorLink", "ResizeAttach", "encodeTerminalInput"],
+			"Pin recovery": ["DaemonError", "OrchestratorLink"],
+			"Root": ["DaemonError", "OrchestratorLink"]
+		},
+		"host/framework/workspace.ts": {
+			"Agent operations": ["FrameworkWorkspace", "WorkspacePinFailure"],
+			"Root": ["openFrameworkWorkspace"]
+		},
+		"host/home.ts": {
+			"Root": ["UnusableHome", "homeReloadText", "unusableHomeText", "useFacadeHome"]
+		},
+		"host/human.ts": {
+			"Root": ["WindowHuman"]
+		},
+		"host/implementation.ts": {
+			"Root": ["prepareFramework"]
+		},
+		"host/legacyCutover.ts": {
+			"Root": ["legacyPinMigration"]
+		},
+		"host/legacyPins.ts": {
+			"Agent operations": ["LegacyResumeTarget"],
+			"Pin recovery": ["LegacyResumeAttempt", "LegacyResumeTarget", "LegacySessionPin"],
+			"Root": ["LegacyMigrationSource", "LegacyPredecessor"],
+			"Roster and Pins": ["LEGACY_STATE_FILE", "LegacyMigrationSource", "LegacyPinMigration", "LegacySessionPin", "isFrameworkPin", "isLegacySessionPin", "isLegacyWorkspaceKey", "legacyStateFile", "readLegacyPins"]
+		},
+		"host/locations/gitEvents.ts": {
+			"Git worktrees": ["watchGitDirectory"]
+		},
+		"host/locations/gitRead.ts": {
+			"Directory catalog and history": ["Checkout", "GitError", "ListedWorktree"]
+		},
+		"host/locations/index.ts": {
+			"Root": ["createWorktreeService"]
+		},
+		"host/locations/service.ts": {
+			"Git worktrees": ["FolderSource", "GitAccess", "LocationService"]
+		},
+		"host/locations/workspaceFolders.ts": {
+			"Directory catalog and history": ["editorUriOf"]
+		},
+		"host/terminal/agentPty.ts": {
+			"Editor tabs": ["AgentPty", "ScreenBinding"]
+		},
+		"host/terminal/terminalColours.ts": {
+			"Editor tabs": ["WindowColours"],
+			"Root": ["WindowColours"]
+		},
+		"host/windowComponent.ts": {
+			"Root": ["optionalTerminalOwner"],
+			"Roster and Pins": ["legacyWindowInstance"]
+		},
+		"host/windowTerminals.ts": {
+			"Window identity": ["WindowTerminals"]
+		},
+		"record/paths.ts": {
+			"Git worktrees": ["facadeHome"],
+			"New Agent flow": ["FACADE_HOME_VARIABLE"],
+			"Pin recovery": ["isFullyQualified"],
+			"Root": ["FACADE_HOME_VARIABLE", "facadeRoot"],
+			"Roster and Pins": ["facadeHome"],
+			"Window identity": ["FACADE_HOME_VARIABLE", "isFullyQualified"]
+		},
+		"record/workspace.ts": {
+			"Legacy migration": ["resolveWorkspaceRecord"]
+		},
+		"ui/cardView.ts": {
+			"Agent pickers": ["isAgentRunning"],
+			"Root": ["CardWords"],
+			"Webview": ["isAgentRunning"]
+		},
+		"ui/catalog.ts": {
+			"Agent pickers": ["COMMANDS"],
+			"Git worktrees": ["COMMANDS", "PANEL_VIEW"],
+			"Legacy migration": ["COMMANDS", "PANEL_VIEW"],
+			"New Agent flow": ["COMMANDS"],
+			"Root": ["COMMANDS", "PANEL_VIEW", "TEST_COMMANDS"],
+			"Webview": ["CONTEXT", "PANEL_VIEW"],
+			"Window identity": ["COMMANDS", "PANEL_VIEW"]
+		},
+		"ui/commands/agent.ts": {
+			"Root": ["FrameworkCardActions", "registerFrameworkAgentCommands", "targetOf"]
+		},
+		"ui/commands/worktree.ts": {
+			"Root": ["registerWorktreeCommands"]
+		},
+		"ui/model.ts": {
+			"Agent pickers": ["PanelModel"],
+			"Root": ["PanelModel", "directoryOfFilter", "locationOfFilter"],
+			"Webview": ["PanelModel"]
+		},
+		"ui/order.ts": {
+			"Root": ["PanelPrefs"]
+		},
+		"ui/panel.ts": {
+			"Root": ["PanelView"]
+		},
+		"ui/pickers/filter.ts": {
+			"Root": ["pickFilter"]
+		},
+		"ui/pickers/launchLocation.ts": {
+			"New Agent flow": ["LaunchLocationDeps", "LaunchPlace", "checkedPlace", "chooseWorkingLocation", "machineScope", "workspacePlace"]
+		},
+		"ui/pickers/location.ts": {
+			"Card model and filtering": ["CatalogStepOptions", "catalogStep", "folderIconOf", "inStepOrder", "locationIcon", "locationsIn"],
+			"Directory catalog and history": ["addFolder", "addFolderItem", "catalogStep", "folderRow", "inStepOrder", "locationRow", "locationsIn", "removeFolderButton", "removeWorkspaceFolder"]
+		},
+		"ui/pickers/newAgent.ts": {
+			"Agent pickers": ["LaunchPickerDeps", "LaunchStart", "newAgent"]
+		},
+		"ui/pickers/orchestrator.ts": {
+			"Root": ["FrameworkPickerDeps", "createFrameworkPickers"]
+		},
+		"ui/pickers/search.ts": {
+			"Agent pickers": ["matchesCliSearch"]
+		},
+		"ui/pickers/stepping.ts": {
+			"Agent pickers": ["BACK", "Flow", "pickLoaded"],
+			"Card model and filtering": ["BACK", "Flow"],
+			"Directory catalog and history": ["BACK", "Flow"],
+			"Git worktrees": ["BACK", "Flow", "StepAction"],
+			"New Agent flow": ["BACK", "Flow", "LoadedRows", "pickLoaded"]
+		},
+		"ui/presentation.ts": {
+			"Agent pickers": ["cliDisplayName", "cliIcon", "editSettingsFileLabel", "launchFailureText", "plainText", "reasonOf", "reasonText"],
+			"Card model and filtering": ["agentCountText", "plainText"],
+			"Directory catalog and history": ["plainText"],
+			"Editor tabs": ["cliTerminalIcon"],
+			"Git worktrees": ["plainText", "worktreeFailureText"],
+			"New Agent flow": ["cliIcon", "openSettingsLabel", "plainText"],
+			"Root": ["openSettingsLabel"],
+			"Webview": ["agentCountText"]
+		},
+		"webview/protocol.ts": {
+			"Card model and filtering": ["AgentFilter", "Card", "CardMenu", "DetailField", "DetailId", "DirectoryFilter", "DisplayFilter", "FilterChoice", "PanelFilter", "PanelState", "PlaceKind"],
+			"Root": ["Act", "Outcome"]
+		}
+	}
+}

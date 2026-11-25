@@ -11,7 +11,7 @@ import { watchGitDirectory } from './gitEvents';
 import { editorNativeGit } from './nativeGit';
 import { LocationService } from './service';
 import { editorEnvironment, editorFolders, editorGit, editorGitCreationSettings, editorUriOf } from './workspaceFolders';
-import { WorktreeService } from './worktrees';
+import { WorktreeService, type CreationLocations } from './worktrees';
 
 /** The workspace-storage key of what the window last knew of its locations (RULES-2.4). */
 const KNOWN_LOCATIONS = 'facade.locations.known';
@@ -41,6 +41,6 @@ export function createLocationService(workspaceState: vscode.Memento, log: LogPo
  * New worktrees for the window's locations (WORKTREES-2), through the editor's Git extension, serialized per destination folder
  * across the environment's windows by locks in its Facade directory.
  */
-export function createWorktreeService(locations: LocationService, log: LogPort): WorktreeService {
-	return new WorktreeService({ locations, git: editorGit(), native: editorNativeGit(), settings: editorGitCreationSettings(), locks: path.join(facadeHome(), 'locks', 'worktrees'), log });
+export function createWorktreeService(locations: CreationLocations, log: LogPort, home = facadeHome()): WorktreeService {
+	return new WorktreeService({ locations, git: editorGit(), native: editorNativeGit(), settings: editorGitCreationSettings(), locks: path.join(home, 'locks', 'worktrees'), log });
 }

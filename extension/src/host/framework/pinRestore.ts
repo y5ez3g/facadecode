@@ -14,6 +14,8 @@ export interface PinRestoreDeps {
 	lookup(pin: FrameworkPin): Promise<PinRecord>;
 	resumeExisting(agent: AgentInfo): Promise<AgentInfo>;
 	resumeSession(pin: FrameworkPin): Promise<AgentInfo>;
+	restart(pin: FrameworkPin): Promise<AgentInfo>;
+	unconfirmedStart(pin: FrameworkPin): Error;
 	opened(pin: FrameworkPin, agent: AgentInfo): Promise<void>;
 	removed(pin: FrameworkPin): void;
 	expired(pin: FrameworkPin): void;
@@ -37,10 +39,17 @@ export async function restoreFrameworkPins(pins: readonly FrameworkPin[], deps: 
 		}
 		let record: AgentInfo;
 		try {
-			if ('removal' in result) {
+			const agent = 'agent' in result ? result.agent : undefined;
+			if (agent?.process === 'running') {
+				record = agent;
+			} else if (pin.restartAttempt) {
+				throw deps.unconfirmedStart(pin);
+			} else if (agent?.session) {
+				record = await deps.resumeExisting(agent);
+			} else if (pin.conversation.sessionId) {
 				record = await deps.resumeSession(pin);
 			} else {
-				record = result.agent.process === 'running' ? result.agent : await deps.resumeExisting(result.agent);
+				record = await deps.restart(pin);
 			}
 		} catch (error) {
 			if (deps.isMissingSession(error)) {

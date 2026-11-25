@@ -4,11 +4,16 @@
 
 import * as assert from 'assert';
 import type { RunFacts } from '../core/ports';
-import { runFacts } from './contractFakes';
 import type { PanelActions, PanelView } from '../ui/panel';
 import type { SelectedAgent } from '../ui/model';
 import type { PanelState } from '../webview/protocol';
 import { TestEmitter, withModules } from './withModules';
+
+function runFacts(facts: Pick<RunFacts, 'id' | 'alias' | 'name'>): RunFacts {
+	return { ...facts, cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'folder', cwd: '/work', environment: 'local',
+		yolo: true, createdAt: 0, lifecycle: 'running', phase: 'running', activity: 'not_working', reporting: true,
+		root: facts.id, origin: 'human', tools: 'not_injected' };
+}
 
 /** The panel's view and its webview's page, with no editor behind them: what the extension posts, and what the page says to it. */
 suite('The panel\'s view: what it takes from its webview, and which page it answers (PANEL-1.1, 3.1, 3.2)', () => {
@@ -36,7 +41,6 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	let panel: PanelView;
 	/** The commands the panel ran, other than its context keys. */
 	let ran: string[];
-	let copied: unknown[];
 
 	const page = (n: number) => n.toString(16).padStart(32, '0');
 	const settle = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -60,7 +64,6 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 			env: { language: 'en' },
 			commands: { executeCommand: async (command: string, arg: unknown, value: unknown) => {
 				if (command === 'setContext') { contexts[String(arg)] = value; }
-				else if (command === 'facade.copyAgentReference') { copied.push(arg); }
 				else { ran.push(command); }
 			} },
 			window: { withProgress: async () => void progress++ },
@@ -72,8 +75,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		(globalThis as { FACADE_TEST_MODE?: boolean }).FACADE_TEST_MODE = testMode;
 		const { PanelView: View } = withModules({ vscode: api })<typeof import('../ui/panel')>(require.resolve('../ui/panel'));
 		const model = { onDidChange: changed.event, state: () => state, selectedAgent: () => front,
-			placesShown: () => placesShown, usesOrchestrator: () => orchestrator, select,
-			runFacts: (id: string) => id === 'devbox/a1' ? { id, address: 'a1@devbox' } : undefined };
+			placesShown: () => placesShown, usesOrchestrator: () => orchestrator, select };
 		const actions: PanelActions = async (what, target) => {
 			acts.push([what, target]);
 			return answer();
@@ -103,7 +105,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 
 	setup(() => {
 		posted = []; acts = []; contexts = {}; progress = 0; logged = []; motions = []; ran = [];
-		copied = []; orchestrator = false;
+		orchestrator = false;
 		settings = {};
 		configChanged = new TestEmitter();
 		state = stateOf(1);
@@ -191,7 +193,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'rename' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'pin' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'unpin' },
-			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'copyReference' },
+			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'copyReference', target: 'devbox/a1' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'new', target: '1' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'unknown' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'clearFilter', target: '1' },
@@ -233,20 +235,13 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		await say({ type: 'act', page: page(1), action: `${page(1)}-3`, what: 'open', target: 'run-1' });
 		await say({ type: 'act', page: page(1), action: `${page(1)}-4`, what: 'open', revision: 4, target: 'run-1' });
 		assert.deepStrictEqual([before, acts, logged.length], [[], [['open', 'run-1']], 1]);
-		orchestrator = true;
-		await say({ type: 'act', page: page(2), action: `${page(2)}-5`, what: 'copyReference', target: 'devbox/a1' });
-		await say({ type: 'act', page: page(1), action: `${page(1)}-6`, what: 'copyReference', target: 'devbox/a1' });
-		await say({ type: 'act', page: page(1), action: `${page(1)}-7`, what: 'copyReference', target: 'other/a1' });
-		assert.deepStrictEqual(copied, [{ run_id: 'devbox/a1' }]);
-		assert.deepStrictEqual(posted.filter(message => message.type === 'outcome').slice(-2).map(({ ok, reason }) => [ok, reason]),
-			[[true, undefined], [false, 'gone']]);
 	});
 
 	test('the Framework host answers the new ready page, dispatches only its exact card run and reports errors without effects (PANEL-3.1, 3.2)', async () => {
 		panel.dispose();
 		orchestrator = true;
-		const local = runFacts(1, { id: 'workstation/a1', alias: 'a1', name: 'Gauge' });
-		const peer = runFacts(1, { id: 'devbox/a1', alias: 'a1', name: 'Gauge' });
+		const local = runFacts({ id: 'workstation/a1', alias: 'a1', name: 'Gauge' });
+		const peer = runFacts({ id: 'devbox/a1', alias: 'a1', name: 'Gauge' });
 		const runs = new Map([[local.id, local], [peer.id, peer]]);
 		const selected: string[] = [];
 		make(false, target => {
@@ -345,7 +340,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		panel.dispose();
 		orchestrator = true;
 		make();
-		assert.match(view.webview.html, /"continueSession":"Resume Agent","copyReference":"Copy Agent Reference"/);
+		assert.match(view.webview.html, /"continueSession":"Resume Agent"/);
 	});
 
 	test('the shipped build answers no probe; the integration build has the page shown answer one (UX-3.2)', async () => {

@@ -279,3 +279,48 @@ export class Flow {
 	}
 }
 
+export interface LoadedRows<T> {
+	readonly items: readonly T[];
+	readonly active?: T;
+	readonly title?: string;
+	readonly placeholder?: string;
+}
+
+/** Shows the native picker while its request is pending, and ignores answers after it is dismissed. */
+export function pickLoaded<T extends vscode.QuickPickItem>(flow: Flow, deps: { readonly notifyError: (error: unknown) => void }, options: {
+	readonly title: string;
+	readonly placeholder: string;
+	readonly load: () => Promise<LoadedRows<T>>;
+	readonly accepts?: (row: T) => boolean;
+	readonly back?: boolean;
+	readonly matchesHidden?: (row: T, query: string) => boolean;
+}) {
+	return flow.pick<T>({
+		title: options.title, placeholder: options.placeholder, items: [], busy: true,
+		matchOnDescription: true, accepts: options.accepts, back: options.back,
+		live: picker => {
+			let open = true;
+			let rows: readonly T[] = [];
+			const matchesHidden = options.matchesHidden;
+			const showRows = (query: string) => {
+				picker.items = matchesHidden ? rows.map(row => matchesHidden(row, query) ? { ...row, alwaysShow: true } : row) : rows;
+			};
+			const search = matchesHidden && picker.onDidChangeValue(showRows);
+			void Promise.resolve().then(() => open ? options.load() : undefined).then(found => {
+				if (!open || !found) { return; }
+				rows = found.items;
+				showRows(picker.value);
+				if (found.active) { picker.activeItems = [found.active]; }
+				picker.title = found.title ?? options.title;
+				picker.placeholder = found.placeholder ?? options.placeholder;
+				picker.busy = false;
+			}, error => {
+				if (open) {
+					if (options.back) { picker.busy = false; } else { flow.close(); }
+					deps.notifyError(error);
+				}
+			});
+			return { dispose: () => { open = false; search?.dispose(); } };
+		}
+	});
+}

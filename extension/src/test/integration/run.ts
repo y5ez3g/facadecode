@@ -13,50 +13,35 @@ import { execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { parse as parseJsonc, ParseError } from 'jsonc-parser';
-import { pathToFileURL } from 'url';
-import { isDeepStrictEqual } from 'util';
-import { frameworkCall, frameworkListens, frameworkProgram, EDITOR_FLAGS, editorProfile, endFramework, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
-import { BUILT_IN_NAMES } from '../../base/names';
+import { BUILT_INS } from './builtinFixtures';
+import { frameworkCall, frameworkListens, frameworkProgram, EDITOR_FLAGS, editorProfile, endFramework, endEditors, fakeClis, newRepository, officialEditor, sanitizedEnvironment, testProcessCleanup } from './editors';
 import { focusProbe } from './focusProbe';
 import { runRemoteWorktree } from './remoteWorktree';
 import { assertTemporaryState, probeEnvironment } from './probeState';
-import { replacementInFlight } from './replacementInFlight';
 import { installLocalVsixes, runEditorCli } from './vsixInstall';
 import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
-import { activationFailure, incompatibleActivation, missingSessionUnpin, multiWindowDriverFiles, frameworkMultiWindow, sharedAttachJourney, shellHandoff, staleOwner, withFrameworkWindows } from './frameworkMultiWindow';
+import { CUTOVER_VARIANTS, legacyCutover, type CutoverVariant } from './cutover';
+import { activationFailure, incompatibleActivation, missingSessionUnpin, multiWindowDriverFiles, frameworkMultiWindow, sharedAttachJourney, shellHandoff, withFrameworkWindows } from './frameworkMultiWindow';
 
 /** An entry of Facade's settings file, by its fields (CONFIGURATION-2.2). */
 type Entry = { readonly [field: string]: unknown };
 
-/**
- * The built-ins in their catalog order (CLIS-1.1), each with its earlier editor settings' segment, which a released build reads
- * (CONFIGURATION-6.1), and the avatar file its card shows (PANEL-1.3).
- */
-const BUILT_INS: readonly { readonly id: string; readonly segment: string; readonly avatar: string }[] = [
-	{ id: 'claude', segment: 'claude', avatar: 'avatar-claude.png' },
-	{ id: 'codex', segment: 'codex', avatar: 'avatar-codex.png' },
-	{ id: 'agy', segment: 'antigravity', avatar: 'avatar-antigravity.png' },
-	{ id: 'muse', segment: 'muse', avatar: 'avatar-muse.png' },
-	{ id: 'opencode', segment: 'opencode', avatar: 'avatar-opencode.png' },
-	{ id: 'pi', segment: 'pi', avatar: 'avatar-pi.png' }
-];
-
 const ACCEPTANCE_DRIVERS = new Map([
 	['activation-failure', { implementation: 'framework', cli: 'claude' }],
-	['conversion', { implementation: 'legacy', cli: 'claude' }],
-	['expiry', { implementation: 'legacy', cli: 'claude' }],
+	['cutover-exited', { implementation: 'framework', cli: 'claude' }],
+	['cutover-live', { implementation: 'framework', cli: 'claude' }],
+	['cutover-prior-owner', { implementation: 'framework', cli: 'claude' }],
+	['cutover-separate-workspaces', { implementation: 'framework', cli: 'claude' }],
+	['cutover-two-windows', { implementation: 'framework', cli: 'claude' }],
+	['cutover-uncertain', { implementation: 'framework', cli: 'claude' }],
 	['incompatible-activation', { implementation: 'framework', cli: 'claude' }],
-	['install-pair', { implementation: 'legacy', cli: 'claude' }],
+	['install-pair', { implementation: 'framework', cli: 'claude' }],
 	['lifetime', { implementation: 'framework', cli: 'claude' }],
 	['missing-session-unpin', { implementation: 'framework', cli: 'claude' }],
 	['multi-window', { implementation: 'framework', cli: 'claude' }],
 	['remote-worktree', { implementation: 'framework', cli: 'fake' }],
-	['replacement-in-flight', { implementation: 'legacy', cli: 'claude' }],
 	['shell-handoff', { implementation: 'framework', cli: 'codex' }],
-	['stale-owner', { implementation: 'legacy', cli: 'claude' }],
-	['switch', { implementation: 'framework', cli: 'claude' }],
-	['upgrade-pair', { implementation: 'legacy', cli: 'claude' }]
+	['upgrade-pair', { implementation: 'framework', cli: 'claude' }]
 ] as const);
 type AcceptanceDriver = typeof ACCEPTANCE_DRIVERS extends ReadonlyMap<infer Name, unknown> ? Name : never;
 
@@ -106,13 +91,15 @@ async function main(): Promise<void> {
 	// For a look at what a run left: its folder kept, and one part of it alone (`journeys`, `cross` or `conversion`)
 	const keep = !!process.env.FACADE_IT_KEEP;
 	const only = process.env.FACADE_IT_ONLY;
+	if (only === 'real') {
+		throw new Error('Use FACADE_IT_ONLY=real-lifecycle for the Framework editor with a real CLI.');
+	}
 	const attachFake = process.env.FACADE_IT_FAKECLI;
 	const attachUpgrade = process.env.FACADE_IT_ATTACH_UPGRADE;
-	// The implementation the windows run on: `legacy`, the default, writes `facade.framework: off` into each profile; `framework` writes `auto`, which the
-	// package with framework's programs takes to the Framework (the setting's own default is `auto`, so the suite always says it)
-	const implementation = process.env.FACADE_IT_IMPLEMENTATION ?? 'legacy';
-	if (implementation !== 'legacy' && implementation !== 'framework') {
-		throw new Error('FACADE_IT_IMPLEMENTATION is legacy or framework.');
+	// Current builds activate Framework. The legacy selector is only for fixtures using earlier packages.
+	const implementation = process.env.FACADE_IT_IMPLEMENTATION ?? 'framework';
+	if (implementation !== 'framework') {
+		throw new Error('Run legacy execution through the published VSIX cutover fixtures.');
 	}
 	// Real agents, for `real` alone: the built-in FACADE_IT_REAL (Claude Code by default) at FACADE_IT_REAL_PATH - FACADE_IT_CLAUDE
 	// for Claude Code - and Claude Code's temporary configuration folder FACADE_IT_CLAUDE_CONFIG, signed in for testing. Its terminals
@@ -139,10 +126,6 @@ async function main(): Promise<void> {
 	const nativeLifecycle = only === 'real-lifecycle';
 	const realState = process.env.FACADE_IT_REAL_STATE;
 	const realHome = process.env.FACADE_IT_REAL_HOME === 'keep';
-	// YOLO is off for the real journey, unless FACADE_IT_REAL_YOLO=on: Muse Code, whose approvals have no rule for one server's tools,
-	// asks before each of Facade's with YOLO off, and on Windows first sets up its sandbox, which a new home has not
-	const realYolo = process.env.FACADE_IT_REAL_YOLO === 'on';
-	const modelDecisions = process.env.FACADE_IT_REAL_DECISIONS === '1';
 	// The update journey's packages: a released build's, FACADE_IT_RELEASED, and the ones it updates to, FACADE_IT_CURRENT - else this build's
 	const released = process.env.FACADE_IT_RELEASED;
 	const current = process.env.FACADE_IT_CURRENT;
@@ -158,11 +141,11 @@ async function main(): Promise<void> {
 			throw new Error('An exact acceptance driver requires the matching isolated mode, implementation and fake CLI.');
 		}
 	}
-	type ServingImplementation = 'legacy' | 'framework' | 'none';
+	type ServingImplementation = 'framework' | 'none';
 	let observedDriver: { name: AcceptanceDriver; implementation: ServingImplementation } | undefined;
 	const driverPassed = (name: AcceptanceDriver, actual: ServingImplementation) => {
 		if (expectedDriver === name) {
-			const serving = name === 'activation-failure' ? 'legacy' : name === 'incompatible-activation' ? 'none' : implementation;
+			const serving = name === 'activation-failure' || name === 'incompatible-activation' ? 'none' : implementation;
 			assert.strictEqual(actual, serving, 'the completed driver exercised its expected serving implementation');
 			assert.ok(!observedDriver, 'the exact driver runs once');
 			observedDriver = { name, implementation: actual };
@@ -170,8 +153,8 @@ async function main(): Promise<void> {
 	};
 	const passed = Object.fromEntries((process.env.FACADE_IT_REAL_PASS ?? '').split(',').filter(name => name && process.env[name] !== undefined).map(name => [name, process.env[name]!]));
 	// A prepared temporary home may be used directly, or copied from an isolated state template.
-	const prepared = only === 'real' || nativeLifecycle ? process.env.FACADE_IT_REAL_AGENTS_HOME : undefined;
-	if (only === 'real' || nativeLifecycle) {
+	const prepared = nativeLifecycle ? process.env.FACADE_IT_REAL_AGENTS_HOME : undefined;
+	if (nativeLifecycle) {
 		probeEnvironment(realEnv, realHome, realConfig);
 		probeEnvironment(passed, realHome);
 		if (prepared !== undefined) { assertTemporaryState(prepared, 'FACADE_IT_REAL_AGENTS_HOME'); }
@@ -201,7 +184,7 @@ async function main(): Promise<void> {
 	// Only terminal configuration points to this temporary CLI home; the editor keeps its own HOME.
 	const agentsHome = prepared ?? path.join(root, 'agents-home');
 	fs.mkdirSync(agentsHome, { recursive: true });
-	if ((only === 'real' || nativeLifecycle) && realState) { fs.cpSync(realState, agentsHome, { recursive: true }); }
+	if ((nativeLifecycle) && realState) { fs.cpSync(realState, agentsHome, { recursive: true }); }
 	// Antigravity merges trust into its existing temporary settings (CLIS-3.3).
 	fs.mkdirSync(path.join(agentsHome, '.gemini', 'antigravity-cli'), { recursive: true });
 	const agySettingsFile = path.join(agentsHome, '.gemini', 'antigravity-cli', 'settings.json');
@@ -222,8 +205,7 @@ async function main(): Promise<void> {
 		'window.restoreWindows': 'none',
 		'update.mode': 'none',
 		'extensions.autoUpdate': false,
-		'extensions.autoCheckUpdates': false,
-		'facade.framework': implementation === 'framework' ? 'auto' : 'off'
+		'extensions.autoCheckUpdates': false
 	};
 	/**
 	 * Facade's settings file in the Facade root `facade` (CONFIGURATION-1.1): every built-in's command a fake - the suite never starts
@@ -231,7 +213,7 @@ async function main(): Promise<void> {
 	 */
 	const facadeSettings = (facade: string, clis: { readonly [name: string]: Entry } = {}, yolo?: boolean) => {
 		// Resume listing reads the settings entry's effective environment on the Orchestrator machine.
-		const fixtureEnv = implementation === 'framework' && only !== 'real' && !nativeLifecycle
+		const fixtureEnv = implementation === 'framework' && !nativeLifecycle
 			? { HOME: agentsHome, USERPROFILE: agentsHome, ...isolatedStorage }
 			: undefined;
 		const entries: { [name: string]: Entry } = Object.fromEntries(BUILT_INS.map(cli => [cli.id, {
@@ -330,7 +312,7 @@ async function main(): Promise<void> {
 		}
 		// The fake runtime registry keys leases by PID. A different journey's fixture must not reuse a stale lease.
 		const more = nativeLifecycle ? terminalEnv(realEnv)
-			: implementation === 'legacy' && cli.id === 'muse' ? terminalEnv({ XDG_DATA_HOME: path.join(facade, 'agent-data') }) : {};
+			: {};
 		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, ...more }));
 		facadeSettings(facade, { ...alone(cli.id), ...nativeLifecycle ? { [cli.id]: { command: realPath, args: realArgs } } : {} }, nativeLifecycle ? false : undefined);
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'conversion-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
@@ -352,7 +334,6 @@ async function main(): Promise<void> {
 		};
 		const editorEnv = { ...process.env, ...passed, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_IMPLEMENTATION: implementation,
 			// The first built-in's journey reloads a busy window: twenty agents beside its own (VERIFICATION G2)
-			...implementation === 'legacy' && !reopening && !nativeLifecycle && cli === BUILT_INS[0] ? { FACADE_IT_LOAD: '20' } : {},
 			FACADE_IT_SECOND: second, FACADE_IT_REOPEN: reopening ? '1' : '0', FACADE_IT_NATIVE: nativeLifecycle ? cli.id : '', CLAUDE_CONFIG_DIR: realConfig ?? claudeConfig };
 		let editor = spawn(executable, [solo, '--new-window', '--disable-extensions', ...profile.args,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
@@ -415,7 +396,6 @@ async function main(): Promise<void> {
 				console.log(`  ✔ ${cli.id}: real window close and ${expiry ? 'reopen after its grace restore the exact pinned session in a new process' : 'immediate reopen preserve Pin, exact session and process'}, with one terminal: ${JSON.stringify(lines())}`);
 				if (expectedDriver === 'expiry') {
 					assert.match(String(before.runId), /^run-/u, 'the previously pinned run has a legacy implementation identity');
-					if (expiry) { driverPassed('expiry', 'legacy'); }
 				}
 				return;
 			}
@@ -437,7 +417,6 @@ async function main(): Promise<void> {
 			}
 			if (expectedDriver === 'conversion') {
 				assert.match(before.runId, /^run-/u, 'the reloaded pinned run has a legacy implementation identity');
-				driverPassed('conversion', 'legacy');
 			}
 		} catch (error) {
 			console.error(`Editor output for ${suffix} (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
@@ -574,9 +553,7 @@ async function main(): Promise<void> {
 		});
 		try {
 			// The other window is there once its component registered it on this computer
-			if (implementation === 'legacy' && await registeredWindow(facade, label => label === 'peer') === undefined) {
-				throw new Error('The second editor window did not join this computer\'s Facade windows.');
-			}
+
 			await run('cross', repo, { FACADE_IT_CLI: 'claude', FACADE_IT_PEER: 'peer', FACADE_IT_PEER_DIR: fs.realpathSync(peer) });
 		} finally {
 			try {
@@ -588,26 +565,14 @@ async function main(): Promise<void> {
 			}
 		}
 	};
-	/**
-	 * An update from a released build with a running agent, then a reload (VERIFICATION E05, J17): the released build's two packages
-	 * installed in an isolated profile, an agent started there with its tab open, the current packages installed over them and the
-	 * window reloaded. The agent stays with its released ptyd, its tab hidden, and each question its CLI asks its terminal is answered
-	 * once: with its tab open by the editor, the window passing the answer on; hidden, by the window's headless terminal; open again,
-	 * by the editor once more (ARCHITECTURE-2.3, LIFECYCLE-3.5). It needs the released packages and runs only when asked.
-	 */
-	const update = async (mode: 'update' | 'replacement-in-flight' | 'install-pair' | 'upgrade-pair' = 'update') => {
-		const replacement = mode === 'replacement-in-flight';
-		const installPair = mode === 'install-pair';
-		const upgradePair = mode === 'upgrade-pair';
-		if ((installPair || upgradePair) && !current) {
-			throw new Error(mode + ' requires a candidate pair directory in FACADE_IT_CURRENT.');
-		}
-		if (!installPair && !released) {
-			throw new Error('FACADE_IT_ONLY=update installs a released build: set FACADE_IT_RELEASED to a folder holding its facadecode and window VSIX files.');
+	/** Install the candidate pair in an empty isolated profile and observe one real Framework start. */
+	const installPair = async () => {
+		if (!current) {
+			throw new Error('FACADE_IT_ONLY=install-pair requires FACADE_IT_CURRENT.');
 		}
 		const packages = (dir: string) => {
 			const files = fs.readdirSync(dir, { withFileTypes: true }).filter(file => file.name.endsWith('.vsix'));
-			if ((replacement || installPair || upgradePair) && (files.length !== 2 || files.some(file => !file.isFile()))) {
+			if (files.length !== 2 || files.some(file => !file.isFile())) {
 				throw new Error(`${dir} must contain exactly two regular VSIX files.`);
 			}
 			const component = files.find(file => file.name.includes('-window-'));
@@ -617,8 +582,7 @@ async function main(): Promise<void> {
 			}
 			return [path.join(dir, component.name), path.join(dir, main.name)];
 		};
-		const from = released && !installPair ? packages(released) : [];
-		const to = packages(current ?? path.resolve(__dirname, '..', '..', '..', 'vsix'));
+		const candidate = packages(current);
 		const folder = path.join(root, 'update');
 		newRepository(folder);
 		const profile = editorProfile(root, 'upd');
@@ -627,43 +591,23 @@ async function main(): Promise<void> {
 		for (const dir of [path.join(user, 'User'), facade, driver]) {
 			fs.mkdirSync(dir, { recursive: true });
 		}
-		// The released build reads its CLIs from the editor's settings, as released builds did: the update moves them into Facade's
-		// settings file, which the updated build's agents then start by (CONFIGURATION-6)
-		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings,
-			...Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.path`, launchers[cli.id] ?? fake])),
-			...Object.fromEntries(BUILT_INS.filter(each => each.id !== 'claude').map(each => [`facade.${each.segment}.enabled`, false])) }));
+		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify(settings));
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'update-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
 		fs.copyFileSync(path.join(__dirname, 'updateDriver.js'), path.join(driver, 'extension.js'));
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
 			fs.rmSync(path.join(root, file));
 		}
-		const env = { ...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_UPDATE: out, CLAUDE_CONFIG_DIR: claudeConfig,
-			...(installPair || upgradePair ? { FACADE_IT_UPDATE_ROLE: installPair ? 'install' : 'upgrade' } : {}) };
-		if (replacement) {
-			await replacementInFlight({ root, facade, folder, record, executable, driver, from, to, receiver: profile, env, endMatching });
-			driverPassed('replacement-in-flight', 'legacy');
-			return;
-		}
-		const install = (files: readonly string[]) => installLocalVsixes(executable, profile, files, env, 30_000);
+		const env = { ...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_UPDATE: out, CLAUDE_CONFIG_DIR: claudeConfig };
 		const pairVersion = (pair: string[]): string => {
 			const files = pair.map(file => path.basename(file));
 			const version = /^facadecode-window-(\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?)\.vsix$/iu.exec(files[0])?.[1];
 			assert.ok(version && files[1] === ['facadecode', process.platform, process.arch, version].join('-') + '.vsix', 'the package names are a matching native pair');
 			return version;
 		};
-		const candidateVersion = installPair || upgradePair ? pairVersion(to) : undefined;
-		const priorVersion = upgradePair ? pairVersion(from) : undefined;
-		if (installPair || upgradePair) {
-			assert.strictEqual((await runEditorCli(executable, profile, ['--list-extensions'], env, 30_000)).trim(), '', 'the editor profile has no installed extensions');
-		}
-		if (upgradePair) {
-			assert.strictEqual(priorVersion, '0.1.5', 'the supported prior pair');
-			assert.notStrictEqual(priorVersion, candidateVersion, 'the candidate updates the prior pair');
-		}
-		if (installPair) {
-			facadeSettings(facade, alone('claude'));
-		}
-		await install(installPair ? to : from);
+		const candidateVersion = pairVersion(candidate);
+		assert.strictEqual((await runEditorCli(executable, profile, ['--list-extensions'], env, 30_000)).trim(), '', 'the editor profile has no installed extensions');
+		facadeSettings(facade, alone('claude'));
+		await installLocalVsixes(executable, profile, candidate, env, 30_000);
 		let editorOutput = '';
 		const editor = spawn(executable, [folder, '--new-window', ...profile.args,
 			`--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], { stdio: ['ignore', 'pipe', 'pipe'], env });
@@ -689,127 +633,26 @@ async function main(): Promise<void> {
 			}
 		};
 		const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-		/**
-		 * What its CLI asks, then each kind of answer it got after, by how many came within a few seconds - and what it got unasked
-		 * since the last time it asked, which is to be nothing: the window's own questions' answers are the window's (ARCHITECTURE-2.3).
-		 */
-		let asked = 0;
-		let answered = 0;
-		const ask = async (alias: string) => {
-			const log = `${record}.stdin.${alias}`;
-			const since = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').length : 0;
-			const unasked = (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').slice(answered, since) : '').split('\n').filter(Boolean).map(line => (JSON.parse(line) as { data: string }).data).join('');
-			// Its cursor, the device attributes and its background colour
-			fs.writeFileSync(`${record}.quirks.${alias}`, JSON.stringify({ ask: '\x1b[6n\x1b[c\x1b]11;?\x1b\\', asked: ++asked }));
-			await new Promise(resolve => setTimeout(resolve, 4_000));
-			const got = (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').slice(since) : '').split('\n').filter(Boolean).map(line => (JSON.parse(line) as { data: string }).data).join('');
-			answered = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').length : 0;
-			// eslint-disable-next-line no-control-regex
-			return { cursor: got.match(/\x1b\[\d+;\d+R/g)?.length ?? 0, attributes: got.match(/\x1b\[\?[\d;]*c/g)?.length ?? 0, colour: got.match(/\x1b\]11;rgb:[0-9a-fA-F/]+(?:\x07|\x1b\\)/g)?.length ?? 0, ...unasked ? { unasked } : {} };
-		};
-		const once = { cursor: 1, attributes: 1, colour: 1 };
 		try {
-			if (upgradePair) {
-				type InstalledUpgrade = { version: string; component: string; componentPath: string; mainPath: string; window: string; token: string;
-					hostPid: number; aliases: string[]; saved: { key: string; workspace: string; pins: unknown[] }; agents: { root: string; session: string }[];
-					marked: { alias: string; pinned: boolean }[] };
-				const observed = (name: string) => phase(name) as unknown as Promise<InstalledUpgrade>;
-				const verifyInstall = (snapshot: InstalledUpgrade, version: string | undefined) => {
-					assert.strictEqual(snapshot.version, version);
-					assert.strictEqual(snapshot.component, version);
-					const dir = path.join(profile.env.VSCODE_PORTABLE, 'extensions');
-					assert.strictEqual(snapshot.mainPath, path.join(dir, 'facade.facadecode-' + version));
-					assert.strictEqual(snapshot.componentPath, path.join(dir, 'facade.facadecode-window-' + version));
-				};
-				const original = await observed('started');
-				verifyInstall(original, priorVersion);
-				assert.strictEqual(new Set(original.agents.map(agent => agent.session)).size, 3);
-				for (const alias of original.aliases) {
-					const launch = JSON.parse(fs.readFileSync(record + '.args.' + alias, 'utf8')) as { cwd: string };
-					assert.strictEqual(launch.cwd, folder, 'the launch ran in the observed workspace');
-				}
-				assert.strictEqual(original.saved.workspace, pathToFileURL(folder).href);
-				assert.strictEqual(original.saved.pins.length, 2);
-				assert.strictEqual(original.marked.length, 3);
-				const pids = original.aliases.map(alias => Number(fs.readFileSync(record + '.' + alias, 'utf8').trim()));
-				assert.ok(pids.every(pid => Number.isSafeInteger(pid) && pid > 0 && alive(pid)));
-				await install(to);
-				fs.writeFileSync(out + '.reload', '');
-				const successor = await observed('updated');
-				verifyInstall(successor, candidateVersion);
-				assert.notStrictEqual(successor.hostPid, original.hostPid);
-				assert.deepStrictEqual([successor.window, successor.token], [original.window, original.token]);
-				assert.deepStrictEqual(successor.saved, original.saved);
-				assert.deepStrictEqual(successor.agents, original.agents);
-				assert.deepStrictEqual(successor.marked, original.aliases.slice(0, 2).map(alias => ({ alias, pinned: true })));
-				assert.ok(pids.every(pid => alive(pid)), 'the original fake CLI processes remain live');
-				for (const [index, alias] of original.aliases.entries()) {
-					assert.deepStrictEqual(fs.readFileSync(record + '.starts.' + alias, 'utf8').trim().split(/\r?\n/u).map(Number), [pids[index]]);
-				}
-				console.log('  ✔ candidate update preserves the workspace, two ordered Pins and the live Window Component publication ' + JSON.stringify({ original, successor, pids }));
-				driverPassed('upgrade-pair', 'legacy');
-				return;
-			}
 			const started = await phase('started') as { phase: string; version: string; alias: string; tabs: string[][] };
 			const pid = Number(fs.readFileSync(`${record}.${started.alias}`, 'utf8').trim());
-			if (installPair) {
-				const observed = started as typeof started & { component: string; componentPath: string; mainPath: string; window: string; run: string };
-				assert.strictEqual(observed.version, candidateVersion);
-				assert.strictEqual(observed.component, candidateVersion);
-				const extensions = path.join(profile.env.VSCODE_PORTABLE, 'extensions');
-				for (const installed of [observed.mainPath, observed.componentPath]) {
-					assert.strictEqual(path.dirname(installed), extensions, 'activation came from the isolated install');
-				}
-				assert.ok(observed.window && observed.run && Number.isSafeInteger(pid) && pid > 0 && alive(pid), 'New Agent has a live fake CLI and Window Component publication');
-				const launches = fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`));
-				assert.deepStrictEqual(launches, [`${path.basename(record)}.starts.${observed.alias}`]);
-				assert.deepStrictEqual(fs.readFileSync(path.join(path.dirname(record), launches[0]), 'utf8').trim().split(/\r?\n/u).map(Number), [pid]);
-				console.log(`  ✔ clean candidate pair activation and one New Agent effect: ${JSON.stringify({ ...observed, pid })}`);
-				driverPassed('install-pair', 'legacy');
-				return;
+			const observed = started as typeof started & { component: string; componentPath: string; mainPath: string; token: string };
+			assert.strictEqual(observed.version, candidateVersion);
+			assert.strictEqual(observed.component, candidateVersion);
+			const extensions = path.join(profile.env.VSCODE_PORTABLE, 'extensions');
+			for (const installed of [observed.mainPath, observed.componentPath]) {
+				assert.strictEqual(path.dirname(installed), extensions, 'activation came from the isolated install');
 			}
-			// What it got before it first asked - the released build's terminal opening - is not this journey's
-			answered = fs.existsSync(`${record}.stdin.${started.alias}`) ? fs.readFileSync(`${record}.stdin.${started.alias}`, 'utf8').length : 0;
-			const before = await ask(started.alias);
-			await install(to);
-			fs.writeFileSync(`${out}.reload`, '');
-			const updated = await phase('updated') as { phase: string; version: string; tabs: string[][] };
-			// The updated build made Facade's settings file from the editor's settings the released build read (CONFIGURATION-6.1): every
-			// built-in with its defaults under what those settings gave it, in a file with comments
-			// A file that does not parse is no migration, whatever value a lenient parser makes of it
-			const migrated = (() => {
-				try {
-					const errors: ParseError[] = [];
-					const value = parseJsonc(fs.readFileSync(path.join(facade, 'facade.json'), 'utf8'), errors, { allowTrailingComma: true }) as unknown;
-					return errors.length ? { unparsed: errors.map(error => error.error) } : value;
-				} catch {
-					return undefined;
-				}
-			})();
-			// Each built-in shows its type, icon, enabled flag, args, env and migrated program. The file keeps the built-in names.
-			const moved = { yolo: true, names: [...BUILT_IN_NAMES], clis: Object.fromEntries(BUILT_INS.map(cli => [cli.id, {
-				type: cli.id, icon: cli.id, enabled: cli.id === 'claude', args: [], env: {}, program: launchers[cli.id] ?? fake
-			}])) };
-			const hidden = await ask(started.alias);
-			fs.writeFileSync(`${out}.open`, '');
-			const opened = await phase('opened') as { phase: string; tabs: string[][] };
-			await new Promise(resolve => setTimeout(resolve, 2_000));
-			const shown = await ask(started.alias);
-			console.log(`  Journey: update from ${started.version} to ${updated.version} with a running agent, then a reload (E05, J17)\n    ${JSON.stringify({ started, before, updated, hidden, opened, shown })}`);
-			const problems = [
-				...updated.version === started.version ? ['the window did not reload into the update'] : [],
-				...isDeepStrictEqual(migrated, moved) ? [] : [`the settings file was not made from the editor's settings: ${JSON.stringify(migrated)}`],
-				...JSON.stringify(before) !== JSON.stringify(once) ? [`with its tab open in the released build its questions were answered ${JSON.stringify(before)}`] : [],
-				...updated.tabs.flat().length ? [`its tab came back open after the update: ${JSON.stringify(updated.tabs)}`] : [],
-				...JSON.stringify(hidden) !== JSON.stringify(once) ? [`with its tab hidden its questions were answered ${JSON.stringify(hidden)}`] : [],
-				...opened.tabs.flat().length !== 1 ? [`Go to Agent did not open its one tab: ${JSON.stringify(opened.tabs)}`] : [],
-				...JSON.stringify(shown) !== JSON.stringify(once) ? [`with its tab open again its questions were answered ${JSON.stringify(shown)}`] : [],
-				...alive(pid) ? [] : ['its process did not survive the update']
-			];
-			if (problems.length) {
-				throw new Error(`The update journey failed: ${problems.join('; ')}.`);
-			}
-			console.log('    ✔ the agent kept its process; its tab came back hidden; each question was answered once - by the editor, by the window\'s headless terminal while hidden, and by the editor again');
+			assert.ok(observed.token && Number.isSafeInteger(pid) && pid > 0 && alive(pid), 'New Agent has a live fake CLI and a native Window Component');
+			const { agents } = await frameworkCall(facade, 'agent.list', {});
+			assert.strictEqual(agents.length, 1, 'only one Framework agent started');
+			const { agent } = await frameworkCall(facade, 'agent.inspect', { target: agents[0].reference });
+			assert.deepStrictEqual([agent.process, agent.pid, agent.reference.agent_id], ['running', pid, observed.alias.slice(1)]);
+			const launches = fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`));
+			assert.deepStrictEqual(launches, [`${path.basename(record)}.starts.${observed.alias}`]);
+			assert.deepStrictEqual(fs.readFileSync(path.join(path.dirname(record), launches[0]), 'utf8').trim().split(/\r?\n/u).map(Number), [pid]);
+			console.log(`  ✔ clean candidate pair activation and one New Agent effect: ${JSON.stringify({ ...observed, pid })}`);
+			driverPassed('install-pair', 'framework');
 		} catch (error) {
 			console.error(`Editor output for the update journey (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
 			throw error;
@@ -818,43 +661,7 @@ async function main(): Promise<void> {
 				await endEditors([editor]);
 			} finally {
 				endMatching(profile.env.VSCODE_PORTABLE);
-				endMatching(path.join(facade, 'extension', 'ptyd'));
-			await cleanUpFramework(facade);
-			}
-		}
-	};
-	/**
-	 * Real agents of one built-in working together (VERIFICATION G3): YOLO off, the suite's real journey alone. Each launch trusts its
-	 * folder in the CLI's own configuration where it keeps trust in a file (CLIS-3.3) - Claude Code's, or Antigravity's in the home folder
-	 * its terminals have: the run takes that back, Antigravity's file restored as it was.
-	 */
-	const real = async () => {
-		const added = realEntry as { readonly name: string; readonly [field: string]: unknown } | null;
-		const cli = BUILT_INS.find(each => each.id === realCli);
-		if (!cli || !realPath) {
-			throw new Error('FACADE_IT_ONLY=real starts a real CLI: set FACADE_IT_REAL to a built-in and FACADE_IT_REAL_PATH to its executable (FACADE_IT_CLAUDE for Claude Code), and give it a configuration signed in for testing.');
-		}
-		// A real CLI updates nothing of its own while it is tested: Claude Code would download its next version at every start
-		const terminals = terminalEnv({ DISABLE_AUTOUPDATER: '1', ...realEnv });
-		const agySettings = path.join(agentsHome, '.gemini', 'antigravity-cli', 'settings.json');
-		const agyBefore = cli.id === 'agy' ? (fs.existsSync(agySettings) ? fs.readFileSync(agySettings) : null) : undefined;
-		try {
-			// The other built-ins not installed: the real one is the one New Agent preselects - for an added entry, every built-in, the
-			// entry its program
-			const others = Object.fromEntries(BUILT_INS.filter(each => added || each !== cli).map(each => [each.id, { command: path.join(root, `unavailable-${each.id}`) }]));
-			const { name, ...fields } = added ?? { name: cli.id };
-			const started = { [name]: { ...added ? { type: cli.id } : {}, command: realPath, args: realArgs, ...fields } };
-			await run('real', repo, { FACADE_IT_REAL: name, FACADE_IT_REAL_BUILTIN: cli.id, FACADE_IT_GREP: 'Journey: real', ...realYolo ? { FACADE_IT_REAL_YOLO: 'on' } : {}, ...modelDecisions ? { FACADE_IT_REAL_DECISIONS: '1' } : {}, ...passed },
-				{ ...others, ...started }, terminals, cli.id === 'claude' ? realConfig ?? claudeConfig : claudeConfig, realYolo);
-		} finally {
-			if (cli.id === 'claude') {
-				untrust(path.join(realConfig ?? claudeConfig, '.claude.json'), root);
-			}
-			if (agyBefore === null) {
-				fs.rmSync(agySettings, { force: true });
-			} else if (agyBefore !== undefined) {
-				fs.writeFileSync(agySettings, agyBefore);
-				console.log(`Restored ${agySettings} as it was before the run.`);
+				await cleanUpFramework(facade);
 			}
 		}
 	};
@@ -914,7 +721,7 @@ async function main(): Promise<void> {
 			await cleanUpFramework(facade);
 		}
 	};
-	const frameworkWindows = async (runName: 'multi' | 'handoff' | 'attach' | 'missing-session-unpin' | 'activation-failure' | 'incompatible-activation' | 'stale-owner') => {
+	const frameworkWindows = async (runName: 'multi' | 'handoff' | 'attach' | 'missing-session-unpin' | 'activation-failure' | 'incompatible-activation') => {
 		const driver = path.join(root, `driver-${runName}`);
 		const facade = path.join(home, runName);
 		const peer = path.join(root, `${runName}-peer`);
@@ -927,13 +734,25 @@ async function main(): Promise<void> {
 		for (const [name, contents] of Object.entries(multiWindowDriverFiles())) {
 			fs.writeFileSync(path.join(driver, name), contents);
 		}
+		const session = runName === 'attach' && attachUpgrade ? '065e033f-12fe-4bac-9870-dc4e3d4971af' : undefined;
 		if (runName === 'attach') {
 			assert.ok(attachFake && path.isAbsolute(attachFake) && fs.statSync(attachFake, { throwIfNoEntry: false })?.isFile(),
 				'Set FACADE_IT_FAKECLI to the absolute path of the test build of facade-fakecli.');
 			assert.ok(!attachUpgrade || (path.isAbsolute(attachUpgrade) && fs.statSync(attachUpgrade, { throwIfNoEntry: false })?.isFile()),
 				'Use an absolute, isolated program for FACADE_IT_ATTACH_UPGRADE.');
 			fs.mkdirSync(facade, { recursive: true });
-			const clis = { ...alone('qa-fake'), 'qa-fake': { type: 'custom', program: attachFake } };
+			const transcripts = path.join(claudeConfig, 'projects', repo.replace(/[^A-Za-z0-9]/g, '-'));
+			if (session) {
+				fs.mkdirSync(transcripts, { recursive: true });
+				fs.writeFileSync(path.join(transcripts, `${session}.jsonl`), JSON.stringify({
+					type: 'user', sessionId: session, cwd: repo, message: { role: 'user', content: 'Saved compatible Attach fixture' },
+				}) + '\n');
+			}
+			const clis = { ...alone('qa-fake'), 'qa-fake': session ? {
+				type: 'claude', command: attachFake, env: {
+					FAKECLI_LOOK: 'claude', FAKECLI_SESSION: session, FAKECLI_TRANSCRIPTS: transcripts, CLAUDE_CONFIG_DIR: claudeConfig,
+				},
+			} : { type: 'custom', program: attachFake } };
 			fs.writeFileSync(path.join(facade, 'facade.json'), JSON.stringify({ clis }));
 		} else {
 			facadeSettings(facade, alone(runName === 'handoff' ? 'codex' : 'claude'));
@@ -949,35 +768,34 @@ async function main(): Promise<void> {
 		};
 		// Each journey has its own Facade home and can start an a1.
 		const env = { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: path.join(root, `${runName}-cli`), CLAUDE_CONFIG_DIR: claudeConfig };
-		const fallback = runName === 'activation-failure';
+		const failedStart = runName === 'activation-failure';
 		const incompatible = runName === 'incompatible-activation';
 		const faultStage = path.join(root, 'extension-with-fault');
 		const faultProgram = frameworkProgram(path.join(faultStage, 'bin'));
-		if (fallback) {
+		if (failedStart) {
 			assert.ok(fs.statSync(frameworkPrograms).isFile(), 'the original stage has the bundled native program');
 			fs.cpSync(extension, faultStage, { recursive: true, dereference: true });
-			// The native program path still exists, so auto selects Framework and actually attempts the spawn.
+			// Keep the native program path present so activation exercises the failed spawn.
 			fs.unlinkSync(faultProgram);
 			fs.mkdirSync(faultProgram);
 		}
 		const start = (folder: string, name: string, control: string, port: number) => {
-			const legacyImplementation = runName === 'stale-owner' || runName === 'attach' && name === 'legacy';
-			const withComponent = runName === 'multi' || legacyImplementation || fallback || incompatible;
+			const withComponent = runName === 'multi' || failedStart || incompatible;
 			const profile = editorProfile(root, `${runName[0]}-${name}`);
 			const userSettings = path.join(profile.user, 'User', 'settings.json');
 			if (!fs.existsSync(userSettings)) {
 				fs.mkdirSync(path.dirname(userSettings), { recursive: true });
 				fs.writeFileSync(userSettings, JSON.stringify({
-					...settings, 'window.dialogStyle': 'custom', ...legacyImplementation ? { 'facade.framework': 'off' } : {}
+					...settings, 'window.dialogStyle': 'custom'
 				}));
 			}
 			return spawn(executable, [folder, '--new-window', '--disable-extensions', ...profile.args,
-				`--extensionDevelopmentPath=${fallback ? faultStage : extension}`,
+				`--extensionDevelopmentPath=${failedStart ? faultStage : extension}`,
 				...withComponent ? [`--extensionDevelopmentPath=${windowComponent}`] : [],
 				`--extensionDevelopmentPath=${driver}`, `--remote-debugging-port=${port}`, '--locale=en', ...EDITOR_FLAGS],
 				{ env: { ...env, ...profile.env, FACADE_IT_WINDOW_CONTROL: control,
 					...withComponent ? {} : { FACADE_IT_WINDOW_NO_COMPONENT: '1' },
-					...fallback ? { FACADE_IT_WINDOW_FALLBACK: '1' } : {},
+					...failedStart ? { FACADE_IT_WINDOW_STARTUP_FAILURE: '1' } : {},
 					...incompatible ? { FACADE_IT_WINDOW_INCOMPATIBLE: '1' } : {} }, stdio: ['ignore', 'pipe', 'pipe'] });
 		};
 		try {
@@ -986,117 +804,31 @@ async function main(): Promise<void> {
 					return frameworkMultiWindow(open, { folder: repo, peer, shared, home: facade, remote: null, files });
 				}
 				if (runName === 'missing-session-unpin') { return missingSessionUnpin(open, repo, env); }
-				if (runName === 'stale-owner') { return staleOwner(open, repo, env); }
-				if (fallback) { return activationFailure(open, repo, env, faultProgram); }
+
+				if (failedStart) { return activationFailure(open, repo, env, faultProgram); }
 				if (incompatible) { return incompatibleActivation(open, repo, env); }
 				const shellEnv = {
 					...env, ...isolatedStorage, HOME: agentsHome, USERPROFILE: agentsHome,
 					APPDATA: path.join(agentsHome, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(agentsHome, 'AppData', 'Local')
 				};
-				return runName === 'attach'
-					? sharedAttachJourney(open, repo, frameworkPrograms, shellEnv, attachUpgrade)
-					: shellHandoff(open, repo, frameworkPrograms, { ...shellEnv, FACADE_IT_AS: 'codex' });
+				if (runName === 'attach') {
+					return sharedAttachJourney(open, repo, frameworkPrograms, shellEnv, attachUpgrade, session);
+				}
+				return shellHandoff(open, repo, frameworkPrograms, { ...shellEnv, FACADE_IT_AS: 'codex' });
 			});
 			// Both journeys observe the live Framework daemon and an editor view of the same machine-qualified agent.
 			if (runName === 'multi') { driverPassed('multi-window', 'framework'); }
 			if (runName === 'handoff') { driverPassed('shell-handoff', 'framework'); }
 			if (runName === 'missing-session-unpin') { driverPassed('missing-session-unpin', 'framework'); }
-			if (fallback) { driverPassed('activation-failure', 'legacy'); }
+			if (failedStart) { driverPassed('activation-failure', 'none'); }
 			if (incompatible) { driverPassed('incompatible-activation', 'none'); }
-			if (runName === 'stale-owner') { driverPassed('stale-owner', 'legacy'); }
+
 		} finally {
 			await cleanUpFramework(facade);
 			if (runName === 'attach') {
 				endMatching(facade);
-				endMatching(path.join(root, 'a-legacy'));
 			}
-			if (fallback || incompatible || runName === 'stale-owner') { endMatching(path.join(facade, 'extension', 'ptyd')); }
-		}
-	};
-	/**
-	 * Switching implementations (spec 验收): two agents under `off`; the setting `auto` and a reload: both go on, on the legacy implementation; both ended,
-	 * a new agent is not started there; reload: the window is on the Framework, and Resume Agent continues both saved sessions. The
-	 * reloads end a test run's extension host, so a driver beside Facade Code (implementationDriver.ts) does the steps and this judges them.
-	 */
-	const implementationSwitch = async () => {
-		const solo = path.join(root, 'switch-app');
-		const profile = editorProfile(root, 'sw');
-		const { user } = profile;
-		const facade = path.join(home, 'switch');
-		const out = path.join(root, 'switch.jsonl');
-		const driver = path.join(root, 'driver-switch');
-		for (const dir of [solo, path.join(user, 'User'), driver]) {
-			fs.mkdirSync(dir, { recursive: true });
-		}
-		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, 'facade.framework': 'off' }));
-		facadeSettings(facade, alone('claude'));
-		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'switch-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
-		fs.copyFileSync(path.join(__dirname, 'implementationDriver.js'), path.join(driver, 'extension.js'));
-		fs.copyFileSync(path.join(__dirname, 'resumePickerFixture.js'), path.join(driver, 'resumePickerFixture.js'));
-		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
-			fs.rmSync(path.join(root, file));
-		}
-		let editorOutput = '';
-		const editors: ReturnType<typeof spawn>[] = [];
-		const editor = spawn(executable, [solo, '--new-window', '--disable-extensions', ...profile.args,
-			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
-			stdio: ['ignore', 'pipe', 'pipe'],
-			env: { ...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_SWITCH: out, FACADE_IT_AGENTS_HOME: agentsHome, CLAUDE_CONFIG_DIR: claudeConfig }
-		});
-		editors.push(editor);
-		const append = (chunk: unknown) => { editorOutput = (editorOutput + String(chunk)).slice(-16_000); };
-		editor.stdout?.on('data', append);
-		editor.stderr?.on('data', append);
-		const lines = () => fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { phase: string; [key: string]: unknown }) : [];
-		try {
-			const end = Date.now() + 240_000;
-			while (Date.now() < end && !lines().some(line => line.phase === 'framework' || line.phase === 'error')) {
-				await new Promise(resolve => setTimeout(resolve, 500));
-			}
-			const said = lines();
-			console.log(`  Journey: switching implementations (spec 验收)\n    ${JSON.stringify(said)}`);
-			const phase = (name: string) => said.find(line => line.phase === name);
-			const two = phase('two') as { before: string; defaultSetting: string; agents: { runId: string; alias: string; session: string }[]; framework: boolean } | undefined;
-			const still = phase('legacy-still') as { cards: string[]; alive: boolean[]; framework: boolean; setting: string } | undefined;
-			const refused = phase('refused') as { cards: number; newCli: string[]; framework: boolean } | undefined;
-			const framework = phase('framework') as { framework: boolean; resumed: { runId: string; session: string }[] } | undefined;
-			const problems = [
-				...!two || two.agents.length !== 2 || two.framework ? ['two agents did not start on the legacy implementation, with no framework running'] : [],
-				...!still || still.setting !== 'auto' || still.framework || still.alive.some(each => !each) || !two || !isDeepStrictEqual([...still.cards].sort(), two.agents.map(agent => agent.runId).sort())
-					? ['after `auto` and a reload the two agents did not go on, on the legacy implementation'] : [],
-				...!refused || refused.cards !== 0 || refused.newCli.length || refused.framework ? ['with both ended, a new agent was started or framework was started where the window says to reload'] : [],
-				...!framework || !framework.framework ? ['the window did not come up on the Framework after the second reload'] : [],
-				...framework && two && !isDeepStrictEqual(framework.resumed.map(each => each.session).sort(), two.agents.map(agent => agent.session).sort()) ? ['Resume Agent did not continue both saved sessions'] : [],
-				...framework && framework.resumed.some(each => !/^[^/]+\/a\d+$/u.test(each.runId)) ? ['one of the sessions has no Orchestrator agent identity'] : [],
-				...phase('error') ? [`the driver failed: ${JSON.stringify(phase('error'))}`] : []
-			];
-			if (problems.length) {
-				throw new Error(`Switching implementations failed: ${problems.join('; ')}`);
-			}
-			console.log('    ✔ off → auto keeps the live old agents through one reload. After they end, the next reload starts framework and Resume Agent continues both saved sessions');
-			if (expectedDriver === 'switch') {
-				assert.ok(two);
-				assert.deepStrictEqual([two.defaultSetting, two.before], ['auto', 'off']);
-				assert.ok(two.agents.every(agent => /^#a\d+$/u.test(agent.alias)), 'the first two agents are legacy implementation runs');
-				driverPassed('switch', 'framework');
-			}
-		} catch (error) {
-			console.error(`Editor output for the implementation switch (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
-			throw error;
-		} finally {
-			try {
-				await endEditors(editors);
-			} finally {
-				try {
-					console.log('    Ending the implementation switch editor and terminal helpers.');
-					endMatching(user);
-					endMatching(path.join(facade, 'extension', 'ptyd'));
-				} finally {
-					console.log('    Ending the implementation switch Orchestrator.');
-					await cleanUpFramework(facade);
-				}
-				console.log('    Implementation switch cleanup finished.');
-			}
+			if (failedStart || incompatible) { endMatching(path.join(facade, 'extension', 'ptyd')); }
 		}
 	};
 	let suiteFailure: unknown;
@@ -1133,15 +865,6 @@ async function main(): Promise<void> {
 		if (!only || only === 'reopen') {
 			for (const cli of BUILT_INS) { await conversion(cli, true); }
 		}
-		if (implementation === 'legacy' && (!only || only === 'expiry')) {
-			// The shared supervisor's real local grace, not a shortened fixture timer.
-			if (expectedDriver === 'expiry') { await conversion(BUILT_INS[0], true); }
-			await conversion(BUILT_INS[0], true, true);
-		}
-		// The Framework's acceptance on the extension's side: with the implementation on, a run of the whole suite has it, and each is asked for alone
-		if (['activation-failure', 'framework', 'incompatible-activation', 'switch', 'lifetime', 'multi-window', 'missing-session-unpin', 'remote-worktree', 'shell-handoff', 'shared-attach'].includes(only ?? '') && implementation !== 'framework') {
-			throw new Error(`FACADE_IT_ONLY=${only} runs on the Framework: set FACADE_IT_IMPLEMENTATION=framework.`);
-		}
 		if (only === 'framework' || (!only && implementation === 'framework')) {
 			await frameworkJourneys();
 		}
@@ -1160,10 +883,6 @@ async function main(): Promise<void> {
 		if (only === 'incompatible-activation') {
 			await frameworkWindows('incompatible-activation');
 		}
-		if (only === 'stale-owner') {
-			assert.strictEqual(implementation, 'legacy', 'stale-owner uses the old window owner');
-			await frameworkWindows('stale-owner');
-		}
 		if (only === 'remote-worktree') {
 			driverPassed('remote-worktree', runRemoteWorktree(home, executable));
 		}
@@ -1172,9 +891,6 @@ async function main(): Promise<void> {
 		}
 		if (implementation === 'framework' && (only === 'shared-attach' || (!only && attachFake))) {
 			await frameworkWindows('attach');
-		}
-		if (only === 'switch' || (!only && implementation === 'framework')) {
-			await implementationSwitch();
 		}
 		// Asked for alone, as its three reloads of a window of twelve agents or more take minutes
 		if (only === 'pins') {
@@ -1185,17 +901,27 @@ async function main(): Promise<void> {
 			await focusProbe({ executable, root, home, extension, windowComponent, record, claudeConfig, fake, env: probeEnv, settings, endMatching,
 				facadeSettings: facade => facadeSettings(facade, alone('claude')) });
 		}
-		// Never unasked: it installs a released build's packages
-		if (only === 'update') {
-			await update();
+		// The released legacy pair to the candidate across the cutover (ARCHITECTURE-1.4, VERIFICATION-5.2)
+		const cutover = only === 'upgrade-pair' ? 'exited' : only === 'update' ? 'live' : CUTOVER_VARIANTS.find(variant => only === `cutover-${variant}`);
+		if (cutover) {
+			assert.strictEqual(implementation, 'framework', 'the cutover journeys run the candidate on Framework');
+			await legacyCutover({
+				variant: cutover, root, home, executable, record, claudeConfig, released, current, settings, endMatching,
+				legacyCliSettings: {
+					...Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.path`, launchers[cli.id] ?? fake])),
+					...Object.fromEntries(BUILT_INS.filter(each => each.id !== 'claude').map(each => [`facade.${each.segment}.enabled`, false]))
+				},
+				// Framework resolves a session from the daemon's environment and the entry's: Claude Code's session store is named there
+				facadeSettings: facade => facadeSettings(facade, { ...alone('claude'), claude: { env: {
+					HOME: agentsHome, USERPROFILE: agentsHome, ...isolatedStorage, CLAUDE_CONFIG_DIR: claudeConfig
+				} } }),
+				cleanUpFramework: facade => cleanUpFramework(facade)
+			});
+			driverPassed(only === 'upgrade-pair' ? 'upgrade-pair' : `cutover-${cutover}` as `cutover-${CutoverVariant}`,
+				'framework');
 		}
-		if (only === 'replacement-in-flight' || only === 'install-pair' || only === 'upgrade-pair') {
-			assert.strictEqual(implementation, 'legacy');
-			await update(only);
-		}
-		// Never unasked: it signs in and uses an account's usage
-		if (only === 'real') {
-			await real();
+		if (only === 'install-pair') {
+			await installPair();
 		}
 		if (nativeLifecycle) {
 			const cli = BUILT_INS.find(each => each.id === realCli);
@@ -1203,7 +929,7 @@ async function main(): Promise<void> {
 			try {
 				await conversion(cli);
 				await conversion(cli, true);
-				if (implementation === 'legacy') { await conversion(cli, true, true); }
+
 			} finally {
 				if (cli.id === 'claude') { untrust(path.join(realConfig ?? claudeConfig, '.claude.json'), root); }
 			}

@@ -38,7 +38,7 @@ let stateReceivedAt = performance.now();
 /** Where the person was when this view last hid: restored on the first list drawn, without taking input focus (PANEL-3.1). */
 let restoring = savedBrowsing();
 
-const DOTS: readonly unknown[] = ['working', 'error', 'none'];
+const DOTS: readonly unknown[] = ['working', 'error', 'just_done', 'none'];
 const EMPTY: readonly unknown[] = ['noFolder', 'noAgents', 'noMatch'];
 
 const isMenu: Check = value => isShaped(value, { moveUp: isBoolean, moveDown: isBoolean }, { dismiss: value => value === true, pin: isBoolean, unpin: isBoolean });
@@ -49,7 +49,7 @@ const PLACE_KINDS: readonly unknown[] = ['repo', 'worktree', 'folder'];
 const isFact = (ids: readonly unknown[], more: Readonly<Record<string, Check>> = {}): Check => value => isShaped(value, { id: id => ids.includes(id), label: isString, value: isString, ...more });
 const isDetails: Check = value => isShaped(value, { location: isFact(['location'], { kind: kind => PLACE_KINDS.includes(kind) }), path: isFact(['path']),
 	titleLabel: isString, description: value => isShaped(value, { title: isString, place: isString }) }, {
-	summary: isFact(['title']), untitled: isString, startedBy: isString, machine: isFact(['machine']), address: isFact(['address'])
+	summary: isFact(['title', 'session']), untitled: isString, startedBy: isString, nameLabel: isString, machine: isFact(['machine']), address: isFact(['address'])
 });
 const isCard: Check = value => isShaped(value, {
 	runId: isString, selected: isBoolean, name: isString, alias: isString,
@@ -60,7 +60,7 @@ const isState: Check = value => isShaped(value, {
 	revision: isNumber, loading: isBoolean, cards: value => Array.isArray(value) && value.every(isCard), cardCount: isNumber,
 	capabilities: value => isShaped(value, { remote: isBoolean })
 }, {
-	filter: value => isShaped(value, { kind: value => value === 'location' || value === 'folder', id: isString, label: isString }),
+	filter: value => isShaped(value, { kind: value => value === 'location' || value === 'folder' || value === 'agents', id: isString, label: isString }),
 	clockAt: isNumber,
 	empty: value => EMPTY.includes(value),
 	exited: isStrings
@@ -389,7 +389,8 @@ function emptyParts(): readonly EmptyPart[] {
 		case 'noMatch':
 			return [
 				// A function, not the label itself: a folder or branch name may hold `$&` or `$'`, which a replacement string would expand
-				{ kind: 'text', text: strings.noAgentsIn.replace('{0}', () => state.filter?.label ?? '') },
+				{ kind: 'text', text: state.filter?.kind === 'agents' && strings.noAgentsMatching
+					? strings.noAgentsMatching : strings.noAgentsIn.replace('{0}', () => state.filter?.label ?? '') },
 				// Hidden by the filter, not ended: how many, where there are any (PANEL-1.2)
 				...state.cardCount ? [{ kind: 'text', text: state.cardCount === 1 ? strings.otherAgent : strings.otherAgents.replace('{0}', String(state.cardCount)) } as const] : [],
 				{ kind: 'button', text: strings.clearFilter, run: () => act('clearFilter') },
@@ -429,7 +430,6 @@ interface Drawn {
 	readonly dot: HTMLElement;
 	readonly name: HTMLElement;
 	readonly top: HTMLElement;
-	readonly meta: HTMLElement;
 	readonly line: HTMLElement;
 	/** The buttons at the first line's end while the pointer is on the card: its details, its menu, and its Pin where it has one (PANEL-1.3). */
 	readonly actions: HTMLElement;
@@ -554,13 +554,13 @@ function make(card: Card): Drawn {
 	element.tabIndex = -1;
 	const avatar = el('span', 'avatar');
 	const dot = el('span', 'dot');
+	dot.setAttribute('aria-hidden', 'true');
 	avatar.append(face(card.avatar), dot);
 	const body = el('span', 'body');
 	const top = el('span', 'line top');
 	const name = el('span', 'name');
 	top.append(name);
 	const bottom = el('span', 'line bottom');
-	const meta = el('span', 'card-meta');
 	const line = el('span', 'title');
 	bottom.append(line);
 	body.append(top, bottom);
@@ -574,7 +574,7 @@ function make(card: Card): Drawn {
 	const pinButton = action('pin-button', pinIcon(false));
 	actions.append(info, gear, pinButton);
 	top.append(actions);
-	const entry: Drawn = { element, avatar, dot, name, top, meta, line, actions, info, gear, pinButton, look: lookOf(card.avatar), place: '', card };
+	const entry: Drawn = { element, avatar, dot, name, top, line, actions, info, gear, pinButton, look: lookOf(card.avatar), place: '', card };
 	// The pointer on the card shows its buttons: the name gives the line's end up to them, and takes it back as the pointer goes
 	element.addEventListener('pointerenter', () => setHovered(entry, true));
 	element.addEventListener('pointerleave', () => pointerLeft(entry));
@@ -742,11 +742,10 @@ function update(entry: Drawn, card: Card): void {
 		entry.top.replaceChildren(entry.name, ...card.repeated ? [el('span', 'short-id', card.alias)] : [], ...status ? [status] : [], entry.actions);
 	}
 	// The Pin button where the card can be pinned or unpinned, filled where it is pinned as its passive Pin is (PANEL-1.3)
-	const pinnable = !card.orchestrator && (card.menu.pin === true || card.menu.unpin === true);
+	const pinnable = card.menu.pin === true || card.menu.unpin === true;
 	element.classList.toggle('pinnable', pinnable);
 	element.classList.toggle('pinned', card.pinned === true);
 	element.classList.toggle('remote-agent', card.runningOn !== undefined);
-	element.classList.toggle('orchestrator', card.orchestrator !== undefined);
 	entry.pinButton.hidden = !pinnable;
 	const pinLook = card.pinned ? 'filled' : 'outline';
 	if (entry.pinButton.dataset.look !== pinLook) {
@@ -755,17 +754,6 @@ function update(entry: Drawn, card: Card): void {
 	}
 	if (entry.line.textContent !== card.line) {
 		entry.line.textContent = card.line;
-	}
-	if (card.orchestrator) {
-		if (!entry.meta.parentElement) {
-			entry.line.before(entry.meta);
-		}
-		const meta = `${card.stateText} · ${card.orchestrator.cli}${card.line ? ' ·' : ''}`;
-		if (entry.meta.textContent !== meta) {
-			entry.meta.textContent = meta;
-		}
-	} else {
-		entry.meta.remove();
 	}
 	element.classList.toggle('selected', card.selected);
 	element.setAttribute('aria-selected', String(card.selected));
@@ -877,33 +865,23 @@ details.setAttribute('aria-hidden', 'true');
 const detailsArrow = el('span', 'details-arrow');
 const detailsScroll = el('div', 'details-scroll');
 detailsScroll.tabIndex = -1;
-// Five facts, each an icon and one line as a name card lists its facts: its conversation's title - "No title yet" or "Title
-// unavailable", quieter, where it has none; who - its name, then in the quieter colour its short ID - which names the dialog; when it
-// started, as Resume Agent says a time, and who started it; where it works - its main checkout, worktree or folder, its
-// icon saying which; and its path
+// Framework shares the same icon rows for session, name, start time and folder (PANEL-4.1).
 const detailsFacts = el('div', 'details-facts');
 const detailsSummary = fact('details-fact', icon('fact-icon', [['path', { d: TALK_PATH }]]));
 const detailsWho = el('div', 'details-fact');
 const detailsWhoText = el('span');
 detailsWhoText.id = 'facade-details-title';
+const detailsNameLabel = el('span', 'visually-hidden');
 const detailsName = el('span');
 const detailsMore = el('span', 'details-more');
-detailsWhoText.append(detailsName, detailsMore);
+const detailsState = el('span');
+detailsWhoText.append(detailsNameLabel, detailsName, detailsMore, detailsState);
 detailsWho.append(icon('fact-icon', [['path', { d: TAG_PATH }]]), detailsWhoText);
-const detailsStarted = el('div', 'details-fact');
-const detailsStartedText = el('span');
-detailsStarted.append(icon('fact-icon', [['path', { d: CLOCK_PATH }]]), detailsStartedText);
+const detailsStarted = fact('details-fact', icon('fact-icon', [['path', { d: CLOCK_PATH }]]));
 let placeKind: PlaceKind = 'repo';
 const detailsLocation = fact('details-fact', PLACE_ICONS[placeKind]());
 const detailsPath = fact('details-fact', icon('fact-icon', [['path', { d: FOLDER_PATH }]]));
-const detailsMachine = fact('details-fact', icon('fact-icon', [['path', { d: GLOBE_PATH }]]));
-const detailsAddress = fact('details-fact', icon('fact-icon', [['path', { d: TAG_PATH }]]));
-const copyReference = button(strings.copyReference ?? '', () => {
-	if (detailed?.card.details.address) {
-		act('copyReference', detailed.card.runId);
-	}
-}, true);
-detailsFacts.append(detailsSummary.row, detailsWho, detailsStarted, detailsLocation.row, detailsPath.row);
+detailsFacts.append(detailsSummary.row, detailsWho, detailsStarted.row, detailsLocation.row, detailsPath.row);
 detailsScroll.append(detailsFacts);
 details.append(detailsArrow, detailsScroll);
 document.body.append(details);
@@ -993,34 +971,48 @@ function fillDetails(): void {
 		return;
 	}
 	const { card } = entry;
-	const { summary, location, path, machine, address } = card.details;
+	const { summary, location, path, nameLabel, address } = card.details;
+	const framework = card.orchestrator !== undefined;
 	show(detailsSummary, summary ?? { label: card.details.titleLabel, value: card.details.untitled ?? '' });
 	detailsSummary.row.classList.toggle('untitled', !summary);
-	write(detailsName, card.name || card.alias);
-	// Its short ID right after its name; an empty name's ID is its name
-	write(detailsMore, card.name && !card.orchestrator ? ` ${card.alias}` : '');
-	write(detailsStartedText, startedOf(card, nowOf()) ?? '');
-	if (location.kind !== placeKind) {
-		placeKind = location.kind;
-		detailsLocation.row.firstElementChild?.replaceWith(PLACE_ICONS[placeKind]());
-	}
-	show(detailsLocation, location);
-	show(detailsPath, path);
-	if (card.orchestrator) {
-		if (!detailsMachine.row.parentElement) {
-			detailsFacts.append(detailsMachine.row, detailsAddress.row, copyReference);
-		}
-		show(detailsMachine, machine);
-		show(detailsAddress, address);
-		copyReference.hidden = !address || !strings.copyReference;
+	showLabel(detailsNameLabel, detailsName, nameLabel);
+	write(detailsName, framework ? card.name.trim() ? card.name : '-' : card.name || card.alias);
+	write(detailsMore, framework ? ` ${address?.value ?? '-'}` : card.name ? ` ${card.alias}` : '');
+	write(detailsState, framework ? ` · ${card.stateText}` : '');
+	const started = startedOf(card, nowOf());
+	showLabel(detailsStarted.label, detailsStarted.value, framework && !started ? startTimeLabel() : undefined);
+	write(detailsStarted.value, started ?? (framework ? '-' : ''));
+	if (framework) {
+		detailsLocation.row.remove();
 	} else {
-		detailsMachine.row.remove();
-		detailsAddress.row.remove();
-		copyReference.remove();
+		if (!detailsLocation.row.parentElement) {
+			detailsPath.row.before(detailsLocation.row);
+		}
+		if (location.kind !== placeKind) {
+			placeKind = location.kind;
+			detailsLocation.row.firstElementChild?.replaceWith(PLACE_ICONS[placeKind]());
+		}
+		show(detailsLocation, location);
 	}
+	show(detailsPath, path);
 	placeDetails(entry);
 	// How long ago, as time passes with no new state, from what this card says now
 	scheduleDetailsClock();
+}
+
+function startTimeLabel(): string {
+	return (strings.startTime ?? strings.started).replace('{0}', '');
+}
+
+function showLabel(label: HTMLElement, value: HTMLElement, text: string | undefined): void {
+	if (text) {
+		if (label.nextElementSibling !== value) {
+			value.before(label);
+		}
+		write(label, text);
+	} else {
+		label.remove();
+	}
 }
 
 /** Shows `shown` with `words`, or hides it where there are none. */
@@ -1083,7 +1075,11 @@ function nowOf(): number {
 
 /** What a screen reader is told of a card beyond its label: the host's facts, and when it started, in the details' order (PANEL-1.5). */
 function descriptionOf(card: Card): string {
-	return [card.details.description.title, startedOf(card, nowOf()), card.details.description.place].filter(Boolean).join(', ');
+	const { description, address } = card.details;
+	const started = startedOf(card, nowOf());
+	const reference = card.orchestrator && address ? `${address.label}${address.value}` : undefined;
+	const time = started ?? (card.orchestrator ? `${startTimeLabel()}-` : undefined);
+	return [description.title, reference, time, description.place].filter(Boolean).join(', ');
 }
 
 /**

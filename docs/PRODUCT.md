@@ -119,7 +119,7 @@ with a machine scope follows the wake policy for that command.
   and reports a lookup failure if a required search could not complete.
 - Multiple eligible matches produce copyable addresses. Errors distinguish missing, ended and inaccessible
   targets. An inaccessible target's address is withheld.
-- At resume, a saved CLI session can be selected by its session ID. Copy its `REF` from the resume table. If
+- At resume, a saved CLI session can be selected by its session ID. Copy its `REFERENCE` from the resume table. If
   a prefix matches multiple sessions, use the full ID.
 
 ### States
@@ -143,7 +143,7 @@ question, permission prompt or sign-in. `just_done` means a turn finished and ha
   the other targets. The stopped agent's record lasts 30 days, and its helpers keep running.
 - **Resume.** `facade resume` lists resumable agents on reachable machines and saved CLI sessions in your
   current folder. `--local` queries only this machine with zero SSH. `--machine <MACHINE>` lists resumable
-  managed agents on that machine. Copy a `REF` from the list. Resuming a managed agent keeps its reference,
+  managed agents on that machine. Copy a `REFERENCE` from the list. Resuming a managed agent keeps its reference,
   folder, session, model and effort and uses the machine's current settings. Resuming a saved session creates a
   new agent. If the session is in use, the error identifies the agent using it. Add `-d` to run in the background.
 - **Remove.** Use VS Code to remove a record, screen and inbox. Facade stops a running agent first.
@@ -156,7 +156,7 @@ question, permission prompt or sign-in. `just_done` means a turn finished and ha
 
 ```text
 $ facade list
-NAME   REF         STATE     CLI      TYPE      WORKING DIRECTORY  STARTED  SESSION
+NAME   REFERENCE   STATE     CLI      TYPE      WORKING DIRECTORY  STARTED  SESSION
 Eve    a9@devbox   Idle      claude   Managed   /work/app-wt       1m ago   Write release notes
 Cora   a5@laptop   Online    cursor   Guest     -                  5m ago   -
 Ada    a3@laptop   Working   codex    Managed   /work/app          2h ago   Fix the failing parser test
@@ -469,17 +469,16 @@ defines the tool arguments and results.
 
 ## VS Code extension
 
-A workspace remembers agents started or opened there, their helpers throughout the creation tree, and its Pins.
-Helpers appear as cards. Windows for the same workspace share the remembered membership.
+Running Managed Agents visible to the Orchestrator appear in the panel, including starts from Shell and other windows.
+A workspace remembers agents started or opened there and shares its Pins across its windows.
 
-- **Panel.** A card shows the agent's name, CLI, state and title. Open details to see its machine. Click the
-  card to attach to its terminal. Closing the terminal tab leaves the agent running and keeps its Pin.
-- **Card menu.** Open the terminal, hide the card and remove its Pin, stop the agent, remove its record, Pin
-  it or rename it. Hiding keeps the agent running. A Pin requires a resumable session.
-- **Find an agent.** **Go to Agent…** lists running managed agents on awake, reachable machines that you can
-  attach to. **Resume Agent…** lists resumable agents and saved sessions from the Orchestrator.
-- **Start.** The location picker offers a machine and folder. On the extension host it offers workspace
-  folders and worktrees. On another machine it offers your login home, recent folders and manual path entry.
+- **Panel.** A card shows the agent's name, CLI, state and recent input. Open details to see the session,
+  reference, start time and folder. Click the card to open the terminal. Its tab can close while the agent runs.
+- **Card actions.** Pin a card, or use the menu to rename or move it. Use **Stop Agent…** to end a process.
+- **Find an agent.** Click a running agent's card to open its terminal. **Resume Agent…** lists
+  resumable agents and saved sessions from the Orchestrator.
+- **Start.** Change Location offers open folders, worktrees, recent locations and path entry on the selected
+  machine. Use the panel's **New Worktree…** to create a worktree before starting an agent.
 - **Reopen.** The extension resumes pinned agents that are stopped, including after a crash. It tries once
   per reopen and shows a failure on the card. Unpin an agent before stopping it if you want it to stay
   stopped. An expired unpinned record drops its card. For an expired pinned record, the extension can create a
@@ -488,8 +487,8 @@ Helpers appear as cards. Windows for the same workspace share the remembered mem
   Run `facade machine add` there to make other machines reachable from that window.
 - **Window Component.** The component supplied with the extension cleans up terminal tabs left by a previous
   extension host after a reconnect or restart.
-- **Extension implementation.** The [Extension product guide](extension/PRODUCT.md) describes its Framework and
-  legacy implementation settings.
+- **Extension implementation.** The [Extension product guide](extension/PRODUCT.md) describes Framework activation
+  and the transition of legacy Pins.
 - **Other actions.** Use Shell for machine administration and sending messages as a person. Use Git to remove
   a worktree.
 
@@ -499,8 +498,8 @@ The [VS Code product guide](extension/PRODUCT.md) explains the editor entry in m
 ## Common workflows
 
 1. **Start in Shell and open in VS Code.** Run `facade start -d --name Ada codex` on your laptop. Copy the
-   returned reference, also shown by `facade list --local`. Open that agent in **Go to Agent…**. Closing
-   the editor leaves it running. From Shell, use `facade attach <REFERENCE>`, Ctrl+] to detach, and
+   returned reference, also shown by `facade list --local`. Click Ada's card in VS Code to open its terminal.
+   Closing the editor leaves it running. From Shell, use `facade attach <REFERENCE>`, Ctrl+] to detach, and
    `facade stop <REFERENCE>` when you want to end the run.
 2. **Run on another machine.** Save devbox with `facade machine add -p 2222 aaron@devbox.lan`. Then run
    `facade start --machine devbox --workdir /work/app --worktree feat-x claude`. You can attach from both
