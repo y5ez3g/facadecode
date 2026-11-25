@@ -425,13 +425,23 @@ pub fn run() -> anyhow::Result<()> {
     base_service::close_inherited(channel.as_ref())
         .map_err(|err| failed(&mut channel, err.into()))?;
     facade_base::limits::raise_open_files();
-    let workers = std::thread::available_parallelism()
-        .map_or(4, |n| n.get())
-        .clamp(2, 16);
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let workers = if cfg!(windows) {
+        2
+    } else {
+        std::thread::available_parallelism()
+            .map_or(4, |n| n.get())
+            .clamp(2, 16)
+    };
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder
         .worker_threads(workers)
         .thread_name("facade-worker")
-        .enable_all()
+        .enable_all();
+    #[cfg(windows)]
+    builder
+        .max_blocking_threads(10)
+        .thread_keep_alive(Duration::from_millis(150));
+    let runtime = builder
         .build()
         .map_err(|err| failed(&mut channel, err.into()))?;
     runtime.block_on(async {
