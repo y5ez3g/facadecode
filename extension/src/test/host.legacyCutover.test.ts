@@ -139,6 +139,39 @@ suite('Scoped legacy cutover', () => {
 		}
 	});
 
+	test('defers a new Pin recovery when released supervisor enumeration fails (ARCHITECTURE-1.4)', async () => {
+		const f = await fixture();
+		try {
+			f.rows.forEach(row => { row.ended = true; });
+			const namespace = process.platform === 'win32' ? '\\\\.\\pipe\\' : path.dirname(ptydSocketPath(f.home, PTYD_PROTOCOL));
+			let unreadable = true;
+			let attempts = 0;
+			const readdirSync = (directory: string) => {
+				if (directory === namespace) {
+					attempts++;
+					const code = process.platform === 'win32' ? 'ENOENT' : 'EACCES';
+					if (unreadable) { throw Object.assign(new Error('Cannot enumerate legacy supervisors'), { code }); }
+				}
+				return fs.readdirSync(directory);
+			};
+			const hostFs = new Proxy(fs, { get: (target, key) => key === 'readdirSync' ? readdirSync : Reflect.get(target, key) });
+			const load = withModules({ fs: hostFs });
+			const { legacyPinMigration: migrate } = load<typeof import('../host/legacyCutover')>(require.resolve('../host/legacyCutover'));
+			const migration = migrate(f.home, A);
+			const saved = pin('pin-a', 'scope-a');
+			assert.deepStrictEqual(await migration.recover(saved, () => ({ attempted: false }),
+				async () => assert.fail('endpoint enumeration failure allowed a new start')), { kind: 'deferred' });
+			assert.strictEqual(attempts, 1);
+			unreadable = false;
+			assert.deepStrictEqual(await migration.recover(saved, () => ({ attempted: false }), async reservation => {
+				await reservation.begin();
+				return REFERENCE;
+			}), { kind: 'confirmed', reference: REFERENCE });
+		} finally {
+			await f.dispose();
+		}
+	});
+
 	test('reloads before consent and before dispatch with the same retired claim and approved scope (ARCHITECTURE-1.4)', async () => {
 		const f = await fixture();
 		try {

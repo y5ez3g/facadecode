@@ -3,14 +3,39 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
 import { lineReader } from '../base/lines';
-import { PtydClient, PTYD_PROTOCOL, ptydSocketPath } from '../host/migration/supervisor';
+import { PtydClient, PTYD_PROTOCOL, ptydSocketPath, releasedPtydSockets } from '../host/migration/supervisor';
 import { tempDir } from './util';
 
 suite('Legacy supervisor transport (ARCHITECTURE-1.4)', () => {
+	test('Windows enumerates a bound pipe with the released home and build suffixes', async function () {
+		if (process.platform !== 'win32') { this.skip(); }
+		const temp = tempDir('fd-old-pipe-');
+		const namespace = '\\\\.\\pipe\\';
+		const build = '0123456789';
+		const homeHash = createHash('sha256').update(temp.dir).digest('hex').slice(0, 12);
+		const name = `facade-extension-ptyd-17-${build}-${homeHash}`;
+		const socket = `${namespace}${name}`;
+		const server = net.createServer(connection => connection.destroy());
+		try {
+			await new Promise<void>((resolve, reject) => {
+				server.once('error', reject);
+				server.listen(socket, resolve);
+			});
+			assert.ok(fs.readdirSync(namespace).includes(name), `Windows did not enumerate the bound fixture ${name}`);
+			assert.strictEqual(ptydSocketPath(temp.dir, PTYD_PROTOCOL, build), socket);
+			assert.deepStrictEqual(releasedPtydSockets(temp.dir), [{ socket, build }]);
+			assert.deepStrictEqual(releasedPtydSockets(path.join(temp.dir, 'other-home')), []);
+		} finally {
+			if (server.listening) { await new Promise<void>(resolve => server.close(() => resolve())); }
+			temp.remove();
+		}
+	});
+
 	test('retirement uses the five released requests and reports loss of custody', async () => {
 		const temp = tempDir('fd-old-supervisor-');
 		const socket = process.platform === 'win32' ? ptydSocketPath(temp.dir, PTYD_PROTOCOL) : path.join(temp.dir, 'old.sock');
