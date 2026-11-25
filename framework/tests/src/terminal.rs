@@ -339,6 +339,21 @@ impl TestTerminal {
             .collect()
     }
 
+    /// The physical viewport, keeping blank rows and preserving screen coordinates.
+    pub fn viewport_rows(&self) -> Vec<String> {
+        self.screen
+            .lock()
+            .unwrap()
+            .view()
+            .rows
+            .into_iter()
+            .map(|row| {
+                let text: String = row.iter().map(|cell| cell.text.as_str()).collect();
+                text.trim_end().to_string()
+            })
+            .collect()
+    }
+
     /// Returns the terminal's scrollback and visible text, one line per logical line.
     pub fn text_with_scrollback(&self) -> String {
         self.screen

@@ -79,8 +79,25 @@ impl Given<'_> {
         match provider.native {
             Native::Kiro => {
                 let args = server["args"].as_array().unwrap();
+                #[cfg(unix)]
                 let script = args.last().unwrap().as_str().unwrap();
+                #[cfg(windows)]
+                let script = {
+                    let args: Vec<_> = args.iter().map(|word| word.as_str().unwrap()).collect();
+                    let program = server["command"].as_str().unwrap();
+                    let command = format!("{program} {}", args.join(" "));
+                    let decoded = powershell_script(&command).expect("Kiro's encoded launcher");
+                    decoded
+                        .strip_prefix("& ([scriptblock]::Create([IO.File]::ReadAllText('")
+                        .and_then(|path| path.strip_suffix("'))); exit $LASTEXITCODE"))
+                        .expect("the launcher reads the private relay script")
+                        .replace("''", "'")
+                };
+                #[cfg(windows)]
+                let script = script.as_str();
                 let script = in_run_folder(Path::new(script), self.home).unwrap();
+                #[cfg(windows)]
+                assert_eq!(script.file_name().unwrap(), "kiro-relay.ps1");
                 std::fs::read_to_string(script).unwrap()
             }
             _ => words,
@@ -178,7 +195,11 @@ const DEVIN: Provider = Provider {
         );
     },
     save: |place, id, name| {
-        let folder = place.user.join(".local/share/devin");
+        let folder = place.user.join(if cfg!(windows) {
+            "AppData/Local/devin"
+        } else {
+            ".local/share/devin"
+        });
         std::fs::create_dir_all(&folder).unwrap();
         let db = rusqlite::Connection::open(folder.join("sessions.db")).unwrap();
         db.execute_batch(
@@ -395,6 +416,20 @@ impl Stand {
         ]
     }
 
+    /// The command's isolated launch environment, supplied through the test protocol call.
+    fn protocol_env(&self) -> std::collections::BTreeMap<&'static str, String> {
+        let mut env = std::collections::BTreeMap::new();
+        #[cfg(windows)]
+        env.extend(
+            PASSED_THROUGH
+                .iter()
+                .filter_map(|&name| std::env::var(name).ok().map(|value| (name, value))),
+        );
+        env.extend(self.home.isolating_env());
+        env.extend(self.env());
+        env
+    }
+
     /// Starts the CLI as `ada` in the project through the protocol, its new session `session`.
     fn start(
         &self,
@@ -402,12 +437,7 @@ impl Stand {
         prompt: Option<&str>,
         (cols, rows): (u16, u16),
     ) -> Value {
-        let mut env: std::collections::BTreeMap<_, _> = self
-            .home
-            .isolating_env()
-            .into_iter()
-            .chain(self.env())
-            .collect();
+        let mut env = self.protocol_env();
         if let Some(session) = session {
             env.insert("FAKECLI_SESSION", session.to_string());
         }
@@ -551,10 +581,21 @@ impl Stand {
     /// Writes the person's own settings.
     fn write_own_settings(&self) {
         for (file, text) in self.provider.own_settings {
-            let file = self.place.user.join(file);
+            let file = self.own_settings_file(file);
             std::fs::create_dir_all(file.parent().unwrap()).unwrap();
             std::fs::write(file, text).unwrap();
         }
+    }
+
+    fn own_settings_file(&self, file: &str) -> PathBuf {
+        let file = Path::new(file);
+        if cfg!(windows) && self.provider.native == Native::Devin {
+            return self.place.user.join("AppData/Roaming").join(
+                file.strip_prefix(".config")
+                    .expect("Devin's own files are under the configuration root"),
+            );
+        }
+        self.place.user.join(file)
     }
 }
 
@@ -655,7 +696,7 @@ fn starts_takes_messages_and_resumes_its_session(provider: &'static Provider) {
     stand.facade(&["stop", "ada"], &[]);
     keeps_no_file(&stand, &before);
     for (file, text) in provider.own_settings {
-        let file = stand.place.user.join(file);
+        let file = stand.own_settings_file(file);
         assert_eq!(std::fs::read_to_string(file).unwrap(), *text);
     }
 }
@@ -761,12 +802,7 @@ fn resume_external_session(provider: &'static Provider, profile: Option<&str>) {
         (provider.save)(&stand.place, &session, "修复构建");
     }
     stand.facade(&["daemon", "--detach"], &[]);
-    let env: std::collections::BTreeMap<_, _> = stand
-        .home
-        .isolating_env()
-        .into_iter()
-        .chain(stand.env())
-        .collect();
+    let env = stand.protocol_env();
     let mut wire = connect(&stand.home);
     let items = saved_sessions(&mut wire, &stand.place.project);
     assert_eq!(items.len(), 1, "{items:?}\n{}", stand.home.daemon_log());
@@ -838,7 +874,11 @@ fn each_cli_is_listed_under_its_name() {
         .filter(|cli| *cli != "fake")
         .collect();
     let earlier = ["claude", "codex", "agy", "muse", "opencode", "pi"];
-    assert_eq!(listed, [&earlier[..], &names[..]].concat(), "in this order");
+    assert_eq!(
+        listed,
+        [&earlier[..], &names[..], &["copilot"]].concat(),
+        "in this order"
+    );
     // What a model reads of the CLIs it can start.
     home.start_named_fake("ada", &[]);
     let mut ada = McpTestClient::open_configured(&home, "a1");
@@ -952,12 +992,7 @@ fn cursor_cannot_resume_a_startup_id_without_a_saved_conversation() {
         json!({ "kind": "agent", "reference": agent["reference"] }),
         json!({ "kind": "selector", "selector": "ada", "folder": stand.place.project }),
     ] {
-        let env: std::collections::BTreeMap<_, _> = stand
-            .home
-            .isolating_env()
-            .into_iter()
-            .chain(stand.env())
-            .collect();
+        let env = stand.protocol_env();
         let refused = wire.call(
             "agent.resume",
             json!({ "target": target, "env": env, "size": { "cols": 120, "rows": 30 } }),

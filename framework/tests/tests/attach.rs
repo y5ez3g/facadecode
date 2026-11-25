@@ -362,10 +362,10 @@ fn detach_from_a_main_screen_cli_keeps_its_primary_output() {
 fn wait_for_viewport(term: &TestTerminal, rows: [&str; 3], alternate: bool) {
     assert!(
         wait_until(LOADED_TIMEOUT, || {
-            term.rows()[..rows.len()] == rows && term.on_alternate_screen() == alternate
+            term.viewport_rows()[..rows.len()] == rows && term.on_alternate_screen() == alternate
         }),
         "expected {rows:?} with alternate screen {alternate}, got {:?}",
-        term.rows()
+        term.viewport_rows()
     );
 }
 
