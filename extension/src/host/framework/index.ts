@@ -12,7 +12,7 @@ import { FACADE_HOME_VARIABLE } from '../../record/paths';
 import { COMMANDS } from '../../ui/catalog';
 import { registerOrchestratorUi, type OrchestratorUiDeps } from '../../ui/commands/index';
 import { registerWorktreeCommands } from '../../ui/commands/worktree';
-import { WindowColours } from '../execution/terminalColours';
+import { WindowColours } from '../terminal/terminalColours';
 import { WindowHuman } from '../human';
 import type { LegacyMigrationSource } from '../legacyPins';
 import { createWorktreeService } from '../locations/index';

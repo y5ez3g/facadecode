@@ -4,8 +4,8 @@
 
 import * as assert from 'assert';
 import * as path from 'path';
-import type * as AgentPtyModule from '../host/execution/agentPty';
-import type { RunBinding } from '../host/execution/agentPty';
+import type * as AgentPtyModule from '../host/terminal/agentPty';
+import type { RunBinding } from '../host/terminal/agentPty';
 import { TerminalReplies } from '../base/terminalReplies';
 import { TestEmitter, withModules } from './withModules';
 

@@ -1,7 +1,7 @@
 {
 	"root": ["extension.ts", "host/framework/index.ts", "host/service.ts", "ui/commands/index.ts"],
 	"migration": ["base/ptydRegistry.ts", "host/implementation.ts", "host/legacyCutover.ts", "host/legacyPins.ts", "host/migration/supervisor.ts", "host/pins.ts"],
-	"shared": ["base/async.ts", "base/connect.ts", "base/errors.ts", "base/files.ts", "base/json.ts", "base/jsonc.ts", "base/lifecycle.ts", "base/lines.ts", "base/lock.ts", "base/names.ts", "base/ownership.ts", "base/robot.ts", "base/system.ts", "core/errors.ts", "core/names.ts", "core/ports.ts", "record/paths.ts", "ui/catalog.ts", "ui/pickers/search.ts", "ui/pickers/stepping.ts", "ui/presentation.ts"],
+	"shared": ["base/async.ts", "base/connect.ts", "base/errors.ts", "base/files.ts", "base/json.ts", "base/jsonc.ts", "base/lifecycle.ts", "base/lines.ts", "base/lock.ts", "base/names.ts", "base/ownership.ts", "base/robot.ts", "base/system.ts", "base/tabSpinner.ts", "core/errors.ts", "core/names.ts", "core/ports.ts", "record/paths.ts", "ui/catalog.ts", "ui/pickers/search.ts", "ui/pickers/stepping.ts", "ui/presentation.ts"],
 	"islands": {
 		"Framework connection": {
 			"Connection and reconnect": ["host/framework/connection.ts", "host/framework/daemonTypes.ts", "host/framework/rpc.ts"],
@@ -13,8 +13,8 @@
 			"Pin recovery": ["host/editorEnvironment.ts", "host/framework/legacyRecovery.ts", "host/framework/pinRestore.ts"]
 		},
 		"Terminal view": {
-			"Editor tabs": ["base/tabSpinner.ts", "host/execution/agentTerminals.ts", "host/framework/terminals.ts"],
-			"Terminal data and input": ["base/mouseModes.ts", "base/mouseReports.ts", "base/terminalReplies.ts", "host/execution/agentPty.ts", "host/execution/hiddenAnswers.ts", "host/execution/terminalColours.ts"]
+			"Editor tabs": ["host/framework/terminals.ts", "host/terminal/agentTerminals.ts"],
+			"Terminal data and input": ["base/mouseModes.ts", "base/mouseReports.ts", "base/terminalReplies.ts", "host/terminal/agentPty.ts", "host/terminal/hiddenAnswers.ts", "host/terminal/terminalColours.ts"]
 		},
 		"Launch and locations": {
 			"Directory catalog and history": ["core/locations/catalog.ts", "host/framework/catalog.ts", "host/locations/gitEvents.ts", "host/locations/service.ts", "ui/pickers/launchLocation.ts"],
@@ -164,13 +164,6 @@
 		"host/editorEnvironment.ts": {
 			"Git worktrees": ["editorEnvironment"]
 		},
-		"host/execution/agentPty.ts": {
-			"Editor tabs": ["AgentPty", "ScreenBinding"]
-		},
-		"host/execution/terminalColours.ts": {
-			"Editor tabs": ["WindowColours"],
-			"Root": ["WindowColours"]
-		},
 		"host/framework/agentFacts.ts": {
 			"Root": ["agentKey"]
 		},
@@ -251,6 +244,13 @@
 		},
 		"host/locations/workspaceFolders.ts": {
 			"Directory catalog and history": ["editorUriOf"]
+		},
+		"host/terminal/agentPty.ts": {
+			"Editor tabs": ["AgentPty", "ScreenBinding"]
+		},
+		"host/terminal/terminalColours.ts": {
+			"Editor tabs": ["WindowColours"],
+			"Root": ["WindowColours"]
 		},
 		"host/windowComponent.ts": {
 			"Root": ["optionalTerminalOwner"],

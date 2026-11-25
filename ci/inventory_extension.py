@@ -180,7 +180,7 @@ def _window(root: Path, rows: dict[str, str]) -> None:
     kinds = []
     for values in re.findall(r"\breadonly kind: ((?:'[\w]+'(?: \| )?)+)", registration):
         kinds.extend(_literals(values))
-    terminals = "extension/src/host/execution/agentTerminals.ts"
+    terminals = "extension/src/host/terminal/agentTerminals.ts"
     terminal_kinds = re.findall(r"\bkind: '([\w-]+)'", _read(root, terminals))
     if set(kinds) != set(terminal_kinds):
         raise ValueError(f"{WINDOW_IDENTITY}: terminal registration kinds differ from {terminals}")

@@ -6,7 +6,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as ts from 'typescript';
-import { dependenciesOf, productionGraph, SOURCE_ROOT, type SourceGraph } from './sourceGraph';
+import { dependenciesOf, productionGraph, sourceCycles, SOURCE_ROOT, type Dependency, type SourceGraph } from './sourceGraph';
 
 interface Contracts {
 	readonly root: readonly string[];
@@ -80,7 +80,24 @@ suite('Extension island interfaces (ISLANDS, ARCHITECTURE-1.3)', () => {
 	test('each production file has one owner and imports only public names granted to it', () => {
 		const map = path.join(path.dirname(SOURCE_ROOT), 'islands.json');
 		const contracts: Contracts = JSON.parse(fs.readFileSync(map, 'utf8'));
-		assert.deepStrictEqual(violations(productionGraph(), contracts), []);
+		const graph = productionGraph();
+		assert.deepStrictEqual(violations(graph, contracts), []);
+
+		const islands = Object.entries(contracts.islands);
+		const mediumByFile = new Map(islands.flatMap(([island, small]) =>
+			Object.values(small).flatMap(files => files.map(file => [file, island] as const))));
+		const edges = new Map<string, Dependency[]>(islands.map(([island]) => [island, []]));
+		for (const [file, dependencies] of graph) {
+			const source = mediumByFile.get(file);
+			if (!source) { continue; }
+			for (const dependency of dependencies) {
+				const target = dependency.target && mediumByFile.get(dependency.target);
+				if (target && target !== source) {
+					edges.get(source)!.push({ ...dependency, target });
+				}
+			}
+		}
+		assert.deepStrictEqual(sourceCycles(edges), [], 'medium islands never depend on each other in both directions');
 	});
 
 	test('only the workspace host reaches the migration adapter and every production source has an entry point', () => {

@@ -7,8 +7,8 @@ import * as vscode from 'vscode';
 import { timeout } from '../../base/async';
 import type { AgentRef, DaemonTopics } from '../../base/frameworkProtocol';
 import type { Disposable, PairFacts, RunId } from '../../core/ports';
-import type { ScreenBinding } from '../execution/agentPty';
-import { AgentTerminals, type AgentTerminal } from '../execution/agentTerminals';
+import type { ScreenBinding } from '../terminal/agentPty';
+import { AgentTerminals, type AgentTerminal } from '../terminal/agentTerminals';
 import { encodeTerminalInput, type OrchestratorLink, type ResizeAttach } from './types';
 
 type TerminalOptions = ConstructorParameters<typeof AgentTerminals>[0];

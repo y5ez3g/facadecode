@@ -8,16 +8,11 @@ import { productionGraph, sourceCycles } from './sourceGraph';
 /** What each layer may import of the others (ARCHITECTURE-1.3): business rules depend on ports, never on the editor or a socket. */
 const MAY_IMPORT: { readonly [layer: string]: readonly string[] } = {
 	'extension.ts': ['host'],
-	host: ['ui', 'contract', 'core', 'record', 'clis', 'transport', 'schema', 'ptyd', 'base'],
+	host: ['ui', 'core', 'record', 'base'],
 	ui: ['core', 'webview', 'base'],
 	webview: [],
-	contract: ['core', 'schema', 'base'],
 	core: ['base'],
 	record: ['base'],
-	clis: ['base'],
-	ptyd: ['base'],
-	transport: ['ptyd', 'schema', 'base'],
-	schema: ['base'],
 	base: []
 };
 
@@ -71,10 +66,10 @@ suite('Layers: what each file may import (ARCHITECTURE-1.3)', () => {
 		assert.deepStrictEqual(sourceCycles(graph), []);
 	});
 
-	test('execution depends on shared presentation, never a picker or command flow', () => {
+	test('the terminal view depends on shared presentation and calls no picker or command flow', () => {
 		const wrong: string[] = [];
 		for (const [file, dependencies] of graph) {
-			if (!file.startsWith('host/execution/')) { continue; }
+			if (!file.startsWith('host/terminal/')) { continue; }
 			for (const { target } of dependencies) {
 				if (target?.startsWith('ui/') && target !== 'ui/presentation.ts') {
 					wrong.push(`${file} imports ${target}`);

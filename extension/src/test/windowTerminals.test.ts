@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type * as vscode from 'vscode';
 import { isTerminalRegistration, TERMINAL_REGISTRATION_MS, type TerminalOwner } from '../base/windowIdentity';
-import type { AgentTerminals } from '../host/execution/agentTerminals';
+import type { AgentTerminals } from '../host/terminal/agentTerminals';
 import type { WindowTerminals } from '../host/windowTerminals';
 import { FakeClock } from './clock';
 import { TestEmitter, withModules } from './withModules';
@@ -70,7 +70,7 @@ suite('Window terminal registration: actual objects across workspace host genera
 		return snapshot;
 	};
 	const manager = (remote = true) => {
-		const { AgentTerminals: Manager } = load<typeof import('../host/execution/agentTerminals')>(require.resolve('../host/execution/agentTerminals'));
+		const { AgentTerminals: Manager } = load<typeof import('../host/terminal/agentTerminals')>(require.resolve('../host/terminal/agentTerminals'));
 		const result = new Manager({ media: {} as vscode.Uri, log: () => undefined, terminalOwner: { ...owner, remote },
 			activated: () => undefined, closed: () => undefined, renamed: () => undefined });
 		managers.push(result);

@@ -5,7 +5,7 @@
 import * as assert from 'assert';
 import type { AgentInfo } from '../base/frameworkProtocol';
 import type { FrameworkPin } from '../core/ports';
-import type { AgentPty } from '../host/execution/agentPty';
+import type { AgentPty } from '../host/terminal/agentPty';
 import { restoreFrameworkPins } from '../host/framework/pinRestore';
 import { DaemonError, type AttachListener, type AttachWatchArgs, type OrchestratorLink, type ResizeAttach } from '../host/framework/types';
 import { TestEmitter, withModules } from './withModules';
@@ -30,8 +30,8 @@ suite('Orchestrator terminals', () => {
 			l10n: { t: (message: string, ...args: unknown[]) => message.replace(/\{(\d+)\}/g, (_, at: string) => String(args[Number(at)])) }
 		};
 		const load = withModules({ vscode });
-		const { AgentPty } = load<typeof import('../host/execution/agentPty')>(require.resolve('../host/execution/agentPty'));
-		const { WindowColours } = load<typeof import('../host/execution/terminalColours')>(require.resolve('../host/execution/terminalColours'));
+		const { AgentPty } = load<typeof import('../host/terminal/agentPty')>(require.resolve('../host/terminal/agentPty'));
+		const { WindowColours } = load<typeof import('../host/terminal/terminalColours')>(require.resolve('../host/terminal/terminalColours'));
 		const colors = new WindowColours();
 		const pty: AgentPty = new AgentPty('Fixture', () => undefined, undefined, (osc, rgb) => colors.learn(osc, rgb));
 		pty.onDidOverrideDimensions(grid => renderer.push(grid));
@@ -59,7 +59,7 @@ suite('Orchestrator terminals', () => {
 			retries.delete(callback);
 			callback();
 		};
-		const { OrchestratorTerminals } = withModules({ vscode, '../execution/agentTerminals': { AgentTerminals } }, timers)<typeof import('../host/framework/terminals')>(require.resolve('../host/framework/terminals'));
+		const { OrchestratorTerminals } = withModules({ vscode, '../terminal/agentTerminals': { AgentTerminals } }, timers)<typeof import('../host/framework/terminals')>(require.resolve('../host/framework/terminals'));
 		let canSend = true;
 		const ref = { machine_id: gpu, agent_id: 'a7' };
 		const link: OrchestratorLink = {
