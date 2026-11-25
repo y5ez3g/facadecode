@@ -5,11 +5,9 @@
 // The legacy cutover's driver (ARCHITECTURE-1.4, VERIFICATION-5.2): an extension beside an installed released legacy build of Facade
 // Code, in an editor that runs no extension tests, as the installed packages have none of the suite's commands. In the released build
 // it starts two agents as a person does and pins the first, so their two distinct sessions and the one Pin are saved; the runner
-// then installs the candidate pair and asks for a reload. In the candidate it says which build activated and, when the runner asks,
-// runs VS Code's primary-action command for the cutover's notification, or opens the notification center. Each step is a line of FACADE_IT_CUTOVER for the runner to judge; the runner asks for the
-// next by a file `<FACADE_IT_CUTOVER>.<step>` or, for one window, `<FACADE_IT_CUTOVER>.<role>.<step>`. A legacy window that still owns
-// its agents ends them when asked. It is copied alone into the test window's extensions, so it imports nothing of the
-// extension's at run time.
+// then installs the candidate pair and asks for a reload. Each window reports its actions to FACADE_IT_CUTOVER and accepts
+// requests from `<FACADE_IT_CUTOVER>.<role>.<step>`. A released window can enter text into its own live terminal or stop its agents.
+// A candidate window can show its notifications and exercise the Settings file action. The driver is copied alone.
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -19,17 +17,11 @@ import type { Directory } from './legacyDirectory';
 
 const OUT = process.env.FACADE_IT_CUTOVER!;
 const RECORD = process.env.FACADE_IT_RECORD!;
-/** `primary`, the window that starts the legacy agents, or `second`, another window of the same workspace on the candidate. */
+/** The original window or its peer, which can open either the same workspace or its own. */
 const ROLE = process.env.FACADE_IT_CUTOVER_ROLE ?? 'primary';
-/** The command the cutover's single action runs, when the variant accepts it. */
-const ACCEPT = process.env.FACADE_IT_CUTOVER_COMMAND || undefined;
 
 function write(line: object): void {
 	fs.appendFileSync(OUT, `${JSON.stringify({ role: ROLE, ...line })}\n`);
-}
-
-function said(): { readonly phase: string; readonly role?: string }[] {
-	return fs.existsSync(OUT) ? fs.readFileSync(OUT, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { phase: string; role?: string }) : [];
 }
 
 async function until<T>(what: string, probe: () => Promise<T | undefined> | T | undefined, ms = 20_000): Promise<T> {
@@ -46,8 +38,8 @@ async function until<T>(what: string, probe: () => Promise<T | undefined> | T | 
 	}
 }
 
-function version(): string | undefined {
-	return (vscode.extensions.getExtension('facade.facadecode')?.packageJSON as { version?: string } | undefined)?.version;
+function version(extension: string): string | undefined {
+	return (vscode.extensions.getExtension(`facade.${extension}`)?.packageJSON as { version?: string } | undefined)?.version;
 }
 
 /** The legacy agents the fake CLI says started, by the files `<record>.#aN` holding their process IDs. */
@@ -68,7 +60,7 @@ async function pick<T>(what: string, command: string, done: () => T | undefined)
 }
 
 async function activated(): Promise<void> {
-	await until('the installed workspace extension', async () => version() && (await vscode.commands.getCommands(true)).includes('facade.newAgent') ? true : undefined, 90_000);
+	await until('the installed workspace extension', async () => version('facadecode') && (await vscode.commands.getCommands(true)).includes('facade.newAgent') ? true : undefined, 90_000);
 }
 
 async function newAgent(): Promise<string> {
@@ -104,7 +96,7 @@ async function legacy(): Promise<void> {
 			const id: unknown = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).session_id : undefined;
 			return typeof id === 'string' && id ? id : undefined;
 		});
-		return { alias, run: agent.run, name: agent.name, session };
+		return { alias, run: agent.run, name: agent.name, session, cwd: agent.cwd };
 	}));
 	await vscode.commands.executeCommand('facade.pinAgent', { run_id: agents[0].run });
 	type Pin = { id: string; conversation?: { sessionId?: string } };
@@ -121,46 +113,69 @@ async function legacy(): Promise<void> {
 		}
 		return undefined;
 	});
-	write({ phase: 'started', version: version(), hostPid: process.pid, agents, saved });
-	const next = await until('the candidate pair to be installed, or the owner to end its agents',
-		() => fs.existsSync(`${OUT}.reload`) ? 'reload' : fs.existsSync(`${OUT}.${ROLE}.stop`) ? 'stop' : undefined, 300_000);
-	if (next === 'stop') {
-		// The window that still owns the legacy runs ends them, as a person does with End Agent there
-		for (const agent of agents) {
-			await vscode.commands.executeCommand('facade.closeAgent', { run_id: agent.run });
+	const uri = vscode.workspace.workspaceFolders?.[0]?.uri.toString();
+	write({ phase: 'started', version: version('facadecode'), component: version('facadecode-window'), hostPid: process.pid, uri, agents, saved });
+	for (;;) {
+		const step = await until('a runner request for the released window', () =>
+			['reload', 'stop', 'scope', 'input'].find(each => fs.existsSync(`${OUT}.${ROLE}.${each}`)), 300_000);
+		const file = `${OUT}.${ROLE}.${step}`;
+		const text = fs.readFileSync(file, 'utf8');
+		fs.unlinkSync(file);
+		if (step === 'stop') {
+			for (const agent of agents) {
+				await vscode.commands.executeCommand('facade.closeAgent', { run_id: agent.run });
+			}
+			write({ phase: 'stopped', runs: agents.map(agent => agent.run) });
+			return;
 		}
-		write({ phase: 'stopped', runs: agents.map(agent => agent.run) });
-		return;
+		if (step === 'reload') {
+			write({ phase: 'reloading' });
+			void vscode.commands.executeCommand('workbench.action.reloadWindow').then(undefined, () => undefined);
+			return;
+		}
+		if (step === 'scope') {
+			const opened = await vscode.commands.executeCommand('facade.revealAgent', { run_id: text });
+			write({ phase: 'foreign-run', run: text, opened, version: version('facadecode') });
+			continue;
+		}
+		const [agent] = agents;
+		if (!await vscode.commands.executeCommand('facade.revealAgent', { run_id: agent.run })) {
+			throw new Error(`Could not open ${agent.run} in the released window`);
+		}
+		const terminal = await until('the released agent terminal', () => {
+			const active = vscode.window.activeTerminal;
+			return active && 'pty' in active.creationOptions && active.name.includes(agent.name) ? active : undefined;
+		});
+		terminal.sendText(text, true);
+		write({ phase: 'input-sent', run: agent.run, terminal: terminal.name, text, version: version('facadecode'), hostPid: process.pid });
 	}
-	write({ phase: 'reloading' });
-	void vscode.commands.executeCommand('workbench.action.reloadWindow').then(undefined, () => undefined);
 }
 
-/** In the candidate: which build activated, then the cutover's action when the runner asks for it. */
+/** In the candidate: report which packages and host are active, even while the host is waiting on cutover. */
 async function candidate(): Promise<void> {
 	await activated();
-	write({ phase: ROLE === 'second' ? 'second-active' : 'updated', version: version(), hostPid: process.pid });
-	// The notification center, when the runner asks to read a toast the window may have hidden
-	void until('the runner to ask for the notification center', () => fs.existsSync(`${OUT}.${ROLE}.showlist`) || undefined, 300_000)
-		.then(() => vscode.commands.executeCommand('notifications.showList'), () => undefined);
-	await until('the runner to ask for the cutover action', () => fs.existsSync(`${OUT}.${ROLE}.accept`) || undefined, 300_000);
-	if (!ACCEPT) {
-		write({ phase: 'accept-unavailable' });
-		return;
-	}
-	const known = (await vscode.commands.getCommands(true)).includes(ACCEPT);
-	try {
-		const result: unknown = known ? await vscode.commands.executeCommand(ACCEPT) : undefined;
-		write({ phase: 'accepted', command: ACCEPT, registered: known, result: result ?? null });
-	} catch (error) {
-		write({ phase: 'accepted', command: ACCEPT, registered: known, failed: String(error) });
+	write({ phase: 'candidate-loaded', version: version('facadecode'), component: version('facadecode-window'), hostPid: process.pid });
+	for (;;) {
+		const step = await until('a runner request for the candidate window', () =>
+			['showlist', 'settings'].find(each => fs.existsSync(`${OUT}.${ROLE}.${each}`)), 300_000).catch(() => undefined);
+		if (!step) { return; }
+		fs.unlinkSync(`${OUT}.${ROLE}.${step}`);
+		if (step === 'showlist') {
+			await vscode.commands.executeCommand('notifications.showList');
+		} else {
+			await vscode.commands.executeCommand('facade.openSettingsFile');
+			const opened = vscode.window.activeTextEditor?.document.uri.fsPath;
+			write({ phase: 'settings', opened, hostPid: process.pid });
+			if (opened === path.join(process.env.FACADE_HOME!, 'facade.json')) {
+				await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+			}
+		}
 	}
 }
 
 export async function activate(): Promise<void> {
 	try {
-		const first = said().some(line => line.phase === 'started');
-		await (ROLE === 'primary' && !first ? legacy() : candidate());
+		await (version('facadecode') === '0.1.5' ? legacy() : candidate());
 	} catch (error) {
 		write({ phase: 'error', message: String(error) });
 	}

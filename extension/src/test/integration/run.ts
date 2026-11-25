@@ -43,6 +43,7 @@ const ACCEPTANCE_DRIVERS = new Map([
 	['cutover-exited', { implementation: 'framework', cli: 'claude' }],
 	['cutover-live', { implementation: 'framework', cli: 'claude' }],
 	['cutover-prior-owner', { implementation: 'framework', cli: 'claude' }],
+	['cutover-separate-workspaces', { implementation: 'framework', cli: 'claude' }],
 	['cutover-two-windows', { implementation: 'framework', cli: 'claude' }],
 	['cutover-uncertain', { implementation: 'framework', cli: 'claude' }],
 	['incompatible-activation', { implementation: 'framework', cli: 'claude' }],
@@ -899,8 +900,7 @@ async function main(): Promise<void> {
 			await focusProbe({ executable, root, home, extension, windowComponent, record, claudeConfig, fake, env: probeEnv, settings, endMatching,
 				facadeSettings: facade => facadeSettings(facade, alone('claude')) });
 		}
-		// Never unasked: it installs a released build's packages
-				// Never unasked: the released legacy pair to the candidate across the cutover (ARCHITECTURE-1.4, VERIFICATION-5.2)
+		// The released legacy pair to the candidate across the cutover (ARCHITECTURE-1.4, VERIFICATION-5.2)
 		const cutover = only === 'upgrade-pair' ? 'exited' : only === 'update' ? 'live' : CUTOVER_VARIANTS.find(variant => only === `cutover-${variant}`);
 		if (cutover) {
 			assert.strictEqual(implementation, 'framework', 'the cutover journeys run the candidate on Framework');

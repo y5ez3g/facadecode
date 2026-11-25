@@ -47,7 +47,16 @@ fs.renameSync(nextLaunch, launchRecord);
 fs.writeFileSync(`${record}.${agent}`, `${process.pid}\n`);
 fs.appendFileSync(`${record}.starts.${agent}`, `${process.pid}\n`, { mode: 0o600 });
 // Every launch of the run in one append-only file: implementations number their agents alike, and a later `#a1` replaces the files above
-fs.appendFileSync(`${record}.launches`, `${JSON.stringify({ at: Date.now(), agent, pid: process.pid, args: recordedArgs })}\n`, { mode: 0o600 });
+const legacyPidsFile = `${record}.legacy-pids`;
+const legacyPidsAlive = fs.existsSync(legacyPidsFile)
+	? (JSON.parse(fs.readFileSync(legacyPidsFile, 'utf8')) as number[]).filter(pid => {
+		try { process.kill(pid, 0); return true; }
+		catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
+	})
+	: undefined;
+fs.appendFileSync(`${record}.launches`, `${JSON.stringify({
+	at: Date.now(), cwd: process.cwd(), agent, pid: process.pid, args: recordedArgs, legacyPidsAlive,
+})}\n`, { mode: 0o600 });
 // Simulate the vendor's identity report explicitly; a launch argument alone no longer enables Pin.
 const sessionFile = process.env.FACADE_CODE_SESSION_FILE;
 if (sessionFile) {
@@ -314,6 +323,9 @@ function take(): void {
 		return;
 	}
 	fs.appendFileSync(`${record}.received.${agent}`, `${JSON.stringify(draft)}\n`);
+	if (fs.existsSync(legacyPidsFile)) {
+		fs.appendFileSync(`${record}.received-pid.${process.pid}`, `${JSON.stringify(draft)}\n`);
+	}
 	appendTranscript(draft);
 	draft = '';
 }
