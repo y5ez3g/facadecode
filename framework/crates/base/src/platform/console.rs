@@ -2,6 +2,7 @@
 //! own threads call these; nothing here starts a thread.
 
 use std::io;
+use std::time::Instant;
 
 #[cfg(unix)]
 mod unix;
@@ -12,9 +13,10 @@ mod windows;
 #[cfg(windows)]
 use windows as imp;
 
-/// The console modes that make keys travel as bytes, entered after crossterm's raw mode. Windows
-/// adds virtual terminal input to the input, without line, echo or processed input, and virtual
-/// terminal processing to the output; Unix changes nothing. Dropping it restores them.
+/// The console modes that make keys travel as bytes. Enter before crossterm's optional raw mode
+/// so Windows saves the original console modes. Windows enables virtual terminal input and output
+/// processing and disables line, echo and processed input. Unix changes nothing. Dropping it
+/// restores the original modes.
 pub struct VtModes(imp::VtModes);
 
 impl VtModes {
@@ -88,6 +90,16 @@ impl ConsoleReader {
         self.0.read(buf)
     }
 
+    /// Reads one event by the deadline, or returns None if no event is available in time.
+    /// The caller must own console input.
+    pub fn read_until(
+        &mut self,
+        buf: &mut [u8],
+        deadline: Instant,
+    ) -> io::Result<Option<ConsoleRead>> {
+        self.0.read_until(buf, deadline)
+    }
+
     /// Discards an exact ASCII key-down prefix of the native input queue without waiting for input.
     /// Returns `false` if the prefix is absent or on Unix. The reader must own console input.
     pub fn discard_key_prefix(&mut self, keys: &[u8]) -> io::Result<bool> {
@@ -105,8 +117,8 @@ pub enum ConsoleSignal {
     Ended { name: &'static str, number: i32 },
 }
 
-/// The signals that reach the console's program. Unix: SIGWINCH, and SIGTERM, SIGHUP, SIGINT and
-/// SIGQUIT. Windows: none; [`ConsoleSignals::next`] returns None at once.
+/// On Unix, SIGWINCH reports a resize, and SIGTERM, SIGHUP, SIGINT, SIGQUIT and SIGPIPE report
+/// that the program should end. On Windows, [`ConsoleSignals::next`] returns `None` immediately.
 pub struct ConsoleSignals(imp::ConsoleSignals);
 
 impl ConsoleSignals {

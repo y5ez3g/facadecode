@@ -1,8 +1,13 @@
 //! The person's terminal on Unix: crossterm's raw mode is all it needs.
 
 use std::io::{self, Read};
+use std::os::fd::AsFd;
+use std::time::Instant;
 
-use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
+use nix::errno::Errno;
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+
+use signal_hook::consts::{SIGHUP, SIGINT, SIGPIPE, SIGQUIT, SIGTERM, SIGWINCH};
 
 use super::{ConsoleRead, ConsoleSignal};
 
@@ -36,6 +41,29 @@ impl ConsoleReader {
         }
     }
 
+    pub(super) fn read_until(
+        &mut self,
+        buf: &mut [u8],
+        deadline: Instant,
+    ) -> io::Result<Option<ConsoleRead>> {
+        let mut fd = [PollFd::new(self.0.as_fd(), PollFlags::POLLIN)];
+        loop {
+            let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                return Ok(None);
+            };
+            let millis = left.as_millis().clamp(1, i32::MAX as u128) as i32;
+            match poll(
+                &mut fd,
+                PollTimeout::try_from(millis).expect("bounded wait"),
+            ) {
+                Ok(0) => return Ok(None),
+                Ok(_) => return self.read(buf).map(Some),
+                Err(Errno::EINTR) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
     pub(super) fn discard_key_prefix(&mut self, _keys: &[u8]) -> io::Result<bool> {
         Ok(false)
     }
@@ -45,7 +73,7 @@ pub(super) struct ConsoleSignals(signal_hook::iterator::Signals);
 
 impl ConsoleSignals {
     pub(super) fn new() -> io::Result<ConsoleSignals> {
-        signal_hook::iterator::Signals::new([SIGWINCH, SIGTERM, SIGHUP, SIGINT, SIGQUIT])
+        signal_hook::iterator::Signals::new([SIGWINCH, SIGTERM, SIGHUP, SIGINT, SIGQUIT, SIGPIPE])
             .map(ConsoleSignals)
     }
 
