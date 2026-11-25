@@ -2968,6 +2968,187 @@ fn a_relay_v1_confirms_closing_with_equivalent_json() {
     assert!(upgraded.get("result").is_some(), "{upgraded}");
 }
 
+fn connect_relay_peer(local: &TestHome, remote: &TestHome) -> (DaemonTestClient, DaemonTestClient) {
+    let binaries = test_binaries();
+    install_machine_ssh(
+        &[("sender", local), ("recipient", remote)],
+        &binaries.facade,
+    );
+    let local_connection = connect(local);
+    let remote_connection = connect(remote);
+    for (home, name) in [(local, "sender"), (remote, "recipient")] {
+        let hello = home.hello_result().unwrap();
+        let id = hello["machine_id"].as_str().unwrap().replace('-', "");
+        home.run_facade_ok(&["machine", "rename", &id, name]);
+    }
+    local.run_facade_ok(&[
+        "machine",
+        "add",
+        "--home",
+        remote.path.to_str().unwrap(),
+        "recipient",
+    ]);
+    (local_connection, remote_connection)
+}
+
+#[test]
+fn a_remote_relay_send_keeps_its_order_without_holding_up_handover() {
+    let local = TestHome::new("relay-remote-origin");
+    let remote = TestHome::new("relay-remote-recipient");
+    let _connections = connect_relay_peer(&local, &remote);
+    let sender = local.start_named_fake("sender", &[]);
+    let follower = local.start_named_fake("follower", &[]);
+    let worker = remote.start_named_fake("worker", &[]);
+    remote.run_facade_ok(&["type", &worker.address, "hold the remote delivery"]);
+    assert!(wait_until(secs(8), || remote
+        .screen(&worker.address)
+        .contains("❯ hold the remote delivery")));
+
+    let mut relay = McpTestClient::open_configured(&local, &sender.id);
+    let text = "saved remotely before takeover";
+    let waiting = relay.send(
+        "tools/call",
+        json!({
+            "name": "send_message", "arguments": {
+                "to": worker.address, "text": text, "wait_for": "delivery", "timeout_seconds": 30,
+            },
+        }),
+    );
+    let db = rusqlite::Connection::open(remote.path.join("framework/facade.db")).unwrap();
+    let mut saved = None;
+    assert!(wait_until(secs(8), || {
+        saved = db
+            .query_row(
+                "SELECT number, request_id FROM messages WHERE text = ?1 AND status = 'pending'",
+                [text],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .ok();
+        saved.is_some()
+    }));
+    let (number, request_id) = saved.expect("the peer saved the request");
+
+    let cancelled = relay.send("tools/call", json!({
+        "name": "send_message", "arguments": { "to": follower.address, "text": "cancel before its turn" },
+    }));
+    let next = relay.send("tools/call", json!({
+        "name": "send_message", "arguments": { "to": follower.address, "text": "following send" },
+    }));
+    assert!(
+        relay.answer(next, secs(1)).is_none(),
+        "the earlier peer request still owns its turn"
+    );
+    relay.write(&json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": cancelled}}).to_string());
+    assert!(relay.request("ping", json!({})).get("result").is_some());
+    let replacement = newer();
+    let program = program_of_build(&local, &replacement);
+    let upgraded = local.command(&program).arg("list").output().unwrap();
+    assert!(upgraded.status.success(), "{}", stderr(&upgraded));
+    assert_eq!(local.hello_result().unwrap()["build"], replacement);
+    let cancelled = relay
+        .answer(cancelled, secs(5))
+        .expect("cancelled send answer");
+    assert_eq!(cancelled["error"]["code"], -32800, "{cancelled}");
+    remote.run_facade_ok(&["type", &worker.address, "--key", "Ctrl+C"]);
+    let answer = relay
+        .answer(waiting, secs(30))
+        .expect("the peer request is answered");
+    assert_eq!(relay.tool_answer(next)["status"], "success");
+    let local_db = rusqlite::Connection::open(local.path.join("framework/facade.db")).unwrap();
+    let saved_to_follower: i64 = local_db
+        .query_row(
+            "SELECT count(*) FROM messages WHERE \"to\" = ?1",
+            [&follower.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(saved_to_follower, 1, "only the uncancelled send was saved");
+    let mut receipts = db
+        .prepare("SELECT number, withdrawn FROM messages WHERE request_id = ?1")
+        .unwrap();
+    let receipts = receipts
+        .query_map([request_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(receipts.len(), 1, "{receipts:?}");
+    assert_eq!(receipts[0].0, number);
+    if receipts[0].1 {
+        // A disconnected v1 peer leaves a withdrawal receipt and clears its message text.
+        assert_ne!(
+            answer["result"]["structuredContent"]["status"], "success",
+            "{answer}"
+        );
+    }
+}
+
+#[test]
+fn a_remote_start_replayed_after_its_deadline_answers_only_a_saved_receipt() {
+    let local = TestHome::new("relay-start-origin");
+    let remote = TestHome::new("relay-start-destination");
+    let _connections = connect_relay_peer(&local, &remote);
+    let sender = local.start_named_fake("sender", &[]);
+    let now = facade_base::unix_process::monotonic_now();
+    let past = now.saturating_sub(31_000_000_000);
+    let start = |relay: &mut McpTestClient, id: u64, at: u64, replay: &str, name: &str| {
+        relay.write(&json!({
+            "relay_request": { "first_line_ns": at, "replay": replay, "cancelled": false },
+            "request": { "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+                "name": "start_agent", "arguments": {
+                    "machine": "recipient", "cli": "fake", "name": name, "folder": remote.project,
+                },
+            } },
+        }).to_string());
+    };
+    let mut relay = McpTestClient::relay_configured(&local, &sender.id);
+    start(&mut relay, 90, now, "first", "already-started");
+    let db = rusqlite::Connection::open(remote.path.join("framework/facade.db")).unwrap();
+    let mut original = None;
+    assert!(
+        wait_until(secs(10), || {
+            original = db
+                .query_row(
+                    "SELECT agent_id, request_id FROM agents WHERE name = 'already-started'",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .ok();
+            original.is_some()
+        }),
+        "the start was saved on the destination"
+    );
+    let (agent_id, request_id) = original.unwrap();
+    drop(relay);
+
+    let mut relay = McpTestClient::relay_configured(&local, &sender.id);
+    start(&mut relay, 90, past, "interrupted", "already-started");
+    let repeated = relay
+        .answer(90, secs(8))
+        .expect("the expired retry's answer");
+    let repeated = &repeated["result"]["structuredContent"];
+    assert_eq!(repeated["status"], "success", "{repeated}");
+    assert_eq!(
+        repeated["data"]["id"],
+        format!("{agent_id}@recipient"),
+        "{repeated}"
+    );
+    start(&mut relay, 91, past, "interrupted", "too-late");
+    let missing = relay.tool_answer(91);
+    assert_eq!(missing["reason"], "timeout", "{missing}");
+    let saved: (i64, String) = db
+        .query_row("SELECT count(*), request_id FROM agents", [], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(
+        saved,
+        (1, request_id),
+        "the expired requests made no new start"
+    );
+}
+
 #[test]
 fn a_relay_that_has_not_confirmed_closing_keeps_the_old_daemon_selected() {
     let home = TestHome::new("relay-confirmation");

@@ -45,7 +45,7 @@ use facade_base::{
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::time::Instant;
 
-use crate::store::{Kept, KeptMessage, MessageTable, RequestId};
+use crate::store::{Kept, KeptMessage, MessageTable, RequestId, SendRouteBinding};
 use crate::{Cancel, HUMAN, REQUEST_HOUR, blocking_in_place};
 
 pub(crate) use handle::DeliveryHandle;
@@ -330,6 +330,7 @@ impl Deliveries {
         request_id: Option<&str>,
         caller_window_id: Option<&str>,
         notify_failure: bool,
+        binding: Option<&SendRouteBinding>,
     ) -> Result<Kept, ErrorBody> {
         let since = hour_ago();
         let request = request_id.map(|id| RequestId {
@@ -337,8 +338,11 @@ impl Deliveries {
             since: &since,
             caller_window_id,
         });
-        blocking_in_place(|| self.table.insert_message(message, request, notify_failure))
-            .map_err(ErrorBody::internal)
+        blocking_in_place(|| {
+            self.table
+                .insert_message(message, request, notify_failure, binding)
+        })
+        .map_err(ErrorBody::internal)
     }
 
     fn posted(&self, open: &mut OpenDeliveries, kept: Kept) -> Posted {
@@ -449,10 +453,25 @@ impl Messages {
         caller_window_id: Option<&str>,
         notify_failure: bool,
     ) -> Result<Posted, ErrorBody> {
+        self.post_with_route(message, request_id, caller_window_id, notify_failure, None)
+    }
+
+    pub(crate) fn post_with_route(
+        &self,
+        message: Message,
+        request_id: Option<&str>,
+        caller_window_id: Option<&str>,
+        notify_failure: bool,
+        binding: Option<&SendRouteBinding>,
+    ) -> Result<Posted, ErrorBody> {
         let mut open = self.deliveries.lock();
-        let kept = self
-            .deliveries
-            .keep(&message, request_id, caller_window_id, notify_failure)?;
+        let kept = self.deliveries.keep(
+            &message,
+            request_id,
+            caller_window_id,
+            notify_failure,
+            binding,
+        )?;
         Ok(self.deliveries.posted(&mut open, kept))
     }
 

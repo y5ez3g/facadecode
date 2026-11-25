@@ -482,6 +482,8 @@ the private reply receipt. The persisted original remains identifiable after the
   The recipient retains the original receipt, including withdrawals and settlements from removed
   inboxes, for one hour. The origin retains the stable target for that hour plus the delivery
   budget, so the earlier binding covers a receipt dated at the destination.
+  A local MCP send commits its route and message number in the same transaction. Cross-machine
+  sends keep their route before forwarding.
   A private receipt is available to retry lookup. Inbox and history queries only see visible mail.
 - `MessageTable` gives Post the stored records and the settlement transaction. The actor submits
   paste and delivery facts through `DeliveryHandle`, and relays read through `Messages::read_inbox`.
@@ -760,9 +762,17 @@ trait and writes responses and watch changes back, without knowing what any oper
       takeover; an attached terminal's keys and size, and `daemon.upgrade`, still run.
     - `work() -> Option<Work>`: counts a connection; None closes it.
   - `RelayLines::take(line, arrived, outbox)` decodes a line, applies cancellations in receive order,
-    and supplies async response work. A relay's sends reach save, a previous receipt or refusal in
-    receive order. Delivery and reply waits can proceed independently. The send's durable delivery
-    continues if a relay connection closes while the caller awaits its outcome.
+    and supplies async response work. A relay's local sends reach save, a previous receipt or refusal
+    in receive order. Local delivery continues if the relay connection closes, and delivery and
+    reply waits can proceed independently. A forwarded send keeps its relay's turn until the peer's
+    final answer. That wait leaves the local save and handover permits free. A cancelled send can
+    check its existing receipt and settle the withdrawal while an earlier send still owns the turn.
+  - The original relay arrival bounds new effects. A start or send can still answer an existing
+    receipt. A forwarded start with a request ID and zero `time_left_ms` checks that ID's receipt
+    at the destination, within a separate transport budget. An older peer may reject the expired
+    forward, in which case the original start's outcome remains unknown. An inbox uses its granted
+    reply room after reselecting the page and checks its deadline just before marking it read. A
+    terminal call checks its deadline before the typist queues its first bytes.
   - `Client` carries the kind and selected API version of an ordinary daemon API connection.
   - `Watch { snapshot, changes }`. `WatchChange::Ended(ErrorBody)` reports a remote watch failure.
     `WatchChange::Disconnect` cuts off a client that fell too far behind.
