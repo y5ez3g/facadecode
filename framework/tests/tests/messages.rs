@@ -1658,6 +1658,40 @@ fn a_message_read_when_its_daemon_crashes_is_never_typed_by_the_next() {
     );
 }
 
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the test pause of debug builds")]
+fn the_relay_reports_the_interrupted_read_and_leaves_the_rest_unread() {
+    let home = TestHome::new("relay-restart-read");
+    home.start_facade_with(&[("FACADE_TEST_PAUSE_AT", "after-read-commit")]);
+    let worker = home.start_named_fake("worker", &[]);
+    type_draft(&home, "worker", "my draft");
+    let old_send = begin_send(&home, "worker", "committed before interruption", Some("r1"));
+    wait_pending(&home, 1);
+    let mut relay = McpTestClient::open_configured(&home, &worker.id);
+    let id = relay.send(
+        "tools/call",
+        json!({"name": "read_messages", "arguments": {}}),
+    );
+    crash_at(&home, "after-read-commit");
+    drop(old_send);
+    let interrupted = relay.tool_answer(id);
+    assert_eq!(interrupted["reason"], "unavailable", "{interrupted}");
+    assert!(
+        interrupted["message"]
+            .as_str()
+            .unwrap()
+            .contains("use last")
+    );
+    let history = read_messages(&mut relay, json!({"last": 1}));
+    assert_eq!(history[0]["text"], "committed before interruption");
+    let next_send = begin_send(&home, "worker", "unread after interruption", Some("r2"));
+    wait_pending(&home, 2);
+    let unread = read_messages(&mut relay, json!({}));
+    assert_eq!(unread.len(), 1, "{unread:?}");
+    assert_eq!(unread[0]["text"], "unread after interruption");
+    drop(next_send);
+}
+
 /// A message whose recipient ended while no daemon ran fails as ended in the next daemon. The
 /// keeper, holding no CLI once the recipient ended, exits with the daemon; the next command starts
 /// Facade again, and the agent is ended there, its terminal closed.

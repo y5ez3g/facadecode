@@ -491,9 +491,9 @@ async fn a_typist_and_a_read_never_both_take_a_message() {
             false,
             InboxRead::default(),
             crate::Cancel::default(),
-            |page| {
+            |page, _: Option<()>| {
                 assert_eq!(ids(page), ["m2", "m3"]);
-                Ok((1, page.messages[0].clone()))
+                Ok(super::InboxSelection::ready(1, page.messages[0].clone()))
             },
         )
         .await
@@ -516,7 +516,12 @@ async fn a_typist_and_a_read_never_both_take_a_message() {
                 ..InboxRead::default()
             },
             crate::Cancel::default(),
-            |page| Ok((page.messages.len(), page.clone())),
+            |page, _: Option<()>| {
+                Ok(super::InboxSelection::ready(
+                    page.messages.len(),
+                    page.clone(),
+                ))
+            },
         )
         .await
         .unwrap();

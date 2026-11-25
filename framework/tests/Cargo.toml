@@ -19,6 +19,9 @@ crossterm.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true
 
+[dev-dependencies]
+tokio.workspace = true
+
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 nix.workspace = true

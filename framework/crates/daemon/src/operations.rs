@@ -31,8 +31,8 @@ use crate::runs::{ExitSink, FirstRead, RunExit, RunKind, RunRequest};
 use crate::store::{AgentRecord, CreationSource, InitialLaunch, RelayRunRecord, RemovalCause};
 use crate::windows::Destination;
 use crate::{
-    Daemon, Sender, StartKey, agent_number, an_hour_ago, blocking, gate_for_test, log,
-    pause_for_test,
+    Daemon, Sender, StartKey, agent_number, an_hour_ago, blocking, effect_time_left, gate_for_test,
+    log, pause_for_test,
 };
 
 /// The exit wait once the keeper took `agent.stop`, its 3 seconds before SIGKILL included.
@@ -99,6 +99,7 @@ pub(crate) struct StartOrigin {
     pub(crate) caller: Caller,
     pub(crate) sender: Sender,
     pub(crate) launch: LaunchOrigin,
+    pub(crate) deadline: Option<std::time::Instant>,
 }
 
 impl StartOrigin {
@@ -310,6 +311,7 @@ impl Daemon {
                 );
                 return Ok(answer);
             } else {
+                effect_time_left(origin.deadline)?;
                 let (answer, answered) = watch::channel(None);
                 starting.insert(key.clone(), answered);
                 Ok(StartUnderWay {
@@ -385,6 +387,7 @@ impl Daemon {
         origin: StartOrigin,
         session: Option<String>,
     ) -> Result<Started, ErrorBody> {
+        effect_time_left(origin.deadline)?;
         gate_for_test("before-start-run");
         let (settings, mut configured, destination) = self
             .check_local_start(&args, origin.launch == LaunchOrigin::Agent)
@@ -392,6 +395,7 @@ impl Daemon {
         if let Some(session) = session.as_deref() {
             command_line::check_session(&configured, session)?;
         }
+        effect_time_left(origin.deadline)?;
         let Some(branch) = args.worktree.as_deref() else {
             return self
                 .start_in(args, origin, &settings, configured, destination, session)
@@ -879,9 +883,11 @@ impl Daemon {
         self: &Arc<Self>,
         agent: &AgentHandle,
         caller: &Caller,
+        deadline: Option<std::time::Instant>,
     ) -> Result<(StopResult, AgentLabel), ErrorBody> {
         let _changing = agent.lock_run_change().await;
         gate_for_test("before-stop-run");
+        effect_time_left(deadline)?;
         let stopped_by = match caller {
             Caller::Agent { agent, .. } => Some(crate::api::agent_ref(agent.clone())),
             _ => None,

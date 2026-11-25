@@ -1,15 +1,17 @@
-//! MCP's JSON-RPC, one message per line: the handshake, `ping`, and the tools, `tools/list` and
-//! `tools/call`, which the client can cancel with `notifications/cancelled`. MCP took batches out,
-//! so a batch is refused.
+//! Decodes each MCP line, records its cancellation at ingress, and answers the request.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
+use serde::{Deserialize, Deserializer, Serialize, de::IgnoredAny};
+use serde_json::{Value, json, value::RawValue};
 
+use super::replies::{ReplyTarget, tool_result};
 use super::{Relay, TOOLS, Tool, ToolCall, ToolEntry, verified_tools};
+use crate::delivery::SendTurn;
+use crate::lifecycle::RelayLink;
+use crate::server::Outbox;
 
-/// The MCP versions this server speaks, newest first. It answers with the version the client asks
-/// for, or else the newest.
+/// The MCP versions this server speaks, newest first.
 const MCP_VERSIONS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 const PARSE_ERROR: i64 = -32700;
@@ -17,116 +19,278 @@ const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 const INTERNAL_ERROR: i64 = -32603;
-/// The error a cancelled call is answered with, as LSP names one: MCP names none.
 const CANCELLED: i64 = -32800;
 const CANCELLED_MESSAGE: &str = "the client cancelled this call; nothing was sent";
 
-/// A JSON-RPC error response.
-fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message.into() } })
+#[derive(Deserialize)]
+struct McpLine {
+    #[serde(default, deserialize_with = "present_id")]
+    id: Option<Box<RawValue>>,
+    #[serde(default)]
+    method: Value,
+    #[serde(default)]
+    params: Value,
+    #[serde(default, deserialize_with = "present")]
+    result: bool,
+    #[serde(default, deserialize_with = "present")]
+    error: bool,
 }
 
-/// The response to a line whose answering failed unexpectedly.
-pub(super) fn internal_error() -> Value {
-    let message = "internal error: facade-mcp could not answer this request";
-    error(Value::Null, INTERNAL_ERROR, message)
+fn present_id<'de, D: Deserializer<'de>>(input: D) -> Result<Option<Box<RawValue>>, D::Error> {
+    Box::<RawValue>::deserialize(input).map(Some)
 }
 
-/// What is done with a client's line as it is read, before it waits for a thread: each
-/// `send_message` and `read_messages` call is noted so a cancellation can name it.
-/// True where the line needs nothing more, as a cancellation alone does.
-pub(super) fn notice(relay: &Relay, line: &[u8]) -> bool {
-    match serde_json::from_slice::<Value>(line) {
-        Ok(Value::Array(batch)) => {
-            // A batch is answered with its refusal, but what it cancels is cancelled.
-            for message in &batch {
-                notice_message(relay, message);
-            }
-            false
-        }
-        Ok(message) => notice_message(relay, &message),
-        Err(_) => false,
+fn present<'de, D: Deserializer<'de>>(input: D) -> Result<bool, D::Error> {
+    IgnoredAny::deserialize(input).map(|_| true)
+}
+
+#[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Replay {
+    #[default]
+    First,
+    Planned,
+    Interrupted,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayRequest {
+    first_line_ns: u64,
+    replay: Replay,
+    cancelled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayFrame {
+    relay_request: RelayRequest,
+    request: McpLine,
+}
+
+impl RelayRequest {
+    fn first_arrival(&self, local_arrival: Instant) -> Instant {
+        let age = Duration::from_nanos(
+            facade_base::unix_process::monotonic_now().saturating_sub(self.first_line_ns),
+        );
+        Instant::now()
+            .checked_sub(age)
+            .unwrap_or(local_arrival)
+            .min(local_arrival)
     }
 }
 
-fn notice_message(relay: &Relay, message: &Value) -> bool {
-    match message["method"].as_str() {
-        Some("tools/call") => {
-            let id = message.get("id").filter(|id| is_id(id));
-            let tool = message["params"]["name"]
-                .as_str()
-                .and_then(ToolEntry::named)
-                .map(|entry| entry.action);
-            if let (Some(Tool::SendMessage | Tool::ReadMessages), Some(id)) = (tool, id) {
-                relay.sends.note(id.to_string());
-            }
-            false
+#[derive(Serialize)]
+struct RpcError {
+    code: i64,
+    message: String,
+}
+
+#[derive(Serialize)]
+pub(super) struct Response {
+    jsonrpc: &'static str,
+    /// The exact ID token accepted from the client. Old relays compare its spelling.
+    id: Option<Box<RawValue>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<RpcError>,
+}
+
+impl Response {
+    pub(super) fn ok(id: Box<RawValue>, result: Value) -> Self {
+        Self {
+            jsonrpc: "2.0",
+            id: Some(id),
+            result: Some(result),
+            error: None,
         }
-        Some("notifications/cancelled") if message.get("id").is_none() => {
-            if let Some(id) = message["params"].get("requestId") {
-                relay.sends.cancel(&id.to_string());
-            }
-            true
+    }
+
+    fn error(id: Option<Box<RawValue>>, code: i64, message: impl Into<String>) -> Self {
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: None,
+            error: Some(RpcError {
+                code,
+                message: message.into(),
+            }),
         }
-        _ => false,
+    }
+
+    pub(super) fn into_line(self) -> Vec<u8> {
+        let mut line = serde_json::to_vec(&self).expect("an MCP response serializes");
+        line.push(b'\n');
+        line
     }
 }
 
-/// Whether `id` can be a JSON-RPC request's ID.
+pub(super) fn internal_error(id: Option<Box<RawValue>>) -> Vec<u8> {
+    Response::error(
+        id,
+        INTERNAL_ERROR,
+        "internal error: facade-mcp could not answer this request",
+    )
+    .into_line()
+}
+
+pub(super) enum Prepared {
+    Answer(Response),
+    Request {
+        id: Box<RawValue>,
+        method: String,
+        params: Value,
+        call: ToolCall,
+        send_turn: Option<SendTurn>,
+    },
+}
+
+impl Prepared {
+    pub(super) fn id(&self) -> Option<Box<RawValue>> {
+        match self {
+            Self::Answer(reply) => reply.id.clone(),
+            Self::Request { id, .. } => Some(id.clone()),
+        }
+    }
+}
+
+/// Read the line once, noting the waiting calls and their cancellations before scheduling work.
+pub(super) fn prepare(relay: &Relay, line: &[u8], arrived: Instant) -> Option<Prepared> {
+    let invalid =
+        |code, message: String| Some(Prepared::Answer(Response::error(None, code, message)));
+    let line = line.trim_ascii();
+    let (parsed, context) = if line.starts_with(br#"{"relay_request":"#) {
+        let frame: RelayFrame = match serde_json::from_slice(line) {
+            Ok(frame) => frame,
+            Err(error) => return invalid(PARSE_ERROR, format!("not a relay request: {error}")),
+        };
+        (frame.request, Some(frame.relay_request))
+    } else if line.first() == Some(&b'{') {
+        match serde_json::from_slice(line) {
+            Ok(request) => (request, None),
+            Err(error) => return invalid(PARSE_ERROR, format!("not JSON: {error}")),
+        }
+    } else {
+        match serde_json::from_slice::<Value>(line) {
+            Ok(Value::Array(batch)) => {
+                for entry in batch {
+                    if entry.get("id").is_none()
+                        && entry["method"].as_str() == Some("notifications/cancelled")
+                    {
+                        cancel(relay, &entry["params"]);
+                    }
+                }
+                return invalid(
+                    INVALID_REQUEST,
+                    "batches are not supported; send one request per line".into(),
+                );
+            }
+            Ok(_) => return invalid(INVALID_REQUEST, "not a JSON-RPC message".into()),
+            Err(error) => return invalid(PARSE_ERROR, format!("not JSON: {error}")),
+        }
+    };
+
+    let method = parsed.method.as_str();
+    let id_value = parsed.id.as_ref().and_then(|token| {
+        serde_json::from_str::<Value>(token.get())
+            .ok()
+            .filter(is_id)
+    });
+    let Some(method) = method else {
+        if parsed.result || parsed.error {
+            return None;
+        }
+        let id = parsed.id.filter(|_| id_value.is_some());
+        return Some(Prepared::Answer(Response::error(
+            id,
+            INVALID_REQUEST,
+            "the request names no method",
+        )));
+    };
+    let Some(id) = parsed.id else {
+        if method == "notifications/cancelled" {
+            cancel(relay, &parsed.params);
+        }
+        return None;
+    };
+    let Some(id_value) = id_value else {
+        return invalid(
+            INVALID_REQUEST,
+            "the request's id is neither a string nor a number".into(),
+        );
+    };
+    let replay = context.as_ref().map_or(Replay::First, |frame| frame.replay);
+    let arrived = context
+        .as_ref()
+        .map_or(arrived, |frame| frame.first_arrival(arrived));
+    let call = ToolCall::of(relay, &id_value, arrived, replay);
+    let mut send_turn = None;
+    if method == "tools/call"
+        && let Some(tool) = parsed.params["name"].as_str().and_then(ToolEntry::named)
+    {
+        if matches!(tool.action, Tool::SendMessage | Tool::ReadMessages) {
+            let cancelled = context.is_some_and(|frame| frame.cancelled);
+            relay.sends.note(call.key.clone(), cancelled);
+        }
+        if matches!(tool.action, Tool::SendMessage) {
+            send_turn = Some(relay.send_order.next());
+        }
+    }
+    Some(Prepared::Request {
+        id,
+        method: method.to_string(),
+        params: parsed.params,
+        call,
+        send_turn,
+    })
+}
+
 fn is_id(id: &Value) -> bool {
     id.is_string() || id.is_number()
 }
 
-/// The response to one line from the client, which arrived at `arrived`: none for a notification or
-/// a response.
-pub(super) fn respond(relay: &Relay, line: &[u8], arrived: Instant) -> Option<Value> {
-    let message = match serde_json::from_slice::<Value>(line) {
-        Ok(message) => message,
-        Err(err) => return Some(error(Value::Null, PARSE_ERROR, format!("not JSON: {err}"))),
-    };
-    let Value::Object(message) = message else {
-        let why = if message.is_array() {
-            "batches are not supported; send one request per line"
-        } else {
-            "not a JSON-RPC message"
-        };
-        return Some(error(Value::Null, INVALID_REQUEST, why));
-    };
-    let id = message.get("id").filter(|id| is_id(id)).cloned();
-    let Some(method) = message.get("method").and_then(Value::as_str) else {
-        if message.contains_key("result") || message.contains_key("error") {
-            return None;
-        }
-        let id = id.unwrap_or(Value::Null);
-        return Some(error(id, INVALID_REQUEST, "the request names no method"));
-    };
-    // A notification, such as `notifications/initialized`, asks for nothing.
-    if !message.contains_key("id") {
-        return None;
+fn cancel(relay: &Relay, params: &Value) {
+    if let Some(id) = params.get("requestId") {
+        relay.sends.cancel(&id.to_string());
     }
-    let Some(id) = id else {
-        let why = "the request's id is neither a string nor a number";
-        return Some(error(Value::Null, INVALID_REQUEST, why));
-    };
-    let params = message.get("params").unwrap_or(&Value::Null);
-    let answered = match method {
-        "initialize" => initialize(relay, params),
-        "ping" => Ok(json!({})),
-        "tools/list" => Ok(list_tools(relay)),
-        "tools/call" => call_tool(relay, &id, params, arrived),
-        other => Err((METHOD_NOT_FOUND, format!("no method {other}"))),
-    };
-    Some(match answered {
-        Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-        Err((code, message)) => error(id, code, message),
-    })
 }
 
 /// A JSON-RPC error's code and message.
 type Refused = (i64, String);
 
-/// The answer to `initialize`: the version, the server, and what the model is told as it starts.
-fn initialize(relay: &Relay, params: &Value) -> Result<Value, Refused> {
+pub(super) async fn respond(
+    relay: &Relay,
+    request: Prepared,
+    output: Option<(Outbox, std::sync::Arc<RelayLink>)>,
+) -> Option<Response> {
+    let (id, method, params, mut call, send_turn) = match request {
+        Prepared::Answer(reply) => return Some(reply),
+        Prepared::Request {
+            id,
+            method,
+            params,
+            call,
+            send_turn,
+        } => (id, method, params, call, send_turn),
+    };
+    let answer = match method.as_str() {
+        "initialize" => initialize(relay, &params).await,
+        "ping" => Ok(json!({})),
+        "tools/list" => Ok(list_tools(relay)),
+        "tools/call" => {
+            call.output = output.map(|(outbox, link)| ReplyTarget::new(outbox, link, id.clone()));
+            call_tool(relay, params, &call, send_turn).await?
+        }
+        method => Err((METHOD_NOT_FOUND, format!("no method {method}"))),
+    };
+    Some(match answer {
+        Ok(result) => Response::ok(id, result),
+        Err((code, message)) => Response::error(Some(id), code, message),
+    })
+}
+
+async fn initialize(relay: &Relay, params: &Value) -> Result<Value, Refused> {
     let asked = params["protocolVersion"].as_str();
     let version = MCP_VERSIONS
         .into_iter()
@@ -135,6 +299,7 @@ fn initialize(relay: &Relay, params: &Value) -> Result<Value, Refused> {
     let instructions = relay
         .verified
         .initialize(relay, params["clientInfo"]["name"].as_str())
+        .await
         .map_err(|_| {
             (
                 INTERNAL_ERROR,
@@ -149,54 +314,56 @@ fn initialize(relay: &Relay, params: &Value) -> Result<Value, Refused> {
     }))
 }
 
-/// The answer to `tools/list`: the shipped definitions. Every tool returns the same envelope
-/// (MCP-1.2), so the catalog omits result schemas.
 fn list_tools(relay: &Relay) -> Value {
-    facade_base::service::gate_for_test("mcp-before-tools-list");
-    // The client has the tools with this answer, so only now does the daemon learn they are there:
-    // a start's prompt or a message it sends next finds them loaded.
+    crate::gate_for_test("mcp-before-tools-list");
     relay.hold_verified_presence();
     let tools: Vec<&Value> = TOOLS.iter().map(|entry| &entry.definition).collect();
     json!({ "tools": tools })
 }
 
-/// The answer to `tools/call`: the tool's envelope, as the text the model reads and as structured
-/// content. A call its client cancelled, which wrote nothing or whose message Facade withdrew, is
-/// answered too, so that every request has one answer and the relay holds no call open; MCP has its
-/// client ignore it.
-fn call_tool(
+async fn call_tool(
     relay: &Relay,
-    id: &Value,
-    params: &Value,
-    arrived: Instant,
-) -> Result<Value, Refused> {
-    let Some(name) = params["name"].as_str() else {
+    params: Value,
+    call: &ToolCall,
+    send_turn: Option<SendTurn>,
+) -> Option<Result<Value, Refused>> {
+    let Value::Object(mut params) = params else {
+        return Some(Err((
+            INVALID_PARAMS,
+            "tools/call needs an arguments object".into(),
+        )));
+    };
+    let Some(Value::String(name)) = params.shift_remove("name") else {
         let why = "tools/call names its tool with a string name";
-        return Err((INVALID_PARAMS, why.to_string()));
+        return Some(Err((INVALID_PARAMS, why.to_string())));
     };
-    let call = ToolCall::of(relay, id, arrived);
-    let result = verified_tools::dispatch(
-        relay,
-        name,
-        &params["arguments"],
-        &call,
-        params.get("_meta"),
-    );
+    let given = params.shift_remove("arguments").unwrap_or(Value::Null);
+    let meta = params.shift_remove("_meta");
+    drop(params);
+    let result = verified_tools::dispatch(relay, &name, given, call, meta, send_turn).await;
     relay.sends.finish(&call.key);
-    let Some(result) = result else {
-        let message = if ToolEntry::named(name)
-            .is_some_and(|entry| matches!(entry.action, Tool::ReadMessages))
-        {
-            "the client cancelled this call"
-        } else {
-            CANCELLED_MESSAGE
-        };
-        return Err((CANCELLED, message.to_string()));
+    let result = match result {
+        verified_tools::ToolReply::Result(result) => result,
+        verified_tools::ToolReply::Answered => return None,
+        verified_tools::ToolReply::Cancelled => {
+            let message = if name == "read_messages" {
+                "the client cancelled this call"
+            } else {
+                CANCELLED_MESSAGE
+            };
+            return Some(Err((CANCELLED, message.to_string())));
+        }
     };
-    Ok(json!({
-        "content": [{ "type": "text", "text": result.to_string() }],
-        "isError": result["status"] == "failure", "structuredContent": result,
-    }))
+    if result["reason"] == "upgrading"
+        && call
+            .output
+            .as_ref()
+            .is_some_and(|output| output.link.is_sealed())
+    {
+        // Only the relay can reach the next daemon. Leave this request in its pending list.
+        return None;
+    }
+    Some(Ok(tool_result(result)))
 }
 
 #[cfg(test)]
@@ -219,16 +386,19 @@ mod tests {
         let mut relay = Relay::for_test();
         let services = &mut relay.verified.services;
         services.authenticate = Box::new(move |_, _, _| {
-            Ok(ActorIdentity {
-                reference: AgentRef {
-                    machine_id: "00000000-0000-4000-8000-000000000001".into(),
-                    agent_id: "a7".into(),
-                },
-                kind: AgentKind::Managed,
-                receives_terminal_messages,
+            Box::pin(async move {
+                Ok(ActorIdentity {
+                    reference: AgentRef {
+                        machine_id: "00000000-0000-4000-8000-000000000001".into(),
+                        agent_id: "a7".into(),
+                    },
+                    kind: AgentKind::Managed,
+                    receives_terminal_messages,
+                })
             })
         });
-        services.connect = Box::new(|_, _| panic!("a rejected tool call must not connect"));
+        services.call =
+            Box::new(|_, _, _, _| panic!("a rejected tool call must not reach the daemon"));
         relay
     }
 
@@ -413,6 +583,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn replies_keep_the_spelling_of_valid_ids_for_a_v1_relay() {
+        let relay = Relay::for_test();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for (id, method) in [(r#""\u0070age""#, "ping"), ("1.5e2", "no-method")] {
+            let request = format!(r#"{{"jsonrpc":"2.0","id":{id},"method":"{method}"}}"#);
+            let request = prepare(&relay, request.as_bytes(), Instant::now()).unwrap();
+            let line = runtime
+                .block_on(respond(&relay, request, None))
+                .unwrap()
+                .into_line();
+            assert!(
+                std::str::from_utf8(&line)
+                    .unwrap()
+                    .contains(&format!(r#""id":{id},"#))
+            );
+        }
+    }
+
     /// MCP took batches out: a batch is refused, whatever it holds.
     #[test]
     fn a_batch_is_refused() {
@@ -431,7 +623,7 @@ mod tests {
     #[test]
     fn the_reader_notes_send_calls_and_cancels_the_one_a_cancellation_names() {
         let relay = Relay::for_test();
-        let notice = |line: String| notice(&relay, line.as_bytes());
+        let notice = |line: String| prepare(&relay, line.as_bytes(), Instant::now()).is_none();
         let call = |id: &str, tool: &str| {
             format!(
                 r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"{tool}","arguments":{{}}}}}}"#

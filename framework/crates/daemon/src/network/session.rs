@@ -28,7 +28,7 @@ use tokio::time::Instant;
 
 use super::activity::{Activity, SessionActivity};
 use super::wire::{self, Reader};
-use super::{BeginSessionWork, RequestFailure, SessionWork, TargetReply};
+use super::{BeginSessionWork, RequestFailure, START_RECEIPT_WAIT, SessionWork, TargetReply};
 
 type Change = Result<Value, ErrorBody>;
 type Answer = Result<Reply, RequestFailure>;
@@ -819,7 +819,12 @@ impl Peer {
         params: Value,
     ) -> Result<(), ErrorBody> {
         let forward: ForwardParams = decode_arguments(params)?;
-        let deadline = deadline_after(forward.time_left_ms.map(Duration::from_millis));
+        let budget = if wire::start_receipt_only(&forward) {
+            Some(START_RECEIPT_WAIT)
+        } else {
+            forward.time_left_ms.map(Duration::from_millis)
+        };
+        let deadline = deadline_after(budget);
         let binding = resize_arguments(&forward)?;
         if let Some(binding) = binding {
             let send = self
@@ -889,8 +894,11 @@ impl Peer {
             self.fail_unwritten(id, write_timeout);
             return Ok(());
         }
-        let line = wire::forward_line(id, forward, deadline.is_some());
-        let end_bytes = left.map_or(0, |left| wire::forward_end(left).len());
+        let timed = deadline.filter(|_| !wire::start_receipt_only(&forward));
+        let line = wire::forward_line(id, forward, timed.is_some());
+        let end_bytes = left
+            .filter(|_| timed.is_some())
+            .map_or(0, |left| wire::forward_end(left).len());
         if line.len() + end_bytes > MAX_LINE_BYTES {
             self.fail_unwritten(id, |_| {
                 RequestFailure::Failed(ErrorBody::line_too_long(), None)
@@ -905,7 +913,7 @@ impl Peer {
             };
             started = true;
             writer.write_all(&line[first..]).await?;
-            if let Some(deadline) = deadline {
+            if let Some(deadline) = timed {
                 writer.flush().await?;
                 write_forward_end(writer, deadline).await?;
             }

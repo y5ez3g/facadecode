@@ -1,26 +1,25 @@
 //! The message tools: `send_message` sends one message for the actor the server acts for, and the
 //! checks of its arguments and of `read_messages`'.
 
-use std::io::Write;
 use std::time::{Duration, Instant};
 
 use facade_base::address::selector;
 use facade_base::api_v1;
 use facade_base::api_v1::daemon::{
-    AgentKind, AgentSend, AgentTarget, ReplyTo, SendArgs, SendResult, SendWait, cancel_line,
+    AgentKind, AgentTarget, DaemonCall, ReplyTo, SendArgs, SendResult, SendWait,
 };
-use facade_base::api_v1::daemon_client::{Cut, DaemonClient, upgrading};
 use facade_base::model::agent::AgentRef;
 use facade_base::model::error::{ErrorBody, Reason};
-use facade_base::model::machine::{ExecutionOutcome, Unavailable};
 use facade_base::model::message::{
     DeliveredVia, DeliveryFailure, DeliveryStatus, MessageRef, TextWritten, check_message_text,
 };
 use serde_json::{Map, Value, json};
 
-use super::daemon_calls::{self, CONNECT_TIMEOUT, failed};
+use super::daemon_calls::result;
 use super::envelope;
-use super::{ActorIdentity, Problems, Relay, ToolCall, optional, text};
+use super::verified_tools::ToolReply;
+use super::{ActorIdentity, InboxAnswer, InboxOutput, Problems, Relay, ToolCall, optional, text};
+use crate::delivery::{SEND_BEFORE_DEADLINE, SendControl, SendTurn};
 use crate::messages::{RESPONSE_GRACE, ReplyRead};
 
 /// The ordinary send budget when the caller asks only for inbox acceptance.
@@ -58,101 +57,79 @@ fn timeout_seconds(arguments: &Map<String, Value>) -> u64 {
         .unwrap_or_default()
 }
 
-/// Keeps the same deadline and business request ID through reconnect and reply selection.
-pub(super) fn send_verified(
+/// Sends once through the daemon, with the relay's original deadline and request ID.
+pub(super) async fn send_verified(
     relay: &Relay,
     actor: &ActorIdentity,
-    arguments: &Map<String, Value>,
+    arguments: Map<String, Value>,
     call: &ToolCall,
-) -> Option<Value> {
-    let seconds = timeout_seconds(arguments);
+    send_turn: Option<SendTurn>,
+) -> ToolReply {
+    let seconds = timeout_seconds(&arguments);
     let (wait_for, budget) = match (seconds, arguments.get("wait_for").and_then(Value::as_str)) {
         (0, _) => (SendWait::Inbox, SEND_TIMEOUT),
         (_, Some("delivery")) => (SendWait::Delivery, Duration::from_secs(seconds)),
         (_, Some("result")) => (SendWait::Result, Duration::from_secs(seconds)),
         _ => unreachable!("validated send wait"),
     };
-    // Delivery may spend another settlement grace before the receipt can travel back.
     let answer_grace = match wait_for {
         SendWait::Inbox => ANSWER_GRACE,
         SendWait::Delivery | SendWait::Result => ANSWER_GRACE + RESPONSE_GRACE,
     };
     let deadline = call.arrived + budget;
     let send_deadline = deadline - answer_grace;
-    let time_left = || deadline.saturating_duration_since(Instant::now());
-    let send_args = |left: Duration| SendArgs {
-        to: AgentTarget::Selector(text(arguments, "to")),
-        text: text(arguments, "text"),
-        reply_to: optional(arguments, "reply_to").map(ReplyTo::Address),
+    let left = send_deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() && call.replay == super::lines::Replay::First {
+        return send_before_deadline(budget).into();
+    }
+    let mut cancel = relay.sends.read_cancel(&call.key);
+    let turn = match send_turn {
+        Some(turn) => tokio::select! {
+            biased;
+            () = cancel.requested() => None,
+            turn = turn.until(send_deadline.into()) => turn,
+        },
+        None => None,
+    };
+    // A cancelled send can check and withdraw its own saved receipt without waiting for I5.
+    if turn.is_none() && !cancel.is_requested() && call.replay == super::lines::Replay::First {
+        return send_before_deadline(budget).into();
+    }
+
+    let args = SendArgs {
+        to: AgentTarget::Selector(text(&arguments, "to")),
+        text: text(&arguments, "text"),
+        reply_to: optional(&arguments, "reply_to").map(ReplyTo::Address),
         request_id: Some(call.request_id.clone()),
-        time_left_ms: Some(left.saturating_sub(answer_grace).as_millis() as u64),
+        time_left_ms: Some(left.as_millis() as u64),
         wait_for: Some(wait_for),
         allow_unsupported_receipt: false,
     };
-    let connect = || {
-        daemon_calls::open_with(
-            || (relay.verified.services.connect)(&actor.reference, Some(send_deadline)),
-            time_left().min(CONNECT_TIMEOUT),
-        )
-    };
-    if time_left() <= answer_grace {
-        return Some(send_before_deadline(budget));
-    }
-    let mut client = match connect() {
-        Ok(client) => client,
-        Err(failure) => return Some(failure),
-    };
-    let mut outcome_unknown = false;
-    let outcome = loop {
-        if time_left() <= answer_grace {
-            return Some(if outcome_unknown {
-                send_unconfirmed()
-            } else {
-                send_before_deadline(budget)
-            });
+    drop(arguments);
+    crate::gate_for_test("mcp-writing-send");
+    crate::gate_for_test("mcp-before-send");
+    let sent = (relay.verified.services.call)(
+        &actor.reference,
+        DaemonCall::AgentSend(args),
+        SendControl {
+            deadline: Some(send_deadline),
+            admission: turn.map(|turn| relay.send_order.admitted(turn)),
+            relay: call.output.as_ref().map(|output| output.link.clone()),
+        },
+        cancel.clone(),
+    )
+    .await;
+    match result!(sent, Sent) {
+        Ok(sent) => sent_result(relay, actor, call, *sent, wait_for, deadline, seconds).await,
+        Err(error) if cancel.is_requested() && error.data.reason == "cancelled" => {
+            ToolReply::Cancelled
         }
-        let Some(written) = relay.sends.write(&call.key, &mut client, |client| {
-            let left = time_left();
-            if left <= answer_grace {
-                return Err(std::io::Error::from(std::io::ErrorKind::TimedOut).into());
-            }
-            client.writer.set_write_timeout(Some(left))?;
-            let args = send_args(left);
-            // Tests hold the computed budget until the frame is ready to write.
-            facade_base::service::gate_for_test("mcp-before-send");
-            client.begin_call::<AgentSend>(args)
-        }) else {
-            return outcome_unknown.then(send_unconfirmed);
-        };
-        let sent = written.and_then(|id| receive(&mut client, id, deadline));
-        let cut = sent.as_ref().is_err_and(|err| err.is::<Cut>());
-        if !cut && !sent.as_ref().is_err_and(upgrading) {
-            break sent;
+        Err(error)
+            if error.data.reason == "unavailable" && error.message == SEND_BEFORE_DEADLINE =>
+        {
+            send_before_deadline(budget).into()
         }
-        outcome_unknown |= cut;
-        if time_left() <= answer_grace {
-            break sent;
-        }
-        client = match connect() {
-            Ok(client) => client,
-            Err(_) => break sent,
-        };
-        // A cancellation after the cut went with the cut connection. The same request ID joins the
-        // message the next daemon kept, and the cancellation follows it there.
-        if relay.sends.cancelled(&call.key) {
-            let left = time_left();
-            if left <= answer_grace {
-                return outcome_unknown.then(send_unconfirmed);
-            }
-            break withdraw(&mut client, send_args(left), deadline);
-        }
-    };
-    match outcome {
-        Ok(sent) => Some(sent_result(
-            relay, actor, call, sent, wait_for, deadline, seconds,
-        )),
-        Err(err) if relay.sends.cancelled(&call.key) && was_cancelled(&err) => None,
-        Err(err) => Some(send_failure(&err, outcome_unknown)),
+        Err(error) => send_failure(&error).into(),
     }
 }
 
@@ -166,56 +143,7 @@ fn send_before_deadline(budget: Duration) -> Value {
     )
 }
 
-fn receive(client: &mut DaemonClient, id: u64, deadline: Instant) -> anyhow::Result<SendResult> {
-    // A cancellable send needs the request ID between its write and its response.
-    let left = deadline.saturating_duration_since(Instant::now());
-    if left.is_zero() {
-        return Err(Cut.into());
-    }
-    client.writer.set_read_timeout(Some(left))?;
-    client.result::<AgentSend>(id)
-}
-
-fn send_unconfirmed() -> Value {
-    let mut error = ErrorBody::new(
-        Reason::Unavailable,
-        "whether the message was delivered is not known; send it again only if you establish \
-         that it did not arrive",
-    );
-    error.data.unavailable = Some(Unavailable {
-        execution: ExecutionOutcome::OutcomeUnknown,
-        machine: None,
-        window: None,
-        matches: Vec::new(),
-        unanswered: Vec::new(),
-    });
-    envelope::refusal(&error)
-}
-
-fn was_cancelled(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<api_v1::ErrorBody>()
-        .is_some_and(|error| error.data.reason == "cancelled")
-}
-
-/// Sends a message again by its request ID and cancels it at once on the same connection: the
-/// daemon withdraws the message it kept where its paste has not begun, and otherwise answers what
-/// became of it.
-fn withdraw(
-    client: &mut DaemonClient,
-    args: SendArgs,
-    deadline: Instant,
-) -> anyhow::Result<SendResult> {
-    let left = deadline.saturating_duration_since(Instant::now());
-    if left.is_zero() {
-        return Err(Cut.into());
-    }
-    client.writer.set_write_timeout(Some(left))?;
-    let id = client.begin_call::<AgentSend>(args)?;
-    client.writer.write_all(&cancel_line(id))?;
-    receive(client, id, deadline)
-}
-
-fn sent_result(
+async fn sent_result(
     relay: &Relay,
     actor: &ActorIdentity,
     call: &ToolCall,
@@ -223,15 +151,15 @@ fn sent_result(
     wait_for: SendWait,
     deadline: Instant,
     seconds: u64,
-) -> Value {
+) -> ToolReply {
     let delivery = &sent.message.delivery;
     let how = match delivery_word(delivery.status, delivery.delivered_via) {
         Some(how) => how,
-        None => return delivery_failed(&sent),
+        None => return delivery_failed(&sent).into(),
     };
     let mut data = json!({ "id": sent.id, "delivery": how });
     if wait_for != SendWait::Result {
-        return envelope::success(data);
+        return envelope::success(data).into();
     }
     if delivery.status != DeliveryStatus::Success {
         let mut failure = envelope::failure(
@@ -241,9 +169,9 @@ fn sent_result(
              that it did not",
         );
         failure["data"] = data;
-        return failure;
+        return failure.into();
     }
-    let reading = || {
+    let reading = async {
         let read_reply = relay.verified.read_reply.as_ref().ok_or_else(|| {
             ErrorBody::new(Reason::Unavailable, "the reply reader is unavailable")
         })?;
@@ -261,7 +189,7 @@ fn sent_result(
             ));
         }
         if Instant::now() >= deadline {
-            return Ok(None);
+            return Ok(InboxAnswer::Page(Value::Null));
         }
         let sender = AgentRef {
             machine_id: recipient.reference.machine_id,
@@ -277,6 +205,10 @@ fn sent_result(
                 message_id: sent.message.message_id,
             },
         };
+        let output = call.output.clone().map(|target| InboxOutput {
+            target,
+            sent: Some(data.clone()),
+        });
         read_reply(
             &actor.reference,
             ReplyRead {
@@ -285,14 +217,21 @@ fn sent_result(
                 wait_until: tokio::time::Instant::from_std(deadline),
             },
             cancel,
+            output,
         )
+        .await
     };
-    let mut failure = match reading() {
-        Ok(Some(reply)) => {
-            data["messages"] = json!([reply]);
-            return envelope::success(data);
+    let mut failure = match reading.await {
+        Ok(InboxAnswer::Answered) => return ToolReply::Answered,
+        Ok(InboxAnswer::Page(mut page))
+            if page["data"]["messages"]
+                .as_array()
+                .is_some_and(|messages| !messages.is_empty()) =>
+        {
+            data["messages"] = page["data"]["messages"].take();
+            return envelope::success(data).into();
         }
-        Ok(None) => envelope::failure(
+        Ok(InboxAnswer::Page(_)) => envelope::failure(
             "reply_timeout",
             format!(
                 "No reply to {id} within {seconds} seconds. The message was delivered: do not \
@@ -311,7 +250,7 @@ fn sent_result(
         ),
     };
     failure["data"] = data;
-    failure
+    failure.into()
 }
 
 fn delivery_word(status: DeliveryStatus, via: Option<DeliveredVia>) -> Option<&'static str> {
@@ -331,21 +270,8 @@ fn delivered_word(via: DeliveredVia) -> Option<&'static str> {
     }
 }
 
-fn send_failure(err: &anyhow::Error, outcome_unknown: bool) -> Value {
-    let Some(wire) = err.downcast_ref::<api_v1::ErrorBody>() else {
-        if outcome_unknown {
-            return send_unconfirmed();
-        }
-        return failed(
-            err,
-            "whether the message was sent is not known: it may still arrive, so send it again \
-             only if you establish that it did not",
-        );
-    };
+fn send_failure(wire: &api_v1::ErrorBody) -> Value {
     let mut error = envelope::tool_error(wire);
-    if outcome_unknown && error.data.message_ref.is_none() {
-        return send_unconfirmed();
-    }
     let reference = error.data.message_ref.take();
     let delivered = error.data.delivered_via.take().and_then(delivered_word);
     let mut failure = envelope::refusal(&error);

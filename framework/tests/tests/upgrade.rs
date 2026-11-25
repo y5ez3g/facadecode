@@ -2861,6 +2861,245 @@ fn an_older_build_s_command_and_server_work_with_the_running_facade() {
     assert_eq!(home.hello_result().unwrap()["build"], CURRENT);
 }
 
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the test gates of debug builds")]
+fn relay_keeps_the_original_answers_to_a_committed_read_and_key_during_upgrade() {
+    let home = TestHome::new("relay-effects");
+    home.start_facade_with(&[("FACADE_TEST_GATES", "mcp-inbox-answer,before-type-input")]);
+    let key_log = home.project.join("keys");
+    let reader = home.start_named_fake("reader", &[]);
+    let target = home.start_named_fake("target", &[("FAKECLI_KEYS", key_log.to_str().unwrap())]);
+    home.release_gate("before-type-input");
+    home.run_facade_ok(&["type", "reader", "hold the inbox"]);
+    assert!(wait_until(secs(10), || home
+        .screen("reader")
+        .contains("hold the inbox")));
+    for kind in ["reached", "release"] {
+        std::fs::remove_file(
+            home.path
+                .join(format!("framework/{kind}-before-type-input")),
+        )
+        .unwrap();
+    }
+    home.run_facade_ok(&["send", "reader", "the committed page"]);
+    let old_relay = std::env::var_os("FACADE_TEST_PREVIOUS_MCP").map(PathBuf::from);
+    let open = |agent| match &old_relay {
+        Some(program) => McpTestClient::open_from(&home, agent, program),
+        None => McpTestClient::open_configured(&home, agent),
+    };
+    let mut inbox = open(&reader.id);
+    let mut console = open(&target.id);
+    inbox.write(r#"{"jsonrpc":"2.0","id":"\u0070age","method":"tools/call","params":{"name":"read_messages","arguments":{}}}"#);
+    home.wait_for_gate("mcp-inbox-answer");
+    let key = json!({
+        "jsonrpc": "2.0", "id": "key", "method": "tools/call",
+        "params": { "name": "press_keys", "arguments": { "agent": target.address, "keys": ["X"] } },
+    });
+    console.write(
+        &key.to_string()
+            .replacen(r#""id":"key""#, r#""id":"\u006bey""#, 1),
+    );
+    home.wait_for_gate("before-type-input");
+    let build = newer();
+    let replacement = program_of_build(&home, &build);
+    let requesting = home
+        .command(&replacement)
+        .arg("list")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate("upgrade-relay-preparing");
+    home.release_gate("before-type-input");
+    home.release_gate("mcp-inbox-answer");
+    let replaced = requesting.wait_with_output().unwrap();
+    assert!(replaced.status.success(), "{}", stderr(&replaced));
+    assert_eq!(home.hello_result().unwrap()["build"], build);
+    assert_eq!(
+        inbox.call("read_messages", json!({}))["data"]["messages"],
+        json!([])
+    );
+    let (pages, _) = inbox.close(secs(10));
+    let page: Vec<_> = pages
+        .iter()
+        .filter(|answer| answer["id"] == "page")
+        .collect();
+    assert_eq!(page.len(), 1, "{pages:?}");
+    assert_eq!(
+        page[0]["result"]["structuredContent"]["data"]["messages"][0]["text"],
+        "the committed page"
+    );
+    let (keys, _) = console.close(secs(10));
+    let key: Vec<_> = keys.iter().filter(|answer| answer["id"] == "key").collect();
+    assert_eq!(key.len(), 1, "{keys:?}");
+    assert_eq!(key[0]["result"]["structuredContent"]["status"], "success");
+    assert_eq!(
+        std::fs::read(&key_log)
+            .unwrap()
+            .iter()
+            .filter(|byte| **byte == b'X')
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_relay_v1_confirms_closing_with_equivalent_json() {
+    let home = TestHome::new("relay-closing-v1");
+    let agent = home.start_named_fake("agent", &[]);
+    let mut relay = McpTestClient::relay_configured(&home, &agent.id);
+    let replacement = newer();
+    let program = program_of_build(&home, &replacement);
+    let mut requester = connect(&home);
+    let request = requester.send(
+        "call",
+        json!({ "op": "daemon.upgrade", "args": {
+            "build": replacement, "program": program,
+            "daemon_api_versions": [1], "keeper_api_versions": [1],
+        } }),
+    );
+    let closing = relay
+        .wait_for_frame(secs(8), |frame| frame["method"] == "closing")
+        .expect("the old daemon sent closing");
+    assert_eq!(closing["params"]["build"], replacement);
+    relay.write(r#"  { "params" : {}, "method" : "clo\u0073ing", "jsonrpc" : "2.0" }  "#);
+    let upgraded = requester.wait_for_response(request, secs(8)).unwrap();
+    assert!(upgraded.get("result").is_some(), "{upgraded}");
+}
+
+#[test]
+fn a_relay_that_has_not_confirmed_closing_keeps_the_old_daemon_selected() {
+    let home = TestHome::new("relay-confirmation");
+    let agent = home.start_named_fake("agent", &[]);
+    let daemon = home.daemon_pid();
+    let mut relay = McpTestClient::relay_configured(&home, &agent.id);
+    let replacement = newer();
+    let program = program_of_build(&home, &replacement);
+    let mut requester = connect(&home);
+    let before = home.hello_result().unwrap();
+    let refused = requester.call(
+        "daemon.upgrade",
+        json!({
+            "build": replacement, "program": program,
+            "daemon_api_versions": [1], "keeper_api_versions": [1],
+        }),
+    );
+    assert_eq!(
+        refused["error"]["data"]["reason"], "unavailable",
+        "{refused}"
+    );
+    assert_eq!(home.daemon_pid(), daemon);
+    assert_eq!(home.hello_result().unwrap()["build"], before["build"]);
+    relay.write(r#"{"jsonrpc":"2.0","method":"closing","params":{}}"#);
+    drop(relay);
+    home.run_facade_ok(&["send", "agent", "still serving", "-w"]);
+    let replaced = home
+        .command(&program)
+        .arg("list")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(replaced.status.success(), "{}", stderr(&replaced));
+    assert_eq!(home.hello_result().unwrap()["build"], replacement);
+    assert_ne!(home.daemon_pid(), daemon);
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the test gates of debug builds")]
+fn relay_replays_sends_in_order_and_applies_a_late_cancel_to_the_old_receipt() {
+    let home = TestHome::new("relay-order-cancel");
+    home.start_facade_with(&[(
+        "FACADE_TEST_GATES",
+        "mcp-send-before-resolve,upgrade-before-end",
+    )]);
+    let sender = home.start_named_fake("sender", &[]);
+    let target = home.start_named_fake("target", &[]);
+    home.run_facade_ok(&["type", "target", "keep all delivery waiting"]);
+    assert!(wait_until(secs(10), || home
+        .screen("target")
+        .contains("keep all delivery waiting")));
+    let mut relay = McpTestClient::open_configured(&home, &sender.id);
+    let mut other = McpTestClient::open_configured(&home, &sender.id);
+    // Save this call before preparing closing. Later, its ID is cancelled while the old daemon
+    // is about to exit, so only the replay can apply that cancellation.
+    let send = |to: &str, text: &str, wait: bool| {
+        let arguments = if wait {
+            json!({"to": to, "text": text, "wait_for": "delivery", "timeout_seconds": 30})
+        } else {
+            json!({"to": to, "text": text})
+        };
+        json!({"name": "send_message", "arguments": arguments})
+    };
+    let first = relay.send("tools/call", send("target", "first in relay order", false));
+    home.wait_for_gate("mcp-send-before-resolve");
+    let second = relay.send(
+        "tools/call",
+        send(&target.address, "second in relay order", false),
+    );
+    let cancel = other.send(
+        "tools/call",
+        send("target", "never paste this late cancel", true),
+    );
+    let mut number = None;
+    let saved = || {
+        let db = rusqlite::Connection::open(home.path.join("framework/facade.db")).unwrap();
+        number = db
+            .query_row(
+                "SELECT number FROM messages WHERE text = 'never paste this late cancel'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .ok();
+        number.is_some()
+    };
+    assert!(
+        wait_until(secs(10), saved),
+        "another relay can save past a blocked one"
+    );
+    let replacement = program_of_build(&home, &newer());
+    let requesting = home
+        .command(&replacement)
+        .arg("list")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate("upgrade-before-end");
+    other.write(&json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": cancel}}).to_string());
+    home.release_gate("mcp-send-before-resolve");
+    home.release_gate("upgrade-before-end");
+    let replaced = requesting.wait_with_output().unwrap();
+    assert!(replaced.status.success(), "{}", stderr(&replaced));
+    let cancelled = other
+        .answer(cancel, secs(15))
+        .expect("cancelled send answer");
+    assert_eq!(cancelled["error"]["code"], -32800, "{cancelled}");
+    let db = rusqlite::Connection::open(home.path.join("framework/facade.db")).unwrap();
+    assert!(
+        db.query_row(
+            "SELECT withdrawn FROM messages WHERE number = ?1",
+            [number.unwrap()],
+            |row| row.get::<_, bool>(0)
+        )
+        .unwrap()
+    );
+    drop(db);
+    let received = [relay.tool_answer(first), relay.tool_answer(second)];
+    for receipt in &received {
+        assert_eq!(receipt["status"], "success", "{receipt}");
+    }
+    home.run_facade_ok(&["type", "target", "--key", "Ctrl+C"]);
+    assert!(wait_until(secs(10), || home.submitted_messages().len() == 2));
+    let received: Vec<_> = home
+        .submitted_messages()
+        .iter()
+        .map(|message| message.lines().last().unwrap().to_string())
+        .collect();
+    assert_eq!(received, ["first in relay order", "second in relay order"]);
+}
+
 /// Messages sent without pause through facade-mcp and `facade send` while a newer Facade takes over
 /// are all answered and typed once each. One agent holds a draft, and a message to it from each way
 /// of sending waits through the takeover. Every CLI and the keeper keep their processes, and a new

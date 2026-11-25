@@ -58,11 +58,11 @@ mod waits;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use facade_base::api_v1::{ApiVersion, daemon as wire};
 use facade_base::model::agent::AgentsUpdate;
-use facade_base::model::error::ErrorBody;
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::model::machine::new_boot_id;
 use facade_base::process::ProcessState;
 use facade_base::programs::Held;
@@ -201,6 +201,25 @@ pub(crate) enum ToolsGiven {
     NotGiven,
 }
 
+pub(crate) fn effect_deadline_passed() -> ErrorBody {
+    ErrorBody::new(
+        Reason::OperationTimeout,
+        "the call's deadline passed before it could take effect",
+    )
+}
+
+/// Time left to begin the effect itself. Request-key receipt lookups may outlive this budget.
+pub(crate) fn effect_time_left(deadline: Option<Instant>) -> Result<Option<Duration>, ErrorBody> {
+    deadline
+        .map(|deadline| {
+            deadline
+                .checked_duration_since(Instant::now())
+                .filter(|left| !left.is_zero())
+                .ok_or_else(effect_deadline_passed)
+        })
+        .transpose()
+}
+
 /// A call's cancellation, which its client's `cancel` asks for. A closed connection asks for none.
 #[derive(Clone, Default)]
 pub(crate) struct Cancel(Option<watch::Receiver<bool>>);
@@ -293,6 +312,7 @@ pub(crate) struct Daemon {
     claimed_sessions: Mutex<HashMap<SessionKey, String>>,
     screens: Screens,
     messages: Arc<Messages>,
+    relay_send_store: tokio::sync::Mutex<()>,
     command_replies: command_replies::CommandReplies,
     runs: Runs,
     records: Records,
@@ -523,6 +543,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         results: mcp::results_folder(&framework),
         watch_ends: Mutex::default(),
         messages,
+        relay_send_store: tokio::sync::Mutex::default(),
         command_replies: command_replies::CommandReplies::default(),
         runs,
         records,

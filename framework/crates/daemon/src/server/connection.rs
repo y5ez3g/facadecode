@@ -2,7 +2,6 @@
 //! a request that the service answers.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::net::Shutdown;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -28,7 +27,7 @@ use tokio::time::Instant;
 
 use super::lanes::{LaneContext, Lanes};
 use super::outbox::Outbox;
-use super::{Client, Service, ShellWatch, VerifiedActor, WatchChange, WhenFull, operation_error};
+use super::{Client, Service, ShellWatch, WatchChange, WhenFull, operation_error};
 use crate::Cancel;
 
 /// The most calls one connection runs at once. Further calls wait for one to be answered.
@@ -121,7 +120,6 @@ pub(super) struct Connection<S: Service> {
     pub(super) peer: Arc<Peer>,
     pub(super) outbox: Outbox,
     pub(super) peer_pid: Option<u32>,
-    verified_actor: Option<VerifiedActor>,
     client: Option<Arc<Client>>,
     /// What the service gave the hello, held until the connection is cleaned up.
     hold: Option<S::Hold>,
@@ -155,14 +153,8 @@ struct MachineHandoff<M> {
     machine: M,
 }
 
-/// Serves `socket` until the client closes or `ended` completes, and cleans up after it. Dropped
-/// before it returns, it would leave the tasks of the connection behind.
-pub(super) async fn serve<S: Service>(
-    service: Arc<S>,
-    socket: ServerSocket,
-    verified_actor: Option<VerifiedActor>,
-    ended: impl Future<Output = ()> + Send,
-) -> anyhow::Result<()> {
+/// Serves the socket and cleans up the tasks it started.
+pub(super) async fn serve<S: Service>(service: Arc<S>, socket: ServerSocket) -> anyhow::Result<()> {
     let Some(work) = service.work() else {
         return Ok(());
     };
@@ -179,7 +171,6 @@ pub(super) async fn serve<S: Service>(
         peer,
         outbox,
         peer_pid,
-        verified_actor,
         client: None,
         hold: None,
         lanes: Lanes::default(),
@@ -194,10 +185,7 @@ pub(super) async fn serve<S: Service>(
         teller: None,
     };
     let mut reader = BufReader::new(read);
-    let served = tokio::select! {
-        served = connection.read_requests(&mut reader) => served,
-        () = ended => Ok(None),
-    };
+    let served = connection.read_requests(&mut reader).await;
     // A reader can finish while the writer still needs the Shell cutoff.
     let shell_attach = connection.shell_attach.take();
     connection.clean_up(!matches!(&served, Ok(Some(_)))).await;
@@ -284,7 +272,7 @@ impl<S: Service> Connection<S> {
                 self.outbox.answer(Some(id), Err(refused)).await;
             } else if let Some(refused) = self.service.draining() {
                 self.outbox.answer(Some(id), Err(refused)).await;
-            } else if self.verified_actor.is_none() && super::is_relay_hello(&params) {
+            } else if super::is_relay_hello(&params) {
                 if params["foreground"] == true {
                     self.outbox
                         .answer(Some(id), Err(foreground_requires_machine()))
@@ -353,7 +341,7 @@ impl<S: Service> Connection<S> {
                 return Next::Read;
             }
         };
-        if (hello.kind == ClientKind::Mcp) != self.verified_actor.is_some() {
+        if hello.kind == ClientKind::Mcp {
             let refused = operation_error(
                 "refused",
                 "an internal MCP connection requires a verified actor",
@@ -399,7 +387,6 @@ impl<S: Service> Connection<S> {
             .await?;
         client.kind = kind;
         client.api_version = api_version;
-        client.verified_actor = self.verified_actor.take();
         result.api_version = client.api_version;
         self.client = Some(Arc::new(client));
         self.hold = Some(hold);
