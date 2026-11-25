@@ -980,7 +980,7 @@ fn menus_match_logical_lines_after_terminal_wrapping() {
 #[test]
 fn claude_plain_hint_and_same_text_draft_need_the_probe() {
     let claude = &find("claude").unwrap().unwrap().input;
-    let text = r#"Try "refactor <filepath>""#;
+    let text = r#"Try "fix typecheck errors""#;
     let border = "─".repeat(40);
     let frame = |text: &str, column: usize| {
         let output = format!("{border}\r\n❯\u{a0}{text}\r\n{border}\x1b[2;{column}H");
@@ -988,8 +988,9 @@ fn claude_plain_hint_and_same_text_draft_need_the_probe() {
     };
     let read = |text: &str, column: usize| read_box_for_typing(claude, &frame(text, column), true);
 
-    // Claude Code 2.1.326 under NO_COLOR draws the hint as plain text.
-    let initial = read(text, 3);
+    // Claude Code 2.1.332 under NO_COLOR. Cursor moves leave the gaps between words.
+    let view = frame("Try\x1b[7G\"fix\x1b[12Gtypecheck\x1b[22Gerrors\"", 3);
+    let initial = read_box_for_typing(claude, &view, true);
     let before = initial.line.as_ref().expect("the first row of the frame");
 
     let hint_after_space = read(" ", 4);
@@ -1010,6 +1011,32 @@ fn claude_plain_hint_and_same_text_draft_need_the_probe() {
     assert_eq!(ordinary.info.state, InputState::Draft);
     assert_eq!(ordinary.draft.as_deref(), Some(text));
     assert!(!ordinary.unsure);
+}
+
+#[test]
+fn a_dim_claude_startup_hint_is_usable_and_a_plain_muse_draft_is_held() {
+    let border = "─".repeat(40);
+    let claude = &find("claude").unwrap().unwrap().input;
+    // Claude Code 2.1.331 with color enabled, with the cursor before its dim hint.
+    let frame = format!(
+        "{border}\r\n\x1b[39m❯\u{a0}\x1b[2mTry \"fix lint errors\"\r\n\x1b[22m{border}\x1b[2;3H"
+    );
+    let read = read_box_for_typing(claude, &screen_after(frame.as_bytes()), true);
+    assert_eq!(
+        read.info.state,
+        InputState::Usable,
+        "{}",
+        read.info.evidence
+    );
+    assert!(!read.unsure);
+
+    let muse = &find("muse").unwrap().unwrap().input;
+    let text = r#"Try "fix typecheck errors""#;
+    let frame = format!("{border}\r\n❯ {text}\r\n{border}\x1b[2;3H");
+    let read = read_box_for_typing(muse, &screen_after(frame.as_bytes()), true);
+    assert_eq!(read.info.state, InputState::Draft, "{}", read.info.evidence);
+    assert_eq!(read.draft.as_deref(), Some(text));
+    assert!(!read.unsure);
 }
 
 #[test]

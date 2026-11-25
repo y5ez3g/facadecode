@@ -273,11 +273,12 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     `BoxReading::draft_hidden() -> Option<HiddenRows>` gives the draft's rows out of sight for
     telling a message's own draft: the marked ones of `info.hidden`, or one row above where the
     screen cut the input without a mark (`InputLine::cut`).
-  - `read_box_for_typing(&InputRule, &ScreenView, bool) -> BoxReading` lets automatic delivery
-    consider an unstyled probe when the daemon reports untouched input and the CLI's rule allows it.
+  - `read_box_for_typing(&InputRule, &ScreenView, bool) -> BoxReading` considers an unstyled
+    row ambiguous when the daemon reports untouched input and the CLI's rule allows a probe.
+    Inspection reports the ambiguity, and delivery can probe the row.
   - `read_draft(&InputRule, &ScreenView) -> (InputInfo, Option<String>)` gives the input state,
     evidence, mechanism and scrolled rows along with the draft's text. `read_input` gives
-    `InputInfo` alone. The actor uses ordinary readings for inspect, readiness, state and
+    `InputInfo` alone. The actor uses ordinary readings for readiness, state and
     tracking when the CLI takes a person's draft.
   - `with_paste_text(&PasteRule, draft, pastes) -> String`: the agent actor uses it to give back the pasted text behind each placeholder in a draft the person submits.
   - For the typist:

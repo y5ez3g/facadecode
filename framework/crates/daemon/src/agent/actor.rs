@@ -652,7 +652,7 @@ impl Actor {
                 };
                 let _ = reply.send(Inspection {
                     agent,
-                    input: self.read_screen_input().info,
+                    input: self.read_screen_input(self.untouched_input).info,
                     session_tracking: self.captures && !self.ended(),
                     viewers: if self.ended() {
                         Vec::new()
@@ -1381,13 +1381,13 @@ impl Actor {
 
     /// The CLI's input as its rule reads the screen now, with a draft's text, which stays in the
     /// daemon, and its first row.
-    fn read_screen_input(&self) -> BoxReading {
+    fn read_screen_input(&self, untouched_input: bool) -> BoxReading {
         read_box(
             self.input_rule,
             self.ended(),
             self.undrawn,
             self.screen().screen(),
-            false,
+            untouched_input,
         )
     }
 
@@ -1493,13 +1493,13 @@ impl Actor {
         self.readiness.readies_tools()
             && self
                 .readiness
-                .holds_input(self.typist.recall(self.read_screen_input()).info.state)
+                .holds_input(self.typist.recall(self.read_screen_input(false)).info.state)
     }
 
     /// One step of the run's start; the keys it asks for go to the typist.
     fn step_start(&mut self) {
         let now = Instant::now();
-        let reading = self.typist.recall(self.read_screen_input());
+        let reading = self.typist.recall(self.read_screen_input(false));
         // An input that may hold a hint or a draft is probed; the start waits on what it finds.
         if reading.unsure && self.readiness.readies_tools() {
             self.typist.want_probe();
@@ -1576,7 +1576,7 @@ impl Actor {
             // Let the first prompt arrive unless the native CLI is asking for input.
             if next.is_sequence()
                 && self.start_prompt_bytes.is_some()
-                && self.read_screen_input().info.state != InputState::Interaction
+                && self.read_screen_input(false).info.state != InputState::Interaction
             {
                 return;
             }
@@ -1697,7 +1697,7 @@ impl Actor {
                 }
                 // A draft ending in `\` is a line break to a CLI, not a submission.
                 let draft = (whole && drawn.is_some())
-                    .then(|| self.read_screen_input())
+                    .then(|| self.read_screen_input(false))
                     .and_then(|reading| {
                         reading.draft.filter(|draft| {
                             reading.info.state == InputState::Draft
@@ -1714,7 +1714,7 @@ impl Actor {
             }
             Some(Submitting::Sent { draft, until }) => {
                 let taken = matches!(
-                    self.read_screen_input().info.state,
+                    self.read_screen_input(false).info.state,
                     InputState::Usable | InputState::Interaction
                 );
                 if taken {
@@ -1755,7 +1755,7 @@ impl Actor {
             .expect("the screen exists while the actor runs");
         self.state.observe(screen.screen());
         // A menu or question of the CLI's own in place of its input waits for the person.
-        let asking = self.read_screen_input().info.state == InputState::Interaction;
+        let asking = self.read_screen_input(false).info.state == InputState::Interaction;
         self.state.asks(asking, Instant::now());
         self.state_changed = true;
     }

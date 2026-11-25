@@ -1013,9 +1013,13 @@ impl Harness {
     }
 
     async fn round_trip(&self) {
+        self.inspect().await;
+    }
+
+    async fn inspect(&self) -> Inspection {
         let (reply, answered) = oneshot::channel();
         self.send(AgentCommand::Inspect { reply }).await;
-        answered.await.unwrap();
+        answered.await.unwrap()
     }
 
     async fn watch_screen(&self, viewer: u64) -> (ViewerSnapshot, viewers::ViewerReceiver) {
@@ -2623,6 +2627,8 @@ async fn a_claude_draft_matching_a_probed_hint_holds_the_next_message() {
     let mut harness = claude(&home, false);
     let hint = CLAUDE_PLAIN_HINT;
     harness.plain_claude_input("", hint);
+    assert!(harness.shows(hint, Duration::from_secs(5)).await);
+    let unprobed = harness.inspect().await.input;
     let first = harness
         .queue_probe_message("first message", Duration::from_secs(15))
         .await;
@@ -2642,6 +2648,7 @@ async fn a_claude_draft_matching_a_probed_hint_holds_the_next_message() {
         first.delivery.status,
         facade_base::model::message::DeliveryStatus::Success
     );
+    assert_eq!(unprobed.state, InputState::Unknown, "{}", unprobed.evidence);
 
     // The person types the same text and presses Home. The CLI draws the same row and cursor.
     let edit = format!("{hint}\x1b[H");
@@ -2652,6 +2659,8 @@ async fn a_claude_draft_matching_a_probed_hint_holds_the_next_message() {
         .queue_probe_message("second message", Duration::from_secs(3))
         .await;
     assert_plain_draft_held(&mut harness, second, hint).await;
+    let edited = harness.inspect().await.input;
+    assert_eq!(edited.state, InputState::Draft, "{}", edited.evidence);
     harness.stop().await;
     std::fs::remove_dir_all(&home).unwrap();
 }
