@@ -811,9 +811,10 @@ async function main(): Promise<void> {
 					...env, ...isolatedStorage, HOME: agentsHome, USERPROFILE: agentsHome,
 					APPDATA: path.join(agentsHome, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(agentsHome, 'AppData', 'Local')
 				};
-				return runName === 'attach'
-					: shellHandoff(open, repo, frameworkPrograms, { ...shellEnv, FACADE_IT_AS: 'codex' });
-					? sharedAttachJourney(open, repo, frameworkPrograms, shellEnv, attachUpgrade, session)
+				if (runName === 'attach') {
+					return sharedAttachJourney(open, repo, frameworkPrograms, shellEnv, attachUpgrade, session);
+				}
+				return shellHandoff(open, repo, frameworkPrograms, { ...shellEnv, FACADE_IT_AS: 'codex' });
 			});
 			// Both journeys observe the live Framework daemon and an editor view of the same machine-qualified agent.
 			if (runName === 'multi') { driverPassed('multi-window', 'framework'); }
