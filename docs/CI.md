@@ -645,6 +645,8 @@ Run the installed-pair drivers with `FACADE_IT_IMPLEMENTATION=framework`,
 `FACADE_IT_EXPECT_DRIVER`. Their final lines report isolated profile cleanup and the exact
 driver result. Hash staged inputs before and after testing, record the actual exit status
 and retain the original logs alongside the package digests.
+Replay expects the Framework marker for Framework-only workspace VSIXs. Historical workspace
+VSIXs that include the TypeScript supervisor retain their original legacy marker.
 
 Framework transcript replay checks the install report and the source-stamped Shell version. For evidence
 of installed program digests, a live fake Agent and installer refusal behavior on Linux x64,

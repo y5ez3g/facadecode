@@ -13,7 +13,7 @@ import { withFileLock, withLongFileLock } from '../../base/lock';
 import { isProcessRunning, isSameStart, processStartedAt, processStartTime, processStartTimeOf } from '../../base/system';
 import type { AgentRef, DaemonTopics } from '../../base/frameworkProtocol';
 import type { Disposable, Event, LogPort, FrameworkPin } from '../../core/ports';
-import { keepWorkspaceUri, workspaceRecord } from '../../record/workspace';
+import { keepWorkspaceUri, mayReadPreLedgerWorkspace, workspaceRecord } from '../../record/workspace';
 import {
 	isFrameworkPin, isLegacySessionPin, isLegacyWorkspaceKey as isWorkspaceKey, LEGACY_STATE_FILE as OLD_STATE,
 	legacyStateFile, readLegacyPins, type LegacyMigrationSource, type LegacyPinMigration, type LegacySessionPin,
@@ -96,7 +96,14 @@ export function openFrameworkWorkspace(context: vscode.ExtensionContext, options
 	const handover = predecessor?.window && folders?.length
 		? { token: predecessor.window.token, folders: folders.map(folder => folder.uri.toString()) } : undefined;
 	const record = workspaceRecord(uri, home, nativeKey, handover);
-	const verified = record.handedOver ?? record.binding.key ?? (!folders?.length ? predecessor?.owner : undefined);
+	const prior = record.handedOver ?? record.binding.key ?? (!folders?.length ? predecessor?.owner : undefined);
+	const folderless = !folders?.length ? { home, uri, kept: isWorkspaceKey(kept) ? kept : undefined } : undefined;
+	const savedEmpty = folderless && workspace && !uri.startsWith('untitled:');
+	const priorFile = prior && legacyStateFile(home, prior);
+	const emptyPinFile = savedEmpty && (!priorFile || !fs.existsSync(priorFile))
+		? folderlessPinsForUri(home, uri, kept) ?? folderlessPinsForUri(home, uri, record.key)
+		: undefined;
+	const verified = emptyPinFile ? path.basename(path.dirname(emptyPinFile)) : prior;
 	const rosterFile = path.join(record.dir, ROSTER);
 	// Save the migration source before registering this URI so another window sees the same binding.
 	const key = withFileLock(rosterFile, () => {
@@ -111,16 +118,12 @@ export function openFrameworkWorkspace(context: vscode.ExtensionContext, options
 		return verified;
 	}, { keepLive: true });
 	const oldStateFile = isWorkspaceKey(key) ? legacyStateFile(home, key) : undefined;
-	const folderless = !folders?.length ? { home, uri, kept: isWorkspaceKey(kept) ? kept : undefined } : undefined;
-	const oldFile = oldStateFile && fs.existsSync(oldStateFile) ? oldStateFile : folderless && !options.legacy
-		? folderlessPinsForUri(home, uri, kept) ?? folderlessPinsForUri(home, uri, record.key)
-		: undefined;
 	keepWorkspaceUri(uri, workspace ? record : { ...record, folderless: true }, home);
 	return new FrameworkWorkspace(record.dir, {
 		migration: options.legacy?.pins,
 		home,
 		key: isWorkspaceKey(key) ? key : undefined,
-		file: oldFile,
+		file: oldStateFile && fs.existsSync(oldStateFile) ? oldStateFile : undefined,
 		folderless,
 		keepNativeKey: !workspace && nativeKey !== record.key
 			? () => context.workspaceState.update(EMPTY_WORKSPACE_KEY, record.key)
@@ -135,11 +138,13 @@ function normalizedWorkspaceUri(uri: string): string {
 
 /** An empty saved workspace can retain its Memento even though v2 skipped its URI ledger entry. */
 function folderlessPinsForUri(home: string, uri: string, key: unknown): string | undefined {
-	if (!isWorkspaceKey(key)) { return undefined; }
+	if (!isWorkspaceKey(key) || !mayReadPreLedgerWorkspace(key, uri, home)) { return undefined; }
 	const dir = path.join(home, 'workspaces', key);
 	const file = path.join(dir, OLD_STATE);
 	if (!fs.existsSync(file)) { return undefined; }
-	const identity = readJson(path.join(dir, 'identity.json'));
+	let identity: unknown;
+	try { identity = readJson(path.join(dir, 'identity.json')); }
+	catch { return undefined; }
 	if (isJsonObject(identity) && typeof identity.workspace === 'string'
 		&& normalizedWorkspaceUri(identity.workspace) === normalizedWorkspaceUri(uri)) {
 		return file;
@@ -215,6 +220,13 @@ function sameLegacyIntent(a: LegacySessionPin, b: LegacySessionPin): boolean {
 	const other = b.conversation;
 	return environment === other.environment && cli === other.cli && (builtIn ?? cli) === (other.builtIn ?? cli)
 		&& sessionId === other.sessionId && (sessionId !== undefined || a.id === b.id) && isSameFolder(a.cwd, b.cwd);
+}
+
+function isConvertedLegacyPin(previous: LegacySessionPin, saved: FrameworkPin): boolean {
+	const { cli, builtIn, sessionId } = previous.conversation;
+	return saved.id === previous.id && sessionId !== undefined && saved.conversation.sessionId === sessionId
+		&& saved.conversation.environment === `machine:${saved.machine_id}` && saved.conversation.cli === cli
+		&& (saved.conversation.builtIn ?? cli) === (builtIn ?? cli) && isSameFolder(saved.cwd, previous.cwd);
 }
 
 function readJson(file: string): unknown {
@@ -399,19 +411,35 @@ export class FrameworkWorkspace implements Disposable {
 		return isWorkspaceKey(this.legacyOwner) ? this.legacy.migration?.(this.legacyOwner) : undefined;
 	}
 
-	/** Read historical v1 attempts from this workspace and other verified local workspace stores. */
-	legacyPinAttempted(pin: LegacySessionPin): boolean {
-		const matches = (recovery: LegacyPinRecovery | undefined | null) => recovery?.pending.some(each =>
-			recovery.attempts.includes(each.id) && sameLegacyIntent(each, pin));
-		if (matches(this.readLegacyRecovery())) { return true; }
-		if (!this.legacy.home) { return false; }
-		const directory = path.join(this.legacy.home, 'workspaces');
-		return fs.readdirSync(directory).filter(isWorkspaceKey).some(owner => {
-			const file = path.join(directory, owner, LEGACY_PIN_RECOVERY);
-			if (file === this.legacyRecoveryFile) { return false; }
-			try { return !!matches(readLegacyPinRecovery(file)); }
-			catch { return false; }
-		});
+	/** A v1 attempt may be left beside a completed conversion. Only an exact durable Pin can corroborate it. */
+	legacyPinProgress(pin: LegacySessionPin): { readonly attempted: boolean; readonly reference?: AgentRef } {
+		const committed = new Map<string, AgentRef>();
+		let attempted = false;
+		const collect = (rosterFile: string, recovery: LegacyPinRecovery | undefined | null) => {
+			const pending = recovery?.pending.filter(each => recovery.attempts.includes(each.id)
+				&& !recovery.removed?.includes(each.id) && sameLegacyIntent(each, pin));
+			if (!pending?.length) { return; }
+			attempted = true;
+			const roster = readRoster(rosterFile);
+			for (const saved of roster?.pins ?? []) {
+				if (pending.some(previous => isConvertedLegacyPin(previous, saved))) {
+					const reference = refOf(saved);
+					committed.set(refKey(reference), reference);
+				}
+			}
+		};
+		try { collect(this.file, this.readLegacyRecovery()); }
+		catch { /* The current attempt still fences recovery if its roster cannot substantiate a result. */ }
+		if (this.legacy.home) {
+			const directory = path.join(this.legacy.home, 'workspaces');
+			for (const owner of fs.readdirSync(directory).filter(isWorkspaceKey)) {
+				const file = path.join(directory, owner, LEGACY_PIN_RECOVERY);
+				if (file === this.legacyRecoveryFile) { continue; }
+				try { collect(path.join(directory, owner, ROSTER), readLegacyPinRecovery(file)); }
+				catch { /* A damaged store cannot supply a confirmed reference. */ }
+			}
+		}
+		return committed.size === 1 ? { attempted, reference: committed.values().next().value } : { attempted };
 	}
 
 	/** A lost reply can have started a process. Save the v1 attempt marker before calling Framework. */
@@ -799,17 +827,25 @@ export class FrameworkWorkspace implements Disposable {
 	}
 
 	private watchRoster(directory: string): Disposable {
+		let failedRead = false;
 		const refresh = () => {
-			try { this.refresh(); }
-			catch (error) { this.log.event(`Could not read the Facade workspace: ${messageOf(error)}`); }
+			try {
+				this.refresh();
+				failedRead = false;
+			} catch (error) {
+				if (!failedRead) { this.log.event(`Could not read the Facade workspace: ${messageOf(error)}`); }
+				failedRead = true;
+			}
 		};
 		let close = () => {};
 		const poll = (error: unknown) => {
 			close();
 			if (this.disposed) { return; }
 			this.log.event(`Could not watch the Facade workspace: ${messageOf(error)}`);
-			fs.watchFile(this.file, { persistent: false, interval: ROSTER_POLL_MS }, refresh);
-			close = () => fs.unwatchFile(this.file, refresh);
+			const timer = setInterval(refresh, ROSTER_POLL_MS);
+			timer.unref();
+			close = () => clearInterval(timer);
+			refresh();
 		};
 		try {
 			const watcher = fs.watch(directory, { persistent: false }, (_event, name) => {

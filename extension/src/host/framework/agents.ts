@@ -430,7 +430,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 			try {
 				let launchedFromSession = false;
 				let confirmed: AgentInfo | undefined;
-				const outcome = await migration.recover(pin, () => workspace.legacyPinAttempted(pin), async reservation => {
+				const outcome = await migration.recover(pin, () => workspace.legacyPinProgress(pin), async reservation => {
 					const begin = async (target?: LegacyResumeTarget) => {
 						if (this.disposed || !workspace.pendingLegacyPins().some(each => each.id === pin.id)) { return false; }
 						await reservation.begin(target);
@@ -462,6 +462,13 @@ export class OrchestratorAgents implements vscode.Disposable {
 				}, async attempt => {
 					const observed = await this.inspect(attempt.reference).catch(() => undefined);
 					if (!observed || !confirmsLegacyResume(pin, link.machineId, attempt, observed)) { return; }
+					confirmed = observed;
+					return observed.reference;
+				}, async reference => {
+					const observed = await this.inspect(reference).catch(() => undefined);
+					if (!observed || agentKey(observed.reference) !== agentKey(reference)
+						|| !matchesLegacyPin(pin, link.machineId, observed)
+						|| (observed.process !== 'running' && observed.process !== 'ended')) { return; }
 					confirmed = observed;
 					return observed.reference;
 				});

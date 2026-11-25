@@ -508,7 +508,7 @@ suite('Scoped legacy cutover', () => {
 		const f = await fixture();
 		try {
 			f.rows.forEach(row => { row.ended = true; });
-			const { confirmsLegacyResume } = withModules({ vscode: {} })
+			const { confirmsLegacyResume } = withModules({ vscode: { env: {}, workspace: {} } })
 				<typeof import('../host/framework/legacyRecovery')>(require.resolve('../host/framework/legacyRecovery'));
 			const a = legacyPinMigration(f.home, A);
 			const saved = pin('pin-a');
@@ -529,6 +529,8 @@ suite('Scoped legacy cutover', () => {
 				assert.strictEqual(confirmsLegacyResume(saved, REFERENCE.machine_id, attempt, {
 					...after, reference: { ...REFERENCE, agent_id: 'a8' },
 				}), false);
+				const anotherEnvironment = { ...saved, conversation: { ...saved.conversation, environment: 'ssh-remote' } };
+				assert.strictEqual(confirmsLegacyResume(anotherEnvironment, REFERENCE.machine_id, attempt, after), false);
 				return confirmsLegacyResume(saved, REFERENCE.machine_id, attempt, after) ? REFERENCE : undefined;
 			}), { kind: 'confirmed', reference: REFERENCE });
 		} finally {

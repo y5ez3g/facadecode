@@ -407,6 +407,9 @@ automatic recovery of the Pin after confirmed prior exit, the one acknowledged c
 are live, and that an uncertain stop defers recovery. Verify exact session IDs, original process exits, and one
 recovery across two windows that share an agent. On one Facade home, upgrade two independent workspaces in
 sequence. The other workspace retains its original live processes and can send input until its own upgrade.
+For a live upgrade, remove only the isolated supervisor's registry entry and verify discovery of its released listener.
+Reload once before consent and again after approval while the generation lock holds dispatch. The same retired claim
+survives both reloads. The scope and frozen Pins remain fixed, and recovery waits for the confirmed stops.
 An ordinary compatible restart keeps the original agent reference, process and screen.
 
 Run `npm run test:integration` from `extension/` with `FACADE_IT_IMPLEMENTATION=framework` and the

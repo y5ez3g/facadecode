@@ -22,8 +22,10 @@
 
 import * as assert from 'assert';
 import { spawn, spawnSync } from 'child_process';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { withLongFileLock } from '../../base/lock';
 import type { AgentInfo, AgentRef, DaemonHelloResult } from '../../base/frameworkProtocol';
 import type { FrameworkPin } from '../../core/ports';
 import { Workbench, freePort } from './cdpInput';
@@ -175,7 +177,8 @@ function legacyPinProgress(facade: string): { [key: string]: unknown } {
  * Pin, of the legacy session and with the confirmed identity of `agent` on this machine, and its import settled. A released legacy Pin
  * has no machine or agent until its exact native session is resumed on Framework, so a session-only or guessed identity fails here.
  */
-async function savedRecoveredPin(facade: string, owner: string, agent: AgentInfo, original: { readonly id: string; readonly session: string }) {
+async function savedRecoveredPin(facade: string, owner: string, agent: AgentInfo,
+	original: { readonly id: string; readonly session: string; readonly name: string }) {
 	const hello = await helloInFramework(facade);
 	assert.ok('result' in hello, JSON.stringify(hello));
 	const machine = (hello.result as DaemonHelloResult).machine_id;
@@ -184,7 +187,8 @@ async function savedRecoveredPin(facade: string, owner: string, agent: AgentInfo
 	const { pins, progress } = await until(`the original Pin to settle in workspace ${owner}`, () => {
 		const pins = fs.existsSync(file) ? (JSON.parse(fs.readFileSync(file, 'utf8')) as { readonly pins: readonly FrameworkPin[] }).pins : [];
 		const progress = legacyPinProgress(facade)[owner] as Progress | undefined;
-		return pins.some(pin => pin.agent === agent.reference.agent_id) && progress?.pending.length === 0 && progress.attempts.length === 0
+		return pins.some(pin => pin.agent === agent.reference.agent_id && pin.name === original.name)
+			&& progress?.pending.length === 0 && progress.attempts.length === 0
 			? { pins, progress } : undefined;
 	});
 	assert.deepStrictEqual(pins.map(pin => pin.id), [original.id], `exactly the original Pin, once: ${JSON.stringify(pins)}`);
@@ -246,11 +250,11 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		editors.push(editor);
 	};
 	const lines = (): Line[] => fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as Line) : [];
-	const phase = (name: string, win: TestWindow) => until(`cutover ${win.role} ${name}`, () => {
+	const phase = (name: string, win: TestWindow, beforeReload?: Line) => until(`cutover ${win.role} ${name}`, () => {
 		const seen = lines();
 		const failed = seen.find(line => line.phase === 'error');
 		if (failed) { throw new Error(`The cutover driver failed: ${String(failed.message)} (${failed.role})`); }
-		return seen.find(each => each.phase === name && each.role === win.role);
+		return seen.find(each => each.phase === name && each.role === win.role && (!beforeReload || each.hostPid !== beforeReload.hostPid));
 	}, 90_000);
 	const launches = (): Launch[] => fs.existsSync(`${record}.launches`)
 		? fs.readFileSync(`${record}.launches`, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as Launch)
@@ -299,8 +303,8 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 	};
 	const waitExited = (workspace: LegacyWorkspace) =>
 		until(`the original PIDs ${workspace.pids.join(', ')} to exit`, () => workspace.pids.every(pid => !alive(pid)) || undefined, 60_000);
-	const candidateLoaded = async (win: TestWindow) => {
-		const loaded = await phase('candidate-loaded', win);
+	const candidateLoaded = async (win: TestWindow, beforeReload?: Line) => {
+		const loaded = await phase('candidate-loaded', win, beforeReload);
 		assertInstalledPair(win, loaded, candidate.version);
 		return loaded;
 	};
@@ -331,15 +335,16 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 	const recoveredExactly = async (win: TestWindow, workspace: LegacyWorkspace, since: number, stillAlive: readonly number[] = []) => {
 		const [pinned, unpinned] = workspace.agents;
 		const original = workspace.saved.pins[0];
-		await until(`Framework to hold ${pinned.session}`, async () => (await holding(pinned.session)).length > 0 || undefined, 90_000);
-		const current = await holding(pinned.session);
-		assert.strictEqual(current.length, 1, `one recovered agent for ${pinned.session}: ${JSON.stringify(current)}`);
-		const [agent] = current;
+		const agent = await until(`Framework to hold ${pinned.session} as ${original.name}`, async () => {
+			const current = await holding(pinned.session);
+			assert.ok(current.length <= 1, `one recovered agent for ${pinned.session}: ${JSON.stringify(current)}`);
+			return current.find(agent => agent.process === 'running' && agent.name === original.name);
+		}, 90_000);
 		evidence[`recovery-${win.role}`] = { agent, launches: launches().slice(since) };
 		assert.strictEqual(agent.process, 'running');
 		assert.ok(agent.pid && !pids.includes(agent.pid), 'the Pin was recovered in a new process');
 		assert.strictEqual(canonical(agent.cwd), canonical(win.folder));
-		const saved = await savedRecoveredPin(facade, workspace.saved.key, agent, { id: original.id, session: pinned.session });
+		const saved = await savedRecoveredPin(facade, workspace.saved.key, agent, { ...original, session: pinned.session });
 		assert.deepStrictEqual([agent.name, saved.pin.name], [original.name, original.name], 'the resumed agent and roster preserve the saved name');
 		// Give another host or recovery round time to contend for the same Pin before reading the append-only log.
 		await pause(4_000);
@@ -389,11 +394,55 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		assertExactRows(workspace, scoped(workspace, approved), true);
 		assertSnapshot(workspace, approved);
 	};
+	const dropReleasedSupervisorIndex = () => {
+		const registry = path.join(extensionHome, 'ptyd', 'sockets');
+		const ownerPids = legacyOwners(facade);
+		const indexed = fs.readdirSync(registry).filter(name => /^[0-9a-f]{16}\.json$/u.test(name)).map(name => {
+			const file = path.join(registry, name);
+			const entry = JSON.parse(fs.readFileSync(file, 'utf8')) as { readonly pid: number; readonly socket: string; readonly protocol: number };
+			assert.ok(ownerPids.includes(entry.pid) && alive(entry.pid), 'the legacy registry row belongs to the live isolated supervisor');
+			assert.strictEqual(entry.protocol, 17);
+			return { file, ...entry };
+		});
+		assert.strictEqual(indexed.length, 1, 'the released build published one isolated supervisor');
+		for (const { file } of indexed) { fs.unlinkSync(file); }
+		evidence.removedSupervisorIndex = indexed;
+	};
+	const interruptBeforeDispatch = async (win: TestWindow, workspace: LegacyWorkspace, since: number, initial: Line) => {
+		const claimFile = path.join(extensionHome, 'claims', `${createHash('sha256').update(workspace.saved.key).digest('hex')}.json`);
+		const originalClaim: unknown = JSON.parse(fs.readFileSync(claimFile, 'utf8'));
+		const readHandoff = (loaded: Line) => {
+			const handoff = loaded.handoff as { readonly key?: string; readonly reply?: { readonly claim: unknown } } | undefined;
+			assert.strictEqual(handoff?.key, workspace.saved.key);
+			assert.deepStrictEqual(handoff?.reply?.claim, originalClaim, 'the native component still has this workspace’s exact retired claim');
+		};
+		readHandoff(initial);
+		await shownOffer(win);
+		request(win, 'reload');
+		const beforeConsent = await candidateLoaded(win, initial);
+		readHandoff(beforeConsent);
+		return withLongFileLock(claimFile, async () => {
+			await consent(win, workspace, since);
+			assert.ok(scoped(workspace).every(row => row.approved && !row.stop), 'approval is durable while the generation lock holds dispatch');
+			const approved = journal(facade);
+			request(win, 'reload');
+			const afterApproval = await candidateLoaded(win, beforeConsent);
+			readHandoff(afterApproval);
+			assertExactRows(workspace, scoped(workspace), true);
+			assert.ok(workspace.pids.every(alive), 'the same released processes survive the pre-dispatch reload');
+			assert.strictEqual(frameworkListens(facade), false, 'the owning workspace still waits for its authorized stops');
+			assert.deepStrictEqual(launches().slice(since), [], 'no replacement launched while the claim lock was held');
+			assert.deepStrictEqual(journal(facade)?.snapshots, approved?.snapshots, 'the frozen Pins survive both reloads');
+			evidence.beforeDispatchReload = { initial, beforeConsent, afterApproval, approved };
+			return afterApproval;
+		}, 10_000);
+	};
 	const migrateLive = async (win: TestWindow, workspace: LegacyWorkspace, since: number, stillAlive: readonly number[] = []) => {
 		await install(win, candidate.files);
 		request(win, 'reload');
-		const pendingHost = await candidateLoaded(win);
-		await consent(win, workspace, since);
+		let pendingHost = await candidateLoaded(win);
+		if (variant === 'live') { pendingHost = await interruptBeforeDispatch(win, workspace, since, pendingHost); }
+		else { await consent(win, workspace, since); }
 		await waitExited(workspace);
 		const recovered = await recoveredExactly(win, workspace, since, stillAlive);
 		const completed = scoped(workspace);
@@ -430,6 +479,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		fs.writeFileSync(`${record}.legacy-pids`, JSON.stringify(pids));
 
 		if (variant === 'live') {
+			dropReleasedSupervisorIndex();
 			await migrateLive(primary, original, since);
 		} else if (separated && second && other) {
 			const a = await migrateLive(primary, original, since, other.pids);
@@ -451,7 +501,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 			const [retained] = await holding(original.agents[0].session);
 			assert.deepStrictEqual([retained?.reference, retained?.pid, retained?.name], [a.reference, a.pid, a.name], 'workspace A kept its original recovery through workspace B switching');
 			assert.notDeepStrictEqual(b.reference, a.reference, 'the distinct sessions have separate Framework references');
-			await savedRecoveredPin(facade, original.saved.key, a, { id: original.saved.pins[0].id, session: original.agents[0].session });
+			await savedRecoveredPin(facade, original.saved.key, a, { ...original.saved.pins[0], session: original.agents[0].session });
 			assert.deepStrictEqual(launches().slice(since).map(launch => launch.pid), [a.pid, b.pid], 'one new CLI per restored Pin across both upgrades');
 		} else if (variant === 'exited' || variant === 'two-windows') {
 			for (const pid of original.pids) { process.kill(pid, 'SIGTERM'); }

@@ -48,12 +48,10 @@ A workspace extension runs where its workspace is; extensionKind is placement pr
 simultaneous instances.
 [Official remote extension guidance](https://code.visualstudio.com/api/advanced-topics/remote-extensions).
 
-The execution component packages its own `node-pty` backend (4.3) with third-party notices and never locates
-undocumented editor-bundled native modules by guessed appRoot paths. ptyd and each run's shim run on the extension
-host's own executable as Node (`ELECTRON_RUN_AS_NODE=1`), ptyd detached so that it outlives the window. Execution
-packages are platform-specific, so that remote hosts and compatible editors are supported honestly. Nothing is
-downloaded or compiled during ordinary activation. A backend that cannot load on its host fails that capability clearly
-and keeps usable existing records.
+The execution component ships the two native Framework programs for its platform (4.3). The workspace host talks to
+the daemon, and the Keeper owns the agent terminals and processes across editor restarts. Activation selects the
+bundled programs without downloading or compiling them. A Framework startup failure leaves saved workspace records
+in place and follows the existing notice in 1.4.
 
 ### 1.3 Boundaries and code structure
 
@@ -97,10 +95,16 @@ Group 6 owns Framework connection and workspace recovery.
 
 For a local successor, the Window Component supplies its predecessor's retired workspace claim. The released
 component records the owner generation even when it has already disposed of all terminal views. The migration
-adapter obtains process identities from the verified supervisor. It reuses the retired claim only while its
+adapter discovers that release's listener for the exact execution home, including when its registry entry is missing.
+It corroborates the listener and named run with the supervisor protocol and process identity. The local component
+carries the retired claim through reloads before consent or dispatch. The adapter reuses the claim only while its
 generation and token still match the persisted owner and no live row of that owner on the supervisor is attached
 elsewhere. Claim validation and dispatch share the generation lock. Each stop names an approved, unambiguous run
 and its confirmed process identity.
+
+A full list from the same verified supervisor can settle a queued run that failed before receiving a PID.
+A committed shared reference can be inspected and adopted while an unrelated supervisor is unavailable.
+Any new start still requires current evidence that the saved session is free.
 
 ## 2 Ownership and recovery
 
@@ -156,7 +160,7 @@ its session may still be held. After confirmed exit, Pin recovery uses Framework
 | Window Component global storage on the client computer, `home.json` | The resolved local Facade: Home, written by local windows and read by remote windows' local components; absent when no local setting is set |
 | Framework state | Process, session, machine, and delivery records under the Framework home. See [Framework architecture](../../framework/ARCHITECTURE.md). |
 | Released TypeScript state | Supervisor registry and exact run inventory, URI ledger, native handover, old ownership generations and saved Pins under the execution home's extension directory. The old release owns its active records. |
-| Framework workspace roster | Roster and Pins owns v1 membership, Pins, hidden agents and import markers in orchestrator-workspace.json. All writes use the roster lock. Windows observe the file through a directory watch and poll it if the native watch is unavailable. |
+| Framework workspace roster | Roster and Pins owns v1 membership, Pins, hidden agents and import markers in orchestrator-workspace.json. All writes use the roster lock. Windows observe the file through a directory watch. If the watch is lost or unavailable, reread the file immediately and poll for the rest of that opening, including after a transient read failure. |
 | Legacy cutover record, `<Facade home>/extension/legacy-cutover.json` | The cutover owner records consent for the exact affected runs and keeps the Pin snapshots until the earlier workspaces can import them. Confirmed exits leave the active inventory. The migration adapter holds scoped notice and custody locks and keeps shared recovery attempts and confirmed references. Retain the snapshots for the legacy compatibility period. |
 | Workspace legacy Pin recovery, `<Facade home>/extension/workspaces/<key>/orchestrator-legacy-pins.json` | Roster and Pins owns the record. It holds unresolved saved sessions and preserves unrecognized input. Accept the confirmed Pin in the roster before consuming the corresponding recovery entry. Retain the import marker for the legacy compatibility period. |
 | Editor workspace storage | Workspace key (2.2), Panel preferences and launch location history. Earlier versions mirrored legacy workspace state here. |
@@ -407,28 +411,16 @@ with vsce pinned at 4.1.0. The workspace manifest installs its local window comp
 `extensionDependencies`: in a remote window the editor installs the remote extension and activates it before it installs
 a local dependency, and an unmet dependency then blocks activation with no reload offered. The window component's
 manifest names the workspace extension in its own `extensionPack`, so installing either one installs both; alone, the
-window component shows nothing. When activating the legacy implementation, the workspace component waits up to 60 seconds for `facade.window.identity` and continues as soon as it appears, including when the
-editor reports the component installed later. If it does not appear, the window cannot read its own identity (2.2),
-which the component reads, so it cannot tell which agents are its own and shows and starts none (RULES-4.1): the panel
-and one notification explain in plain words that the Facade Code Window Component must be installed and enabled on this
-computer, with an action that shows it in the Extensions view, Facade's commands repeat that explanation, and a reload
-is offered once the component is installed. The running agents go on for RULES-4.1's grace. A remote window's grace leaves time to install the component and reload, which shows the
-agents again. A local window has less time. A window component without the client network, too old to carry requests,
-leaves its window's agents shown and usable: they reach
-this window's agents alone, list_agents and name resolution report the other windows unavailable (`complete: false`,
-MCP-3.1), and a new start or send is refused, saying to update the Facade Code Window Component on this computer and
-reload the window (1.1). Unpublished installation tests install that component locally as well as the platform-specific
-execution VSIX in its execution host.
+window component shows nothing. The workspace component uses it for verified native identity and terminal commands
+(2.2, 6.3). Installation tests install the window VSIX locally and the platform-specific execution VSIX in its
+execution host.
 
-The execution stage includes its owned backend, node-pty 1.2.0-beta.15 pinned exactly - node-pty 1.1.0's Windows exit
-watchers change a shared console list without a lock, which corrupts ptyd when several consoles end together - with its
-required runtime dependencies/resources and their license notices under `build/extension/node_modules/`. Each execution
-package targets one VS Code platform - its OS and architecture, musl Linux as `alpine` - read from the binaries' own
-headers; its addons are Node-API, never bound to one runtime's ABI, so one artifact serves the local extension host and
-a remote server alike. The loader resolves this packaged backend, not an editor-internal module. A build verifies only
-its own host's platform; another platform needs its own build there and the verification below. Verify actual VSIX
-contents and install in clean profiles for each supported editor/OS/remote host. Compatible editor marketing follows
-measured support, not a promise that arbitrary forks work. Version mismatch must leave user work intact.
+The execution VSIX includes `facade`, `facade-mcp`, their build marker, native resources and third-party notices.
+Each execution package targets one VS Code OS and architecture, checked against the binaries' headers. The package
+check enforces the bundle's island boundaries and verifies the absence of the retired TypeScript supervisor, shim
+and runtime dependencies. Build and verify each target on its native runner. Install both VSIXs in clean profiles
+on the supported editor and execution platforms. Check installed upgrades against the published prior pair under
+VERIFICATION-5.2. Version mismatch preserves the person's work.
 
 ### 4.4 Localization
 
@@ -538,10 +530,14 @@ starting from a Pin.
 Read local `facade.pins` from a verified legacy workspace file or from the snapshot saved before an approved cutover.
 For a folderless window, the persisted native
 window token can identify its original workspace key in `extension/windows/`. That key locates the local Pins even
-when the workspace sidecar is absent. Merge the confirmed Pins under the roster lock, retaining a person's current
+when the workspace sidecar is absent. An empty saved workspace that predates its URI ledger entry can also recover Pins
+when its stored identity matches the exact saved workspace URI and the ledger has not assigned the key elsewhere.
+Merge the confirmed Pins under the roster lock, retaining a person's current
 Pins and hidden entries. A new empty window stores its roster key in VS Code workspace state. Share the existing
 Pin restore round across windows and use the full persisted agent or session identity for recovery. Keep unfinished
-session recovery in its workspace record and fence a resume with an uncertain reply.
+session recovery in its workspace record and fence a resume with an uncertain reply. For an earlier interrupted
+import, corroborate its pending Pin and exact saved session with a durable converted Pin and the matching Framework record
+before sharing that reference. A pending Pin without this evidence fences another launch.
 
 ### 6.3 Terminals and the Window Component
 

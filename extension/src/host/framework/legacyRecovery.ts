@@ -105,7 +105,8 @@ export async function recoverLegacyPin(pin: LegacySessionPin, recovery: LegacyRe
 export function matchesLegacyPin(pin: LegacySessionPin, machine: string, record: AgentInfo): boolean {
 	const { cli, sessionId } = pin.conversation;
 	return record.type === 'managed' && !record.unreachable && record.reference.machine_id === machine
-		&& record.cli === cli && (sessionId === undefined || record.session === sessionId) && isSameFolder(record.cwd, pin.cwd);
+		&& pin.conversation.environment === editorEnvironment() && record.cli === cli
+		&& (sessionId === undefined || record.session === sessionId) && isSameFolder(record.cwd, pin.cwd);
 }
 
 /** An unkeyed request can reconcile only the exact target whose Framework run changed after dispatch. */

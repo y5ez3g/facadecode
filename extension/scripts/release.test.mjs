@@ -52,11 +52,12 @@ test('the published BUILD marker is committed by the release tag', t => {
 });
 
 /** A stored (uncompressed) ZIP with the manifests a VSIX carries. */
-function vsix(file, { name, version, target, programs = [] }) {
+function vsix(file, { name, version, target, programs = [], legacy = false }) {
 	writeZip(file, [
 		['extension/package.json', JSON.stringify({ publisher: 'facade', name, version })],
 		['extension.vsixmanifest', `<Identity Id="${name}" Version="${version}" Publisher="facade"${target ? ` TargetPlatform="${target}"` : ''} />`],
 		...programs.map(([program, bytes]) => ['extension/bin/' + program, bytes]),
+		...(legacy ? [['extension/dist/ptyd.js', 'historical supervisor fixture']] : []),
 	]);
 }
 
@@ -252,12 +253,14 @@ function writeArchive(directory, target, build, programs, license = 'fixture lic
 	fs.writeFileSync(path.join(framework, 'SHA256SUMS'), sha256(fs.readFileSync(archive)) + '  ' + name + '\n');
 }
 
-function writeNativePackages(directory, version, build, source, { mockSigning = false } = {}) {
+function writeNativePackages(directory, version, build, source, { mockSigning = false, legacy = false } = {}) {
 	const targets = targetsFor(version).filter(target => target !== 'universal');
 	for (const target of targets) {
 		const root = path.join(directory, 'extension-' + target);
 		const programs = programsFor(target);
-		vsix(path.join(root, 'vsix', fileFor(version, target)), { name: 'facadecode', version, target, programs: [...programs, ['VERSION', build + '\n']] });
+		vsix(path.join(root, 'vsix', fileFor(version, target)), {
+			name: 'facadecode', version, target, programs: [...programs, ['VERSION', build + '\n']], legacy,
+		});
 		vsix(path.join(root, 'vsix', fileFor(version, 'universal')), { name: 'facadecode-window', version, programs: [['fixture', target]] });
 		writeArchive(directory, target, build, programs);
 		const evidence = captureNativePackage(root, target, version, source);
@@ -315,7 +318,7 @@ test('the candidate verifier requires every native target and the tested bytes f
 	assert.throws(() => verifyNativePackages(directory, version, source), /wrong version/);
 });
 
-function disposableRelease(t) {
+function disposableRelease(t, { legacy = false } = {}) {
 	const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'facade-release-rehearsal-'));
 	t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
 	const gitDir = path.join(directory, 'git');
@@ -342,7 +345,7 @@ function disposableRelease(t) {
 	fs.mkdirSync(mirror);
 	fs.writeFileSync(marker, oldVersion + '\n');
 	fs.writeFileSync(logFile, '');
-	writeNativePackages(inputs, version, build, source, { mockSigning: true });
+	writeNativePackages(inputs, version, build, source, { mockSigning: true, legacy });
 	const command = (mode, args = [], { fault = '', attempt = source.attempt } = {}) => {
 		const result = spawnSync(process.execPath, ['--import', transport, script, mode, '--tag', tag, ...args], {
 			encoding: 'utf8',
@@ -388,7 +391,7 @@ function withArtifactChange(file, bytes, action) {
 	}
 }
 
-function nativeReplay(fixture) {
+function nativeReplay(fixture, implementation = 'framework') {
 	const { tag, source, version, build } = fixture;
 	const directory = path.join(path.dirname(fixture.inputs), 'native-evidence');
 	const packages = path.join(directory, 'packages');
@@ -416,7 +419,7 @@ function nativeReplay(fixture) {
 		]);
 		const pair = inputs(fileFor(version, target), fileFor(version, 'universal'));
 		const editorLog = check => log(check, pair, [
-			'Isolated editor profile cleanup finished.', 'Facade acceptance test ' + JSON.stringify({ name: check, implementation: 'legacy' }),
+			'Isolated editor profile cleanup finished.', 'Facade acceptance test ' + JSON.stringify({ name: check, implementation }),
 		]);
 		const packageEvidence = fs.readFileSync(path.join(packages, 'extension-' + target, evidenceFile));
 		return { target, packageEvidenceSha256: sha256(packageEvidence), logs: {
@@ -459,6 +462,12 @@ test('read-only release replay binds every native install and editor result to t
 	assert.equal(fixture.log(), readLog);
 	assert.equal(fixture.latest(), 'extension/' + fixture.oldVersion);
 	assert.equal(fs.existsSync(fixture.output), false);
+});
+
+test('read-only release replay retains the legacy receipt for packages with the earlier supervisor', t => {
+	const fixture = disposableRelease(t, { legacy: true });
+	checkExit(fixture.prepare(), 0);
+	checkExit(nativeReplay(fixture, 'legacy').verify(), 0);
 });
 
 test('read-only release replay refuses missing or conflicting native artifacts and results', t => {
@@ -513,7 +522,7 @@ test('read-only release replay refuses missing or conflicting native artifacts a
 	changeEditorRecord(record => { record.target = 'win32-x64'; }, /target or package inputs differ/);
 	changeEditorRecord(record => { record.source = { ...record.source, attempt: '2' }; }, /source, target or package inputs differ/);
 	rejectLog(bytes => bytes.replace('Isolated editor profile cleanup finished.\r\n', ''), /missing or repeated editor cleanup/);
-	rejectLog(bytes => bytes.replace('"implementation":"legacy"', '"implementation":"framework"'), /missing exact installed editor result after cleanup/);
+	rejectLog(bytes => bytes.replace('"implementation":"framework"', '"implementation":"legacy"'), /missing exact installed editor result after cleanup/);
 
 	const winEvidence = path.join(replay.packages, 'extension-' + target, evidenceFile);
 	const record = JSON.parse(fs.readFileSync(winEvidence, 'utf8'));

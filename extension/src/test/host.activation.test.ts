@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -113,9 +114,9 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 	}
 
 	/** Real component activation with the editor command dispatch supplied by the fixture. */
-	function activateWindowComponent(logUri: string, editorSession = session, component = '0.1.6', editor = componentEditor(editorSession)) {
+	function activateWindowComponent(logUri: string, editorSession = session, component = '0.1.6', editor = componentEditor(editorSession), files = fs) {
 		const subscriptions: { dispose(): void }[] = [];
-		const { activate } = withModules({ vscode: editor.vscode })<typeof import('../host/window')>(require.resolve('../host/window'));
+		const { activate } = withModules({ vscode: editor.vscode, fs: files })<typeof import('../host/window')>(require.resolve('../host/window'));
 		activate({
 			logUri: { fsPath: logUri }, globalStorageUri: { fsPath: path.join(logUri, 'storage') }, subscriptions,
 			extension: { packageJSON: { version: component } }
@@ -192,6 +193,82 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		assertOnlyTerminalCommands();
 		assert.deepStrictEqual(await commands.get(WINDOW_IDENTITY_COMMAND)!(session), { version: 1, session, damaged: true });
 		assert.strictEqual(await commands.get(WINDOW_IDENTITY_COMMAND)!('session-before'), undefined, 'a late request of another editor session is not answered');
+	});
+
+	test('native identity starts the local writer of the remembered Facade home (ARCHITECTURE-3.1)', async () => {
+		const before = process.env.FACADE_HOME;
+		const initial = path.join(temp, 'local-home');
+		const changed = path.join(temp, 'changed-home');
+		const record = path.join(temp, 'storage', 'home.json');
+		const change = () => configurationChanged.forEach(listener => listener({ affectsConfiguration: section => section === 'facade.home' }));
+		home = initial;
+		const window = activateWindowComponent(temp);
+		try {
+			assert.ok(isWindowIdentity(await window.command(WINDOW_IDENTITY_COMMAND, session), session));
+			assert.deepStrictEqual(JSON.parse(fs.readFileSync(record, 'utf8')), { home: initial });
+			assert.strictEqual(process.env.FACADE_HOME, initial);
+			const timestamp = fs.statSync(record).mtimeMs;
+			change();
+			assert.strictEqual(fs.statSync(record).mtimeMs, timestamp);
+			home = changed;
+			change();
+			assert.deepStrictEqual(JSON.parse(fs.readFileSync(record, 'utf8')), { home: changed });
+			assert.strictEqual(process.env.FACADE_HOME, initial);
+			home = { unusable: true };
+			change();
+			assert.deepStrictEqual(JSON.parse(fs.readFileSync(record, 'utf8')), { home: changed });
+			home = '';
+			change();
+			assert.ok(!fs.existsSync(record));
+		} finally {
+			window.dispose();
+			if (before === undefined) { delete process.env.FACADE_HOME; } else { process.env.FACADE_HOME = before; }
+		}
+	});
+
+	test('native remote identity reads the remembered local home and sees writes during watch registration (ARCHITECTURE-3.1)', async () => {
+		const before = process.env.FACADE_HOME;
+		const storage = path.join(temp, 'storage');
+		const record = path.join(storage, 'home.json');
+		const local = path.join(temp, 'recorded-local');
+		const fallback = path.join(temp, 'fallback-local');
+		const later = path.join(temp, 'later-local');
+		const save = (home: string) => fs.writeFileSync(record, JSON.stringify({ home }));
+		let notify = () => {};
+		let closed = false;
+		let choose!: (answer: string) => void;
+		const watcher = Object.assign(new EventEmitter(), { close: () => { closed = true; } });
+		const files = {
+			...fs,
+			watch: (_dir: string, _options: unknown, listener: () => void) => {
+				save(later);
+				notify = listener;
+				return watcher;
+			}
+		} as unknown as typeof fs;
+		fs.mkdirSync(storage);
+		save(local);
+		home = path.join(temp, 'remote-setting');
+		remoteName = 'ssh-remote';
+		process.env.FACADE_HOME = fallback;
+		answer = () => new Promise(resolve => { choose = resolve; });
+		const window = activateWindowComponent(temp, session, '0.1.6', componentEditor(), files);
+		try {
+			assert.ok(isWindowIdentity(await window.command(WINDOW_IDENTITY_COMMAND, session), session));
+			assert.strictEqual(process.env.FACADE_HOME, local);
+			assert.deepStrictEqual(informed, [{ text: 'The new Facade home applies only after the window reloads.', items: ['Reload Window'] }]);
+			notify();
+			assert.strictEqual(informed.length, 1);
+			watcher.emit('error', new Error('Watch closed'));
+			assert.ok(closed);
+			window.dispose();
+			choose('Reload Window');
+			await new Promise(resolve => setImmediate(resolve));
+			assert.ok(!executed.includes('workbench.action.reloadWindow'));
+		} finally {
+			window.dispose();
+			if (before === undefined) { delete process.env.FACADE_HOME; } else { process.env.FACADE_HOME = before; }
+		}
 	});
 
 	test('a handover record that cannot be read is reported as unreadable by the window component', async () => {

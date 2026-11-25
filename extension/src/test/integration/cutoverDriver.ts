@@ -182,9 +182,13 @@ async function candidate(): Promise<void> {
 	write({ phase: 'candidate-loaded', ...installedPair(), hostPid: process.pid, handoff: await observedHandoff() });
 	for (;;) {
 		const step = await until('a runner request for the candidate window', () =>
-			['showlist', 'settings'].find(each => fs.existsSync(`${OUT}.${ROLE}.${each}`)), 300_000).catch(() => undefined);
+			['reload', 'showlist', 'settings'].find(each => fs.existsSync(`${OUT}.${ROLE}.${each}`)), 300_000).catch(() => undefined);
 		if (!step) { return; }
 		fs.unlinkSync(`${OUT}.${ROLE}.${step}`);
+		if (step === 'reload') {
+			void vscode.commands.executeCommand('workbench.action.reloadWindow').then(undefined, () => undefined);
+			return;
+		}
 		if (step === 'showlist') {
 			await vscode.commands.executeCommand('notifications.showList');
 		} else {

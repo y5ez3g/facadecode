@@ -225,7 +225,7 @@
     },
     {
       "id": "extension/configuration-framework/environment/FACADE_HOME",
-      "assertion": "Launch the window with FACADE_HOME set to the isolated absolute root and verify the daemon and its state and editor terminal launcher resolve there. Verify the default home and refused relative root. During legacy migration, Facade: Home still identifies the legacy workspace while Framework uses its environment root.",
+      "assertion": "Launch the window with FACADE_HOME set to the isolated absolute root and verify the daemon and its state and editor terminal launcher resolve there. Verify the default home and refused relative root. When Facade: Home is set, legacy discovery and Framework use that resolved home.",
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/integration/framework.it.ts:54",
@@ -786,7 +786,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "commands.test",
-        "name": "Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1) PANEL-2.2, 4.2: a card's menu names its exact run, including same-numbered agents on two machines"
+        "name": "Framework agent command targets (UX-3.1, PANEL-4.2) PANEL-2.2, 4.2: a card's menu names its exact run, including same-numbered agents on two machines"
       }
     },
     {
@@ -844,7 +844,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "commands.test",
-        "name": "Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1) PANEL-2.2, 4.2: a card's menu names its exact run, including same-numbered agents on two machines"
+        "name": "Framework agent command targets (UX-3.1, PANEL-4.2) PANEL-2.2, 4.2: a card's menu names its exact run, including same-numbered agents on two machines"
       }
     },
     {
@@ -858,7 +858,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "commands.test",
-        "name": "Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1) PANEL-2.2, 4.2: a card's menu names its exact run, including same-numbered agents on two machines"
+        "name": "Framework agent command targets (UX-3.1, PANEL-4.2) PANEL-2.2, 4.2: a card's menu names its exact run, including same-numbered agents on two machines"
       }
     },
     {
@@ -1240,7 +1240,7 @@
       "test": {
         "runner": "extension-unit",
         "target": "host.activation.test",
-        "name": "A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-2.4) the native handoff returns only the retired owner for the current local session (ARCHITECTURE-1.4)"
+        "name": "A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-2.4) the native handoff returns the local retired claim after the old terminal views close (ARCHITECTURE-1.4)"
       }
     },
     {
