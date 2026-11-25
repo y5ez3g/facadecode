@@ -84,7 +84,11 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 - `feed(&mut self, &[u8]) -> ParsedOutput`, `resize(&mut self, cols, rows)`.
 - `feed_observing` lets its reader inspect complete frames in order, including each applied
   synchronized update when several finish in one read. `CursorRowWrites` says whether the frame
-  wrote or erased cells on the cursor row and whether it began before the marked boundary.
+  wrote or erased cells on the cursor row and whether it began before the marked boundary. Those
+  facts stay with the frame when the PTY splits its output, including a split cursor movement.
+  `frame_printed_cell` reports a glyph printed in the current frame after that boundary, including
+  when its output spanned several reads. OSC status observations carry the offset of the opening
+  escape, which can precede the read that completed it.
 - `set_colors(&mut self, colors: TerminalColors)` replaces the colors used for subsequent queries.
   `TerminalColors { foreground, background, cursor }` has three `Option<[u8; 3]>` fields; its
   default leaves all three `None`. OSC 10, 11 and 12 replies use `rgb:rrrr/gggg/bbbb`, each 8-bit
@@ -102,6 +106,11 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 
 **Daemon, agent actor** (`daemon/src/agent/actor.rs`):
 
+- `feed_observing(&mut self, bytes, observe) -> ParsedOutput` reports status and complete frames in
+  output order, including synchronized frames within one read. Each frame reports whether the
+  cursor row was written and whether it started before the caller's input boundary. A menu can
+  be drawn away from the cursor row. `frame_has_current_cell_writes()` lets the observer check for
+  a fresh draw on any row rather than repeating a snapshot that carried over from earlier bytes.
 - `ParsedOutput { query_replies, title_change, cursor_row_cells_written, viewer_output, native_activity,
   redraw_viewers, status }`: replies are written to the run's terminal, viewer output goes to viewers, and
   status goes to the state. `title_change` carries the CLI's own title. `native_activity`

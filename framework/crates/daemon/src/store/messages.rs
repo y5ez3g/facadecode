@@ -1036,6 +1036,26 @@ impl MessageTable {
         )
     }
 
+    /// Releases a paste the daemon knows was never issued. Pending messages keep their deadlines.
+    pub(crate) fn release_unissued_paste(&self, numbers: &[u64]) -> anyhow::Result<()> {
+        let Some(first) = numbers.first() else {
+            return Ok(());
+        };
+        self.0.transaction(
+            || format!("release #m{first}'s unissued paste"),
+            |transaction| {
+                for number in numbers {
+                    transaction.execute(
+                        "UPDATE messages SET paste = NULL WHERE number = ?1 AND paste = ?2 \
+                         AND status = 'pending' AND withdrawn = 0 AND private_receipt = 0",
+                        params![*number as i64, *first as i64],
+                    )?;
+                }
+                Ok(())
+            },
+        )
+    }
+
     /// Writes, in one transaction, each delivery whose message is still pending, and the results
     /// that the prompts among them owe, each paired with its prompt's number. A result is written
     /// only for a caller still there. A message settled before, or deleted with its recipient's

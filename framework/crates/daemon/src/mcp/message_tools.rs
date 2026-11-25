@@ -312,7 +312,9 @@ fn delivery_failed(sent: &SendResult) -> Value {
                  again with reply_to: {message}."
             );
         }
-    } else if unconfirmed.is_some() {
+    } else if unconfirmed.is_some()
+        && delivery.reason != Some(DeliveryFailure::InteractionAfterWrite)
+    {
         words += &format!(
             ". You can look at {to}'s screen for text still in its input; send the message again \
              only if you establish that it did not arrive."

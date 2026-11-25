@@ -8,6 +8,8 @@ mod probe;
 
 use std::borrow::Cow;
 
+use std::ops::Range;
+
 use facade_base::model::terminal::{HiddenRows, InputInfo, InputState};
 use facade_screen::{ScreenView, VisibleCell};
 use regex::Regex;
@@ -196,12 +198,12 @@ pub fn read_box_for_typing(
     view: &ScreenView,
     untouched_input: bool,
 ) -> BoxReading {
-    read_box_in_frame(rule, view, untouched_input, BoxPaint::None)
+    read_box_in_frame(rule, view, untouched_input, BoxPaint::None, None).0
 }
 
 /// Reads a cleanup response only where the CLI has painted the displayed input since the write.
 pub fn read_box_after_paint(rule: &InputRule, screen: &facade_screen::Screen) -> BoxReading {
-    read_box_in_frame(rule, &screen.view(), false, BoxPaint::Cleanup(screen))
+    read_box_in_frame(rule, &screen.view(), false, BoxPaint::Cleanup(screen), None).0
 }
 
 enum BoxPaint<'a> {
@@ -216,12 +218,37 @@ pub fn read_box_for_screen(
     screen: &facade_screen::Screen,
     untouched_input: bool,
 ) -> BoxReading {
-    let paint = if screen.observes_paint() {
+    read_box_in_frame(
+        rule,
+        &screen.view(),
+        untouched_input,
+        paste_paint(screen),
+        None,
+    )
+    .0
+}
+
+fn paste_paint(screen: &facade_screen::Screen) -> BoxPaint<'_> {
+    if screen.observes_paint() {
         BoxPaint::Paste(screen)
     } else {
         BoxPaint::None
-    };
-    read_box_in_frame(rule, &screen.view(), untouched_input, paint)
+    }
+}
+
+/// Reads the current frame and whether the recognized menu's anchor was printed in it.
+pub fn read_box_with_menu_redraw(
+    rule: &InputRule,
+    screen: &facade_screen::Screen,
+    untouched_input: bool,
+) -> (BoxReading, bool) {
+    read_box_in_frame(
+        rule,
+        &screen.view(),
+        untouched_input,
+        paste_paint(screen),
+        Some(screen),
+    )
 }
 
 fn read_box_in_frame(
@@ -229,7 +256,8 @@ fn read_box_in_frame(
     view: &ScreenView,
     untouched_input: bool,
     paint: BoxPaint<'_>,
-) -> BoxReading {
+    menu_redraw: Option<&facade_screen::Screen>,
+) -> (BoxReading, bool) {
     let screen = Screen::new(view, rule.menus());
     let mut reading = screen.read(rule, view, untouched_input);
     let wrapped_cursor = reading.wrapped_padding_cursor(view);
@@ -251,6 +279,7 @@ fn read_box_in_frame(
         draft_start,
         line,
         unsure,
+        menu_anchor,
         ..
     } = reading;
     let info = InputInfo {
@@ -277,14 +306,31 @@ fn read_box_in_frame(
             row.checked_sub(top)?,
         ))
     });
-    BoxReading {
-        info,
-        draft,
-        draft_cursor,
-        line,
-        paste_drawing,
-        unsure,
-    }
+    let redrawn = menu_anchor
+        .zip(menu_redraw)
+        .is_some_and(|(rows, terminal)| {
+            let mut drawn = false;
+            for row in rows {
+                for cell in screen.row(row).iter().filter(|cell| draws(cell)) {
+                    if !terminal.frame_printed_cell(row, cell.column) {
+                        return false;
+                    }
+                    drawn = true;
+                }
+            }
+            drawn
+        });
+    (
+        BoxReading {
+            info,
+            draft,
+            draft_cursor,
+            line,
+            paste_drawing,
+            unsure,
+        },
+        redrawn,
+    )
 }
 
 /// What a reader found, before the rule's mechanism is added.
@@ -298,6 +344,7 @@ struct Reading {
     draft_start: Option<(usize, usize)>,
     line: Option<InputLine>,
     unsure: bool,
+    menu_anchor: Option<Range<usize>>,
 }
 
 impl Reading {
@@ -458,6 +505,14 @@ fn reading(state: InputState, evidence: impl Into<String>) -> Reading {
         draft_start: None,
         line: None,
         unsure: false,
+        menu_anchor: None,
+    }
+}
+
+fn interaction(evidence: impl Into<String>, anchor: Range<usize>) -> Reading {
+    Reading {
+        menu_anchor: Some(anchor),
+        ..reading(InputState::Interaction, evidence)
     }
 }
 
@@ -815,8 +870,8 @@ impl<'a> Screen<'a> {
             .all(|cell| cell.dim)
     }
 
-    /// The first screen row of a menu or question's anchor.
-    fn menu_row(&self, menu: &Menu, lines: &[LogicalLine<'_>]) -> Option<usize> {
+    /// All screen rows of a menu or question's anchor, including continuations.
+    fn menu_rows(&self, menu: &Menu, lines: &[LogicalLine<'_>]) -> Option<Range<usize>> {
         lines.iter().enumerate().find_map(|(start, line)| {
             let end = self.menu_line_end(&menu.selected, lines, start)?;
             if let Some(not) = &menu.not_selected
@@ -834,7 +889,8 @@ impl<'a> Screen<'a> {
                     .take(hint.within)
                     .any(|start| self.menu_line_end(&hint.pattern, lines, start).is_some())
             });
-            (next_fits && hint_fits).then_some(line.row)
+            (next_fits && hint_fits)
+                .then(|| line.row..lines.get(after).map_or(self.height(), |line| line.row))
         })
     }
 
@@ -847,7 +903,7 @@ impl<'a> Screen<'a> {
         }
         let lines = self.logical_lines();
         for menu in self.menus {
-            let Some(y) = self.menu_row(menu, &lines) else {
+            let Some(anchor) = self.menu_rows(menu, &lines) else {
                 continue;
             };
             let what = match (&menu.selected, &menu.next) {
@@ -855,9 +911,9 @@ impl<'a> Screen<'a> {
                 (_, Some(_)) => "a menu's selected item",
                 (_, None) => "a question",
             };
-            return reading(
-                InputState::Interaction,
-                format!("{why}; the CLI shows {what} at row {}", y + 1),
+            return interaction(
+                format!("{why}; the CLI shows {what} at row {}", anchor.start + 1),
+                anchor,
             );
         }
         unknown(why)
@@ -1226,12 +1282,12 @@ impl<'a> Screen<'a> {
         let place = format!("the editor at {}", row_span(upper + 2, lower));
         if let Some((row, certain)) = self.question_row(&rule.question, upper, lower) {
             return match certain {
-                true => reading(
-                    InputState::Interaction,
+                true => interaction(
                     format!(
                         "{place} answers a question of the CLI's, as row {} shows",
                         row + 1
                     ),
+                    row..row + 1,
                 ),
                 false => unknown(format!(
                     "{place} may answer a question of the CLI's, as row {} may show over its \

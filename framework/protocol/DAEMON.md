@@ -937,7 +937,7 @@ What became of a message.
 
 Why a message was not delivered.
 
-`'ended' \| 'input_draft' \| 'input_interaction' \| 'input_unknown' \| 'timeout' \| 'submission_unconfirmed' \| 'unsupported'`
+`'ended' \| 'input_draft' \| 'input_interaction' \| 'input_unknown' \| 'timeout' \| 'submission_unconfirmed' \| 'interaction_after_write' \| 'unsupported'`
 
 ### DeliveryStatus
 

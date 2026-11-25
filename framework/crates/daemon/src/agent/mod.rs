@@ -10,6 +10,7 @@
 
 mod actor;
 mod glyph;
+mod input_gate;
 mod person;
 mod readiness;
 mod screen;

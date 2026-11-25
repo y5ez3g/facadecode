@@ -221,8 +221,12 @@ struct TermDamageState {
     /// Information about damage on terminal lines.
     lines: Vec<LineDamageBounds>,
 
-    /// Rows on which output wrote or erased cells since the last reset.
+    /// Rows written or erased since the last damage reset and since the last frame boundary.
     cell_writes: Vec<bool>,
+    frame_writes: Vec<bool>,
+    /// Glyphs printed in the current frame, with each row in its own set of words.
+    printed_cells: Vec<u64>,
+    words_per_row: usize,
 
     /// Old terminal cursor point.
     last_cursor: Point,
@@ -233,10 +237,14 @@ impl TermDamageState {
         let lines =
             (0..num_lines).map(|line| LineDamageBounds::undamaged(line, num_cols)).collect();
 
+        let words_per_row = num_cols.div_ceil(u64::BITS as usize);
         Self {
             full: true,
             lines,
             cell_writes: vec![false; num_lines],
+            frame_writes: vec![false; num_lines],
+            printed_cells: vec![0; words_per_row * num_lines],
+            words_per_row,
             last_cursor: Default::default(),
         }
     }
@@ -254,6 +262,11 @@ impl TermDamageState {
         }
         self.cell_writes.resize(num_lines, false);
         self.cell_writes.fill(false);
+        self.frame_writes.resize(num_lines, false);
+        self.frame_writes.fill(false);
+        self.words_per_row = num_cols.div_ceil(u64::BITS as usize);
+        self.printed_cells.resize(self.words_per_row * num_lines, 0);
+        self.printed_cells.fill(0);
     }
 
     /// Damage point inside of the viewport.
@@ -271,7 +284,33 @@ impl TermDamageState {
     #[inline]
     fn wrote_cells(&mut self, line: usize, left: usize, right: usize) {
         self.cell_writes[line] = true;
+        self.frame_writes[line] = true;
         self.damage_line(line, left, right);
+    }
+
+    fn set_row_writes(&mut self, rows: Range<usize>, written: bool) {
+        self.cell_writes[rows.clone()].fill(written);
+        self.frame_writes[rows].fill(written);
+    }
+
+    fn clear_frame_writes(&mut self) {
+        self.frame_writes.fill(false);
+        self.printed_cells.fill(0);
+    }
+
+    fn printed_cell(&mut self, line: usize, column: usize) {
+        self.wrote_cells(line, column, column);
+        let (word, bit) = self.printed_cell_bit(line, column);
+        self.printed_cells[word] |= bit;
+    }
+
+    fn printed_cell_bit(&self, line: usize, column: usize) -> (usize, u64) {
+        let bits = u64::BITS as usize;
+        (line * self.words_per_row + column / bits, 1 << (column % bits))
+    }
+
+    fn forget_printed_rows(&mut self, rows: Range<usize>) {
+        self.printed_cells[rows.start * self.words_per_row..rows.end * self.words_per_row].fill(0);
     }
 
     /// Reset information about terminal damage.
@@ -532,6 +571,30 @@ impl<T> Term<T> {
     /// Whether output wrote or erased cells on the cursor's row since the last damage reset.
     pub fn cursor_row_cells_written(&self) -> bool {
         self.damage.cell_writes[self.grid.cursor.point.line.0 as usize]
+    }
+
+    /// Marks a boundary for cell writes without discarding the damage accumulated so far.
+    pub fn mark_cell_write_boundary(&mut self) {
+        self.damage.clear_frame_writes();
+    }
+
+    /// Whether the current frame wrote or erased cells on the cursor's row.
+    pub fn cursor_row_cells_written_in_scope(&self) -> bool {
+        self.damage.frame_writes[self.grid.cursor.point.line.0 as usize]
+    }
+
+    /// Whether any row was written in the current cell-write scope.
+    pub fn cells_written_in_scope(&self) -> bool {
+        self.damage.frame_writes.contains(&true)
+    }
+
+    /// Whether the current frame printed a glyph at this viewport cell.
+    pub fn frame_printed_cell(&self, line: usize, column: usize) -> bool {
+        if line >= self.screen_lines() || column >= self.columns() {
+            return false;
+        }
+        let (word, bit) = self.damage.printed_cell_bit(line, column);
+        self.damage.printed_cells[word] & bit != 0
     }
 
     #[inline]
@@ -887,6 +950,7 @@ impl<T> Term<T> {
         self.mode ^= TermMode::ALT_SCREEN;
         self.selection = None;
         self.damage.cell_writes.fill(false);
+        self.damage.clear_frame_writes();
         self.mark_fully_damaged();
     }
 
@@ -915,7 +979,9 @@ impl<T> Term<T> {
 
         // Scroll between origin and bottom
         self.grid.scroll_down(&region, lines);
-        self.damage.cell_writes[region.start.0 as usize..region.end.0 as usize].fill(false);
+        let rows = region.start.0 as usize..region.end.0 as usize;
+        self.damage.set_row_writes(rows.clone(), false);
+        self.damage.forget_printed_rows(rows);
         self.scroll_paint(&region, lines, false);
         self.mark_fully_damaged();
     }
@@ -936,7 +1002,9 @@ impl<T> Term<T> {
         self.selection = self.selection.take().and_then(|s| s.rotate(self, &region, lines as i32));
 
         self.grid.scroll_up(&region, lines);
-        self.damage.cell_writes[region.start.0 as usize..region.end.0 as usize].fill(false);
+        let rows = region.start.0 as usize..region.end.0 as usize;
+        self.damage.set_row_writes(rows.clone(), false);
+        self.damage.forget_printed_rows(rows);
         self.scroll_paint(&region, lines, true);
 
         // Scroll vi mode cursor.
@@ -1206,7 +1274,7 @@ impl<T> Term<T> {
         cursor_cell.flags = flags;
         cursor_cell.extra = extra;
         let point = self.grid.cursor.point;
-        self.damage.wrote_cells(point.line.0 as usize, point.column.0, point.column.0);
+        self.damage.printed_cell(point.line.0 as usize, point.column.0);
     }
 
     #[inline]
@@ -1289,6 +1357,7 @@ impl<T: EventListener> Handler for Term<T> {
             let line = self.grid.cursor.point.line;
             let col = self.grid.cursor.point.column;
             self.mark_paint(line, col.0..columns, |_| CellPaint::Unseen);
+            self.damage.forget_printed_rows(line.0 as usize..line.0 as usize + 1);
             let row = &mut self.grid[line][..];
 
             for col in (col.0..(columns - width)).rev() {
@@ -1393,6 +1462,7 @@ impl<T: EventListener> Handler for Term<T> {
         let line = cursor.point.line;
         self.mark_paint(line, source.0..self.columns(), |_| CellPaint::Unseen);
         self.damage.wrote_cells(line.0 as usize, 0, self.columns() - 1);
+        self.damage.forget_printed_rows(line.0 as usize..line.0 as usize + 1);
 
         let row = &mut self.grid[line][..];
 
@@ -1743,6 +1813,7 @@ impl<T: EventListener> Handler for Term<T> {
         let line = cursor.point.line;
         self.mark_paint(line, start..columns, |_| CellPaint::Unseen);
         self.damage.wrote_cells(line.0 as usize, 0, self.columns() - 1);
+        self.damage.forget_printed_rows(line.0 as usize..line.0 as usize + 1);
         let row = &mut self.grid[line][..];
 
         for offset in 0..num_cells {
@@ -1969,7 +2040,8 @@ impl<T: EventListener> Handler for Term<T> {
                 for cell in &mut self.grid[cursor.line][..end] {
                     *cell = bg.into();
                 }
-                self.damage.cell_writes[cursor.line.0 as usize] = true;
+                let line = cursor.line.0 as usize;
+                self.damage.set_row_writes(line..line + 1, true);
 
                 let range = Line(0)..=cursor.line;
                 self.selection = self.selection.take().filter(|s| !s.intersects_range(range));
@@ -1987,7 +2059,7 @@ impl<T: EventListener> Handler for Term<T> {
                         self.mark_paint(Line(row), 0..columns, CellPaint::Changed);
                     }
                 }
-                self.damage.cell_writes[cursor.line.0 as usize..].fill(true);
+                self.damage.set_row_writes(cursor.line.0 as usize..screen_lines, true);
 
                 let range = cursor.line..Line(screen_lines as i32);
                 self.selection = self.selection.take().filter(|s| !s.intersects_range(range));
@@ -2000,6 +2072,7 @@ impl<T: EventListener> Handler for Term<T> {
                         row[columns] = CellPaint::Unseen;
                     }
                 }
+                self.damage.printed_cells.fill(0);
                 if self.mode.contains(TermMode::ALT_SCREEN) {
                     self.grid.reset_region(..);
                 } else {
@@ -2015,7 +2088,7 @@ impl<T: EventListener> Handler for Term<T> {
                 }
 
                 self.selection = None;
-                self.damage.cell_writes.fill(true);
+                self.damage.set_row_writes(0..screen_lines, true);
             },
             ansi::ClearMode::Saved if self.history_size() > 0 => {
                 self.grid.clear_history();
@@ -2048,6 +2121,7 @@ impl<T: EventListener> Handler for Term<T> {
     /// Reset all important fields in the term struct.
     #[inline]
     fn reset_state(&mut self) {
+        self.damage.clear_frame_writes();
         if self.mode.contains(TermMode::ALT_SCREEN) {
             mem::swap(&mut self.grid, &mut self.inactive_grid);
         }

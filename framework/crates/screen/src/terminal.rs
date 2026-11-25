@@ -108,6 +108,18 @@ impl Terminal {
         self.term.cursor_row_cells_written()
     }
 
+    pub(crate) fn mark_input_boundary(&mut self) {
+        self.term.mark_cell_write_boundary();
+    }
+
+    pub(crate) fn cursor_row_written_since_input_boundary(&self) -> bool {
+        self.term.cursor_row_cells_written_in_scope()
+    }
+
+    pub(crate) fn cells_written_since_input_boundary(&self) -> bool {
+        self.term.cells_written_in_scope()
+    }
+
     pub(crate) fn restore_title(&mut self, title: &str) {
         // Seed alacritty too, so a subsequent native title-stack push sees the restored title.
         self.term.set_title(Some(title.to_owned()));

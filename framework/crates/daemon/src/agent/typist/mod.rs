@@ -11,6 +11,7 @@ use facade_base::key_input::{Key, MAX_INPUT_BYTES, MAX_KEYS, PASTE_END, PASTE_ST
 use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::terminal::{key_down_records, key_down_records_len};
 use facade_base::{
+    model::agent::WaitKind,
     model::message::{DeliveryFailure, TextWritten},
     model::terminal::{InputInfo, InputState, first_control},
 };
@@ -56,7 +57,11 @@ pub(crate) enum BoxWrites {
 /// The input as a step reads it.
 pub(crate) struct InputObservation<'a> {
     pub(crate) current: BoxReading,
-    /// A complete input frame after this delivery action established the current reading.
+    /// The CLI's current global report that it needs a person, even with an old composer frame.
+    pub(crate) native_wait: Option<WaitKind>,
+    /// A completed ordinary frame is still needed before automatic delivery can resume.
+    pub(crate) waits_for_frame: bool,
+    /// The current frame includes output read after the terminal acknowledged its last write.
     pub(crate) after_write: bool,
     /// A complete empty frame followed the delivery write and preceded any subsequent edit.
     pub(crate) empty_after_write: bool,
@@ -67,19 +72,20 @@ pub(crate) struct InputObservation<'a> {
     pub(crate) awaiting_after_interaction: bool,
 }
 
-/// Bytes to queue now and the next timer to arrange; neither operation waits.
+/// What changes for a delivery once the terminal takes its write.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum DeliveryWrite {
+    Paste,
+    Submit,
+    Erase { until: Instant, earlier: u32 },
+}
+
+/// A direct call's bytes, or a revocable delivery write, and the next timer.
 #[derive(Debug, Default)]
 pub(crate) struct Step {
     pub(crate) write: Vec<u8>,
     pub(crate) wake: Option<Instant>,
-    pub(crate) delivery_write: Option<DeliveryWrite>,
-}
-
-/// The automatic write whose output position the terminal tracks.
-#[derive(Debug)]
-pub(crate) enum DeliveryWrite {
-    Paste,
-    Action,
+    pub(super) delivery: Option<DeliveryWrite>,
 }
 
 impl Step {
@@ -87,6 +93,14 @@ impl Step {
         Self {
             wake: at,
             ..Self::default()
+        }
+    }
+
+    fn delivery(write: Vec<u8>, kind: DeliveryWrite, wake: Option<Instant>) -> Self {
+        Self {
+            write,
+            wake,
+            delivery: Some(kind),
         }
     }
 }
@@ -391,12 +405,42 @@ struct Batch {
     submissions: u8,
     /// External input could have caused the draft to leave after the submission key.
     interrupted: bool,
+    evidence: DeliveryEvidence,
     /// The batch already tried to erase a changed draft and paste the original again.
     replaced: bool,
+    erase: Option<EraseTail>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeliveryEvidence {
+    Pending,
+    InteractionAfterWrite,
+}
+
+/// The independent erase keys the actor still has to offer through its write gate.
+struct EraseTail {
+    remaining: usize,
+    issued_from: Option<u64>,
+    original_draft: String,
+}
+
+impl EraseTail {
+    fn matches(&self, reading: &BoxReading) -> bool {
+        reading.info.state == InputState::Draft
+            && reading
+                .draft_hidden()
+                .is_none_or(|hidden| hidden.above == 0 && hidden.below == 0)
+            && reading
+                .draft
+                .as_deref()
+                .is_some_and(|draft| !draft.is_empty() && self.original_draft.starts_with(draft))
+    }
 }
 
 #[derive(Clone, Copy)]
 enum DeliveryPhase {
+    /// Persistence allows the paste, but no terminal write was issued.
+    AwaitingPaste,
     /// The paste goes in, and its submission key over its draft.
     Draft,
     /// Its submission key goes, and the paste leaves the input.
@@ -561,13 +605,7 @@ impl DraftCheck {
         current
     }
 
-    /// Whether `over`, a draft someone submitted, held this whole paste.
-    fn is_whole_in(&self, over: &BoxReading) -> bool {
-        over.draft.as_deref().is_some_and(|draft| {
-            facade_rules::shows_whole(draft, &self.paste.text, over.draft_hidden())
-        })
-    }
-
+    /// Whether `reading` shows the original visible draft by itself.
     fn is_original_in(&self, reading: &BoxReading) -> bool {
         reading.draft.as_deref().is_some_and(|draft| {
             facade_rules::shows_original_text(draft, &self.paste.text, reading.draft_hidden())
@@ -674,12 +712,42 @@ impl DraftCheck {
 }
 
 impl Batch {
+    /// A question before proof leaves the outcome uncertain even if another Enter later takes
+    /// the draft. Keep the actual terminal write facts.
+    fn outcome(&self, outcome: Outcome) -> Outcome {
+        if self.evidence != DeliveryEvidence::InteractionAfterWrite {
+            return outcome;
+        }
+        let (text_written, enter_written) = match outcome {
+            Outcome::Typed => (TextWritten::Full, Some(self.submissions > 0)),
+            Outcome::Withdrawn { text_written, .. } => (text_written, Some(false)),
+            Outcome::Failed {
+                text_written,
+                enter_written,
+                ..
+            } => (text_written, enter_written),
+        };
+        Outcome::Failed {
+            reason: DeliveryFailure::InteractionAfterWrite,
+            text_written,
+            enter_written,
+        }
+    }
+
     fn deadline(&self) -> Option<Instant> {
         self.messages.iter().map(|m| m.deadline).min()
     }
 
-    fn held(&self) -> usize {
-        usize::from(matches!(self.phase, DeliveryPhase::Draft))
+    fn held(&self, console: Option<ConsoleTyping>) -> usize {
+        match self.phase {
+            DeliveryPhase::AwaitingPaste => self
+                .messages
+                .iter()
+                .map(|message| message.most_bytes(console))
+                .sum(),
+            DeliveryPhase::Draft => 1,
+            _ => 0,
+        }
     }
 }
 
@@ -855,7 +923,7 @@ impl Typist {
                 if self.probing.is_some() && writes == BoxWrites::AwaitingEscape {
                     return self.advance_delivery(now, queued, modes, writes, observe, None);
                 }
-                return self.stalled(now);
+                return self.stalled(now, written);
             }
             receipt.arrived = Some(now);
             if let Some(probe) = &mut self.probing {
@@ -974,7 +1042,7 @@ impl Typist {
                 text_written,
                 enter_written,
             };
-            self.settle_delivery(&batch.messages, outcome);
+            self.settle_delivery(&batch.messages, batch.outcome(outcome));
         }
         let pending: Vec<_> = self.inbox.drain(..).collect();
         self.deliveries
@@ -1015,7 +1083,9 @@ impl Typist {
                     phase,
                     submissions: 0,
                     interrupted: false,
+                    evidence: DeliveryEvidence::Pending,
                     replaced: false,
+                    erase: None,
                 });
             }
             _ => self
@@ -1034,12 +1104,21 @@ impl Typist {
         self.retire_paste_draft(Some(self.empty_cleanup_outcome(false)))
     }
 
-    fn retire_paste_draft(&mut self, cleared: Option<Outcome>) -> bool {
+    /// Revokes recovery's authority before a user key. A live cleanup can still prove its tail
+    /// from later output when the key went to a menu.
+    pub(super) fn revoke_paste_observation(&mut self) -> bool {
         if let Some((number, _)) = self.draft_proof {
             if !self.deliveries.forget_paste_draft(number) {
                 return false;
             }
             self.draft_proof = None;
+        }
+        true
+    }
+
+    fn retire_paste_draft(&mut self, cleared: Option<Outcome>) -> bool {
+        if !self.revoke_paste_observation() {
+            return false;
         }
         if let Some(batch) = &self.batch
             && let DeliveryPhase::Clearing(cleanup) = &batch.phase
@@ -1075,6 +1154,28 @@ impl Typist {
                 ..progress
             },
         )
+    }
+
+    /// Fences the revocable portion of a cleanup before offering it to the terminal.
+    pub(super) fn before_actor_write(&mut self, offset: u64, count: usize, erase: bool) -> bool {
+        if !erase {
+            return self.before_write(offset, count);
+        }
+        let Some((number, proof)) = self.draft_proof else {
+            return true;
+        };
+        let Some(progress) = proof.cleanup else {
+            return true;
+        };
+        progress.writing
+            || self.keep_cleanup(
+                number,
+                proof,
+                CleanupProgress {
+                    writing: true,
+                    ..progress
+                },
+            )
     }
 
     /// Advances cleanup by the bytes the terminal reported written, before looking for a redraw.
@@ -1145,9 +1246,25 @@ impl Typist {
     pub(crate) fn deliver(&mut self, message: MessageTyping) {
         self.inbox.push_back(message);
     }
-    /// Suspends new pastes during takeover; no I/O or locks.
-    pub(crate) fn hold_pastes(&mut self) {
+    /// Suspends new pastes during takeover and tells the actor to withdraw an unissued first
+    /// paste. Reopens its messages for the next daemon if the reservation can be released.
+    pub(crate) fn hold_pastes(&mut self) -> bool {
         self.paste_held = true;
+        let Some(batch) = self
+            .batch
+            .as_ref()
+            .filter(|batch| matches!(batch.phase, DeliveryPhase::AwaitingPaste))
+        else {
+            return false;
+        };
+        if self
+            .deliveries
+            .release_unissued_paste(&numbers(&batch.messages))
+        {
+            let batch = self.batch.take().expect("reserved paste");
+            self.inbox.extend(batch.messages);
+        }
+        true
     }
     /// Reads the rule supplied at construction; no I/O or locks.
     pub(crate) fn paste_rule(&self) -> Option<&'static PasteRule> {
@@ -1174,7 +1291,7 @@ impl Typist {
                 .iter()
                 .map(|message| message.most_bytes(console))
                 .sum::<usize>()
-            + self.batch.as_ref().map_or(0, Batch::held)
+            + self.batch.as_ref().map_or(0, |batch| batch.held(console))
     }
     /// Takes the last confirmed submission synchronously; no I/O or locks.
     pub(crate) fn take_submitted(&mut self) -> Option<Submission> {
@@ -1267,21 +1384,124 @@ impl Typist {
     /// Whether a complete frame shows the whole message a person may submit for us.
     pub(crate) fn shows_whole_paste(&self, reading: &BoxReading) -> bool {
         reading.info.state == InputState::Draft
-            && self
-                .batch
-                .as_ref()
-                .is_some_and(|batch| !batch.messages.is_empty() && batch.draft.is_whole_in(reading))
+            && self.batch.as_ref().is_some_and(|batch| {
+                !batch.messages.is_empty() && batch.draft.is_original_in(reading)
+            })
     }
     /// Reads whether a paste is or may be in the input, delivered or not; no I/O or locks.
     pub(crate) fn occupies_input(&self) -> bool {
-        self.batch.is_some()
+        self.batch
+            .as_ref()
+            .is_some_and(|batch| !matches!(batch.phase, DeliveryPhase::AwaitingPaste))
     }
+    /// Whether a complete frame offers the input back to the same delivery draft.
+    pub(crate) fn owns_draft(&self, reading: &BoxReading) -> bool {
+        let Some(batch) = self
+            .batch
+            .as_ref()
+            .filter(|batch| !matches!(batch.phase, DeliveryPhase::AwaitingPaste))
+        else {
+            return false;
+        };
+        let draft = &batch.draft;
+        if draft.edited {
+            return draft.is_original_in(reading);
+        }
+        if matches!(batch.phase, DeliveryPhase::Clearing(_))
+            && batch
+                .erase
+                .as_ref()
+                .is_some_and(|erase| erase.matches(reading))
+        {
+            return true;
+        }
+        self.paste_rule().is_some_and(|rule| {
+            draft.is_same(reading)
+                && (draft.paste.matches(rule, reading, draft.recovered)
+                    || draft
+                        .previous
+                        .as_ref()
+                        .is_some_and(|paste| paste.matches(rule, reading, draft.recovered)))
+        })
+    }
+
+    pub(super) fn delivery_batch(&self) -> Option<u64> {
+        let batch = self.batch.as_ref()?;
+        if matches!(batch.phase, DeliveryPhase::AwaitingPaste) {
+            return None;
+        }
+        batch.messages.first().map(|message| message.number)
+    }
+
+    pub(super) fn saw_interaction(&mut self) {
+        if let Some(batch) = &mut self.batch {
+            batch.interrupted |= matches!(batch.phase, DeliveryPhase::Submitting);
+        }
+    }
+
+    /// Tracks a native question or a complete menu after an actual delivery write.
+    pub(super) fn saw_delivery_interaction(&mut self, after_paste: bool, after_write: bool) {
+        if let Some(batch) = &mut self.batch
+            && !matches!(batch.phase, DeliveryPhase::AwaitingPaste)
+            && (after_paste
+                || after_write
+                    && (matches!(batch.phase, DeliveryPhase::Submitting) || batch.submissions > 0))
+        {
+            batch.evidence = DeliveryEvidence::InteractionAfterWrite;
+        }
+    }
+
+    pub(super) fn interaction_after_write(&self) -> bool {
+        self.batch
+            .as_ref()
+            .is_some_and(|batch| batch.evidence == DeliveryEvidence::InteractionAfterWrite)
+    }
+
+    /// An interaction before an empty composer cannot become automatic delivery evidence later.
+    /// A previously observed empty frame remains available to the current decision.
+    pub(super) fn accepts_new_empty_evidence(&self) -> bool {
+        self.batch.as_ref().is_none_or(|batch| {
+            !matches!(batch.phase, DeliveryPhase::Submitting)
+                || batch.evidence != DeliveryEvidence::InteractionAfterWrite
+        })
+    }
+
+    /// Whether the next step can settle a delivery based on the output it has already seen.
+    pub(super) fn needs_ready_delivery_output(
+        &self,
+        now: Instant,
+        drawn_after_write: bool,
+    ) -> bool {
+        let Some(batch) = self
+            .batch
+            .as_ref()
+            .filter(|batch| !batch.messages.is_empty())
+        else {
+            return false;
+        };
+        let due = batch.deadline().is_some_and(|deadline| now >= deadline);
+        match batch.phase {
+            DeliveryPhase::AwaitingPaste => false,
+            DeliveryPhase::Draft => {
+                due || batch
+                    .draft
+                    .stable
+                    .as_ref()
+                    .is_some_and(|(_, draft)| draft.is_none())
+            }
+            DeliveryPhase::Submitting => due || drawn_after_write,
+            DeliveryPhase::Clearing(_) => true,
+        }
+    }
+
     /// Until when keys wait for the paste in the input, so that they do not mix into it; no I/O or
     /// locks.
     pub(crate) fn paste_hold_until(&self) -> Option<Instant> {
         let batch = self.batch.as_ref()?;
         match batch.phase {
-            DeliveryPhase::Draft | DeliveryPhase::Submitting => Some(batch.draft.hold_until),
+            DeliveryPhase::AwaitingPaste | DeliveryPhase::Draft | DeliveryPhase::Submitting => {
+                Some(batch.draft.hold_until)
+            }
             DeliveryPhase::Clearing(cleanup) if cleanup.replace_until.is_some() => {
                 Some(batch.draft.hold_until)
             }
@@ -1297,6 +1517,14 @@ impl Typist {
             batch.interrupted |= matches!(batch.phase, DeliveryPhase::Submitting);
         }
     }
+
+    /// Whether the typist is still following a proposed or partly issued erase.
+    pub(super) fn follows_erase(&self) -> bool {
+        self.batch
+            .as_ref()
+            .is_some_and(|batch| batch.erase.is_some())
+    }
+
     /// Reads whether a program call is pending or active; no I/O or locks.
     pub(crate) fn types_calls(&self) -> bool {
         self.current.is_some() || !self.calls.is_empty()
@@ -1312,13 +1540,13 @@ impl Typist {
     }
 
     pub(crate) fn awaiting_cleanup_frame(&self) -> bool {
-        self.batch
-            .as_ref()
-            .is_some_and(|batch| matches!(batch.phase, DeliveryPhase::Clearing(_)))
-            && self
-                .draft_proof
-                .and_then(|(_, proof)| proof.cleanup)
-                .is_some()
+        self.batch.as_ref().is_some_and(|batch| {
+            matches!(batch.phase, DeliveryPhase::Clearing(cleanup)
+                if batch.draft.recovered || cleanup.queued_after.is_some())
+        }) && self
+            .draft_proof
+            .and_then(|(_, proof)| proof.cleanup)
+            .is_some()
     }
 
     pub(crate) fn recovering_cleanup(&self) -> bool {
@@ -1387,21 +1615,31 @@ impl Typist {
         result
     }
 
-    fn stalled(&mut self, now: Instant) -> Step {
-        let Some(batch) = &mut self.batch else {
-            return Step::default();
-        };
-        if let DeliveryPhase::Clearing(cleanup) = &mut batch.phase {
+    fn stalled(&mut self, now: Instant, written: u64) -> Step {
+        if let Some(Batch {
+            phase: DeliveryPhase::Clearing(cleanup),
+            messages,
+            ..
+        }) = &mut self.batch
+        {
             if let Some(outcome) = cleanup.report_due(now) {
-                self.deliveries.settle(&numbers(&batch.messages), outcome);
+                self.deliveries.settle(&numbers(messages), outcome);
             }
             return Step::wait(cleanup.report.map(|(until, _)| until));
         }
+        let Some(batch) = &self.batch else {
+            return Step::default();
+        };
         let due = batch.deadline();
         if due.is_none_or(|due| now < due) {
             return Step::wait(due);
         }
         let outcome = match batch.phase {
+            DeliveryPhase::AwaitingPaste => {
+                let batch = self.batch.take().expect("the reserved paste");
+                return self
+                    .settle_delivery(&batch.messages, Outcome::untyped(DeliveryFailure::Timeout));
+            }
             DeliveryPhase::Submitting => Outcome::Failed {
                 reason: DeliveryFailure::SubmissionUnconfirmed,
                 text_written: TextWritten::Full,
@@ -1410,6 +1648,17 @@ impl Typist {
             _ if batch.submissions > 0 => Self::uncleared(true),
             _ => Outcome::UNCONFIRMED,
         };
+        let outcome = if batch.evidence == DeliveryEvidence::InteractionAfterWrite {
+            let (text_written, enter_written) = self.delivery_progress(batch, written);
+            Outcome::Failed {
+                reason: DeliveryFailure::InteractionAfterWrite,
+                text_written,
+                enter_written,
+            }
+        } else {
+            outcome
+        };
+        let batch = self.batch.as_mut().expect("stalled delivery");
         // Follow the late draft for cleanup without keeping the sender waiting.
         batch.phase = DeliveryPhase::Clearing(Cleanup {
             report: None,
@@ -1429,6 +1678,7 @@ impl Typist {
             .as_ref()
             .is_some_and(|receipt| receipt.complete(written));
         match batch.phase {
+            DeliveryPhase::AwaitingPaste => (TextWritten::None, Some(false)),
             DeliveryPhase::Submitting => (TextWritten::Full, Some(full)),
             DeliveryPhase::Clearing(_) => (TextWritten::Full, Some(false)),
             DeliveryPhase::Draft if batch.draft.recovered => (TextWritten::Unknown, None),
@@ -1483,15 +1733,18 @@ impl Typist {
                 || matches!(batch.phase, DeliveryPhase::Clearing(cleanup) if cleanup.report.is_none());
             let seen = observe();
             let step = match batch.phase {
+                DeliveryPhase::AwaitingPaste => {
+                    self.await_paste(batch, rule, now, may_write && paused.is_none(), seen)
+                }
                 DeliveryPhase::Draft => {
                     let working = modes.working;
-                    self.check_draft(batch, rule, now, offset, working, may_write, paused, seen)
+                    self.check_draft(batch, rule, now, working, may_write, paused, seen)
                 }
                 DeliveryPhase::Submitting => {
-                    self.check_submitted(batch, rule, now, offset, modes.working, may_write, seen)
+                    self.check_submitted(batch, rule, now, modes.working, may_write, seen)
                 }
                 DeliveryPhase::Clearing(cleanup) => {
-                    self.check_cleanup(batch, cleanup, rule, seen, now, offset, may_write)
+                    self.check_cleanup(batch, cleanup, rule, seen, now, may_write)
                 }
             };
             if !ended || !step.write.is_empty() {
@@ -1502,9 +1755,10 @@ impl Typist {
         if self.paste_held || self.inbox.is_empty() {
             return Step::wait(follows);
         }
-        let reading = observe().current;
+        let seen = observe();
+        let reading = seen.current.clone();
         let info = self.recall(reading.clone()).info;
-        self.expire_inbox(now, info.state, may_write);
+        self.expire_inbox(now, self.unpasted_reason(&seen, may_write));
         if self.inbox.is_empty() {
             return Step::wait(follows);
         }
@@ -1543,12 +1797,14 @@ impl Typist {
                 let batch = Batch {
                     messages: vec![next],
                     draft,
-                    phase: DeliveryPhase::Draft,
+                    phase: DeliveryPhase::AwaitingPaste,
                     submissions: 0,
                     interrupted: false,
+                    evidence: DeliveryEvidence::Pending,
                     replaced: false,
+                    erase: None,
                 };
-                return self.write_delivery_paste(batch, rule, now, offset);
+                return self.write_delivery_paste(batch, rule, now);
             }
         }
         Step::wait(
@@ -1560,13 +1816,7 @@ impl Typist {
         )
     }
 
-    fn expire_inbox(&mut self, now: Instant, state: InputState, may_write: bool) {
-        let reason = match state {
-            InputState::Usable if may_write => DeliveryFailure::Timeout,
-            InputState::Usable | InputState::Draft => DeliveryFailure::InputDraft,
-            InputState::Interaction => DeliveryFailure::InputInteraction,
-            _ => DeliveryFailure::InputUnknown,
-        };
+    fn expire_inbox(&mut self, now: Instant, reason: DeliveryFailure) {
         let mut expired = Vec::new();
         self.inbox.retain(|message| {
             if !self.deliveries.still_to_type(message.number) {
@@ -1581,13 +1831,41 @@ impl Typist {
         self.deliveries.settle(&expired, Outcome::untyped(reason));
     }
 
-    fn write_delivery_paste(
+    fn unpasted_reason(&self, seen: &InputObservation<'_>, may_write: bool) -> DeliveryFailure {
+        let info = self.recall(seen.current.clone()).info;
+        match (seen.native_wait, info.state) {
+            (Some(_), _) | (_, InputState::Interaction) => DeliveryFailure::InputInteraction,
+            (_, _) if seen.waits_for_frame => DeliveryFailure::InputUnknown,
+            (_, InputState::Usable) if may_write => DeliveryFailure::Timeout,
+            (_, InputState::Usable | InputState::Draft) => DeliveryFailure::InputDraft,
+            _ => DeliveryFailure::InputUnknown,
+        }
+    }
+
+    fn await_paste(
         &mut self,
         batch: Batch,
         rule: &PasteRule,
         now: Instant,
-        offset: u64,
+        may_write: bool,
+        seen: InputObservation<'_>,
     ) -> Step {
+        let deadline = batch.deadline().expect("reserved paste");
+        if now >= deadline {
+            let reason = self.unpasted_reason(&seen, may_write);
+            return self.settle_delivery(&batch.messages, Outcome::untyped(reason));
+        }
+        if may_write
+            && !self.paste_held
+            && self.recall(seen.current).info.state == InputState::Usable
+        {
+            return self.write_delivery_paste(batch, rule, now);
+        }
+        self.batch = Some(batch);
+        Step::wait(Some(deadline.min(now + READ_INTERVAL)))
+    }
+
+    fn write_delivery_paste(&mut self, batch: Batch, rule: &PasteRule, now: Instant) -> Step {
         let mut write = Vec::new();
         write_paste(
             &batch.draft.paste.text,
@@ -1597,11 +1875,75 @@ impl Typist {
         );
         let wake = (now + READ_INTERVAL).min(batch.deadline().expect("paste to deliver"));
         self.batch = Some(batch);
-        self.record_write(offset, write.len(), Duration::ZERO);
-        Step {
-            write,
-            wake: Some(wake),
-            delivery_write: Some(DeliveryWrite::Paste),
+        Step::delivery(write, DeliveryWrite::Paste, Some(wake))
+    }
+
+    pub(super) fn delivery_deadline(&self, kind: DeliveryWrite) -> Instant {
+        if let DeliveryWrite::Erase { until, .. } = kind {
+            return until;
+        }
+        let batch = self
+            .batch
+            .as_ref()
+            .expect("the batch owns its delivery write");
+        let deadline = batch
+            .deadline()
+            .expect("the write is for a pending delivery");
+        match batch.phase {
+            DeliveryPhase::Clearing(cleanup) => cleanup
+                .replace_until
+                .map_or(deadline, |until| deadline.min(until)),
+            _ => deadline,
+        }
+    }
+
+    /// Records an automatic write that the system accepted.
+    pub(super) fn delivery_issued(&mut self, kind: DeliveryWrite, offset: u64, length: usize) {
+        let batch = self
+            .batch
+            .as_mut()
+            .expect("the batch owns its delivery write");
+        match kind {
+            DeliveryWrite::Paste => {
+                batch.erase = None;
+                batch.draft.stable = None;
+                batch.draft.shown = None;
+                batch.draft.observed = false;
+                batch.phase = DeliveryPhase::Draft;
+            }
+            DeliveryWrite::Submit => {
+                batch.phase = DeliveryPhase::Submitting;
+                crate::gate_for_test("message-enter");
+            }
+            DeliveryWrite::Erase { earlier, .. } => {
+                batch
+                    .erase
+                    .as_mut()
+                    .expect("the erase owns its tail")
+                    .issued_from = Some(offset);
+                let DeliveryPhase::Clearing(cleanup) = &mut batch.phase else {
+                    unreachable!("the batch owns the cleanup");
+                };
+                cleanup.queued_after = Some(earlier);
+            }
+        }
+        self.record_write(offset, length, Duration::ZERO);
+    }
+
+    /// Keeps only the unwritten portion of an independent erase after a completed write.
+    pub(super) fn note_erasure_write(&mut self, written: u64) {
+        let Some(batch) = &mut self.batch else { return };
+        let Some(erase) = &mut batch.erase else {
+            return;
+        };
+        let Some(offset) = erase.issued_from.filter(|&offset| written > offset) else {
+            return;
+        };
+        let count = (written - offset) as usize;
+        erase.remaining = erase.remaining.saturating_sub(count);
+        erase.issued_from = None;
+        if let Some(receipt) = &mut self.receipt {
+            receipt.boundaries[0] = written;
         }
     }
 
@@ -1624,7 +1966,6 @@ impl Typist {
         mut batch: Batch,
         rule: &PasteRule,
         now: Instant,
-        offset: u64,
         working: bool,
         may_write: bool,
         paused: Option<Instant>,
@@ -1635,8 +1976,8 @@ impl Typist {
         let awaiting_after_interaction = seen.awaiting_after_interaction;
         let deadline = batch.deadline().expect("started paste");
         let draft = &mut batch.draft;
-        if submitted.is_some_and(|over| draft.is_whole_in(over)) {
-            return self.settle_delivery(&batch.messages, Outcome::Typed);
+        if submitted.is_some_and(|over| draft.is_original_in(over)) {
+            return self.settle_delivery(&batch.messages, batch.outcome(Outcome::Typed));
         }
         if awaiting_after_interaction && now < deadline {
             self.batch = Some(batch);
@@ -1658,7 +1999,7 @@ impl Typist {
         if now >= deadline {
             if draft.edited || (draft.recovered && self.draft_proof.is_none()) {
                 let outcome = draft.unsubmitted(batch.submissions > 0);
-                return self.settle_delivery(&batch.messages, outcome);
+                return self.settle_delivery(&batch.messages, batch.outcome(outcome));
             }
             let showed = matches!(draft.stable, Some((_, Some(_))));
             let until = if may_write && (own || (showed && reading.is_unread())) {
@@ -1667,8 +2008,9 @@ impl Typist {
                 now
             };
             let mut cleanup = Cleanup::new(until);
-            cleanup.report = Some((until, draft.unsubmitted(batch.submissions > 0)));
-            return self.check_cleanup(batch, cleanup, rule, seen, now, offset, may_write);
+            let outcome = draft.unsubmitted(batch.submissions > 0);
+            cleanup.report = Some((until, batch.outcome(outcome)));
+            return self.check_cleanup(batch, cleanup, rule, seen, now, may_write);
         }
         draft.observed |= own || (draft.edited && reading.draft.is_some());
         // What is left of the paste: its draft, or, once it showed, an empty input.
@@ -1704,7 +2046,7 @@ impl Typist {
         if now >= settled && !own {
             // Someone else took the paste out of the input.
             let outcome = draft.unsubmitted(batch.submissions > 0);
-            return self.settle_delivery(&batch.messages, outcome);
+            return self.settle_delivery(&batch.messages, batch.outcome(outcome));
         }
         if now >= settled && may_write {
             #[cfg(debug_assertions)]
@@ -1713,7 +2055,7 @@ impl Typist {
                 return Step::wait(Some((now + READ_INTERVAL).min(deadline)));
             }
             crate::pause_for_test("before-message-enter");
-            return self.send_submission(batch, rule, offset, working);
+            return self.send_submission(batch, rule, working);
         }
         self.batch = Some(batch);
         // Where someone else's keys go first, the next output or their end looks again.
@@ -1734,13 +2076,7 @@ impl Typist {
         }
     }
 
-    fn send_submission(
-        &mut self,
-        mut batch: Batch,
-        rule: &PasteRule,
-        offset: u64,
-        working: bool,
-    ) -> Step {
+    fn send_submission(&mut self, batch: Batch, rule: &PasteRule, working: bool) -> Step {
         // Recovered drafts can be first prompts, so retain Enter for them.
         let working_message = working
             && !batch.draft.recovered
@@ -1748,15 +2084,8 @@ impl Typist {
         let mut write = Vec::new();
         rule.submission_key(working_message)
             .write(false, &mut write);
-        batch.phase = DeliveryPhase::Submitting;
         self.batch = Some(batch);
-        self.record_write(offset, write.len(), Duration::ZERO);
-        crate::gate_for_test("message-enter");
-        Step {
-            write,
-            wake: None,
-            delivery_write: Some(DeliveryWrite::Action),
-        }
+        Step::delivery(write, DeliveryWrite::Submit, None)
     }
 
     /// One step after the submission key reached the terminal. A fresh empty frame confirms that
@@ -1767,25 +2096,28 @@ impl Typist {
         mut batch: Batch,
         rule: &PasteRule,
         now: Instant,
-        offset: u64,
         working: bool,
         may_write: bool,
         seen: InputObservation<'_>,
     ) -> Step {
         let deadline = batch.deadline().expect("unconfirmed submission");
         let reading = &seen.current;
-        let person_took = seen
-            .submitted
-            .is_some_and(|over| batch.draft.is_whole_in(over));
-        if now < deadline && (seen.empty_after_write || person_took) {
+        if now < deadline && seen.empty_after_write {
             return self.settle_delivery(&batch.messages, Outcome::Typed);
         }
         if now < deadline
+            && seen
+                .submitted
+                .is_some_and(|over| batch.draft.is_original_in(over))
+        {
+            return self.settle_delivery(&batch.messages, batch.outcome(Outcome::Typed));
+        }
+        if now < deadline
             && seen.after_write
-            && batch.interrupted
+            && (batch.interrupted || batch.evidence == DeliveryEvidence::InteractionAfterWrite)
             && self.recall(reading.clone()).info.state == InputState::Usable
         {
-            return self.settle_delivery(&batch.messages, Self::uncleared(true));
+            return self.settle_delivery(&batch.messages, batch.outcome(Self::uncleared(true)));
         }
         if now >= deadline {
             let until = if reading.is_unread() {
@@ -1794,8 +2126,8 @@ impl Typist {
                 now
             };
             let mut cleanup = Cleanup::new(until);
-            cleanup.report = Some((until, Self::uncleared(batch.submissions > 0)));
-            return self.check_cleanup(batch, cleanup, rule, seen, now, offset, may_write);
+            cleanup.report = Some((until, batch.outcome(Self::uncleared(batch.submissions > 0))));
+            return self.check_cleanup(batch, cleanup, rule, seen, now, may_write);
         }
         let retry = if !batch.draft.edited && batch.submissions < MAX_SUBMISSIONS {
             self.receipt
@@ -1819,7 +2151,7 @@ impl Typist {
                 if retry.is_some_and(|retry| now >= retry)
                     && (!self.checks_paste_end(rule) || batch.draft.sees_paste_end(rule, reading))
                 {
-                    return self.send_submission(batch, rule, offset, working);
+                    return self.send_submission(batch, rule, working);
                 }
             } else if !batch.replaced {
                 let until = now + RESPONSE_GRACE;
@@ -1834,7 +2166,7 @@ impl Typist {
                     batch.replaced = true;
                     let mut cleanup = Cleanup::new(until);
                     cleanup.replace_until = Some(until);
-                    return self.queue_cleanup(batch, cleanup, count, offset, 0, now);
+                    return self.offer_cleanup(batch, cleanup, count, 0, now, reading);
                 }
             }
         }
@@ -1846,14 +2178,14 @@ impl Typist {
         ))
     }
 
-    fn queue_cleanup(
+    fn offer_cleanup(
         &mut self,
         mut batch: Batch,
         mut cleanup: Cleanup,
         count: usize,
-        offset: u64,
         earlier: u32,
         now: Instant,
+        reading: &BoxReading,
     ) -> Step {
         if let Some((number, proof)) = self.draft_proof
             && proof.cleanup.is_none()
@@ -1862,19 +2194,31 @@ impl Typist {
             return self.wait_for_cleanup(batch, cleanup, InputState::Draft, now);
         }
         if let Some((until, _)) = cleanup.report {
-            cleanup.report = Some((until, Self::uncleared(batch.submissions > 0)));
+            cleanup.report = Some((until, batch.outcome(Self::uncleared(batch.submissions > 0))));
         }
-        let wake = cleanup.report.map(|(until, _)| until);
-        cleanup.queued_after = Some(earlier);
+        if let Some(outcome) = cleanup.report_due(now) {
+            self.deliveries.settle(&numbers(&batch.messages), outcome);
+        }
+        let until = cleanup
+            .replace_until
+            .or_else(|| cleanup.report.map(|(until, _)| until))
+            .unwrap_or(now + RESPONSE_GRACE);
         batch.phase = DeliveryPhase::Clearing(cleanup);
-        self.record_write(offset, count, Duration::ZERO);
+        if count == 0 {
+            return self.wait_for_cleanup(batch, cleanup, InputState::Draft, now);
+        }
+        batch.erase = Some(EraseTail {
+            remaining: count,
+            issued_from: None,
+            original_draft: reading.draft.clone().unwrap_or_default(),
+        });
         self.batch = Some(batch);
         crate::gate_for_test("before-paste-cleanup");
-        Step {
-            write: vec![0x7f; count],
-            wake,
-            delivery_write: (count != 0).then_some(DeliveryWrite::Action),
-        }
+        Step::delivery(
+            vec![0x7f; count],
+            DeliveryWrite::Erase { until, earlier },
+            Some(until),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1885,7 +2229,6 @@ impl Typist {
         rule: &PasteRule,
         seen: InputObservation<'_>,
         now: Instant,
-        offset: u64,
         may_write: bool,
     ) -> Step {
         let reading = &seen.current;
@@ -1896,10 +2239,15 @@ impl Typist {
             .filter(|(owner, _)| Some(*owner) == number)
             .map(|(_, proof)| proof);
         let draft = &mut batch.draft;
-        // The saved draft proves ownership, but after Enter cleanup needs a new frame.
-        let fresh = seen.after_write
-            || (cleanup.queued_after.is_none() && batch.submissions == 0)
-            || proof.is_some_and(|proof| proof.cleanup.is_some() && !reading.is_unread());
+        // After Enter, recovered ownership needs a new frame to authorize cleanup.
+        let fresh = !seen.waits_for_frame
+            && (seen.after_write
+                || (cleanup.queued_after.is_none() && batch.submissions == 0)
+                || (batch
+                    .erase
+                    .as_ref()
+                    .is_none_or(|erase| erase.remaining == 0)
+                    && proof.is_some_and(|proof| proof.cleanup.is_some() && !reading.is_unread())));
         if cleanup.replace_until.is_some_and(|until| now >= until) || draft.edited {
             cleanup.replace_until = None;
         }
@@ -1915,7 +2263,7 @@ impl Typist {
                     draft.shown = None;
                     draft.observed = false;
                     batch.phase = DeliveryPhase::Draft;
-                    return self.write_delivery_paste(batch, rule, now, offset);
+                    return self.write_delivery_paste(batch, rule, now);
                 }
                 return self.wait_for_cleanup(batch, cleanup, state, now);
             }
@@ -1927,7 +2275,7 @@ impl Typist {
                 self.empty_cleanup_outcome(cleanup.queued_after.is_some())
             };
             if self.forget_paste_draft() {
-                return self.settle_delivery(&batch.messages, outcome);
+                return self.settle_delivery(&batch.messages, batch.outcome(outcome));
             }
         }
         if !draft.edited
@@ -1948,6 +2296,22 @@ impl Typist {
                         .is_some_and(|proof| draft.paste.proves_recovered(reading, proof.digest)));
             if may_write
                 && fresh
+                && let Some(erase) = &batch.erase
+                && cleanup.queued_after.is_some()
+                && erase.issued_from.is_none()
+                && erase.remaining != 0
+                && erase.matches(reading)
+            {
+                let remaining = erase.remaining;
+                let earlier = progress.written;
+                return self.offer_cleanup(batch, cleanup, remaining, earlier, now, reading);
+            }
+            if may_write
+                && fresh
+                && batch
+                    .erase
+                    .as_ref()
+                    .is_none_or(|erase| cleanup.queued_after.is_none() || erase.remaining == 0)
                 && cleanup
                     .queued_after
                     .is_none_or(|earlier| rule.rechecks_cleanup() && progress.written > earlier)
@@ -1966,13 +2330,13 @@ impl Typist {
                     })
                 };
                 if let Some(count) = count {
-                    return self.queue_cleanup(
+                    return self.offer_cleanup(
                         batch,
                         cleanup,
                         count,
-                        offset,
                         progress.written,
                         now,
+                        reading,
                     );
                 }
             }
@@ -1989,7 +2353,7 @@ impl Typist {
                 } else {
                     draft.unsubmitted(batch.submissions > 0)
                 };
-                return self.settle_delivery(&batch.messages, outcome);
+                return self.settle_delivery(&batch.messages, batch.outcome(outcome));
             }
             if let Some(proof) = proof
                 && proof.cleanup.is_none()
@@ -2003,7 +2367,7 @@ impl Typist {
         }
         if draft.edited {
             let outcome = draft.unsubmitted(batch.submissions > 0);
-            return self.settle_delivery(&batch.messages, outcome);
+            return self.settle_delivery(&batch.messages, batch.outcome(outcome));
         }
         draft.observed |= fresh && state == InputState::Draft && reading.draft.is_some();
         self.wait_for_cleanup(batch, cleanup, state, now)
@@ -2038,7 +2402,15 @@ impl Typist {
         if let Some(outcome) = cleanup.report_due(now) {
             self.deliveries.settle(&numbers(&batch.messages), outcome);
         }
-        self.expire_inbox(now, state, true);
+        self.expire_inbox(
+            now,
+            match state {
+                InputState::Usable => DeliveryFailure::Timeout,
+                InputState::Draft => DeliveryFailure::InputDraft,
+                InputState::Interaction => DeliveryFailure::InputInteraction,
+                _ => DeliveryFailure::InputUnknown,
+            },
+        );
         let ready_for_call = cleanup.report.is_none() && !self.calls.is_empty();
         let wake = cleanup
             .report
@@ -2395,6 +2767,7 @@ mod tests {
             let empty_after_write = self.after_write
                 && typist.recall(reading.clone()).info.state == InputState::Usable
                 && !typist.batch.as_ref().is_some_and(|batch| batch.interrupted);
+            typist.note_erasure_write(self.written as u64);
             let step = typist.step(
                 now,
                 self.written as u64,
@@ -2403,12 +2776,17 @@ mod tests {
                 writes,
                 &|| InputObservation {
                     current: reading.clone(),
+                    native_wait: None,
+                    waits_for_frame: false,
                     submitted,
                     after_write: self.after_write,
                     empty_after_write,
                     awaiting_after_interaction: false,
                 },
             );
+            if let Some(intent) = step.delivery {
+                typist.delivery_issued(intent, self.queued.len() as u64, step.write.len());
+            }
             self.queued.extend(step.write);
             step.wake
         }
@@ -3559,6 +3937,71 @@ mod tests {
         assert_eq!(became(&post, number), TYPED);
     }
 
+    #[test]
+    fn an_interaction_holds_the_tail_of_a_short_erase_write() {
+        let post = test_messages();
+        let mut terminal = Terminal::default();
+        let start = Instant::now();
+        let times = (start, start + Duration::from_secs(30));
+        let (mut typist, number, _) = pasted(&post, &mut terminal, "hello @file", times);
+        terminal.reading = input(InputState::Draft, Some("hello @file"));
+        terminal.step(&mut typist, start + Duration::from_millis(200), ANY);
+        let submit = start + Duration::from_millis(280);
+        terminal.step(&mut typist, submit, ANY);
+        assert_eq!(terminal.write_all(), b"\r");
+        terminal.step(&mut typist, submit, ANY);
+
+        let draft = "hello src/longer-file";
+        terminal.reading = BoxReading {
+            line: row(draft, 2 + draft.len(), false).line,
+            ..input(InputState::Draft, Some(draft))
+        };
+        let erase = submit + Duration::from_millis(600);
+        terminal.step(&mut typist, erase, ANY);
+        let start_erase = terminal.written;
+        assert_eq!(&terminal.queued[start_erase..], vec![b'\x7f'; draft.len()]);
+        terminal.queued.truncate(start_erase + 2);
+        assert_eq!(terminal.write_all(), b"\x7f\x7f");
+
+        terminal.reading = input(InputState::Interaction, None);
+        terminal.step_after(
+            &mut typist,
+            erase + Duration::from_millis(5),
+            ANY,
+            BoxWrites::ObserveOnly,
+            None,
+        );
+        assert!(terminal.write_all().is_empty());
+        assert_eq!(became(&post, number), PENDING);
+
+        let (next, next_number) = message(&post, "next", times.1);
+        typist.deliver(next);
+        let late = erase + RESPONSE_GRACE + Duration::from_millis(1);
+        terminal.step_after(&mut typist, late, ANY, BoxWrites::ObserveOnly, None);
+        let receipt = failed(
+            DeliveryFailure::SubmissionUnconfirmed,
+            TextWritten::Full,
+            true,
+        );
+        assert_eq!(became(&post, number), receipt);
+        assert!(terminal.write_all().is_empty());
+
+        let rest = &draft[..draft.len() - 2];
+        terminal.reading = input(InputState::Draft, Some(rest));
+        assert!(typist.owns_draft(&terminal.reading));
+        terminal.step(&mut typist, late + Duration::from_millis(10), ANY);
+        assert_eq!(terminal.write_all(), vec![b'\x7f'; rest.len()]);
+        assert_eq!(became(&post, number), receipt);
+        assert_eq!(became(&post, next_number), PENDING);
+        terminal.step(&mut typist, late + Duration::from_millis(20), ANY);
+        assert!(terminal.write_all().is_empty(), "the residual still shows");
+
+        terminal.reading = input(InputState::Usable, None);
+        terminal.step(&mut typist, late + Duration::from_millis(30), ANY);
+        assert_eq!(terminal.write_all(), b"\x1b[200~next \x1b[201~");
+        assert_eq!(became(&post, number), receipt);
+    }
+
     /// An Enter that reached the terminal is an input effect. A run that ends with the message
     /// still in its draft has taken no message.
     #[test]
@@ -4272,15 +4715,11 @@ mod tests {
         }
     }
 
-    /// A person's Enter over a draft that shows the whole message, alone or among their own text,
-    /// delivers it once the CLI took it, and the next message goes in.
+    /// A person's Enter over a draft that shows exactly the message delivers it once the CLI took
+    /// it, and the next message goes in.
     #[test]
     fn a_person_s_enter_over_the_whole_message_delivers_it() {
-        for over in [
-            "hello there",
-            "hello\n  there",
-            "well, hello there and more",
-        ] {
+        for over in ["hello there", "hello\n  there"] {
             let post = test_messages();
             let mut terminal = Terminal::default();
             let start = Instant::now();
@@ -4306,14 +4745,15 @@ mod tests {
         }
     }
 
-    /// A draft that does not show the whole message proves nothing of it: a person's Enter over it
-    /// leaves the message unconfirmed, at once, and the next one goes in.
+    /// The person's Enter over a visibly different or incomplete draft leaves the message
+    /// unconfirmed and the next one goes in.
     #[test]
-    fn a_person_s_enter_over_less_than_the_whole_message_leaves_it_unconfirmed() {
+    fn a_person_s_enter_over_a_nonmatching_draft_leaves_it_unconfirmed() {
         let mut scrolled = input(InputState::Draft, Some("second line, and mine"));
         scrolled.info.hidden = Some(HiddenRows { above: 1, below: 0 });
         for over in [
             input(InputState::Draft, Some("first line\nsecond")),
+            input(InputState::Draft, Some("first line\nsecond line, and mine")),
             input(
                 InputState::Draft,
                 Some("[Pasted text #1 +1 lines] and mine"),
@@ -4920,6 +5360,8 @@ mod tests {
             post.read("a1", &Default::default()).unwrap();
             InputObservation {
                 current: input(InputState::Usable, None),
+                native_wait: None,
+                waits_for_frame: false,
                 submitted: None,
                 after_write: true,
                 empty_after_write: false,

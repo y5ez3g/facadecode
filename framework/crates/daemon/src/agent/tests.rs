@@ -3026,6 +3026,8 @@ async fn held_keys_go_on_as_far_apart_as_they_came() {
 /// A menu or question of the CLI's own takes the person's keys at once, held ones first.
 #[tokio::test(flavor = "multi_thread")]
 async fn keys_for_a_question_do_not_wait_for_a_message() {
+    use facade_base::model::message::{DeliveryFailure, DeliveryStatus};
+
     let home = home("keysquestion");
     let mut harness = claude(&home, false);
     harness.plain_claude_input("", "");
@@ -3041,7 +3043,16 @@ async fn keys_for_a_question_do_not_wait_for_a_message() {
     harness.plain_claude_input("a message", "");
     assert_eq!(harness.cli_reads(1), b"\r");
     harness.plain_claude_input("", "");
-    assert_delivered(message).await;
+    let crate::messages::Settled::Kept(message) = probe_message_settled(message).await else {
+        panic!("the written paste has a retained receipt");
+    };
+    assert_eq!(message.delivery.status, DeliveryStatus::Failure);
+    assert_eq!(
+        message.delivery.reason,
+        Some(DeliveryFailure::InteractionAfterWrite)
+    );
+    assert_eq!(message.delivery.text_written, TextWritten::Full);
+    assert_eq!(message.delivery.enter_written, Some(true));
     harness.stop().await;
     std::fs::remove_dir_all(&home).unwrap();
 }
@@ -3066,7 +3077,7 @@ async fn keys_wait_a_bounded_time_for_a_message_the_cli_never_shows() {
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// A person who types into a message that stayed in the input, and submits it whole, delivers it
+/// A person who restores and submits the original message delivers it
 /// when the CLI draws an empty frame with only Enter between the draft and the empty frame.
 /// An intervening key still goes at the paste's bound, leaving the submission unconfirmed.
 #[tokio::test(flavor = "multi_thread")]
@@ -3078,7 +3089,9 @@ async fn a_person_s_enter_over_a_message_that_stayed_in_the_input_delivers_it() 
         let message = harness.message_pasted("a message").await;
         harness.type_bytes(b"!").await.unwrap();
         assert_eq!(harness.cli_reads(1), b"!", "let go at the bound");
-        harness.plain_claude_input("a message!", "");
+        harness.type_bytes(b"\x7f").await.unwrap();
+        assert_eq!(harness.cli_reads(1), b"\x7f");
+        harness.plain_claude_input("a message", "");
         harness.type_bytes(b"\r").await.unwrap();
         if intervening_key {
             harness.type_bytes(b"y").await.unwrap();
@@ -3101,6 +3114,39 @@ async fn a_person_s_enter_over_a_message_that_stayed_in_the_input_delivers_it() 
         harness.stop().await;
         std::fs::remove_dir_all(&home).unwrap();
     }
+}
+
+/// A person may submit a draft they edited. The resulting text cannot confirm the original message.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_person_s_enter_over_an_edited_message_does_not_confirm_the_original() {
+    use facade_base::model::message::{DeliveryFailure, DeliveryStatus};
+
+    let home = home("enterover");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let message = harness.message_pasted("a message").await;
+    harness.type_bytes(b"!").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"!", "let go at the bound");
+    harness.plain_claude_input("a message!", "");
+    harness.type_bytes(b"\r").await.unwrap();
+    assert_eq!(
+        harness.cli_reads(1),
+        b"\r",
+        "the person can submit their draft"
+    );
+    harness.plain_claude_input("", "");
+    let crate::messages::Settled::Kept(message) = probe_message_settled(message).await else {
+        panic!("the edited paste has a receipt");
+    };
+    assert_eq!(message.delivery.status, DeliveryStatus::Failure);
+    assert_eq!(
+        message.delivery.reason,
+        Some(DeliveryFailure::SubmissionUnconfirmed)
+    );
+    assert_eq!(message.delivery.text_written, TextWritten::Full);
+    assert_eq!(message.delivery.enter_written, Some(false));
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
 }
 
 /// Keys held for a message go with a run that ends, and a run that takes its place gets none.
@@ -3765,16 +3811,22 @@ async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
     };
     let step = |old: &mut Typist, now, terminal: &mut Terminal, screen: &Screen| {
         let written = terminal.written();
-        old.step(now, written, written, modes, BoxWrites::Allowed, &|| {
+        old.note_erasure_write(written);
+        let step = old.step(now, written, written, modes, BoxWrites::Allowed, &|| {
             InputObservation {
                 current: facade_rules::read_box(&rule.input, &screen.view()),
+                native_wait: None,
+                waits_for_frame: false,
                 submitted: None,
                 after_write: false,
                 empty_after_write: false,
                 awaiting_after_interaction: false,
             }
-        })
-        .write
+        });
+        if let Some(kind) = step.delivery {
+            old.delivery_issued(kind, written, step.write.len());
+        }
+        step.write
     };
     let deadline = start + Duration::from_secs(1);
     old.deliver(typing(deadline));

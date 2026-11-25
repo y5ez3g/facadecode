@@ -245,6 +245,11 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     in effect lasts up to the CLI's `submit_clear_ms`. A rule without this value uses `SLOWEST_DRAW`.
     Held keys go on as far apart as they came, for at most `ESCAPE_DELAY`. Mouse events, focus
     changes, key releases and standalone modifiers do not wait for a message.
+  - A current-run `Blocked` report or a completed interaction frame releases the delivery hold
+    on the person's keys and suspends automatic paste, submission, retry and erasure. An active
+    report must be withdrawn before a completed ordinary input frame can reopen delivery. The
+    frame shows an empty box or the same owned draft. The actor observes reports and frames in
+    output order, even when one read contains several of them.
   - A message's paste, probe, submission key and erasing wait for the person's queued keys, the rest of a paste or escape sequence they started, and what the input has yet to show of their keys in order. Text leaves a draft. Enter or another key that can clear it leaves an empty input. A slow CLI that still shows an earlier line has yet to show the next one. What never shows is waited for until neither a key went in nor the input changed for `SLOWEST_DRAW`.
   - A person's Enter can prove delivery from two frames in output order. After the paste is issued,
     a complete frame shows the whole message. A complete frame on the Enter's side of the output
@@ -270,6 +275,10 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     still reach their original deadlines.
     An already visible interaction takes the Escape itself. The actor offers confirmed frames
     to the typist before retiring their Enter. Later keys wait within the paste's hold limit.
+    A native wait also interrupts an unfinished proof. A complete frame after withdrawal must show
+    the original draft again. A report that began after the most recent edit's write boundary, or a
+    complete menu frame whose anchor was printed after that boundary, can establish where that
+    edit went. A subsequent Enter can start another proof for the same delivery.
   - Every screen change goes into the screen log before the screen takes it.
   - Input and state readings can reuse screen-view row allocations. The daemon keeps up to four
     reusable views, each with up to 160 KiB of storage. It refreshes a borrowed view before a read
@@ -306,7 +315,10 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     The first prompt reserves room for its rendered text before the agent is listed. Later
     messages use the remaining room. The actor gives back input that must wait for room and
     refuses input that is too large to fit on its own.
-  - Quiet replies only once no read is under way and what the last reads brought went through the screen log; `LetGoBeforeStop` lets go of the signal pipe and nothing else.
+  - Quiet replies once issued input has drained and the last reads have gone through the screen
+    log. At clean takeover, a first paste still awaiting issue releases its durable reservation.
+    Recovery can offer that message again under its original deadline. `LetGoBeforeStop` releases
+    the signal pipe.
 - **Never does:** touch the database; know other agents; decide when a run starts or ends; type into a terminal that is not Facade's.
 - **Interface:**
   - `spawn(ActorStart, rx, tx, changes) -> anyhow::Result<AgentHandle>`. `ActorStart` carries the
@@ -336,8 +348,19 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 
 - **Owns:** the `PtyIo` (none between runs or once the run's output ended), the input queue, the last output read, the bytes written so far and when.
 - **Keeps:** Input is written in order, at most 64 KiB at a time; a read takes at most 64 KiB. The count of bytes written never resets, across runs too: the typist finds its own bytes by it. Letting go of the terminal, as a read that finds the end of its output does, drops the queued input and the last output. `ready` can be cancelled safely. A write under way is given the same head of the queue until it returns; clearing the queue keeps those bytes. `stop_reading` leaves no read under way.
+- An automatic intent can reach the system after earlier accepted input drains. Before the first
+  write attempt, the terminal advances through the ready output prefix and returns it to the actor
+  for revalidation. An intent retains its deadline. `DeliveryIssued` registers the system's write
+  range and `Wrote` confirms pending writes. Framed input keeps its ordered suffix. Independent
+  erase keys beyond the range accepted by the system return to the typist for admission again.
 - **Never does:** parse output, decide what input may wait, or select a submission key.
-- **Interface:** `new(Option<PtyMaster>)`, `install(PtyMaster)`, `detach()`, `stop_reading() -> Option<usize>` (async), `let_go_before_stop()`; `ready(TerminalWait) -> TerminalEvent` (`Read`, `Closed`, `ReadFailed`, `Wrote`, `WriteFailed`), `read_now() -> Option<usize>`, `output() -> &[u8]`; `push(&[u8])`, `clear()`, `queued()`, `written()`, `written_at()`; `is_open()`, `is_closed()`, `set_size(cols, rows)`.
+- **Interface**
+  - Lifecycle — `new(Option<PtyMaster>)`, `install(PtyMaster)`, `detach()`,
+    `stop_reading() -> Option<usize>` (async), `let_go_before_stop()`, `is_open()`, `is_closed()`
+    and `set_size(cols, rows)`.
+  - `ready` and `ready_with_delivery` return `Read`, `Closed`, `Wrote`, `DeliveryIssued`,
+    `ReadFailed` or `WriteFailed`. Read the last output with `read_now() -> Option<usize>` and `output() -> &[u8]`.
+    Input methods are `push(&[u8])`, `clear()`, `queued()`, `written()` and `written_at()`.
 
 #### screen
 
@@ -396,6 +419,12 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   - `DeliveryHandle::begin_paste` records the paste before the typist writes the complete message in one paste.
     Automatic delivery takes its paste brackets from the CLI rule, including after a daemon restart.
     A direct text call follows the screen's bracketed paste mode.
+  - The actor holds a revocable intent for each automatic paste, submission and erase. A native
+    wait or complete interaction frame pauses those writes and releases the delivery hold on
+    human keys. A later ordinary composer frame reopens the input after the native wait clears.
+    The terminal reads the finite prefix of output already available before it tries an automatic
+    write. The actor uses those bytes to check the intent again.
+    The typist changes the delivery phase only when the system takes the first write.
   - An ordinary message paste carries one trailing ASCII space when the message ends in a non-whitespace
     character. The stored message and initial prompt use their original text.
   - The submission key goes over a complete reading of the draft once it has shown for the CLI's settle
@@ -426,12 +455,19 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     at its retry interval. A fully readable changed draft with an established erase range can be
     erased once and pasted again after a complete frame drawn empty after the erase write boundary.
     Both actions use the original deadline and hold limit.
-  - After its deadline the typist erases its own paste once when the current reading establishes its
-    erase range and the paste still owns the box. The same ownership covers a display variant whose
-    text and cursor establish its range. It remembers the paste's placeholder number through menus
-    and unread frames. It follows the erased draft until a complete reading shows that the paste
-    left the input. What a person typed into is theirs. Where the input box showed the paste last and the
-    deadline falls on an unread reading, the receipt waits for the next frame, for at most `RESPONSE_GRACE`. A receipt is given
+  - A native Question report that begins after the paste or submission key reached the terminal,
+    or a complete question or menu frame after that write, records `interaction_after_write`
+    when it precedes proof of delivery. The receipt says the paste or key may have answered the
+    CLI's question and tells the sender to check the terminal.
+  - After its deadline the typist can erase only a draft whose ownership and erase range it can
+    establish. It follows the erase until a complete reading shows that the paste left the input.
+    Short writes leave their unsent keys under the same gate. A key that may edit the draft
+    suspends the tail until a report or fully redrawn menu accounts for it. After withdrawal, a
+    fresh composer frame must show the owned remainder before the tail can pass the gate.
+    Before passing a possible edit, the actor revokes persisted recovery evidence. When the
+    CLI is waiting, the live cleanup stays available for revalidation by later output.
+    A deadline in an unread frame can wait for a complete frame within the existing grace.
+    A receipt is given
     once, by two `RESPONSE_GRACE` after the deadline, and says what is known then; erasing later changes none.
   - The start prompt is pasted alone; a paste an earlier daemon began is never typed again.
   - With console typing, characters above U+FFFF go as key-down records, a text's line breaks as presses of the rule's line break key, a key-down and a key-up record each, where it names one, and the wait before a call's Enter adds `per_char` for each UTF-16 code unit.
@@ -461,13 +497,14 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses
   `new(agent, rule, console_typing, DeliveryHandle)`, `push`, `deliver`, `deliver_first`, `finish_paste`,
   `fail_prompt(prompt, reason)`, `fail_all(written, why)`, `hold_pastes()`, and
-  `step(now, written, queued, modes, writes, observe) -> Step { write, wake }`. The `writes` argument
+  `step(now, written, queued, modes, writes, observe) -> Step { write, wake, delivery }`. The `writes` argument
   (`BoxWrites`) tells the typist whether it may write into the input box on its own. The `observe`
-  callback gives the current reading in `InputObservation` and the draft proved submitted by the
-  person's Enter. That proof may come from earlier frames in the same read. A pending observation
-  after an interaction leaves the batch waiting for a new complete sequence until its deadline.
-  The actor calls `input_edited()` when keys that can change the input go into it. For probes,
-  `recall(reading)` uses a prior probe's result, `want_probe()`
+  callback gives the current reading, the current native wait and complete-frame requirements
+  in `InputObservation`. It also gives the draft proved submitted by the person's Enter in
+  output order. Evidence can come from earlier frames in the same read. A pending observation
+  after an interaction can retain the original delivery deadline. The actor calls
+  `input_edited()` where the person's keys may change the input. For probes, `recall(reading)`
+  uses a prior probe's result, `want_probe()`
   requests a probe and `clear_probes()` starts a run with fresh probe evidence. The actor reads
   `take_submitted()`, `take_entered()`, `held_bytes()`, `console()`, `paste_rule()`, `busy()`,
   `pasting()`, `occupies_input()`, `paste_hold_until()`, `types_calls()`, `reads_input()` and

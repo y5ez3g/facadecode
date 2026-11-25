@@ -78,6 +78,21 @@ impl DeliveryHandle {
         })
     }
 
+    /// Returns a durably reserved paste to the pending messages when no bytes were issued.
+    pub(crate) fn release_unissued_paste(&self, numbers: &[u64]) -> bool {
+        let mut open = self.0.lock();
+        if let Err(err) = blocking_in_place(|| self.0.table.release_unissued_paste(numbers)) {
+            warn(&format!("{err:#}; retaining the paste reservation"));
+            return false;
+        }
+        for number in numbers {
+            if let Some(delivery) = open.agents.get_mut(number) {
+                delivery.pasted = false;
+            }
+        }
+        true
+    }
+
     /// Ends the deliveries among `numbers` still open, as `outcome` says.
     pub(crate) fn settle(&self, numbers: &[u64], outcome: Outcome) {
         self.0.settle(numbers, outcome);

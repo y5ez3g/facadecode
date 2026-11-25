@@ -229,11 +229,14 @@ impl StateTracker {
         facts
     }
 
-    /// Accepts ordered state events parsed from CLI output.
-    pub(crate) fn take(&mut self, events: Vec<StatusEvent>) {
-        events
-            .into_iter()
-            .for_each(|event| self.evidence.event(event));
+    /// Accepts a state event at its place in CLI output.
+    pub(super) fn take_event(&mut self, event: StatusEvent) {
+        self.evidence.event(event);
+    }
+
+    #[cfg(test)]
+    fn take(&mut self, events: Vec<StatusEvent>) {
+        events.into_iter().for_each(|event| self.take_event(event));
     }
 
     /// Whether the selected evidence calls for a screen reading now.
@@ -805,6 +808,26 @@ mod tests {
             how,
             reason,
         })
+    }
+
+    #[test]
+    fn native_wait_follows_the_runs_own_report() {
+        let now = Instant::now();
+        let mut agent = tracker(None, now);
+        agent.asks(true, now);
+        assert_eq!(state(&mut agent, now).0, ManagedAgentState::WaitingForYou);
+        assert_eq!(agent.native_wait(), None);
+
+        agent.take(vec![report("state=blocked")]);
+        assert_eq!(agent.native_wait(), Some(WaitKind::Unknown));
+        agent.take(vec![report("state=blocked:kind=auth")]);
+        let mut recovered = StateTracker::new(None, now, agent.kept(), None, None);
+        assert_eq!(recovered.native_wait(), Some(WaitKind::Auth));
+        recovered.restarted(now, ToolsGiven::NotInjected);
+        assert_eq!(recovered.native_wait(), None);
+
+        agent.take(vec![report("state=idle")]);
+        assert_eq!(agent.native_wait(), None);
     }
 
     #[test]

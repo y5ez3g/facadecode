@@ -192,6 +192,76 @@ fn only_applied_cell_writes_count_on_the_cursor_row() {
 }
 
 #[test]
+fn printed_glyphs_follow_frames_and_input_boundaries_across_reads() {
+    let mut screen = Screen::new(16, 5, 0);
+    screen.feed(b"ab");
+    screen.feed(b"cd");
+    assert!((0..4).all(|column| screen.frame_printed_cell(0, column)));
+
+    screen.mark_pending_frame_earlier();
+    screen.feed(b"ef");
+    assert!((0..4).all(|column| !screen.frame_printed_cell(0, column)));
+    let mut frames = Vec::new();
+    screen.feed_observing(
+        b"gh\x1b[?2026hij\x1b[?2026lkl",
+        Some(&mut |event| {
+            if let InputEvent::Frame(screen, _) = event {
+                frames.push(
+                    (0..12)
+                        .filter(|&column| screen.frame_printed_cell(0, column))
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }),
+    );
+    assert_eq!(frames, [vec![4, 5, 6, 7], vec![8, 9], vec![10, 11]]);
+}
+
+#[test]
+fn input_frames_and_reports_keep_their_output_order() {
+    let mut screen = Screen::new(40, 5, 0);
+    let mut observed = Vec::new();
+    let mut observe = |event: InputEvent<'_>| match event {
+        InputEvent::Status { .. } => observed.push(String::from("status")),
+        InputEvent::Frame(screen, CursorRowWrites::Current) => {
+            observed.push(screen.text(1).join("\n"))
+        }
+        InputEvent::Frame(_, _) => {}
+    };
+    let parsed = screen.feed_observing(
+        b"old\x1b]7501;state=idle\x07\x1b[?2026h\r\x1b[2Kdraft\x1b[?2026l\
+          \x1b[?2026h\r\x1b[2Kempty\x1b[?2026l",
+        Some(&mut observe),
+    );
+    assert!(parsed.cursor_row_cells_written);
+    assert_eq!(observed, ["old", "status", "draft", "empty"]);
+}
+
+#[test]
+fn only_completed_frames_can_follow_a_report() {
+    let mut screen = Screen::new(40, 5, 0);
+    let mut observed = Vec::new();
+    let mut observe = |event: InputEvent<'_>| match event {
+        InputEvent::Status { .. } => observed.push(String::from("status")),
+        InputEvent::Frame(screen, CursorRowWrites::Current) => {
+            observed.push(screen.text(1).join("\n"))
+        }
+        InputEvent::Frame(_, _) => {}
+    };
+    let parsed = screen.feed_observing(b"old\x1b]7501;state=idle\x07\x1b[1;2H", Some(&mut observe));
+    assert!(
+        parsed.cursor_row_cells_written,
+        "the report does not erase write evidence"
+    );
+    screen.feed_observing(
+        b"\x1b[?2026h\r\x1b[2Knew\x1b]7501;state=idle\x07",
+        Some(&mut observe),
+    );
+    screen.feed_observing(b"\x1b[?2026l", Some(&mut observe));
+    assert_eq!(observed, ["old", "status", "status", "new"]);
+}
+
+#[test]
 fn a_synchronized_update_is_one_frame() {
     let mut screen = Screen::new(20, 5, 0);
     screen.feed(b"\x1b[?2026hhalf");

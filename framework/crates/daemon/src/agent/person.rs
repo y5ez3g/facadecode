@@ -5,6 +5,7 @@
 //! told from keys that can change the input, and what the input has yet to show of those is kept.
 
 use std::borrow::Cow;
+use std::ops::Range;
 use std::time::Duration;
 
 use facade_base::model::terminal::InputState;
@@ -43,6 +44,10 @@ pub(super) struct PersonInput {
     pub(super) edits: bool,
     /// The start of the first complete editing key that can go now.
     pub(super) first_edit: Option<KeyOffset>,
+    /// The first key that can change the text of a delivery draft.
+    pub(super) first_draft_edit: Option<KeyOffset>,
+    /// The final byte of the last such key, so its entire sequence has to reach the CLI.
+    pub(super) last_draft_edit: Option<KeyOffset>,
     /// A sequence that still needs to be classified.
     pub(super) partial_start: Option<KeyOffset>,
     /// A key that may empty the input or bring an older draft back went in, their Enter aside.
@@ -66,10 +71,14 @@ impl KeyOffset {
 }
 
 impl PersonInput {
-    fn edited_at(&mut self, index: usize, carried: usize) {
+    fn edited_at(&mut self, bytes: Range<usize>, carried: usize, changes_draft: bool) {
+        let offset = KeyOffset::from_index(bytes.start, carried);
         self.edits = true;
-        self.first_edit
-            .get_or_insert(KeyOffset::from_index(index, carried));
+        self.first_edit.get_or_insert(offset);
+        if changes_draft {
+            self.first_draft_edit.get_or_insert(offset);
+            self.last_draft_edit = Some(KeyOffset::from_index(bytes.end - 1, carried));
+        }
     }
 
     fn partial_at(&mut self, index: usize, carried: usize) {
@@ -113,6 +122,8 @@ impl PersonKeys {
         if self.finish_escape(now) {
             found.clears = lone_escape;
             found.first_edit = Some(KeyOffset::Carried);
+            found.first_draft_edit = found.first_edit;
+            found.last_draft_edit = found.first_edit;
         }
         let carried = std::mem::take(&mut self.partial);
         let bytes = following(&carried, keys);
@@ -122,7 +133,7 @@ impl PersonKeys {
             if let Some(opens) = bracket(rest) {
                 self.close_paste();
                 self.pasting = opens;
-                found.edited_at(i, carried.len());
+                found.edited_at(i..i + PASTE_START.len(), carried.len(), true);
                 i += PASTE_START.len();
                 continue;
             }
@@ -139,21 +150,29 @@ impl PersonKeys {
                 };
                 let key = &rest[..length];
                 if !is_report(key) {
-                    found.edited_at(i, carried.len());
+                    let leaves = sequence_leaves(key);
+                    found.edited_at(
+                        i..i + length,
+                        carried.len(),
+                        leaves != Leaves::AsItWas || sequence_changes_text(key),
+                    );
                     // Alt+Enter is a line break of the draft's.
                     if key != b"\x1b" || rest.get(1) != Some(&b'\r') {
-                        found.clears |= self.goes_in(sequence_leaves(key), now);
+                        found.clears |= self.goes_in(leaves, now);
                     }
                 }
                 i += length;
                 continue;
             }
             let byte = rest[0];
+            let leaves = if self.pasting {
+                Leaves::Draft
+            } else {
+                character_leaves(byte.into())
+            };
             // An Enter counts once it goes on.
-            if self.pasting {
-                found.clears |= self.goes_in(Leaves::Draft, now);
-            } else if byte != b'\r' {
-                found.clears |= self.goes_in(character_leaves(byte.into()), now);
+            if self.pasting || byte != b'\r' {
+                found.clears |= self.goes_in(leaves, now);
             }
             let after_escape = i > 0 && bytes[i - 1] == 0x1b;
             if byte == b'\r' && !self.pasting && !after_escape {
@@ -164,7 +183,11 @@ impl PersonKeys {
                 });
                 break;
             }
-            found.edited_at(i, carried.len());
+            found.edited_at(
+                i..i + 1,
+                carried.len(),
+                leaves != Leaves::AsItWas || changes_character(byte.into()),
+            );
             if self.pasting && self.paste.len() < MAX_INPUT_BYTES {
                 self.paste.push(byte);
             }
@@ -482,6 +505,23 @@ fn sequence_leaves(keys: &[u8]) -> Leaves {
     }
 }
 
+fn changes_character(character: u32) -> bool {
+    matches!(character, 0x08..=0x0a | 0x7f)
+}
+
+/// Some keys edit the text while leaving a draft in the input.
+fn sequence_changes_text(keys: &[u8]) -> bool {
+    match control_sequence(keys) {
+        Some((b'~', parameters)) => parameter(parameters, 0, 0) == 3,
+        Some((b'_', parameters)) => matches!(parameter(parameters, 0, 0), 8 | 9 | 46),
+        Some((b'u', parameters)) => {
+            let character = parameter(parameters, 0, 0);
+            changes_character(character) || (character == 13 && parameter(parameters, 1, 0) > 1)
+        }
+        _ => false,
+    }
+}
+
 /// The last byte of the control sequence `keys` and its parameters.
 fn control_sequence(keys: &[u8]) -> Option<(u8, &[u8])> {
     let (last, parameters) = keys.strip_prefix(b"\x1b[")?.split_last()?;
@@ -528,6 +568,9 @@ pub(super) struct Submitting {
     pub(super) until: Instant,
     pub(super) cleared_at: Option<u64>,
     pub(super) after_interaction: bool,
+    pub(super) delivery_batch: Option<u64>,
+    /// The CLI still showed or reported a wait after the following edit went on.
+    pub(super) wait_observed_after_edit: bool,
 }
 
 impl Submitting {
@@ -540,6 +583,8 @@ impl Submitting {
             until: Instant::now() + SUBMISSION_TAKEN_TIMEOUT,
             cleared_at: None,
             after_interaction: false,
+            delivery_batch: None,
+            wait_observed_after_edit: false,
         }
     }
 

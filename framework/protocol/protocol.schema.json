@@ -1824,6 +1824,11 @@
         },
         {
           "type": "string",
+          "const": "interaction_after_write",
+          "description": "A question or menu appeared after delivery input reached the terminal and before the\nCLI showed that it took the message."
+        },
+        {
+          "type": "string",
           "const": "unsupported",
           "description": "The recipient's CLI has no rule to read its input by, so Facade types no message into it."
         }

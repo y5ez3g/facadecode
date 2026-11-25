@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 
-use facade_screen::{FrameObserver, ParsedOutput, Screen, TerminalColors};
+use facade_screen::{InputEvent, ParsedOutput, Screen, TerminalColors};
 use tokio::task::JoinHandle;
 
 use super::SCROLLBACK_ROWS;
@@ -456,21 +456,28 @@ impl LoggedScreen {
     }
     /// Appends output in a blocking region before parsing it; takes no lock.
     pub(crate) fn feed(&mut self, bytes: &[u8]) -> ParsedOutput {
-        self.feed_observing(bytes, None)
+        self.append_output(bytes);
+        let parsed = self.mutable_screen().feed(bytes);
+        self.record_title(&parsed);
+        parsed
     }
 
-    /// See `Screen::feed_observing` for the frame facts a caller may observe.
+    /// Like [Self::feed], with a reader for the input events encountered while parsing.
     pub(crate) fn feed_observing(
         &mut self,
         bytes: &[u8],
-        observe: Option<&mut FrameObserver<'_>>,
+        observe: &mut dyn FnMut(InputEvent<'_>),
     ) -> ParsedOutput {
+        self.append_output(bytes);
+        let parsed = self.mutable_screen().feed_observing(bytes, Some(observe));
+        self.record_title(&parsed);
+        parsed
+    }
+
+    fn append_output(&mut self, bytes: &[u8]) {
         if let Some(journal) = &mut self.log {
             blocking_in_place(|| journal.append_output(bytes));
         }
-        let parsed = self.mutable_screen().feed_observing(bytes, observe);
-        self.record_title(&parsed);
-        parsed
     }
 
     pub(crate) fn mark_pending_frame_earlier(&mut self) {

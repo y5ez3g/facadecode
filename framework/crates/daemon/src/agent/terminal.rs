@@ -25,6 +25,8 @@ pub(crate) enum TerminalEvent {
     Wrote,
     /// The candidate erase needs a new complete input reading before any write.
     ProbeEraseNeedsCheck { automatic: bool },
+    /// The system took a new delivery write.
+    DeliveryIssued { offset: u64, wrote: bool },
     /// Writing failed: the terminal takes no more input.
     WriteFailed(std::io::Error),
 }
@@ -33,6 +35,23 @@ pub(crate) enum TerminalEvent {
 pub(crate) enum TerminalWait {
     ReadAndWrite,
     WriteOnly,
+}
+
+/// Bytes delivery proposes to write once the already admitted input has drained.
+pub(super) struct DeliveryInput<'a> {
+    pub bytes: &'a [u8],
+    /// The end of the ready output that first deferred this intent.
+    pub read_through: &'a mut Option<u64>,
+    pub deadline: Instant,
+    pub pastes: bool,
+    /// Whether the rest of this input belongs to the same terminal frame.
+    pub framed: bool,
+}
+
+enum DeliveryEvent {
+    Issued,
+    Written(io::Result<Option<usize>>),
+    Read(io::Result<usize>),
 }
 
 /// A selected input byte and the end of the output already readable when its write was issued.
@@ -44,6 +63,10 @@ struct OutputBoundary {
 impl OutputBoundary {
     fn in_write(&self, sent: u64, end: u64) -> bool {
         self.input > sent && self.input <= end
+    }
+
+    fn precedes(&self, output_start: u64) -> bool {
+        self.before.is_some_and(|before| output_start >= before)
     }
 }
 
@@ -93,6 +116,7 @@ pub(crate) struct Terminal {
     /// The bytes at the head of `input` that a write under way was given: the terminal may still
     /// take them, so they stay at the head until a write returns.
     writing: usize,
+    writing_erase: bool,
     /// Position in the input queue, including an optional erase retired without a write.
     sent: u64,
     #[cfg(test)]
@@ -106,6 +130,8 @@ pub(crate) struct Terminal {
     probe: Option<ProbeWrite>,
     probe_erase: Option<ProbeErase>,
     cleanup: Option<OutputBoundary>,
+    draft_edit: Option<OutputBoundary>,
+    partial_draft_edit: Option<OutputBoundary>,
     submissions: VecDeque<SubmissionOrder>,
     /// The current automatic submission or erase, with the first external key after it.
     delivery_write: Option<SubmissionOrder>,
@@ -118,6 +144,7 @@ impl Terminal {
             master: None,
             input: VecDeque::new(),
             writing: 0,
+            writing_erase: false,
             sent: 0,
             #[cfg(test)]
             written: 0,
@@ -130,6 +157,8 @@ impl Terminal {
             probe: None,
             probe_erase: None,
             cleanup: None,
+            draft_edit: None,
+            partial_draft_edit: None,
             submissions: VecDeque::new(),
             delivery_write: None,
         };
@@ -150,6 +179,7 @@ impl Terminal {
         self.probe_erase = None;
         self.cleanup = None;
         self.delivery_write = None;
+        self.clear_draft_edits();
         self.stop_observing_submission();
         Ok(())
     }
@@ -166,12 +196,159 @@ impl Terminal {
     fn close_io(&mut self) {
         self.master = None;
         self.writing = 0;
+        self.writing_erase = false;
         self.input = VecDeque::new();
         self.buffer = Vec::new();
         self.received = 0;
         self.probe = None;
         self.probe_erase = None;
         self.delivery_output = None;
+    }
+
+    /// Offers a revocable write at the head of the existing input FIFO.
+    pub(super) async fn ready_with_delivery(
+        &mut self,
+        wait: TerminalWait,
+        delivery: Option<DeliveryInput<'_>>,
+        mut before_write: impl FnMut(u64, usize, bool) -> bool,
+    ) -> TerminalEvent {
+        if let Some(delivery) = delivery
+            && matches!(wait, TerminalWait::ReadAndWrite)
+            && self.input.is_empty()
+        {
+            let erases = !delivery.framed;
+            return self
+                .ready_delivery(delivery, |offset, count| {
+                    before_write(offset, count, erases)
+                })
+                .await;
+        }
+        self.ready(wait, |offset, count| before_write(offset, count, false))
+            .await
+    }
+
+    async fn ready_delivery(
+        &mut self,
+        delivery: DeliveryInput<'_>,
+        mut before_write: impl FnMut(u64, usize) -> bool,
+    ) -> TerminalEvent {
+        let Some(master) = self.master.as_ref() else {
+            return pending().await;
+        };
+        self.buffer.resize(self.read_limit(), 0);
+        if let Some(through) = *delivery.read_through
+            && through > self.output_read
+        {
+            self.buffer.truncate((through - self.output_read) as usize);
+            let result = master.read(&mut self.buffer).await;
+            return self.take_read(result);
+        }
+        let head = &delivery.bytes[..delivery.bytes.len().min(MAX_WRITE_BYTES)];
+        let issued = OnceLock::new();
+        let check = WriteCheck {
+            defer_for_output: delivery.read_through.is_none(),
+            deadline: Some(delivery.deadline.into_std()),
+            issued: &issued,
+        };
+        let write = async {
+            if !before_write(self.sent, head.len()) {
+                return DeliveryEvent::Written(Err(io::Error::other(
+                    "could not save paste cleanup before writing",
+                )));
+            }
+            let mut write = std::pin::pin!(master.write_checked(head, check));
+            poll_fn(|cx| match write.as_mut().poll(cx) {
+                Poll::Ready(result) => Poll::Ready(DeliveryEvent::Written(result)),
+                Poll::Pending if issued.get().is_some() => Poll::Ready(DeliveryEvent::Issued),
+                Poll::Pending => Poll::Pending,
+            })
+            .await
+        };
+        let event = tokio::select! {
+            biased;
+            event = write => event,
+            event = master.read(&mut self.buffer) => DeliveryEvent::Read(event),
+        };
+        match event {
+            DeliveryEvent::Issued => {
+                self.mark_delivery_write(
+                    delivery.pastes,
+                    !delivery.framed,
+                    issued.get().copied().flatten(),
+                );
+                self.input.extend(if delivery.framed {
+                    delivery.bytes
+                } else {
+                    head
+                });
+                self.writing = head.len();
+                self.writing_erase = !delivery.framed;
+                TerminalEvent::DeliveryIssued {
+                    offset: self.sent,
+                    wrote: false,
+                }
+            }
+            DeliveryEvent::Written(Ok(Some(n))) if n > 0 => {
+                self.mark_delivery_write(
+                    delivery.pastes,
+                    !delivery.framed,
+                    issued.get().copied().flatten(),
+                );
+                let offset = self.sent;
+                if delivery.framed {
+                    self.input.extend(&delivery.bytes[n..]);
+                }
+                self.sent += n as u64;
+                #[cfg(test)]
+                {
+                    self.written += n as u64;
+                }
+                self.last_write = Some(Instant::now());
+                TerminalEvent::DeliveryIssued {
+                    offset,
+                    wrote: true,
+                }
+            }
+            DeliveryEvent::Written(Ok(Some(_))) => {
+                TerminalEvent::WriteFailed(io::ErrorKind::WriteZero.into())
+            }
+            DeliveryEvent::Written(Ok(None)) => {
+                if delivery.read_through.is_none()
+                    && let Ok(ready) = master.queued_output_bytes()
+                    && ready > 0
+                {
+                    *delivery.read_through = Some(self.output_read + ready as u64);
+                    self.buffer.truncate(ready);
+                }
+                let result = master.read(&mut self.buffer).await;
+                self.take_read(result)
+            }
+            DeliveryEvent::Written(Err(error)) => TerminalEvent::WriteFailed(error),
+            DeliveryEvent::Read(read) => {
+                if delivery.read_through.is_none()
+                    && let Ok(n) = read.as_ref()
+                    && *n > 0
+                    && let Ok(ready) = master.queued_output_bytes()
+                {
+                    *delivery.read_through = Some(self.output_read + (*n + ready) as u64);
+                }
+                self.take_read(read)
+            }
+        }
+    }
+
+    fn mark_delivery_write(&mut self, pastes: bool, erases: bool, before: Option<usize>) {
+        let first = self.sent + 1;
+        if pastes {
+            self.clear_draft_edits();
+            self.observe_paste_from(first);
+        } else {
+            self.observe_delivery_write(first);
+        }
+        if erases {
+            self.observe_cleanup_through(first);
+        }
+        self.mark_output(first, before);
     }
 
     /// Waits until output can be read (only with `ReadAndWrite`) or queued input can be written, and does one of them.
@@ -272,8 +449,12 @@ impl Terminal {
                     self.mark_output(end, prefix);
                 }
                 IoReady::Written(result, prefix) => {
-                    self.writing = 0;
+                    let offered = std::mem::take(&mut self.writing);
+                    let writing_erase = std::mem::take(&mut self.writing_erase);
                     let n = match result {
+                        Ok(Some(0)) if writing_erase => {
+                            return TerminalEvent::WriteFailed(io::ErrorKind::WriteZero.into());
+                        }
                         Ok(Some(n)) => n,
                         Ok(None) => return self.probe_erase_needs_check(),
                         Err(error) => return TerminalEvent::WriteFailed(error),
@@ -291,24 +472,32 @@ impl Terminal {
                         probe.issued = false;
                         probe.boundary.before = None;
                     }
-                    for boundary in self.paste.iter_mut().chain(&mut self.cleanup).chain(
-                        self.submissions
-                            .iter_mut()
-                            .chain(self.delivery_write.iter_mut())
-                            .flat_map(|submission| {
-                                std::iter::once(&mut submission.enter).chain(
-                                    submission
-                                        .following_edit
-                                        .iter_mut()
-                                        .map(|edit| &mut edit.boundary),
-                                )
-                            }),
-                    ) {
+                    for boundary in self
+                        .paste
+                        .iter_mut()
+                        .chain(&mut self.cleanup)
+                        .chain(&mut self.draft_edit)
+                        .chain(&mut self.partial_draft_edit)
+                        .chain(
+                            self.submissions
+                                .iter_mut()
+                                .chain(self.delivery_write.iter_mut())
+                                .flat_map(|submission| {
+                                    std::iter::once(&mut submission.enter).chain(
+                                        submission
+                                            .following_edit
+                                            .iter_mut()
+                                            .map(|edit| &mut edit.boundary),
+                                    )
+                                }),
+                        )
+                    {
                         if boundary.in_write(written, end) {
                             boundary.before = None;
                         }
                     }
-                    self.input.drain(..n);
+                    // The unaccepted tail of an independent erase remains with Typist.
+                    self.input.drain(..if writing_erase { offered } else { n });
                     self.sent = written;
                     if guarded && n > 0 {
                         self.probe_erase = None;
@@ -418,6 +607,8 @@ impl Terminal {
             .iter()
             .chain(self.probe.iter().map(|probe| &probe.boundary))
             .chain(&self.cleanup)
+            .chain(self.draft_edit.iter())
+            .chain(self.partial_draft_edit.iter())
             .chain(
                 self.submissions
                     .iter()
@@ -441,6 +632,15 @@ impl Terminal {
         {
             probe.issued = true;
             probe.boundary.before = before;
+        }
+        for edit in self
+            .draft_edit
+            .iter_mut()
+            .chain(self.partial_draft_edit.iter_mut())
+        {
+            if edit.in_write(self.sent, end) {
+                edit.before = before;
+            }
         }
         for submission in self
             .submissions
@@ -594,12 +794,40 @@ impl Terminal {
         self.probe_erase = None;
         self.cleanup = None;
         self.delivery_write = None;
+        self.clear_draft_edits();
         self.stop_observing_submission();
     }
 
     /// Bytes queued and not yet written.
     pub(crate) fn queued(&self) -> usize {
         self.input.len()
+    }
+
+    pub(super) fn erasure_under_way(&self) -> bool {
+        self.writing_erase
+    }
+
+    pub(super) fn issued_length(&self, offset: u64, wrote: bool) -> usize {
+        if wrote {
+            (self.sent - offset) as usize
+        } else {
+            self.writing
+        }
+    }
+
+    /// Whether this read belongs to bytes already waiting when the last automatic write began.
+    pub(super) fn output_precedes_delivery_write(&self) -> bool {
+        self.delivery_write
+            .as_ref()
+            .and_then(|write| write.enter.before)
+            .is_some_and(|before| self.output_read <= before)
+    }
+
+    /// Whether the current output was read beyond the issue of the last automatic write.
+    pub(super) fn output_follows_delivery_write_at(&self, start: u64) -> bool {
+        self.delivery_write
+            .as_ref()
+            .is_some_and(|write| write.enter.precedes(start))
     }
 
     /// The input queue position, including any canceled probe erase.
@@ -824,6 +1052,82 @@ impl Terminal {
         debug_assert!(done.is_none_or(|submission| submission.enter.input == through));
     }
 
+    /// Discards the newest attempt when a later Enter starts a fresh proof after a menu redraw.
+    pub(super) fn discard_last_submission(&mut self, through: u64) {
+        let done = self.submissions.pop_back();
+        debug_assert!(done.is_some_and(|submission| submission.enter.input == through));
+    }
+
+    /// The previous following edit was accounted for by an observed wait. Later keys get a new cut.
+    pub(super) fn discard_acknowledged_edit(&mut self) {
+        if let Some(submission) = self.submissions.back_mut() {
+            submission.following_edit = None;
+        }
+    }
+
+    /// The latest possible edit of an active delivery draft, independent of the Enter queue.
+    pub(super) fn watch_draft_edit(&mut self, input: u64, provisional: bool) {
+        debug_assert!(input > self.sent);
+        let boundary = Some(OutputBoundary {
+            input,
+            before: None,
+        });
+        if provisional {
+            self.partial_draft_edit = boundary;
+        } else {
+            self.draft_edit = boundary;
+        }
+    }
+
+    /// Reuses the prefix's actual write position once PersonKeys has classified the sequence.
+    pub(super) fn classify_draft_edit(&mut self, edits: bool) {
+        if let Some(boundary) = self.partial_draft_edit.take()
+            && edits
+        {
+            self.draft_edit = Some(boundary);
+        }
+    }
+
+    pub(super) fn draft_edit_is_pending(&self) -> bool {
+        self.draft_edit.is_some() || self.partial_draft_edit.is_some()
+    }
+
+    /// Whether output at `start` follows the readable prefix at the latest edit's write.
+    pub(super) fn output_follows_draft_edit(&self, start: u64) -> bool {
+        self.draft_edit
+            .as_ref()
+            .and_then(|edit| edit.before)
+            .is_some_and(|before| start >= before)
+    }
+
+    pub(super) fn output_precedes_draft_edit(&self) -> bool {
+        self.draft_edit
+            .as_ref()
+            .is_some_and(|edit| !self.latest_output_follows(edit))
+    }
+
+    pub(super) fn read_starts_at_draft_edit(&self) -> bool {
+        let start = self.output_read_start();
+        self.draft_edit
+            .iter()
+            .chain(self.partial_draft_edit.iter())
+            .any(|edit| edit.before == Some(start))
+    }
+
+    /// A complete wait observation on the far side of the latest key accounts for its edit.
+    pub(super) fn acknowledge_draft_edit_in_menu(&mut self, start: u64) -> bool {
+        if self.partial_draft_edit.is_none() && self.output_follows_draft_edit(start) {
+            self.draft_edit = None;
+            return true;
+        }
+        false
+    }
+
+    fn clear_draft_edits(&mut self) {
+        self.draft_edit = None;
+        self.partial_draft_edit = None;
+    }
+
     /// Keeps the prefix already readable at the first following edit's actual write issue.
     pub(crate) fn observe_following_edit(&mut self, first: u64, provisional: bool) {
         debug_assert!(first > self.sent);
@@ -871,7 +1175,7 @@ impl Terminal {
             .before
     }
 
-    fn output_read_start(&self) -> u64 {
+    pub(super) fn output_read_start(&self) -> u64 {
         self.output_read - self.received as u64
     }
 
@@ -880,16 +1184,18 @@ impl Terminal {
     }
 
     fn latest_output_follows(&self, boundary: &OutputBoundary) -> bool {
-        boundary
-            .before
-            .is_some_and(|before| self.output_read_start() >= before)
+        boundary.precedes(self.output_read_start())
     }
 
     /// Whether the latest read is on this side of the active paste's write.
     pub(crate) fn output_follows_paste(&self) -> bool {
+        self.output_follows_paste_at(self.output_read_start())
+    }
+
+    pub(super) fn output_follows_paste_at(&self, start: u64) -> bool {
         self.paste
             .as_ref()
-            .is_some_and(|paste| self.latest_output_follows(paste))
+            .is_some_and(|paste| paste.precedes(start))
     }
 
     /// Whether this read starts at the output boundary of the paste's first write.
@@ -1009,6 +1315,114 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_delivery_output_sample_ends_before_newly_arrived_bytes() {
+        let (mut terminal, mut cli) = opened();
+        cli.write_output(b"already readable").unwrap();
+        terminal.sample_ready_delivery_output().unwrap();
+        assert!(terminal.delivery_output_pending());
+        cli.write_output(b"arrived after the sample").unwrap();
+        terminal.sample_ready_delivery_output().unwrap();
+
+        assert!(matches!(next(&mut terminal).await, TerminalEvent::Read));
+        assert_eq!(terminal.output(), b"already readable");
+        assert!(!terminal.delivery_output_pending());
+        terminal.finish_delivery_output();
+        assert!(matches!(next(&mut terminal).await, TerminalEvent::Read));
+        assert_eq!(terminal.output(), b"arrived after the sample");
+    }
+
+    #[tokio::test]
+    async fn an_unissued_erase_tail_is_absent_when_the_actor_withdraws_its_intent() {
+        let (mut terminal, mut cli) = opened();
+        let bytes = vec![b'\x7f'; MAX_WRITE_BYTES + 1];
+        let mut read_through = None;
+        let event = tokio::time::timeout(
+            Duration::from_secs(5),
+            terminal.ready_with_delivery(
+                TerminalWait::ReadAndWrite,
+                Some(DeliveryInput {
+                    bytes: &bytes,
+                    read_through: &mut read_through,
+                    deadline: Instant::now() + Duration::from_secs(5),
+                    pastes: false,
+                    framed: false,
+                }),
+                |_, _, _| true,
+            ),
+        )
+        .await
+        .expect("the first chunk reached the system");
+        let TerminalEvent::DeliveryIssued { offset: 0, wrote } = event else {
+            panic!("the terminal only starts the first chunk");
+        };
+        assert_eq!(terminal.queued(), if wrote { 0 } else { MAX_WRITE_BYTES });
+        let accepted = if wrote {
+            terminal.written() as usize
+        } else {
+            MAX_WRITE_BYTES
+        };
+        let mut read = vec![0; accepted];
+        let mut filled = 0;
+        while filled < read.len() {
+            filled += cli.read_input(&mut read[filled..]).unwrap();
+        }
+        assert_eq!(&read, &bytes[..accepted]);
+        if !wrote {
+            assert!(matches!(next(&mut terminal).await, TerminalEvent::Wrote));
+        }
+        cli.write_output(b"blocked").unwrap();
+        assert!(matches!(
+            terminal
+                .ready_with_delivery(TerminalWait::ReadAndWrite, None, |_, _, _| true)
+                .await,
+            TerminalEvent::Read
+        ));
+        assert_eq!(terminal.written(), accepted as u64);
+    }
+
+    #[tokio::test]
+    async fn a_delivery_reads_the_whole_ready_prefix_before_admitting_a_write() {
+        let (mut terminal, mut cli) = opened();
+        let ready = b"frame\x1b]7501;state=blocked:kind=question\x07";
+        cli.write_output(ready).unwrap();
+        // An earlier submission already limits the next read to its own output boundary.
+        terminal.paste = Some(OutputBoundary {
+            input: 0,
+            before: Some(b"frame".len() as u64),
+        });
+        let mut through = None;
+        let delivery = DeliveryInput {
+            bytes: b"\r",
+            read_through: &mut through,
+            deadline: Instant::now() + Duration::from_secs(5),
+            pastes: false,
+            framed: true,
+        };
+        assert!(matches!(
+            terminal
+                .ready_delivery(
+                    DeliveryInput {
+                        read_through: &mut *delivery.read_through,
+                        ..delivery
+                    },
+                    |_, _| true
+                )
+                .await,
+            TerminalEvent::Read
+        ));
+        assert_eq!(terminal.output(), b"frame");
+        assert_eq!(*delivery.read_through, Some(ready.len() as u64));
+
+        cli.write_output(b"later frames").unwrap();
+        assert!(matches!(
+            terminal.ready_delivery(delivery, |_, _| true).await,
+            TerminalEvent::Read
+        ));
+        assert_eq!(terminal.output(), &ready[b"frame".len()..]);
+        assert_eq!(terminal.written(), 0);
+    }
+
+    #[tokio::test]
     async fn a_terminal_is_let_go_of_as_its_output_ends() {
         let (mut terminal, mut cli) = opened();
         cli.write_output(b"last words").unwrap();
@@ -1024,6 +1438,7 @@ mod tests {
                     panic!("terminal ended with a read error: {error}")
                 }
                 TerminalEvent::Wrote | TerminalEvent::ProbeEraseNeedsCheck { .. } => {}
+                TerminalEvent::DeliveryIssued { .. } => unreachable!("no automatic intent"),
                 TerminalEvent::WriteFailed(_) => terminal.clear(),
             }
         }
@@ -1096,23 +1511,6 @@ mod tests {
         assert_eq!(terminal.output(), b"new redraw");
         assert!(terminal.cleanup_output_seen());
         assert!(terminal.read_starts_at_cleanup());
-    }
-
-    #[tokio::test]
-    async fn a_delivery_output_sample_ends_before_newly_arrived_bytes() {
-        let (mut terminal, mut cli) = opened();
-        cli.write_output(b"already readable").unwrap();
-        terminal.sample_ready_delivery_output().unwrap();
-        assert!(terminal.delivery_output_pending());
-        cli.write_output(b"arrived after the sample").unwrap();
-        terminal.sample_ready_delivery_output().unwrap();
-
-        assert!(matches!(next(&mut terminal).await, TerminalEvent::Read));
-        assert_eq!(terminal.output(), b"already readable");
-        assert!(!terminal.delivery_output_pending());
-        terminal.finish_delivery_output();
-        assert!(matches!(next(&mut terminal).await, TerminalEvent::Read));
-        assert_eq!(terminal.output(), b"arrived after the sample");
     }
 
     /// Issues a tracked Enter in a full pipe, drains it, and leaves the CLI's reply waiting.
