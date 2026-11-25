@@ -35,6 +35,8 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 
 - Reads, views, redraws and resizes give exactly what a terminal keeping every scrollback row in
   alacritty would give. Where a row lives (alacritty or the store) never shows.
+- Reads, views and redraws keep a single UTF-8 character inside its cell's text representation.
+  A longer combining sequence keeps every character, and a wide cell keeps its first column.
 - Viewers get whole characters, sequences and strings only, and never a terminal query or an
   OSC 7501 sequence. Eligible OSC 0 and OSC 2 titles get the current glyph and a space unless
   they already begin with them. A blank title has only whitespace or control characters.

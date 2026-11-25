@@ -908,23 +908,21 @@ fn an_update_prompt_no_reader_knows_reads_unknown() {
                 let mut cells: Vec<VisibleCell> = line
                     .chars()
                     .enumerate()
-                    .map(|(column, c)| VisibleCell {
-                        text: c.to_string(),
-                        column,
-                        bold: false,
-                        dim: false,
-                        inverse: false,
-                        colored: false,
+                    .map(|(column, c)| {
+                        VisibleCell::new(
+                            c.encode_utf8(&mut [0; 4]),
+                            column,
+                            false,
+                            false,
+                            false,
+                            false,
+                        )
                     })
                     .collect();
-                cells.extend((line.chars().count()..80).map(|column| VisibleCell {
-                    text: " ".into(),
-                    column,
-                    bold: false,
-                    dim: false,
-                    inverse: false,
-                    colored: false,
-                }));
+                cells.extend(
+                    (line.chars().count()..80)
+                        .map(|column| VisibleCell::new(" ", column, false, false, false, false)),
+                );
                 cells
             })
             .collect();

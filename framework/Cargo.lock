@@ -462,6 +462,7 @@ name = "facade-screen"
 version = "0.1.6"
 dependencies = [
  "alacritty_terminal",
+ "arrayvec",
  "base64",
 ]
 
