@@ -231,6 +231,53 @@ suite('Scoped legacy cutover', () => {
 		}
 	});
 
+	test('two workspace Pins for an exact legacy run share one stop and a durable recovery (ARCHITECTURE-1.4)', async function () {
+		if (process.platform === 'win32') { this.skip(); }
+		const f = await fixture();
+		try {
+			const pinA = pin('pin-a', 'scope-a');
+			const pinB = pin('pin-shared-b', 'scope-a');
+			f.savePins(A, [pinA]);
+			f.savePins(B, [pinB]);
+			const a = legacyPinMigration(f.home, A);
+			const b = legacyPinMigration(f.home, B);
+			const scope = { owner: A, retired: { claim: CLAIM, runs: [RUN_A] } };
+			const offered = (await checkLegacyCutover(f.home, scope)).plan;
+			assert.ok(offered);
+			let started = 0;
+			const convert: Parameters<typeof a.recover>[2] = async reservation => {
+				await reservation.begin();
+				started++;
+				return REFERENCE;
+			};
+			assert.deepStrictEqual(await b.recover(pinB, () => false, convert), { kind: 'deferred' });
+			assert.strictEqual(started, 0);
+			assert.ok(await approveLegacyCutover(f.home, scope, offered));
+			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
+			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
+			assert.deepStrictEqual(f.effects.filter(effect => effect.method === 'terminate').map(effect => effect.params),
+				[{ run: RUN_A, graceMs: 2_000 }]);
+			assert.strictEqual(f.rows[1].ended, false, 'the second workspace’s unrelated agent is still live');
+			const confirmed = { kind: 'confirmed', reference: REFERENCE };
+			assert.deepStrictEqual(await Promise.all([
+				a.recover(pinA, () => false, convert),
+				b.recover(pinB, () => false, convert),
+			]), [confirmed, confirmed]);
+			assert.strictEqual(started, 1);
+			const journal = JSON.parse(fs.readFileSync(f.journal, 'utf8')) as {
+				recoveries: Record<string, { reference: typeof REFERENCE; runs: string[] }>;
+			};
+			const recoveries = Object.values(journal.recoveries);
+			assert.deepStrictEqual(recoveries.map(item => item.reference), [REFERENCE]);
+			assert.strictEqual(recoveries[0].runs.length, 1);
+			assert.ok(recoveries[0].runs[0].includes(RUN_A), 'the recovery is tied to the exact stopped run');
+			assert.deepStrictEqual(await legacyPinMigration(f.home, B).recover(pinB, () => false,
+				async () => assert.fail('the saved recovery was launched again')), confirmed);
+		} finally {
+			await f.dispose();
+		}
+	});
+
 	test('persists an ambiguous resume and refuses a late-discovered session holder (RULES-6.4)', async function () {
 		if (process.platform === 'win32') { this.skip(); }
 		const f = await fixture();
