@@ -892,6 +892,11 @@ fn a_member_and_what_waits_for_it_outlast_a_daemon_restart() {
             },
         }),
     );
+    let (guest_id, _) = address.split_once('@').expect("the Guest address");
+    assert!(
+        wait_until(secs(10), || waiting_for(&home, guest_id) == 1),
+        "the send must be saved before the daemon exits"
+    );
     let old = home.kill_daemon();
     assert!(
         wait_until(secs(10), || home
@@ -899,11 +904,17 @@ fn a_member_and_what_waits_for_it_outlast_a_daemon_restart() {
             .is_some_and(|hello| hello["pid"].as_i64() != Some(old as i64))),
         "no daemon took over"
     );
+    let early = sender.answer(sending, secs(5));
+    assert!(
+        early.is_none(),
+        "the replay answered before the Guest read: {early:?}"
+    );
     let read = member.call("read_messages", json!({ "timeout_seconds": 30 }));
     assert_eq!(
         read["data"]["messages"][0]["text"], "kept for the member",
         "{read}"
     );
+    assert_eq!(read["data"]["messages"].as_array().map(Vec::len), Some(1));
     let sent = sender.tool_answer(sending);
     assert_eq!(sent["status"], "success", "{sent}");
     assert_eq!(sent["data"]["delivery"], "read_by_recipient", "{sent}");
@@ -913,6 +924,43 @@ fn a_member_and_what_waits_for_it_outlast_a_daemon_restart() {
         [&json!(address)],
         "{kept:?}"
     );
+}
+
+/// Recovering a Guest's delivery keeps its saved deadline and message number.
+#[test]
+fn a_guest_s_unread_delivery_times_out_after_daemon_restart() {
+    let home = TestHome::new("member-deadline");
+    let ada = home.start_named_fake("ada", &[]);
+    let (mut member, record) = member(&home);
+    let address = record["address"].as_str().expect("the Guest address");
+    let (guest_id, machine) = address.split_once('@').expect("the Guest ID");
+    let mut sender = McpTestClient::open(&home, &ada.id);
+    let sending = sender.send(
+        "tools/call",
+        json!({
+            "name": "send_message",
+            "arguments": {
+                "to": address, "text": "the member does not read this in time",
+                "wait_for": "delivery", "timeout_seconds": 18,
+            },
+        }),
+    );
+    assert!(
+        wait_until(secs(10), || waiting_for(&home, guest_id) == 1),
+        "the send must be saved before the daemon exits"
+    );
+    let old = home.kill_daemon();
+    assert!(
+        home.wait_for_daemon_after(old, secs(10)).is_some(),
+        "no daemon took over"
+    );
+    let sent = sender.tool_answer(sending);
+    assert_eq!(sent["status"], "failure", "{sent}");
+    assert_eq!(sent["reason"], "timeout", "{sent}");
+    assert_eq!(sent["data"]["id"], format!("m1@{machine}"), "{sent}");
+    assert_eq!(waiting_for(&home, guest_id), 0, "{sent}");
+    let read = member.call("read_messages", json!({}));
+    assert_eq!(read["data"]["messages"], json!([]), "{read}");
 }
 
 /// A read delivers only the messages it returns: `last` takes the newest of the inbox, and the rest
