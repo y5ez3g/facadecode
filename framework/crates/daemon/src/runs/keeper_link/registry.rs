@@ -32,9 +32,9 @@ pub(super) enum StopState {
 }
 
 impl StopState {
-    pub fn from_holder(stopping: bool) -> Self {
+    pub fn from_holder(stopping: bool, stopped_by: Option<AgentRef>) -> Self {
         if stopping {
-            Self::Confirmed(None)
+            Self::Confirmed(stopped_by)
         } else {
             Self::None
         }
@@ -228,8 +228,20 @@ impl RunRegistry {
         run.exit.is_none().then(|| run.identity.clone())
     }
 
-    pub fn request_stop(&self, id: &str, number: u64) -> Result<Option<bool>, ErrorBody> {
-        let was_stopping = {
+    pub fn identity(&self, id: &str) -> Option<ProcessIdentity> {
+        self.runs
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|run| run.identity.clone())
+    }
+
+    pub fn request_stop(
+        &self,
+        id: &str,
+        number: u64,
+    ) -> Result<Option<(bool, ProcessIdentity)>, ErrorBody> {
+        let request = {
             let mut runs = self.runs.lock().unwrap();
             let run = runs.get_mut(id).ok_or_else(|| {
                 ErrorBody::new(
@@ -245,10 +257,10 @@ impl RunRegistry {
             if !was_stopping {
                 run.stop = StopState::Requested;
             }
-            was_stopping
+            (was_stopping, run.identity.clone())
         };
         self.changed.notify_waiters();
-        Ok(Some(was_stopping))
+        Ok(Some(request))
     }
 
     pub fn stop_refused(&self, id: &str, number: u64) {
@@ -387,18 +399,8 @@ impl RunRegistry {
     pub async fn ended_run_released(&self, id: &str, deadline: Instant) -> bool {
         loop {
             let changed = self.changed.notified();
-            {
-                let mut runs = self.runs.lock().unwrap();
-                match runs.get(id) {
-                    None => return true,
-                    Some(run) if run.exit.is_some() => {
-                        runs.remove(id);
-                        drop(runs);
-                        self.changed.notify_waiters();
-                        return true;
-                    }
-                    _ => {}
-                }
+            if !self.runs.lock().unwrap().contains_key(id) {
+                return true;
             }
             if tokio::time::timeout_at(deadline, changed).await.is_err() {
                 return false;
@@ -469,6 +471,7 @@ impl RunRegistry {
                         id: held.agent_id.clone(),
                         run: run.number,
                         caller: None,
+                        save_creator_stop: None,
                     });
                 }
             } else {
@@ -509,6 +512,7 @@ impl RunRegistry {
                     id: id.clone(),
                     run: run.number,
                     caller: None,
+                    save_creator_stop: None,
                 }),
             ));
         }

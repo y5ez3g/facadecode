@@ -341,6 +341,8 @@ pub struct Term<T> {
 
     /// Information about damaged cells.
     damage: TermDamageState,
+    /// Facade: cells explicitly written or erased during an input observation.
+    painted: Option<Vec<bool>>,
 
     /// Config directly for the terminal.
     config: Config,
@@ -444,6 +446,7 @@ impl<T> Term<T> {
             scroll_region,
             event_proxy,
             damage,
+            painted: None,
             config,
             grid,
             tabs,
@@ -683,6 +686,55 @@ impl<T> Term<T> {
         if self.mode.contains(TermMode::ALT_SCREEN) { &mut self.inactive_grid } else { &mut self.grid }
     }
 
+    /// Facade: start a new cell observation, or stop tracking it. Cursor movement and visual
+    /// damage do not establish which text the application has drawn.
+    pub fn observe_paint(&mut self, enabled: bool) {
+        self.painted = enabled.then(|| vec![false; self.columns() * self.screen_lines()]);
+    }
+
+    /// Facade: forget the current frame, keeping the observation open for subsequent output.
+    pub fn discard_observed_paint(&mut self) {
+        if let Some(painted) = &mut self.painted {
+            painted.fill(false);
+        }
+    }
+
+    /// Facade: whether the application explicitly set each cell in the range on this row.
+    pub fn has_painted(&self, row: usize, columns: Range<usize>) -> bool {
+        self.painted.as_ref().is_some_and(|cells| {
+            row < self.screen_lines()
+                && !columns.is_empty()
+                && columns.end <= self.columns()
+                && cells[row * self.columns()..][columns].iter().all(|painted| *painted)
+        })
+    }
+
+    #[inline]
+    fn mark_paint(&mut self, line: Line, columns: Range<usize>, value: bool) {
+        let start = line.0 as usize * self.columns();
+        if let Some(painted) = &mut self.painted {
+            painted[start..][columns].fill(value);
+        }
+    }
+
+    fn scroll_paint(&mut self, region: &Range<Line>, lines: usize, up: bool) {
+        let columns = self.columns();
+        if let Some(painted) = &mut self.painted {
+            let start = region.start.0 as usize * columns;
+            let end = region.end.0 as usize * columns;
+            let rows = &mut painted[start..end];
+            let count = (lines * columns).min(rows.len());
+            if up {
+                rows.rotate_left(count);
+                let start = rows.len() - count;
+                rows[start..].fill(false);
+            } else {
+                rows.rotate_right(count);
+                rows[..count].fill(false);
+            }
+        }
+    }
+
     /// Resize terminal to new dimensions.
     pub fn resize<S: Dimensions>(&mut self, size: S) {
         let old_cols = self.columns();
@@ -734,6 +786,9 @@ impl<T> Term<T> {
 
         // Resize damage information.
         self.damage.resize(num_cols, num_lines);
+        if self.painted.is_some() {
+            self.observe_paint(true);
+        }
     }
 
     /// Active terminal modes.
@@ -761,6 +816,7 @@ impl<T> Term<T> {
         self.set_keyboard_mode(keyboard_mode, KeyboardModesApplyBehavior::Replace);
 
         mem::swap(&mut self.grid, &mut self.inactive_grid);
+        self.discard_observed_paint();
         self.mode ^= TermMode::ALT_SCREEN;
         self.selection = None;
         self.damage.cell_writes.fill(false);
@@ -793,6 +849,7 @@ impl<T> Term<T> {
         // Scroll between origin and bottom
         self.grid.scroll_down(&region, lines);
         self.damage.cell_writes[region.start.0 as usize..region.end.0 as usize].fill(false);
+        self.scroll_paint(&region, lines, false);
         self.mark_fully_damaged();
     }
 
@@ -813,6 +870,7 @@ impl<T> Term<T> {
 
         self.grid.scroll_up(&region, lines);
         self.damage.cell_writes[region.start.0 as usize..region.end.0 as usize].fill(false);
+        self.scroll_paint(&region, lines, true);
 
         // Scroll vi mode cursor.
         let viewport_top = Line(-(self.grid.display_offset() as i32));
@@ -834,6 +892,7 @@ impl<T> Term<T> {
 
         // Clear grid.
         self.grid.reset_region(..);
+        self.discard_observed_paint();
         self.mark_fully_damaged();
     }
 
@@ -1017,6 +1076,10 @@ impl<T> Term<T> {
     /// Write `c` to the cell at the cursor position.
     #[inline(always)]
     fn write_at_cursor(&mut self, c: char) {
+        if self.painted.is_some() {
+            let point = self.grid.cursor.point;
+            self.mark_paint(point.line, point.column.0..point.column.0 + 1, true);
+        }
         let c = self.grid.cursor.charsets[self.active_charset].map(c);
         let fg = self.grid.cursor.template.fg;
         let bg = self.grid.cursor.template.bg;
@@ -1132,6 +1195,7 @@ impl<T: EventListener> Handler for Term<T> {
         if self.mode.contains(TermMode::INSERT) && self.grid.cursor.point.column + width < columns {
             let line = self.grid.cursor.point.line;
             let col = self.grid.cursor.point.column;
+            self.mark_paint(line, col.0..columns, false);
             let row = &mut self.grid[line][..];
 
             for col in (col.0..(columns - width)).rev() {
@@ -1234,6 +1298,7 @@ impl<T: EventListener> Handler for Term<T> {
         let num_cells = self.columns() - destination;
 
         let line = cursor.point.line;
+        self.mark_paint(line, source.0..self.columns(), false);
         self.damage.wrote_cells(line.0 as usize, 0, self.columns() - 1);
 
         let row = &mut self.grid[line][..];
@@ -1565,6 +1630,7 @@ impl<T: EventListener> Handler for Term<T> {
         // Cleared cells have current background color set.
         let bg = self.grid.cursor.template.bg;
         let line = cursor.point.line;
+        self.mark_paint(line, start.0..end.0, true);
         self.damage.wrote_cells(line.0 as usize, start.0, end.0);
         let row = &mut self.grid[line];
         for cell in &mut row[start..end] {
@@ -1586,6 +1652,7 @@ impl<T: EventListener> Handler for Term<T> {
         let num_cells = columns - end;
 
         let line = cursor.point.line;
+        self.mark_paint(line, start..columns, false);
         self.damage.wrote_cells(line.0 as usize, 0, self.columns() - 1);
         let row = &mut self.grid[line][..];
 
@@ -1684,6 +1751,7 @@ impl<T: EventListener> Handler for Term<T> {
             ansi::LineClearMode::All => (Column(0), Column(self.columns())),
         };
 
+        self.mark_paint(point.line, left.0..right.0, true);
         self.damage.wrote_cells(point.line.0 as usize, left.0, right.0 - 1);
 
         let row = &mut self.grid[point.line];
@@ -1790,6 +1858,7 @@ impl<T: EventListener> Handler for Term<T> {
         let bg = self.grid.cursor.template.bg;
 
         let screen_lines = self.screen_lines();
+        let columns = self.columns();
 
         match mode {
             ansi::ClearMode::Above => {
@@ -1800,10 +1869,14 @@ impl<T: EventListener> Handler for Term<T> {
                     // Fully clear all lines before the current line.
                     self.grid.reset_region(..cursor.line);
                     self.damage.cell_writes[..cursor.line.0 as usize].fill(true);
+                    for row in 0..cursor.line.0 {
+                        self.mark_paint(Line(row), 0..columns, true);
+                    }
                 }
 
                 // Clear up to the current column in the current line.
                 let end = cmp::min(cursor.column + 1, Column(self.columns()));
+                self.mark_paint(cursor.line, 0..end.0, true);
                 for cell in &mut self.grid[cursor.line][..end] {
                     *cell = bg.into();
                 }
@@ -1814,12 +1887,16 @@ impl<T: EventListener> Handler for Term<T> {
             },
             ansi::ClearMode::Below => {
                 let cursor = self.grid.cursor.point;
+                self.mark_paint(cursor.line, cursor.column.0..columns, true);
                 for cell in &mut self.grid[cursor.line][cursor.column..] {
                     *cell = bg.into();
                 }
 
                 if (cursor.line.0 as usize) < screen_lines - 1 {
                     self.grid.reset_region((cursor.line + 1)..);
+                    for row in cursor.line.0 + 1..screen_lines as i32 {
+                        self.mark_paint(Line(row), 0..columns, true);
+                    }
                 }
                 self.damage.cell_writes[cursor.line.0 as usize..].fill(true);
 
@@ -1827,6 +1904,9 @@ impl<T: EventListener> Handler for Term<T> {
                 self.selection = self.selection.take().filter(|s| !s.intersects_range(range));
             },
             ansi::ClearMode::All => {
+                if let Some(painted) = &mut self.painted {
+                    painted.fill(true);
+                }
                 if self.mode.contains(TermMode::ALT_SCREEN) {
                     self.grid.reset_region(..);
                 } else {
@@ -1882,6 +1962,7 @@ impl<T: EventListener> Handler for Term<T> {
         self.cursor_style = None;
         self.grid.reset();
         self.inactive_grid.reset();
+        self.discard_observed_paint();
         self.scroll_region = Line(0)..Line(self.screen_lines() as i32);
         self.tabs = TabStops::new(self.columns());
         self.title_stack = Vec::new();

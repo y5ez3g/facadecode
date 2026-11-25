@@ -31,10 +31,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use facade_base::api_v1::keeper::HeldAgent;
-use facade_base::process::{EndReason, ProcessExit, ProcessState};
+use facade_base::process::{EndReason, ProcessExit, ProcessIdentity, ProcessState};
 use facade_base::terminal::PtyMaster;
 use facade_base::{
-    model::agent::{ManagedAgent, ManagedAgentState, ToolsState},
+    model::agent::{AgentRef, ManagedAgent, ManagedAgentState, ToolsState},
     model::message::{DeliveryFailure, Message, TextWritten},
 };
 use tokio::sync::{Semaphore, mpsc, watch};
@@ -47,7 +47,7 @@ use crate::agent::{
 use crate::lifecycle::Work;
 use crate::messages::{self, Outcome, OwedResult, PromptWatch, Recipient, Settled, TakeUp};
 use crate::operations::exit_sink;
-use crate::store::{AgentRecord, KeptMessage};
+use crate::store::{AgentRecord, DraftProof, KeptMessage, KeptPaste};
 use crate::{Daemon, PASTE_SEPARATOR, Sender, blocking_in_place};
 
 /// How many agents recover at once: bounds the keeper's requests and the memory screen replays
@@ -98,7 +98,8 @@ type Delivering = (Message, watch::Receiver<Option<Settled>>);
 /// those still pending, and the earliest of their deadlines.
 struct BegunPaste {
     typings: Vec<MessageTyping>,
-    previous_text: String,
+    previous_text: Option<String>,
+    draft: Option<DraftProof>,
     pending: Vec<Delivering>,
     deadline: Instant,
 }
@@ -122,7 +123,7 @@ impl Daemon {
         records: Vec<AgentRecord>,
         agent_ids: &HashSet<String>,
         progress: &RecoveryProgress,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Vec<(ProcessExit, AgentHandle)>> {
         let mut held: HashMap<String, HeldAgent> = held
             .into_iter()
             .map(|run| (run.agent_id.clone(), run))
@@ -164,18 +165,21 @@ impl Daemon {
         while let Some(agent) = recoveries.join_next().await {
             recovered.push(agent??);
         }
-        self.list_recovered(recovered);
-        Ok(())
+        Ok(self.list_recovered(recovered))
     }
 
     /// Lists the recovered agents at once, then starts what each still needs.
-    fn list_recovered(self: &Arc<Self>, recovered: Vec<Recovered>) {
+    fn list_recovered(
+        self: &Arc<Self>,
+        recovered: Vec<Recovered>,
+    ) -> Vec<(ProcessExit, AgentHandle)> {
         {
             let mut agents = self.agents.lock().unwrap();
             for agent in &recovered {
                 agents.insert(agent.handle.id().to_owned(), agent.handle.clone());
             }
         }
+        let mut exits = Vec::new();
         for Recovered {
             handle,
             then,
@@ -196,7 +200,7 @@ impl Daemon {
             }
             match then {
                 Then::Nothing => {}
-                Then::SaveExit(exit) => self.settle_exit(id, exit, handle),
+                Then::SaveExit(exit) => exits.push((exit, handle)),
                 Then::ReleaseWhenSettled => {
                     let (daemon, work) = (self.clone(), self.lifecycle.begin(Work::ExitCommit));
                     tokio::spawn(async move {
@@ -208,6 +212,7 @@ impl Daemon {
                 }
             }
         }
+        exits
     }
 
     /// Brings one agent back: commits a resume the daemon before left uncommitted, takes back its
@@ -229,6 +234,28 @@ impl Daemon {
         } else {
             false
         };
+        let stopped_by = record
+            .creator
+            .as_ref()
+            .filter(|_| {
+                record.exit.is_none()
+                    && (record.creator_stop
+                        || record.run_birth.as_ref().is_some_and(|birth| {
+                            let process = ProcessIdentity {
+                                pid: record.pid,
+                                birth: birth.clone(),
+                            };
+                            self.runs.creator_stopped(&id, Some(&process))
+                        }))
+            })
+            .map(|creator| AgentRef {
+                agent_id: creator.clone(),
+                machine_id: record
+                    .creator_machine_id
+                    .clone()
+                    .unwrap_or_else(|| self.machine_id.clone()),
+            });
+        let creator_stopped = stopped_by.is_some();
         let master = match &run {
             Some(run) => Some(self.runs.take_back(run).await.map_err(|error| {
                 anyhow::anyhow!("could not take back the terminal of {id} from the keeper: {error}")
@@ -251,9 +278,10 @@ impl Daemon {
                 record.rule.as_deref(),
                 cwd,
                 exit_sink(tx.clone()),
+                stopped_by,
             )?;
             if process == ProcessState::Running {
-                let identity = facade_base::process::ProcessIdentity {
+                let identity = ProcessIdentity {
                     pid: run.pid,
                     birth: run.birth.clone(),
                 };
@@ -311,7 +339,8 @@ impl Daemon {
             yolo: record.yolo,
             session: record.session,
         };
-        let state = self.kept_state(&id, &info, run.as_ref()).await?;
+        let mut state = self.kept_state(&id, &info, run.as_ref()).await?;
+        state.kept.stopped |= creator_stopped;
         let launch_command = blocking_in_place(|| self.store.launch_command(&id))?;
         let actor = ActorStart {
             colors: facade_screen::TerminalColors::default(),
@@ -323,10 +352,11 @@ impl Daemon {
             captures: follows_session,
             launch_command,
             deliveries: self.messages.delivery_handle(),
-            observed_loss: matches!(then, Then::SaveExit(_)),
+            observed_loss: matches!(then, Then::SaveExit(_)) && !creator_stopped,
             state,
         };
-        let handle = agent::spawn(actor, rx, tx, self.changes.clone())?;
+        let handle =
+            agent::spawn(actor, rx, tx, self.changes.clone())?.with_start_prompt(record.prompt);
         steps.fetch_add(1, Ordering::Relaxed);
         Ok(Recovered {
             handle,
@@ -336,23 +366,29 @@ impl Daemon {
     }
 
     /// A resume the daemon before started and never committed: the keeper's run is the agent's
-    /// now. Commits its process with the last committed YOLO setting.
+    /// now. Commits its full identity with the last committed YOLO setting.
     fn commit_uncommitted_resume(
         &self,
         record: &mut AgentRecord,
         run: &HeldAgent,
     ) -> anyhow::Result<()> {
         let id = &record.agent_id;
+        let process = ProcessIdentity {
+            pid: run.pid,
+            birth: run.birth.clone(),
+        };
         blocking_in_place(|| {
             self.store
-                .record_restart(id, run.pid, record.yolo, None, None, None)
+                .record_restart(id, &process, record.yolo, None, None, None)
         })?;
         log(
             "info",
             &format!("committed the resumed run of {id}, process {}", run.pid),
         );
         record.pid = run.pid;
+        record.run_birth = Some(process.birth);
         record.exit = None;
+        record.creator_stop = false;
         Ok(())
     }
 
@@ -459,14 +495,38 @@ impl Daemon {
                 first_prompts.insert(id, prompt);
             }
         }
+        for (recipient, paste) in self.messages.settled_cleanups()? {
+            if self
+                .get_agent(&recipient)
+                .is_some_and(|agent| !agent.is_guest() && agent.exit().borrow().is_none())
+            {
+                typists
+                    .entry(recipient)
+                    .or_default()
+                    .pastes
+                    .entry(paste)
+                    .or_insert((started, Vec::new()));
+            }
+        }
         for agent in self.agents() {
             self.watch_creator(&agent, first_prompts.remove(agent.id()))
                 .await;
         }
+        let mut restoring = JoinSet::new();
         for (id, work) in typists {
             let agent = self.get_agent(&id).expect("a running recipient");
             let begun = self.begun_paste(&id, work.pastes)?;
-            tokio::spawn(self.clone().feed_typist(agent, begun, work.messages));
+            let daemon = self.clone();
+            restoring.spawn(async move {
+                if let Some(begun) = begun {
+                    daemon.finish_paste(&agent, begun).await;
+                }
+                tokio::spawn(daemon.feed_typist(agent, work.messages));
+            });
+        }
+        // An actor must have the evidence it revokes before it can accept a client's keys.
+        while let Some(restored) = restoring.join_next().await {
+            restored?;
         }
         Ok(())
     }
@@ -568,9 +628,7 @@ impl Daemon {
                 .values()
                 .flat_map(|(_, pending)| pending.iter().map(|(m, _)| m))
         };
-        let ids: Vec<String> = pending()
-            .map(|message| format!("#{}", message.message_id))
-            .collect();
+        let ids: Vec<String> = pastes.keys().map(|number| format!("#m{number}")).collect();
         log(
             "warn",
             &format!(
@@ -585,12 +643,25 @@ impl Daemon {
             return Ok(None);
         }
         let (paste, (deadline, pending)) = pastes.into_iter().next().expect("one paste");
-        let messages = self.messages.paste_messages(paste)?;
-        let previous_text = messages
-            .iter()
-            .map(|message| self.previous_message_text(message))
-            .collect::<Vec<_>>()
-            .join(PASTE_SEPARATOR);
+        // An already expired paste enters the typist at its deadline, with no time to submit.
+        let deadline = deadline.max(Instant::now());
+        let KeptPaste {
+            messages,
+            current_header,
+            draft,
+        } = self.messages.paste_messages(paste)?;
+        if messages.is_empty()
+            || (pending.is_empty() && draft.and_then(|proof| proof.cleanup).is_none())
+        {
+            return Ok(None);
+        }
+        let previous_text = (!current_header).then(|| {
+            messages
+                .iter()
+                .map(|message| self.previous_message_text(message))
+                .collect::<Vec<_>>()
+                .join(PASTE_SEPARATOR)
+        });
         let typings = messages
             .iter()
             .map(|message| {
@@ -612,22 +683,19 @@ impl Daemon {
         Ok(Some(BegunPaste {
             typings,
             previous_text,
+            draft,
             pending,
             deadline,
         }))
     }
 
-    /// Feeds `agent`'s typist what the restart took up for it: the begun paste, then its messages.
-    /// Each waits for room in the agent's input until its deadline, as a sent message does.
+    /// Feeds `agent`'s typist the messages that still need pasting. Each waits for room in the
+    /// agent's input until its deadline, as a sent message does.
     async fn feed_typist(
         self: Arc<Self>,
         agent: AgentHandle,
-        begun: Option<BegunPaste>,
         messages: Vec<(Instant, Delivering, bool)>,
     ) {
-        if let Some(begun) = begun {
-            self.finish_paste(&agent, begun).await;
-        }
         for (deadline, (message, settled), first_prompt) in messages {
             let handed = if first_prompt {
                 let typing = MessageTyping::start_prompt(
@@ -653,6 +721,7 @@ impl Daemon {
         let BegunPaste {
             typings,
             previous_text,
+            draft,
             pending,
             deadline,
         } = begun;
@@ -661,12 +730,13 @@ impl Daemon {
             .map(|(message, _)| messages::number(message))
             .collect();
         let handed = tokio::time::timeout_at(
-            deadline,
+            deadline.max(Instant::now()) + messages::RESPONSE_GRACE,
             self.hand_input(
                 agent,
                 Input::BegunPaste {
                     messages: typings,
                     previous_text,
+                    draft,
                 },
                 crate::delivery::InputWait::Always,
             ),

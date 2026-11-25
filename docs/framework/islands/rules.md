@@ -258,8 +258,17 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - Colored text alone where the input starts could be a hint or a draft. Claude can also draw hints without styling. For automatic delivery to a fresh input that has received no external edits, the reader marks a single unstyled row at the input start as `unknown` and unsure. Ordinary input reads identify that writing as a draft. A dim hint, or a mode placeholder shown above its footer, counts as empty only while the cursor is where the input starts.
   - A probe is judged from two readings, before its key and after, never from the time between them: whether its space went in by the cursor and the text, what the row was by the text alone, and whether Backspace put the box back by every cell and the cursor.
   - The evidence names the rows, never the draft's text. The draft's text leaves `read_draft` only as its second value and is never saved.
-  - A message's own draft is its full text or the CLI's placeholder for a paste of that size. Whitespace is ignored because wrapping and indentation draw it differently. A draft scrolled out above only has to show the text's end.
+  - The shape check compares the full text or the CLI's placeholder for a paste of that size.
+    Literal comparisons match canonically equivalent Unicode text, including a cell whose base
+    character carries combining marks. Whitespace is ignored because wrapping and indentation
+    draw it differently. A draft scrolled out above only has to show the text's end. The typist
+    uses the shape alongside its evidence of draft ownership.
   - `paste.bracketed` says the CLI enables bracketed paste on all screens where Facade can deliver a message.
+  - `paste.backspace_unit` records how the editor deletes literal text. It accepts `grapheme`,
+    `legacy_grapheme` and `code_point`. `paste.backspace_single_code_points` records any characters
+    the editor deletes individually at the end. If no unit is recorded, one key per grapheme
+    is safe. After confirmed keys, Rules can compare the observed box with literal remainders of
+    the original paste and its canonical spellings under either deletion unit.
   - OpenCode's `[Pasted ~N lines]` counts the lines after trimming whitespace from both ends of the paste.
     Claude Code's `[Pasted text #N]` matches a paste with no line break.
     Antigravity's `[Pasted text #N M chars]` counts Unicode scalar values, including line breaks.
@@ -268,7 +277,11 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
 - **Never does:** decide when to type, write terminal input, read CLI reports, hooks or session files, or keep state between readings.
 - **Interface** (re-exported from `facade_rules`):
   - `read_box(&InputRule, &ScreenView) -> BoxReading` gives the reading, the draft's text,
-    the input's first row and whether the reading is unsure. The `InputLine` includes the
+    its cursor within the draft rows when located, the input's first row and whether the
+    reading is unsure. `BoxReading::logical_draft(paste)` joins display wraps and maps the caret
+    to an offset in the logical text, including when the cells and paste have equivalent Unicode
+    spellings. Final spaces or tabs in the paste are presentation padding for this comparison.
+    The `InputLine` includes the
     input's starting column and cursor, its cells and styling, and whether the box has more rows.
     `BoxReading::draft_hidden() -> Option<HiddenRows>` gives the draft's rows out of sight for
     telling a message's own draft: the marked ones of `info.hidden`, or one row above where the
@@ -278,6 +291,9 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - `read_box_for_typing(&InputRule, &ScreenView, bool) -> BoxReading` considers an unstyled
     row ambiguous when the daemon reports untouched input and the CLI's rule allows a probe.
     Inspection reports the ambiguity, and delivery can probe the row.
+  - `read_box_after_paint(&InputRule, &Screen) -> BoxReading` requires the cells making up the
+    visible draft, or the start of a confirmed empty input, to have been painted since the actor's
+    last write boundary.
   - `read_draft(&InputRule, &ScreenView) -> (InputInfo, Option<String>)` gives the input state,
     evidence, mechanism and scrolled rows along with the draft's text. `read_input` gives
     `InputInfo` alone. The actor uses ordinary readings for readiness, state and
@@ -286,7 +302,9 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - For the typist:
     - `PasteRule::brackets_delivery() -> bool` selects whether to wrap automatic delivery in paste brackets.
     - `is_own_draft(&PasteRule, draft, text, hidden) -> bool` matches the message in the input box before submission.
-    - `is_legacy_split_paste(&PasteRule, draft, prefix, pasted) -> bool` matches an older daemon's visible typed prefix and the paste placeholder during recovery.
+    - `is_own_recovered_draft(&PasteRule, draft, text, hidden) -> bool` also recognizes historical
+      layouts declared by `paste.legacy_split_prefixes`. The rule verifies the visible typed prefix
+      and the placeholder for the remaining paste.
     - `settle_time(&PasteRule, text) -> Duration` gives the base wait plus the wait for each line.
     - `PasteRule::submit_clear_time() -> Option<Duration>` gives the hold limit once the submission key
       reaches the terminal. Set `submit_clear_ms` to the p99.9 time from key write to a complete empty

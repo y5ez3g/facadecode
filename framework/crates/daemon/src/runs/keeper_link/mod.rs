@@ -249,6 +249,7 @@ impl KeeperLink {
         id: &str,
         run: u64,
         caller: Option<AgentRef>,
+        by_creator: bool,
     ) -> Result<bool, ErrorBody> {
         let keeper = self.wait_ready(false).await.ok_or_else(|| {
             ErrorBody::new(
@@ -258,18 +259,27 @@ impl KeeperLink {
                 ),
             )
         })?;
-        let Some(was_stopping) = self.runs.request_stop(id, run)? else {
+        let Some((was_stopping, process)) = self.runs.request_stop(id, run)? else {
             return Ok(false);
+        };
+        let creator_stop = (!was_stopping && by_creator).then_some(process);
+        let (receipt, save_creator_stop) = if keeper.hello.stop_receipts {
+            (creator_stop, None)
+        } else {
+            (None, creator_stop)
         };
         let stop = StopAccepted {
             id: id.into(),
             run,
             caller: if was_stopping { None } else { caller },
+            save_creator_stop,
         };
+        crate::gate_for_test("before-keeper-stop");
         let result = keeper
             .stop(
                 &StopArgs {
                     agent_id: id.into(),
+                    creator_stop: receipt,
                 },
                 Some(stop),
             )
@@ -285,6 +295,24 @@ impl KeeperLink {
 
     pub(crate) fn confirm_stop(&self, stop: StopAccepted) {
         self.runs.confirm_stop(stop);
+    }
+
+    pub(crate) fn creator_stopped(&self, id: &str, recovered: Option<&ProcessIdentity>) -> bool {
+        recovered
+            .cloned()
+            .or_else(|| self.runs.identity(id))
+            .is_some_and(|process| {
+                crate::blocking_in_place(|| {
+                    facade_base::stop_receipt::exists(&self.framework, id, &process)
+                })
+                .unwrap_or_else(|error| {
+                    crate::log(
+                        "warn",
+                        &format!("could not read the creator stop of {id}: {error}"),
+                    );
+                    false
+                })
+            })
     }
 
     /// Records the first exit and invokes its sink after releasing registry and pending locks.
@@ -359,6 +387,7 @@ impl KeeperLink {
         exit: Option<ProcessExit>,
         number: u64,
         exits: ExitSink,
+        stopped_by: Option<AgentRef>,
     ) -> std::io::Result<()> {
         let copy = master.try_clone()?;
         self.runs.recovered(
@@ -370,7 +399,7 @@ impl KeeperLink {
                     birth: held.birth.clone(),
                 },
                 exit,
-                stop: StopState::from_holder(held.stopping),
+                stop: StopState::from_holder(held.stopping, stopped_by),
                 role: RunRole::Agent,
                 committed: true,
                 installed: true,
@@ -411,7 +440,7 @@ impl KeeperLink {
                             birth: held.birth.clone(),
                         },
                         exit: None,
-                        stop: StopState::from_holder(held.stopping),
+                        stop: StopState::from_holder(held.stopping, None),
                         role: RunRole::Unreadable,
                         committed: true,
                         installed: false,
@@ -571,6 +600,7 @@ impl KeeperLink {
             .stop(
                 &StopArgs {
                     agent_id: id.into(),
+                    creator_stop: None,
                 },
                 None,
             )
@@ -638,6 +668,7 @@ impl KeeperLink {
                 .stop(
                     &StopArgs {
                         agent_id: stop.id.clone(),
+                        creator_stop: None,
                     },
                     Some(stop),
                 )

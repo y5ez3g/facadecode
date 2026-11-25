@@ -65,6 +65,8 @@ pub(crate) struct StopAccepted {
     pub(crate) id: String,
     pub(crate) run: u64,
     pub(crate) caller: Option<AgentRef>,
+    /// An older Keeper acknowledges its stop on the link only. Save that positive evidence.
+    pub(crate) save_creator_stop: Option<ProcessIdentity>,
 }
 
 /// What the runs tell the daemon.
@@ -313,12 +315,17 @@ impl Runs {
         id: &str,
         run: u64,
         caller: Option<AgentRef>,
+        by_creator: bool,
     ) -> Result<bool, ErrorBody> {
-        self.link.stop(id, run, caller).await
+        self.link.stop(id, run, caller, by_creator).await
     }
 
     pub(crate) fn confirm_stop(&self, stop: StopAccepted) {
         self.link.confirm_stop(stop);
+    }
+
+    pub(crate) fn creator_stopped(&self, id: &str, recovered: Option<&ProcessIdentity>) -> bool {
+        self.link.creator_stopped(id, recovered)
     }
 
     /// Records a run's first exit and hands it to the run's [`ExitSink`] once no lock is held.
@@ -497,10 +504,11 @@ impl Runs {
         rule: Option<&str>,
         cwd: &Path,
         exits: ExitSink,
+        stopped_by: Option<AgentRef>,
     ) -> std::io::Result<()> {
         let running = exit.is_none();
         self.link
-            .register_recovered(held, master, exit, number, exits)?;
+            .register_recovered(held, master, exit, number, exits, stopped_by)?;
         if running {
             self.preparation.plugin_used(&held.agent_id, rule, cwd);
         }

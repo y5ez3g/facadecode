@@ -18,6 +18,7 @@ runs as `facade keeper`.
 - **The daemon's link**: the one proved connection on the keeper's socket.
 - **Files:**
   - `<home>/framework/keeper.lock`;
+  - `<home>/framework/runs/<agent>/creator-stop`, the accepted process identity for a creator stop.
   - the socket `keeper-<key>.sock` in the socket folder, at the path
     `facade_base::paths::keeper_socket` gives, removed when the keeper exits; on Windows the named
     pipe at that path, `\\.\pipe\facade-framework-keeper-<key>`, which goes with the process.
@@ -181,10 +182,13 @@ its terminal copy when the operation calls for one. When an input line exceeds
 - **`agent.start`:** opens the PTY (`terminal.rs`), spawns the CLI and reads its birth. A CLI
   whose birth cannot be read is killed and the start fails.
 - **`agent.stop`:**
-  1. SIGHUP to the group, then SIGKILL after `STOP_TIMEOUT` (3 seconds) or as soon as the CLI ends,
+  1. A caller that uses `creator_stop` supplies the held process identity. The Keeper persists the
+     acceptance of that first stop before it signals the CLI. The daemon retires it with the run
+     folders on resume or removal.
+  2. SIGHUP to the group, then SIGKILL after `STOP_TIMEOUT` (3 seconds) or as soon as the CLI ends,
      whichever comes first.
-  2. A repeated stop keeps the first deadline.
-  3. A SIGKILL that fails is tried again after 100 ms.
+  3. A repeated stop keeps the first deadline.
+  4. A SIGKILL that fails is tried again after 100 ms.
 - **`agent.sync`:** checks the CLI's PID and birth. It gives a copy of the master to whichever side
   lacks it, closes a redundant incoming copy, and returns `not_found` when neither side has one.
   When the daemon gives the keeper a terminal for a CLI that already ended, the keeper acknowledges

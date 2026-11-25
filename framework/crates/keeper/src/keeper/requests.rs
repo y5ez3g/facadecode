@@ -119,6 +119,7 @@ impl Keeper {
             api_version,
             build: facade_base::build_id(),
             agents: self.clis.values().map(Cli::as_held).collect(),
+            stop_receipts: true,
         })
     }
 
@@ -140,7 +141,9 @@ impl Keeper {
             .clis
             .get_mut(&args.agent_id)
             .ok_or_else(|| not_held(&args.agent_id))?;
+        runtime::accept_creator_stop(&self.framework, &args, cli.process(), cli.is_stopping())?;
         cli.begin_stop(Instant::now());
+        facade_base::service::gate_for_test("keeper-stop-accepted");
         Ok(Handled::nothing())
     }
 

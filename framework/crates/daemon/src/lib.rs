@@ -572,12 +572,15 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         .iter()
         .filter_map(|record| record.prompt)
         .collect::<HashSet<_>>();
-    daemon
+    let recovered_exits = daemon
         .recover(held_agents, opened.records, &opened.agent_ids, &progress)
         .await?;
-    daemon.expire_agents(&kept_since(SystemTime::now())).await;
     daemon.restore_guests()?;
     daemon.take_up_messages(&recovered_prompts).await?;
+    for (exit, agent) in recovered_exits {
+        daemon.settle_exit(agent.id().to_string(), exit, agent);
+    }
+    daemon.expire_agents(&kept_since(SystemTime::now())).await;
     // A plugin whose runs ended while no daemon ran goes now.
     let users = daemon
         .agents()
@@ -635,7 +638,15 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
 async fn follow_runs(daemon: Arc<Daemon>, mut events: mpsc::UnboundedReceiver<RunEvent>) {
     while let Some(event) = events.recv().await {
         match event {
-            RunEvent::StopAccepted(stop) => daemon.runs.confirm_stop(stop),
+            RunEvent::StopAccepted(stop) => {
+                if let Some(process) = &stop.save_creator_stop
+                    && let Err(error) =
+                        blocking_in_place(|| daemon.store.record_creator_stop(&stop.id, process))
+                {
+                    log("warn", &format!("{error:#}"));
+                }
+                daemon.runs.confirm_stop(stop);
+            }
             RunEvent::Exited { id, exit } => daemon.record_exit(&id, exit),
             RunEvent::Session {
                 id,

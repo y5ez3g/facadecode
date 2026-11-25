@@ -438,6 +438,14 @@ impl LoggedScreen {
             Box::new(screen)
         })
     }
+
+    pub(crate) fn observe_paint(&mut self, enabled: bool) {
+        if enabled {
+            self.mutable_screen().observe_paint(true);
+        } else if let Some(screen) = &mut self.screen {
+            screen.observe_paint(false);
+        }
+    }
     pub(crate) fn title(&self) -> Option<&str> {
         self.title.as_deref()
     }

@@ -17,6 +17,7 @@
 	},
 	"paste": {
 		"bracketed": true,
+		"backspace_unit": "grapheme",
 		"enter_ms": 250,
 		"submit_clear_ms": 78,
 		"placeholders": [

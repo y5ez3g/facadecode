@@ -17,8 +17,10 @@
 	},
 	"paste": {
 		"bracketed": true,
+		"backspace_unit": "grapheme",
 		"enter_ms": 80,
 		"submit_clear_ms": 582,
+		"legacy_split_prefixes": ["📨 Message from ", "📨 Message "],
 		"placeholders": [
 			{ "pattern": "^\\[Pastedtext#\\d+\\+(\\d+)lines?\\]$", "count": "lines_after_first" },
 			{ "pattern": "^\\[Pastedtext#\\d+\\]$", "count": "single_line" }

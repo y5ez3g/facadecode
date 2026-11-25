@@ -1739,7 +1739,11 @@ impl Daemon {
         deadline: tokio::time::Instant,
         mut settled: watch::Receiver<Option<Settled>>,
     ) -> Option<Settled> {
-        gate_for_test("before-result-delivery");
+        gate_for_test(if message.result.is_some() {
+            "before-result-delivery"
+        } else {
+            "before-end-notice-delivery"
+        });
         let to = self.get_agent(&message.to)?;
         if to.is_guest() || self.hand_to_typist(&to, &message, deadline).await {
             self.messages

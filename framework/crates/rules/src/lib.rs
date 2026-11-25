@@ -36,8 +36,9 @@ pub use compose::{
 };
 pub use formats::shell_word;
 pub use input::{
-    BoxReading, InputLine, LineCell, ProbeVerdict, is_legacy_split_paste, is_own_draft,
-    is_same_draft, read_box, read_box_for_typing, read_draft, read_input, restored, settle_time,
+    BoxReading, InputLine, LineCell, ProbeVerdict, canonical_text, could_be_paste_prefix,
+    is_legacy_split_paste, is_own_draft, is_own_recovered_draft, is_same_draft, read_box,
+    read_box_after_paint, read_box_for_typing, read_draft, read_input, restored, settle_time,
     shape_of, shows_whole, space_taken, verdict_of, with_paste_text,
 };
 pub use sessions::{
@@ -247,6 +248,23 @@ pub struct PasteRule {
     /// What the input shows in place of a long paste.
     #[serde(default)]
     pub placeholders: Vec<PastePlaceholder>,
+    /// Prefixes a previous build typed before it pasted the rest of a delivery.
+    #[serde(default)]
+    legacy_split_prefixes: Vec<String>,
+    /// The editor's deletion unit for a literal draft, where it has been established.
+    #[serde(default)]
+    backspace_unit: Option<BackspaceUnit>,
+    /// Characters the editor deletes individually when they end a draft.
+    #[serde(default)]
+    backspace_single_code_points: Option<Pattern>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum BackspaceUnit {
+    CodePoint,
+    Grapheme,
+    LegacyGrapheme,
 }
 
 /// What the input shows in place of a long paste, such as `[Pasted text #1 +3 lines]`.

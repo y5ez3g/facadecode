@@ -114,6 +114,7 @@ pub struct Screen {
     modes: KeptModes,
     tab_stops: TabStops,
     scrollback: Scrollback,
+    paint_waits_for_frame: bool,
 }
 
 impl Screen {
@@ -132,6 +133,7 @@ impl Screen {
             earlier_frame: false,
             splitter: Splitter::default(),
             modes: KeptModes::default(),
+            paint_waits_for_frame: false,
             tab_stops: TabStops::new(size.cols),
             scrollback,
         }
@@ -234,7 +236,7 @@ impl Screen {
             self.terminal.title.as_deref().is_some_and(title_has_text),
             &mut self.title_negotiation,
             self.status_glyph.as_deref(),
-            observe.is_some(),
+            observe.is_some() || self.paint_waits_for_frame,
         );
         let mut earlier_through = if earlier_sync {
             filtered.sync_ended_at
@@ -261,7 +263,9 @@ impl Screen {
             }
             left_alternate |= on_alternate && !self.on_alternate_screen();
             match mark {
+                Mark::CarriedUnitEnd => self.finish_preexisting_frame(true),
                 Mark::EndSync => {
+                    self.finish_preexisting_frame(true);
                     if !self.is_drawing()
                         && let Some(observe) = &mut observe
                     {
@@ -373,7 +377,12 @@ impl Screen {
     pub fn end_synchronized_update(&mut self) -> ParsedOutput {
         self.terminal.reset_damage();
         let on_alternate = self.on_alternate_screen();
-        self.terminal.end_update();
+        if self.synchronized_update_deadline().is_some() {
+            self.terminal.end_update();
+            // An update that ended at its timeout can still be shown to viewers.
+            self.terminal.term.discard_observed_paint();
+            self.finish_preexisting_frame(!self.has_unfinished_unit());
+        }
         let requests = self.terminal.take_requests();
         ParsedOutput {
             query_replies: requests.replies,
@@ -401,13 +410,40 @@ impl Screen {
     /// half-written and no synchronized update is open. The checkpoint's redraw followed by the
     /// later output then rebuilds the screen.
     pub fn at_clean_point(&self) -> bool {
-        let open_update = self.synchronized_update_deadline().is_some();
-        !(self.on_alternate_screen() || self.has_unfinished_unit() || open_update)
+        !self.on_alternate_screen() && self.output_frame_complete()
+    }
+
+    fn output_frame_complete(&self) -> bool {
+        !self.has_unfinished_unit() && self.synchronized_update_deadline().is_none()
     }
 
     /// Whether output has stopped inside a character, escape sequence or string.
     pub fn has_unfinished_unit(&self) -> bool {
         self.splitter.is_inside_unit()
+    }
+
+    /// Starts or stops tracking which cells the CLI paints from this point on. A synchronized
+    /// frame or control sequence open at the boundary cannot supply the next observation.
+    pub fn observe_paint(&mut self, enabled: bool) {
+        self.paint_waits_for_frame = enabled && !self.output_frame_complete();
+        self.terminal.term.observe_paint(enabled);
+    }
+
+    fn finish_preexisting_frame(&mut self, between_units: bool) {
+        if self.paint_waits_for_frame
+            && between_units
+            && self.synchronized_update_deadline().is_none()
+        {
+            self.terminal.term.discard_observed_paint();
+            self.paint_waits_for_frame = false;
+        }
+    }
+
+    /// Whether the CLI painted the entire range since the boundary, in the visible frame.
+    pub fn has_painted(&self, row: usize, columns: std::ops::Range<usize>) -> bool {
+        !self.paint_waits_for_frame
+            && self.output_frame_complete()
+            && self.terminal.term.has_painted(row, columns)
     }
 
     /// Whether pasted text must be bracketed.

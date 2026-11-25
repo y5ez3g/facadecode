@@ -41,13 +41,13 @@ mod windows;
 
 pub(crate) use guests::{GuestRecord, GuestTable};
 pub(crate) use messages::{
-    CommandRequest, Gone, InboxPage, Kept, KeptMessage, MessageTable, RequestId, SendRoute,
-    SendRouteBinding, Settlement,
+    CleanupProgress, CommandRequest, DraftDigest, DraftProof, Gone, InboxPage, Kept, KeptMessage,
+    KeptPaste, MessageTable, RequestId, SendRoute, SendRouteBinding, Settlement,
 };
 #[cfg(test)]
 use windows::WindowTable;
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 const FILE_NAME: &str = "facade.db";
 
 const SCHEMA: &str = "
@@ -108,8 +108,10 @@ pub(crate) struct AgentRecord {
     pub(crate) cli: String,
     pub(crate) cwd: String,
     pub(crate) pid: u32,
+    pub(crate) run_birth: Option<String>,
     pub(crate) created_at: String,
     pub(crate) exit: Option<ProcessExit>,
+    pub(crate) creator_stop: bool,
     /// The CLI rule the agent was started by, by name: proof that its start used that rule, which
     /// `cli` alone is not.
     pub(crate) rule: Option<String>,
@@ -462,37 +464,69 @@ impl Store {
         )
     }
 
-    /// Commits an agent's exit. A deleted record stays deleted: a late exit never brings a removed
-    /// agent back. Blocks.
-    pub(crate) fn record_exit(&self, agent_id: &str, exit: &ProcessExit) -> anyhow::Result<()> {
+    /// Commits the first exit and any notice for a local creator together. Blocks.
+    pub(crate) fn record_exit(
+        &self,
+        agent_id: &str,
+        exit: &ProcessExit,
+        notice: Option<&Message>,
+    ) -> anyhow::Result<(bool, Option<Message>)> {
         #[cfg(debug_assertions)]
         if failing_for_test("fail-exit-commit") {
             facade_base::service::mark_for_test("failed-exit-commit");
             anyhow::bail!("the exit store is temporarily unavailable");
         }
-        self.with(
+        self.transaction(
             || format!("save the exit of {agent_id}"),
-            |connection| {
-                connection.execute(
-                    "UPDATE agents SET exit_code = ?1, exit_signal = ?2, exit_at = ?3, \
-                     exit_reason = ?4, run_auth_birth = NULL, run_credential_digest = NULL \
-                     WHERE agent_id = ?5",
-                    params![exit.code, exit.signal, exit.at, reason_name(exit), agent_id],
-                )
+            |transaction| {
+                if !write_exit(transaction, agent_id, None, exit)? {
+                    return Ok((false, None));
+                }
+                let notice = match notice {
+                    Some(notice) if messages::recipient_there(transaction, &notice.to)? => {
+                        Some(messages::insert(transaction, notice)?)
+                    }
+                    _ => None,
+                };
+                Ok((true, notice))
             },
-        )?;
-        Ok(())
+        )
     }
 
-    /// Commits a resumed run in one statement. A missing `started_at` means an uncommitted
-    /// keeper run was recovered; an unmarked v2 row is still eligible for legacy adoption.
+    /// Keeps a creator stop acknowledged by an older Keeper for this process.
+    pub(crate) fn record_creator_stop(
+        &self,
+        agent_id: &str,
+        process: &ProcessIdentity,
+    ) -> anyhow::Result<()> {
+        self.with(
+            || format!("save the creator's acknowledged stop for {agent_id}"),
+            |connection| {
+                connection.execute(
+                    "UPDATE agents SET creator_stop = ?1 WHERE agent_id = ?2 AND pid = ?3 \
+                     AND run_auth_birth = ?4 AND exit_at IS NULL",
+                    params![
+                        stop_key(process.pid, &process.birth),
+                        agent_id,
+                        process.pid,
+                        process.birth
+                    ],
+                )?;
+                Ok(())
+            },
+        )
+    }
+
+    /// Commits the resumed process identity independently of its relay credential. A missing
+    /// `started_at` means an uncommitted keeper run was recovered; an unmarked v2 row is still
+    /// eligible for legacy adoption.
     pub(crate) fn record_restart(
         &self,
         agent_id: &str,
-        pid: u32,
+        process: &ProcessIdentity,
         yolo: bool,
         started_at: Option<&str>,
-        relay: Option<&RelayRunRecord>,
+        credential_digest: Option<&[u8; 32]>,
         command: Option<&str>,
     ) -> anyhow::Result<()> {
         #[cfg(debug_assertions)]
@@ -504,7 +538,7 @@ impl Store {
             |connection| {
                 connection.execute(
                     "UPDATE agents SET pid = ?2, yolo = ?3, exit_code = NULL, \
-                     exit_signal = NULL, exit_at = NULL, exit_reason = NULL, \
+                     exit_signal = NULL, exit_at = NULL, exit_reason = NULL, creator_stop = NULL, \
                      started_at = COALESCE(?4, started_at), \
                      run_auth_version = CASE WHEN ?4 IS NULL AND run_auth_version IS NULL \
                          THEN NULL ELSE 3 END, run_auth_birth = ?5, run_credential_digest = ?6, \
@@ -512,13 +546,11 @@ impl Store {
                      WHERE agent_id = ?1",
                     params![
                         agent_id,
-                        pid,
+                        process.pid,
                         yolo,
                         started_at,
-                        relay.map(|relay| &relay.process.birth),
-                        relay
-                            .and_then(|relay| relay.digest.as_ref())
-                            .map(|digest| digest.as_slice()),
+                        process.birth,
+                        credential_digest.map(|digest| digest.as_slice()),
                         command,
                     ],
                 )
@@ -555,7 +587,8 @@ impl Store {
             |connection| {
                 connection.query_row(
                     "SELECT pid, run_auth_birth, run_auth_version, run_credential_digest FROM agents \
-                     WHERE agent_id = ?1 AND exit_at IS NULL AND run_auth_birth IS NOT NULL",
+                     WHERE agent_id = ?1 AND exit_at IS NULL AND run_auth_birth IS NOT NULL \
+                       AND run_auth_version IS NOT NULL",
                     [agent_id],
                     |row| Ok(RelayRunRecord {
                         process: ProcessIdentity { pid: row.get(0)?, birth: row.get(1)? },
@@ -785,9 +818,9 @@ impl NumberTable {
     }
 }
 
-/// Whether a test asked the store to fail a write, by the file `name` in `framework/`.
+/// Whether a test enabled a fault or hold by a file in `framework/`.
 #[cfg(debug_assertions)]
-fn failing_for_test(name: &str) -> bool {
+pub(crate) fn failing_for_test(name: &str) -> bool {
     facade_base::paths::framework_dir().is_ok_and(|framework| framework.join(name).exists())
 }
 
@@ -816,6 +849,40 @@ fn reason_name(exit: &ProcessExit) -> Option<&'static str> {
     exit.reason
         .filter(|reason| *reason != EndReason::Unknown)
         .map(EndReason::as_str)
+}
+
+fn stop_key(pid: u32, birth: &str) -> String {
+    format!("accepted:{pid}:{birth}")
+}
+
+/// A repeat exit leaves the first exit and its inbox record intact. A removed agent stays removed.
+fn write_exit(
+    connection: &Connection,
+    agent_id: &str,
+    pid: Option<u32>,
+    exit: &ProcessExit,
+) -> rusqlite::Result<bool> {
+    let changed = connection.execute(
+        "UPDATE agents SET exit_code = ?1, exit_signal = ?2, exit_at = ?3, exit_reason = ?4, \
+         run_auth_birth = NULL, run_credential_digest = NULL, creator_stop = NULL \
+         WHERE agent_id = ?5 AND exit_at IS NULL AND (?6 IS NULL OR pid = ?6)",
+        params![
+            exit.code,
+            exit.signal,
+            exit.at,
+            reason_name(exit),
+            agent_id,
+            pid
+        ],
+    )?;
+    if changed == 1 {
+        connection.execute(
+            "UPDATE messages SET paste_draft = NULL WHERE \"to\" = ?1 AND paste_draft IS NOT NULL \
+             AND (status = 'pending' OR length(paste_draft) = 37)",
+            [agent_id],
+        )?;
+    }
+    Ok(changed == 1)
 }
 
 /// Writes `record` as a new row of `agents`.
@@ -948,6 +1015,10 @@ fn migrate(
     if version < 6 {
         messages::migrate_failure_notices(&transaction)?;
     }
+    if version < 7 {
+        transaction.execute("ALTER TABLE agents ADD COLUMN creator_stop TEXT", [])?;
+        messages::migrate_paste_evidence(&transaction)?;
+    }
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
@@ -1037,11 +1108,17 @@ fn read_record(connection: &Connection, row: &Row) -> rusqlite::Result<AgentReco
     let (code, signal) = (row.get("exit_code")?, row.get("exit_signal")?);
     let reason: Option<String> = row.get("exit_reason")?;
     let source = optional(row, "location_machine_id").zip(optional(row, "location_window_id"));
+    let pid = row.get("pid")?;
+    let run_birth = optional::<String>(row, "run_auth_birth");
+    let creator_stop = optional::<String>(row, "creator_stop")
+        .zip(run_birth.as_deref())
+        .is_some_and(|(stop, birth)| stop == stop_key(pid, birth));
     Ok(AgentRecord {
         name: row.get("name")?,
         cli: row.get("cli")?,
         cwd: row.get("cwd")?,
-        pid: row.get("pid")?,
+        pid,
+        run_birth,
         created_at: row.get("created_at")?,
         exit: exit_at.map(|at| ProcessExit {
             code,
@@ -1049,6 +1126,7 @@ fn read_record(connection: &Connection, row: &Row) -> rusqlite::Result<AgentReco
             reason: reason.as_deref().map(EndReason::from_name),
             at,
         }),
+        creator_stop,
         rule: optional(row, "rule"),
         session: optional::<String>(row, "session").filter(|session| {
             facade_rules::parse_session_id(session).is_some_and(|id| id == *session)
@@ -1168,8 +1246,10 @@ pub(crate) mod tests {
             cli: "claude".into(),
             cwd: "/work".into(),
             pid: 42,
+            run_birth: None,
             created_at: "2026-11-09T17:22:05.123Z".into(),
             exit: None,
+            creator_stop: false,
             rule: Some("claude".into()),
             session: None,
             windows: vec![WindowRef {
@@ -1207,7 +1287,7 @@ pub(crate) mod tests {
             reason: None,
             at: "2026-11-09T17:25:40.017Z".into(),
         };
-        store.record_exit("a1", &exit).unwrap();
+        store.record_exit("a1", &exit, None).unwrap();
         drop(store);
         let opened = Store::open(&framework, &[]).unwrap();
         assert_eq!(opened.machine_id, machine_id);
@@ -1224,7 +1304,7 @@ pub(crate) mod tests {
             "numbers continue after a reopen and skip the uncommitted start"
         );
         opened.store.delete("a1", crate::an_hour_ago).unwrap();
-        opened.store.record_exit("a1", &exit).unwrap();
+        opened.store.record_exit("a1", &exit, None).unwrap();
         assert!(
             Store::open(&framework, &[]).unwrap().records.is_empty(),
             "an exit after removal must not bring the record back"
@@ -1338,7 +1418,7 @@ pub(crate) mod tests {
             reason: Some(EndReason::TerminalClosed),
             at: "2026-11-10T00:00:00.000Z".into(),
         };
-        store.record_exit("a1", &closed).unwrap();
+        store.record_exit("a1", &closed, None).unwrap();
         store.insert(&record("a2")).unwrap();
         drop(store);
         let connection = Connection::open(framework.join("facade.db")).unwrap();
@@ -1445,7 +1525,10 @@ pub(crate) mod tests {
         store
             .record_restart(
                 "a1",
-                77,
+                &ProcessIdentity {
+                    pid: 77,
+                    birth: "123456789".into(),
+                },
                 false,
                 Some("2026-11-09T17:26:00.123Z"),
                 None,
@@ -1457,6 +1540,7 @@ pub(crate) mod tests {
         let session = Some("86da4482-2bae-4a45-b193-a5664c19826a".into());
         let resumed = AgentRecord {
             pid: 77,
+            run_birth: Some("123456789".into()),
             session,
             yolo: false,
             ..record("a1")
@@ -1474,12 +1558,70 @@ pub(crate) mod tests {
         opened.store.record_session("a1", None).unwrap();
         opened
             .store
-            .record_restart("a1", 78, true, Some("2026-11-09T17:27:00.123Z"), None, None)
+            .record_restart(
+                "a1",
+                &ProcessIdentity {
+                    pid: 78,
+                    birth: "123456790".into(),
+                },
+                true,
+                Some("2026-11-09T17:27:00.123Z"),
+                None,
+                None,
+            )
             .unwrap();
         assert!(
             Store::open(&framework, &[]).unwrap().records.is_empty(),
             "a late write must not bring the record back"
         );
+    }
+
+    #[test]
+    fn an_adopted_resume_keeps_the_identity_used_by_the_keepers_stop_receipt() {
+        let framework = framework("adopted-resume-stop");
+        let store = Store::open(&framework, &[]).unwrap().store;
+        store.insert(&record("a1")).unwrap();
+        let previous = ProcessIdentity {
+            pid: 77,
+            birth: "123456788".into(),
+        };
+        store
+            .record_restart(
+                "a1",
+                &previous,
+                false,
+                Some("2026-11-09T17:26:00.123Z"),
+                Some(&[5; 32]),
+                None,
+            )
+            .unwrap();
+        let exit = ProcessExit {
+            code: Some(0),
+            signal: None,
+            reason: None,
+            at: "2026-11-09T17:27:00.123Z".into(),
+        };
+        store.record_exit("a1", &exit, None).unwrap();
+
+        let process = ProcessIdentity {
+            pid: 78,
+            birth: "123456789".into(),
+        };
+        store
+            .record_restart("a1", &process, false, None, None, None)
+            .unwrap();
+        store.adopt_legacy_run("a1", &process).unwrap();
+        facade_base::stop_receipt::record(&framework, "a1", &process).unwrap();
+        drop(store);
+
+        let opened = Store::open(&framework, &[]).unwrap();
+        let record = &opened.records[0];
+        assert_eq!(record.pid, process.pid);
+        assert_eq!(record.run_birth.as_deref(), Some(process.birth.as_str()));
+        let identity = opened.store.relay_run("a1").unwrap().unwrap();
+        assert_eq!(identity.process, process);
+        assert_eq!((identity.version, identity.digest), (3, None));
+        assert!(facade_base::stop_receipt::exists(&framework, "a1", &identity.process).unwrap());
     }
 
     #[test]

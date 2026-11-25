@@ -206,6 +206,7 @@ fn new_actor(start: ActorStart, links: Links, recovered: bool) -> anyhow::Result
         captures,
         launch_command,
         undrawn: None,
+        recovered_empty: false,
         process: info.process,
         exit: info.exit.clone(),
         exit_sent: false,
@@ -284,6 +285,8 @@ struct Actor {
     launch_command: Option<String>,
     /// Why the screen may not show the CLI's input yet; cleared once the CLI writes.
     undrawn: Option<&'static str>,
+    /// The live drain at takeover already showed an empty box. It can only finish cleanup.
+    recovered_empty: bool,
     /// The process state viewers' snapshots carry.
     process: ProcessState,
     exit: Option<ProcessExit>,
@@ -426,7 +429,9 @@ impl Actor {
                 _ = wait_for_prompt(&mut self.prompt_result) => self.report_trouble(),
                 // Continuous terminal output must not hold back a glyph frame.
                 _ = sleep_until(self.glyph_at), if self.glyph_at.is_some() => self.advance_glyph(),
-                event = self.terminal.ready(wait) => self.take_terminal(event),
+                event = self.terminal.ready(wait, |offset, count| self.typist.before_write(offset, count)) => {
+                    self.take_terminal(event);
+                }
                 Ok(()) = self.links.tools_connections.changed() => {
                     let open = *self.links.tools_connections.borrow_and_update() > 0;
                     self.state.tools_connection(open);
@@ -564,7 +569,16 @@ impl Actor {
             return;
         }
         let (cols, rows) = self.size();
-        self.read_unread_output();
+        let input_rule = self.input_rule;
+        self.screen_mut().observe_paint(input_rule.is_some());
+        self.recovered_empty = self.read_unread_output()
+            && input_rule.is_some_and(|rule| {
+                facade_rules::read_box_after_paint(rule, self.screen().screen())
+                    .info
+                    .state
+                    == InputState::Usable
+            });
+        self.screen_mut().observe_paint(false);
         // Its output may have changed the title since clients took their snapshots.
         self.publish();
         if handed_over {
@@ -903,7 +917,27 @@ impl Actor {
             Input::BegunPaste {
                 messages,
                 previous_text,
-            } => self.typist.finish_paste(messages, Some(previous_text)),
+                draft,
+            } => {
+                self.typist.finish_paste(messages, previous_text, draft);
+                let recovered_empty = std::mem::take(&mut self.recovered_empty);
+                if self.typist.awaiting_cleanup_frame() {
+                    self.observe_cleanup_frame();
+                    if recovered_empty
+                        && self.drain_cleanup_output()
+                        && self.input_rule.is_some_and(|rule| {
+                            facade_rules::read_box(rule, &self.screen().screen().view())
+                                .info
+                                .state
+                                == InputState::Usable
+                        })
+                        && self.typist.finish_recovered_cleanup()
+                    {
+                        self.undrawn = None;
+                        self.screen_mut().observe_paint(false);
+                    }
+                }
+            }
             Input::Raw(_) => {}
         }
     }
@@ -1059,6 +1093,7 @@ impl Actor {
                 }
             }
             TerminalEvent::Wrote => {
+                self.typist.wrote(self.terminal.input_through());
                 if !self.terminal.has_probe_erase() {
                     self.probe_takeover = None;
                 }
@@ -1102,12 +1137,17 @@ impl Actor {
 
     fn apply_output(&mut self) {
         self.links.output.send_replace(());
-        self.end_nudge();
+        if !self.typist.recovering_cleanup() {
+            self.end_nudge();
+        }
         self.undrawn = None;
         let received = Instant::now();
         self.drawn_at = Some(received);
         let output = self.terminal.output().to_vec();
         let earlier = self.terminal.output_precedes_submission();
+        if self.terminal.read_starts_at_cleanup() {
+            self.screen_mut().observe_paint(true);
+        }
         if self.terminal.read_starts_at_submission() || self.terminal.read_starts_at_probe() {
             self.screen_mut().mark_pending_frame_earlier();
         }
@@ -1126,13 +1166,14 @@ impl Actor {
             let typist = &mut self.typist;
             let mut observe = |screen: &facade_screen::Screen, writes: CursorRowWrites| {
                 if after_probe && writes == CursorRowWrites::Current {
-                    typist.observe_probe_frame(read_box(rule, ended, None, screen, untouched));
+                    typist
+                        .observe_probe_frame(read_box(rule, ended, None, screen, untouched, false));
                 }
                 if observes_submission {
                     Self::observe_submissions(
                         submitting,
                         typist,
-                        || read_box(rule, ended, None, screen, false),
+                        || read_box(rule, ended, None, screen, false, false),
                         writes,
                         after_paste,
                         (after_enter && writes == CursorRowWrites::Current).then_some(position),
@@ -1273,6 +1314,20 @@ impl Actor {
             self.type_next();
         }
         self.follow_enter();
+    }
+
+    /// Uses the latest available frame for cleanup, including output in later reads of this
+    /// already available prefix. A full log or the drain bound withholds authorization.
+    fn drain_cleanup_output(&mut self) -> bool {
+        let mut read = 0;
+        while read < MAX_DRAIN_BYTES && !self.screen().is_full() {
+            let Some(bytes) = self.terminal.read_now() else {
+                return self.terminal.is_open();
+            };
+            read += bytes;
+            self.apply_output();
+        }
+        false
     }
 
     /// The replies and status the screen found in output.
@@ -1454,9 +1509,26 @@ impl Actor {
         }
     }
 
+    /// A cleanup carried through restart may need a whole redraw. Leave the short resize nudge
+    /// in effect while the CLI has only written a partial frame or moved the cursor.
+    fn observe_cleanup_frame(&mut self) {
+        self.screen_mut().observe_paint(true);
+        if self.typist.recovering_cleanup() {
+            let (cols, rows) = self.size();
+            // Moving a bottom-aligned composer makes its cells visible in consoles that emit
+            // only the differences after a redraw.
+            if rows > 1 {
+                self.terminal.set_size(cols, rows - 1);
+            } else {
+                self.terminal.set_size(cols.saturating_sub(1).max(1), rows);
+            }
+            self.nudge_until = Some(Instant::now() + REDRAW_NUDGE_TIMEOUT);
+        }
+    }
+
     /// Reads what a recovered CLI wrote while no daemon read it, so that the redraw the nudge asks
     /// for comes after it. No viewer is attached yet.
-    fn read_unread_output(&mut self) {
+    fn read_unread_output(&mut self) -> bool {
         let mut read = 0;
         while read < MAX_DRAIN_BYTES && !self.screen().is_full() {
             let Some(n) = self.terminal.read_now() else {
@@ -1468,6 +1540,7 @@ impl Actor {
             self.take_parsed(fed);
             self.screen_mut().checkpoint_if_due();
         }
+        read != 0
     }
 
     /// Reads the last output into the screen before removal, and ends an open synchronized update.
@@ -1502,7 +1575,6 @@ impl Actor {
         self.process = ProcessState::Ended;
         self.exit = Some(exit.clone());
         self.record_state();
-        self.report_trouble();
         self.publish();
         self.viewers.note_exit(Instant::now());
         self.stop_input(&format!("{} ended", self.id));
@@ -1609,6 +1681,7 @@ impl Actor {
             self.undrawn,
             self.screen().screen(),
             untouched_input,
+            false,
         )
     }
 
@@ -1621,6 +1694,9 @@ impl Actor {
         }
         let now = Instant::now();
         self.finish_escape(now);
+        let cleanup_frame = self.typist.awaiting_cleanup_frame();
+        let caught_up =
+            !cleanup_frame || (self.drain_cleanup_output() && self.terminal.cleanup_output_seen());
         let screen = self
             .screen
             .as_ref()
@@ -1635,12 +1711,27 @@ impl Actor {
         let queued = written + self.terminal.queued() as u64;
         let probing = self.typist.probing();
         let pasting = self.typist.pasting();
-        let (rule, ended, undrawn) = (self.input_rule, self.ended(), self.undrawn);
+        let (rule, ended) = (self.input_rule, self.ended());
+        let undrawn = self.undrawn;
+        let cleanup_undrawn = if caught_up {
+            undrawn
+        } else {
+            Some("the cleanup frame may have more terminal output")
+        };
         let untouched_input = self.untouched_input;
         // The screen stays as it is during a step: it is read once, where the step needs it.
         let reading = OnceCell::new();
         let read_screen = || {
-            let read = || read_box(rule, ended, undrawn, screen.screen(), untouched_input);
+            let read = || {
+                read_box(
+                    rule,
+                    ended,
+                    undrawn,
+                    screen.screen(),
+                    untouched_input,
+                    false,
+                )
+            };
             reading.get_or_init(read).clone()
         };
         // With a paste in the input, what that shows may be the paste alone.
@@ -1673,7 +1764,11 @@ impl Actor {
             .front()
             .is_some_and(|submission| submission.after_interaction);
         let observe = || {
-            let current = read_screen();
+            let current = if cleanup_frame {
+                read_box(rule, ended, cleanup_undrawn, screen.screen(), false, true)
+            } else {
+                read_screen()
+            };
             InputObservation {
                 current,
                 submitted,
@@ -1691,6 +1786,17 @@ impl Actor {
             } else {
                 self.terminal.observe_probe_from(queued + 1);
             }
+        }
+        let still_observing = self.typist.awaiting_cleanup_frame();
+        if !cleanup_frame && still_observing {
+            self.observe_cleanup_frame();
+        } else if cleanup_frame && !still_observing {
+            self.screen_mut().observe_paint(false);
+            self.terminal.stop_observing_cleanup();
+        }
+        if still_observing && !step.write.is_empty() {
+            self.terminal
+                .observe_cleanup_through(queued + step.write.len() as u64);
         }
         if !pasting && self.typist.pasting() && !step.write.is_empty() {
             self.escape_may_edit = false;
@@ -1794,6 +1900,13 @@ impl Actor {
         while let Some((came, next)) = self.held.front()
             && !self.waits(*came, next)
         {
+            // A fragmented sequence might edit the composer. Revoke the durable evidence
+            // before the prefix goes on, while the typist waits for its classification.
+            if matches!(next, Input::Raw(keys) if self.person.edits(keys))
+                && !self.release_draft_evidence()
+            {
+                return;
+            }
             match self.held.pop_front().expect("held input") {
                 (came, Input::Raw(keys)) => self.take_keys(came, keys),
                 (_, typed) => {
@@ -1981,6 +2094,21 @@ impl Actor {
                 self.id
             ),
         );
+    }
+
+    /// Keeps the person's keys in their queue until a saved draft observation is revoked.
+    fn release_draft_evidence(&mut self) -> bool {
+        let observing_paint = self.typist.awaiting_cleanup_frame();
+        if self.typist.forget_paste_draft() {
+            if observing_paint {
+                self.screen_mut().observe_paint(false);
+                self.terminal.stop_observing_cleanup();
+            }
+            return true;
+        }
+        let retry = Instant::now() + ENTER_READ_AGAIN;
+        self.typist_at = Some(self.typist_at.map_or(retry, |at| at.min(retry)));
+        false
     }
 
     /// Drops queued input and fails the typist's calls: `why` typing stopped.
@@ -2285,6 +2413,10 @@ impl Actor {
         // A draft ending in a backslash is a line break to a CLI.
         let draft = over.as_ref().and_then(|reading| reading.draft.as_deref());
         let line_break = draft.is_some_and(|draft| draft.trim_end().ends_with('\\'));
+        if !self.release_draft_evidence() {
+            self.held_enter = Some(held);
+            return false;
+        }
         self.person.goes_on(held.came);
         self.terminal.push(b"\r");
         let through = self.queued_through();
@@ -2361,6 +2493,7 @@ impl Actor {
         }
         let said = self.state.said_line().cloned();
         let mut record = self.links.shared.record.lock().unwrap();
+        record.observed_end = self.observed_end && self.process == ProcessState::Ended;
         let info = &mut record.info;
         if self.process == ProcessState::Ended {
             info.process = self.process;
@@ -2373,7 +2506,7 @@ impl Actor {
             && info.tools_reason == reading.tools_reason;
         (info.state, info.state_detail, info.said) = (reading.state, reading.detail, said);
         (info.tools_state, info.tools_reason) = (reading.tools, reading.tools_reason);
-        let trouble = Trouble::observe(info, self.observed_end);
+        let trouble = Trouble::observe(info);
         let urgent = matches!(
             info.state,
             ManagedAgentState::WaitingForYou | ManagedAgentState::Error
@@ -2402,7 +2535,6 @@ impl Actor {
             let reason = match trouble {
                 Trouble::Waiting(_) => DeliveryFailure::InputInteraction,
                 Trouble::Error => DeliveryFailure::Timeout,
-                Trouble::Ended => DeliveryFailure::Ended,
             };
             match self
                 .deliveries
@@ -2436,6 +2568,7 @@ fn read_box(
     undrawn: Option<&str>,
     screen: &facade_screen::Screen,
     untouched_input: bool,
+    cleanup_frame: bool,
 ) -> BoxReading {
     let unknown = |evidence: &str, rule: Option<&InputRule>| BoxReading {
         info: InputInfo {
@@ -2445,6 +2578,7 @@ fn read_box(
             hidden: None,
         },
         draft: None,
+        draft_cursor: None,
         line: None,
         unsure: false,
     };
@@ -2452,6 +2586,7 @@ fn read_box(
         (None, _) => unknown("the agent has no CLI rule to read its input by", None),
         (Some(rule), _) if ended => unknown("the agent ended", Some(rule)),
         (Some(rule), Some(why)) => unknown(why, Some(rule)),
+        (Some(rule), None) if cleanup_frame => facade_rules::read_box_after_paint(rule, screen),
         (Some(rule), None) => super::with_screen_view(screen, |view| {
             facade_rules::read_box_for_typing(rule, view, untouched_input)
         }),
@@ -2569,7 +2704,11 @@ mod tests {
         loop {
             let event = tokio::time::timeout(
                 Duration::from_secs(5),
-                actor.terminal.ready(TerminalWait::WriteOnly),
+                actor
+                    .terminal
+                    .ready(TerminalWait::WriteOnly, |offset, count| {
+                        actor.typist.before_write(offset, count)
+                    }),
             )
             .await
             .expect("the terminal takes the queued input");
@@ -2586,7 +2725,11 @@ mod tests {
         cli.write_output(bytes).unwrap();
         let event = tokio::time::timeout(
             Duration::from_secs(5),
-            actor.terminal.ready(TerminalWait::ReadAndWrite),
+            actor
+                .terminal
+                .ready(TerminalWait::ReadAndWrite, |offset, count| {
+                    actor.typist.before_write(offset, count)
+                }),
         )
         .await
         .expect("output reaches the actor");
@@ -2629,7 +2772,11 @@ mod tests {
         while left > 0 {
             let event = tokio::time::timeout(
                 Duration::from_secs(5),
-                actor.terminal.ready(TerminalWait::ReadAndWrite),
+                actor
+                    .terminal
+                    .ready(TerminalWait::ReadAndWrite, |offset, count| {
+                        actor.typist.before_write(offset, count)
+                    }),
             )
             .await
             .expect("buffered output can be read again");
@@ -2693,7 +2840,7 @@ mod tests {
         let mut screen = facade_screen::Screen::new(80, 24, 0);
         screen.feed(menu.as_bytes());
         assert_eq!(
-            read_box(actor.input_rule, false, None, &screen, false)
+            read_box(actor.input_rule, false, None, &screen, false, false)
                 .info
                 .state,
             InputState::Interaction
@@ -2745,7 +2892,7 @@ mod tests {
         screen.feed(draft.as_bytes());
         assert!(!screen.feed(menu.as_bytes()).cursor_row_cells_written);
         assert_eq!(
-            read_box(actor.input_rule, false, None, &screen, false)
+            read_box(actor.input_rule, false, None, &screen, false, false)
                 .info
                 .state,
             InputState::Interaction
@@ -3095,7 +3242,11 @@ mod tests {
         assert!(settled.borrow().is_none());
         let event = tokio::time::timeout(
             Duration::from_secs(5),
-            actor.terminal.ready(TerminalWait::ReadAndWrite),
+            actor
+                .terminal
+                .ready(TerminalWait::ReadAndWrite, |offset, count| {
+                    actor.typist.before_write(offset, count)
+                }),
         )
         .await
         .expect("the earlier frame reaches the actor");
@@ -3122,7 +3273,11 @@ mod tests {
         actor.take_terminal(TerminalEvent::Wrote);
         let event = tokio::time::timeout(
             Duration::from_secs(5),
-            actor.terminal.ready(TerminalWait::ReadAndWrite),
+            actor
+                .terminal
+                .ready(TerminalWait::ReadAndWrite, |offset, count| {
+                    actor.typist.before_write(offset, count)
+                }),
         )
         .await
         .expect("the old synchronized update reaches the actor");
@@ -3170,7 +3325,11 @@ mod tests {
             .unwrap();
         let event = tokio::time::timeout(
             Duration::from_secs(5),
-            actor.terminal.ready(TerminalWait::ReadAndWrite),
+            actor
+                .terminal
+                .ready(TerminalWait::ReadAndWrite, |offset, count| {
+                    actor.typist.before_write(offset, count)
+                }),
         )
         .await
         .expect("the CLI's response reaches the actor");
@@ -3204,7 +3363,11 @@ mod tests {
             actor.take_terminal(TerminalEvent::Wrote);
             let event = tokio::time::timeout(
                 Duration::from_secs(5),
-                actor.terminal.ready(TerminalWait::ReadAndWrite),
+                actor
+                    .terminal
+                    .ready(TerminalWait::ReadAndWrite, |offset, count| {
+                        actor.typist.before_write(offset, count)
+                    }),
             )
             .await
             .expect("the old synchronized update reaches the actor");
@@ -3483,7 +3646,11 @@ mod tests {
             let before = actor.terminal.written();
             let event = tokio::time::timeout(
                 Duration::from_secs(5),
-                actor.terminal.ready(TerminalWait::WriteOnly),
+                actor
+                    .terminal
+                    .ready(TerminalWait::WriteOnly, |offset, count| {
+                        actor.typist.before_write(offset, count)
+                    }),
             )
             .await
             .expect("the terminal processes the queued input");
@@ -3668,7 +3835,11 @@ mod tests {
             if split {
                 let event = tokio::time::timeout(
                     Duration::from_secs(5),
-                    actor.terminal.ready(TerminalWait::WriteOnly),
+                    actor
+                        .terminal
+                        .ready(TerminalWait::WriteOnly, |offset, count| {
+                            actor.typist.before_write(offset, count)
+                        }),
                 )
                 .await
                 .unwrap();
@@ -3823,7 +3994,11 @@ mod tests {
 
         let skipped = tokio::time::timeout(
             Duration::from_secs(5),
-            actor.terminal.ready(TerminalWait::WriteOnly),
+            actor
+                .terminal
+                .ready(TerminalWait::WriteOnly, |offset, count| {
+                    actor.typist.before_write(offset, count)
+                }),
         )
         .await
         .unwrap();

@@ -11,7 +11,8 @@ All of it in memory, one set per `Screen`:
 
 - **alacritty's terminal** (`alacritty_terminal` and its parser `vte`, vendored in
   `framework/vendor/`): the main and alternate grids, cursor and saved cursor, pen, charsets, modes,
-  and the parser with the frame an open synchronized update holds back.
+  and the parser with the frame an open synchronized update holds back. The local terminal patch
+  tracks paint during input observations, using one byte per visible cell while tracking is active.
 - **The unit being written**: the bytes of a character, escape sequence or control string the CLI
   has started and not finished.
 - **Supplied terminal colors**: optional foreground, background and cursor RGB values, used for
@@ -111,6 +112,11 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 - `mark_pending_frame_earlier()` carries the older origin of an unfinished unit or synchronized
   update. A later feed applies it and starts counting cell writes at its completion boundary,
   including a new frame that follows the boundary within the same read.
+- `observe_paint(bool)` starts or stops tracking cells explicitly set by the CLI after a write
+  boundary. `has_painted(row, columns)` checks the whole range in a complete frame. The parser
+  handles unit and synchronized-frame endings in stream order, including when one read finishes
+  an old frame and carries a new one. Tracking starts at the old frame's ending and follows
+  the cells if they scroll.
 - `set_status_glyph(&mut self, glyph: Option<String>) -> Vec<u8>` sets or clears the glyph.
   When the glyph changes and the title is eligible, it returns a title sequence. It may
   repeat the title viewers already see if the CLI's title begins with the glyph and a space.

@@ -24,6 +24,7 @@
 	},
 	"paste": {
 		"bracketed": true,
+		"backspace_unit": "grapheme",
 		"enter_ms": 80,
 		"line_ms": 45,
 		"submit_clear_ms": 352,

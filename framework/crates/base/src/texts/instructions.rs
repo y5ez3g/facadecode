@@ -4,14 +4,14 @@ use crate::model::terminal::display_name;
 
 const MANAGED: &str = r##"If a "📨 Message" needs a reply and has a reply address, call send_message (to=address, reply_to=its number, text=answer). Printed text never reaches the sender. Facade Code runs you as a managed agent. 📨 messages and 🔔 notices arrive as your input.
 "📨 Message m42 from Ada (a2@devbox) · in reply to m17" is Ada's m42, answering your m17. A waiting command shows "from command line (#c44@devbox)" and takes one reply. Plain "from command line" has no reply address.
-A 🔔 notice comes from Facade, is unnumbered and takes no reply. It reports a delivery problem or says an agent you started needs someone's input or is in Error. When an agent you started ends, even on a normal exit, only you get a notice unless you stopped it yourself. That run can send no further replies. Judge completion from its work.
+A 🔔 notice comes from Facade, is unnumbered and takes no reply. It reports a delivery problem or says an agent you started needs someone's input or is in Error. When an agent you started ends, even on a normal exit, only you get a notice unless you stopped it yourself. That run can send no further replies. Judge completion from its work. If automatic delivery of a notice expires, use read_messages to read it under its original inbox number.
 After you send a message or start an agent, keep working or end your turn. Successful delivery of a message or start prompt produces no notice. Replies arrive on their own, so do not poll read_messages or read_screen. Wait in a send only to confirm delivery or get a linked reply within 30 seconds. If your client has tool search, load the Facade tools you need in one search."##;
 
 /// The instructions for a connection that receives the Guest text at initialization.
 pub fn for_connection() -> String {
     r#"Facade Code connects agents. As a Guest, read messages and notices with read_messages and only timeout_seconds 30. send_message takes to and text; to wait for delivery or one reply, add wait_for "delivery" or "result" and timeout_seconds 30.
 A connection that Facade cannot verify as a managed agent's joins as a Guest at its first tool call, with an address and an inbox. Where Facade's instructions say you are a managed agent, they apply to calls through that agent's server.
-As a Guest, nothing is typed into your input: messages, and notices from "facade", reach you only when you read them, and an unread one is withdrawn, usually within 30 seconds. So start waiting as soon as you expect one, and wait again while you still do. If your client has tool search, load the Facade tools you need in one search."#
+As a Guest, read_messages gives you messages and notices from "facade". An ordinary unread message is withdrawn, usually within 30 seconds. Facade notices stay in your inbox. Start waiting as soon as you expect a message, and wait again while you still do. If your client has tool search, load the Facade tools you need in one search."#
         .to_owned()
 }
 
@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(
             for_managed("a3@devbox", &run).lines().nth(2),
             Some(
-                r#"A 🔔 notice comes from Facade, is unnumbered and takes no reply. It reports a delivery problem or says an agent you started needs someone's input or is in Error. When an agent you started ends, even on a normal exit, only you get a notice unless you stopped it yourself. That run can send no further replies. Judge completion from its work."#
+                r#"A 🔔 notice comes from Facade, is unnumbered and takes no reply. It reports a delivery problem or says an agent you started needs someone's input or is in Error. When an agent you started ends, even on a normal exit, only you get a notice unless you stopped it yourself. That run can send no further replies. Judge completion from its work. If automatic delivery of a notice expires, use read_messages to read it under its original inbox number."#
             )
         );
     }

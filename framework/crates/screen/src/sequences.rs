@@ -27,6 +27,8 @@ pub(crate) enum TitleNegotiation {
 pub(crate) enum Mark {
     /// The end of a synchronized frame, where a reader can inspect the applied screen.
     EndSync,
+    /// An unfinished unit left by an earlier read has finished.
+    CarriedUnitEnd,
     /// The CLI switched between the main and the alternate screen.
     SwitchScreen,
     /// `ESC c`: a full reset.
@@ -127,6 +129,12 @@ pub(crate) fn filter(
         }
     });
     filtered.carried_unit_ended_at = carried_unit_ended_at;
+    if watch_frames && let Some(at) = carried_unit_ended_at {
+        let index = filtered
+            .marks
+            .partition_point(|(position, _)| *position <= at);
+        filtered.marks.insert(index, (at, Mark::CarriedUnitEnd));
+    }
     filtered
 }
 

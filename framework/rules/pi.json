@@ -19,6 +19,7 @@
 		"bracketed": true,
 		"enter_ms": 80,
 		"submit_clear_ms": 3134,
+		"backspace_unit": "grapheme",
 		"placeholders": [
 			{ "pattern": "^\\[paste#\\d+\\+(\\d+)lines?\\]$", "count": "lines" },
 			{ "pattern": "^\\[paste #\\d+ (\\d+) chars?\\]$", "count": "visible_utf16", "spaced": true }

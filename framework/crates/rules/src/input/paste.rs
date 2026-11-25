@@ -6,8 +6,114 @@ use std::ops::Range;
 use std::time::Duration;
 
 use facade_base::model::terminal::HiddenRows;
+use unicode_normalization::UnicodeNormalization;
+use unicode_segmentation::UnicodeSegmentation;
 
-use crate::{PasteCount, PastePlaceholder, PasteRule};
+use super::canonical_text;
+use crate::{BackspaceUnit, PasteCount, PastePlaceholder, PasteRule};
+
+impl PasteRule {
+    /// The number of Backspaces to issue before reading the box again. The number of
+    /// graphemes is a lower bound when the editor's unit is unknown.
+    pub fn backspace_count(&self, text: &str) -> usize {
+        let unit = self.backspace_unit.unwrap_or(BackspaceUnit::Grapheme);
+        match unit {
+            BackspaceUnit::CodePoint => text.chars().count(),
+            _ if self.backspace_single_code_points.is_none() => {
+                text.graphemes(unit == BackspaceUnit::Grapheme).count()
+            }
+            _ => self.grapheme_backspaces(text, unit).count(),
+        }
+    }
+
+    /// An editor with an unknown unit can need another batch after its next complete drawing.
+    pub fn rechecks_cleanup(&self) -> bool {
+        self.backspace_unit.is_none()
+    }
+
+    /// Checks which literal remainder the complete box actually shows after confirmed keys.
+    /// Without an editor rule, look for the grapheme or scalar remainder of the original or
+    /// its canonical spellings. More keys still use the lower bound.
+    pub fn remaining_cleanup(
+        &self,
+        text: &str,
+        written: usize,
+        shows: impl Fn(&str) -> bool,
+    ) -> Option<usize> {
+        let after_code_points = |text: &str| {
+            match_remainder(text, written, code_point_backspaces(text), &shows)
+                .map(|(remaining, _)| self.backspace_count(remaining))
+        };
+        let after_graphemes = |unit| {
+            match_remainder(text, written, self.grapheme_backspaces(text, unit), &shows)
+                .map(|(_, remaining)| remaining.count())
+        };
+        match self.backspace_unit {
+            Some(BackspaceUnit::CodePoint) => {
+                return match_remainder(text, written, code_point_backspaces(text), &shows)
+                    .map(|(_, remaining)| remaining.count());
+            }
+            Some(unit) => return after_graphemes(unit),
+            None => {}
+        }
+        after_graphemes(BackspaceUnit::Grapheme)
+            .or_else(|| after_code_points(text))
+            .or_else(|| {
+                if text.is_ascii() {
+                    return None;
+                }
+                let composed = canonical_text(text);
+                after_code_points(&composed).or_else(|| {
+                    let decomposed: String = text.nfd().collect();
+                    after_code_points(&decomposed)
+                })
+            })
+    }
+
+    /// Walks the grapheme boundaries once. Only each cluster's trailing exceptions are split
+    /// out as separate keys, before removing the rest of that cluster in one key.
+    fn grapheme_backspaces<'a>(
+        &'a self,
+        text: &'a str,
+        unit: BackspaceUnit,
+    ) -> impl Iterator<Item = usize> + 'a {
+        let singles = self.backspace_single_code_points.as_ref();
+        text.grapheme_indices(unit == BackspaceUnit::Grapheme)
+            .rev()
+            .flat_map(move |(at, mut cluster)| {
+                std::iter::from_fn(move || {
+                    let (offset, ch) = cluster.char_indices().next_back()?;
+                    if singles.is_some_and(|pattern| pattern.is_match(ch.encode_utf8(&mut [0; 4])))
+                    {
+                        cluster = &cluster[..offset];
+                        Some(at + offset)
+                    } else {
+                        cluster = "";
+                        Some(at)
+                    }
+                })
+            })
+    }
+}
+
+fn code_point_backspaces(text: &str) -> impl Iterator<Item = usize> + '_ {
+    text.char_indices().rev().map(|(at, _)| at)
+}
+
+/// Leaves the iterator ready to count the keys still needed, using the same boundary scan.
+fn match_remainder<I: Iterator<Item = usize>>(
+    text: &str,
+    written: usize,
+    mut backspaces: I,
+    shows: impl Fn(&str) -> bool,
+) -> Option<(&str, I)> {
+    let end = match written.checked_sub(1) {
+        Some(last) => backspaces.nth(last)?,
+        None => text.len(),
+    };
+    let remaining = &text[..end];
+    (!remaining.is_empty() && shows(remaining)).then_some((remaining, backspaces))
+}
 
 /// Whether `draft` is `text` alone in the input box, or the CLI's placeholder for a paste of
 /// `text`. `hidden` counts the draft's rows scrolled out of the input box. Never waits.
@@ -29,9 +135,28 @@ pub fn is_own_draft(
 pub fn is_legacy_split_paste(paste: &PasteRule, draft: &str, prefix: &str, pasted: &str) -> bool {
     !prefix.trim().is_empty()
         && paste
+            .legacy_split_prefixes
+            .iter()
+            .any(|known| known == prefix)
+        && paste
             .placeholders
             .iter()
             .any(|placeholder| draws_placeholder(placeholder, draft, Some(prefix), pasted))
+}
+
+/// Whether a complete recovered box shows the original paste in a layout the rule recognizes.
+pub fn is_own_recovered_draft(
+    paste: &PasteRule,
+    draft: &str,
+    text: &str,
+    hidden: Option<HiddenRows>,
+) -> bool {
+    is_own_draft(paste, draft, text, hidden)
+        || (hidden.is_none()
+            && paste.legacy_split_prefixes.iter().any(|prefix| {
+                text.strip_prefix(prefix)
+                    .is_some_and(|rest| is_legacy_split_paste(paste, draft, prefix, rest))
+            }))
 }
 
 /// Whether `draft` is still `seen`, the draft an earlier reading took for the paste of `text`: the
@@ -46,6 +171,25 @@ pub fn is_same_draft(draft: &str, seen: &str, text: &str, hidden: Option<HiddenR
 pub fn shows_whole(draft: &str, text: &str, hidden: Option<HiddenRows>) -> bool {
     hidden.is_none_or(|hidden| hidden.above == 0 && hidden.below == 0)
         && without_space(draft).contains(&without_space(text))
+}
+
+/// Whether a literal draft could still be a prefix of the paste. Wrapped whitespace can be
+/// absent, and a code-point editor can erase a combining mark while leaving its base character.
+pub fn could_be_paste_prefix(paste: &str, shown: &str) -> bool {
+    let visible = |ch: &char| !ch.is_whitespace();
+    let mut original = paste.chars().filter(visible);
+    if shown
+        .chars()
+        .filter(visible)
+        .all(|ch| original.next() == Some(ch))
+    {
+        return true;
+    }
+    let mut original = paste.nfd().filter(visible);
+    shown
+        .nfd()
+        .filter(visible)
+        .all(|ch| original.next() == Some(ch))
 }
 
 /// `draft` with the placeholders the CLI draws for pastes of `texts` given back as their text. Each
@@ -142,8 +286,8 @@ fn single_spaced(text: &str) -> String {
 
 /// Whether `draft` shows `text` in full, or its end while rows are scrolled out above only.
 fn draws_text(draft: &str, text: &str, hidden: Option<HiddenRows>) -> bool {
-    let shown = without_space(draft);
-    let text = without_space(text);
+    let shown = without_space(&canonical_text(draft));
+    let text = without_space(&canonical_text(text));
     let scrolled = hidden.filter(|hidden| hidden.above > 0 || hidden.below > 0);
     match scrolled {
         None => shown == text,
@@ -264,6 +408,107 @@ mod tests {
             pasted
         ));
         assert!(!is_own_draft(claude, draft, pasted, None));
+    }
+
+    #[test]
+    fn a_placeholder_rule_alone_does_not_enable_legacy_split_pastes() {
+        let fake = rule("fake");
+        let prefix = "📨 Message ";
+        let lines = "m1 from command line\nhi";
+        assert!(is_own_draft(fake, "[Pasted text #1 +1 lines]", lines, None));
+        assert!(!is_legacy_split_paste(
+            fake,
+            "📨 Message\n  [Pasted text #1 +1 lines]",
+            prefix,
+            lines
+        ));
+    }
+
+    #[test]
+    fn a_literal_draft_matches_its_canonically_equivalent_paste() {
+        let pi = rule("pi");
+        assert!(is_own_draft(pi, "h\u{e9}llo", "he\u{301}llo", None));
+        assert!(is_own_draft(pi, "he\u{301}llo", "h\u{e9}llo", None));
+        assert!(!is_own_draft(pi, "hello", "he\u{301}llo", None));
+    }
+
+    #[test]
+    fn backspaces_use_the_established_editor_unit() {
+        let pi = rule("pi");
+        let code_point: PasteRule =
+            serde_json::from_str(r#"{"backspace_unit":"code_point"}"#).unwrap();
+        let unknown = PasteRule::default();
+        let decomposed = "helloe\u{301}!";
+        assert_eq!(pi.backspace_count(decomposed), 7);
+        assert_eq!(
+            pi.remaining_cleanup(decomposed, 2, |text| text == "hello"),
+            Some(5)
+        );
+        assert_eq!(
+            pi.remaining_cleanup(decomposed, 2, |text| text == "helloe"),
+            None
+        );
+        assert_eq!(code_point.backspace_count(decomposed), 8);
+        assert_eq!(
+            code_point.remaining_cleanup(decomposed, 2, |text| text == "helloe"),
+            Some(6)
+        );
+        assert_eq!(unknown.backspace_count(decomposed), 7);
+        assert_eq!(
+            unknown.remaining_cleanup(decomposed, 2, |text| text == "hello"),
+            Some(5)
+        );
+        assert_eq!(
+            unknown.remaining_cleanup(decomposed, 2, |text| text == "helloe"),
+            Some(6)
+        );
+        assert_eq!(unknown.backspace_count("hello\u{e9}!"), 7);
+        assert_eq!(
+            unknown.remaining_cleanup("hello\u{e9}!?", 8, |text| text == "h"),
+            Some(1)
+        );
+        assert_eq!(
+            unknown.remaining_cleanup("hello\u{e9}!?", 8, |text| text == "he"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_managed_editors_use_their_observed_backspace_boundaries() {
+        let plain = "q\u{301}!";
+        let thai = "\u{e01}\u{e48}!";
+        for (cli, unit, thai_keys) in [
+            ("agy", BackspaceUnit::Grapheme, 2),
+            ("claude", BackspaceUnit::Grapheme, 2),
+            ("codex", BackspaceUnit::LegacyGrapheme, 3),
+            ("muse", BackspaceUnit::Grapheme, 2),
+            ("opencode", BackspaceUnit::Grapheme, 2),
+            ("pi", BackspaceUnit::Grapheme, 2),
+        ] {
+            let paste = rule(cli);
+            assert_eq!(paste.backspace_unit, Some(unit), "{cli}");
+            assert_eq!(paste.backspace_count(plain), 2, "{cli}");
+            assert_eq!(paste.backspace_count(thai), thai_keys, "{cli}");
+            assert_eq!(
+                paste.remaining_cleanup(thai, 2, |text| text == "\u{e01}"),
+                (thai_keys > 2).then_some(1),
+                "{cli}"
+            );
+        }
+        assert!(rule("fake").rechecks_cleanup());
+    }
+
+    #[test]
+    fn codex_finds_a_partial_cleanup_boundary_in_a_full_length_draft() {
+        let codex = rule("codex");
+        let text = format!("paste: {}\u{e01}\u{e48}!", "🇺🇸".repeat(3995));
+        facade_base::model::message::check_message_text(&text).unwrap();
+        assert_eq!(codex.backspace_count(&text), 4005);
+        let expected = format!("paste: {}", "🇺🇸".repeat(1998));
+        assert_eq!(
+            codex.remaining_cleanup(&text, 2000, |shown| shown == expected),
+            Some(2005)
+        );
     }
 
     #[test]

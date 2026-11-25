@@ -8,7 +8,7 @@ use facade_base::model::agent::{
     ANSWER_WAIT, AgentRef, ManagedAgent, ManagedAgentState, WaitKind, error_words, exit_words,
 };
 use facade_base::model::error::{ErrorBody, Reason};
-use facade_base::model::message::{DeliveryStatus, FACADE, send_failure_text};
+use facade_base::model::message::{DeliveryStatus, FACADE, Message, send_failure_text};
 use facade_base::model::terminal::display_name;
 use facade_base::process::ProcessState;
 use serde::{Deserialize, Serialize};
@@ -36,16 +36,14 @@ pub(crate) struct WaitNotice {
 pub(crate) enum Trouble {
     Waiting(WaitKind),
     Error,
-    Ended,
 }
 
 impl Trouble {
-    pub(crate) fn observe(info: &ManagedAgent, observed_end: bool) -> Option<Self> {
+    pub(crate) fn observe(info: &ManagedAgent) -> Option<Self> {
         if info.creator.is_none() || info.guest {
             return None;
         }
         match info.process {
-            ProcessState::Ended if observed_end => Some(Self::Ended),
             ProcessState::Running => match info.state {
                 ManagedAgentState::WaitingForYou => {
                     let kind = info.state_detail.as_ref()?.kind?;
@@ -59,10 +57,7 @@ impl Trouble {
     }
 
     pub(crate) fn deadline(self, now: Instant) -> Instant {
-        match self {
-            Self::Ended => now,
-            Self::Waiting(_) | Self::Error => now + WAIT_REPORT_DELAY,
-        }
+        now + WAIT_REPORT_DELAY
     }
 }
 
@@ -76,16 +71,9 @@ impl Daemon {
             return;
         }
         let daemon = Arc::downgrade(self);
-        let rule = agent
-            .rule()
-            .and_then(|name| facade_rules::find(name).ok().flatten());
         let report = Box::new(move |info: ManagedAgent, trouble| {
             if let Some(daemon) = daemon.upgrade() {
-                let resumable = trouble == Trouble::Ended
-                    && rule
-                        .zip(info.session.as_deref())
-                        .is_some_and(|(rule, session)| rule.resume_args(session).is_some());
-                daemon.tell_creator(info, trouble, resumable);
+                daemon.tell_creator(info, trouble);
             }
         });
         agent
@@ -93,12 +81,7 @@ impl Daemon {
             .await;
     }
 
-    pub(crate) fn tell_creator(
-        self: &Arc<Self>,
-        info: ManagedAgent,
-        trouble: Trouble,
-        resumable: bool,
-    ) {
+    fn tell_creator(self: &Arc<Self>, info: ManagedAgent, trouble: Trouble) {
         let Some(recipient) = info.creator_ref() else {
             return;
         };
@@ -119,20 +102,40 @@ impl Daemon {
                 state_detail: info.state_detail,
                 tools_reason: info.tools_reason,
             },
-            Trouble::Ended => {
-                let Some(exit) = info.exit else {
-                    return;
-                };
-                wire::Notice::AgentEnded {
-                    agent,
-                    name: info.name,
-                    exit,
-                    how: info.state_detail.and_then(|detail| detail.how),
-                    resumable,
-                }
-            }
         };
         self.route_notice(recipient, notice);
+    }
+
+    pub(crate) fn creator_end_notice(
+        &self,
+        handle: &AgentHandle,
+    ) -> Option<(AgentRef, wire::Notice)> {
+        let info = handle.observed_exit()?;
+        let creator = info.creator_ref()?;
+        let agent = api::wire_ref(&info.reference());
+        let resumable = handle
+            .rule()
+            .and_then(|name| facade_rules::find(name).ok().flatten())
+            .zip(info.session.as_deref())
+            .is_some_and(|(rule, session)| rule.resume_args(session).is_some());
+        let notice = wire::Notice::AgentEnded {
+            agent,
+            name: info.name,
+            exit: info.exit?,
+            how: info.state_detail.and_then(|detail| detail.how),
+            resumable,
+        };
+        Some((creator, notice))
+    }
+
+    pub(crate) fn local_notice(
+        &self,
+        recipient: &AgentRef,
+        notice: &wire::Notice,
+        due: &Due,
+    ) -> Result<Message, ErrorBody> {
+        let text = self.notice_text(notice)?;
+        Ok(self.notice_message(recipient, &self.machine_id, text, due))
     }
 
     fn route_wait_notice(self: &Arc<Self>, notice: WaitNotice) {
@@ -248,15 +251,21 @@ impl Daemon {
             }
         };
         self.check_notice(caller, &recipient, source)?;
-        let text = match args.notice {
+        let text = self.notice_text(&args.notice)?;
+        self.post_notice(&recipient, caller.machine_id(), text, remaining)
+            .await
+    }
+
+    fn notice_text(&self, notice: &wire::Notice) -> Result<String, ErrorBody> {
+        Ok(match notice {
             wire::Notice::AgentError {
                 agent,
                 name,
                 state_detail,
                 tools_reason,
             } => {
-                let label = self.notice_agent(agent, &name)?;
-                let error = error_words(state_detail.as_ref(), tools_reason);
+                let label = self.notice_agent(agent, name)?;
+                let error = error_words(state_detail.as_ref(), *tools_reason);
                 format!(
                     "{label} {error}.\nIt has been in Error for {} seconds. Use `read_screen` to decide what to do next.",
                     WAIT_REPORT_DELAY.as_secs()
@@ -269,9 +278,9 @@ impl Daemon {
                 how,
                 resumable,
             } => {
-                let label = self.notice_agent(agent, &name)?;
-                let ended = exit_words(&exit, how);
-                let next = if resumable {
+                let label = self.notice_agent(agent, name)?;
+                let ended = exit_words(exit, *how);
+                let next = if *resumable {
                     "Its saved session can be resumed."
                 } else {
                     "It has no resumable saved session."
@@ -284,17 +293,15 @@ impl Daemon {
                 delivery,
                 withdrawn,
             } => {
-                let target = self.agent_address(&api::agent_ref(target))?;
-                let message = self.message_address(&api::message_ref(message))?;
-                send_failure_text(&message, &target, &delivery, withdrawn)
+                let target = self.agent_address(&api::agent_ref(target.clone()))?;
+                let message = self.message_address(&api::message_ref(message.clone()))?;
+                send_failure_text(&message, &target, delivery, *withdrawn)
             }
-        };
-        self.post_notice(&recipient, caller.machine_id(), text, remaining)
-            .await
+        })
     }
 
-    fn notice_agent(&self, agent: wire::AgentRef, name: &str) -> Result<String, ErrorBody> {
-        let address = self.agent_address(&api::agent_ref(agent))?;
+    fn notice_agent(&self, agent: &wire::AgentRef, name: &str) -> Result<String, ErrorBody> {
+        let address = self.agent_address(&api::agent_ref(agent.clone()))?;
         Ok(format!("{} ({address})", display_name(name)))
     }
 
@@ -332,12 +339,7 @@ impl Daemon {
             ));
         }
         let due = Due::within(remaining.map(|time| time.as_millis() as u64));
-        let from = Sender {
-            from: FACADE.to_string(),
-            from_name: None,
-        };
-        let mut message = pending_message(from, agent.id(), text, None, Some(due.at));
-        message.from_machine_id = (source != self.machine_id).then(|| source.to_string());
+        let message = self.notice_message(recipient, source, text, &due);
         if let Posted::New(message, mut settled) = self.messages.post(message, None, None, false)?
             && (agent.is_guest() || self.hand_to_typist(&agent, &message, due.instant).await)
         {
@@ -346,6 +348,23 @@ impl Daemon {
                 .await;
         }
         Ok(())
+    }
+
+    fn notice_message(
+        &self,
+        recipient: &AgentRef,
+        source: &str,
+        text: String,
+        due: &Due,
+    ) -> Message {
+        let from = Sender {
+            from: FACADE.to_string(),
+            from_name: None,
+        };
+        let mut message =
+            pending_message(from, &recipient.agent_id, text, None, Some(due.at.clone()));
+        message.from_machine_id = (source != self.machine_id).then(|| source.to_string());
+        message
     }
 }
 

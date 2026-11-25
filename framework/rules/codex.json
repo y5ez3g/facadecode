@@ -25,6 +25,8 @@
 	},
 	"paste": {
 		"bracketed": true,
+		"backspace_unit": "legacy_grapheme",
+		"backspace_single_code_points": "^[\\u{0E31}\\u{0E34}-\\u{0E3A}\\u{0E47}-\\u{0E4E}]$",
 		"enter_ms": 80,
 		"submit_clear_ms": 132,
 		"tab_while_working": true,

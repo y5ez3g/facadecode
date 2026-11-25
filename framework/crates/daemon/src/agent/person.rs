@@ -567,6 +567,7 @@ mod tests {
                 hidden: None,
             },
             draft: draft.map(str::to_string),
+            draft_cursor: None,
             line: None,
             unsure: false,
         }

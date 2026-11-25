@@ -10,7 +10,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use facade_base::api_v1::keeper::{
-    HelloResult, KeeperCall, StartArgs, StartResult, SyncArgs, project_error,
+    HelloResult, KeeperCall, StartArgs, StartResult, StopArgs, SyncArgs, project_error,
 };
 use facade_base::api_v1::{EmptyResult, ErrorBody, Request, Response, parse_request};
 use facade_base::model::error::{ErrorBody as RuntimeError, Reason};
@@ -60,6 +60,7 @@ impl Keeper {
                         api_version,
                         build: facade_base::build_id(),
                         agents: self.clis.values().map(Cli::as_held).collect(),
+                        stop_receipts: true,
                     },
                 ));
             }
@@ -67,7 +68,7 @@ impl Keeper {
                 KeeperCall::Sync(args) => self.sync(id, args, terminal)?,
                 KeeperCall::Start(args) => self.start(id, args)?,
                 KeeperCall::Stop(args) => {
-                    self.stop(&args.agent_id)?;
+                    self.stop(args)?;
                     self.post(&Response::ok(id, EmptyResult {}));
                 }
                 KeeperCall::Ping(_) => {
@@ -124,9 +125,14 @@ impl Keeper {
         Ok(())
     }
 
-    fn stop(&mut self, agent: &str) -> Result<(), ErrorBody> {
-        let cli = self.clis.get_mut(agent).ok_or_else(|| not_held(agent))?;
+    fn stop(&mut self, args: StopArgs) -> Result<(), ErrorBody> {
+        let cli = self
+            .clis
+            .get_mut(&args.agent_id)
+            .ok_or_else(|| not_held(&args.agent_id))?;
+        runtime::accept_creator_stop(&self.framework, &args, cli.process(), cli.is_stopping())?;
         cli.begin_stop(Instant::now());
+        facade_base::service::gate_for_test("keeper-stop-accepted");
         Ok(())
     }
 

@@ -769,6 +769,8 @@ fn record(id: &str) -> AgentRecord {
         pid: 7,
         created_at: "2026-11-11T00:00:00.000Z".into(),
         exit: None,
+        creator_stop: false,
+        run_birth: None,
         rule: None,
         session: None,
         windows: vec![facade_base::model::machine::WindowRef {
@@ -1005,7 +1007,11 @@ fn a_pending_message_is_taken_up_by_what_is_left_of_its_deadline_and_where_its_r
     );
     assert_eq!(
         decide(&past, Some(4), Recipient::Running, now),
-        TakeUp::Settle(Outcome::UNCONFIRMED)
+        TakeUp::FinishPaste {
+            paste: 4,
+            left: Duration::ZERO,
+        },
+        "the typist still has to clear its draft after the delivery deadline"
     );
     assert_eq!(
         decide(&past, None, Recipient::NotListed, now),

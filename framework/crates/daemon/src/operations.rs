@@ -26,7 +26,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use crate::agent::{self, ActorStart, AgentCommand, AgentHandle, Kept, ScreenStart, StateStart};
 use crate::command_line::{self, Configured};
 use crate::lifecycle::Work;
-use crate::messages::{self, OwedResult, PromptWatch};
+use crate::messages::{self, Due, OwedResult, PromptWatch};
 use crate::runs::{ExitSink, FirstRead, RunExit, RunKind, RunRequest};
 use crate::store::{AgentRecord, CreationSource, InitialLaunch, RelayRunRecord, RemovalCause};
 use crate::windows::Destination;
@@ -627,8 +627,10 @@ impl Daemon {
             cli: info.cli.clone(),
             cwd: info.cwd.clone(),
             pid: started.pid,
+            run_birth: Some(started.process.birth.clone()),
             created_at: info.created_at.clone(),
             exit: None,
+            creator_stop: false,
             rule: rule.map(|rule| rule.cli.clone()),
             session: info.session.clone(),
             windows: info.windows.clone(),
@@ -741,7 +743,8 @@ impl Daemon {
         };
         let handle =
             match agent::spawn_with_trust(actor, rx, tx, self.changes.clone(), allow_auto_trust) {
-                Ok(handle) => handle,
+                Ok(handle) => handle
+                    .with_start_prompt(kept.as_ref().map(|(prompt, _)| messages::number(prompt))),
                 Err(err) => {
                     release_name();
                     self.runs.remove_folders(&id);
@@ -923,8 +926,9 @@ impl Daemon {
         if !agent.send(AgentCommand::LetGoBeforeStop { reply }).await || let_go.await.is_err() {
             return Err(agent_stopped(&id));
         }
-        let (run, _) = agent.installed_record();
-        let running = self.runs.stop(&id, run, stopped_by).await?;
+        let (run, info) = agent.installed_record();
+        let by_creator = stopped_by.is_some() && stopped_by == info.creator_ref();
+        let running = self.runs.stop(&id, run, stopped_by, by_creator).await?;
         match tokio::time::timeout(STOP_TIMEOUT, exit.wait_for(Option::is_some)).await {
             Ok(Ok(exit)) => Ok(StopResult {
                 exit: exit.clone().expect("a recorded exit"),
@@ -971,12 +975,39 @@ impl Daemon {
         let saving = self.lifecycle.begin(Work::ExitCommit);
         let writer = id.clone();
         let task = tokio::spawn(async move {
+            let mut observed = agent.exit();
+            let _ = observed.wait_for(Option::is_some).await;
             pause_for_test("before-exit-commit");
+            let notice = daemon
+                .creator_end_notice(&agent)
+                .filter(|_| !daemon.runs.creator_stopped(&id, None));
+            let first_prompt = agent.start_prompt();
             let mut delay = Duration::from_millis(500);
-            loop {
-                let (store, saved, exited) = (daemon.store.clone(), id.clone(), exit.clone());
-                match blocking(move || store.record_exit(&saved, &exited)).await {
-                    Ok(()) => break,
+            let saved = loop {
+                let (recorder, saved, exited) = (daemon.clone(), id.clone(), exit.clone());
+                let due = Due::now();
+                let local = notice
+                    .as_ref()
+                    .filter(|(creator, _)| creator.machine_id == daemon.machine_id)
+                    .map(|(creator, notice)| daemon.local_notice(creator, notice, &due));
+                let result = match local.transpose() {
+                    Ok(local) => {
+                        blocking(move || {
+                            recorder.messages.record_exit(
+                                &recorder.store,
+                                &saved,
+                                &exited,
+                                first_prompt,
+                                local,
+                                &due,
+                            )
+                        })
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                match result {
+                    Ok(saved) => break saved,
                     Err(error) => {
                         daemon.lifecycle.delay_exit(&format!(
                             "could not save the exit of {id}: {}",
@@ -986,6 +1017,12 @@ impl Daemon {
                         delay = (delay * 2).min(Duration::from_secs(30));
                     }
                 }
+            };
+            if saved
+                && let Some((creator, notice)) = notice
+                && creator.machine_id != daemon.machine_id
+            {
+                daemon.route_notice(creator, notice);
             }
             daemon.lifecycle.clear_exit_delay();
             let mut settled = agent.settled();
@@ -1049,6 +1086,16 @@ impl Daemon {
         cause: RemovalCause,
     ) -> Result<(), ErrorBody> {
         let id = agent.id().to_string();
+        if !self
+            .runs
+            .previous_run_ended(&id, PREVIOUS_RUN_TIMEOUT)
+            .await
+        {
+            return Err(ErrorBody::new(
+                Reason::Unavailable,
+                format!("{id}'s ended run is still being saved; try again"),
+            ));
+        }
         self.runs.end_session_following(&id).await;
         let (store, deleted) = (self.store.clone(), id.clone());
         blocking(move || store.delete_listed(&deleted, cause, an_hour_ago)).await?;
@@ -1269,24 +1316,21 @@ impl Daemon {
             )
             .await?;
         gate_for_test("before-restart-commit");
-        let (store, committed, pid) = (self.store.clone(), id.clone(), started.pid);
+        let (store, committed) = (self.store.clone(), id.clone());
         let started_at = facade_base::time::iso_now();
         let launch_command = prepared.launch_command.clone();
-        let relay = RelayRunRecord {
-            process: started.process.clone(),
-            version: 3,
-            digest: started
-                .credential
-                .as_ref()
-                .map(|credential| credential.digest),
-        };
+        let process = started.process.clone();
+        let digest = started
+            .credential
+            .as_ref()
+            .map(|credential| credential.digest);
         if let Err(error) = blocking(move || {
             store.record_restart(
                 &committed,
-                pid,
+                &process,
                 yolo,
                 Some(&started_at),
-                Some(&relay),
+                digest.as_ref(),
                 launch_command.as_deref(),
             )
         })

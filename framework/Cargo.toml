@@ -46,6 +46,7 @@ schemars = "1.2"
 rusqlite = { version = "0.41", features = ["bundled"] }
 regex = "1.13"
 toml = "1.2"
+unicode-normalization = "0.1.25"
 unicode-segmentation = "1.13"
 unicode-width = "0.2"
 

@@ -280,6 +280,48 @@ fn an_update_with_nothing_in_it_holds_no_frame_back() {
 }
 
 #[test]
+fn paint_observation_begins_after_any_open_frame() {
+    let mut screen = Screen::new(20, 5, 0);
+    screen.feed(b"\x1b[?2026hold");
+    screen.observe_paint(true);
+    screen.feed(b"\x1b[?2026l");
+    assert!(!screen.has_painted(0, 0..3));
+
+    screen.feed(b"\x1b[?2026h\rnew");
+    assert!(!screen.has_painted(0, 0..3));
+    screen.end_synchronized_update();
+    assert!(!screen.has_painted(0, 0..3));
+
+    screen.feed(b"\x1b[?2026h\rnew\x1b[?2026l");
+    assert!(screen.has_painted(0, 0..3));
+    assert!(!screen.has_painted(1, 0..1));
+}
+
+#[test]
+fn a_new_synchronized_frame_survives_the_old_frame_ending_in_the_same_read() {
+    for split in [true, false] {
+        let mut screen = Screen::new(20, 5, 0);
+        screen.feed(b"> hello\x1b[?2026h\x1b7\x1b[3;1H*\x1b8");
+        screen.observe_paint(true);
+        let close = b"\x1b[?2026l";
+        let frame = b"\x1b[?2026h\r\x1b[K> hel\x1b[?2026l";
+        if split {
+            screen.feed(close);
+            screen.feed(frame);
+        } else {
+            screen.feed(&[close.as_slice(), frame].concat());
+        }
+        assert_eq!(screen.view().cursor, (5, 0));
+        assert_eq!(screen.view().rows[2][0].text(), "*");
+        assert!(
+            screen.has_painted(0, 2..5),
+            "split before the new frame: {split}"
+        );
+        assert!(!screen.has_painted(2, 0..1), "the old frame is excluded");
+    }
+}
+
+#[test]
 fn redraw_carries_the_modes_a_viewer_needs() {
     let mut screen = Screen::new(20, 5, 0);
     screen.feed(b"\x1b[?2004h\x1b[?1h\x1b[?25l\x1b[?1000h\x1b[?1006h");

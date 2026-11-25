@@ -6,7 +6,7 @@ use facade_base::model::message::{DeliveryFailure, Message, TextWritten};
 use tokio::sync::watch;
 
 use super::{Deliveries, Messages, Outcome, OwedResult, Settled};
-use crate::store::KeptMessage;
+use crate::store::{KeptMessage, KeptPaste};
 use crate::{HUMAN, blocking_in_place, delivery_ceiling, delivery_limit};
 
 impl Messages {
@@ -18,8 +18,13 @@ impl Messages {
         Ok(pending)
     }
 
-    /// Every message that went in paste `paste`, however each ended, in the order they were pasted.
-    pub(crate) fn paste_messages(&self, paste: u64) -> anyhow::Result<Vec<Message>> {
+    /// Gives the typists their remaining cleanup work without reopening a receipt.
+    pub(crate) fn settled_cleanups(&self) -> anyhow::Result<Vec<(String, u64)>> {
+        blocking_in_place(|| self.deliveries.table.settled_cleanups())
+    }
+
+    /// Every message in the paste, in order, with the evidence the old daemon left.
+    pub(crate) fn paste_messages(&self, paste: u64) -> anyhow::Result<KeptPaste> {
         blocking_in_place(|| self.deliveries.table.paste_messages(paste))
     }
 
@@ -82,16 +87,19 @@ pub(crate) fn decide(
         });
     }
     let left = time_left(message, now);
+    if let (Recipient::Running, Some(paste)) = (recipient, paste) {
+        // Even an expired paste can leave its own draft in this terminal.
+        return TakeUp::FinishPaste { paste, left };
+    }
     if left.is_zero() {
         return TakeUp::Settle(match paste {
             Some(_) => Outcome::UNCONFIRMED,
             None => Outcome::untyped(DeliveryFailure::Timeout),
         });
     }
-    match (recipient, paste) {
-        (Recipient::NotListed, _) => TakeUp::Wait(left),
-        (_, Some(paste)) => TakeUp::FinishPaste { paste, left },
-        (_, None) => TakeUp::Type(left),
+    match recipient {
+        Recipient::NotListed => TakeUp::Wait(left),
+        _ => TakeUp::Type(left),
     }
 }
 

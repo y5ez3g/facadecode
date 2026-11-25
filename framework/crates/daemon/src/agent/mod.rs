@@ -40,6 +40,7 @@ use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::time::Instant;
 
 use crate::messages::{DeliveryHandle, PromptWatch};
+use crate::store::DraftProof;
 use crate::waits::Trouble;
 use crate::{Sender, ToolsGiven};
 
@@ -123,7 +124,8 @@ pub(crate) enum Input {
     /// without typing it again.
     BegunPaste {
         messages: Vec<MessageTyping>,
-        previous_text: String,
+        previous_text: Option<String>,
+        draft: Option<DraftProof>,
     },
 }
 
@@ -139,7 +141,7 @@ impl Input {
             Input::Raw(keys) => keys.len(),
             Input::Typed(typing) => typing.most_bytes(console),
             Input::Message(message) => message.most_bytes(console),
-            // What is left of a begun paste is its Enter.
+            // A begun paste is either submitted or cleared by the typist.
             Input::BegunPaste { .. } => 1,
         }
     }
@@ -385,6 +387,7 @@ pub(crate) fn spawn_with_trust(
         settled,
         output,
         rule: start.rule.clone(),
+        start_prompt: None,
         run_change: Arc::new(tokio::sync::Mutex::new(())),
         tools: tools.clone(),
     };
@@ -415,6 +418,7 @@ struct Record {
     incident: u64,
     installed_run: u64,
     title: Option<String>,
+    observed_end: bool,
 }
 
 impl Shared {
@@ -425,6 +429,7 @@ impl Shared {
                 incident: 0,
                 installed_run: FIRST_RUN,
                 title: None,
+                observed_end: false,
             }),
             run: AtomicU64::new(FIRST_RUN),
         }
@@ -442,6 +447,7 @@ pub(crate) struct AgentHandle {
     settled: watch::Receiver<bool>,
     output: watch::Receiver<()>,
     rule: Option<String>,
+    start_prompt: Option<u64>,
     run_change: Arc<tokio::sync::Mutex<()>>,
     tools: Arc<watch::Sender<usize>>,
 }
@@ -460,6 +466,7 @@ impl AgentHandle {
             settled: watch::channel(false).1,
             output: watch::channel(()).1,
             rule: None,
+            start_prompt: None,
             run_change: Arc::new(tokio::sync::Mutex::new(())),
             tools: Arc::new(watch::channel(0).0),
         }
@@ -477,6 +484,21 @@ impl AgentHandle {
     pub(crate) fn prompt_result_facts(&self) -> (ManagedAgent, u64) {
         let record = self.shared.record.lock().unwrap();
         (record.info.clone(), record.incident)
+    }
+
+    pub(crate) fn with_start_prompt(mut self, prompt: Option<u64>) -> Self {
+        self.start_prompt = prompt;
+        self
+    }
+
+    /// The prompt the installed run could still owe, if it was the original start.
+    pub(crate) fn start_prompt(&self) -> Option<u64> {
+        self.start_prompt.filter(|_| self.run() == FIRST_RUN)
+    }
+
+    pub(crate) fn observed_exit(&self) -> Option<ManagedAgent> {
+        let record = self.shared.record.lock().unwrap();
+        record.observed_end.then(|| record.info.clone())
     }
 
     /// The full title supplied by the terminal, for the caller to project.

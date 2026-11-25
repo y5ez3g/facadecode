@@ -6,10 +6,11 @@
 )]
 
 use std::collections::BTreeMap;
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
-use facade_base::api_v1::keeper::{self, KeeperCall, StartArgs, methods};
+use facade_base::api_v1::keeper::{self, KeeperCall, StartArgs, StopArgs, methods};
 use facade_base::api_v1::{ApiVersion, ErrorBody, Request};
+use facade_base::process::ProcessIdentity;
 use facade_base::start::StartCommand;
 
 /// From a stop's hang-up to its kill, unless the CLI ends first.
@@ -22,6 +23,36 @@ pub(crate) const MIN_RESTART_DELAY: Duration = Duration::from_millis(500);
 pub(crate) const MAX_RESTART_DELAY: Duration = Duration::from_secs(30);
 /// Once a daemon runs this long, the restart delay starts over.
 pub(crate) const RESTART_DELAY_RESET: Duration = Duration::from_secs(60);
+
+/// Saves positive evidence of a creator stop before acting on the request.
+pub(crate) fn accept_creator_stop(
+    framework: &Path,
+    args: &StopArgs,
+    process: &ProcessIdentity,
+    stopping: bool,
+) -> Result<(), ErrorBody> {
+    let Some(creator) = &args.creator_stop else {
+        return Ok(());
+    };
+    if creator != process {
+        return Err(ErrorBody::invalid_argument(
+            "the stop names another process",
+        ));
+    }
+    let storage_error =
+        |error| keeper::project_error(facade_base::model::error::ErrorBody::internal(error));
+    if stopping {
+        if facade_base::stop_receipt::exists(framework, &args.agent_id, creator)
+            .map_err(storage_error)?
+        {
+            return Ok(());
+        }
+        return Err(ErrorBody::invalid_argument(
+            "the process already has a stop",
+        ));
+    }
+    facade_base::stop_receipt::record(framework, &args.agent_id, creator).map_err(storage_error)
+}
 
 /// The resolved start the keeper executes.
 pub(crate) struct KeeperStartArgs {

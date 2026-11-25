@@ -198,6 +198,9 @@ and the input facts. Successful delivery leaves the number unused. A managed age
 an agent creator can also report 30 seconds of continuous waiting or Error, or an observed
 end, through the creator's Facade inbox. An effective stop by the creator is reported in
 the stop call. A startup delivery failure and its watchdog incident share one notification.
+The inbox keeps a Facade notice under its original message number after the automatic delivery
+deadline. `read_messages` can take a notice whose submission did not occur. A history read with
+`last` or `after` can also show a notice whose submission remains unconfirmed.
 
 ### YOLO and creation trees
 

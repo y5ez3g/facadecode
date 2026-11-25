@@ -3530,6 +3530,431 @@ async fn an_ended_run_is_in_its_record_before_its_waiting_prompt_learns_it_ended
     std::fs::remove_dir_all(&home).unwrap();
 }
 
+/// A recovered title changes the screen's status without showing whether cleanup reached the box.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_status_only_read_after_a_crash_does_not_repeat_issued_cleanup() {
+    recover_after_cleanup_write(CleanupRecovery {
+        written: 5,
+        redraw: "hello",
+        expected_keys: 0,
+        ..CleanupRecovery::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_redrawn_literal_draft_gets_only_the_confirmed_cleanup_difference() {
+    recover_after_cleanup_write(CleanupRecovery::default()).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_confirmed_partial_cleanup_survives_the_receipt_grace() {
+    recover_after_cleanup_write(CleanupRecovery {
+        redraw_after_ms: 420,
+        ..CleanupRecovery::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_draw_outside_the_input_box_cannot_authorize_more_backspaces() {
+    recover_after_cleanup_write(CleanupRecovery {
+        outside_draw: true,
+        ..CleanupRecovery::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_crash_before_the_write_receipt_leaves_the_remaining_draft_alone() {
+    recover_after_cleanup_write(CleanupRecovery {
+        confirm_write: false,
+        expected_keys: 0,
+        ..CleanupRecovery::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unissued_cleanup_waits_for_a_full_composer_frame() {
+    recover_after_cleanup_write(CleanupRecovery {
+        written: 0,
+        redraw: "hello",
+        expected_keys: 5,
+        outside_draw: true,
+        ..CleanupRecovery::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_confirmed_unicode_short_write_keeps_its_character_count() {
+    recover_after_cleanup_write(CleanupRecovery {
+        text: "héllo",
+        redraw: "hél",
+        redraw_after_ms: 420,
+        ..CleanupRecovery::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_next_complete_composer_frame_follows_an_unfinished_title() {
+    for coalesced in [false, true] {
+        recover_after_cleanup_write(CleanupRecovery {
+            unfinished_title: Some(coalesced),
+            ..CleanupRecovery::default()
+        })
+        .await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pi_recovery_uses_the_editors_grapheme_boundaries() {
+    for (text, confirm_write, expected_keys) in [
+        ("hello\u{e9}!", true, 5),
+        ("helloe\u{301}!", true, 5),
+        ("helloe\u{301}!", false, 0),
+    ] {
+        recover_after_cleanup_write(CleanupRecovery {
+            cli_rule: "pi",
+            text,
+            redraw: "hello",
+            redraw_after_ms: 420,
+            confirm_write,
+            initial_keys: Some(7),
+            expected_keys,
+            ..CleanupRecovery::default()
+        })
+        .await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pi_recovery_matches_a_canonically_equivalent_redrawn_prefix() {
+    for (text, redraw) in [
+        ("he\u{301}llo!", "h\u{e9}ll"),
+        ("h\u{e9}llo!", "he\u{301}ll"),
+    ] {
+        recover_after_cleanup_write(CleanupRecovery {
+            cli_rule: "pi",
+            text,
+            redraw,
+            redraw_after_ms: 420,
+            initial_keys: Some(6),
+            expected_keys: 4,
+            ..CleanupRecovery::default()
+        })
+        .await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unknown_editor_finishes_a_combining_remainder_after_redraw() {
+    for (text, written) in [("hello\u{e9}!?", 2), ("hello\u{e9}", 0)] {
+        recover_after_cleanup_write(CleanupRecovery {
+            text,
+            written,
+            redraw: "helloe\u{301}",
+            redraw_after_ms: 420,
+            expected_keys: 6,
+            after_redraw: Some(("h", 1)),
+            ..CleanupRecovery::default()
+        })
+        .await;
+    }
+}
+
+struct CleanupRecovery<'a> {
+    cli_rule: &'a str,
+    text: &'a str,
+    initial_keys: Option<usize>,
+    written: usize,
+    confirm_write: bool,
+    redraw_after_ms: u64,
+    outside_draw: bool,
+    unfinished_title: Option<bool>,
+    redraw: &'a str,
+    expected_keys: usize,
+    after_redraw: Option<(&'a str, usize)>,
+}
+
+impl Default for CleanupRecovery<'_> {
+    fn default() -> Self {
+        Self {
+            cli_rule: "fake",
+            text: "hello",
+            initial_keys: None,
+            written: 2,
+            confirm_write: true,
+            redraw_after_ms: 100,
+            outside_draw: false,
+            unfinished_title: None,
+            redraw: "hel",
+            expected_keys: 3,
+            after_redraw: None,
+        }
+    }
+}
+
+async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
+    use super::terminal::{Terminal, TerminalEvent, TerminalWait};
+    use super::typist::{BoxWrites, InputObservation, Modes, Typist};
+    use crate::messages::tests::{message, messages, post_new};
+
+    let CleanupRecovery {
+        cli_rule,
+        text,
+        initial_keys,
+        written,
+        confirm_write,
+        redraw_after_ms,
+        outside_draw,
+        unfinished_title,
+        redraw,
+        expected_keys,
+        after_redraw,
+    } = case;
+    let home = home("issued-cleanup");
+    let (master, mut cli) = raw_terminal(80, 24);
+    let mut terminal = Terminal::new(Some(master.try_clone().unwrap())).unwrap();
+    let post = messages().0;
+    let (message, mut settled) = post_new(&post, message(0, "a1"));
+    let number = crate::messages::number(&message);
+    let start = Instant::now();
+    let typing = |deadline| {
+        MessageTyping::new(
+            text.into(),
+            number,
+            deadline,
+            Submission {
+                text: text.into(),
+                sender: Sender::person(),
+            },
+        )
+    };
+    let rule = facade_rules::find(cli_rule).unwrap().unwrap();
+    let border = "─".repeat(80);
+    let draw = |text: &str| {
+        if cli_rule == "pi" {
+            format!(
+                "\x1b[1;1H\x1b[K{border}\x1b[3;1H\x1b[K{border}\x1b[2;1H\x1b[K{text}\x1b[7m \x1b[27m\x1b[D"
+            )
+        } else {
+            format!("\r\x1b[K❯ {text}")
+        }
+    };
+    let mut old = Typist::new("a1", Some(rule), None, post.delivery_handle());
+    let mut screen = Screen::new(80, 24, SCROLLBACK_ROWS);
+    let modes = Modes {
+        bracketed_paste: true,
+        application_cursor_keys: false,
+        working: false,
+    };
+    let step = |old: &mut Typist, now, terminal: &mut Terminal, screen: &Screen| {
+        let written = terminal.written();
+        old.step(now, written, written, modes, BoxWrites::Allowed, &|| {
+            InputObservation {
+                current: facade_rules::read_box(&rule.input, &screen.view()),
+                submitted: None,
+                awaiting_after_interaction: false,
+            }
+        })
+        .write
+    };
+    let deadline = start + Duration::from_secs(1);
+    old.deliver(typing(deadline));
+    screen.feed(draw("").as_bytes());
+    let paste = step(&mut old, start, &mut terminal, &screen);
+    assert_eq!(paste, format!("\x1b[200~{text}\x1b[201~").as_bytes());
+    terminal.push(&paste);
+    assert!(matches!(
+        terminal
+            .ready(TerminalWait::WriteOnly, |offset, count| old
+                .before_write(offset, count))
+            .await,
+        TerminalEvent::Wrote
+    ));
+    assert_eq!(cli.reads_within(paste.len(), Duration::from_secs(5)), paste);
+
+    screen.feed(draw(text).as_bytes());
+    assert!(
+        step(
+            &mut old,
+            start + Duration::from_millis(1),
+            &mut terminal,
+            &screen
+        )
+        .is_empty()
+    );
+    let cleanup = step(&mut old, deadline, &mut terminal, &screen);
+    assert_eq!(
+        cleanup,
+        vec![0x7f; initial_keys.unwrap_or_else(|| text.chars().count())]
+    );
+    if written != 0 {
+        terminal.push(&cleanup[..written]);
+        assert!(matches!(
+            terminal
+                .ready(TerminalWait::WriteOnly, |offset, count| old
+                    .before_write(offset, count))
+                .await,
+            TerminalEvent::Wrote
+        ));
+        if confirm_write {
+            old.wrote(terminal.written());
+        }
+        assert_eq!(
+            cli.reads_within(written, Duration::from_secs(5)),
+            cleanup[..written]
+        );
+    }
+    let saved = post.paste_messages(number).unwrap().draft.unwrap();
+    let progress = saved.cleanup.unwrap();
+    assert_eq!(progress.writing, !confirm_write);
+    assert_eq!(
+        progress.written as usize,
+        if confirm_write { written } else { 0 }
+    );
+    assert!(settled.borrow().is_none());
+    drop((terminal, old));
+
+    // The CLI has taken the write, but the screen log still shows the full old draft.
+    if outside_draw {
+        // A partial repaint was in the old snapshot, before the new actor could read the box.
+        screen.feed(draw(redraw).as_bytes());
+    }
+    if unfinished_title.is_some() {
+        screen.feed(b"\x1b]2;old title");
+        assert!(screen.has_unfinished_unit());
+    }
+    let dir = home.join("screens").join("a1");
+    let (tx, rx) = mpsc::channel(MAX_QUEUED_COMMANDS);
+    let start = ActorStart {
+        colors: TerminalColors::default(),
+        info: record(ProcessState::Running, None, 80, 24),
+        master: Some(master),
+        screen: ScreenStart::Recovered {
+            restart_size: None,
+            handed_over_cleanly: false,
+            screen: Box::new(screen),
+            log: None,
+        },
+        untouched_input: false,
+        rule: Some(cli_rule.into()),
+        captures: false,
+        launch_command: None,
+        observed_loss: false,
+        deliveries: post.delivery_handle(),
+        state: StateStart {
+            file: super::state::state_file(&dir),
+            kept: Kept::default(),
+            started: Instant::now(),
+        },
+    };
+    let handle = spawn(start, rx, tx, broadcast::channel(16).0).unwrap();
+    let (reply, taken) = oneshot::channel();
+    handle
+        .mailbox()
+        .send(AgentCommand::WriteInput {
+            input: Input::BegunPaste {
+                messages: vec![typing(Instant::now())],
+                previous_text: None,
+                draft: Some(saved),
+            },
+            run: FIRST_RUN,
+            reply,
+        })
+        .await
+        .unwrap();
+    assert!(taken.await.unwrap().is_ok());
+    match unfinished_title {
+        None => cli.write_all(b"\x1b]2;working\x07").unwrap(),
+        Some(false) => cli.write_all(b"\x07").unwrap(),
+        Some(true) => {}
+    }
+    assert_eq!(
+        cli.reads_within(5, Duration::from_millis(redraw_after_ms)),
+        b"",
+        "a title alone cannot show the old backspaces' effect"
+    );
+
+    if redraw_after_ms == 100 {
+        assert!(settled.borrow().is_none(), "the receipt still has time");
+    } else {
+        assert!(
+            settled.borrow().is_some(),
+            "the receipt has already settled"
+        );
+    }
+    if outside_draw {
+        cli.write_all(b"\x1b7\x1b[20;1H*\x1b8").unwrap();
+        assert_eq!(
+            cli.reads_within(5, Duration::from_millis(180)),
+            b"",
+            "painting another row cannot make the cached input box current"
+        );
+        cli.write_all(format!("\x1b[1;3Hhe\x1b[1;{}H", 3 + redraw.len()).as_bytes())
+            .unwrap();
+        assert_eq!(
+            cli.reads_within(5, Duration::from_millis(40)),
+            b"",
+            "a partial redraw of the input cannot borrow the last letter from the snapshot"
+        );
+    }
+    let id = format!("m{number}");
+    let delivery = || post.message(&id).unwrap().delivery;
+    let receipt_before_redraw = settled.borrow().is_some().then(delivery);
+    let close = if unfinished_title == Some(true) {
+        "\x07"
+    } else {
+        ""
+    };
+    cli.write_all(format!("{close}{}", draw(redraw)).as_bytes())
+        .unwrap();
+    if expected_keys == 0 {
+        assert!(cli.reads_within(5, Duration::from_millis(40)).is_empty());
+    } else {
+        assert_eq!(
+            cli.reads_within(expected_keys, Duration::from_secs(5)),
+            vec![0x7f; expected_keys],
+        );
+    }
+    if let Some((remaining, keys)) = after_redraw {
+        cli.write_all(b"\x1b]2;cleanup in progress\x07").unwrap();
+        assert!(cli.reads_within(1, Duration::from_millis(100)).is_empty());
+        cli.write_all(draw(redraw).as_bytes()).unwrap();
+        assert!(
+            cli.reads_within(1, Duration::from_millis(100)).is_empty(),
+            "a repaint of the old text cannot confirm the new keys' effect"
+        );
+        cli.write_all(draw(remaining).as_bytes()).unwrap();
+        assert_eq!(
+            cli.reads_within(keys, Duration::from_secs(5)),
+            vec![0x7f; keys],
+            "the current drawing proves the rest of the same paste"
+        );
+    }
+    cli.write_all(draw("").as_bytes()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), settled.wait_for(Option::is_some))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(cli.reads_within(5, Duration::from_millis(100)).is_empty());
+    assert_eq!(post.paste_messages(number).unwrap().draft, None);
+    if let Some(before) = receipt_before_redraw {
+        assert_eq!(before, delivery());
+    }
+    Harness {
+        handle,
+        cli,
+        dir,
+        messages: post,
+    }
+    .stop()
+    .await;
+}
+
 /// A message the typist is typing, its paste begun, fails as ended only once the agent's record
 /// shows the run ended, as a waiting start prompt does. Here a reader holds the record while
 /// the run ends: the message learns nothing until it lets go.

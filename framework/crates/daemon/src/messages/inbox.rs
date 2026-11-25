@@ -526,7 +526,11 @@ impl Deliveries {
     ) -> Result<(), ErrorBody> {
         let mut delivered = Vec::new();
         for message in messages.iter_mut() {
-            if message.delivery.status == DeliveryStatus::Success {
+            if message.delivery.status == DeliveryStatus::Success
+                || (matches!(mode, ReadMode::Unstarted)
+                    && message.delivery.status == DeliveryStatus::Failure
+                    && message.delivery.enter_written != Some(false))
+            {
                 continue;
             }
             let typing = match mode {

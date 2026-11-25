@@ -54,14 +54,14 @@ The next exchange uses Unix PTY copies on the successful replies to start and sy
 
 ```jsonl keeper
 {"jsonrpc":"2.0","id":1,"method":"hello","params":{"api_versions":[1]}}
-{"jsonrpc":"2.0","id":1,"result":{"api_version":1,"build":"1.0.0+example","agents":[{"agent_id":"a1","pid":5113,"birth":"123456789"}]}}
+{"jsonrpc":"2.0","id":1,"result":{"api_version":1,"build":"1.0.0+example","agents":[{"agent_id":"a1","pid":5113,"birth":"123456789"}],"stop_receipts":true}}
 {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"daemon.ping","args":{}}}
 {"jsonrpc":"2.0","id":2,"result":{}}
 {"jsonrpc":"2.0","id":3,"method":"call","params":{"op":"agent.start","args":{"agent_id":"a2","command":["/usr/local/bin/codex","--model","gpt-6.2-sol"],"env":{"HOME":"/home/alice","PATH":"/usr/local/bin:/usr/bin","TERM":"xterm-256color"},"cwd":"/work/app","size":{"cols":120,"rows":40}}}}
 {"jsonrpc":"2.0","id":3,"result":{"pid":5114,"birth":"123456910"}}
 {"jsonrpc":"2.0","id":4,"method":"call","params":{"op":"agent.sync","args":{"agent_id":"a1","pid":5113,"birth":"123456789"}}}
 {"jsonrpc":"2.0","id":4,"result":{}}
-{"jsonrpc":"2.0","id":5,"method":"call","params":{"op":"agent.stop","args":{"agent_id":"a2"}}}
+{"jsonrpc":"2.0","id":5,"method":"call","params":{"op":"agent.stop","args":{"agent_id":"a2","creator_stop":{"pid":5114,"birth":"123456910"}}}}
 {"jsonrpc":"2.0","id":5,"result":{}}
 {"jsonrpc":"2.0","method":"changed","params":{"kind":"exit","agent_id":"a2","exit":{"signal":"SIGHUP","at":"2026-11-20T17:03:00.000Z"}}}
 {"jsonrpc":"2.0","id":6,"method":"call","params":{"op":"agent.sync","args":{"agent_id":"a2","pid":5114,"birth":"123456910"}}}
@@ -90,6 +90,13 @@ reports the actual exit. On Unix the keeper signals the verified process group w
 then sends SIGKILL when the CLI exits or three seconds pass, whichever comes first. Repeated
 stops keep the original deadline. On Windows the daemon and keeper release their ConPTY
 signal pipe copies and the keeper terminates the corresponding job.
+
+A Keeper that advertises `stop_receipts: true` in hello accepts `creator_stop` on `agent.stop`.
+It contains the PID and birth of the process the creator asked to stop. The Keeper checks this
+identity and records acceptance in the agent's run folder before it begins stopping the CLI.
+A daemon sends the field only to a Keeper that advertises support. With an older Keeper, the daemon
+records a successful acknowledgement when it receives it. An exit with no saved acknowledgement
+or Keeper receipt can still earn a creator notice after recovery.
 
 On Unix only the keeper that started a CLI can read its exit code or signal. A replacement
 keeper that observes the end of a CLI can give the observation time without either field.
@@ -224,6 +231,7 @@ Why an exit has no code or signal.
 | `api_version` | `number` | yes |  |
 | `build` | `string` | yes |  |
 | `agents` | `HeldAgent[]` | yes |  |
+| `stop_receipts` | `boolean` | no | Accepts a process identity in `stop` and keeps the receipt locally. |
 
 ### PingArgs
 
@@ -239,6 +247,15 @@ A recorded CLI exit. Without a code or signal, its status is unavailable; do not
 | `signal` | `string` | no | The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. Never on Windows. |
 | `reason` | `EndReason` | no | Why no code or signal is available, if known. If all three fields are absent, the exit status is unavailable. |
 | `at` | `string` | yes | The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or signal, the time Facade noticed it. |
+
+### ProcessIdentity
+
+A process ID with the process's birth value. The birth value tells a process apart from a later one given the same ID: on Linux, its start time from `/proc/<pid>/stat`; on macOS, its start time in seconds and microseconds; on Windows, its creation time in 100-nanosecond intervals.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `pid` | `number` | yes | The process ID. |
+| `birth` | `string` | yes | The process's birth value. |
 
 ### ProtocolMismatchDetails
 
@@ -270,6 +287,7 @@ A recorded CLI exit. Without a code or signal, its status is unavailable; do not
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `agent_id` | `string` | yes |  |
+| `creator_stop` | `ProcessIdentity` | no | For a creator's first stop, the exact process to record before it is stopped. |
 
 ### SyncArgs
 

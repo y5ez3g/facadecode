@@ -95,6 +95,7 @@ pub(crate) struct Terminal {
     paste: Option<OutputBoundary>,
     probe: Option<ProbeWrite>,
     probe_erase: Option<ProbeErase>,
+    cleanup: Option<OutputBoundary>,
     submissions: VecDeque<SubmissionOrder>,
 }
 
@@ -115,6 +116,7 @@ impl Terminal {
             paste: None,
             probe: None,
             probe_erase: None,
+            cleanup: None,
             submissions: VecDeque::new(),
         };
         if let Some(master) = master {
@@ -131,6 +133,7 @@ impl Terminal {
         self.paste = None;
         self.probe = None;
         self.probe_erase = None;
+        self.cleanup = None;
         self.stop_observing_submission();
         Ok(())
     }
@@ -147,12 +150,18 @@ impl Terminal {
         self.paste = None;
         self.probe = None;
         self.probe_erase = None;
+        self.cleanup = None;
         self.stop_observing_submission();
     }
 
     /// Waits until output can be read (only with `ReadAndWrite`) or queued input can be written, and does one of them.
-    /// Pending forever while there is nothing to do. Safe to cancel in `select!`; takes no locks.
-    pub(crate) async fn ready(&mut self, wait: TerminalWait) -> TerminalEvent {
+    /// Pending forever with nothing to do. Safe to cancel in `select!`. The write fence can
+    /// persist cleanup progress before the terminal issues any bytes.
+    pub(crate) async fn ready(
+        &mut self,
+        wait: TerminalWait,
+        mut before_write: impl FnMut(u64, usize) -> bool,
+    ) -> TerminalEvent {
         let read = matches!(wait, TerminalWait::ReadAndWrite);
         loop {
             let read_size = self.read_limit();
@@ -189,7 +198,16 @@ impl Terminal {
                 .output_boundaries()
                 .any(|boundary| boundary.in_write(self.sent, end));
             let started = OnceLock::new();
+            let offset = self.sent;
             let write = async {
+                if !guarded && !before_write(offset, head.len()) {
+                    return IoReady::Written(
+                        Err(io::Error::other(
+                            "could not save paste cleanup before writing",
+                        )),
+                        None,
+                    );
+                }
                 let mut writing = std::pin::pin!(async {
                     if guarded {
                         master
@@ -253,18 +271,16 @@ impl Terminal {
                         probe.issued = false;
                         probe.boundary.before = None;
                     }
-                    for boundary in
-                        self.paste
-                            .iter_mut()
-                            .chain(self.submissions.iter_mut().flat_map(|submission| {
-                                std::iter::once(&mut submission.enter).chain(
-                                    submission
-                                        .following_edit
-                                        .iter_mut()
-                                        .map(|edit| &mut edit.boundary),
-                                )
-                            }))
-                    {
+                    for boundary in self.paste.iter_mut().chain(&mut self.cleanup).chain(
+                        self.submissions.iter_mut().flat_map(|submission| {
+                            std::iter::once(&mut submission.enter).chain(
+                                submission
+                                    .following_edit
+                                    .iter_mut()
+                                    .map(|edit| &mut edit.boundary),
+                            )
+                        }),
+                    ) {
                         if boundary.in_write(written, end) {
                             boundary.before = None;
                         }
@@ -362,6 +378,7 @@ impl Terminal {
         self.paste
             .iter()
             .chain(self.probe.iter().map(|probe| &probe.boundary))
+            .chain(&self.cleanup)
             .chain(self.submissions.iter().flat_map(|submission| {
                 std::iter::once(&submission.enter)
                     .chain(submission.following_edit.iter().map(|edit| &edit.boundary))
@@ -370,10 +387,10 @@ impl Terminal {
 
     fn mark_output(&mut self, end: u64, prefix: Option<usize>) {
         let before = prefix.map(|n| self.output_read + n as u64);
-        if let Some(paste) = &mut self.paste
-            && paste.in_write(self.sent, end)
-        {
-            paste.before = before;
+        for boundary in self.paste.iter_mut().chain(&mut self.cleanup) {
+            if boundary.in_write(self.sent, end) {
+                boundary.before = before;
+            }
         }
         if let Some(probe) = &mut self.probe
             && probe.boundary.in_write(self.sent, end)
@@ -496,6 +513,7 @@ impl Terminal {
         self.paste = None;
         self.probe = None;
         self.probe_erase = None;
+        self.cleanup = None;
         self.stop_observing_submission();
     }
 
@@ -504,6 +522,7 @@ impl Terminal {
         self.input.len()
     }
 
+    /// The input queue position, including any canceled probe erase.
     pub(crate) fn input_through(&self) -> u64 {
         self.sent
     }
@@ -617,6 +636,35 @@ impl Terminal {
     pub(super) fn read_starts_at_probe(&self) -> bool {
         self.probe.as_ref().and_then(|probe| probe.boundary.before)
             == Some(self.output_read_start())
+    }
+
+    /// Watches the output boundary of the write that finishes a batch of Backspaces.
+    pub(crate) fn observe_cleanup_through(&mut self, through: u64) {
+        debug_assert!(through > self.sent);
+        self.cleanup = Some(OutputBoundary {
+            input: through,
+            before: None,
+        });
+    }
+
+    pub(crate) fn stop_observing_cleanup(&mut self) {
+        self.cleanup = None;
+    }
+
+    /// Whether an issued cleanup has actually been followed by readable output.
+    pub(crate) fn cleanup_output_seen(&self) -> bool {
+        self.cleanup.as_ref().is_none_or(|boundary| {
+            boundary
+                .before
+                .is_some_and(|before| self.output_read > before)
+        })
+    }
+
+    /// The screen can begin collecting fresh paint with this part of the stream.
+    pub(crate) fn read_starts_at_cleanup(&self) -> bool {
+        self.cleanup
+            .as_ref()
+            .is_some_and(|boundary| boundary.before == Some(self.output_read_start()))
     }
 
     /// Establish an output boundary when the write that includes the pending Enter is issued.
@@ -786,7 +834,7 @@ mod tests {
 
     /// The terminal's next event, or a failure after 10 seconds.
     async fn next(terminal: &mut Terminal) -> TerminalEvent {
-        let event = terminal.ready(TerminalWait::ReadAndWrite);
+        let event = terminal.ready(TerminalWait::ReadAndWrite, |_, _| true);
         tokio::time::timeout(Duration::from_secs(10), event)
             .await
             .expect("an event")
@@ -838,7 +886,7 @@ mod tests {
         let (mut terminal, mut cli) = opened();
         let waits = tokio::time::timeout(
             Duration::from_millis(10),
-            terminal.ready(TerminalWait::ReadAndWrite),
+            terminal.ready(TerminalWait::ReadAndWrite, |_, _| true),
         );
         assert!(waits.await.is_err(), "arm a read before the earlier output");
         cli.write_output(b"earlier output").unwrap();
@@ -857,6 +905,49 @@ mod tests {
         assert!(!terminal.output_precedes_submission());
     }
 
+    #[tokio::test]
+    async fn an_earlier_queued_redraw_does_not_follow_the_cleanup_write() {
+        let (mut terminal, mut cli) = opened();
+        terminal.push_probe_erase(b'\x7f', true);
+        terminal.cancel_probe_erase();
+        assert_eq!(terminal.input_through(), 1);
+        assert_eq!(terminal.written(), 0);
+        let armed = tokio::time::timeout(
+            Duration::from_millis(10),
+            terminal.ready(TerminalWait::ReadAndWrite, |_, _| true),
+        );
+        assert!(armed.await.is_err());
+        cli.write_output(b"earlier redraw").unwrap();
+        terminal.push(b"\x7f");
+        terminal.observe_cleanup_through(2);
+        let mut fence = None;
+        let event = tokio::time::timeout(
+            Duration::from_secs(5),
+            terminal.ready(TerminalWait::WriteOnly, |offset, count| {
+                fence = Some((offset, count));
+                true
+            }),
+        )
+        .await
+        .expect("the cleanup key reaches the terminal");
+        assert!(matches!(event, TerminalEvent::Wrote));
+        assert_eq!(fence, Some((1, 1)));
+        assert_eq!(terminal.input_through(), 2);
+        assert_eq!(terminal.written(), 1);
+        assert!(!terminal.cleanup_output_seen());
+
+        cli.write_output(b"new redraw").unwrap();
+        assert!(matches!(next(&mut terminal).await, TerminalEvent::Read));
+        assert_eq!(terminal.output(), b"earlier redraw");
+        assert!(!terminal.cleanup_output_seen());
+        assert!(!terminal.read_starts_at_cleanup());
+
+        assert!(matches!(next(&mut terminal).await, TerminalEvent::Read));
+        assert_eq!(terminal.output(), b"new redraw");
+        assert!(terminal.cleanup_output_seen());
+        assert!(terminal.read_starts_at_cleanup());
+    }
+
     /// Issues a tracked Enter in a full pipe, drains it, and leaves the CLI's reply waiting.
     #[cfg(windows)]
     async fn pending_enter() -> (Terminal, TestCli) {
@@ -869,7 +960,7 @@ mod tests {
         terminal.observe_output_after(input.len() as u64);
         let waiting = tokio::time::timeout(
             Duration::from_millis(20),
-            terminal.ready(TerminalWait::WriteOnly),
+            terminal.ready(TerminalWait::WriteOnly, |_, _| true),
         );
         assert!(waiting.await.is_err(), "the marked write is pending");
 
@@ -892,7 +983,7 @@ mod tests {
         let (mut terminal, _cli) = pending_enter().await;
         let completion = tokio::time::timeout(
             Duration::from_secs(5),
-            terminal.ready(TerminalWait::WriteOnly),
+            terminal.ready(TerminalWait::WriteOnly, |_, _| true),
         )
         .await
         .expect("the CLI took the tracked Enter");
@@ -933,7 +1024,7 @@ mod tests {
             assert!(matches!(next(&mut terminal).await, TerminalEvent::Wrote));
             let waits = tokio::time::timeout(
                 Duration::from_millis(20),
-                terminal.ready(TerminalWait::ReadAndWrite),
+                terminal.ready(TerminalWait::ReadAndWrite, |_, _| true),
             );
             assert!(waits.await.is_err(), "the second write waits");
             let mut left = 2 * MAX_WRITE_BYTES;

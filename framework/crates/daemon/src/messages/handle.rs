@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 use facade_base::model::{agent::ManagedAgent, message::DeliveryFailure};
 
 use super::{Deliveries, Outcome, PromptNotice, PromptWatch, warn};
+use crate::store::{DraftDigest, DraftProof};
 use crate::{blocking_in_place, pause_for_test};
 
 /// What a typist may ask of the messages: whether a message is still to be typed, leave to paste
@@ -55,6 +56,26 @@ impl DeliveryHandle {
             }
         }
         Some(granted)
+    }
+
+    pub(crate) fn observe_paste(&self, number: u64, draft: &DraftDigest) -> bool {
+        blocking_in_place(|| self.0.table.observe_paste(number, draft)).unwrap_or_else(|err| {
+            warn(&format!("{err:#}"));
+            false
+        })
+    }
+
+    pub(crate) fn forget_paste_draft(&self, number: u64) -> bool {
+        blocking_in_place(|| self.0.table.forget_paste_draft(number))
+            .inspect_err(|err| warn(&format!("{err:#}")))
+            .is_ok()
+    }
+
+    pub(crate) fn record_cleanup(&self, number: u64, proof: DraftProof) -> bool {
+        blocking_in_place(|| self.0.table.record_cleanup(number, proof)).unwrap_or_else(|err| {
+            warn(&format!("{err:#}"));
+            false
+        })
     }
 
     /// Ends the deliveries among `numbers` still open, as `outcome` says.

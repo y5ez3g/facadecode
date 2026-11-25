@@ -11,8 +11,9 @@ public `run()` entry point.
 - `framework/facade.db`, including the record and message counters, run identity, launch options, creation
   source, Guest snapshots, saved SSH arguments and remembered routes. Earlier window and membership
   records stay in the store. The extension owns current workspace membership and Pins.
-- The transactions that commit a start with its prompt, settle a message, and remove an agent with
-  its inbox. A record removal keeps the reason needed to distinguish expiry from explicit removal.
+- The transactions that commit a start with its prompt, record a run's exit with its local creator
+  notice, settle a message, and remove an agent with its inbox. A record removal keeps the reason
+  needed to distinguish expiry from explicit removal.
 - The target and checked reply reference for a send with an internal request ID. The origin
   recovers both after a restart. The recipient looks for the original receipt before it checks
   whether a new message can be sent.
@@ -148,14 +149,14 @@ the live route. [Start transaction](../../../framework/crates/daemon/src/store/m
 
 ### Opening and upgrading a store
 
-The current database schema is `user_version = 6`. SQLite reserves this number for the application.
+The current database schema is `user_version = 7`. SQLite reserves this number for the application.
 The daemon and Keeper negotiate their API versions independently.
 
 Fresh stores initialize in their own transaction. The open path first refuses a nonempty development
 schema missing `saved_connections` before normal WAL setup. It disables checkpoint-on-close for that
 connection to preserve the existing database and WAL.
 
-Versions below 6 enter one migration transaction. For a version below 3, the daemon first snapshots known
+Versions below 7 enter one migration transaction. For a version below 3, the daemon first snapshots known
 machine names, adds normalized SSH arguments and last-seen timestamps, and creates the remembered-route and
 send-route tables and private receipt field. It adds Guest YOLO at version 0. Below 2 it adds the message
 withdrawal field and replaces the request index. Then it adds the agent start, launch, authentication and
@@ -163,10 +164,16 @@ removal fields. For agents missing launch choices it snapshots configured model 
 with empty original arguments.
 
 Below 4 it adds nullable `agents.launch_command`. Below 5 it adds `messages.command_line_reply` with
-default false. Below 6 it adds `messages.notify_failure` with default false. Both additions preserve existing
-messages, numbers and receipt keys. The migration writes `user_version` in the same transaction. A failed
-migration rolls back and open fails. Version 6 or higher proceeds to normal reads. A newer layout may reach
-the ordinary writers if those reads succeed.
+default false. Below 6 it adds `messages.notify_failure` with default false. Below 7 it adds nullable
+`agents.creator_stop`, `messages.paste_header` and `messages.paste_draft`. The daemon uses
+`creator_stop` to keep an older Keeper's positive acknowledgement for the installed process ID and
+birth. A supporting Keeper saves its own acceptance in the run folder. When recovery adopts an
+uncommitted resume, it saves the Keeper's process ID and birth together so a later recovery can
+match that run's stop receipt. Relay credentials continue to require their own evidence.
+Version 6 reads and writes its known columns and can reopen a stopped version 7 home. It uses
+version 6 notice behavior.
+The migration writes `user_version` in the same transaction. A failed migration rolls back and open fails.
+Version 7 or higher proceeds to normal reads. A newer layout may reach the ordinary writers if those reads succeed.
 Recovery keeps unreadable agent rows and reserves their IDs. Keep a consistent backup of the whole stopped home
 and its workspace state before a format change. Opening a migrated store with older code has no general rollback
 guarantee. Use the backup if the change's approved rollback procedure requires it.
@@ -215,10 +222,12 @@ old messages and receipts, and prunes the daemon log.
 
 A managed agent with an agent creator earns one notice after the serving daemon observes a continuous
 30-second wait for permission, an answer or login, or a continuous 30-second error. A replacement daemon
-starts a fresh observation interval. A natural exit, a crash or a stop
-from another caller earns a notice at once. The creator must still be live. Recovery allows the next
-incident to earn a notice. An initial message failure and its startup trouble share one receipt.
-A Guest receives its notices through `read_messages`.
+starts a fresh observation interval. A natural exit, a crash or a stop from another caller earns a notice
+for the live creator. The exit and the local inbox notice commit together. A failed first prompt that
+reports the exit writes the same exit with its reserved result. When recovery first discovers an exit,
+it settles any first prompt and uses the same exit transaction. Recovery uses the Keeper's receipt
+for that process or an older Keeper's saved acknowledgement to attribute a stop to the creator. An
+exit without that evidence earns the usual notice. A Guest receives its notices through `read_messages`.
 
 ### agent
 
@@ -479,12 +488,42 @@ A managed terminal sees `📨 Message mN from <sender>` above the body. Replies 
 sender has a `#c` address only while waiting for a reply. A notice begins with `🔔` followed by its
 text. Its record number is available in the inbox.
 
-When a daemon recovers an already begun paste, it checks the draft against the message formats
-before and after the header change. An older Claude draft may show part of the header before its
-paste placeholder. Recovery recognizes that visible prefix with the matching placeholder. It keeps
-the original deadline and submits the existing draft once. If both formats
-still match at the deadline and their lengths differ, recovery leaves the text in the input and
-reports unconfirmed submission.
+At paste start, the daemon records the header version alongside the paste number. Version 1 puts the
+message number before the sender and omits the number on notices. Recovery uses the stored format
+to compare the rendered draft with the paste. Older or revoked observations provide no authority
+to press a key.
+
+Recovery requires a matching digest of the full draft the original typist saw after writing it.
+The digest includes the logical text in Unicode NFC, the placeholder number where shown, and
+the caret's byte offset in that text. Reads also recognize existing v7 raw-byte proofs. Moving or
+rewrapping the box preserves the proof. Final horizontal padding maps to a single caret position
+at the end of the text. The typist counts cleanup keys from the original paste using the editor's
+deletion unit from Rules. A matching draft may be submitted within its original deadline or
+cleared afterward if the cleanup count is known. The actor revokes the observation before
+allowing other input to write.
+
+The local `paste_draft` blob keeps its 32-byte digest and appends five bytes when cleanup begins,
+including when the confirmed Backspace count is zero. Before a PTY write that could contain
+cleanup keys, the actor commits a marker for the outstanding write. The terminal's returned byte
+count advances the confirmed count. After a confirmed partial write, only a complete repaint of
+the current draft after the write boundary can authorize the remaining Backspaces. The typist
+checks the saved digest and the exact literal prefix and caret left by the confirmed keys.
+Canonical spellings of a combining character match at the same logical caret. Without a
+recorded deletion unit, the typist issues at most one Backspace per grapheme before reading
+again. Each additional batch needs the confirmed write progress and a complete repaint
+showing the exact remaining prefix at its end. Reading the cleared box ends cleanup.
+A recovered plan with zero confirmed writes also needs a current complete input frame. The actor
+drains available terminal output within its existing bounds before checking the box. An outstanding
+write or an unreadable box leaves the cleanup intent waiting for more evidence.
+At takeover, a live drain that shows a freshly painted empty input can also finish cleanup.
+When a saved cleanup needs a redraw, the actor uses a brief row-count resize. This lets a
+bottom-aligned input move so a terminal that emits only changed cells can send the current box.
+
+The delivery receipt settles on its original deadline and graces. An unresolved cleanup stays
+in the v7 field across receipt settlement, inbox history expiry, and daemon takeover. A complete
+reading that shows the paste has left the input, an edit from another writer, or the end of the
+run retires its cleanup. Recovery resumes the cleanup of a settled message without reopening its
+receipt or repasting the message.
 
 An explicit inbox-only send returns after storage commits, and delivery continues on its background deadline.
 For a send from an authenticated agent, the original admission stores `notify_failure` with the sender and
@@ -499,8 +538,9 @@ request. If the source is a peer, confirmation goes back along an authenticated 
 the private reply receipt. The persisted original remains identifiable after the waiter ends.
 
 - Post serializes the first terminal paste, inbox settlement and withdrawal under its delivery
-  lock. A read takes only pending messages whose paste has yet to begin. An explicit history page
-  can also include previously delivered messages. The selector and optional reply filter run
+  lock. A read takes pending messages whose paste has yet to begin and Facade notices whose automatic
+  submission failed with no submission key sent. An explicit history page can also include delivered
+  messages and unconfirmed notices. The selector and optional reply filter run
   before applying the limit. The client projects complete messages and returns the prefix Post
   must settle. Post commits that prefix and the results it owes together.
 - A send without a reply reference can overlap a Guest waiting for a specific reply. When the
