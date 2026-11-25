@@ -220,6 +220,8 @@ No notification or message is scheduled for replay on the next opening.
 An ordinary message is one full paste plus Enter, not one Enter per line: none of its line breaks acts as the
 CLI's own Enter (CLIS-2.1). Codex on Windows can take a tab in it for its own Tab key (CLIS-2.1). Direct text/keys use
 the same serialization.
+The Framework uses the CLI rule's paste brackets for automatic messages and first prompts, including when the mode
+is missing from the screen recovered after a daemon crash.
 While another delivery's text may still be in that input - written, neither confirmed nor ended - or its run's
 post-start creation prompt, its preparation included, is neither delivered nor given up (COLLABORATION-2.2), no message
 is pasted into it: that input is held for it, as by a draft. Waiting in that sequence does not renew deadlines. Stop is

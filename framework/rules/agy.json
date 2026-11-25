@@ -23,6 +23,7 @@
 		"menus": [{ "selected": "^ ?> \\S", "not_selected": "^ ?> /", "next": "^ {2,3}\\S", "hint": { "pattern": "^ {2,3}↑/↓ Navigate · ", "within": 8 } }]
 	},
 	"paste": {
+		"bracketed": true,
 		"enter_ms": 80,
 		"line_ms": 45,
 		"placeholders": [

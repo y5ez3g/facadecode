@@ -16,6 +16,7 @@
 		"menus": [{ "selected": "^⟩ \\d+ +\\S", "next": "^ {2}\\d+ +\\S" }]
 	},
 	"paste": {
+		"bracketed": true,
 		"enter_ms": 250,
 		"placeholders": [
 			{ "pattern": "^\\[PastedContent(\\d+)chars?\\]$", "count": "chars" },

@@ -341,6 +341,8 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
 - **Keeps:**
   - Each call goes in whole and in order; a pause counts from when its bytes reached the terminal.
   - `DeliveryHandle::begin_paste` records the paste before the typist writes the complete message in one paste.
+    Automatic delivery takes its paste brackets from the CLI rule, including after a daemon restart.
+    A direct text call follows the screen's bracketed paste mode.
   - The submission key goes once the input box shows this paste alone and stays still for the CLI's settle time.
     Codex queues an ordinary message with Tab while Working. The start prompt and recovered pastes use Enter.
   - A message is delivered once its submission key reaches the terminal. When the deadline expires before

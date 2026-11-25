@@ -402,6 +402,42 @@ fn a_guest_s_start_prompt_that_outlives_its_daemon_is_silent_on_success() {
     assert_eq!(read["data"]["messages"], json!([]), "{read}");
 }
 
+/// A replacement daemon can recover a usable input without the CLI's bracketed paste mode.
+/// The CLI still reads brackets, so it takes the first prompt as a single paste.
+#[test]
+fn a_recovered_multiline_prompt_is_bracketed_even_without_the_saved_mode() {
+    let home = TestHome::new("promptrestartpaste");
+    home.start_facade_with(&[("FACADE_TEST_GATES", "before-prompt-delivery")]);
+    let (mut guest, address) = guest(&home, &[("FAKECLI_UNANNOUNCED_PASTE", "1")]);
+    let body = "first line\n\nsecond line\nthird line";
+    start_from_the_guest(&home, &mut guest, body);
+    home.wait_for_gate("before-prompt-delivery");
+    assert!(home.submitted_messages().is_empty());
+    crash(&home);
+
+    let ending = format!(" ({address})\n{body}");
+    assert!(
+        wait_until(secs(40), || !home.submitted_messages().is_empty()),
+        "{}",
+        home.daemon_log()
+    );
+    let prompts = home.submitted_messages();
+    assert!(
+        matches!(prompts.as_slice(), [prompt]
+            if prompt.starts_with("📨 Message m1 from ") && prompt.ends_with(&ending)),
+        "expected one complete prompt, got {prompts:?}"
+    );
+    home.run_facade_ok(&["send", "child", "next\nmessage", "-w"]);
+    assert_eq!(
+        home.submitted_messages(),
+        [
+            prompts[0].clone(),
+            "📨 Message m3 from command line\nnext\nmessage".into()
+        ],
+        "the recovered prompt and next message were each submitted once"
+    );
+}
+
 /// A failure result read before it is typed is delivered by the read, with its facts, and never
 /// typed.
 #[test]

@@ -224,11 +224,14 @@ pub fn console_typing(rule: &Rule) -> Option<ConsoleTyping> {
     })
 }
 
-/// How the CLI takes a pasted message: what its input shows of a paste, and how long the message
-/// shows there before submitting it.
+/// How the CLI takes a pasted message: its terminal mode, what its input shows, and how long a
+/// message shows there before submission.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PasteRule {
+    /// The CLI enables bracketed paste on every screen where Facade can deliver a message.
+    #[serde(default)]
+    bracketed: bool,
     /// How long a message shows as the input's own draft before submission, in milliseconds.
     #[serde(default)]
     pub enter_ms: u64,
@@ -700,6 +703,11 @@ fn is_literal(arg: &str) -> bool {
 }
 
 impl PasteRule {
+    /// Whether automatic delivery uses paste brackets.
+    pub fn brackets_delivery(&self) -> bool {
+        self.bracketed
+    }
+
     /// Which key submits a checked message draft.
     pub fn submission_key(&self, working: bool) -> Key {
         if working && self.tab_while_working {
@@ -1229,6 +1237,13 @@ mod tests {
                 find(raw).unwrap().is_none(),
                 "{raw} is a program without a rule"
             );
+        }
+    }
+
+    #[test]
+    fn every_ruled_cli_enables_bracketed_paste_on_its_delivery_screens() {
+        for rule in rules().unwrap() {
+            assert!(rule.paste.brackets_delivery(), "{}", rule.cli);
         }
     }
 

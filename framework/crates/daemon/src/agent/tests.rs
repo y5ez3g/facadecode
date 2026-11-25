@@ -1981,9 +1981,10 @@ async fn a_start_readies_antigravity_s_tools_before_its_first_turn() {
     harness.agy_panel(true);
     assert_eq!(harness.cli_reads(1), b"\x1b");
     harness.agy_input("");
+    let paste = "\x1b[200~📨 hello\x1b[201~".as_bytes();
     assert_eq!(
-        String::from_utf8(harness.cli_reads("📨 hello".len())).unwrap(),
-        "📨 hello",
+        harness.cli_reads(paste.len()),
+        paste,
         "the message goes in after"
     );
     harness.stop().await;

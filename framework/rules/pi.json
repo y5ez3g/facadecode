@@ -16,6 +16,7 @@
 		"menus": [{ "selected": "^ ?→ \\S", "next": "^ {2,4}\\S", "hint": { "pattern": "[Ee]scape/[Cc]trl\\+[Cc]", "within": 40 } }]
 	},
 	"paste": {
+		"bracketed": true,
 		"enter_ms": 80,
 		"placeholders": [
 			{ "pattern": "^\\[paste#\\d+\\+(\\d+)lines?\\]$", "count": "lines" },

@@ -15,6 +15,7 @@
 		"menus": [{ "selected": "^› \\d+\\. \\S", "next": "^ {2}\\d+\\. \\S", "hint": { "pattern": "^ {2}(?:Press )?[Ee]nter\\b", "within": 10 } }]
 	},
 	"paste": {
+		"bracketed": true,
 		"enter_ms": 80,
 		"tab_while_working": true,
 		"placeholders": [

@@ -259,6 +259,7 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - A probe is judged from two readings, before its key and after, never from the time between them: whether its space went in by the cursor and the text, what the row was by the text alone, and whether Backspace put the box back by every cell and the cursor.
   - The evidence names the rows, never the draft's text. The draft's text leaves `read_draft` only as its second value and is never saved.
   - A message's own draft is its full text or the CLI's placeholder for a paste of that size. Whitespace is ignored because wrapping and indentation draw it differently. A draft scrolled out above only has to show the text's end.
+  - `paste.bracketed` says the CLI enables bracketed paste on all screens where Facade can deliver a message.
   - OpenCode's `[Pasted ~N lines]` counts the lines after trimming whitespace from both ends of the paste.
     Claude Code's `[Pasted text #N]` matches a paste with no line break.
     Antigravity's `[Pasted text #N M chars]` counts Unicode scalar values, including line breaks.
@@ -280,6 +281,7 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     tracking when the CLI takes a person's draft.
   - `with_paste_text(&PasteRule, draft, pastes) -> String`: the agent actor uses it to give back the pasted text behind each placeholder in a draft the person submits.
   - For the typist:
+    - `PasteRule::brackets_delivery() -> bool` selects whether to wrap automatic delivery in paste brackets.
     - `is_own_draft(&PasteRule, draft, text, hidden) -> bool` matches the message in the input box before submission.
     - `is_legacy_split_paste(&PasteRule, draft, prefix, pasted) -> bool` matches an older daemon's visible typed prefix and the paste placeholder during recovery.
     - `settle_time(&PasteRule, text) -> Duration` gives the base wait plus the wait for each line.

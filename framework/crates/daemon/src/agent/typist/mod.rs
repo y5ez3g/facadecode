@@ -646,7 +646,7 @@ impl Typist {
                 None => self.emit_call(queued, modes),
             }
         } else {
-            self.advance_delivery(now, queued, modes, typed, read, pause)
+            self.advance_delivery(now, queued, modes.working, typed, read, pause)
         }
     }
 
@@ -906,7 +906,7 @@ impl Typist {
         &mut self,
         now: Instant,
         offset: u64,
-        modes: Modes,
+        working: bool,
         typed: u64,
         read: &dyn Fn() -> BoxReading,
         paused: Option<Instant>,
@@ -930,7 +930,7 @@ impl Typist {
                     now,
                     offset,
                     typed,
-                    modes.working,
+                    working,
                     read(),
                     paused,
                 ),
@@ -1001,7 +1001,7 @@ impl Typist {
                 let mut write = Vec::new();
                 write_paste(
                     &draft.paste.text,
-                    modes.bracketed_paste,
+                    rule.brackets_delivery(),
                     self.console,
                     &mut write,
                 );
@@ -1248,7 +1248,7 @@ impl Stroke {
     }
 }
 
-/// A paste of `text`, between the paste brackets where the CLI asked for them. Its line breaks go
+/// A paste of `text`, between the paste brackets when `bracketed`. Its line breaks go
 /// as the `console`'s line break key where it has one. Otherwise they go as returns between the
 /// brackets, and as they are without brackets.
 fn write_paste(text: &str, bracketed: bool, console: Option<ConsoleTyping>, bytes: &mut Vec<u8>) {

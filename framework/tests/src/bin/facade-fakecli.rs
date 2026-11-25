@@ -13,7 +13,8 @@
 //! it hold its console's closing up and start a child outside the console, writing the child's
 //! process ID to `<file>`. `FAKECLI_KEYLOG=<file>` notes when each read of input arrives and when
 //! the frame it drew is written (`note_key_time`). `FAKECLI_READ_GATE=<file>` holds input reads
-//! until the test creates the file.
+//! until the test creates the file. `FAKECLI_UNANNOUNCED_PASTE=1` accepts bracketed paste without
+//! reporting the mode, as seen by a daemon that lost that output in a crash.
 //! For the stress test, `--flood` writes a line every 10 milliseconds until the agent stops.
 //! For the Attach exit test, `--attach-exit` waits for the exact line `finish` and exits with 23.
 //!
@@ -1414,7 +1415,9 @@ fn run() -> anyhow::Result<()> {
             write!(out, "{line}\r\n")?;
         }
     }
-    let _ = out.write_all(b"\x1b[?2004h");
+    if std::env::var_os("FAKECLI_UNANNOUNCED_PASTE").is_none() {
+        let _ = out.write_all(b"\x1b[?2004h");
+    }
     app.draw(&mut out);
 
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
