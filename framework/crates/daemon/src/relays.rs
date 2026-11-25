@@ -5,8 +5,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use facade_base::api_v1::daemon::{self as wire, AgentKind};
-use facade_base::api_v1::daemon_client::{DaemonClient, upgrading};
-use facade_base::model::agent::{AgentRef, AgentsUpdate, is_session_id};
+use facade_base::model::agent::{AgentRef, AgentsUpdate, ManagedAgent, is_session_id};
 use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::process::ProcessState;
 use facade_base::{system, unix_process};
@@ -14,12 +13,15 @@ use serde_json::{Value, json};
 
 use crate::agent::AgentHandle;
 use crate::guests::{GuestJoin, RelayProcess};
+use crate::lifecycle::RelayLink;
+use crate::machine_service::agent_caller;
 use crate::mcp::{
-    self, ActorIdentity, ActorServices, DiscoverClis, ReadReply, Relay, RelayHelloParams,
+    self, ActorIdentity, ActorServices, DiscoverClis, InboxAnswer, InboxOutput, ReadReply, Relay,
+    RelayHelloParams, ToolsPresence,
 };
-use crate::messages::{InboxRead, ReplyRead};
+use crate::messages::{InboxRead, InboxSelection, ReplyRead};
 use crate::runs::RunIdentity;
-use crate::server::{self, RelayLines};
+use crate::server::{Outbox, RelayHandshake, RelayLines, RelayResponse, WhenFull};
 use crate::{Cancel, Daemon, api, blocking_in_place};
 
 struct RelayEvidence {
@@ -32,6 +34,19 @@ struct RelayEvidence {
 struct BoundActor {
     reference: AgentRef,
     run: Option<(u64, u32)>,
+}
+
+struct CurrentActor {
+    handle: AgentHandle,
+    info: ManagedAgent,
+}
+
+struct RelayTools(tokio::task::JoinHandle<()>);
+
+impl Drop for RelayTools {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 impl BoundActor {
@@ -61,7 +76,7 @@ impl BoundActor {
         }
     }
 
-    fn current(&self, daemon: &Daemon, process: &RelayProcess) -> Result<AgentHandle, ErrorBody> {
+    fn current(&self, daemon: &Daemon, process: &RelayProcess) -> Result<CurrentActor, ErrorBody> {
         let unavailable = || ErrorBody::new(Reason::Unavailable, "this relay's run has ended");
         let handle = daemon
             .get_agent(&self.reference.agent_id)
@@ -81,7 +96,9 @@ impl BoundActor {
                     && daemon.guests.member_of(process).as_ref() == Some(&self.reference.agent_id)
             }
         };
-        current.then_some(handle).ok_or_else(unavailable)
+        current
+            .then_some(CurrentActor { handle, info })
+            .ok_or_else(unavailable)
     }
 }
 
@@ -89,6 +106,7 @@ struct RelayConnection {
     daemon: Arc<Daemon>,
     relay: Arc<Relay>,
     process: RelayProcess,
+    link: Arc<RelayLink>,
 }
 
 enum RelayInbox {
@@ -101,9 +119,10 @@ impl Daemon {
         self: &Arc<Self>,
         params: Value,
         peer_pid: Option<u32>,
-    ) -> Result<(Value, Arc<dyn RelayLines>), ErrorBody> {
+    ) -> Result<RelayHandshake, ErrorBody> {
         let process = relay_process(peer_pid)?;
         let hello = RelayHelloParams::decode(params)?;
+        let link = self.lifecycle.relays.join()?;
         let evidence = Arc::new(RelayEvidence {
             process: process.clone(),
             env: hello
@@ -121,132 +140,170 @@ impl Daemon {
         let relay = Arc::new(self.relay(hello, evidence));
         if relay.reconnect() {
             let relay = relay.clone();
-            tokio::task::spawn_blocking(move || relay.hold_verified_presence());
+            tokio::spawn(async move { relay.hold_verified_presence() });
         }
         let lines = RelayConnection {
             daemon: self.clone(),
             relay,
             process,
+            link: link.clone(),
         };
-        Ok((json!({ "relay": mcp::RELAY_CONTRACT }), Arc::new(lines)))
+        Ok(RelayHandshake {
+            answer: json!({ "relay": mcp::RELAY_CONTRACT, "request_context": true }),
+            lines: Arc::new(lines),
+            link,
+        })
     }
 
     fn relay(self: &Arc<Self>, hello: RelayHelloParams, evidence: Arc<RelayEvidence>) -> Relay {
-        let runtime = tokio::runtime::Handle::current();
         let bound: Arc<OnceLock<BoundActor>> = Arc::new(OnceLock::new());
         let (pid, birth) = (evidence.process.pid, evidence.process.birth.clone());
-        let authenticate = {
-            let (daemon, runtime, evidence, bound) = (
-                self.clone(),
-                runtime.clone(),
-                evidence.clone(),
-                bound.clone(),
-            );
+        let authenticate: mcp::verified::Authenticate = {
+            let (daemon, evidence, bound) = (self.clone(), evidence.clone(), bound.clone());
             Box::new(
                 move |credential: Option<&str>, meta: Option<&Value>, app: Option<&str>| {
-                    let actor = match daemon.relay_run(&evidence, credential, meta)? {
-                        Some(run) => BoundActor::managed(run, &daemon.machine_id),
-                        None => {
-                            let id = runtime.block_on(daemon.join_relay_guest(&evidence, app))?;
-                            BoundActor {
-                                reference: AgentRef {
-                                    machine_id: daemon.machine_id.clone(),
-                                    agent_id: id,
-                                },
-                                run: None,
+                    let (daemon, evidence, bound) =
+                        (daemon.clone(), evidence.clone(), bound.clone());
+                    Box::pin(async move {
+                        let run =
+                            blocking_in_place(|| daemon.relay_run(&evidence, credential, meta))?;
+                        let actor = match run {
+                            Some(run) => BoundActor::managed(run, &daemon.machine_id),
+                            None => {
+                                let id = daemon.join_relay_guest(&evidence, app).await?;
+                                BoundActor {
+                                    reference: AgentRef {
+                                        machine_id: daemon.machine_id.clone(),
+                                        agent_id: id,
+                                    },
+                                    run: None,
+                                }
                             }
-                        }
-                    };
-                    let handle = actor.current(&daemon, &evidence.process)?;
-                    let identity = actor.identity(&handle);
-                    bound.set(actor).ok();
-                    Ok(identity)
+                        };
+                        let current = actor.current(&daemon, &evidence.process)?;
+                        let identity = actor.identity(&current.handle);
+                        bound.set(actor).ok();
+                        Ok(identity)
+                    })
                 },
             )
         };
-        let connect = {
-            let (daemon, runtime, evidence, bound) = (
-                self.clone(),
-                runtime.clone(),
-                evidence.clone(),
-                bound.clone(),
-            );
-            Box::new(move |reference: &AgentRef, send_deadline| {
-                let actor = attached_actor(&bound, reference)?;
-                daemon.connect_relay_actor(&runtime, &evidence.process, actor, send_deadline)
-            })
-        };
-        let read_inbox = {
-            let (daemon, runtime, evidence, bound) = (
-                self.clone(),
-                runtime.clone(),
-                evidence.clone(),
-                bound.clone(),
-            );
+        let call: mcp::verified::ActorCall = {
+            let (daemon, evidence, bound) = (self.clone(), evidence.clone(), bound.clone());
             Box::new(
-                move |reference: &AgentRef, read: InboxRead, cancel: Cancel| {
-                    let actor = attached_actor(&bound, reference)?;
-                    runtime.block_on(daemon.read_relay_inbox(
-                        actor,
-                        &evidence,
-                        RelayInbox::Page(read),
-                        cancel,
-                    ))
+                move |reference: &AgentRef, call: wire::DaemonCall, deadline, cancel| {
+                    let (daemon, evidence, bound) =
+                        (daemon.clone(), evidence.clone(), bound.clone());
+                    Box::pin(async move {
+                        call.authorize(wire::ClientKind::Mcp)?;
+                        if let Some(error) = daemon.lifecycle.draining() {
+                            return Err(error);
+                        }
+                        let actor =
+                            attached_actor(&bound, reference).map_err(api::project_error)?;
+                        let CurrentActor { handle, info } = actor
+                            .current(&daemon, &evidence.process)
+                            .map_err(api::project_error)?;
+                        let caller = agent_caller(&info);
+                        drop(info);
+                        let calling = daemon.call_with_result(
+                            &caller,
+                            call,
+                            WhenFull::Refuse,
+                            cancel,
+                            None,
+                            deadline,
+                        );
+                        let Some((run, _)) = actor.run else {
+                            return calling.await;
+                        };
+                        let tools = handle.tools_connected();
+                        tokio::pin!(calling);
+                        tokio::select! {
+                            result = &mut calling => result,
+                            () = run_ended(&handle, run) => {
+                                drop(tools);
+                                calling.await
+                            }
+                        }
+                    })
+                },
+            )
+        };
+        let read_inbox: mcp::verified::ReadInbox = {
+            let (daemon, evidence, bound) = (self.clone(), evidence.clone(), bound.clone());
+            Box::new(
+                move |reference: &AgentRef, read: InboxRead, cancel: Cancel, output| {
+                    let (daemon, evidence, bound) =
+                        (daemon.clone(), evidence.clone(), bound.clone());
+                    Box::pin(async move {
+                        let actor = attached_actor(&bound, reference)?;
+                        daemon
+                            .read_relay_inbox(
+                                actor,
+                                &evidence,
+                                RelayInbox::Page(read),
+                                cancel,
+                                output,
+                            )
+                            .await
+                    })
                 },
             )
         };
         let read_reply: ReadReply = {
-            let (daemon, runtime, evidence, bound) = (
-                self.clone(),
-                runtime.clone(),
-                evidence.clone(),
-                bound.clone(),
-            );
-            Box::new(move |reference, read, cancel| {
-                let actor = attached_actor(&bound, reference)?;
-                let mut page = runtime.block_on(daemon.read_relay_inbox(
-                    actor,
-                    &evidence,
-                    RelayInbox::Reply(read),
-                    cancel,
-                ))?;
-                Ok(page["data"]["messages"].as_array_mut().and_then(Vec::pop))
+            let (daemon, evidence, bound) = (self.clone(), evidence.clone(), bound.clone());
+            Box::new(move |reference, read, cancel, output| {
+                let (daemon, evidence, bound) = (daemon.clone(), evidence.clone(), bound.clone());
+                Box::pin(async move {
+                    let actor = attached_actor(&bound, reference)?;
+                    daemon
+                        .read_relay_inbox(actor, &evidence, RelayInbox::Reply(read), cancel, output)
+                        .await
+                })
             })
         };
         let discover_clis: DiscoverClis = {
-            let (daemon, runtime, evidence) = (self.clone(), runtime.clone(), evidence.clone());
+            let (daemon, evidence, bound) = (self.clone(), evidence.clone(), bound.clone());
             Box::new(move |reference, machines, deadline| {
-                let actor = attached_actor(&bound, reference)
-                    .and_then(|actor| actor.current(&daemon, &evidence.process));
-                match actor {
-                    Ok(agent) => {
-                        runtime.block_on(daemon.relay_clis(agent, machines, deadline.into()))
+                let (daemon, evidence, bound) = (daemon.clone(), evidence.clone(), bound.clone());
+                Box::pin(async move {
+                    let actor = attached_actor(&bound, reference)
+                        .and_then(|actor| actor.current(&daemon, &evidence.process));
+                    match actor {
+                        Ok(current) => {
+                            daemon
+                                .relay_clis(current.info, machines, deadline.into())
+                                .await
+                        }
+                        Err(error) => machines
+                            .iter()
+                            .filter(|machine| machine.status == wire::QueryStatus::Answered)
+                            .map(|machine| (machine.machine_id.clone(), Err(error.message.clone())))
+                            .collect(),
                     }
-                    Err(error) => machines
-                        .iter()
-                        .filter(|machine| machine.status == wire::QueryStatus::Answered)
-                        .map(|machine| (machine.machine_id.clone(), Err(error.message.clone())))
-                        .collect(),
-                }
+                })
             })
         };
         let managed_instructions = {
             let daemon = self.clone();
             let evidence = evidence.clone();
             Box::new(move |credential: Option<&str>| {
-                let Some(run) = daemon.relay_run(&evidence, credential, None)? else {
+                let Some(run) =
+                    blocking_in_place(|| daemon.relay_run(&evidence, credential, None))?
+                else {
                     return Ok(None);
                 };
                 let actor = BoundActor::managed(run, &daemon.machine_id);
-                let handle = actor.current(&daemon, &evidence.process)?;
-                if handle
+                let current = actor.current(&daemon, &evidence.process)?;
+                if current
+                    .handle
                     .rule()
                     .is_some_and(facade_rules::managed_instructions_from_hook)
                 {
                     return Ok(None);
                 }
-                let (_, info) = handle.installed_record();
-                let instructions = daemon.instructions_for_current_run(&info)?;
+                let instructions = daemon.instructions_for_current_run(&current.info)?;
                 actor.current(&daemon, &evidence.process)?;
                 Ok(Some(instructions))
             })
@@ -254,16 +311,25 @@ impl Daemon {
         let ready = {
             let daemon = self.clone();
             Box::new(move |credential: Option<&str>| {
-                let Some(run) = daemon.relay_run(&evidence, credential, None)? else {
+                let Some(run) =
+                    blocking_in_place(|| daemon.relay_run(&evidence, credential, None))?
+                else {
                     return Ok(None);
                 };
+                let generation = run.run;
                 let actor = BoundActor::managed(run, &daemon.machine_id);
-                daemon.connect_relay_actor(&runtime, &evidence.process, &actor, None)
+                let handle = actor.current(&daemon, &evidence.process)?.handle;
+                let tools = handle.tools_connected();
+                let held: ToolsPresence = Box::new(RelayTools(tokio::spawn(async move {
+                    let _tools = tools;
+                    run_ended(&handle, generation).await;
+                })));
+                Ok(Some(held))
             })
         };
         let services = ActorServices {
             authenticate,
-            connect,
+            call,
             read_inbox,
             managed_instructions,
             ready,
@@ -278,10 +344,14 @@ impl Daemon {
         evidence: &RelayEvidence,
         selection: RelayInbox,
         cancel: Cancel,
-    ) -> Result<Value, ErrorBody> {
-        let handle = actor.current(self, &evidence.process)?;
+        output: Option<InboxOutput>,
+    ) -> Result<InboxAnswer, ErrorBody> {
+        let CurrentActor {
+            handle,
+            info: ManagedAgent { guest, .. },
+        } = actor.current(self, &evidence.process)?;
         let machines = self.machine_identities()?;
-        let project = |page: &facade_base::model::message::MessagesSnapshot| {
+        let project = |page: &facade_base::model::message::MessagesSnapshot, room| {
             let render = if page.messages.iter().any(|message| message.result.is_some()) {
                 let mut render = page.clone();
                 for message in &mut render.messages {
@@ -293,14 +363,17 @@ impl Daemon {
             } else {
                 None
             };
-            let projected =
+            let (count, projected) =
                 mcp::project_inbox(render.as_ref().unwrap_or(page), &self.machine_id, &machines)?;
             // The delivery lock covers projection and recording the returned messages together.
             actor.current(self, &evidence.process)?;
-            Ok(projected)
+            if let Some(output) = &output {
+                output.prepare(count, projected, room)
+            } else {
+                Ok(InboxSelection::ready(count, InboxAnswer::Page(projected)))
+            }
         };
         let owner = &actor.reference.agent_id;
-        let guest = handle.is_guest();
         let read = async {
             match selection {
                 RelayInbox::Page(read) => {
@@ -331,17 +404,12 @@ impl Daemon {
 
     async fn relay_clis(
         self: &Arc<Self>,
-        agent: AgentHandle,
+        info: ManagedAgent,
         machines: &[wire::MachineQuery],
         deadline: tokio::time::Instant,
     ) -> BTreeMap<String, Result<Vec<String>, String>> {
         let online = self.network.machines();
-        let info = agent.info();
-        let caller = wire::Caller::Agent {
-            agent: api::wire_ref(&info.reference()),
-            root: api::wire_ref(&crate::records::root_of(&info)),
-            yolo: info.yolo,
-        };
+        let caller = agent_caller(&info);
         let mut jobs = tokio::task::JoinSet::new();
         for machine in machines
             .iter()
@@ -495,43 +563,6 @@ impl Daemon {
         Ok(authenticated)
     }
 
-    fn connect_relay_actor(
-        self: &Arc<Self>,
-        runtime: &tokio::runtime::Handle,
-        process: &RelayProcess,
-        actor: &BoundActor,
-        send_deadline: Option<Instant>,
-    ) -> anyhow::Result<Option<DaemonClient>> {
-        let agent = actor.current(self, process)?;
-        let managed_run = actor.run.map(|(run, _)| run);
-        let (ours, theirs) = {
-            let _entered = runtime.enter();
-            facade_base::sockets::pair()?
-        };
-        let daemon = self.clone();
-        let verified = server::VerifiedActor {
-            reference: crate::api::wire_ref(&actor.reference),
-            send_deadline,
-        };
-        // A managed run's tools are there while its connection is, which ends with the run.
-        let presence = managed_run.map(|run| (run, agent.tools_connected()));
-        let ended = async move {
-            let Some((run, _tools)) = presence else {
-                return std::future::pending().await;
-            };
-            let mut exit = agent.exit();
-            let _ = exit
-                .wait_for(|exit| exit.is_some() || agent.run() != run)
-                .await;
-        };
-        runtime.spawn(server::serve_actor(daemon, theirs, verified, ended));
-        match DaemonClient::hello_actor(ours) {
-            Ok(client) => Ok(Some(client)),
-            Err(err) if upgrading(&err) => Ok(None),
-            Err(err) => Err(err),
-        }
-    }
-
     async fn join_relay_guest(
         self: &Arc<Self>,
         evidence: &RelayEvidence,
@@ -573,6 +604,13 @@ impl Daemon {
     }
 }
 
+async fn run_ended(handle: &AgentHandle, run: u64) {
+    let mut exit = handle.exit();
+    let _ = exit
+        .wait_for(|exit| exit.is_some() || handle.run() != run)
+        .await;
+}
+
 fn attached_actor<'a>(
     bound: &'a OnceLock<BoundActor>,
     reference: &AgentRef,
@@ -584,16 +622,13 @@ fn attached_actor<'a>(
 }
 
 impl RelayLines for RelayConnection {
-    fn notice(&self, line: &[u8]) -> bool {
-        self.relay.notice(line)
+    fn take(&self, line: &[u8], arrived: Instant, outbox: &Outbox) -> Option<RelayResponse> {
+        self.relay
+            .take(line, arrived, outbox.clone(), self.link.clone())
     }
 
-    fn respond(&self, line: &[u8], arrived: Instant) -> Option<Value> {
-        self.relay.respond_verified(line, arrived)
-    }
-
-    fn failed(&self) -> Value {
-        mcp::internal_error()
+    fn settle_cancelled(&self) -> mcp::verified::ActorFuture<'_, ()> {
+        Box::pin(self.relay.settle_cancelled())
     }
 
     fn ended(&self, closing_answered: bool) {

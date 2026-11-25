@@ -40,7 +40,6 @@ impl Service for Hellos {
         let client = Client {
             kind: hello.kind,
             api_version,
-            verified_actor: None,
         };
         Ok((result, client, ()))
     }
@@ -106,7 +105,7 @@ impl Service for Hellos {
         self: &Arc<Self>,
         _: Value,
         _: Option<u32>,
-    ) -> Result<(Value, Arc<dyn RelayLines>), ErrorBody> {
+    ) -> Result<RelayHandshake, ErrorBody> {
         Err(ErrorBody::invalid_argument("no relays"))
     }
 
@@ -150,43 +149,6 @@ fn hello() -> Value {
             "build": "test", "kind": "terminal"
         },
     })
-}
-
-/// Nothing of an actor's connection stays once its run ended, though its client holds its own end.
-#[tokio::test(flavor = "multi_thread")]
-async fn an_actor_s_connection_ends_with_its_run() {
-    let service = Arc::new(Hellos {
-        closing: watch::channel(None).0,
-        draining: Mutex::new(false),
-    });
-    let (client, server) = facade_base::sockets::pair().unwrap();
-    let actor = VerifiedActor {
-        reference: AgentRef {
-            agent_id: "a1".into(),
-            machine_id: "00000000-0000-4000-8000-000000000001".into(),
-        },
-        send_deadline: None,
-    };
-    let (run, ended) = oneshot::channel::<()>();
-    tokio::spawn(serve_actor(service.clone(), server, actor, async {
-        let _ = ended.await;
-    }));
-    let mut writer = client.try_clone().unwrap();
-    let mut reader = BufReader::new(client);
-    reader
-        .get_ref()
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
-    let mut hello = hello();
-    hello["params"]["kind"] = json!("mcp");
-    send(&mut writer, hello);
-    assert_eq!(receive(&mut reader)["result"]["api_version"], 1);
-    run.send(()).unwrap();
-    assert_eq!(
-        reader.read_line(&mut String::new()).unwrap(),
-        0,
-        "the connection closed"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

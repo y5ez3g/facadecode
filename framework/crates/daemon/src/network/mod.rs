@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use facade_base::api_v1::daemon::{
     self, AdvertiseParams, AgentRef, AgentTarget, AttachBinding, Caller, ClientKind,
@@ -39,6 +39,9 @@ use crate::{SavedConnection, SavedSsh};
 
 pub(crate) use self::routes::is_uuid_v4;
 pub(crate) use self::session::{Subscription, WatchRoute};
+
+/// The transport budget for reading an expired start's existing receipt.
+pub(crate) const START_RECEIPT_WAIT: Duration = Duration::from_secs(3);
 
 #[derive(Debug)]
 pub(crate) enum RequestFailure {
@@ -491,13 +494,15 @@ impl Network {
             return Ok(Delivery::Relayed(pending, response));
         }
 
-        forward.time_left_ms = remaining(deadline);
-        if forward.time_left_ms == Some(0) {
-            return Err(wire::unavailable(
-                identity,
-                ExecutionOutcome::NotExecuted,
-                wire::TIMEOUT_BEFORE_TARGET,
-            ));
+        if !wire::start_receipt_only(&forward) {
+            forward.time_left_ms = remaining(deadline);
+            if forward.time_left_ms == Some(0) {
+                return Err(wire::unavailable(
+                    identity,
+                    ExecutionOutcome::NotExecuted,
+                    wire::TIMEOUT_BEFORE_TARGET,
+                ));
+            }
         }
         if route_attempt.is_some() {
             return Ok(Delivery::Local(TargetReply::Call(Ok(serde_json::json!(

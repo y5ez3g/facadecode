@@ -50,7 +50,7 @@ use crate::{Cancel, HUMAN, REQUEST_HOUR, blocking_in_place};
 
 pub(crate) use handle::DeliveryHandle;
 pub(crate) use human::human_result;
-pub(crate) use inbox::{InboxRead, ReplyRead};
+pub(crate) use inbox::{InboxRead, InboxSelection, ReplyRead, read_before_deadline};
 pub(crate) use outcome::{Due, Outcome};
 pub(crate) use restart::{Recipient, TakeUp, decide};
 

@@ -170,6 +170,9 @@ pub enum Reason {
     /// The operation cannot complete: for example, a stop or a screen watch's snapshot timed out,
     /// or the keeper disconnected.
     Unavailable,
+    /// The operation's original deadline passed before it could take effect.
+    #[serde(rename = "timeout")]
+    OperationTimeout,
     /// The command's deadline passed while waiting for a reply.
     ReplyTimeout,
     /// The two sides share no protocol version, or a required client kind, operation, or field is
@@ -287,6 +290,7 @@ impl Reason {
             Reason::Ended => "ended",
             Reason::PartialInput => "partial_input",
             Reason::Unavailable => "unavailable",
+            Reason::OperationTimeout => "timeout",
             Reason::ReplyTimeout => "reply_timeout",
             Reason::IncompatibleProtocol => "protocol_incompatible",
             Reason::MachineIdConflict => "machine_id_conflict",
@@ -374,6 +378,7 @@ mod tests {
             (Reason::NotFound, "not_found"),
             (Reason::InvalidArgument, "invalid_argument"),
             (Reason::ReplyTimeout, "reply_timeout"),
+            (Reason::OperationTimeout, "timeout"),
         ] {
             assert_eq!(reason.canonical_name(), name);
             assert_eq!(serde_json::to_value(reason).unwrap(), json!(name));

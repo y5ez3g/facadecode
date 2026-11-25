@@ -4,13 +4,13 @@ use std::io;
 use std::time::Duration;
 
 use facade_base::api_v1::daemon::{
-    self, AdvertiseParams, ClientKind, ConnectedMachine, ForwardParams, ForwardRequest,
+    self, AdvertiseParams, AgentStart, ClientKind, ConnectedMachine, ForwardParams, ForwardRequest,
     HelloParams, MachineHelloParams, methods,
 };
 use facade_base::api_v1::{
     ApiVersion, ApiVersions, EmptyResult, ErrorBody, ErrorData, MAX_LINE_BYTES, MachineMessage,
-    MalformedRequest, Request, Response, ResponseBody, Topic, decode_arguments, encode_line,
-    parse_request, read_machine_message,
+    MalformedRequest, Operation, Request, Response, ResponseBody, Topic, decode_arguments,
+    encode_line, parse_request, read_machine_message,
 };
 use facade_base::model::machine::{ExecutionOutcome, MachineIdentity};
 use serde::Serialize;
@@ -39,9 +39,18 @@ pub(super) fn work(forward: &ForwardParams) -> Option<SessionWork> {
     }
 }
 
+/// Zero effect time on a keyed start can only recover that key's receipt.
+pub(super) fn start_receipt_only(forward: &ForwardParams) -> bool {
+    forward.time_left_ms == Some(0)
+        && matches!(&forward.request, ForwardRequest::Call(call)
+            if call.op == AgentStart::NAME && call.args["request_id"].is_string())
+}
+
 /// For a timed call, leave the frame open so the remaining time is written after the body.
 pub(super) fn forward_line(id: u64, mut forward: ForwardParams, timed: bool) -> Vec<u8> {
-    forward.time_left_ms = None;
+    if timed || !start_receipt_only(&forward) {
+        forward.time_left_ms = None;
+    }
     let mut line = encode_line(&Request::new(Some(id), methods::FORWARD, forward));
     if timed {
         let prefix = line

@@ -8,6 +8,7 @@
 //! which holds no CLI by then, exits once it sees the daemon end.
 
 mod log_file;
+mod relays;
 mod takeover;
 
 use std::sync::atomic::AtomicBool;
@@ -22,6 +23,7 @@ use tokio::time::Instant;
 use crate::log;
 
 pub(crate) use log_file::{MAX_LOG_LINES, last_lines, prune};
+pub(crate) use relays::RelayLink;
 pub(crate) use takeover::{handed_over_cleanly, take_clean_end};
 
 /// Work and terminal actions provided by the daemon's layer.
@@ -113,6 +115,7 @@ pub(crate) struct Lifecycle {
     takeover: tokio::sync::Mutex<Option<DaemonUpgradeResult>>,
     draining: AtomicBool,
     closing_to: watch::Sender<Option<String>>,
+    pub(crate) relays: relays::RelayDrain,
 }
 
 /// One piece of work, counted until it is dropped.
@@ -141,6 +144,7 @@ impl Lifecycle {
             takeover: tokio::sync::Mutex::default(),
             draining: AtomicBool::new(false),
             closing_to: watch::channel(None).0,
+            relays: relays::RelayDrain::default(),
         })
     }
 

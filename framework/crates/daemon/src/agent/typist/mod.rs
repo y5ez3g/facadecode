@@ -87,6 +87,7 @@ pub(crate) struct Typing {
     submission: Option<Box<Submission>>,
     kind: CallKind,
     completed: usize,
+    start_by: Option<Instant>,
 }
 
 #[derive(Debug)]
@@ -221,9 +222,14 @@ impl Typing {
                 submission: None,
                 kind,
                 completed: 0,
+                start_by: None,
             },
             receiver,
         )
+    }
+
+    pub(crate) fn start_by(&mut self, deadline: Option<Instant>) {
+        self.start_by = deadline;
     }
 
     /// Maximum queued bytes in either terminal mode, as the `console` takes them where the CLI
@@ -727,7 +733,7 @@ impl Typist {
         if self.current.is_some() {
             match pause {
                 Some(at) => Step::wait(Some(at)),
-                None => self.emit_call(queued, modes),
+                None => self.emit_call(now, queued, modes),
             }
         } else {
             self.advance_delivery(now, queued, modes, writes, observe, pause)
@@ -953,7 +959,17 @@ impl Typist {
         });
     }
 
-    fn emit_call(&mut self, offset: u64, modes: Modes) -> Step {
+    fn emit_call(&mut self, now: Instant, offset: u64, modes: Modes) -> Step {
+        if self
+            .current
+            .as_ref()
+            .and_then(|call| call.start_by)
+            .is_some_and(|deadline| deadline <= now)
+        {
+            let call = self.current.take().expect("active call");
+            let _ = call.answer.send(Err(crate::effect_deadline_passed()));
+            return Step::wait(Some(now));
+        }
         let paste_rule = self.paste_rule();
         let call = self.current.as_mut().expect("active call");
         let mut receipt = Receipt {
@@ -971,6 +987,9 @@ impl Typist {
             if call.is_sequence() || receipt.delay != Duration::ZERO {
                 break;
             }
+        }
+        if !result.write.is_empty() {
+            call.start_by = None;
         }
         if !result.write.is_empty()
             && let Some(batch) = &mut self.batch

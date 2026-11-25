@@ -8,14 +8,15 @@ mod lanes;
 mod outbox;
 mod relay;
 
-use std::future::{Future, pending};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use facade_base::api_v1::daemon::{
-    AgentRef, AttachArgs, ClientKind, DaemonCall, DaemonWatch, HelloParams, HelloResult,
-    MachineConnectArgs, MachineConnectResult, TerminalColors, methods,
+    AttachArgs, ClientKind, DaemonCall, DaemonWatch, HelloParams, HelloResult, MachineConnectArgs,
+    MachineConnectResult, TerminalColors,
 };
 use facade_base::api_v1::{ApiVersion, ErrorBody, ErrorData, Size};
 use facade_base::sockets::{DaemonListener, ServerReader, ServerSocket, ServerWriter};
@@ -24,19 +25,14 @@ use tokio::io::BufReader;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::Cancel;
+use crate::lifecycle::RelayLink;
+
+pub(crate) use outbox::{MAX_OUTBOX_BYTES, Outbox, OutboxRoom};
 
 /// Who a connection is, as its hello settled it.
 pub(crate) struct Client {
     pub(crate) kind: ClientKind,
     pub(crate) api_version: ApiVersion,
-    /// The stable actor of an in-process connection, supplied by its authenticated caller.
-    pub(crate) verified_actor: Option<VerifiedActor>,
-}
-
-/// The identity and optional send cutoff supplied by an authenticated in-process caller.
-pub(crate) struct VerifiedActor {
-    pub(crate) reference: AgentRef,
-    pub(crate) send_deadline: Option<Instant>,
 }
 
 /// An ID shared by local and forwarded watches on this daemon.
@@ -174,7 +170,7 @@ pub(crate) trait Service: Send + Sync + 'static {
         self: &Arc<Self>,
         params: Value,
         peer_pid: Option<u32>,
-    ) -> impl Future<Output = Result<(Value, Arc<dyn RelayLines>), ErrorBody>> + Send;
+    ) -> impl Future<Output = Result<RelayHandshake, ErrorBody>> + Send;
 
     /// The build of the newer Facade taking over, once there is one: every connection is told
     /// `closing`.
@@ -187,15 +183,20 @@ pub(crate) trait Service: Send + Sync + 'static {
     fn work(&self) -> Option<Self::Work>;
 }
 
+pub(crate) type RelayResponse = Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send>>;
+
+pub(crate) struct RelayHandshake {
+    pub(crate) answer: Value,
+    pub(crate) lines: Arc<dyn RelayLines>,
+    pub(crate) link: Arc<RelayLink>,
+}
+
 /// What answers one relay's MCP lines.
 pub(crate) trait RelayLines: Send + Sync {
-    /// Looks at a line as it is read. True when the line needs nothing more.
-    fn notice(&self, line: &[u8]) -> bool;
-    /// Answers a line, or None where it needs no answer. Blocks, so the server runs it on a
-    /// blocking thread.
-    fn respond(&self, line: &[u8], arrived: Instant) -> Option<Value>;
-    /// The answer to a line whose answering failed unexpectedly.
-    fn failed(&self) -> Value;
+    /// Reads a line, applying a cancellation immediately or giving work for its response.
+    fn take(&self, line: &[u8], arrived: Instant, outbox: &Outbox) -> Option<RelayResponse>;
+    /// Waits for the cancellation effects of all requests read before closing was confirmed.
+    fn settle_cancelled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
     /// The relay's connection ended. `closing_answered`: it answered `closing`, so it carries on
     /// with the newer daemon.
     fn ended(&self, closing_answered: bool);
@@ -215,12 +216,6 @@ fn operation_error(reason: &str, message: impl Into<String>) -> ErrorBody {
             details: None,
         },
     }
-}
-
-/// Whether `line` answers `closing`: a `closing` notification back. No MCP message is named so.
-pub(crate) fn is_closing_response(line: &[u8]) -> bool {
-    serde_json::from_slice::<Value>(line)
-        .is_ok_and(|message| message["method"] == methods::CLOSING && message.get("id").is_none())
 }
 
 /// Binds the client socket. This daemon holds the daemon lock, so a socket already there belongs
@@ -268,27 +263,7 @@ pub(crate) async fn serve<S: Service>(
 
 /// Serves one connected socket until it closes.
 pub(crate) async fn serve_connection<S: Service>(service: Arc<S>, socket: ServerSocket) {
-    serve_peer(service, socket, None, pending()).await;
-}
-
-/// Serves an in-process connection for an actor the daemon already authenticated, until it closes
-/// or `ended` completes.
-pub(crate) async fn serve_actor<S: Service>(
-    service: Arc<S>,
-    socket: ServerSocket,
-    actor: VerifiedActor,
-    ended: impl Future<Output = ()> + Send,
-) {
-    serve_peer(service, socket, Some(actor), ended).await;
-}
-
-async fn serve_peer<S: Service>(
-    service: Arc<S>,
-    socket: ServerSocket,
-    actor: Option<VerifiedActor>,
-    ended: impl Future<Output = ()> + Send,
-) {
-    if let Err(err) = connection::serve(service, socket, actor, ended).await {
+    if let Err(err) = connection::serve(service, socket).await {
         log("warn", &format!("a connection ended: {err}"));
     }
 }

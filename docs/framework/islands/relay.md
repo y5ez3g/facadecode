@@ -57,8 +57,10 @@ the wiring in [rules](rules.md); a person can also write one by hand with only t
 
 **The daemon.** The relay contract, version 1, is part of the daemon protocol: see "The relay" in
 [DAEMON.md](../../../framework/protocol/DAEMON.md), which gives the hello and the response to `closing`. The relay takes
-the hello as accepted when the daemon's first line has `id` 1, no `method` and no `error`. The daemon's side is the MCP
-server in [daemon](daemon.md).
+the hello as accepted when the daemon's first line has `id` 1, no `method` and no `error`. A daemon can advertise
+`request_context:true` in that response. The relay then supplies when it first read each complete request,
+whether it is a replay, and any cancellation received while the request was pending. The daemon's side is the
+MCP server in [daemon](daemon.md).
 
 **The socket.** The relay works out the daemon socket from the Facade home by the rule in "Connect to the daemon" in
 [DAEMON.md](../../../framework/protocol/DAEMON.md). [base](base.md) follows the same rule in `paths::home_key` and
@@ -73,9 +75,11 @@ own environment, as DAEMON.md tells a client to. On Windows the program is `faca
 
 ## Depends on
 
-- `nix` (Unix only): `poll`; the user ID; the peer's user, through `getpeereid`, or `SO_PEERCRED` on Linux.
+- `nix` (Unix only) provides `poll`, the monotonic clock and peer user verification.
+- `serde_json` decodes request IDs and the optional hello capability.
 - `sha2`: the hash in the socket's name.
-- `windows-sys` (Windows only): the completion port, overlapped pipe I/O and the server's user SID.
+- `windows-sys` (Windows only) provides the completion port, overlapped pipe I/O, the monotonic clock
+  and the server's user SID.
 - No Facade crate. At run time it uses the daemon's socket and the `facade` program beside it.
 
 ## Inside
@@ -124,17 +128,25 @@ stateDiagram-v2
 - `Disconnected`: the relay tries again at `next_try`. It also notes whether it logged why and whether it ran
   `facade daemon --detach` since it was last connected.
 
-**A line from the CLI** (`handle_cli_line`). While connected, the relay writes it to the daemon. A line that is a
-request, with a `method` and an `id`, also becomes pending. If the write fails, the line is held and the link ends.
-In any other state the line is held.
+`handle_cli_line` records each complete request's monotonic time. While connected, it writes the line to the
+daemon and records the request as pending. A failed write keeps that request pending for replay. While closing
+or disconnected, new lines wait in arrival order. A cancellation also marks the pending or held request by ID,
+including a cancellation notification inside a batch. The batch itself is forwarded unchanged.
 
-**A line from the daemon** (`handle_daemon_line`). A `closing` notification gets the relay's response and moves the
-state to `Closing`; it is not passed on. A response, with an `id` and no `method`, removes the first pending request
-whose `id` has the same bytes. Every line but `closing` goes to standard output and is flushed.
+`handle_daemon_line` flushes each response to standard output before removing the pending request with that ID.
+Request IDs compare by JSON value. Acknowledging `closing` confirms that the relay already flushed the preceding
+responses. The relay handles `closing` itself and moves to `Closing`.
 
 **Connecting** (`connect_when_due`). `DaemonLink::open` connects, checks the peer's user, writes the hello and waits
-for the daemon's first line. The relay then writes the pending requests to the new link. Any failure leaves it
-disconnected:
+for the daemon's first line. The relay writes pending requests in their original order before newly held lines.
+After the new daemon answers hello, the relay takes complete CLI lines up to the input boundary before it writes a
+replay. Windows puts a marker after the queued stdin chunks in the completion port. Unix takes the unread stdin
+byte count once. A cancellation split across chunks within that boundary still marks the original ID before its
+first replay. The normal read loop takes later input and completes any partial line left at the boundary.
+If the new daemon supports request context, the replay carries the request's original time and cancellation.
+The prior link's capability and successful closing acknowledgement distinguish a planned replay from an
+interruption. A v1 daemon without the capability receives the original request line. Any failure leaves it
+disconnected.
 
 - It logs why once for each time it is disconnected. When it logged, it logs `connected to Facade` once it connects.
 - Where no one listens (the socket is missing, or the connection is refused) and it has not done so since it was last

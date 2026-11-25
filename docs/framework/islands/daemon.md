@@ -58,7 +58,9 @@ public `run()` entry point.
 
 - [Daemon operations and topics](../../../framework/protocol/DAEMON.md) use JSON-RPC API v1. Each
   connection negotiates its supported version and gets the operation and topic directory for its
-  client kind. Internal MCP calls use the actor proved by the independent relay connection.
+  client kind. MCP calls use a typed asynchronous dispatch with the same operation registry and
+  the actor proved by the relay connection. The caller's permissions come from the installed run
+  record verified for that call.
 - A terminal can request takeover by a newer build. The daemon checks the target daemon's
   supported API separately from the version negotiated with the keeper holding its CLIs.
   A compatible takeover hands each PTY back to the new daemon through `agent.sync`.
@@ -681,13 +683,19 @@ note and `framework/logs/daemon.log`. The keeper points the daemon's standard er
   machines of the idle exit, and waits for screen writers and exit commits before removing the socket.
   A long-lived machine watch or foreground connection counts while active. Takeover settlement
   waits for the existing calls and run changes it can complete.
-- `take_over(UpgradeArgs, activity)` checks and installs the new build before marking the daemon
-  as draining. It settles pastes and work, asks the actors to go quiet, records a clean end when
-  they all do, and sends `closing`. After connections drain it settles work and asks the actors
-  to go quiet again before exiting. The keeper holds the terminals throughout.
+- `take_over(UpgradeArgs, activity)` checks and stages the build. It freezes MCP effects and waits
+  for the relay connections to confirm `closing` and settle earlier cancellations. Each `closing`
+  follows committed read and input responses in the same outbox. The daemon allows three seconds
+  for this preparation. If it expires, the original launcher stays selected and the daemon resumes
+  admitting effects. Once a connection queues `closing`, it stays sealed until it reconnects.
+  After confirmation, takeover selects the launcher, settles pastes and work, asks the actors to go
+  quiet, records a clean end when they all do, and sends `closing` to ordinary API clients.
+  The keeper holds the terminals throughout.
 - The parent implements `LifecycleActivity` to report activity, screen writes and keeper details,
   and to send paste and quiet commands to actors. The parent takes the clean-end note at startup
   and uses that fact to select how it recovers screens.
+- The Windows MSVC executable requests the segment heap in its embedded manifest so the heap can
+  return idle pages after message bursts and groups of terminal exits.
 
 ### server
 
@@ -720,9 +728,11 @@ trait and writes responses and watch changes back, without knowing what any oper
     terminal end release that viewer.
   - A machine hello or connect hands the same buffered reader and writer to the machine session
     after its response is flushed. The old connection releases its watches before the handoff.
-  - Once a newer Facade takes over, every connection past `hello` gets a `closing` notification;
-    what the client sent before its response, or within 0.2 seconds, still runs; then its reading
-    ends.
+  - During takeover, ordinary API clients get `closing` and have up to 0.2 seconds to answer. An
+    MCP relay shares one outbox for its responses and `closing`. Reads reserve room for the full
+    response before recording delivery. Text and keys reserve room before typing and retain it
+    through the full or partial input receipt. The relay connection continues reading through the
+    acknowledgement so the daemon can settle cancellations that arrived before it.
   - While the daemon decides to exit, arriving connections are closed before `hello`.
   - Once base reports `termination_requested`, it removes the daemon socket and exits.
 - **Never does:** decide what a hello, operation, topic or relay means; call the agent list,
@@ -731,8 +741,7 @@ trait and writes responses and watch changes back, without knowing what any oper
   - `bind() -> Result<DaemonListener>`; `serve(listener: DaemonListener, service: Arc<S>, closing:
     watch::Receiver<bool>, paused: watch::Sender<bool>)`: accepts clients, pausing while
     `closing` is true and saying so in `paused`; `serve_connection(service, socket: ServerSocket)`: one
-    connection; `serve_actor(service, socket, actor: VerifiedActor, ended: impl Future)`: the private
-    connection of an actor the daemon authenticated, until the client closes it or `ended` completes.
+    connection.
   - `trait Service`, implemented by the daemon:
     - `hello(HelloParams, api_version, peer_pid) -> (HelloResult, Client, Hold)` runs after the
       server selects a supported API version and checks the client kind.
@@ -742,19 +751,19 @@ trait and writes responses and watch changes back, without knowing what any oper
       the independent terminal-exit receiver.
     - `resize_viewer(&Client, viewer, Size, Option<TerminalColors>) -> Result<()>` receives
       only the viewer number resolved by the server from the connection's watch.
-    - `relay(params, peer_pid) -> Result<(Value, Arc<dyn RelayLines>)>`: the relay hello's response
-      and what serves its MCP lines.
+    - `relay(params, peer_pid) -> Result<RelayHandshake>` provides the hello response, the MCP line
+      handler and the connection's takeover state.
     - `machine_hello` and `machine_connect` authorize a session and return its response and
       handoff state. `serve_machine` takes that state with the stream's existing halves.
     - `closing() -> watch::Receiver<Option<String>>`: the build taking over.
     - `draining() -> Option<ErrorBody>`: the error a new hello, call or watch gets during a
       takeover; an attached terminal's keys and size, and `daemon.upgrade`, still run.
     - `work() -> Option<Work>`: counts a connection; None closes it.
-  - `trait RelayLines`: `notice(line) -> bool`, `respond(line, arrived) -> Option<Value>` (blocking,
-    run on a blocking thread), `failed() -> Value` (the response when answering panicked),
-    `ended(closing_answered)`.
-  - `Client` carries the connection's client kind, selected API version and the actor verified
-    by the daemon's private MCP connection.
+  - `RelayLines::take(line, arrived, outbox)` decodes a line, applies cancellations in receive order,
+    and supplies async response work. A relay's sends reach save, a previous receipt or refusal in
+    receive order. Delivery and reply waits can proceed independently. The send's durable delivery
+    continues if a relay connection closes while the caller awaits its outcome.
+  - `Client` carries the kind and selected API version of an ordinary daemon API connection.
   - `Watch { snapshot, changes }`. `WatchChange::Ended(ErrorBody)` reports a remote watch failure.
     `WatchChange::Disconnect` cuts off a client that fell too far behind.
   - `WhenFull::{Refuse, Wait}`: input without room fails at once (a request ID) or waits until its

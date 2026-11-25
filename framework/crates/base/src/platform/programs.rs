@@ -290,29 +290,37 @@ pub fn select_running_if_idle() -> anyhow::Result<Option<PathBuf>> {
     Ok(Some(launcher))
 }
 
-/// Publishes a candidate after the running daemon admitted it. Selection and publication share
-/// the cold install lock.
+/// Checks and installs a candidate before asking the running relay connections to close.
+pub fn stage_for_takeover(program: &Path, build: &str) -> anyhow::Result<PathBuf> {
+    let bin = Bin::here()?;
+    let _lock = bin.lock()?;
+    takeover_eligible(&bin, build)?;
+    bin.install_set(program, build)
+}
+
+/// Publishes an installed candidate after the running daemon cleared its relay connections.
 pub fn select_for_takeover(program: &Path, build: &str, running: &[String]) -> anyhow::Result<()> {
     let bin = Bin::here()?;
-    let eligible = || -> anyhow::Result<bool> {
-        if bin.should_select(build)? {
-            return Ok(true);
-        }
-        ensure!(
-            bin.current().as_deref() == Some(build),
-            "Facade {build} was superseded. Run {}",
-            bin.0.join(PROGRAMS[0]).display()
-        );
-        Ok(false)
-    };
-    if eligible()? {
+    if takeover_eligible(&bin, build)? {
         let _lock = bin.lock()?;
-        if eligible()? {
+        if takeover_eligible(&bin, build)? {
             bin.install_set(program, build)?;
             bin.point_at(build, running)?;
         }
     }
     Ok(())
+}
+
+fn takeover_eligible(bin: &Bin, build: &str) -> anyhow::Result<bool> {
+    if bin.should_select(build)? {
+        return Ok(true);
+    }
+    ensure!(
+        bin.current().as_deref() == Some(build),
+        "Facade {build} was superseded. Run {}",
+        bin.0.join(PROGRAMS[0]).display()
+    );
+    Ok(false)
 }
 
 /// Points the launchers at build `build`. Where they pointed at another build, the build folders

@@ -17,7 +17,7 @@ use facade_base::{
 };
 use facade_base::{
     model::agent::AgentRef,
-    model::machine::{MachineIdentity, MachineQueryStatus},
+    model::machine::{ExecutionOutcome, MachineIdentity, MachineQueryStatus, Unavailable},
 };
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -26,7 +26,7 @@ use tokio::time::Instant;
 
 use crate::api;
 use crate::machine_service::{machine_address_part, offline_machine, project_machine_query};
-use crate::network::{RequestFailure, TargetReply, TargetRequest};
+use crate::network::{RequestFailure, START_RECEIPT_WAIT, TargetReply, TargetRequest};
 use crate::records::{self, LookupCandidate, OperationTarget, Reach};
 use crate::server::{Watch, WatchChange, WhenFull};
 use crate::{Cancel, Daemon, blocking_in_place};
@@ -484,6 +484,49 @@ impl Daemon {
         };
         let deadline = time_left.map(|left| tokio::time::Instant::now() + left);
         self.call_peer(target, request, deadline).await
+    }
+
+    pub(crate) async fn forward_start_receipt(
+        &self,
+        target: &str,
+        caller: &Caller,
+        call: wire::CallParams,
+    ) -> Result<Value, ErrorBody> {
+        let deadline = Instant::now() + START_RECEIPT_WAIT;
+        let receipt = async {
+            self.ensure_machine_route(target, caller).await?;
+            self.call_peer(
+                target,
+                wire::ForwardParams {
+                    route: Vec::new(),
+                    caller: caller.clone(),
+                    request: wire::ForwardRequest::Call(call),
+                    time_left_ms: Some(0),
+                    from_name: None,
+                    start_result: None,
+                },
+                Some(deadline),
+            )
+            .await
+        };
+        // A v1 peer that rejects the expired forward could still have the original receipt.
+        match tokio::time::timeout_at(deadline, receipt).await {
+            Ok(Ok(value)) => return Ok(value),
+            Ok(Err(error)) if error.data.reason == Reason::OperationTimeout => return Err(error),
+            _ => {}
+        }
+        let mut error = ErrorBody::new(
+            Reason::Unavailable,
+            "The original start's outcome is unknown. Check the destination's agent list before repeating it.",
+        );
+        error.data.unavailable = Some(Unavailable {
+            execution: ExecutionOutcome::OutcomeUnknown,
+            machine: None,
+            window: None,
+            matches: Vec::new(),
+            unanswered: Vec::new(),
+        });
+        Err(self.machine_failure(target, error))
     }
 
     pub(crate) async fn call_peer(

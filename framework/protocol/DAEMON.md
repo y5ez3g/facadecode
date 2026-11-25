@@ -214,8 +214,8 @@ verifies callers before reading their records or delivering their operations.
 
 The shared local socket accepts a separate relay handshake before daemon API admission.
 It identifies the verified local process using relay contract 1. Once accepted, the stream
-carries MCP JSON-RPC. A verified internal `kind:"mcp"` actor negotiates the daemon API
-independently. Direct external `kind:"mcp"` hello is refused.
+carries MCP JSON-RPC. The daemon verifies the actor before dispatching typed calls in the same
+process. Direct external `kind:"mcp"` hello is refused.
 
 ```jsonl relay
 {"jsonrpc":"2.0","id":1,"method":"hello","params":{"relay":1,"args":["--guest","codex"],"env":{},"cwd":null,"reconnect":false}}
@@ -223,6 +223,20 @@ independently. Direct external `kind:"mcp"` hello is refused.
 {"jsonrpc":"2.0","method":"closing","params":{"build":"1.0.1+example"}}
 {"jsonrpc":"2.0","method":"closing","params":{}}
 ```
+
+The daemon can advertise `request_context:true` in the hello result. A relay using that capability
+wraps a request as `{"relay_request":{"first_line_ns":0,"replay":"first","cancelled":false},"request":{...}}`.
+`first_line_ns` is the local monotonic timestamp in nanoseconds when the relay first read the
+complete request. `replay` is `first` for a new request, `planned` after a negotiated and confirmed
+closing, or `interrupted` after an unconfirmed disconnect. The relay sends any pending cancellation
+in the same replay frame. Older relays continue to send ordinary MCP lines. Responses preserve the
+request's ID token, including its original JSON escaping.
+
+For planned handover, the daemon queues the replies for committed inbox pages and terminal inputs
+before `closing`. A relay outputs and flushes preceding replies before acknowledging `closing`.
+The original daemon settles the cancellations it received before that acknowledgement. It can
+refuse the handover if the relay cannot confirm in time. After an unexpected disconnect, an
+interrupted inbox read reports that its result is unknown. Use `last` to retrieve recent history.
 
 ### Text and keys
 
