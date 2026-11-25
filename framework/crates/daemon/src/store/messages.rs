@@ -116,9 +116,55 @@ pub(super) fn migrate_failure_notices(connection: &Connection) -> rusqlite::Resu
 }
 
 /// The first recipient and checked reply of a send, retained by its originating machine.
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct SendRoute {
     pub(crate) recipient: AgentRef,
     pub(crate) reply: Option<MessageRef>,
+}
+
+/// A locally resolved route that becomes durable with its first message.
+pub(crate) struct SendRouteBinding {
+    pub(crate) target: String,
+    pub(crate) route: SendRoute,
+}
+
+fn keep_send_route(
+    connection: &Connection,
+    sender: &str,
+    request_id: &str,
+    target: &str,
+    route: &SendRoute,
+    route_cutoff: impl FnOnce() -> String,
+) -> rusqlite::Result<(SendRoute, bool)> {
+    let inserted = connection.execute(
+        "INSERT INTO send_routes
+        (sender,request_id,target,machine_id,agent_id,reply_message_id,reply_machine_id,at)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(sender,request_id,target) DO UPDATE SET
+        at=excluded.at, machine_id=excluded.machine_id, agent_id=excluded.agent_id,
+        reply_message_id=excluded.reply_message_id, reply_machine_id=excluded.reply_machine_id
+        WHERE at < ?9",
+        params![
+            sender,
+            request_id,
+            target,
+            route.recipient.machine_id,
+            route.recipient.agent_id,
+            route.reply.as_ref().map(|reply| &reply.message_id),
+            route.reply.as_ref().map(|reply| &reply.machine_id),
+            facade_base::time::iso_now(),
+            route_cutoff()
+        ],
+    )?;
+    if inserted != 0 {
+        return Ok((route.clone(), false));
+    }
+    let retained = connection.query_row(
+        "SELECT machine_id, agent_id, reply_message_id, reply_machine_id FROM send_routes
+        WHERE sender = ?1 AND request_id = ?2 AND target = ?3",
+        params![sender, request_id, target],
+        read_send_route,
+    )?;
+    Ok((retained, true))
 }
 
 fn read_send_route(row: &Row<'_>) -> rusqlite::Result<SendRoute> {
@@ -683,22 +729,12 @@ impl MessageTable {
         route: &SendRoute,
         route_cutoff: impl FnOnce() -> String,
     ) -> anyhow::Result<(SendRoute, bool)> {
-        self.0.transaction(|| "save the original send recipient".into(), |connection| {
-            let inserted = connection.execute("INSERT INTO send_routes
-                (sender,request_id,target,machine_id,agent_id,reply_message_id,reply_machine_id,at)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(sender,request_id,target) DO UPDATE SET
-                at=excluded.at, machine_id=excluded.machine_id, agent_id=excluded.agent_id,
-                reply_message_id=excluded.reply_message_id, reply_machine_id=excluded.reply_machine_id
-                WHERE at < ?9",
-                params![sender, request_id, target, route.recipient.machine_id, route.recipient.agent_id,
-                    route.reply.as_ref().map(|reply| &reply.message_id),
-                    route.reply.as_ref().map(|reply| &reply.machine_id),
-                    facade_base::time::iso_now(), route_cutoff()])?;
-            let route = connection.query_row("SELECT machine_id, agent_id, reply_message_id, reply_machine_id FROM send_routes
-                WHERE sender = ?1 AND request_id = ?2 AND target = ?3", params![sender,request_id,target],
-                read_send_route)?;
-            Ok((route, inserted == 0))
-        })
+        self.0.transaction(
+            || "save the original send recipient".into(),
+            |connection| {
+                keep_send_route(connection, sender, request_id, target, route, route_cutoff)
+            },
+        )
     }
 
     /// Takes the next number and writes `message` under it, in one transaction, with `request`,
@@ -709,29 +745,46 @@ impl MessageTable {
         message: &Message,
         request: Option<RequestId>,
         notify_failure: bool,
+        binding: Option<&SendRouteBinding>,
     ) -> anyhow::Result<Kept> {
-        self.0.transaction(
-            || "save a message".to_string(),
-            |transaction| {
-                if let Some(request) = request
-                    && let Some(earlier) = find_request(
-                        transaction,
-                        message.from_machine_id.as_deref(),
-                        &message.from,
-                        &message.to,
-                        request,
-                    )?
-                {
-                    return Ok(Kept::Earlier(earlier));
-                }
-                let number = take_number(transaction)?;
-                write(transaction, number, message, request, notify_failure)?;
-                Ok(Kept::New(Message {
-                    message_id: format!("m{number}"),
-                    ..message.clone()
-                }))
-            },
-        )
+        self.0
+            .transaction(
+                || "save a message".to_string(),
+                |transaction| {
+                    if let Some(binding) = binding {
+                        let request = request.expect("a route binding belongs to a request ID");
+                        let (pinned, _) = keep_send_route(
+                            transaction,
+                            &message.from,
+                            request.id,
+                            &binding.target,
+                            &binding.route,
+                            crate::send_route_cutoff,
+                        )?;
+                        if pinned != binding.route {
+                            return Ok(None);
+                        }
+                    }
+                    if let Some(request) = request
+                        && let Some(earlier) = find_request(
+                            transaction,
+                            message.from_machine_id.as_deref(),
+                            &message.from,
+                            &message.to,
+                            request,
+                        )?
+                    {
+                        return Ok(Some(Kept::Earlier(earlier)));
+                    }
+                    let number = take_number(transaction)?;
+                    write(transaction, number, message, request, notify_failure)?;
+                    Ok(Some(Kept::New(Message {
+                        message_id: format!("m{number}"),
+                        ..message.clone()
+                    })))
+                },
+            )?
+            .ok_or_else(|| anyhow::anyhow!("the retained send route changed before saving"))
     }
 
     /// The message this caller kept for `to` with the same request ID within its hour.
@@ -1409,11 +1462,41 @@ mod tests {
                  SELECT RAISE(ABORT, 'refused'); END;",
             )
             .unwrap();
+        let message = message(0, "a2");
+        let request = RequestId {
+            id: "routed",
+            since: "2000-01-01T00:00:00.000Z",
+            caller_window_id: None,
+        };
+        let binding = SendRouteBinding {
+            target: "worker".into(),
+            route: SendRoute {
+                recipient: AgentRef {
+                    machine_id: "local".into(),
+                    agent_id: "a2".into(),
+                },
+                reply: None,
+            },
+        };
+        let routes = store.message_table();
+        let retained = || {
+            routes
+                .send_target(
+                    &message.from,
+                    request.id,
+                    &binding.target,
+                    crate::send_route_cutoff,
+                )
+                .unwrap()
+        };
         assert!(
-            store
-                .message_table()
-                .insert_message(&message(0, "a2"), None, false)
+            routes
+                .insert_message(&message, Some(request), false, Some(&binding))
                 .is_err()
+        );
+        assert!(
+            retained().is_none(),
+            "a failed message leaves no route or number"
         );
         store
             .connection
@@ -1422,14 +1505,15 @@ mod tests {
             .execute_batch("DROP TRIGGER refuse")
             .unwrap();
         assert_eq!(
-            store
-                .insert_message(&message(0, "a2"), None)
+            routes
+                .insert_message(&message, Some(request), false, Some(&binding))
                 .unwrap()
                 .into_message()
                 .message_id,
             "m2",
             "the refused message took no number"
         );
+        assert!(retained().is_some_and(|route| route == binding.route));
     }
 
     /// Every field of a message, its delivery and its paste survive a reopen.
@@ -1467,7 +1551,7 @@ mod tests {
                 .into_message(),
             store
                 .message_table()
-                .insert_message(&from_elsewhere, None, true)
+                .insert_message(&from_elsewhere, None, true, None)
                 .unwrap()
                 .into_message(),
         ];

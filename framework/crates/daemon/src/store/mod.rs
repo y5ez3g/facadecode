@@ -42,7 +42,7 @@ mod windows;
 pub(crate) use guests::{GuestRecord, GuestTable};
 pub(crate) use messages::{
     CommandRequest, Gone, InboxPage, Kept, KeptMessage, MessageTable, RequestId, SendRoute,
-    Settlement,
+    SendRouteBinding, Settlement,
 };
 #[cfg(test)]
 use windows::WindowTable;
@@ -1068,7 +1068,8 @@ impl Store {
         message: &Message,
         request: Option<RequestId>,
     ) -> anyhow::Result<Kept> {
-        self.message_table().insert_message(message, request, false)
+        self.message_table()
+            .insert_message(message, request, false, None)
     }
     pub(crate) fn test_machine_id(&self) -> String {
         self.connection
