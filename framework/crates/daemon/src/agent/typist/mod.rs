@@ -65,6 +65,8 @@ pub(crate) struct InputObservation<'a> {
     pub(crate) after_write: bool,
     /// When a complete empty frame followed the delivery write and preceded any subsequent edit.
     pub(crate) empty_after_write: Option<Instant>,
+    /// Whether the terminal and its latest frame allow starting a probe.
+    pub(crate) can_probe: bool,
     /// A draft a person's Enter submitted and when its empty frame was seen. `current` may
     /// already show a subsequent frame.
     pub(crate) submitted: Option<(&'a BoxReading, Instant)>,
@@ -1008,9 +1010,9 @@ impl Typist {
                     && !self.occupies_input()
                 {
                     self.probe_wanted = false;
-                    let reading = read_screen();
-                    if self.unprobed(&reading) {
-                        return self.begin_probe(&reading, now, queued);
+                    let seen = observe();
+                    if seen.can_probe && self.unprobed(&seen.current) {
+                        return self.begin_probe(&seen.current, now, queued);
                     }
                 }
             }
@@ -1336,6 +1338,21 @@ impl Typist {
 
     pub(super) fn probe_is_erasing(&self) -> bool {
         self.probing.as_ref().is_some_and(Probe::erasing)
+    }
+
+    pub(super) fn can_write_probe_space(&self, reading: Option<&BoxReading>) -> bool {
+        self.probing
+            .as_ref()
+            .zip(reading)
+            .is_some_and(|(probe, reading)| probe.can_write_space(reading))
+    }
+
+    /// A probe whose space was never issued didn't try the row.
+    pub(super) fn withdraw_probe_space(&mut self) {
+        if let Some(probe) = self.probing.take() {
+            self.probed.remove(probe.row());
+            self.receipt = None;
+        }
     }
 
     pub(super) fn recheck_probe_erase(&mut self, reading: Option<&BoxReading>) -> bool {
@@ -1806,7 +1823,7 @@ impl Typist {
             return Step::wait(deadline.into_iter().chain(follows).min());
         }
         let may_write = may_write && paused.is_none();
-        if may_write && self.unprobed(&reading) {
+        if may_write && seen.can_probe && self.unprobed(&reading) {
             return self.begin_probe(&reading, now, offset);
         }
         if may_write && info.state == InputState::Usable {
@@ -2811,6 +2828,7 @@ mod tests {
                     current: reading.clone(),
                     native_wait: None,
                     waits_for_frame: false,
+                    can_probe: true,
                     submitted: submitted.map(|over| (over, observed_at)),
                     after_write: self.after_write,
                     empty_after_write,
@@ -5395,6 +5413,7 @@ mod tests {
                 current: input(InputState::Usable, None),
                 native_wait: None,
                 waits_for_frame: false,
+                can_probe: true,
                 submitted: None,
                 after_write: true,
                 empty_after_write: None,

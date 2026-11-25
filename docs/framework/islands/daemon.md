@@ -472,7 +472,13 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   - The start prompt is pasted alone; a paste an earlier daemon began is never typed again.
   - With console typing, characters above U+FFFF go as key-down records, a text's line breaks as presses of the rule's line break key, a key-down and a key-up record each, where it names one, and the wait before a call's Enter adds `per_char` for each UTF-16 code unit.
   - An input whose row may be a hint or a draft (it reads unsure) is probed once a run, by its child
-    `probe`. The probe types a space where the input starts. Its echo budget runs from the write
+    `probe`. The probe types a space where the input starts. The first Space and both kinds of
+    Backspace pass the same output check at system handoff. The actor reads the available prefix,
+    compares the current complete ordinary box with the probe's input, and checks for native
+    waits. An open synchronized update cannot authorize a write. A resize clears pending
+    approval so any unissued key uses the new box. An unissued Space that loses its box is
+    withdrawn and reported. The row can still
+    be probed when the ordinary box returns. Its echo budget runs from the write
     receipt and includes the console input time, the CLI's settle time and the rule's
     submission-clear time. Two matching complete readings can establish whether it was a hint
     or a draft. If the space is still unseen at the deadline, the daemon reports that uncertainty
@@ -482,8 +488,7 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     pending. A person's key or ordered input call ends the probe and its startup wait. Terminal
     revokes the probe key if its write was never issued. For an issued space, the actor samples the
     output already readable and applies that finite prefix. A complete ordinary box at the probe
-    position permits one Backspace before the person's key, even before any echo. Both kinds of
-    probe Backspace pass the same output check at system handoff. New output sends the intent back
+    position permits one Backspace before the person's key, even before any echo. New output sends the intent back
     to the actor for a fresh reading of the available prefix. With the person's keys queued, all
     checks share a 16 ms budget and use only the bytes already readable. A menu, native wait,
     unread frame, missing position or exhausted budget withdraws the erase. The person's keys

@@ -104,6 +104,11 @@ impl Probe {
         self.pressed == Pressed::Backspace
     }
 
+    /// The space still belongs at the input that prompted the probe.
+    pub(super) fn can_write_space(&self, reading: &BoxReading) -> bool {
+        reading.unsure && reading.line.as_ref() == Some(&self.before)
+    }
+
     /// Rechecks a pending erase with the complete current frame. If it cannot go now,
     /// resume watching for our space at the original echo deadline.
     pub(super) fn recheck_erase(&mut self, reading: Option<&BoxReading>) -> bool {
