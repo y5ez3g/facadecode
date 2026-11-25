@@ -16,7 +16,7 @@ together. This file routes work on the extension in `extension/`; the repository
 ## 2 The specification
 
 **[Facade Code](../docs/PRODUCT.md) defines the product.** The extension's rules in `../docs/extension/` define the
-editor interaction and the legacy implementation. Where code disagrees with a rule, fix the code or amend the owning rule
+editor interaction, Framework integration and the published upgrade. Where code disagrees with a rule, fix the code or amend the owning rule
 first.
 
 The [specification index](../docs/extension/README.md) lists its layers and each document's responsibility. Product constrains
@@ -80,18 +80,13 @@ them on Linux in a container of the local Docker too, its windows attached as De
 is one path on every computer, under `/tmp` unless `FACADE_IT_REMOTE_ROOT` names another, such as `/var/tmp`.
 `FACADE_IT_ONLY=ssh`, `ssh-ssh`, `local-ssh` or `ssh-local` runs one scenario.
 
-`node scripts/capture-inputs.mjs <cli>` records a built-in's input box as text is typed and pasted, never submitted, and
-checks the input readers against it; run it once a CLI updates, and keep its screens in `build/captures` as recorded cases.
-It creates a temporary home and working folder. `--home` and `--cwd` accept only temporary folders; sign in there for
-testing or supply temporary state overrides with `FACADE_CAPTURE_ENV`. It never inherits the owner's CLI configuration.
+For packaged cutover, set `FACADE_IT_RELEASED` to the digest-verified published 0.1.5 pair and
+`FACADE_IT_CURRENT` to the matching 0.1.6 candidate pair. Use the cutover selectors in
+[VERIFICATION-5.2](../docs/extension/engineering/VERIFICATION.md#52-verify-upgrade-and-compatibility-against-the-previous-build).
 
-`FACADE_IT_ONLY=real npm run test:integration` runs real agents of one built-in with YOLO off, never by default: it signs
-in and uses an account's usage. `FACADE_IT_REAL` names the built-in (Claude Code by default) and `FACADE_IT_REAL_PATH` its
-executable (`FACADE_IT_CLAUDE` for Claude Code, with `FACADE_IT_CLAUDE_CONFIG` a temporary configuration folder signed in for
-testing). Its terminals get `FACADE_IT_REAL_ENV`, a JSON object such as its own configuration folders, and the variables
-`FACADE_IT_REAL_PASS` names, taken from your environment and never written to a file. State overrides must name temporary
-storage; `FACADE_IT_REAL_HOME=keep` and personal-home overrides are refused. The runner's default Claude configuration,
-terminal home and XDG directories are isolated. The run takes back each launch's temporary trust.
+`FACADE_IT_ONLY=real-lifecycle npm run test:integration` uses a signed-in temporary CLI state and may use account quota.
+`FACADE_IT_REAL` names the built-in and `FACADE_IT_REAL_PATH` its executable. For Claude Code,
+`FACADE_IT_CLAUDE_CONFIG` names its temporary state. The runner validates all state paths before opening the editor.
 
 ## 6 Other files
 

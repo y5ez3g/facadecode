@@ -288,13 +288,8 @@ journeys over Remote-SSH from this computer to the hosts of a given SSH configur
 window, two SSH windows, local to SSH, SSH to local and, given two hosts, between them, each with Remote-SSH and the
 editor's server in folders of the run's own, under `/tmp` unless `FACADE_IT_REMOTE_ROOT` names another folder.
 `FACADE_IT_CONTAINER`, an image with Node, Git and a user `node`, runs the same scenarios on Linux in a container of the
-local Docker, its windows attached as Dev Containers attaches. `FACADE_IT_ONLY=real` runs real agents of one built-in
-with YOLO off - never part of a default run, as it signs in and uses an account's usage - with `FACADE_IT_REAL` naming
-the built-in, `FACADE_IT_REAL_PATH` its executable, `FACADE_IT_REAL_ENV` the variables its terminals get and
-`FACADE_IT_REAL_PASS` those taken from the environment, never written to a file. It checks what the models did as well
-as what Facade delivered: each message sent once, one agent started, and no agent calling read_messages, list_agents or
-read_screen more than two, four and two times, as an answer comes as a paste and list_agents also says where agents can
-start. Document changes to these commands before using a different build layout. Lock dependency versions, preserve
+local Docker, its windows attached as Dev Containers attaches. `FACADE_IT_ONLY=real-lifecycle` runs an isolated real CLI lifecycle. Its account and state are separate
+from the owner's daily environment. Published cutover journeys install both prior and candidate VSIX pairs. Document changes to these commands before using a different build layout. Lock dependency versions, preserve
 licenses/notices, and keep generated/runtime files ignored. Do not repurpose HOME/CODEX_HOME as script scratch
 variables.
 

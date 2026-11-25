@@ -109,6 +109,7 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 
 	test('Resume and Pin use the same session terminology in each language', () => {
 		const sessionWords = {
+			'zh-cn': /会话/, 'zh-tw': /工作階段/, 'pt-br': /sess(?:ão|ões)/i, es: /sesi(?:ó|o)n(?:es)?/i,
 			ru: /бесед/i, de: /Sitzung/, ja: /セッション/, fr: /session/i, ko: /세션/, tr: /oturum/i, pl: /sesj/i,
 		};
 		const ids = new Set([

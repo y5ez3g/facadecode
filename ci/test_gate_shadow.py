@@ -239,7 +239,7 @@ class GateShadowTests(GateFixture, unittest.TestCase):
         self.prepare('framework/crates/base/src/protocol/address.rs')
         self.assertEqual(self.plan['route'], 'expanded')
         self.assertEqual(set(self.plan['workflows']), {SHADOW, FRAMEWORK, EXTENSION, REMOTE})
-        self.assertEqual(sum(len(jobs) for jobs in self.plan['workflows'].values()), 24)
+        self.assertEqual(sum(len(jobs) for jobs in self.plan['workflows'].values()), 18)
         self.assertNotIn('Extension on linux-x64, legacy implementation', self.plan['workflows'][EXTENSION])
         self.assertIn('Extension on linux-x64, framework implementation', self.plan['workflows'][EXTENSION])
         self.evaluate('success')
@@ -336,7 +336,7 @@ class GateShadowTests(GateFixture, unittest.TestCase):
             self.snapshot['expanded_review'] = review(*self.arguments[:-1], output)
         replay.assert_called_once()
         self.assertEqual(self.evaluate('success')['expanded_review'], native)
-        self.assertEqual(len(TYPED_NATIVE_CASES), 6)
+        self.assertEqual(len(TYPED_NATIVE_CASES), 8)
         for incomplete in ({'typed_cases': TYPED_NATIVE_CASES[:-1]}, {'release_fixture_cases': []},
                            {'typed_cases': sorted([*TYPED_NATIVE_CASES, 'framework/p0/prior-build/cold-migration'])},
                            {'package_targets': 5}, {'editor_passes': {}},

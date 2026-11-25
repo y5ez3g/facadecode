@@ -132,18 +132,18 @@ class CatalogTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaisesRegex(AcceptanceError, 'invalid Extension editor binding'):
                 validate_binding({**driver, field: value}, case_id)
 
-    def test_fallback_binding_names_the_observed_legacy_implementation(self):
+    def test_startup_failure_reports_no_serving_implementation(self):
         binding = {
             'runner': 'extension-editor', 'journey': 'activation-failure', 'name': 'activation-failure',
-            'implementation': 'legacy', 'built_in': 'claude',
+            'implementation': 'none', 'built_in': 'claude',
         }
-        case_id = 'extension/p0/activation-shell/startup-fallback'
+        case_id = 'extension/p0/activation-shell/startup-failure'
         self.assertEqual(validate_binding(binding, case_id), binding)
         _, _, env = command_for(ROOT, [binding], None, Path('/tmp/code'), {})
         self.assertEqual(env['FACADE_IT_IMPLEMENTATION'], 'framework')
-        marker = EDITOR_PASS + '{"name":"activation-failure","implementation":"legacy"}'
+        marker = EDITOR_PASS + '{"name":"activation-failure","implementation":"none"}'
         self.assertTrue(observed_pass([binding], marker))
-        self.assertFalse(observed_pass([binding], marker.replace('"legacy"', '"framework"')))
+        self.assertFalse(observed_pass([binding], marker.replace('"none"', '"framework"')))
 
 
     def test_incompatible_activation_requires_no_serving_implementation(self):
@@ -155,9 +155,9 @@ class CatalogTests(unittest.TestCase):
         marker = EDITOR_PASS + '{"name":"incompatible-activation","implementation":"none"}'
         self.assertTrue(observed_pass([binding], marker))
         self.assertFalse(observed_pass([binding], marker.replace('"none"', '"framework"')))
-        fallback = self.cases['extension/p0/activation-shell/startup-fallback'].test
+        startup = self.cases['extension/p0/activation-shell/startup-failure'].test
         with self.assertRaisesRegex(AcceptanceError, 'requires the incompatible-activation editor route'):
-            validate_binding(fallback, HARD_FAILURE)
+            validate_binding(startup, HARD_FAILURE)
         for unrelated in (binding, {**self.cases[EDITOR_CASE].test, 'implementation': 'none'}):
             with self.assertRaisesRegex(AcceptanceError, 'invalid Extension editor binding'):
                 validate_binding(unrelated, EDITOR_CASE)
@@ -174,11 +174,11 @@ class CatalogTests(unittest.TestCase):
             validate_binding(portable, REMOTE_WORKTREE)
 
 
-    def test_window_replacement_cases_require_their_exact_editor_routes(self):
-        names = ('replacement-in-flight', 'stale-owner')
+    def test_live_and_uncertain_cutovers_require_their_exact_editor_routes(self):
+        names = ('cutover-live', 'cutover-uncertain')
         for name in names:
             with self.subTest(name=name):
-                case_id = f'extension/p0/window-replacement/{name}'
+                case_id = f'extension/p0/vsix-upgrade/{name}'
                 binding = self.cases[case_id].test
                 self.assertEqual(validate_binding(binding, case_id), binding)
                 with self.assertRaisesRegex(AcceptanceError, 'requires the .* editor route'):
@@ -344,8 +344,8 @@ class EvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(AcceptanceError, 'wrong receipt product'):
             verify_receipts(self.plan, [self.receipt(REMOTE_WORKTREE, product='framework', editor=None)])
 
-    def test_replacement_receipt_rechecks_all_four_packages(self):
-        case_id = 'extension/p0/window-replacement/replacement-in-flight'
+    def test_cutover_receipt_rechecks_all_four_packages(self):
+        case_id = 'extension/p0/vsix-upgrade/upgrade-pair'
         catalog, _ = read_cases(ROOT)
         binding = self.bindings[case_id] = catalog[case_id].test
         self.plan['cases'] = {case_id: binding}
