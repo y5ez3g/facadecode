@@ -137,6 +137,21 @@ impl Readiness {
         })
     }
 
+    pub(super) fn waiting_for_input(&self) -> bool {
+        self.tools
+            .as_ref()
+            .is_some_and(|tools| matches!(tools.phase, ToolPhase::Input))
+    }
+
+    /// The person took the input while the start was waiting for the probe.
+    pub(super) fn interrupt_input_wait(&mut self) -> bool {
+        if self.waiting_for_input() {
+            self.tools = None;
+            return true;
+        }
+        false
+    }
+
     /// Whether the tools are being readied: messages wait as behind a draft.
     pub(crate) fn readies_tools(&self) -> bool {
         self.tools.is_some()

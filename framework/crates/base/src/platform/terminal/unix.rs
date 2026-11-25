@@ -3,11 +3,12 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
-use std::sync::OnceLock;
 
 use nix::fcntl::{FcntlArg, OFlag};
 use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
+
+use super::WriteObservation;
 
 /// The PTY master.
 #[derive(Debug)]
@@ -78,9 +79,13 @@ pub(super) struct Io(AsyncFd<File>);
 /// A master reads EIO once the CLI's side closed: that is the end of its output.
 fn end_of_output(read: io::Result<usize>) -> io::Result<usize> {
     match read {
-        Err(error) if error.raw_os_error() == Some(libc::EIO) => Ok(0),
+        Err(error) if is_end(&error) => Ok(0),
         read => read,
     }
+}
+
+fn is_end(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(libc::EIO)
 }
 
 impl Io {
@@ -108,11 +113,18 @@ impl Io {
         end_of_output(self.0.get_ref().read(buf))
     }
 
-    fn queued_output_bytes(&self) -> io::Result<usize> {
+    pub(super) fn queued_output_bytes(&self) -> io::Result<usize> {
         let mut bytes: libc::c_int = 0;
         nix::ioctl_read_bad!(queued, libc::FIONREAD, libc::c_int);
         // SAFETY: the descriptor stays open and bytes is writable count storage.
-        unsafe { queued(self.0.get_ref().as_raw_fd(), &mut bytes) }?;
+        unsafe { queued(self.0.get_ref().as_raw_fd(), &mut bytes) }.map_err(|error| {
+            let error = io::Error::from(error);
+            if is_end(&error) {
+                io::ErrorKind::UnexpectedEof.into()
+            } else {
+                error
+            }
+        })?;
         usize::try_from(bytes).map_err(|_| io::Error::other("invalid queued terminal byte count"))
     }
 
@@ -123,20 +135,24 @@ impl Io {
     pub(super) async fn write(
         &self,
         bytes: &[u8],
-        before: Option<&OnceLock<Option<usize>>>,
-    ) -> io::Result<usize> {
+        check: Option<WriteObservation<'_>>,
+    ) -> io::Result<Option<usize>> {
         loop {
             let mut ready = self.0.writable().await?;
-            match ready.try_io(|file| {
-                let prefix = before.and_then(|_| self.queued_output_bytes().ok());
-                let written = file.get_ref().write(bytes);
-                if written.as_ref().is_ok_and(|n| *n > 0)
-                    && let Some(before) = before
-                {
-                    let _ = before.set(prefix);
+            let attempt = |file: &AsyncFd<File>| {
+                let before = check.and_then(|_| self.queued_output_bytes().ok());
+                if check.is_some_and(|check| !check.permits(before)) {
+                    return Ok(None);
                 }
-                written
-            }) {
+                let n = file.get_ref().write(bytes)?;
+                if n > 0
+                    && let Some(check) = check
+                {
+                    check.issued(before);
+                }
+                Ok(Some(n))
+            };
+            match ready.try_io(attempt) {
                 Ok(written) => return written,
                 // A full PTY master can go on reporting writable while a write would block, as
                 // Linux 7.0's does: wait a moment before trying again rather than spin.

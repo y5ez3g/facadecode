@@ -14,7 +14,7 @@ use facade_base::{
     model::message::{DeliveryFailure, TextWritten},
     model::terminal::{InputInfo, InputState, first_control},
 };
-use facade_rules::{BoxReading, ConsoleTyping, LineCell, PasteRule, ProbeVerdict, Rule};
+use facade_rules::{BoxReading, ConsoleTyping, InputLine, LineCell, PasteRule, ProbeVerdict, Rule};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -625,12 +625,17 @@ impl Typist {
     /// Begins a probe of `reading`'s row with its space; the row counts as tried at once.
     fn begin_probe(&mut self, reading: &BoxReading, now: Instant, offset: u64) -> Step {
         let line = reading.line.clone().expect("an unprobed reading has a row");
+        let budget = console_time(self.console, " ")
+            + self.paste_rule().map_or(SLOWEST_DRAW, |rule| {
+                facade_rules::settle_time(rule, " ")
+                    + rule.submit_clear_time().unwrap_or(SLOWEST_DRAW)
+            });
         self.probed.insert(line.cells.clone(), ProbeVerdict::Other);
-        self.probing = Some(Probe::new(line, now));
+        self.probing = Some(Probe::new(line, now, budget));
         self.record_write(offset, 1, Duration::ZERO);
         Step {
             write: b" ".to_vec(),
-            wake: Some(now + PROBE_READ),
+            wake: Some(now + PROBE_READ.min(budget)),
         }
     }
 
@@ -645,7 +650,7 @@ impl Typist {
         match probe.next(&self.agent, now, read_screen) {
             Next::Wait(at) => {
                 self.probing = Some(probe);
-                Some(Step::wait(Some(at)))
+                at.map(|at| Step::wait(Some(at)))
             }
             Next::Backspace => {
                 self.probing = Some(probe);
@@ -680,9 +685,15 @@ impl Typist {
             && receipt.arrived.is_none()
         {
             if !receipt.complete(written) {
+                if self.probing.is_some() && writes == BoxWrites::AwaitingEscape {
+                    return self.advance_delivery(now, queued, modes, writes, observe, None);
+                }
                 return self.stalled(now);
             }
             receipt.arrived = Some(now);
+            if let Some(probe) = &mut self.probing {
+                probe.wrote_key(now);
+            }
             if let Some(call) = &mut self.current {
                 call.completed += receipt.boundaries.len();
             }
@@ -712,6 +723,16 @@ impl Typist {
                     && let Some(step) = self.continue_probe(probe, now, queued, &read_screen)
                 {
                     return step;
+                }
+                if self.probing.is_some() {
+                    return self.advance_delivery(
+                        now,
+                        queued,
+                        modes,
+                        BoxWrites::ObserveOnly,
+                        observe,
+                        pause,
+                    );
                 }
                 if self.probe_wanted
                     && pause.is_none()
@@ -881,6 +902,35 @@ impl Typist {
     pub(crate) fn probing(&self) -> bool {
         self.probing.is_some()
     }
+
+    pub(super) fn probe_is_erasing(&self) -> bool {
+        self.probing.as_ref().is_some_and(Probe::erasing)
+    }
+
+    pub(super) fn recheck_probe_erase(&mut self, reading: Option<&BoxReading>) -> bool {
+        let allowed = self
+            .probing
+            .as_mut()
+            .is_some_and(|probe| probe.recheck_erase(reading));
+        if !allowed {
+            self.receipt = None;
+        }
+        allowed
+    }
+
+    pub(super) fn observe_probe_frame(&mut self, reading: BoxReading) {
+        if let Some(probe) = &mut self.probing {
+            probe.saw_frame(reading);
+        }
+    }
+
+    /// Abandons the probe receipt and returns the position of any space still needing an erase.
+    pub(super) fn interrupt_probe(&mut self, revoked: bool) -> Option<InputLine> {
+        self.probe_wanted = false;
+        let probe = self.probing.take()?;
+        self.receipt = None;
+        probe.interrupted(revoked)
+    }
     /// Reads whether delivery has passed persistence and awaits settlement; no I/O or locks.
     pub(crate) fn pasting(&self) -> bool {
         self.batch
@@ -917,12 +967,8 @@ impl Typist {
             DeliveryPhase::Clearing { until, erased } => erased.then_some(until),
         }
     }
-    /// Keys that can change the input go into it: a probe under way presses nothing more, and a paste
-    /// that times out is not erased; no I/O or locks.
+    /// A person can now change the input, so do not erase an expired paste.
     pub(crate) fn input_edited(&mut self) {
-        if let Some(probe) = &mut self.probing {
-            probe.edited();
-        }
         if let Some(batch) = &mut self.batch {
             batch.draft.edited = true;
         }
@@ -1656,6 +1702,13 @@ mod tests {
             submitted: Option<&BoxReading>,
         ) -> Option<Instant> {
             let reading = self.reading.clone();
+            if typist
+                .receipt
+                .as_ref()
+                .is_none_or(|receipt| receipt.complete(self.written as u64))
+            {
+                typist.observe_probe_frame(reading.clone());
+            }
             let step = typist.step(
                 now,
                 self.written as u64,
@@ -3387,6 +3440,7 @@ mod tests {
         terminal.reading = row("Try it", 2, true);
         terminal.step(&mut typist, start, ANY);
         assert_eq!(terminal.write_all(), b" ");
+        terminal.step(&mut typist, start, ANY);
         typist
     }
 
@@ -3430,35 +3484,37 @@ mod tests {
         let space = || row(" ", 3, false);
         let menu = input(InputState::Interaction, None);
         let gone = row("other", 7, false);
-        let over = Duration::from_secs(1);
-        let soon = over + Duration::from_millis(40);
         for (last, key) in [
-            (Some((soon, space())), &b"\x7f"[..]),
-            (Some((soon, menu)), b""),
-            (Some((soon, gone)), b""),
-            (Some((over + RESPONSE_GRACE, unread())), b""),
+            (space(), &b"\x7f"[..]),
+            (menu, b""),
+            (gone, b""),
+            (unread(), b""),
         ] {
             let post = test_messages();
             let mut terminal = Terminal::default();
             let start = Instant::now();
             let mut typist = probing(&post, &mut terminal, start);
-            let mut looks = vec![(Duration::from_millis(900), space()), (over, unread())];
-            looks.extend(last.clone());
-            let mut written = Vec::new();
-            for (at, reading) in looks {
-                assert!(written.is_empty(), "nothing goes before the last look");
-                terminal.reading = reading;
-                let wake = terminal.step(&mut typist, start + at, ANY);
-                if at == over {
-                    assert!(
-                        wake.is_some_and(|wake| wake <= start + over + RESPONSE_GRACE),
-                        "it looks again in time"
-                    );
-                }
-                written = terminal.write_all();
+            let deadline = typist.probing.as_ref().unwrap().echo_deadline();
+            terminal.reading = space();
+            terminal.step(&mut typist, deadline - PROBE_READ, ANY);
+            assert!(terminal.write_all().is_empty());
+            terminal.reading = unread();
+            terminal.step(&mut typist, deadline, ANY);
+            assert!(
+                terminal.write_all().is_empty(),
+                "the earlier space is not proof"
+            );
+
+            let later = deadline + Duration::from_millis(40);
+            terminal.reading = last;
+            terminal.step(&mut typist, later, ANY);
+            assert_eq!(terminal.write_all(), key);
+            if key.is_empty() {
+                assert!(typist.probing(), "the redraw leaves the cleanup pending");
+                terminal.reading = space();
+                terminal.step(&mut typist, later + PROBE_READ, ANY);
+                assert_eq!(terminal.write_all(), b"\x7f");
             }
-            assert_eq!(written, key, "{last:?}");
-            assert_eq!(typist.probing(), !key.is_empty(), "{last:?}");
         }
     }
 

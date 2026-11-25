@@ -2,7 +2,7 @@
 
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use windows_sys::Win32::Foundation::{
     ERROR_BROKEN_PIPE, ERROR_IO_INCOMPLETE, ERROR_OPERATION_ABORTED, ERROR_PIPE_NOT_CONNECTED,
@@ -20,6 +20,7 @@ use windows_sys::Win32::System::Pipes::{
 use windows_sys::Win32::System::Threading::CreateEventW;
 
 use super::super::io_thread::{self, Operation};
+use super::WriteObservation;
 
 /// The most bytes one read takes, and one write gives.
 const CHUNK_BYTES: usize = 64 * 1024;
@@ -183,7 +184,7 @@ impl Io {
         }
     }
 
-    fn queued_output_bytes(&self) -> io::Result<usize> {
+    pub(super) fn queued_output_bytes(&self) -> io::Result<usize> {
         let reading = lock(&self.reading);
         let output = self.output.as_raw_handle();
         let completed = || {
@@ -218,7 +219,12 @@ impl Io {
                 )
             };
             if peeked == 0 {
-                return Err(io::Error::last_os_error());
+                let error = io::Error::last_os_error();
+                return Err(if is_end(&error) {
+                    io::ErrorKind::UnexpectedEof.into()
+                } else {
+                    error
+                });
             }
             Ok(bytes as usize)
         };
@@ -282,22 +288,23 @@ impl Io {
     pub(super) async fn write(
         &self,
         bytes: &[u8],
-        before: Option<&OnceLock<Option<usize>>>,
-    ) -> io::Result<usize> {
+        check: Option<WriteObservation<'_>>,
+    ) -> io::Result<Option<usize>> {
         let write = {
             let mut writing = lock(&self.writing);
             match writing.as_ref() {
                 Some(write) => Arc::clone(write),
                 None => {
                     if bytes.is_empty() {
-                        return Ok(0);
+                        return Ok(Some(0));
                     }
                     let write = Operation::new(bytes[..bytes.len().min(CHUNK_BYTES)].to_vec());
                     let input = self.input.as_raw_handle();
+                    let before = check.and_then(|_| self.queued_output_bytes().ok());
+                    if check.is_some_and(|check| !check.permits(before)) {
+                        return Ok(None);
+                    }
                     let under_way = io_thread::issue(&write, |buffer, length, overlapped| {
-                        if let Some(before) = before {
-                            let _ = before.set(self.queued_output_bytes().ok());
-                        }
                         // SAFETY: the handle is open and bound; buffer and overlapped live in
                         // the operation, which outlives the write.
                         unsafe {
@@ -305,7 +312,16 @@ impl Io {
                         }
                     });
                     if !under_way {
-                        return write.done.take().unwrap_or(Ok(0));
+                        let result = write.done.take().unwrap_or(Ok(0));
+                        if result.as_ref().is_ok_and(|n| *n > 0)
+                            && let Some(check) = check
+                        {
+                            check.issued(before);
+                        }
+                        return result.map(Some);
+                    }
+                    if let Some(check) = check {
+                        check.issued(before);
                     }
                     *writing = Some(Arc::clone(&write));
                     write
@@ -320,7 +336,7 @@ impl Io {
         {
             *writing = None;
         }
-        write.done.take().unwrap_or(Ok(0))
+        write.done.take().unwrap_or(Ok(0)).map(Some)
     }
 
     pub(super) fn set_size(&self, master: &Master, cols: u16, rows: u16) {

@@ -14,6 +14,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use facade_base::api_v1::Size;
+use facade_base::key_input::Key;
 use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::model::message::DeliveryFailure;
 use facade_base::process::{ProcessExit, ProcessState};
@@ -21,7 +22,7 @@ use facade_base::{
     model::agent::{AgentRef, AgentsUpdate, ManagedAgent, ManagedAgentState, ToolsState},
     model::terminal::{DEFAULT_TERMINAL_SIZE, InputInfo, InputState},
 };
-use facade_rules::{BoxReading, InputRule, Rule};
+use facade_rules::{BoxReading, InputLine, InputRule, Rule, space_taken};
 use facade_screen::{CursorRowWrites, ParsedOutput, TerminalColors};
 use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
@@ -58,6 +59,13 @@ const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 const REDRAW_NUDGE_TIMEOUT: Duration = Duration::from_millis(200);
 /// How long output settles before the screen is read for the CLI's status.
 const SCREEN_STATUS_DELAY: Duration = Duration::from_millis(200);
+/// I13's idle-key latency target also bounds the time checking output before a person's key.
+const PROBE_TAKEOVER_READ_BUDGET: Duration = Duration::from_millis(16);
+
+struct ProbeTakeover {
+    before: InputLine,
+    check_by: Instant,
+}
 
 /// The batching delay, which a debug build lets a test set through `FACADE_TEST_PUBLISH_AFTER_MS`.
 fn publish_delay() -> Duration {
@@ -188,6 +196,8 @@ fn new_actor(start: ActorStart, links: Links, recovered: bool) -> anyhow::Result
         ready_at: None,
         person: PersonKeys::default(),
         escape_may_edit: false,
+        probe_key_prefix: Vec::new(),
+        probe_takeover: None,
         held_enter: None,
         submitting: VecDeque::new(),
         held: VecDeque::new(),
@@ -218,7 +228,6 @@ fn new_actor(start: ActorStart, links: Links, recovered: bool) -> anyhow::Result
         typist_at: None,
         replies_dropped: false,
         untouched_input,
-        holds_input_for_probe: false,
     })
 }
 
@@ -256,8 +265,12 @@ struct Actor {
     readiness: Readiness,
     ready_at: Option<Instant>,
     person: PersonKeys,
-    /// An undecided escape sequence released into the input box.
+    /// An undecided escape sequence in the input box's context.
     escape_may_edit: bool,
+    /// An undecided escape sequence whose bytes must follow any probe Backspace.
+    probe_key_prefix: Vec<u8>,
+    /// The queued probe erase ahead of the person's keys and its remaining time for checks.
+    probe_takeover: Option<ProbeTakeover>,
     held_enter: Option<HeldEnter>,
     /// Issued Enters in input order, each waiting for its preceding output to be observed.
     submitting: VecDeque<Submitting>,
@@ -304,8 +317,6 @@ struct Actor {
     replies_dropped: bool,
     /// Automatic delivery can probe an unstyled hint before it accepts any external input.
     untouched_input: bool,
-    /// The probe of a fresh unstyled hint finishes before external keys reach the terminal.
-    holds_input_for_probe: bool,
 }
 
 /// A size determined from the live viewers, or an exact size in a unit fixture.
@@ -381,7 +392,6 @@ impl Actor {
         self.publish_state();
         loop {
             if !self.typist.pasting()
-                && !self.holds_input_for_probe
                 && let Some(reply) = self.settling.take()
             {
                 let _ = reply.send(());
@@ -760,8 +770,9 @@ impl Actor {
                 self.glyph_at = None;
                 self.set_status_glyph(None);
                 self.typist.clear_probes();
+                self.terminal.stop_observing_probe();
+                self.probe_takeover = None;
                 self.untouched_input = false;
-                self.holds_input_for_probe = false;
                 self.ready_at =
                     self.readiness
                         .begin(self.state.started(), self.state.tools_given(), false);
@@ -798,8 +809,11 @@ impl Actor {
             AgentCommand::Quiesce { reply } => {
                 gate_for_test("agent-quiesce");
                 (self.quiet, self.typist_at) = (true, None);
-                self.holds_input_for_probe = false;
                 // It reads no more, so the person's keys go as they come.
+                if !self.probe_key_prefix.is_empty() {
+                    self.interrupt_probe_for_input(true);
+                    self.flush_probe_key();
+                }
                 self.let_enter_go();
                 self.release_held();
                 // No read is under way once it replies, and what the last reads brought went
@@ -809,11 +823,8 @@ impl Actor {
                 }
                 // The last facts are written before the next daemon reads them.
                 self.stop_keeping().await;
-                if self.terminal.queued() == 0 {
-                    let _ = reply.send(());
-                } else {
-                    self.quieting = Some(reply);
-                }
+                self.quieting = Some(reply);
+                self.confirm_input_drained();
             }
             AgentCommand::LetGoBeforeStop { reply } => {
                 self.terminal.let_go_before_stop();
@@ -910,6 +921,8 @@ impl Actor {
             + self.typist.held_bytes()
             + usize::from(enter)
             + held
+            + self.probe_key_prefix.len()
+            + usize::from(self.typist.probing())
             + self.start_prompt_bytes.unwrap_or(0);
         MAX_INPUT_BYTES.saturating_sub(used)
     }
@@ -1046,6 +1059,9 @@ impl Actor {
                 }
             }
             TerminalEvent::Wrote => {
+                if !self.terminal.has_probe_erase() {
+                    self.probe_takeover = None;
+                }
                 self.links.room.notify_waiters();
                 if self.typist.busy() {
                     self.type_next();
@@ -1058,12 +1074,9 @@ impl Actor {
                 {
                     self.follow_enter();
                 }
-                if self.terminal.queued() == 0
-                    && let Some(reply) = self.quieting.take()
-                {
-                    let _ = reply.send(());
-                }
+                self.confirm_input_drained();
             }
+            TerminalEvent::ProbeEraseNeedsCheck { automatic } => self.check_probe_erase(automatic),
             TerminalEvent::WriteFailed(err) => {
                 self.stop_input(&format!(
                     "{}'s terminal stopped taking input: {err}",
@@ -1073,8 +1086,21 @@ impl Actor {
         }
     }
 
+    fn confirm_input_drained(&mut self) {
+        if self.terminal.queued() == 0
+            && let Some(reply) = self.quieting.take()
+        {
+            let _ = reply.send(());
+        }
+    }
+
     /// The CLI wrote: into the log and the screen, then to everyone who follows it.
     fn take_output(&mut self) {
+        self.apply_output();
+        self.follow_output();
+    }
+
+    fn apply_output(&mut self) {
         self.links.output.send_replace(());
         self.end_nudge();
         self.undrawn = None;
@@ -1082,29 +1108,37 @@ impl Actor {
         self.drawn_at = Some(received);
         let output = self.terminal.output().to_vec();
         let earlier = self.terminal.output_precedes_submission();
-        if self.terminal.read_starts_at_submission() {
+        if self.terminal.read_starts_at_submission() || self.terminal.read_starts_at_probe() {
             self.screen_mut().mark_pending_frame_earlier();
         }
         let before_next = self.terminal.output_between_submissions();
-        let fed = if self.observes_submission() || before_next {
+        let observes_submission = self.observes_submission() || before_next;
+        let after_probe = self.terminal.output_follows_probe();
+        let fed = if observes_submission || after_probe {
             let (rule, ended) = (self.input_rule, self.ended());
+            let untouched = self.untouched_input;
             let (after_paste, position) = (
                 self.terminal.output_follows_paste(),
                 self.terminal.output_position(),
             );
             let after_enter = self.terminal.output_follows_first_submission();
             let submitting = &mut self.submitting;
-            let typist = &self.typist;
+            let typist = &mut self.typist;
             let mut observe = |screen: &facade_screen::Screen, writes: CursorRowWrites| {
-                Self::observe_submissions(
-                    submitting,
-                    typist,
-                    || read_box(rule, ended, None, screen, false),
-                    writes,
-                    after_paste,
-                    (after_enter && writes == CursorRowWrites::Current).then_some(position),
-                    before_next,
-                );
+                if after_probe && writes == CursorRowWrites::Current {
+                    typist.observe_probe_frame(read_box(rule, ended, None, screen, untouched));
+                }
+                if observes_submission {
+                    Self::observe_submissions(
+                        submitting,
+                        typist,
+                        || read_box(rule, ended, None, screen, false),
+                        writes,
+                        after_paste,
+                        (after_enter && writes == CursorRowWrites::Current).then_some(position),
+                        before_next,
+                    );
+                }
             };
             self.screen
                 .as_mut()
@@ -1121,7 +1155,6 @@ impl Actor {
         self.admit_viewers();
         self.wake_behind_viewers();
         self.screen_mut().checkpoint_if_due();
-        self.follow_output();
     }
 
     fn observes_submission(&self) -> bool {
@@ -1236,7 +1269,7 @@ impl Actor {
         if self.readiness.is_under_way() {
             self.step_start();
             self.type_next();
-        } else if self.typist.reads_input() {
+        } else if self.typist.reads_input() || self.typist.probing() {
             self.type_next();
         }
         self.follow_enter();
@@ -1598,7 +1631,7 @@ impl Actor {
             working: self.links.shared.record.lock().unwrap().info.state
                 == ManagedAgentState::Working,
         };
-        let written = self.terminal.written();
+        let written = self.terminal.input_through();
         let queued = written + self.terminal.queued() as u64;
         let probing = self.typist.probing();
         let pasting = self.typist.pasting();
@@ -1617,13 +1650,12 @@ impl Actor {
         let unshown_until = self.person.unshown_until();
         // Messages wait behind what the run's start does first and behind the person's keys.
         let start_first = self.readiness.readies_tools() || self.start_prompt_bytes.is_some();
-        let held_first = match self.held.front() {
-            Some((_, Input::Raw(_))) => !pasting,
-            first => self.holds_input_for_probe && first.is_some(),
-        };
+        let held_first = !pasting && matches!(self.held.front(), Some((_, Input::Raw(_))));
         let person_submitting = pasting && !self.submitting.is_empty();
         let partial_until = self.person.partial_until(now);
-        let writes = if self.escape_may_edit {
+        let classifying = self.escape_may_edit
+            || (probing && partial_until.is_some() && !self.person.is_pasting());
+        let writes = if classifying {
             BoxWrites::AwaitingEscape
         } else if start_first || held_first || self.person_first(now) || person_submitting {
             BoxWrites::ObserveOnly
@@ -1648,13 +1680,17 @@ impl Actor {
                 awaiting_after_interaction,
             }
         };
-        let step = self
+        let mut step = self
             .typist
             .step(now, written, queued, modes, writes, &observe);
         let still_probing = self.typist.probing();
-        if !probing && still_probing && untouched_input {
-            self.holds_input_for_probe =
-                !read_box(rule, ended, undrawn, screen.screen(), false).unsure;
+        if still_probing && !step.write.is_empty() {
+            if self.typist.probe_is_erasing() {
+                self.terminal.push_probe_erase(step.write[0], true);
+                step.write.clear();
+            } else {
+                self.terminal.observe_probe_from(queued + 1);
+            }
         }
         if !pasting && self.typist.pasting() && !step.write.is_empty() {
             self.escape_may_edit = false;
@@ -1664,17 +1700,14 @@ impl Actor {
         let shown_by = (unshown_until.into_iter())
             .chain(partial_until)
             .min()
-            .filter(|_| self.typist.reads_input() || self.escape_may_edit);
+            .filter(|_| self.typist.reads_input() || classifying);
         self.typist_at = step.wake.into_iter().chain(shown_by).min();
         let submitted = self.take_typed();
         if pasting && !self.typist.pasting() && !submitted {
             self.untouched_input = false;
         }
         if probing && !still_probing {
-            self.holds_input_for_probe = false;
-            if self.readiness.is_under_way() {
-                self.ready_at = Some(Instant::now());
-            }
+            self.finish_observing_probe();
         }
     }
 
@@ -1719,7 +1752,14 @@ impl Actor {
         if reading.unsure && self.readiness.readies_tools() && !self.person_first(now) {
             self.typist.want_probe();
         }
-        let input = reading.info.state;
+        let input = if self.typist.probing()
+            && self.readiness.waiting_for_input()
+            && reading.info.state != InputState::Interaction
+        {
+            InputState::Unknown
+        } else {
+            reading.info.state
+        };
         let screen = self
             .screen
             .as_ref()
@@ -1757,6 +1797,8 @@ impl Actor {
             match self.held.pop_front().expect("held input") {
                 (came, Input::Raw(keys)) => self.take_keys(came, keys),
                 (_, typed) => {
+                    self.interrupt_probe_for_input(true);
+                    self.flush_probe_key();
                     self.give_typist(typed);
                     self.type_next();
                 }
@@ -1769,19 +1811,18 @@ impl Actor {
         self.ordered_input &= self.typist.sequence_pending() || !self.held.is_empty();
     }
 
-    /// Whether `next`, the first held input, which came at `came`, waits: behind the probe under
-    /// way, an ordered sequence, the person's Enter, what the run's start types, or a message that
-    /// goes into the input.
+    /// Whether `next`, the first held input, which came at `came`, waits behind an ordered
+    /// sequence, the person's Enter, the run's start keys, or a message that goes into the input.
     fn waits(&self, came: Instant, next: &Input) -> bool {
         // A quiet agent holds nothing back, as the next daemon has none of it.
         if self.quiet {
             return false;
         }
-        if self.holds_input_for_probe
-            || self.typist.sequence_pending()
+        if self.typist.sequence_pending()
             || (self.ordered_input && self.typist.types_calls())
             || self.held_enter.is_some()
-            || self.start_holds_input()
+            || (self.start_holds_input()
+                && !(self.typist.probing() && self.readiness.waiting_for_input()))
         {
             return true;
         }
@@ -1819,20 +1860,144 @@ impl Actor {
             .min()
     }
 
+    fn finish_observing_probe(&mut self) {
+        self.terminal.stop_observing_probe();
+        if self.readiness.is_under_way() {
+            self.ready_at = Some(Instant::now());
+        }
+    }
+
+    fn interrupt_probe_for_input(&mut self, at_key_boundary: bool) {
+        if !self.typist.probing() {
+            return;
+        }
+        let revoked = self.terminal.revoke_probe_key();
+        if let Some(before) = self.typist.interrupt_probe(revoked) {
+            let check_by = Instant::now() + PROBE_TAKEOVER_READ_BUDGET;
+            if at_key_boundary
+                && self
+                    .current_probe_box(Some(check_by))
+                    .is_some_and(|reading| Self::erase_before_person(&before, &reading))
+            {
+                let mut erase = Vec::new();
+                Key::Backspace.write(false, &mut erase);
+                self.probe_takeover = Some(ProbeTakeover { before, check_by });
+                self.terminal.push_probe_erase(erase[0], false);
+            } else {
+                self.warn_unerased_probe_space();
+            }
+        }
+        if self.readiness.interrupt_input_wait() {
+            self.state.tools_not_started();
+            self.state_changed = true;
+        }
+        self.finish_observing_probe();
+    }
+
+    fn check_probe_erase(&mut self, automatic: bool) {
+        let allowed = if automatic {
+            let reading = self.current_probe_box(None);
+            self.typist.recheck_probe_erase(reading.as_ref())
+        } else {
+            let check_by = self
+                .probe_takeover
+                .as_ref()
+                .map(|takeover| takeover.check_by);
+            let reading = self.current_probe_box(check_by);
+            self.probe_takeover
+                .as_ref()
+                .zip(reading.as_ref())
+                .is_some_and(|(takeover, reading)| {
+                    Self::erase_before_person(&takeover.before, reading)
+                })
+        };
+        if allowed {
+            self.terminal.refresh_probe_erase();
+            return;
+        }
+        self.terminal.cancel_probe_erase();
+        if automatic {
+            self.typist_at = Some(Instant::now());
+        } else {
+            self.probe_takeover = None;
+            self.warn_unerased_probe_space();
+        }
+        self.links.room.notify_waiters();
+        self.confirm_input_drained();
+    }
+
+    /// The ready prefix must leave a complete ordinary input reading.
+    fn current_probe_box(&mut self, check_by: Option<Instant>) -> Option<BoxReading> {
+        if self.quiet
+            || !self.read_ready_probe_output(check_by)
+            || self.state.native_wait().is_some()
+        {
+            return None;
+        }
+        let screen = self.screen().screen();
+        if screen.is_drawing() || screen.has_unfinished_unit() {
+            return None;
+        }
+        let reading = self.read_screen_input();
+        (reading.info.state != InputState::Interaction && !reading.is_unread()).then_some(reading)
+    }
+
+    fn erase_before_person(before: &InputLine, reading: &BoxReading) -> bool {
+        let ordinary = reading.info.state != InputState::Unknown || reading.unsure;
+        (ordinary
+            && reading
+                .line
+                .as_ref()
+                .is_some_and(|line| line.start == before.start && line.cursor == before.cursor))
+            || space_taken(before, reading)
+    }
+
+    /// Examines this readable prefix without waiting. Rechecks ahead of a person's key stop
+    /// at the same deadline, allowing the key through even if the CLI keeps writing.
+    fn read_ready_probe_output(&mut self, check_by: Option<Instant>) -> bool {
+        let mut remaining = match self.terminal.queued_output_bytes() {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => None,
+            Err(_) => return false,
+        };
+        while remaining != Some(0)
+            && !self.screen().is_full()
+            && check_by.is_none_or(|at| Instant::now() < at)
+        {
+            let Ok(Some(n)) = self.terminal.try_read_now(remaining.unwrap_or(usize::MAX)) else {
+                return false;
+            };
+            self.apply_output();
+            remaining = remaining.map(|left| left - n);
+        }
+        remaining == Some(0) && check_by.is_none_or(|at| Instant::now() < at)
+    }
+
+    fn warn_unerased_probe_space(&self) {
+        log(
+            "warn",
+            &format!(
+                "#{}: a probe stopped because the person typed after its space. The space may remain in the input",
+                self.id
+            ),
+        );
+    }
+
     /// Drops queued input and fails the typist's calls: `why` typing stopped.
     fn stop_input(&mut self, why: &str) {
         self.terminal.clear();
-        self.holds_input_for_probe = false;
         self.ordered_input = false;
         self.person = PersonKeys::default();
         self.escape_may_edit = false;
+        self.probe_key_prefix.clear();
+        self.probe_takeover = None;
         self.held_enter = None;
         self.submitting.clear();
         // Held calls fail with the others; held keys go with the queued ones.
         for (_, input) in std::mem::take(&mut self.held) {
             self.give_typist(input);
         }
-        self.typist.fail_all(self.terminal.written(), why);
+        self.typist.fail_all(self.terminal.input_through(), why);
         self.typist_at = None;
         self.take_typed();
     }
@@ -1840,30 +2005,21 @@ impl Actor {
     /// The person's keys. An Enter that may submit the input waits, with the keys after it, until
     /// the input can be read; a CLI without a rule has no input to read.
     fn take_keys(&mut self, came: Instant, mut keys: Vec<u8>) {
+        if !self.probe_key_prefix.is_empty() {
+            self.finish_escape(Instant::now());
+        }
         let PersonInput {
             edits,
             first_edit,
             partial_start,
-            enter,
+            mut enter,
             ..
         } = self.person.read(&keys);
-        if !self.submitting.is_empty() {
-            let first = self.queued_through() + 1;
-            match (first_edit, partial_start) {
-                (Some(KeyOffset::Carried), _) => self.terminal.confirm_following_edit(),
-                (Some(KeyOffset::Packet(at)), _) => {
-                    self.terminal.forget_provisional_edit();
-                    self.terminal
-                        .observe_following_edit(first + at as u64, false);
-                }
-                (None, Some(KeyOffset::Carried)) => {}
-                (None, Some(KeyOffset::Packet(at))) => {
-                    self.terminal.forget_provisional_edit();
-                    self.terminal
-                        .observe_following_edit(first + at as u64, true);
-                }
-                (None, None) => self.terminal.forget_provisional_edit(),
-            }
+        let edits_input = edits && (first_edit.is_some() || enter.is_some());
+        if edits_input {
+            let at_key_boundary =
+                first_edit != Some(KeyOffset::Carried) || !self.probe_key_prefix.is_empty();
+            self.interrupt_probe_for_input(at_key_boundary);
         }
         if edits {
             self.person.goes_on(came);
@@ -1877,10 +2033,46 @@ impl Actor {
         }
         let starts_escape =
             matches!(partial_start, Some(KeyOffset::Packet(_))) && !self.person.is_pasting();
-        let edits_input = edits && (first_edit.is_some() || enter.is_some());
         if edits_input || starts_escape {
             self.observe_person_keys(edits_input, starts_escape);
         }
+
+        let prefix_len = self.probe_key_prefix.len();
+        if prefix_len != 0 {
+            let mut prefix = std::mem::take(&mut self.probe_key_prefix);
+            prefix.append(&mut keys);
+            keys = prefix;
+            if let Some(enter) = &mut enter {
+                enter.at += prefix_len;
+            }
+        }
+        let in_packet = |offset| match offset {
+            KeyOffset::Carried if prefix_len != 0 => KeyOffset::Packet(0),
+            KeyOffset::Packet(at) => KeyOffset::Packet(prefix_len + at),
+            KeyOffset::Carried => KeyOffset::Carried,
+        };
+        let first_edit = first_edit.map(in_packet);
+        let mut partial_start = partial_start.map(in_packet);
+        if self.typist.probing()
+            && !self.quiet
+            && !self.person.is_pasting()
+            && let Some(KeyOffset::Packet(at)) = partial_start
+        {
+            // A focus report and Left may have identical prefixes. Classify the whole key
+            // before issuing the probe or putting a Backspace before the person's sequence.
+            self.probe_key_prefix = keys.split_off(at);
+            self.terminal.classify_probe_key(true);
+            self.typist_at = self
+                .typist_at
+                .into_iter()
+                .chain(self.person.partial_until(Instant::now()))
+                .min();
+            partial_start = None;
+        } else if prefix_len != 0 {
+            self.terminal.classify_probe_key(false);
+        }
+        self.observe_edit_order(first_edit, partial_start);
+
         let mut pastes = None;
         if let Some(enter) = enter {
             self.state.asked();
@@ -1906,6 +2098,36 @@ impl Actor {
         }
     }
 
+    fn observe_edit_order(&mut self, first_edit: Option<KeyOffset>, partial: Option<KeyOffset>) {
+        if self.submitting.is_empty() {
+            return;
+        }
+        let first = self.queued_through() + 1;
+        match (first_edit, partial) {
+            (Some(KeyOffset::Carried), _) => self.terminal.confirm_following_edit(),
+            (Some(KeyOffset::Packet(at)), _) => {
+                self.terminal.forget_provisional_edit();
+                self.terminal
+                    .observe_following_edit(first + at as u64, false);
+            }
+            (None, Some(KeyOffset::Carried)) => {}
+            (None, Some(KeyOffset::Packet(at))) => {
+                self.terminal.forget_provisional_edit();
+                self.terminal
+                    .observe_following_edit(first + at as u64, true);
+            }
+            (None, None) => self.terminal.forget_provisional_edit(),
+        }
+    }
+
+    fn flush_probe_key(&mut self) {
+        if !self.probe_key_prefix.is_empty() {
+            self.observe_edit_order(Some(KeyOffset::Packet(0)), None);
+            self.terminal
+                .push(&std::mem::take(&mut self.probe_key_prefix));
+        }
+    }
+
     fn observe_person_keys(&mut self, edits_input: bool, starts_escape: bool) {
         let reading = self.read_screen_input();
         if reading.info.state == InputState::Interaction {
@@ -1927,7 +2149,13 @@ impl Actor {
     /// Resolves the provisional submission boundary when the escape wait ends.
     fn finish_escape(&mut self, now: Instant) {
         if self.person.finish_escape(now) {
-            self.terminal.confirm_following_edit();
+            let buffered = !self.probe_key_prefix.is_empty();
+            self.interrupt_probe_for_input(buffered);
+            if buffered {
+                self.flush_probe_key();
+            } else {
+                self.terminal.confirm_following_edit();
+            }
             if std::mem::take(&mut self.escape_may_edit) {
                 self.note_input_edited();
             }
@@ -1940,7 +2168,7 @@ impl Actor {
 
     /// Through which byte the input is queued.
     fn queued_through(&self) -> u64 {
-        self.terminal.written() + self.terminal.queued() as u64
+        self.terminal.input_through() + self.terminal.queued() as u64
     }
 
     /// A held Enter goes now: an agent that reads its terminal no more cannot see the input drawn.
@@ -1955,7 +2183,8 @@ impl Actor {
     fn drawn_since(&self, sent_through: u64) -> Option<Instant> {
         let written_at = self.terminal.written_at();
         self.input_drawn_at.filter(|drawn| {
-            self.terminal.written() >= sent_through && written_at.is_none_or(|at| *drawn >= at)
+            self.terminal.input_through() >= sent_through
+                && written_at.is_none_or(|at| *drawn >= at)
         })
     }
 
@@ -2337,13 +2566,20 @@ mod tests {
     }
 
     async fn write_input(actor: &mut Actor) {
-        let event = tokio::time::timeout(
-            Duration::from_secs(5),
-            actor.terminal.ready(TerminalWait::WriteOnly),
-        )
-        .await
-        .expect("the terminal takes the queued input");
-        assert!(matches!(event, TerminalEvent::Wrote));
+        loop {
+            let event = tokio::time::timeout(
+                Duration::from_secs(5),
+                actor.terminal.ready(TerminalWait::WriteOnly),
+            )
+            .await
+            .expect("the terminal takes the queued input");
+            if matches!(event, TerminalEvent::ProbeEraseNeedsCheck { .. }) {
+                actor.take_terminal(event);
+            } else {
+                assert!(matches!(event, TerminalEvent::Wrote));
+                break;
+            }
+        }
     }
 
     async fn read_output(actor: &mut Actor, cli: &mut TestCli, bytes: &[u8]) {
@@ -3047,7 +3283,662 @@ mod tests {
         assert!(actor.held_enter.is_none() && actor.submitting.is_empty());
     }
 
-    /// Puts the person's Escape on the wire just before a probe's second reading.
+    #[tokio::test]
+    async fn a_probe_takes_back_the_space_that_the_cli_echoes_after_750_ms() {
+        let home = crate::test_folder::TestFolder::new("actor-probe-late-echo");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = actor_with_cli(&home, messages.delivery_handle()).await;
+        actor.feed_own(plain_claude_frame("", "\x1b[32mTry this\x1b[0m").as_bytes());
+        assert!(actor.read_screen_input().unsure);
+        actor.typist.want_probe();
+        actor.type_next();
+        write_input(&mut actor).await;
+        let mut key = [0];
+        assert_eq!(cli.read_input(&mut key).unwrap(), 1);
+        assert_eq!(key, [b' ']);
+        actor.take_terminal(TerminalEvent::Wrote);
+
+        tokio::time::pause();
+        let echo_at = Instant::now() + Duration::from_millis(750);
+        while let Some(wake) = actor.typist_at.filter(|wake| *wake < echo_at) {
+            tokio::time::advance(wake.saturating_duration_since(Instant::now())).await;
+            actor.type_next();
+            assert_eq!(
+                actor.terminal.queued(),
+                0,
+                "the CLI still shows the old hint"
+            );
+        }
+        tokio::time::advance(echo_at.saturating_duration_since(Instant::now())).await;
+        tokio::time::resume();
+        read_output(&mut actor, &mut cli, plain_claude_frame(" ", "").as_bytes()).await;
+
+        tokio::time::pause();
+        let before = Instant::now();
+        if let Some(next) = actor.typist_at {
+            tokio::time::advance(next.saturating_duration_since(before)).await;
+            actor.type_next();
+        }
+        assert_eq!(
+            actor.terminal.queued(),
+            1,
+            "the visible probe space must be erased"
+        );
+        tokio::time::resume();
+        write_input(&mut actor).await;
+        assert_eq!(cli.read_input(&mut key).unwrap(), 1);
+        assert_eq!(key, [0x7f]);
+        actor.take_terminal(TerminalEvent::Wrote);
+        assert!(
+            actor.typist.probing(),
+            "cleanup waits for the restored frame"
+        );
+        let restored = plain_claude_frame("", "\x1b[32mTry this\x1b[0m");
+        read_output(&mut actor, &mut cli, restored.as_bytes()).await;
+        tokio::time::pause();
+        for _ in 0..2 {
+            if let Some(next) = actor.typist_at {
+                tokio::time::advance(next.saturating_duration_since(Instant::now())).await;
+                actor.type_next();
+            }
+        }
+        assert!(!actor.typist.probing());
+        assert_eq!(actor.terminal.queued(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_probe_waiting_for_echo_does_not_hold_a_tab_or_the_following_key() {
+        for readies_tools in [false, true] {
+            tab_and_next_key_overtake_a_probe(readies_tools).await;
+        }
+    }
+
+    async fn tab_and_next_key_overtake_a_probe(readies_tools: bool) {
+        let home = crate::test_folder::TestFolder::new("actor-probe-ordered-person");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = actor_with_cli(&home, messages.delivery_handle()).await;
+        actor.untouched_input = true;
+        actor.feed_own(plain_claude_frame("", "Try this").as_bytes());
+        if readies_tools {
+            actor.readiness = Readiness::new(facade_rules::find("agy").unwrap(), &actor.id);
+            actor.ready_at =
+                actor
+                    .readiness
+                    .begin(Instant::now(), crate::ToolsGiven::Injected, false);
+            assert!(actor.readiness.waiting_for_input());
+        }
+        actor.typist.want_probe();
+        actor.type_next();
+        write_input(&mut actor).await;
+        let mut key = [0];
+        assert_eq!(cli.read_input(&mut key).unwrap(), 1);
+        assert_eq!(key, [b' ']);
+        actor.take_terminal(TerminalEvent::Wrote);
+        if readies_tools {
+            read_output(&mut actor, &mut cli, plain_claude_frame("", "").as_bytes()).await;
+            assert!(actor.readiness.waiting_for_input());
+        }
+
+        let (tab, receipt) = Typing::sequence(vec![facade_base::api_v1::daemon::InputStep::Key {
+            key: "Tab".into(),
+        }])
+        .unwrap();
+        actor.take_input(Input::Typed(tab), actor.run).unwrap();
+        actor
+            .take_input(Input::Raw(b"x".to_vec()), actor.run)
+            .unwrap();
+        assert_eq!(
+            actor.terminal.queued(),
+            2,
+            "the erase and Tab are ready before any echo"
+        );
+        assert_eq!(
+            read_queued_probe_input(&mut actor, &mut cli).await,
+            b"\x7f\t"
+        );
+        assert!(receipt.await.unwrap().is_ok());
+        actor.release_held();
+        assert!(actor.held.is_empty());
+        write_input(&mut actor).await;
+        assert_eq!(cli.read_input(&mut key).unwrap(), 1);
+        assert_eq!(key, [b'x']);
+        actor.take_terminal(TerminalEvent::Wrote);
+
+        // The delayed frame may still show only the space before it shows the person's edit.
+        read_output(&mut actor, &mut cli, plain_claude_frame(" ", "").as_bytes()).await;
+        assert!(!actor.typist.probing());
+        assert_eq!(actor.terminal.queued(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_probe_needs_a_complete_frame_after_the_space_write_to_erase() {
+        let home = crate::test_folder::TestFolder::new("actor-probe-prewrite-echo");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = actor_with_cli(&home, messages.delivery_handle()).await;
+        actor.feed_own(plain_claude_frame("", "\x1b[32mTry this\x1b[0m").as_bytes());
+        let space = synchronized(&plain_claude_frame(" ", ""));
+        cli.write_output(space.as_bytes()).unwrap();
+        actor.typist.want_probe();
+        actor.type_next();
+        assert_eq!(read_one_probe_key(&mut actor, &mut cli).await, b' ');
+        read_buffered_frames(&mut actor, space.len()).await;
+
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_millis(750)).await;
+        actor.type_next();
+        assert_eq!(actor.terminal.queued(), 0);
+        tokio::time::resume();
+        read_output(&mut actor, &mut cli, space.as_bytes()).await;
+        assert_eq!(read_one_probe_key(&mut actor, &mut cli).await, 0x7f);
+    }
+
+    async fn waiting_for_a_late_probe_space(home: &Path, messages: &Messages) -> (Actor, TestCli) {
+        let (mut actor, mut cli) = actor_with_cli(home, messages.delivery_handle()).await;
+        actor.feed_own(plain_claude_frame("", "\x1b[32mTry this\x1b[0m").as_bytes());
+        actor.typist.want_probe();
+        actor.type_next();
+        assert_eq!(read_one_probe_key(&mut actor, &mut cli).await, b' ');
+
+        tokio::time::pause();
+        let echo_at = Instant::now() + Duration::from_millis(750);
+        while let Some(wake) = actor.typist_at.filter(|wake| *wake < echo_at) {
+            tokio::time::advance(wake.saturating_duration_since(Instant::now())).await;
+            actor.type_next();
+            assert_eq!(actor.terminal.queued(), 0);
+        }
+        tokio::time::advance(echo_at.saturating_duration_since(Instant::now())).await;
+        tokio::time::resume();
+        (actor, cli)
+    }
+
+    async fn read_one_probe_key(actor: &mut Actor, cli: &mut TestCli) -> u8 {
+        assert_eq!(actor.terminal.queued(), 1);
+        let [key]: [u8; 1] = read_queued_probe_input(actor, cli)
+            .await
+            .try_into()
+            .unwrap();
+        key
+    }
+
+    #[tokio::test]
+    async fn a_persons_key_cancels_a_probe_space_that_has_not_been_issued() {
+        let home = crate::test_folder::TestFolder::new("actor-revoke-probe-space");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = actor_with_cli(&home, messages.delivery_handle()).await;
+        actor.feed_own(plain_claude_frame("", "\x1b[32mTry this\x1b[0m").as_bytes());
+        actor.typist.want_probe();
+        actor.type_next();
+        assert_eq!(actor.terminal.written(), 0);
+        assert_eq!(actor.terminal.queued(), 1);
+
+        actor
+            .take_input(Input::Raw(b"x".to_vec()), actor.run)
+            .unwrap();
+        assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, b"x");
+    }
+
+    async fn read_queued_probe_input(actor: &mut Actor, cli: &mut TestCli) -> Vec<u8> {
+        let mut keys = Vec::with_capacity(actor.terminal.queued());
+        while actor.terminal.queued() > 0 {
+            let before = actor.terminal.written();
+            let event = tokio::time::timeout(
+                Duration::from_secs(5),
+                actor.terminal.ready(TerminalWait::WriteOnly),
+            )
+            .await
+            .expect("the terminal processes the queued input");
+            assert!(matches!(
+                event,
+                TerminalEvent::Wrote | TerminalEvent::ProbeEraseNeedsCheck { .. }
+            ));
+            let end = keys.len() + (actor.terminal.written() - before) as usize;
+            let mut read = keys.len();
+            keys.resize(end, 0);
+            while read < end {
+                let n = cli.read_input(&mut keys[read..]).unwrap();
+                assert!(n > 0);
+                read += n;
+            }
+            actor.take_terminal(event);
+        }
+        keys
+    }
+
+    #[tokio::test]
+    async fn a_persons_key_erases_issued_probe_space_before_it_writes() {
+        for echoed in [false, true] {
+            let home = crate::test_folder::TestFolder::new("actor-erase-probe-space");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = actor_with_cli(&home, messages.delivery_handle()).await;
+            actor.feed_own(plain_claude_frame("", "\x1b[32mTry this\x1b[0m").as_bytes());
+            actor.typist.want_probe();
+            actor.type_next();
+            assert_eq!(read_one_probe_key(&mut actor, &mut cli).await, b' ');
+            if echoed {
+                read_output(&mut actor, &mut cli, plain_claude_frame(" ", "").as_bytes()).await;
+                assert_eq!(actor.terminal.queued(), 0);
+            }
+            actor
+                .take_input(Input::Raw(b"x".to_vec()), actor.run)
+                .unwrap();
+            assert_eq!(
+                read_queued_probe_input(&mut actor, &mut cli).await,
+                b"\x7fx",
+                "echoed={echoed}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_persons_key_keeps_exactly_one_probe_backspace_already_queued() {
+        let home = crate::test_folder::TestFolder::new("actor-queued-probe-backspace");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = waiting_for_a_late_probe_space(&home, &messages).await;
+        read_output(&mut actor, &mut cli, plain_claude_frame(" ", "").as_bytes()).await;
+        assert_eq!(actor.terminal.queued(), 1, "the erase was proposed");
+
+        actor
+            .take_input(Input::Raw(b"x".to_vec()), actor.run)
+            .unwrap();
+        assert_eq!(
+            read_queued_probe_input(&mut actor, &mut cli).await,
+            b"\x7fx"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_split_left_key_ends_a_startup_probe_and_releases_the_next_key() {
+        let home = crate::test_folder::TestFolder::new("actor-startup-probe-split-left");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = actor_with_cli(&home, messages.delivery_handle()).await;
+        let rule = facade_rules::find("agy").unwrap().unwrap();
+        actor.input_rule = Some(&rule.input);
+        actor.typist = Typist::new(&actor.id, Some(rule), None, messages.delivery_handle());
+        actor.readiness = Readiness::new(Some(rule), &actor.id);
+        actor.ready_at = actor
+            .readiness
+            .begin(Instant::now(), crate::ToolsGiven::Injected, false);
+        let hint = plain_claude_frame("", "\x1b[32mTry this\x1b[0m").replace("❯\u{a0}", "> ");
+        actor.feed_own(hint.as_bytes());
+        assert!(actor.read_screen_input().unsure);
+        actor.step_start();
+        actor.type_next();
+        assert!(actor.readiness.waiting_for_input());
+        assert_eq!(read_one_probe_key(&mut actor, &mut cli).await, b' ');
+
+        actor
+            .take_input(Input::Raw(b"\x1b[".to_vec()), actor.run)
+            .unwrap();
+        assert!(
+            actor.typist.probing(),
+            "the prefix could still be a focus report"
+        );
+        actor
+            .take_input(Input::Raw(b"D".to_vec()), actor.run)
+            .unwrap();
+        assert!(!actor.readiness.waiting_for_input());
+        actor
+            .take_input(Input::Raw(b"x".to_vec()), actor.run)
+            .unwrap();
+        assert!(actor.held.is_empty());
+        assert_eq!(
+            read_queued_probe_input(&mut actor, &mut cli).await,
+            b"\x7f\x1b[Dx"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_persons_key_does_not_send_probe_backspace_into_a_buffered_menu() {
+        for read_first in [true, false] {
+            let home = crate::test_folder::TestFolder::new("actor-probe-buffered-menu");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = waiting_for_a_late_probe_space(&home, &messages).await;
+            let menu = synchronized(&claude_trust_frame(false));
+            cli.write_output(menu.as_bytes()).unwrap();
+            if read_first {
+                read_buffered_frames(&mut actor, menu.len()).await;
+            }
+
+            actor
+                .take_input(Input::Raw(b"x".to_vec()), actor.run)
+                .unwrap();
+            assert_eq!(
+                read_queued_probe_input(&mut actor, &mut cli).await,
+                b"x",
+                "read_first={read_first}"
+            );
+            assert_eq!(
+                actor.read_screen_input().info.state,
+                InputState::Interaction
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_menu_buffered_after_persons_key_was_queued_revokes_probe_backspace() {
+        let home = crate::test_folder::TestFolder::new("actor-probe-menu-before-issue");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = waiting_for_a_late_probe_space(&home, &messages).await;
+        actor
+            .take_input(Input::Raw(b"x".to_vec()), actor.run)
+            .unwrap();
+        assert_eq!(actor.terminal.queued(), 2);
+
+        let menu = synchronized(&claude_trust_frame(false));
+        cli.write_output(menu.as_bytes()).unwrap();
+        assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, b"x");
+    }
+
+    #[tokio::test]
+    async fn a_probe_erase_survives_a_late_echo_or_a_title_update() {
+        let space = synchronized(&plain_claude_frame(" ", ""));
+        for (case, output) in [
+            ("space echo", space.as_str()),
+            ("title update", "\x1b]0;new title\x07"),
+        ] {
+            let home = crate::test_folder::TestFolder::new("actor-probe-output-before-issue");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = waiting_for_a_late_probe_space(&home, &messages).await;
+            actor
+                .take_input(Input::Raw(b"x".to_vec()), actor.run)
+                .unwrap();
+            assert_eq!(actor.terminal.queued(), 2);
+            cli.write_output(output.as_bytes()).unwrap();
+            assert_eq!(
+                read_queued_probe_input(&mut actor, &mut cli).await,
+                b"\x7fx",
+                "{case}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_split_probe_echo_and_title_keep_the_same_erase() {
+        let space = synchronized(&plain_claude_frame(" ", ""));
+        let title = b"\x1b]0;new title\x07";
+        for split in [false, true] {
+            let home = crate::test_folder::TestFolder::new("actor-probe-echo-and-title");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = waiting_for_a_late_probe_space(&home, &messages).await;
+            actor
+                .take_input(Input::Raw(b"x".to_vec()), actor.run)
+                .unwrap();
+            assert_eq!(actor.terminal.queued(), 2);
+            cli.write_output(space.as_bytes()).unwrap();
+            if split {
+                let event = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    actor.terminal.ready(TerminalWait::WriteOnly),
+                )
+                .await
+                .unwrap();
+                assert!(matches!(
+                    event,
+                    TerminalEvent::ProbeEraseNeedsCheck {
+                        automatic: false,
+                        ..
+                    }
+                ));
+                actor.take_terminal(event);
+                assert_eq!(actor.terminal.queued(), 2);
+                assert_eq!(actor.terminal.output_position(), space.len() as u64);
+            }
+            cli.write_output(title).unwrap();
+
+            assert_eq!(
+                read_queued_probe_input(&mut actor, &mut cli).await,
+                b"\x7fx",
+                "split={split}"
+            );
+            assert_eq!(
+                actor.terminal.output_position(),
+                (space.len() + title.len()) as u64
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_buffered_menu_revokes_an_automatic_probe_erase_until_the_box_returns() {
+        let home = crate::test_folder::TestFolder::new("actor-auto-probe-erase-before-menu");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = waiting_for_a_late_probe_space(&home, &messages).await;
+        read_output(&mut actor, &mut cli, plain_claude_frame(" ", "").as_bytes()).await;
+        assert_eq!(actor.terminal.queued(), 1);
+
+        let menu = synchronized(&claude_trust_frame(false));
+        cli.write_output(menu.as_bytes()).unwrap();
+        assert!(
+            read_queued_probe_input(&mut actor, &mut cli)
+                .await
+                .is_empty()
+        );
+        assert_eq!(
+            actor.read_screen_input().info.state,
+            InputState::Interaction
+        );
+        assert!(actor.typist.probing());
+
+        let space = synchronized(&format!("\x1b[?25h{}", plain_claude_frame(" ", "")));
+        read_output(&mut actor, &mut cli, space.as_bytes()).await;
+        assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, b"\x7f");
+    }
+
+    #[tokio::test]
+    async fn a_revoked_probe_erase_finishes_when_the_box_returns_empty() {
+        let menu = synchronized(&claude_trust_frame(false));
+        let empty = synchronized(&format!("\x1b[?25h{}", plain_claude_frame("", "")));
+
+        for split in [true, false] {
+            let home = crate::test_folder::TestFolder::new("actor-revoked-probe-erase-empty");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = waiting_for_a_late_probe_space(&home, &messages).await;
+            read_output(&mut actor, &mut cli, plain_claude_frame(" ", "").as_bytes()).await;
+            assert_eq!(actor.terminal.queued(), 1);
+
+            cli.write_output(menu.as_bytes()).unwrap();
+            if split {
+                assert!(
+                    read_queued_probe_input(&mut actor, &mut cli)
+                        .await
+                        .is_empty()
+                );
+                assert_eq!(
+                    actor.read_screen_input().info.state,
+                    InputState::Interaction
+                );
+                assert!(actor.typist.probing());
+                read_output(&mut actor, &mut cli, empty.as_bytes()).await;
+            } else {
+                cli.write_output(empty.as_bytes()).unwrap();
+                assert!(
+                    read_queued_probe_input(&mut actor, &mut cli)
+                        .await
+                        .is_empty()
+                );
+            }
+            assert_eq!(actor.read_screen_input().info.state, InputState::Usable);
+            assert_eq!(actor.terminal.queued(), 0);
+            tokio::time::pause();
+            for _ in 0..2 {
+                if let Some(wake) = actor.typist_at {
+                    tokio::time::advance(wake.saturating_duration_since(Instant::now())).await;
+                    actor.type_next();
+                }
+            }
+            tokio::time::resume();
+
+            let settled = queue_a_message(
+                &mut actor,
+                &messages,
+                Instant::now() + Duration::from_secs(20),
+            );
+            actor.type_next();
+            assert_eq!(
+                read_queued_probe_input(&mut actor, &mut cli).await,
+                b"\x1b[200~a message\x1b[201~",
+                "split={split}"
+            );
+            assert!(!actor.typist.probing());
+            assert!(settled.borrow().is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn quiesce_acknowledges_a_revoked_probe_erase_without_writing_it() {
+        let home = crate::test_folder::TestFolder::new("actor-quiesce-probe-erase");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = waiting_for_a_late_probe_space(&home, &messages).await;
+        read_output(&mut actor, &mut cli, plain_claude_frame(" ", "").as_bytes()).await;
+        assert_eq!(actor.terminal.queued(), 1);
+        let (reply, mut drained) = oneshot::channel();
+        assert!(actor.take_command(AgentCommand::Quiesce { reply }).await);
+        assert_eq!(drained.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+
+        assert!(
+            read_queued_probe_input(&mut actor, &mut cli)
+                .await
+                .is_empty()
+        );
+        assert_eq!(actor.terminal.queued(), 0);
+        assert_eq!(drained.try_recv(), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn a_skipped_probe_backspace_preserves_the_following_typed_receipt() {
+        let home = crate::test_folder::TestFolder::new("actor-probe-menu-and-typed-receipt");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = waiting_for_a_late_probe_space(&home, &messages).await;
+        let (tab, mut receipt) =
+            Typing::sequence(vec![facade_base::api_v1::daemon::InputStep::Key {
+                key: "Tab".into(),
+            }])
+            .unwrap();
+        actor.take_input(Input::Typed(tab), actor.run).unwrap();
+        actor
+            .take_input(Input::Raw(b"x".to_vec()), actor.run)
+            .unwrap();
+        assert_eq!(actor.terminal.queued(), 2);
+        let menu = synchronized(&claude_trust_frame(false));
+        cli.write_output(menu.as_bytes()).unwrap();
+
+        let skipped = tokio::time::timeout(
+            Duration::from_secs(5),
+            actor.terminal.ready(TerminalWait::WriteOnly),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            skipped,
+            TerminalEvent::ProbeEraseNeedsCheck {
+                automatic: false,
+                ..
+            }
+        ));
+        actor.take_terminal(skipped);
+        assert!(matches!(
+            receipt.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        assert_eq!(read_one_probe_key(&mut actor, &mut cli).await, b'\t');
+        assert!(receipt.await.unwrap().is_ok());
+        actor.release_held();
+        assert_eq!(read_one_probe_key(&mut actor, &mut cli).await, b'x');
+    }
+
+    #[tokio::test]
+    async fn a_persons_key_overtakes_a_probe_when_output_shows_a_question_or_is_incomplete() {
+        for output in [
+            "\x1b]7501;state=blocked:kind=question\x07",
+            "\x1b[?2026h\x1b[2J\x1b[H\x1b[?25l",
+            "\x1b[?25",
+        ] {
+            let home = crate::test_folder::TestFolder::new("actor-probe-of-uncertain-input");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = waiting_for_a_late_probe_space(&home, &messages).await;
+            cli.write_output(output.as_bytes()).unwrap();
+            actor
+                .take_input(Input::Raw(b"x".to_vec()), actor.run)
+                .unwrap();
+            assert_eq!(
+                read_queued_probe_input(&mut actor, &mut cli).await,
+                b"x",
+                "{output:?}"
+            );
+            assert_eq!(actor.terminal.output_position(), output.len() as u64);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_buffered_ordinary_box_after_a_menu_allows_erase_before_the_persons_key() {
+        let home = crate::test_folder::TestFolder::new("actor-probe-edit-after-menu");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = waiting_for_a_late_probe_space(&home, &messages).await;
+        let menu = synchronized(&claude_trust_frame(false));
+        read_output(&mut actor, &mut cli, menu.as_bytes()).await;
+        assert_eq!(
+            actor.read_screen_input().info.state,
+            InputState::Interaction
+        );
+
+        let space = synchronized(&format!("\x1b[?25h{}", plain_claude_frame(" ", "")));
+        cli.write_output(space.as_bytes()).unwrap();
+        actor
+            .take_input(Input::Raw(b"x".to_vec()), actor.run)
+            .unwrap();
+        assert_eq!(
+            read_queued_probe_input(&mut actor, &mut cli).await,
+            b"\x7fx"
+        );
+        read_output(&mut actor, &mut cli, plain_claude_frame("x", "").as_bytes()).await;
+        assert_eq!(actor.read_screen_input().draft.as_deref(), Some("x"));
+        assert_eq!(actor.terminal.queued(), 0, "no Backspace follows x");
+    }
+
+    #[tokio::test]
+    async fn a_late_probe_that_redraws_an_empty_box_allows_the_next_paste() {
+        let home = crate::test_folder::TestFolder::new("actor-probe-redrawn-empty");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = waiting_for_a_late_probe_space(&home, &messages).await;
+        read_output(&mut actor, &mut cli, plain_claude_frame(" ", "").as_bytes()).await;
+        assert_eq!(read_one_probe_key(&mut actor, &mut cli).await, 0x7f);
+
+        let empty = plain_claude_frame("", "");
+        read_output(&mut actor, &mut cli, empty.as_bytes()).await;
+        assert_eq!(actor.read_screen_input().info.state, InputState::Usable);
+        tokio::time::pause();
+        for _ in 0..2 {
+            if let Some(wake) = actor.typist_at {
+                tokio::time::advance(wake.saturating_duration_since(Instant::now())).await;
+                actor.type_next();
+            }
+        }
+        tokio::time::resume();
+
+        let settled = queue_a_message(
+            &mut actor,
+            &messages,
+            Instant::now() + Duration::from_secs(20),
+        );
+        actor.type_next();
+        let paste = b"\x1b[200~a message\x1b[201~";
+        assert_eq!(
+            actor.terminal.queued(),
+            paste.len(),
+            "the next paste is ready"
+        );
+        write_input(&mut actor).await;
+        let mut received = [0; b"\x1b[200~a message\x1b[201~".len()];
+        let mut n = 0;
+        while n < received.len() {
+            let read = cli.read_input(&mut received[n..]).unwrap();
+            assert!(read > 0);
+            n += read;
+        }
+        assert_eq!(&received, paste);
+        assert!(settled.borrow().is_none());
+    }
+
+    /// Receives the person's Escape just before a probe's second reading.
     async fn probe_waiting_for_escape(home: &Path) -> (Actor, TestCli, Arc<Messages>) {
         let (messages, _) = messages();
         let (mut actor, mut cli) = actor_with_cli(home, messages.delivery_handle()).await;
@@ -3056,7 +3947,6 @@ mod tests {
         actor.typist.want_probe();
         actor.type_next();
         assert!(actor.typist.probing());
-        assert!(!actor.holds_input_for_probe);
         write_input(&mut actor).await;
         let mut key = [0];
         assert_eq!(cli.read_input(&mut key).unwrap(), 1);
@@ -3072,31 +3962,22 @@ mod tests {
         let backspace_check = actor.typist_at.unwrap();
         let just_before = backspace_check - Duration::from_millis(5);
         tokio::time::advance(just_before.saturating_duration_since(Instant::now())).await;
-        tokio::time::resume();
-        write_raw_escape(&mut actor, &mut cli).await;
-
-        tokio::time::pause();
-        // Exclude native I/O scheduling time from the controlled classification interval.
-        actor.person.goes_on(Instant::now());
-        actor.take_terminal(TerminalEvent::Wrote);
+        actor.take_input(Input::Raw(vec![0x1b]), actor.run).unwrap();
         tokio::time::advance(backspace_check.saturating_duration_since(Instant::now())).await;
         assert!(actor.person.partial_until(Instant::now()).is_some());
         actor.type_next();
-        let queued = actor.terminal.queued();
-        if queued != 0 {
-            tokio::time::resume();
-            write_input(&mut actor).await;
-            assert_eq!(cli.read_input(&mut key).unwrap(), 1);
-            assert_eq!(key, [0x7f]);
-        }
-        assert_eq!(queued, 0, "the probe must wait for the person's Escape");
+        assert_eq!(
+            actor.terminal.queued(),
+            0,
+            "the prefix still needs classification"
+        );
         (actor, cli, messages)
     }
 
     #[tokio::test]
-    async fn a_probe_waits_for_a_standalone_escape_without_writing_backspace() {
+    async fn a_probe_puts_its_backspace_before_a_standalone_escape() {
         let home = crate::test_folder::TestFolder::new("actor-probe-standalone-escape");
-        let (mut actor, _, _) = probe_waiting_for_escape(&home).await;
+        let (mut actor, mut cli, _) = probe_waiting_for_escape(&home).await;
         let now = Instant::now();
         let classify_by = actor.person.partial_until(now).unwrap();
         assert_eq!(actor.typist_at, Some(classify_by));
@@ -3104,32 +3985,37 @@ mod tests {
         actor.type_next();
         assert!(!actor.person.lone_escape());
         assert!(!actor.typist.probing());
-        assert_eq!(actor.terminal.queued(), 0);
+        tokio::time::resume();
+        assert_eq!(
+            read_queued_probe_input(&mut actor, &mut cli).await,
+            b"\x7f\x1b"
+        );
     }
 
     #[tokio::test]
     async fn a_probe_resumes_after_an_escape_is_classified_as_a_focus_report() {
         let home = crate::test_folder::TestFolder::new("actor-probe-focus-report");
         let (mut actor, mut cli, _) = probe_waiting_for_escape(&home).await;
+        actor
+            .take_input(Input::Raw(b"[I".to_vec()), actor.run)
+            .unwrap();
+        assert!(actor.typist.probing());
         tokio::time::resume();
-        actor.person.goes_on(Instant::now());
-        write_person_bytes(&mut actor, &mut cli, b"[I").await;
-        assert_eq!(actor.terminal.queued(), 1);
-        write_input(&mut actor).await;
-        let mut key = [0];
-        assert_eq!(cli.read_input(&mut key).unwrap(), 1);
-        assert_eq!(key, [0x7f]);
+        assert_eq!(
+            read_queued_probe_input(&mut actor, &mut cli).await,
+            b"\x1b[I\x7f"
+        );
     }
 
     #[tokio::test]
     async fn a_probe_ends_when_an_escape_sequence_stays_incomplete() {
         let home = crate::test_folder::TestFolder::new("actor-probe-incomplete-escape");
         let (mut actor, mut cli, _) = probe_waiting_for_escape(&home).await;
-        tokio::time::resume();
-        actor.person.goes_on(Instant::now());
-        write_person_bytes(&mut actor, &mut cli, b"[").await;
+        actor
+            .take_input(Input::Raw(b"[".to_vec()), actor.run)
+            .unwrap();
+        actor.type_next();
 
-        tokio::time::pause();
         let now = Instant::now();
         let classify_by = actor.person.partial_until(now).unwrap();
         assert_eq!(actor.typist_at, Some(classify_by));
@@ -3137,9 +4023,11 @@ mod tests {
         tokio::time::advance(classify_by - now).await;
         actor.type_next();
         assert!(!actor.typist.probing());
-        assert_eq!(actor.terminal.queued(), 0);
-
         tokio::time::resume();
+        assert_eq!(
+            read_queued_probe_input(&mut actor, &mut cli).await,
+            b"\x7f\x1b["
+        );
         write_person_bytes(&mut actor, &mut cli, b"I").await;
         assert_eq!(
             actor.terminal.queued(),
@@ -3192,39 +4080,47 @@ mod tests {
 
     #[tokio::test]
     async fn awaiting_escape_during_a_probe_keeps_a_waiting_messages_deadline() {
-        let home = crate::test_folder::TestFolder::new("actor-probe-and-message-deadline");
-        let (mut actor, mut cli, messages) = probe_waiting_for_escape(&home).await;
-        tokio::time::resume();
-        actor.person.goes_on(Instant::now());
-        write_person_bytes(&mut actor, &mut cli, b"[").await;
-        draw_input(&mut actor, "the person's text");
-        assert_eq!(actor.read_screen_input().info.state, InputState::Draft);
-
-        tokio::time::pause();
-        let now = Instant::now();
-        let deadline = now + Duration::from_millis(1500);
-        let classify_by = actor.person.partial_until(now).unwrap();
-        assert!(deadline < classify_by);
-        let settled = queue_a_message(&mut actor, &messages, deadline);
-        actor.type_next();
-        assert_eq!(actor.terminal.queued(), 0);
-        assert!(settled.borrow().is_none());
-
-        let wake = actor.typist_at.unwrap();
-        tokio::time::advance(deadline - now).await;
-        if wake <= deadline {
+        for issued in [false, true] {
+            let home = crate::test_folder::TestFolder::new("actor-probe-and-message-deadline");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = actor_with_cli(&home, messages.delivery_handle()).await;
+            actor.feed_own(plain_claude_frame("", "\x1b[32mTry this\x1b[0m").as_bytes());
+            actor.typist.want_probe();
             actor.type_next();
+            if issued {
+                assert_eq!(read_one_probe_key(&mut actor, &mut cli).await, b' ');
+            }
+            let pending = usize::from(!issued);
+
+            tokio::time::pause();
+            actor
+                .take_input(Input::Raw(b"\x1b[".to_vec()), actor.run)
+                .unwrap();
+            draw_input(&mut actor, "the person's text");
+            assert_eq!(actor.read_screen_input().info.state, InputState::Draft);
+            let now = Instant::now();
+            let deadline = now + Duration::from_millis(1500);
+            let classify_by = actor.person.partial_until(now).unwrap();
+            assert!(deadline < classify_by);
+            let settled = queue_a_message(&mut actor, &messages, deadline);
+            actor.type_next();
+            assert_eq!(actor.terminal.queued(), pending);
+            assert!(settled.borrow().is_none());
+
+            assert_eq!(actor.typist_at, Some(deadline), "issued={issued}");
+            tokio::time::advance(deadline - now).await;
+            actor.type_next();
+            assert!(
+                matches!(
+                    settled.borrow().as_ref(),
+                    Some(Settled::Withdrawn(message)) if message.delivery.reason == Some(DeliveryFailure::InputDraft)
+                ),
+                "the receipt is due at the message's deadline, issued={issued}"
+            );
+            assert!(actor.typist.probing());
+            assert_eq!(actor.terminal.queued(), pending);
+            tokio::time::resume();
         }
-        assert!(
-            matches!(
-                settled.borrow().as_ref(),
-                Some(Settled::Withdrawn(message)) if message.delivery.reason == Some(DeliveryFailure::InputDraft)
-            ),
-            "the receipt is due at the message's deadline, next wake was {wake:?}"
-        );
-        assert_eq!(wake, deadline);
-        assert!(actor.typist.probing());
-        assert_eq!(actor.terminal.queued(), 0);
     }
 
     #[tokio::test]

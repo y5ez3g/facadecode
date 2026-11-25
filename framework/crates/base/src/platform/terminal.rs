@@ -111,6 +111,42 @@ pub struct PtyIo {
     master: PtyMaster,
 }
 
+/// An automatic write's last check and the output prefix at its first actual issue.
+#[derive(Clone, Copy)]
+pub struct WriteCheck<'a> {
+    pub defer_for_output: bool,
+    pub issued: &'a OnceLock<Option<usize>>,
+    pub deadline: Option<std::time::Instant>,
+}
+
+#[derive(Clone, Copy)]
+enum WriteObservation<'a> {
+    Prefix(&'a OnceLock<Option<usize>>),
+    Checked(WriteCheck<'a>),
+}
+
+impl WriteObservation<'_> {
+    fn permits(self, before: Option<usize>) -> bool {
+        match self {
+            Self::Prefix(_) => true,
+            Self::Checked(check) => {
+                check
+                    .deadline
+                    .is_none_or(|at| std::time::Instant::now() < at)
+                    && (!check.defer_for_output || before == Some(0))
+            }
+        }
+    }
+
+    fn issued(self, before: Option<usize>) {
+        let output = match self {
+            Self::Prefix(output) => output,
+            Self::Checked(check) => check.issued,
+        };
+        let _ = output.set(before);
+    }
+}
+
 impl PtyIo {
     pub fn new(master: PtyMaster) -> io::Result<PtyIo> {
         let io = imp::Io::new(&master.0)?;
@@ -127,6 +163,12 @@ impl PtyIo {
     /// Output already there, kept bytes first, without waiting; `WouldBlock` when there is none.
     pub fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.io.try_read(buf)
+    }
+
+    /// Counts readable output, including bytes kept from a completed read. A closed peer
+    /// can still have buffered bytes and is reported as `UnexpectedEof` when detected.
+    pub fn queued_output_bytes(&self) -> io::Result<usize> {
+        self.io.queued_output_bytes()
     }
 
     /// Leaves no read under way. Windows cancels the read under way, waits for it, and returns what
@@ -146,7 +188,21 @@ impl PtyIo {
         bytes: &[u8],
         before: Option<&OnceLock<Option<usize>>>,
     ) -> io::Result<usize> {
-        self.io.write(bytes, before).await
+        self.io
+            .write(bytes, before.map(WriteObservation::Prefix))
+            .await
+            .map(|result| result.expect("an unchecked write is never deferred"))
+    }
+
+    /// Checks just before issuing a new write. None means no write was attempted.
+    pub async fn write_checked(
+        &self,
+        bytes: &[u8],
+        check: WriteCheck<'_>,
+    ) -> io::Result<Option<usize>> {
+        self.io
+            .write(bytes, Some(WriteObservation::Checked(check)))
+            .await
     }
 
     /// Sets the terminal's size at once: Unix `TIOCSWINSZ`; Windows the resize packet on its copy

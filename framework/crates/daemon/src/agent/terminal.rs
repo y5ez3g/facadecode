@@ -6,7 +6,7 @@ use std::io;
 use std::sync::OnceLock;
 use std::task::Poll;
 
-use facade_base::terminal::{PtyIo, PtyMaster};
+use facade_base::terminal::{PtyIo, PtyMaster, WriteCheck};
 use tokio::time::Instant;
 
 /// The most bytes one read takes from the terminal.
@@ -21,6 +21,8 @@ pub(crate) enum TerminalEvent {
     Closed,
     /// Queued input was written.
     Wrote,
+    /// The candidate erase needs a new complete input reading before any write.
+    ProbeEraseNeedsCheck { automatic: bool },
     /// Writing failed: the terminal takes no more input.
     WriteFailed(std::io::Error),
 }
@@ -43,6 +45,20 @@ impl OutputBoundary {
     }
 }
 
+struct ProbeWrite {
+    boundary: OutputBoundary,
+    issued: bool,
+    classifying_key: bool,
+}
+
+struct ProbeErase {
+    through: u64,
+    output_read: Option<u64>,
+    issued: bool,
+    automatic: bool,
+    classifying_key: bool,
+}
+
 /// The first later key that may change a pending submission's input.
 struct FollowingEdit {
     boundary: OutputBoundary,
@@ -56,7 +72,7 @@ struct SubmissionOrder {
 
 enum IoReady {
     Issued(Option<usize>),
-    Written(io::Result<usize>, Option<Option<usize>>),
+    Written(io::Result<Option<usize>>, Option<Option<usize>>),
     Read(io::Result<usize>),
 }
 
@@ -68,12 +84,17 @@ pub(crate) struct Terminal {
     /// The bytes at the head of `input` that a write under way was given: the terminal may still
     /// take them, so they stay at the head until a write returns.
     writing: usize,
+    /// Position in the input queue, including an optional erase retired without a write.
     sent: u64,
+    #[cfg(test)]
+    written: u64,
     last_write: Option<Instant>,
     buffer: Vec<u8>,
     received: usize,
     output_read: u64,
     paste: Option<OutputBoundary>,
+    probe: Option<ProbeWrite>,
+    probe_erase: Option<ProbeErase>,
     submissions: VecDeque<SubmissionOrder>,
 }
 
@@ -85,11 +106,15 @@ impl Terminal {
             input: VecDeque::new(),
             writing: 0,
             sent: 0,
+            #[cfg(test)]
+            written: 0,
             last_write: None,
             buffer: Vec::new(),
             received: 0,
             output_read: 0,
             paste: None,
+            probe: None,
+            probe_erase: None,
             submissions: VecDeque::new(),
         };
         if let Some(master) = master {
@@ -104,6 +129,8 @@ impl Terminal {
         self.received = 0;
         self.output_read = 0;
         self.paste = None;
+        self.probe = None;
+        self.probe_erase = None;
         self.stop_observing_submission();
         Ok(())
     }
@@ -118,6 +145,8 @@ impl Terminal {
         self.received = 0;
         self.output_read = 0;
         self.paste = None;
+        self.probe = None;
+        self.probe_erase = None;
         self.stop_observing_submission();
     }
 
@@ -133,13 +162,25 @@ impl Terminal {
             if read {
                 self.buffer.resize(read_size, 0);
             }
+            let erasing = self
+                .probe_erase
+                .as_ref()
+                .filter(|erase| erase.through == self.sent + 1);
+            if let Some(erase) = erasing
+                && !erase.issued
+                && !erase.classifying_key
+                && erase.output_read != Some(self.output_read)
+            {
+                return self.probe_erase_needs_check();
+            }
+            let guarded = erasing.is_some();
             // A write under way is given the same bytes again until it returns.
             if self.input.as_slices().0.len() < self.writing {
                 self.input.make_contiguous();
             }
             let (head, _) = self.input.as_slices();
             let head = match self.writing {
-                0 => &head[..head.len().min(MAX_WRITE_BYTES)],
+                0 => &head[..head.len().min(self.write_limit())],
                 writing => &head[..writing],
             };
             self.writing = head.len();
@@ -149,7 +190,25 @@ impl Terminal {
                 .any(|boundary| boundary.in_write(self.sent, end));
             let started = OnceLock::new();
             let write = async {
-                let mut writing = std::pin::pin!(master.write(head, watch.then_some(&started)));
+                let mut writing = std::pin::pin!(async {
+                    if guarded {
+                        master
+                            .write_checked(
+                                head,
+                                WriteCheck {
+                                    defer_for_output: true,
+                                    issued: &started,
+                                    deadline: None,
+                                },
+                            )
+                            .await
+                    } else {
+                        master
+                            .write(head, watch.then_some(&started))
+                            .await
+                            .map(Some)
+                    }
+                });
                 poll_fn(|cx| match writing.as_mut().poll(cx) {
                     Poll::Ready(result) => {
                         Poll::Ready(IoReady::Written(result, started.get().copied()))
@@ -168,16 +227,31 @@ impl Terminal {
                 else => pending().await,
             };
             match event {
-                IoReady::Issued(prefix) => self.mark_output(end, prefix),
+                IoReady::Issued(prefix) => {
+                    if guarded {
+                        self.issue_probe_erase();
+                    }
+                    self.mark_output(end, prefix);
+                }
                 IoReady::Written(result, prefix) => {
                     self.writing = 0;
                     let n = match result {
-                        Ok(n) => n,
+                        Ok(Some(n)) => n,
+                        Ok(None) => return self.probe_erase_needs_check(),
                         Err(error) => return TerminalEvent::WriteFailed(error),
                     };
                     let written = self.sent + n as u64;
                     if let Some(prefix) = prefix {
+                        if guarded && n > 0 {
+                            self.issue_probe_erase();
+                        }
                         self.mark_output(written, prefix);
+                    }
+                    if let Some(probe) = &mut self.probe
+                        && probe.boundary.in_write(written, end)
+                    {
+                        probe.issued = false;
+                        probe.boundary.before = None;
                     }
                     for boundary in
                         self.paste
@@ -197,6 +271,13 @@ impl Terminal {
                     }
                     self.input.drain(..n);
                     self.sent = written;
+                    if guarded && n > 0 {
+                        self.probe_erase = None;
+                    }
+                    #[cfg(test)]
+                    {
+                        self.written += n as u64;
+                    }
                     self.last_write = Some(Instant::now());
                     return TerminalEvent::Wrote;
                 }
@@ -209,6 +290,61 @@ impl Terminal {
                     return TerminalEvent::Closed;
                 }
             }
+        }
+    }
+
+    fn probe_erase_needs_check(&mut self) -> TerminalEvent {
+        let erase = self.probe_erase.as_ref().expect("guarded probe erase");
+        debug_assert!(!erase.issued);
+        self.writing = 0;
+        TerminalEvent::ProbeEraseNeedsCheck {
+            automatic: erase.automatic,
+        }
+    }
+
+    fn issue_probe_erase(&mut self) {
+        let erase = self.probe_erase.as_mut().expect("guarded probe erase");
+        debug_assert!(!erase.issued);
+        erase.issued = true;
+        let through = erase.through;
+        if erase.automatic {
+            self.observe_probe_from(through);
+        }
+    }
+
+    pub(super) fn refresh_probe_erase(&mut self) {
+        let erase = self.probe_erase.as_mut().expect("guarded probe erase");
+        erase.output_read = Some(self.output_read);
+    }
+
+    /// Retires the offered byte without changing the positions of later keys.
+    pub(super) fn cancel_probe_erase(&mut self) {
+        if let Some(erase) = self.probe_erase.take() {
+            debug_assert_eq!(erase.through, self.sent + 1);
+            debug_assert!(!erase.issued);
+            self.input.pop_front();
+            self.sent = erase.through;
+        }
+    }
+
+    /// A probe key is issued on its own, so a short write of earlier bytes cannot issue it.
+    fn write_limit(&self) -> usize {
+        let limit = self.probe_erase.as_ref().map_or(MAX_WRITE_BYTES, |erase| {
+            let earlier = erase.through - self.sent - 1;
+            if earlier == 0 {
+                usize::from(!erase.classifying_key)
+            } else {
+                earlier.min(MAX_WRITE_BYTES as u64) as usize
+            }
+        });
+        let Some(probe) = self.probe.as_ref().filter(|probe| !probe.issued) else {
+            return limit;
+        };
+        let earlier = probe.boundary.input - self.sent - 1;
+        if earlier == 0 {
+            usize::from(!probe.classifying_key)
+        } else {
+            earlier.min(limit as u64) as usize
         }
     }
 
@@ -225,6 +361,7 @@ impl Terminal {
     fn output_boundaries(&self) -> impl Iterator<Item = &OutputBoundary> {
         self.paste
             .iter()
+            .chain(self.probe.iter().map(|probe| &probe.boundary))
             .chain(self.submissions.iter().flat_map(|submission| {
                 std::iter::once(&submission.enter)
                     .chain(submission.following_edit.iter().map(|edit| &edit.boundary))
@@ -237,6 +374,12 @@ impl Terminal {
             && paste.in_write(self.sent, end)
         {
             paste.before = before;
+        }
+        if let Some(probe) = &mut self.probe
+            && probe.boundary.in_write(self.sent, end)
+        {
+            probe.issued = true;
+            probe.boundary.before = before;
         }
         for submission in &mut self.submissions {
             if submission.enter.in_write(self.sent, end) {
@@ -258,18 +401,36 @@ impl Terminal {
 
     /// One read that does not wait: how many bytes it brought, or None when nothing is there or the terminal closed.
     pub(crate) fn read_now(&mut self) -> Option<usize> {
-        let read_size = self.read_limit();
-        let master = self.master.as_ref()?;
+        self.try_read_now(MAX_READ_BYTES).ok().flatten()
+    }
+
+    pub(super) fn queued_output_bytes(&self) -> io::Result<usize> {
+        self.master
+            .as_ref()
+            .ok_or_else(|| io::Error::from(io::ErrorKind::UnexpectedEof))?
+            .queued_output_bytes()
+    }
+
+    /// Reads at most the remainder of a previously sampled output prefix.
+    pub(super) fn try_read_now(&mut self, limit: usize) -> io::Result<Option<usize>> {
+        let read_size = self.read_limit().min(limit);
+        let Some(master) = self.master.as_ref() else {
+            return Ok(None);
+        };
         self.buffer.resize(read_size, 0);
         match master.try_read(&mut self.buffer) {
             Ok(n) if n > 0 => {
                 self.record_read(n);
-                Some(n)
+                Ok(Some(n))
             }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => None,
-            _ => {
+            Ok(_) => {
                 self.detach();
-                None
+                Ok(None)
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => {
+                self.detach();
+                Err(error)
             }
         }
     }
@@ -324,8 +485,17 @@ impl Terminal {
 
     /// Drops the queued input, but for what a write under way was given.
     pub(crate) fn clear(&mut self) {
+        if self
+            .probe_erase
+            .as_ref()
+            .is_some_and(|erase| erase.through == self.sent + 1 && !erase.issued)
+        {
+            self.writing = 0;
+        }
         self.input.truncate(self.writing);
         self.paste = None;
+        self.probe = None;
+        self.probe_erase = None;
         self.stop_observing_submission();
     }
 
@@ -334,9 +504,14 @@ impl Terminal {
         self.input.len()
     }
 
-    /// Bytes written since the actor started, including earlier runs.
-    pub(crate) fn written(&self) -> u64 {
+    pub(crate) fn input_through(&self) -> u64 {
         self.sent
+    }
+
+    /// Bytes physically written since the actor started, including earlier runs.
+    #[cfg(test)]
+    pub(crate) fn written(&self) -> u64 {
+        self.written
     }
 
     /// When input was last written.
@@ -351,6 +526,97 @@ impl Terminal {
             input: first,
             before: None,
         });
+    }
+
+    /// Separates earlier output from frames drawn after the next probe key is issued.
+    pub(super) fn observe_probe_from(&mut self, first: u64) {
+        debug_assert!(first > self.sent);
+        self.probe = Some(ProbeWrite {
+            boundary: OutputBoundary {
+                input: first,
+                before: None,
+            },
+            issued: false,
+            classifying_key: false,
+        });
+    }
+
+    /// Schedules one Backspace before the next person's bytes. A new read or unread output
+    /// revokes it up to the actual write attempt. Its slot keeps later input positions stable.
+    pub(super) fn push_probe_erase(&mut self, key: u8, automatic: bool) {
+        debug_assert!(self.probe_erase.is_none());
+        self.input.push_back(key);
+        self.probe_erase = Some(ProbeErase {
+            through: self.sent + self.input.len() as u64,
+            output_read: (!automatic).then_some(self.output_read),
+            issued: false,
+            automatic,
+            classifying_key: false,
+        });
+    }
+
+    pub(super) fn has_probe_erase(&self) -> bool {
+        self.probe_erase.is_some()
+    }
+
+    /// Prevents a queued probe key from going ahead of a person's key still being classified.
+    pub(super) fn classify_probe_key(&mut self, classifying: bool) {
+        if let Some(erase) = self
+            .probe_erase
+            .as_mut()
+            .filter(|erase| erase.automatic && !erase.issued)
+        {
+            erase.classifying_key = classifying;
+            if classifying && erase.through == self.sent + 1 {
+                self.writing = 0;
+            }
+        }
+        if let Some(probe) = &mut self.probe {
+            probe.classifying_key = classifying;
+            if classifying && !probe.issued && probe.boundary.input == self.sent + 1 {
+                // An offered probe byte may still be waiting for Unix write readiness.
+                self.writing = 0;
+            }
+        }
+    }
+
+    /// Retires observation and revokes the probe byte if the system has not taken its write.
+    pub(super) fn revoke_probe_key(&mut self) -> bool {
+        if let Some(erase) = self
+            .probe_erase
+            .take_if(|erase| erase.automatic && !erase.issued)
+        {
+            self.probe = None;
+            return self.revoke_queued_probe_key(erase.through);
+        }
+        let Some(probe) = self.probe.take().filter(|probe| !probe.issued) else {
+            return false;
+        };
+        self.revoke_queued_probe_key(probe.boundary.input)
+    }
+
+    fn revoke_queued_probe_key(&mut self, through: u64) -> bool {
+        let index = (through - self.sent - 1) as usize;
+        if index < self.writing {
+            self.writing = 0;
+        }
+        debug_assert!(self.output_boundaries().all(|b| b.input < through));
+        self.input.remove(index).is_some()
+    }
+
+    pub(super) fn stop_observing_probe(&mut self) {
+        self.probe = None;
+    }
+
+    pub(super) fn output_follows_probe(&self) -> bool {
+        self.probe
+            .as_ref()
+            .is_some_and(|probe| self.latest_output_follows(&probe.boundary))
+    }
+
+    pub(super) fn read_starts_at_probe(&self) -> bool {
+        self.probe.as_ref().and_then(|probe| probe.boundary.before)
+            == Some(self.output_read_start())
     }
 
     /// Establish an output boundary when the write that includes the pending Enter is issued.
@@ -423,10 +689,14 @@ impl Terminal {
             .before
     }
 
+    fn output_read_start(&self) -> u64 {
+        self.output_read - self.received as u64
+    }
+
     fn latest_output_follows(&self, boundary: &OutputBoundary) -> bool {
         boundary
             .before
-            .is_some_and(|before| self.output_read - self.received as u64 >= before)
+            .is_some_and(|before| self.output_read_start() >= before)
     }
 
     /// Whether the latest read is on this side of the active paste's write.
@@ -468,7 +738,7 @@ impl Terminal {
 
     /// Marks an unfinished frame when this read starts just past an Enter's output prefix.
     pub(crate) fn read_starts_at_submission(&self) -> bool {
-        let start = self.output_read - self.received as u64;
+        let start = self.output_read_start();
         self.submissions
             .iter()
             .any(|s| s.enter.before == Some(start))
@@ -522,6 +792,27 @@ mod tests {
             .expect("an event")
     }
 
+    #[test]
+    fn a_probe_key_can_only_be_revoked_before_the_write_is_issued() {
+        for issued in [false, true] {
+            let mut terminal = Terminal::new(None).unwrap();
+            terminal.observe_probe_from(1);
+            terminal.push(b" x");
+            terminal.writing = 1;
+            if issued {
+                // A failed output-prefix sample does not undo the input handoff.
+                terminal.mark_output(1, None);
+            }
+            assert_eq!(terminal.revoke_probe_key(), !issued);
+            assert_eq!(terminal.writing, usize::from(issued));
+            assert_eq!(terminal.written(), 0);
+            assert_eq!(
+                terminal.input.make_contiguous(),
+                if issued { &b" x"[..] } else { b"x" }
+            );
+        }
+    }
+
     #[tokio::test]
     async fn a_terminal_is_let_go_of_as_its_output_ends() {
         let (mut terminal, mut cli) = opened();
@@ -534,7 +825,7 @@ mod tests {
             match next(&mut terminal).await {
                 TerminalEvent::Read => read.extend_from_slice(terminal.output()),
                 TerminalEvent::Closed => break,
-                TerminalEvent::Wrote => {}
+                TerminalEvent::Wrote | TerminalEvent::ProbeEraseNeedsCheck { .. } => {}
                 TerminalEvent::WriteFailed(_) => terminal.clear(),
             }
         }

@@ -227,7 +227,7 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
 - **Owns:** one actor per agent the daemon started (a guest has a handle with no actor). The actor holds the terminal (a `PtyIo`), the input waiting for it, the screen and its screen log, the state, the typist, the viewers and the start of each run. The agent's record (`AgentInfo`) is shared with its handles under a leaf lock; only the actor changes it while it runs. `framework/screens/<id>/`: one folder per agent, deleted through `Screens`.
 - **Keeps:**
   - Input and exits reach only the run they name. Each run has a number, starting at `FIRST_RUN`; `WriteInput`, `ProcessExited` and `StartPrompt` for any other run are refused as ended or dropped. An exit of a run whose terminal is not installed yet waits until it is.
-  - Automatic input never interleaves (RULES 1.10): messages wait behind the start prompt and what the start types. Keys and calls go on in the order they came, through one queue: the first waits while the start readies the tools, for an unstyled hint probe or an ordered sequence, and behind the person's Enter, which waits until the input can be read; the person's keys also wait for a message in the input.
+  - Automatic input never interleaves (RULES 1.10): messages wait behind the start prompt and what the start types. Keys and calls go on in the order they came, through one queue. They go after prior start keys, ordered sequences and the person's Enter. Where a probe occupies the input, the person's key or call takes priority.
   - An ordered input sequence enters the typist once. Earlier accepted input runs first. Later calls and raw Attach input wait until the sequence's last write.
   - The person's keys wait for a message from its paste until a complete reading shows the paste has
     left, and while it is erased. A menu or question of the CLI's own takes the keys immediately.
@@ -252,10 +252,11 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     as later Enters wait or go on. An incomplete control sequence has a provisional boundary
     until it is classified. A completed terminal report removes that boundary, and any editing
     key that follows it has its own byte position. An unclassified escape sequence in the input box
-    defers probes, automatic submission and cleanup. The actor
-    remembers where it was released through later frames, including menus. A confirmed editing
-    key disowns the paste and stops a probe's Backspace. A completed terminal report lifts the
-    provisional restriction. A sequence still incomplete at the input wait bound counts as an
+    defers probes, automatic submission and cleanup. The actor preserves the sequence's original
+    input context through later frames, including menus. During a probe it keeps the undecided
+    bytes together until classification, so any probe erase precedes the whole key. A confirmed
+    editing key disowns the paste. A completed terminal report lifts the provisional restriction
+    and leaves the probe active. A sequence still incomplete at the input wait bound counts as an
     edit. A subsequent empty input allows new delivery. Messages waiting during classification
     still reach their original deadlines.
     An already visible interaction takes the Escape itself. The actor offers confirmed frames
@@ -380,8 +381,7 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
 - **Owns:** the calls and messages waiting, the paste in the input until that holds nothing of it, where its bytes are in the terminal, its pauses, and what it submitted; the probe under way, and what this run's probes found of each row they tried (`probed`).
 - The actor allows unstyled hint probes for automatic delivery to a freshly launched input. Starting with a
   session, recovery, resume, an unconfirmed paste or accepting external input leaves plain writing on the
-  normal draft path. External input that arrives during an unstyled hint probe waits for its Space and
-  Backspace to finish.
+  normal draft path. A person's key or ordered input call takes the input from an active probe.
 - **Keeps:**
   - Each call goes in whole and in order; a pause counts from when its bytes reached the terminal.
   - `DeliveryHandle::begin_paste` records the paste before the typist writes the complete message in one paste.
@@ -408,7 +408,27 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     once, by two `RESPONSE_GRACE` after the deadline, and says what is known then; erasing later changes none.
   - The start prompt is pasted alone; a paste an earlier daemon began is never typed again.
   - With console typing, characters above U+FFFF go as key-down records, a text's line breaks as presses of the rule's line break key, a key-down and a key-up record each, where it names one, and the wait before a call's Enter adds `per_char` for each UTF-16 code unit.
-  - An input whose row may be a hint or a draft (it reads unsure) is probed once a run, by its child `probe`: a space where the input starts, then, once the input is drawn still, Backspace, and a check that the input is as it was. Nothing else is typed meanwhile. The input is read every 100 ms; still means two equal readings in a row that show the row, for at most a second after each key; where that time ends on an unread reading, the next frame decides, within `RESPONSE_GRACE`. Unread readings count for nothing, and no key goes by an earlier reading. Backspace goes only where the space went in, no menu or question shows, and the person typed nothing since the probe read the input; after a failed check nothing more is pressed. What a probe finds, a hint, a draft or neither for sure, is kept for the row until the CLI's next run, so a row is never probed twice in a run.
+  - An input whose row may be a hint or a draft (it reads unsure) is probed once a run, by its child
+    `probe`. The probe types a space where the input starts. Its echo budget runs from the write
+    receipt and includes the console input time, the CLI's settle time and the rule's
+    submission-clear time. Two matching complete readings can establish whether it was a hint
+    or a draft. If the space is still unseen at the deadline, the daemon reports that uncertainty
+    and checks subsequent frames. Terminal separates output at the issue of the Space and of
+    Backspace. One Backspace is authorized by a complete frame drawn after Space that still
+    shows the original input position and space. An unread redraw or a menu leaves cleanup
+    pending. A person's key or ordered input call ends the probe and its startup wait. Terminal
+    revokes the probe key if its write was never issued. For an issued space, the actor samples the
+    output already readable and applies that finite prefix. A complete ordinary box at the probe
+    position permits one Backspace before the person's key, even before any echo. Both kinds of
+    probe Backspace pass the same output check at system handoff. New output sends the intent back
+    to the actor for a fresh reading of the available prefix. With the person's keys queued, all
+    checks share a 16 ms budget and use only the bytes already readable. A menu, native wait,
+    unread frame, missing position or exhausted budget withdraws the erase. The person's keys
+    continue and the daemon reports that the space may remain. With no manual input, the probe
+    continues watching for its space after a withdrawn erase. Once it has seen the space, a stable
+    complete empty box ends the probe even if it withdrew the erase. Verified restoration after
+    Backspace also ends it. A paste or new probe waits for removal or for the person to take the
+    input. The row's verdict stays with this run.
 - **Never does:** write the terminal (it hands its bytes to the actor); read the screen except through the reading the actor gives it; take the person's keys; touch the database.
 - **Interface.** The daemon builds `Typing::text(text, enter, sender)`, `Typing::keys(names)` and
   `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses

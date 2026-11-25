@@ -2,7 +2,7 @@
 //! input starts as Muse 1.4.20 draws both, is tried once a run with a space. A hint, which the
 //! space replaces, takes the message; a draft, which the space goes in front of, holds it; anything
 //! else reads unknown. Each Backspace puts the row back, a run remembers each row it tried, and the
-//! person's key during a probe stops it. The test CLI runs as Muse, whose input it draws, and
+//! person's key takes the input from an active probe. The test CLI runs as Muse, whose input it draws, and
 //! writes every byte it reads to a file.
 
 use std::io::Write;
@@ -272,10 +272,9 @@ fn a_probe_whose_backspace_does_not_restore_the_row_presses_nothing_more() {
     assert!(home.submitted_messages().is_empty());
 }
 
-/// A key the person presses after the probe's space and before its Backspace stops the probe: no
-/// Backspace takes out what the person typed.
+/// After a probe space has gone in, its Backspace goes before the person's key.
 #[test]
-fn the_person_s_key_during_a_probe_stops_it_before_its_backspace() {
+fn the_person_s_key_during_a_probe_follows_its_backspace() {
     let home = TestHome::new("probeperson");
     let file = keys_file(&home, "muse");
     let id = start(&home, "muse", &[("FAKECLI_DRAFT_AT_START", DRAFT)], DRAFT);
@@ -303,14 +302,13 @@ fn the_person_s_key_during_a_probe_stops_it_before_its_backspace() {
     assert!(typed["result"].is_object(), "{typed}");
     let status = sending.wait().unwrap();
     assert!(!status.success(), "the draft holds the message");
-    assert_eq!(pressed(&file), b" x", "no Backspace after the person's key");
-    let log = home.daemon_log();
-    assert!(
-        log.contains("the person typed after its space"),
-        "the person must type while the probe is active: {log}"
+    assert_eq!(
+        pressed(&file),
+        b" \x7fx",
+        "the Backspace precedes the person's key"
     );
     assert!(
-        home.screen("muse").contains(&format!("❯  x{DRAFT}")),
+        home.screen("muse").contains(&format!("❯ x{DRAFT}")),
         "{}",
         home.screen("muse")
     );

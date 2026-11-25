@@ -252,6 +252,20 @@ impl StateTracker {
                 .is_some_and(EvidenceState::active)
     }
 
+    /// The CLI's own current report that it is waiting for a person.
+    pub(super) fn native_wait(&self) -> Option<WaitKind> {
+        if self.uses_native_reports()
+            && let Some(EvidenceState::Blocked { kind, .. }) = &self.evidence.base
+        {
+            return Some(kind.unwrap_or(WaitKind::Unknown));
+        }
+        None
+    }
+
+    pub(super) fn uses_native_reports(&self) -> bool {
+        self.end.is_none() && matches!(self.evidence.source, Source::Reports)
+    }
+
     /// Reads a completed frame using the CLI's rule; synchronized drawing is left alone.
     pub(crate) fn observe(&mut self, screen: &Screen) {
         if !self.reads_screen() || screen.synchronized_update_deadline().is_some() {

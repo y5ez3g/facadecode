@@ -40,7 +40,10 @@ pub fn space_taken(before: &InputLine, after: &BoxReading) -> bool {
     let Some(line) = &after.line else {
         return false;
     };
-    if line.row != before.row || line.cursor != (before.cursor.0 + 1, before.cursor.1) {
+    if line.row != before.row
+        || line.start != before.start
+        || line.cursor != (before.cursor.0 + 1, before.cursor.1)
+    {
         return false;
     }
     let now = text(line);
