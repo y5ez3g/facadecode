@@ -939,6 +939,15 @@ fn send_endings(
                 let (seq, _) = field.name_next(&sender.id);
                 let text = format!("n{seq:05} {text}{add}");
                 let sent = crate::storm::send(mcp, &sender.id, boss, seq, text.clone(), "delivery");
+                if text.contains('\t') && sent.number.is_none() {
+                    field.violation(
+                        "I15",
+                        format!(
+                            "{name}: a message with a legal tab was refused: {}",
+                            sent.said
+                        ),
+                    );
+                }
                 if let Some(number) = sent.number {
                     texts.insert(number, (name.clone(), text));
                 }

@@ -916,7 +916,7 @@ fn leftovers(
                 format!(
                     "{}: Facade's text stayed in the input {stay} ms {how}: {}",
                     window.agent,
-                    short(&text)
+                    short(text)
                 ),
                 None,
             );

@@ -776,13 +776,27 @@ pub fn inspect_curve(out: &Path, calls: usize) -> anyhow::Result<()> {
     anyhow::ensure!(calls > 0, "give at least one call per size");
     let machine = crate::sample::machine();
     let lab = Lab::fake("inspect-curve")?;
+    std::fs::write(
+        lab.home.path.join("facade.json"),
+        json!({
+            "clis": { "claude": { "type": "claude", "program": test_binaries().fakecli } },
+        })
+        .to_string(),
+    )?;
     lab.home.save_claude_session(SESSION, PROMPT);
     let projects = lab.home.user_home().join(".claude/projects");
     let project = std::fs::read_dir(projects)?
         .next()
         .context("the synthetic session's project")??;
     let path = project.path().join(format!("{SESSION}.jsonl"));
-    let agent = lab.start_as("claude", "inspect", &[("FAKECLI_SESSION", SESSION)])?;
+    let resumed = lab.home.run_facade(&["resume", "-d", SESSION]);
+    anyhow::ensure!(
+        resumed.status.success(),
+        "resuming the synthetic session: {}",
+        stderr(&resumed)
+    );
+    let listed = lab.wire.call("agent.list", json!({}))?;
+    let agent = Lab::agent(&listed["agents"][0])?;
     anyhow::ensure!(
         wait_until(LOADED_TIMEOUT, || lab
             .inspect(&agent)
