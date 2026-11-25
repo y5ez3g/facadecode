@@ -412,6 +412,8 @@ pub enum Course {
     Burst,
     /// One five-line message to a receiver with a small window.
     Narrow,
+    /// Send messages while a loopback response waits, with or without the holding menu.
+    Buffering { show_menu: bool },
     /// One sends each of [`shapes`] in turn.
     Shapes,
     /// One sends each of [`endings`] this many times.
@@ -470,6 +472,24 @@ pub fn specs(
             });
         }
         let times = each.unwrap_or(30);
+        if cli.name == "codex" {
+            for (what, show_menu) in [("buffering", true), ("buffering control", false)] {
+                let name = format!("{} {what}.", cli.name);
+                if !only.is_some_and(|only| only.split(',').any(|word| word == name)) {
+                    continue;
+                }
+                specs.push(RealSpec {
+                    name,
+                    cli,
+                    senders: 1,
+                    each: 1,
+                    size,
+                    busy: false,
+                    hogs: 0,
+                    course: Course::Buffering { show_menu },
+                });
+            }
+        }
         for (what, hogs, course) in [
             ("shapes", 0, Course::Shapes),
             ("narrow", 0, Course::Narrow),
@@ -519,6 +539,10 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
     match spec.course {
         Course::Returns => return returns(spec, name, root, out),
         Course::Ends(times) => return ends(spec, times, name, root, out),
+        Course::Buffering { .. } => anyhow::ensure!(
+            own_model().is_some(),
+            "the buffering probe needs its loopback model"
+        ),
         _ => {}
     }
     let tag: String = name
@@ -608,6 +632,7 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
         spec.cli.name,
         spec.size,
         matches!(spec.course, Course::Delays(_)),
+        matches!(spec.course, Course::Buffering { .. }),
     )?;
     field.note(
         "window_size",
@@ -657,6 +682,9 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
                 Shape::Lines(5),
                 "delivery",
             );
+        }
+        Course::Buffering { show_menu } => {
+            probe_buffering(&field, &clients[0], &senders[0], &saved, &frames, show_menu)?;
         }
         Course::Questions(times) => {
             questions(
@@ -776,6 +804,108 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
     drop(clients);
     drop(lead_client);
     field.finish(out)
+}
+
+/// Observe the menu independently of Facade's input reading and the reason in its receipt.
+fn probe_buffering(
+    field: &Field,
+    sender: &client::Mcp,
+    from: &Agent,
+    real: &RealAgent,
+    frames: &Frames,
+    show_menu: bool,
+) -> anyhow::Result<()> {
+    let boss = &real.agent;
+    let mock_pause_ms: u64 = std::env::var("FACADE_STORM_BUFFER_MS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(40_000);
+    anyhow::ensure!((1..=70_000).contains(&mock_pause_ms), "invalid mock pause");
+    let kind = if show_menu { "MENU" } else { "CONTROL" };
+    wait_idle(field, boss, Duration::from_secs(15));
+    let fixture = crate::storm::send(
+        sender,
+        &from.id,
+        boss,
+        0,
+        format!("A68_BUFFER_{kind}_{mock_pause_ms}: Reply with ok."),
+        "delivery",
+    );
+    anyhow::ensure!(
+        fixture.succeeded,
+        "could not start the fixture turn: {}",
+        fixture.said
+    );
+
+    let appeared = if show_menu {
+        wait_until(Duration::from_secs(12), || {
+            frames.buffering_bounds().is_some()
+        })
+    } else {
+        wait_until(Duration::from_secs(12), || {
+            field
+                .lab
+                .inspect(boss)
+                .is_ok_and(|info| info["agent"]["state"] == "working")
+        })
+    };
+    let mut sent = Vec::new();
+    if appeared {
+        for _ in 0..3 {
+            sent.push(field.send(sender, &from.id, boss, Shape::Ask, "inbox"));
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+    field.quiet()?;
+    let closed = appeared
+        && wait_until(Duration::from_secs(75), || {
+            field.lab.inspect(boss).is_ok_and(|info| {
+                info["input"]["state"] == "usable" && info["agent"]["state"] == "idle"
+            }) && (!show_menu
+                || frames
+                    .buffering_bounds()
+                    .is_some_and(|(_, end)| end.is_some()))
+        });
+    let recovery = closed.then(|| field.send(sender, &from.id, boss, Shape::Ask, "delivery"));
+    let bounds = frames.buffering_bounds();
+    let rows = field.lab.rows()?;
+    let attempts: Vec<_> = sent
+        .iter()
+        .map(|sent| {
+            let row = sent.number.and_then(|number| rows.get(&number));
+            let l2 = row.is_some_and(|row| {
+                row.status == "failure"
+                    && row.text_written == "none"
+                    && row.enter_written == Some(false)
+                    && bounds.is_some_and(|(open, close)| {
+                        open <= sent.called_us
+                            && close.is_some_and(|end| end >= sent.called_us + sent.limit_us)
+                    })
+            });
+            json!({
+                "number": sent.number, "called_us": sent.called_us,
+                "stored_ms": row.map(|row| row.at_ms),
+                "status": row.map(|row| &row.status), "reason": row.and_then(|row| row.reason.as_ref()),
+                "text_written": row.map(|row| &row.text_written),
+                "enter_written": row.and_then(|row| row.enter_written),
+                "l2_entire_deadline": l2,
+            })
+        })
+        .collect();
+    field.note(
+        "buffering",
+        json!({
+            "injected_menu": show_menu, "mock_pause_ms": mock_pause_ms,
+            "fixture_message": fixture.number, "turn_called_us": fixture.called_us,
+            "menu_opened_us": bounds.map(|(began, _)| began),
+            "menu_closed_us": bounds.and_then(|(_, end)| end),
+            "menu_visible_ms": bounds.and_then(|(from, end)| Some(end?.saturating_sub(from) as f64 / 1000.0)),
+            "receiver_idle_after_hold": closed,
+            "attempts": attempts,
+            "recovery": recovery.map(|sent| json!({ "number": sent.number, "succeeded": sent.succeeded })),
+        }),
+    );
+    Ok(())
 }
 
 /// Messages of every shape, each with a name for the report.
@@ -2352,6 +2482,17 @@ const OPENCODE_ERRORS: &[&str] = &[
 ];
 
 impl Frames {
+    /// The first observed menu and the first complete frame without it.
+    fn buffering_bounds(&self) -> Option<(u64, Option<u64>)> {
+        let seen = self.seen.lock().unwrap();
+        let mut states = seen
+            .iter()
+            .filter_map(|frame| Some((frame["us"].as_u64()?, frame["buffering_menu"].as_bool()?)));
+        let start = states.find(|(_, open)| *open)?.0;
+        let end = states.find(|(_, open)| !open).map(|(us, _)| us);
+        Some((start, end))
+    }
+
     /// The first complete frame of this draft, as soon as the viewer receives it.
     fn wait_for_draft(&self, since: u64, expected: &str, timeout: Duration) -> Option<u64> {
         let changed = self.draft_changed.as_ref()?;
@@ -2378,7 +2519,11 @@ impl Frames {
     pub fn readings(&self) -> Vec<(u64, String)> {
         let mut out: Vec<(u64, String)> = Vec::new();
         for piece in self.seen.lock().unwrap().iter() {
-            let input = piece["input"].as_str().unwrap_or_default();
+            let input = if piece["buffering_menu"] == true {
+                "interaction"
+            } else {
+                piece["input"].as_str().unwrap_or_default()
+            };
             let half = piece["in_update"] == true;
             if half || out.last().is_some_and(|(_, last)| last == input) {
                 continue;
@@ -2460,7 +2605,7 @@ impl Frames {
     }
 
     pub fn watch(lab: &Lab, agent: &Agent, cli: &str) -> anyhow::Result<Frames> {
-        Self::watch_drafts(lab, agent, cli, (COLS, ROWS), false)
+        Self::watch_drafts(lab, agent, cli, (COLS, ROWS), false, false)
     }
 
     fn watch_drafts(
@@ -2469,6 +2614,7 @@ impl Frames {
         cli: &str,
         (cols, rows): (u16, u16),
         full: bool,
+        observe_buffering: bool,
     ) -> anyhow::Result<Frames> {
         use facade_base::base64;
         let rule = facade_rules::find(cli)
@@ -2499,6 +2645,12 @@ impl Frames {
             }
             screen.feed(&bytes);
             let reading = facade_rules::read_box(&rule.input, &screen.view());
+            let in_update = screen.synchronized_update_deadline().is_some();
+            let buffering_menu = (observe_buffering && !in_update).then(|| {
+                let text = screen.text(usize::from(rows)).join("\n");
+                text.contains("Giving this request a little extra thought")
+                    && text.contains("Dismiss and keep waiting")
+            });
             // Words of OpenCode's own error, which make a text it puts back L7.
             let error = opencode
                 .then(|| {
@@ -2514,7 +2666,7 @@ impl Frames {
                 "us": now_us(), "kind": change["kind"], "bytes": bytes.len(),
                 "data": change["data"],
                 "input": format!("{:?}", reading.info.state).to_lowercase(),
-                "in_update": screen.synchronized_update_deadline().is_some(),
+                "in_update": in_update, "buffering_menu": buffering_menu,
                 "draft": if full {
                     reading.draft
                 } else {

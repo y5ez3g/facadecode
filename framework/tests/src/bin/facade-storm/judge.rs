@@ -457,13 +457,13 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                 // Reasonable only where what is not Facade's held the input for so long that what
                 // was left could not take this message and those before it (L1, L2).
                 let window = case.windows.iter().find(|window| window.agent == sent.to);
+                let (from, to) = (sent.called_us, sent.called_us + sent.limit_us);
+                let in_menu =
+                    window.map_or(0, |window| window.read_as_ms(&["interaction"], from, to));
                 let held = window.map_or(0, |window| {
-                    let (from, to) = (sent.called_us, sent.called_us + sent.limit_us);
                     match &window.timeline {
                         // Nobody else types there: a draft is Facade's own.
-                        Some(_) if window.person.is_none() => {
-                            window.read_as_ms(&["interaction"], from, to)
-                        }
+                        Some(_) if window.person.is_none() => in_menu,
                         Some(_) => window.read_as_ms(&["interaction", "draft"], from, to),
                         None if window.person.is_some() => window.tape.held_with_keys_ms(from, to),
                         None => window.tape.held_ms(from, to),
@@ -509,7 +509,9 @@ pub fn judge(case: &Case<'_>) -> Verdict {
                 } else if held > 0 && free < needed {
                     let kind = if back > 0 {
                         "L7"
-                    } else if reason == "input_interaction" {
+                    } else if reason == "input_interaction"
+                        || (in_menu > 0 && (sent.limit_us / 1000).saturating_sub(in_menu) < needed)
+                    {
                         "L2"
                     } else {
                         "L1"
