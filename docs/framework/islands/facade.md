@@ -178,12 +178,14 @@ Windows uses deferred wrapping during Attach so cursor moves after a full row fo
 agent's screen.
 
 At the end of an attachment, Attach leaves the alternate screen and restores the terminal modes. If it presented
-primary output, it prints the receipt and any unsent-input warning below the guest view. The preceding shell
-page is in the terminal's history. If it presented only alternate output, it returns to the original shell
-page and prints the receipt there. A normal exit returns the status in the daemon's final event or exact ended
-snapshot. The daemon lets an active dedicated watcher receive the final output and exit in order, then closes
-that connection within its post-exit grace period. A removal or lost connection uses the corresponding Shell
-diagnostic.
+primary output, it prints the receipt and any unsent-input warning below the guest view. On normal exit with a
+complete primary view at the same fitting terminal size, the receipt uses the first row below the occupied
+output. If the output fills the host or its position is uncertain, Attach scrolls one row for the receipt.
+The preceding shell page is in the terminal's history. If it presented only alternate output, it returns to
+the original shell page and prints the receipt there. A normal exit returns the status in the daemon's final
+event or exact ended snapshot. The daemon lets an active dedicated watcher receive the final output and exit
+in order, then closes that connection within its post-exit grace period. A removal or lost connection uses
+the corresponding Shell diagnostic.
 
 ### hooks
 

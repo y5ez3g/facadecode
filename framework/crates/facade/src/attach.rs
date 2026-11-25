@@ -61,6 +61,7 @@ static TERMINAL: Mutex<Display> = Mutex::new(Display {
     shared: None,
     host_alternate: false,
     primary_shown: false,
+    current_view_exited: false,
     cli_title_shown: false,
     mouse_reporting: false,
     write_error: None,
@@ -528,6 +529,8 @@ fn show_snapshot(
     let status = snapshot.exit_status;
     if snapshot.process == Some(ProcessState::Ended) || snapshot.exit.is_some() || status.is_some()
     {
+        // A snapshot seeds a fresh Screen. A skipped decode leaves it absent.
+        terminal.current_view_exited = terminal.shared.is_some();
         return Ok(Some(AttachEnd::AgentExited {
             exit: snapshot.exit.take(),
             status,
@@ -596,10 +599,17 @@ fn show_until_closed(
             ScreenChange::Activity { .. } | ScreenChange::Unknown => continue,
             ScreenChange::Exit {
                 exit, exit_status, ..
-            } => AttachEnd::AgentExited {
-                exit: Some(exit),
-                status: exit_status,
-            },
+            } => {
+                if let Some(mut terminal) = attached_terminal()
+                    && terminal.shared.is_some()
+                {
+                    terminal.current_view_exited = true;
+                }
+                AttachEnd::AgentExited {
+                    exit: Some(exit),
+                    status: exit_status,
+                }
+            }
             ScreenChange::Removed => AttachEnd::Removed,
         }));
     }
@@ -1224,6 +1234,8 @@ struct Display {
     host_alternate: bool,
     /// Whether the shell page has been archived and the guest's primary history seeded.
     primary_shown: bool,
+    /// Whether the current watch has supplied its final frame and confirmed the exit.
+    current_view_exited: bool,
     /// Whether the attachment has written a CLI title, including an explicit empty title.
     cli_title_shown: bool,
     /// Whether the displayed grid is receiving the terminal's mouse reports.
@@ -1471,6 +1483,18 @@ impl SharedScreen {
 
     fn uses_viewport(&self) -> bool {
         self.capacity.is_some_and(|size| size != self.grid())
+    }
+
+    fn exit_receipt_row(&self) -> Option<u16> {
+        let capacity = console_size()?;
+        if self.capacity != Some(capacity)
+            || !fits(self.grid(), Some(capacity))
+            || !self.screen.at_clean_point()
+        {
+            return None;
+        }
+        let occupied = self.screen.occupied_rows();
+        (occupied < capacity.1).then(|| occupied + 1)
     }
 
     /// Forwards a title change while the agent's screen is hidden.
@@ -1748,6 +1772,7 @@ fn finish_attachment(terminal: &mut Display, end: anyhow::Result<AttachEnd>) -> 
         Err(anyhow::Error::new(error).context("could not write to the host terminal"))
     });
     let code = end.as_ref().map_or(1, AttachEnd::code);
+    let current_view_exited = std::mem::take(&mut terminal.current_view_exited);
     let Some(input) = terminal
         .console
         .as_mut()
@@ -1755,11 +1780,28 @@ fn finish_attachment(terminal: &mut Display, end: anyhow::Result<AttachEnd>) -> 
     else {
         return code;
     };
+    let receipt_row = if current_view_exited
+        && matches!(&end, Ok(AttachEnd::AgentExited { .. }))
+        && terminal.primary_shown
+        && !terminal.host_alternate
+    {
+        terminal
+            .shared
+            .as_ref()
+            .and_then(SharedScreen::exit_receipt_row)
+    } else {
+        None
+    };
     let alternate = std::mem::take(&mut terminal.host_alternate);
     let cli_title_shown = std::mem::take(&mut terminal.cli_title_shown);
-    let _ = write_terminal(&restoration(alternate, cli_title_shown));
+    let restored = write_terminal(&restoration(alternate, cli_title_shown)).is_ok();
     if std::mem::take(&mut terminal.primary_shown) {
-        let _ = scroll_primary_into_history(1);
+        if let Some(row) = receipt_row.filter(|_| restored) {
+            let position = format!("\x1b[?6l\x1b[r\x1b[{row};1H");
+            let _ = write_terminal(position.as_bytes());
+        } else {
+            let _ = scroll_primary_into_history(1);
+        }
     }
     terminal.shared = None;
     terminal.mouse_reporting = false;
