@@ -6,8 +6,8 @@ mod recovery;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use facade_screen::{FrameObserver, ParsedOutput, Screen, TerminalColors};
 use tokio::task::JoinHandle;
@@ -358,7 +358,7 @@ pub(crate) struct LoggedScreen {
     id: String,
     held: bool,
     log_closed: bool,
-    screen: Screen,
+    screen: Option<Box<Screen>>,
     title: Option<String>,
     colors: TerminalColors,
     log: Option<ScreenLog>,
@@ -392,7 +392,7 @@ impl LoggedScreen {
             id: agent_id.into(),
             held: true,
             log_closed: false,
-            screen,
+            screen: Some(Box::new(screen)),
             title,
             colors: TerminalColors::default(),
             log,
@@ -405,7 +405,7 @@ impl LoggedScreen {
             id: agent_id.into(),
             held: false,
             log_closed: true,
-            screen: Screen::new(2, 1, 0),
+            screen: None,
             title: None,
             colors: TerminalColors::default(),
             log: None,
@@ -414,15 +414,29 @@ impl LoggedScreen {
     /// Keeps the supplied colors on the current screen and every screen loaded later.
     pub(crate) fn set_colors(&mut self, colors: TerminalColors) {
         self.colors = colors;
-        self.screen.set_colors(colors);
+        if let Some(screen) = &mut self.screen {
+            screen.set_colors(colors);
+        }
     }
     /// Sets the viewer title's status glyph and returns its update bytes without logging them.
     pub(crate) fn set_status_glyph(&mut self, glyph: Option<String>) -> Vec<u8> {
-        self.screen.set_status_glyph(glyph)
+        self.screen
+            .as_deref_mut()
+            .map_or_else(Vec::new, |screen| screen.set_status_glyph(glyph))
     }
     /// Borrows the held screen, or the two-column placeholder; takes no lock.
     pub(crate) fn screen(&self) -> &Screen {
-        &self.screen
+        static BLANK: LazyLock<Screen> = LazyLock::new(|| Screen::new(2, 1, 0));
+        self.screen.as_deref().unwrap_or_else(|| &*BLANK)
+    }
+
+    fn mutable_screen(&mut self) -> &mut Screen {
+        let colors = self.colors;
+        self.screen.get_or_insert_with(|| {
+            let mut screen = Screen::new(2, 1, 0);
+            screen.set_colors(colors);
+            Box::new(screen)
+        })
     }
     pub(crate) fn title(&self) -> Option<&str> {
         self.title.as_deref()
@@ -445,25 +459,25 @@ impl LoggedScreen {
         if let Some(journal) = &mut self.log {
             blocking_in_place(|| journal.append_output(bytes));
         }
-        let parsed = self.screen.feed_observing(bytes, observe);
+        let parsed = self.mutable_screen().feed_observing(bytes, observe);
         self.record_title(&parsed);
         parsed
     }
 
     pub(crate) fn mark_pending_frame_earlier(&mut self) {
-        self.screen.mark_pending_frame_earlier();
+        self.mutable_screen().mark_pending_frame_earlier();
     }
 
     /// Logs a changed size before applying it; may block on disk and takes no lock.
     pub(crate) fn resize(&mut self, cols: u16, rows: u16) {
-        if (cols, rows) == (self.screen.cols(), self.screen.rows()) {
+        if (cols, rows) == (self.screen().cols(), self.screen().rows()) {
             return;
         }
         self.checkpoint_if_due();
         if let Some(journal) = &mut self.log {
             blocking_in_place(|| journal.append_resize(cols, rows));
         }
-        self.screen.resize(cols, rows);
+        self.mutable_screen().resize(cols, rows);
     }
     /// Logs an overdue synchronized update's end before applying it; takes no lock.
     pub(crate) fn end_synchronized_update(&mut self) -> ParsedOutput {
@@ -471,7 +485,7 @@ impl LoggedScreen {
         if let Some(journal) = &mut self.log {
             blocking_in_place(|| journal.append_sync_end());
         }
-        let parsed = self.screen.end_synchronized_update();
+        let parsed = self.mutable_screen().end_synchronized_update();
         self.record_title(&parsed);
         parsed
     }
@@ -486,8 +500,12 @@ impl LoggedScreen {
         let Some(journal) = &mut self.log else {
             return;
         };
+        let screen = self
+            .screen
+            .as_deref()
+            .expect("the journal has an open screen");
         journal.retry_checkpoint_if_due();
-        let clean = journal.wants_checkpoint() && self.screen.at_clean_point();
+        let clean = journal.wants_checkpoint() && screen.at_clean_point();
         if !clean && !journal.must_force_checkpoint() {
             return;
         }
@@ -496,12 +514,12 @@ impl LoggedScreen {
                 "the screen log of {} reached {} MiB without a clean point; forcing a checkpoint; recovery from it loses {}",
                 self.id,
                 MAX_LOG_BYTES / (1024 * 1024),
-                forced_checkpoint_losses(&self.screen).join(" and ")
+                forced_checkpoint_losses(screen).join(" and ")
             ));
         }
         blocking_in_place(|| {
             journal.begin_checkpoint(Checkpoint::capture_with_title(
-                &self.screen,
+                screen,
                 self.title.as_deref(),
             ));
         });
@@ -529,8 +547,7 @@ impl LoggedScreen {
     }
     /// Drops the in-memory screen and waits for any writer before closing its log; takes no lock.
     pub(crate) async fn let_go(&mut self) {
-        self.screen = Screen::new(2, 1, 0);
-        self.screen.set_colors(self.colors);
+        self.screen = None;
         self.held = false;
         if let Some(journal) = self.log.take() {
             journal.finish().await;
@@ -551,11 +568,9 @@ impl LoggedScreen {
         if with_log && self.log_closed {
             match tokio::task::spawn_blocking(move || recover(&folder, &id, None, &|| {})).await {
                 Ok(recovered) => {
-                    self.screen = recovered.screen;
-                    self.screen.set_colors(self.colors);
+                    self.keep_screen(recovered.screen);
                     self.log = recovered.log;
                     self.title = self.log.as_mut().and_then(|log| log.recovered_title.take());
-                    self.held = true;
                     self.log_closed = false;
                 }
                 Err(e) => warn(&format!("could not recover the screen of {}: {e}", self.id)),
@@ -564,10 +579,8 @@ impl LoggedScreen {
             let read = tokio::task::spawn_blocking(move || load(&folder, &id)).await;
             match read {
                 Ok(Ok((screen, title))) => {
-                    self.screen = screen;
+                    self.keep_screen(screen);
                     self.title = title;
-                    self.screen.set_colors(self.colors);
-                    self.held = true;
                     facade_base::service::mark_for_test(&format!("screen-loaded-{}", self.id));
                 }
                 result => {
@@ -584,6 +597,12 @@ impl LoggedScreen {
             }
         }
         self.held
+    }
+
+    fn keep_screen(&mut self, mut screen: Screen) {
+        screen.set_colors(self.colors);
+        self.screen = Some(Box::new(screen));
+        self.held = true;
     }
     /// Waits for any writer and closes the log, without taking a lock.
     pub(crate) async fn finish(&mut self) {

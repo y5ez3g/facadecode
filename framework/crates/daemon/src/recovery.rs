@@ -203,7 +203,7 @@ impl Daemon {
                         let _work = work;
                         let mut settled = handle.settled();
                         let _ = settled.wait_for(|settled| *settled).await;
-                        daemon.runs.release(&id);
+                        daemon.release_ended_run(&id).await;
                     });
                 }
             }

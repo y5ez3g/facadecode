@@ -333,6 +333,14 @@ impl Store {
         work(&connection).map_err(|err| anyhow::anyhow!("could not {}: {err}", what()))
     }
 
+    /// Releases SQLite's unused pager memory. Blocks.
+    pub(crate) fn release_cache(&self) -> anyhow::Result<()> {
+        self.with(
+            || "release unused database cache".to_owned(),
+            Connection::release_memory,
+        )
+    }
+
     /// Commits agent `agent_id`'s new name. Blocks.
     pub(crate) fn rename(&self, agent_id: &str, name: &str) -> anyhow::Result<()> {
         self.with(

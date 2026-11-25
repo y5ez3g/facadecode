@@ -385,11 +385,13 @@ impl Runs {
     }
 
     /// Lets go of agent `id`'s run once its exit is saved and its output drained, and of Facade's
-    /// plugin where it was the last run to use it.
-    pub(crate) fn release(&self, id: &str) {
-        if self.link.release(id) {
-            self.preparation.plugin_released(id);
+    /// plugin where it was the last run to use it. Reports whether it released a run.
+    pub(crate) fn release(&self, id: &str) -> bool {
+        if !self.link.release(id) {
+            return false;
         }
+        self.preparation.plugin_released(id);
+        true
     }
 
     /// Stops a run whose agent could not be listed or committed; it goes with its exit.

@@ -264,6 +264,11 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
   - Input and state readings can reuse screen-view row allocations. The daemon keeps up to four
     reusable views, each with up to 160 KiB of storage. It refreshes a borrowed view before a read
     and drops its cell contents before returning the storage.
+  - The actor releases an ended run's terminal engine and closes its screen log after output has
+    drained and the last viewer has left. Released screens share a read-only blank screen until
+    a caller needs their saved content.
+    When the last managed run settles, the daemon releases its unused view storage and SQLite
+    pager memory.
   - The record shows a run's end before anything waiting on the run learns it. The installed run
     number changes when its terminal is installed. Input is fenced from the previous run as soon
     as restart preparation begins.
