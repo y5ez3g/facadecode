@@ -459,7 +459,12 @@ impl Entry {
         written: Option<&Member>,
         built_ins: &'static [Rule],
     ) -> Entry {
-        let built_in = built_ins.iter().find(|rule| rule.cli == name);
+        // Existing named entries can occupy names introduced by the newer rules.
+        let keeps_named_type = written.is_some_and(uses_previous_type);
+        let built_in = built_ins
+            .iter()
+            .find(|rule| rule.cli == name)
+            .filter(|rule| !keeps_named_type || previously_built_in(rule));
         let mut reader = Reader {
             settings,
             entry_at: written.map(|member| member.at),
@@ -467,7 +472,7 @@ impl Entry {
             problems: Vec::new(),
         };
         if built_in.is_none() {
-            reader.check_name(name, built_ins);
+            reader.check_name(name, built_ins, keeps_named_type);
         }
         let mut entry = Entry {
             name: name.to_string(),
@@ -509,6 +514,32 @@ impl Entry {
     }
 }
 
+fn previously_built_in(rule: &Rule) -> bool {
+    matches!(
+        rule.cli.as_str(),
+        "claude" | "codex" | "agy" | "muse" | "opencode" | "pi" | "fake"
+    )
+}
+
+fn uses_previous_type(member: &Member) -> bool {
+    let Json::Object(fields) = &member.value.json else {
+        return false;
+    };
+    fields
+        .iter()
+        .find(|field| field.key == "type")
+        .is_some_and(|field| {
+            let Json::String(kind) = &field.value.json else {
+                return false;
+            };
+            kind == PROGRAM_TYPE
+                || crate::find(kind)
+                    .ok()
+                    .flatten()
+                    .is_some_and(previously_built_in)
+        })
+}
+
 /// The icon an entry shows when it picks none: its built-in's, or the bare-program robot.
 fn default_icon(kind: Option<Kind>) -> String {
     match kind {
@@ -545,7 +576,7 @@ impl Reader<'_> {
     /// An added CLI's key shows in every list of CLIs (CONFIGURATION-2.1). It must contain
     /// something visible, have no space at either end and no control character, and differ from
     /// every built-in's ID and name, ignoring case: two rows reading `Codex` give no real choice.
-    fn check_name(&mut self, name: &str, built_ins: &[Rule]) {
+    fn check_name(&mut self, name: &str, built_ins: &[Rule], keeps_named_type: bool) {
         let invisible = |char: char| is_space(char) || INVISIBLE.iter().any(|r| r.contains(&char));
         let problem = if name.chars().all(invisible) {
             "a CLI's name needs a visible character".to_string()
@@ -557,10 +588,9 @@ impl Reader<'_> {
             let lower = name.to_lowercase();
             let names_of =
                 |rule: &Rule| [rule.cli.to_lowercase(), rule.display_name.to_lowercase()];
-            match built_ins
-                .iter()
-                .find(|rule| names_of(rule).contains(&lower))
-            {
+            match built_ins.iter().find(|rule| {
+                (!keeps_named_type || previously_built_in(rule)) && names_of(rule).contains(&lower)
+            }) {
                 Some(rule) => format!(
                     "this is {}'s name; choose another name for this CLI",
                     rule.display_name
@@ -924,10 +954,98 @@ mod tests {
         format!("{FILE}:1:{column}: {problem}")
     }
 
+    #[test]
+    fn a_configured_entry_can_keep_its_type_when_a_new_rule_takes_its_name() {
+        let config = r#"{"agent":{"type":"custom","program":"my-cursor","args":["--keep"]},
+                        "Kiro":{"type":"claude","program":"my-kiro"},
+                        "my-cursor-native":{"type":"agent"}}"#;
+        let cursor = entry("agent", config);
+        assert_eq!(cursor.kind.map(|kind| kind.id()), Some("custom"));
+        assert_eq!(cursor.program.as_deref(), Some("my-cursor"));
+        assert_eq!(cursor.args, ["--keep"]);
+        assert!(cursor.problems.is_empty());
+
+        let kiro = entry("Kiro", config);
+        assert_eq!(kiro.kind.map(|kind| kind.id()), Some("claude"));
+        assert_eq!(kiro.program.as_deref(), Some("my-kiro"));
+        assert!(kiro.problems.is_empty());
+
+        let native = entry("my-cursor-native", config);
+        assert_eq!(native.kind.map(|kind| kind.id()), Some("agent"));
+        assert!(native.problems.is_empty());
+    }
+
+    #[test]
+    fn selection_respects_named_entries_and_the_built_in_enabled_setting() {
+        let configured = entries(
+            r#"{"clis": {
+                "agent": {"type": "custom", "command": "local-agent"},
+                "cursor-agent": {"type": "agent", "program": "cursor-agent"},
+                "kiro-cli": {"type": "custom", "program": "local-kiro"},
+                "qodercli": {"type": "qoder", "program": "qodercli"}
+            }}"#,
+        );
+        let folder = Path::new(".");
+        let env = BTreeMap::new();
+        for (name, program) in [
+            ("agent", "local-agent"),
+            ("cursor-agent", "cursor-agent"),
+            ("kiro-cli", "local-kiro"),
+            ("qodercli", "qodercli"),
+        ] {
+            let exact = select(&configured, name, folder, &env).unwrap();
+            assert_eq!(exact.name, name);
+            assert_eq!(exact.program.as_deref(), Some(program));
+        }
+        let without_override = entries(r#"{"clis":{"agent":{"enabled":false}}}"#);
+        let disabled = select(&without_override, "agent", folder, &env).unwrap_err();
+        assert_eq!(disabled.data.reason, Reason::Unavailable);
+        assert_eq!(disabled.data.entry.as_deref(), Some("agent"));
+    }
+
+    #[test]
+    fn native_names_use_their_default_programs_on_path() {
+        let folder = crate::test_folder::TestFolder::new("vendor-path");
+        let executable = |name| folder.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        let env = BTreeMap::from([("PATH".into(), folder.to_str().unwrap().into())]);
+        let defaults = entries("{}");
+        for name in ["agent", "kiro-cli", "qoder"] {
+            let path = executable(name);
+            std::fs::write(&path, []).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, PermissionsExt::from_mode(0o755)).unwrap();
+            }
+            let selected = select(&defaults, name, &folder, &env).unwrap();
+            assert_eq!(selected.name, name);
+            assert_eq!(selected.resolve_program(&folder, &env).unwrap(), path);
+        }
+
+        for (name, old_program) in [("agent", "cursor-agent"), ("qoder", "qodercli")] {
+            let old_path = executable(old_program);
+            std::fs::rename(executable(name), &old_path).unwrap();
+            let selected = select(&defaults, name, &folder, &env).unwrap();
+            let missing_program = selected.resolve_program(&folder, &env).unwrap_err();
+            assert_eq!(missing_program.data.reason, Reason::NotFound);
+
+            let configured = entries(&format!(
+                r#"{{"clis":{{"{name}":{{"program":"{old_program}"}}}}}}"#
+            ));
+            let selected = select(&configured, name, &folder, &env).unwrap();
+            assert_eq!(selected.resolve_program(&folder, &env).unwrap(), old_path);
+        }
+        for name in ["cursor", "cursor-agent", "kiro", "qodercli"] {
+            let missing_name = select(&defaults, name, &folder, &env).unwrap_err();
+            assert_eq!(missing_name.data.reason, Reason::NotFound, "{name}");
+        }
+    }
+
     /// Every built-in, by its name, its defaults where the file names it not, in the built-ins'
     /// order; then the added CLIs in the file's order (main's configuration tests, as all below).
     #[test]
     fn every_built_in_in_order_then_the_added_clis_in_the_file_s_order() {
+        let built_ins = rules().unwrap().len();
         let read = entries(
             r#"{"clis": {"Codex · work": {"type": "codex"}, "pi": {"enabled": false}, "aider": {"type": "custom", "command": "aider"}}}"#,
         );
@@ -943,9 +1061,8 @@ mod tests {
                 )
             })
             .collect();
-        let built_ins = rules().unwrap().len();
         assert_eq!(
-            rows[..6],
+            rows[..11],
             [
                 ("claude", "clis.claude", "claude", true, true),
                 ("codex", "clis.codex", "codex", true, true),
@@ -953,6 +1070,11 @@ mod tests {
                 ("muse", "clis.muse", "muse", true, true),
                 ("opencode", "clis.opencode", "opencode", true, true),
                 ("pi", "clis.pi", "pi", false, true),
+                ("devin", "clis.devin", "devin", true, true),
+                ("agent", "clis.agent", "agent", true, true),
+                ("kiro-cli", "clis.kiro-cli", "kiro-cli", true, true),
+                ("qoder", "clis.qoder", "qoder", true, true),
+                ("omp", "clis.omp", "omp", true, true),
             ]
         );
         assert_eq!(
@@ -1120,7 +1242,7 @@ mod tests {
             .filter(|entry| !entry.problems.is_empty())
             .map(|entry| (entry.name.as_str(), &entry.problems[..]))
             .collect();
-        let types = "claude, codex, agy, muse, opencode, pi, custom";
+        let types = "claude, codex, agy, muse, opencode, pi, devin, agent, kiro-cli, qoder, omp, copilot, custom";
         assert_eq!(
             said,
             [
@@ -1161,6 +1283,14 @@ mod tests {
                 ),
             ]
         );
+        for old_type in ["cursor", "kiro"] {
+            let configured = entries(&format!(r#"{{"clis":{{"old":{{"type":"{old_type}"}}}}}}"#));
+            let invalid = select(&configured, "old", Path::new("."), &BTreeMap::new()).unwrap_err();
+            assert_eq!(invalid.data.reason, Reason::InvalidSettings);
+            assert!(invalid.message.ends_with(&format!(
+                "clis.old.type must be one of {types}; received string"
+            )));
+        }
     }
 
     /// A value of the wrong kind is said by its setting path and its JSON type, in the order read,
@@ -1305,7 +1435,10 @@ mod tests {
     fn an_icon_is_a_built_in_s_or_a_robot() {
         let clis = r#"{"codex": {"icon": "facade-sky"}, "claude": {"icon": "claude"}, "pi": {"icon": "facade-cyan"}, "muse": {"icon": 7}, "mine": {"type": "custom", "command": "mine", "icon": "codex"}, "other": {"type": "codex"}, "tool": {"type": "custom", "command": "tool"}}"#;
         let icons = [
-            &["claude", "codex", "agy", "muse", "opencode", "pi"][..],
+            &[
+                "claude", "codex", "agy", "muse", "opencode", "pi", "devin", "agent", "kiro-cli",
+                "qoder", "omp", "copilot",
+            ][..],
             &ROBOTS,
         ]
         .concat()
@@ -1468,6 +1601,16 @@ mod tests {
             ]
         );
         assert_eq!(codex.choice_refusal(Some("m"), Some("low"), true), None);
+        let agent = entry("agent", r#"{"agent":{"model":"cursor-model"}}"#);
+        assert_eq!(agent.choices(None, None, &[]), ["--model", "cursor-model"]);
+        let kiro = entry(
+            "kiro-cli",
+            r#"{"kiro-cli":{"model":"kiro-model","effort":"high"}}"#,
+        );
+        assert_eq!(
+            kiro.choices(None, Some("low"), &[]),
+            ["--model", "kiro-model", "--effort", "low"]
+        );
         // The start's own words choose: they carry the choice, and the entry's for it is not added
         let words = |words: &[&str]| {
             words

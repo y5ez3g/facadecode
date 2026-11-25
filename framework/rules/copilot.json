@@ -1,0 +1,41 @@
+{
+	"cli": "copilot",
+	"display_name": "GitHub Copilot CLI",
+	"program": "copilot",
+	"arguments": {
+		"reserved": ["-h", "--help", "-v", "--version", "--print-debug-info", "--collect-debug-logs", "-p", "--prompt", "-i", "--interactive", "--attachment", "--assisted-approval", "--trust-folder", "--acp", "--server", "--headless", "--ahp", "--environment", "--remote", "--cloud", "--connect", "-r", "--resume", "--continue", "--session-id", "--new-session-id", "-w", "--worktree", "-C", "--allow-all", "--allow-all-tools", "--allow-all-paths", "--allow-all-urls", "--yolo"],
+		"clusters": ["-C", "-i", "-n", "-p", "-r", "-w"]
+	},
+	"choices": {
+		"model": ["--model", "${value}"],
+		"effort": ["--reasoning-effort", "${value}"],
+		"spelling": { "model": ["--model"], "effort": ["--reasoning-effort", "--effort"] }
+	},
+	"input": {
+		"mechanism": "editor",
+		"hardware_cursor": true,
+		"rail": {
+			"fallback_prompt": "❯ ",
+			"footer": "^ *(?:← open sidebar · )?Interactive · (?:Manual Approval|Assisted Permissions|Allow All)(?: · | {2,}| *$)",
+			"live_notice": {
+				"text": "Please use /login to sign in to use Copilot",
+				"rows_above_upper": 2,
+				"wrapped_context": { "max_rows": 3, "last": "^ (?:\\[⎇ .+\\] +)?Run on: \\S.*$" }
+			}
+		},
+		"upper": "^─+$",
+		"lower": "^─+$",
+		"scrolled": { "position": "unmarked", "min_rows": 3, "reserved_rows": 4, "min_reserved_rows": 2 },
+		"most_rows": 3,
+		"most_share": 0.5,
+		"menus": [{
+			"selected": "^│ Do you trust the files in this folder\\? +│ *$",
+			"hint": { "pattern": "^│ ❯ (?:1\\. Yes|2\\. Yes, and remember this folder for future sessions|3\\. No \\(Esc\\)) +│ *$", "within": 4 }
+		}]
+	},
+	"paste": {
+		"placeholders": [{ "pattern": "^\\[Paste #\\d+ - (\\d+) lines\\]$", "count": "lines", "spaced": true }]
+	},
+	"session": { "capture": "session_start", "resume": ["--resume=${session_id}"], "resume_requires_saved_session": true },
+	"yolo": { "work": { "args": ["--allow-all"] } }
+}

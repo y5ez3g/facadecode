@@ -14,8 +14,11 @@
 //! hooks have nowhere to write.
 
 mod history;
+mod kiro_settings;
 
 pub use history::{SavedSession, list_sessions, session_for_id};
+pub(crate) use history::{copilot_config_dir, kiro_profile, qoder_config_dir};
+pub(crate) use kiro_settings::kiro_config_root;
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -32,19 +35,23 @@ use crate::Rule;
 /// inherit its environment, to name its session: the session itself first, then, for a CLI that
 /// has threads, the current thread. `facade` commands use them to find which agent's terminal they
 /// run in; a guest's server reads only its own CLI's; agents Facade starts never inherit them.
-pub const SESSION_VARIABLES: [(&str, &[&str]); 6] = [
+pub const SESSION_VARIABLES: [(&str, &[&str]); 10] = [
     ("claude", &["CLAUDE_CODE_SESSION_ID"]),
     ("codex", &["CODEX_SESSION_ID", "CODEX_THREAD_ID"]),
     ("opencode", &["OPENCODE_SESSION_ID"]),
     ("pi", &["PI_SESSION_ID"]),
+    ("omp", &["PI_SESSION_ID"]),
     ("muse", &["MUSE_SESSION_ID", "MUSE_THREAD_ID"]),
     ("agy", &["ANTIGRAVITY_CONVERSATION_ID"]),
+    ("agent", &["CURSOR_CONVERSATION_ID", "CURSOR_REQUEST_ID"]),
+    ("kiro-cli", &["KIRO_SESSION_ID"]),
+    ("qoder", &["QODER_SESSION_ID"]),
 ];
 
-/// More variables that mark a CLI session or run, or tune how it behaves: Claude Code and Codex
-/// set these. A CLI started where they are set would treat that session or run as its own, so a
+/// More variables that mark a CLI session or run, or tune how it behaves.
+/// A CLI started where they are set would treat that session or run as its own, so a
 /// new agent never inherits them, just as it never inherits [`SESSION_VARIABLES`].
-const RUN_VARIABLES: [&str; 22] = [
+const RUN_VARIABLES: [&str; 23] = [
     "CLAUDECODE",
     "CLAUDE_CODE_CHILD_SESSION",
     "CLAUDE_CODE_SESSION_ID",
@@ -67,6 +74,7 @@ const RUN_VARIABLES: [&str; 22] = [
     "CODEX_SANDBOX_NETWORK_DISABLED",
     "CODEX_COMPANION_SESSION_ID",
     "CODEX_COMPANION_TRANSCRIPT_PATH",
+    "PI_SESSION_FILE",
 ];
 
 /// The one variable naming `cli`'s session itself, if `cli` has one.
@@ -115,8 +123,12 @@ const OPENCODE_ID_LIMIT: usize = 64;
 
 /// `text` as a session ID in its one accepted spelling, if it is one. Claude Code, Codex,
 /// Antigravity, Muse Code and Pi use UUIDs, accepted in any case and given back in lowercase.
-/// OpenCode uses `ses_` and letters and digits, kept exactly.
+/// OpenCode uses `ses_` and letters and digits, kept exactly. Kiro V3 prefixes its UUID
+/// with the literal `sess_`.
 pub fn parse_session_id(text: &str) -> Option<String> {
+    if let Some(uuid) = text.strip_prefix("sess_") {
+        return is_uuid(uuid).then(|| text.to_ascii_lowercase());
+    }
     match text.strip_prefix("ses_") {
         Some(tail) => is_opencode_tail(tail).then(|| text.to_string()),
         None => is_uuid(text).then(|| text.to_ascii_lowercase()),
@@ -197,7 +209,15 @@ impl Reported {
 /// empty for none; an absolute one-line `transcript_path` says where the session is kept.
 pub fn session_from_hook(input: &[u8]) -> Option<Option<Reported>> {
     let input: serde_json::Value = serde_json::from_slice(input).ok()?;
-    if input.get("hook_event_name")?.as_str()? != "SessionStart" {
+    let event = input.get("hook_event_name")?.as_str()?;
+    if input["cursor_version"].is_string()
+        && event == "sessionStart"
+        && input["is_background_agent"] != true
+    {
+        let id = parse_session_id(input["conversation_id"].as_str()?)?;
+        return Some(Some(Reported::saved(&id)));
+    }
+    if event != "SessionStart" {
         return None;
     }
     let picked = match input.get("session_id")? {

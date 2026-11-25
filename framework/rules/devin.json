@@ -1,0 +1,45 @@
+{
+	"cli": "devin",
+	"display_name": "Devin",
+	"program": "devin",
+	"launch": { "args": ["--process-model", "in-process"] },
+	"arguments": {
+		"reserved": ["--config", "--process-model", "--permission-mode", "--respect-workspace-trust", "--cloud", "--continue", "-c", "--resume", "-r", "--print", "-p", "--prompt-file", "--model", "--version", "-V", "--help", "-h"],
+		"required": ["--config", "--process-model", "--permission-mode", "--prompt-file", "--model"]
+	},
+	"choices": { "model": ["--model", "${value}"], "spelling": { "model": ["--model"] } },
+	"input": {
+		"mechanism": "frame",
+		"prompt": "❭",
+		"alternate_prompt": ">",
+		"gap": " ",
+		"probe_unstyled_hint": true,
+		"upper": "^[─-]+(?: +\\([^)]+\\) *(?:[─-]+)?)? *$",
+		"lower": "^[─-]+ *$",
+		"scrolled": { "position": "rows", "above": "^\\^ (\\d+) more above$", "below": "^v (\\d+) more below$" },
+		"menus": [
+			{ "selected": "^ *[*●•✱] Do you trust the authors of this directory\\?" },
+			{ "selected": "^ *[›>] +[0-9]+\\.? +\\S", "next": "^ +[0-9]+\\.? +\\S" },
+			{ "selected": "^ *[○●] /\\S", "next": "^ +/\\S" }
+		]
+	},
+	"paste": {
+		"enter_ms": 100,
+		"placeholders": [
+			{ "pattern": "^\\[Pasted text #\\d+ \\+(\\d+) lines?\\]$", "count": "lines_after_first", "spaced": true },
+			{ "pattern": "^\\[Pasted text #\\d+ \\((\\d+) chars?\\)\\]$", "count": "chars", "spaced": true }
+		]
+	},
+	"session": { "capture": "session_start", "resume": ["--resume", "${session_id}"] },
+	"mcp": { "deferred_tool_list": true },
+	"status": {
+		"mechanism": "composer",
+		"working": ["^ *.*\\(esc twice to interrupt\\)$"],
+		"authentication": ["^ *Log in to Devin$"],
+		"permission": ["^ *(?:[*●•✱] )?Do you trust the authors of this directory\\?$"]
+	},
+	"yolo": {
+		"work": { "args": ["--permission-mode", "dangerous"] },
+		"startup": { "args": ["--respect-workspace-trust=false"] }
+	}
+}

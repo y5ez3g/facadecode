@@ -1,0 +1,55 @@
+{
+	"cli": "kiro-cli",
+	"display_name": "Kiro",
+	"program": "kiro-cli",
+	"launch": { "args": ["--v3"] },
+	"arguments": {
+		"reserved": ["--v1", "--v2", "--v3", "--agent-engine", "--classic", "--legacy-ui", "--resume", "-r", "--resume-picker", "--resume-id", "--sessions", "--list-sessions", "--cloud", "--repo", "--no-interactive", "--non-interactive", "--output-format", "--trust-workspace", "--trust-all-tools", "-a", "--trust-tools", "--sandbox", "--model", "--effort"],
+		"required": ["--agent", "--profile", "--model", "--effort", "--mode", "--wrap"],
+		"clusters": []
+	},
+	"choices": {
+		"model": ["--model", "${value}"],
+		"effort": ["--effort", "${value}"],
+		"spelling": { "model": ["--model"], "effort": ["--effort"] }
+	},
+	"input": {
+		"mechanism": "prompt_row",
+		"prompt": "› ",
+		"alternate_prompt": "> ",
+		"placeholder": "^ask a question, or describe a task(?: (?:↩|Enter))?$",
+		"menus": [
+			{ "selected": "^\\s*Trust this workspace\\?$" },
+			{ "selected": "^\\s*Warning: Kiro is running in trust all tools mode$" },
+			{
+				"selected": "^ {2}You are not logged in\\. Login now\\?$",
+				"hint": { "pattern": "^❯ (?:Yes|No)$", "within": 2 }
+			}
+		]
+	},
+	"paste": {
+		"enter_ms": 120,
+		"placeholders": [
+			{ "pattern": "^\\[paste #\\d+ \\+(\\d+) lines\\]$", "count": "lines", "spaced": true },
+			{ "pattern": "^\\[paste #\\d+ (\\d+) chars\\]$", "count": "chars", "spaced": true }
+		]
+	},
+	"session": { "capture": "session_start", "resume": ["--resume-id", "${session_id}"] },
+	"status": {
+		"mechanism": "composer",
+		"working": ["^ *(?:[⠁-⣿] )?Thinking(?:\\.\\.\\.|…)(?: .*)?$"],
+		"authentication": ["^ {2}You are not logged in\\. Login now\\?$"],
+		"permission": ["^ *Trust this workspace\\?$", "^ *Warning: Kiro is running in trust all tools mode$"]
+	},
+	"yolo": {
+		"work": { "args": ["--trust-all-tools"] },
+		"startup": { "args": ["--trust-workspace"] },
+		"question": {
+			"shown": "^\\s*Warning: Kiro is running in trust all tools mode$",
+			"answer": "^\\s*(?:[❯›>]\\s*)?Yes, I accept$",
+			"selected": "^\\s*[❯›>]\\s+Yes, I accept$",
+			"keys": ["Down"],
+			"confirm": "Enter"
+		}
+	}
+}

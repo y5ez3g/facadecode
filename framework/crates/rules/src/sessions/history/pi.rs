@@ -69,7 +69,7 @@ fn setting(path: &Path) -> Result<Option<String>, ErrorBody> {
     }))
 }
 
-fn resolve_dir(value: &str, cwd: &Path, home: Option<&Path>) -> Option<PathBuf> {
+pub(super) fn resolve_dir(value: &str, cwd: &Path, home: Option<&Path>) -> Option<PathBuf> {
     if value == "~" {
         return home.map(Path::to_path_buf);
     }
@@ -90,7 +90,7 @@ fn resolve_dir(value: &str, cwd: &Path, home: Option<&Path>) -> Option<PathBuf> 
     Some(cwd.join(value))
 }
 
-fn project_name(path: &Path) -> String {
+pub(super) fn project_name(path: &Path) -> String {
     let path = path.to_string_lossy();
     let path = path.strip_prefix(['/', '\\']).unwrap_or(&path);
     format!("--{}--", path.replace(['/', '\\', ':'], "-"))
@@ -130,16 +130,19 @@ pub(super) fn conversation(
                 .or_else(|| latest(&log.head, "session_info", "name"))
         }
     };
-    let prompt = log
-        .head
-        .iter()
-        .filter(|line| line["type"] == "message" && line["message"]["role"] == "user")
-        .find_map(|line| user_text(&line["message"]["content"]));
+    let prompt = first_prompt(&log.head);
     Ok(Some(scope.session(
         id,
         title(name, prompt),
         log.modified_at,
     )))
+}
+
+pub(super) fn first_prompt(lines: &[Value]) -> Option<&str> {
+    lines
+        .iter()
+        .filter(|line| line["type"] == "message" && line["message"]["role"] == "user")
+        .find_map(|line| user_text(&line["message"]["content"]))
 }
 
 fn user_text(content: &Value) -> Option<&str> {
