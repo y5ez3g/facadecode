@@ -40,6 +40,7 @@ struct Options {
     repeat: usize,
     senders: Option<usize>,
     each: Option<usize>,
+    size: (u16, u16),
     cli: String,
 }
 
@@ -51,6 +52,7 @@ fn options() -> Options {
         repeat: 1,
         senders: None,
         each: None,
+        size: (person::COLS, person::ROWS),
         cli: "fake".into(),
     };
     let mut args = std::env::args_os()
@@ -72,6 +74,19 @@ fn options() -> Options {
             "--senders" => options.senders = Some(number(value())),
             "--cli" => options.cli = value(),
             "--each" => options.each = Some(number(value())),
+            "--size" => {
+                let size = value();
+                let (cols, rows) = size
+                    .split_once('x')
+                    .unwrap_or_else(|| refuse("use COLSxROWS"));
+                let dimension = |text: &str| {
+                    text.parse::<u16>()
+                        .ok()
+                        .filter(|number| *number > 0)
+                        .unwrap_or_else(|| refuse("window dimensions must be positive u16 values"))
+                };
+                options.size = (dimension(cols), dimension(rows));
+            }
             set if !set.starts_with('-') && options.set.is_empty() => options.set = arg,
             other => refuse(&format!("unknown option {other}")),
         }
@@ -277,7 +292,12 @@ pub fn programs() -> Value {
 /// Runs the storms of real CLIs, and exits.
 fn real_storms(options: &Options) -> ! {
     let root = PathBuf::from(std::env::var_os("FACADE_STORM_ROOT").unwrap_or_default());
-    let specs = real::specs(options.only.as_deref(), options.senders, options.each);
+    let specs = real::specs(
+        options.only.as_deref(),
+        options.senders,
+        options.each,
+        options.size,
+    );
     let mut outcomes = Vec::new();
     let mut broken = false;
     let mut unable = specs.is_empty();

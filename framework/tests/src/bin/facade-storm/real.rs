@@ -398,6 +398,7 @@ pub struct RealSpec {
     pub cli: &'static Cli,
     pub senders: usize,
     pub each: usize,
+    pub size: (u16, u16),
     /// The recipient writes a long answer meanwhile.
     pub busy: bool,
     pub hogs: usize,
@@ -409,6 +410,8 @@ pub struct RealSpec {
 pub enum Course {
     /// All send at one moment.
     Burst,
+    /// One five-line message to a receiver with a small window.
+    Narrow,
     /// One sends each of [`shapes`] in turn.
     Shapes,
     /// One sends each of [`endings`] this many times.
@@ -441,7 +444,12 @@ pub enum Course {
 }
 
 /// The storms whose names hold one of `only`'s words, parted by commas.
-pub fn specs(only: Option<&str>, senders: Option<usize>, each: Option<usize>) -> Vec<RealSpec> {
+pub fn specs(
+    only: Option<&str>,
+    senders: Option<usize>,
+    each: Option<usize>,
+    size: (u16, u16),
+) -> Vec<RealSpec> {
     let mut specs = Vec::new();
     for cli in CLIS {
         for (what, busy, hogs) in [
@@ -455,6 +463,7 @@ pub fn specs(only: Option<&str>, senders: Option<usize>, each: Option<usize>) ->
                 cli,
                 senders: senders.unwrap_or(10),
                 each: each.unwrap_or(1),
+                size,
                 busy,
                 hogs,
                 course: Course::Burst,
@@ -463,6 +472,7 @@ pub fn specs(only: Option<&str>, senders: Option<usize>, each: Option<usize>) ->
         let times = each.unwrap_or(30);
         for (what, hogs, course) in [
             ("shapes", 0, Course::Shapes),
+            ("narrow", 0, Course::Narrow),
             ("endings", 0, Course::Endings(times)),
             ("endings cores", 15, Course::Endings(times)),
             ("tabs", 0, Course::Tabs(times)),
@@ -488,6 +498,7 @@ pub fn specs(only: Option<&str>, senders: Option<usize>, each: Option<usize>) ->
                 cli,
                 senders: 1,
                 each: 1,
+                size,
                 busy: false,
                 hogs,
                 course,
@@ -595,8 +606,20 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
         &field.lab,
         &boss,
         spec.cli.name,
+        spec.size,
         matches!(spec.course, Course::Delays(_)),
     )?;
+    field.note(
+        "window_size",
+        json!({ "cols": spec.size.0, "rows": spec.size.1 }),
+    );
+    if spec.course == Course::Narrow {
+        anyhow::ensure!(
+            wait_until(Duration::from_secs(15), || field.lab.input_state(&boss)
+                == "usable"),
+            "the resized input did not become usable"
+        );
+    }
     let timeline = Timeline::watch(
         &field.lab.home.daemon_socket(),
         &boss.reference,
@@ -626,6 +649,15 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
     };
     match spec.course {
         Course::Burst | Course::Returns | Course::Ends(_) => {}
+        Course::Narrow => {
+            field.send(
+                &clients[0],
+                &senders[0].id,
+                &boss,
+                Shape::Lines(5),
+                "delivery",
+            );
+        }
         Course::Questions(times) => {
             questions(
                 &field,
@@ -2428,10 +2460,16 @@ impl Frames {
     }
 
     pub fn watch(lab: &Lab, agent: &Agent, cli: &str) -> anyhow::Result<Frames> {
-        Self::watch_drafts(lab, agent, cli, false)
+        Self::watch_drafts(lab, agent, cli, (COLS, ROWS), false)
     }
 
-    fn watch_drafts(lab: &Lab, agent: &Agent, cli: &str, full: bool) -> anyhow::Result<Frames> {
+    fn watch_drafts(
+        lab: &Lab,
+        agent: &Agent,
+        cli: &str,
+        (cols, rows): (u16, u16),
+        full: bool,
+    ) -> anyhow::Result<Frames> {
         use facade_base::base64;
         let rule = facade_rules::find(cli)
             .map_err(anyhow::Error::msg)?
@@ -2440,7 +2478,7 @@ impl Frames {
         let seen_in = seen.clone();
         let draft_changed = full.then(|| Arc::new(Condvar::new()));
         let changed_in = draft_changed.clone();
-        let screen = Arc::new(Mutex::new(facade_screen::Screen::new(COLS, ROWS, 200)));
+        let screen = Arc::new(Mutex::new(facade_screen::Screen::new(cols, rows, 200)));
         let screen_in = screen.clone();
         let opencode = cli == "opencode";
         let wire = client::terminal_with(&lab.home.daemon_socket(), move |notice| {
@@ -2457,14 +2495,14 @@ impl Frames {
             };
             let mut screen = screen_in.lock().unwrap();
             if change["kind"] == "redraw" {
-                *screen = facade_screen::Screen::new(COLS, ROWS, 200);
+                *screen = facade_screen::Screen::new(cols, rows, 200);
             }
             screen.feed(&bytes);
             let reading = facade_rules::read_box(&rule.input, &screen.view());
             // Words of OpenCode's own error, which make a text it puts back L7.
             let error = opencode
                 .then(|| {
-                    let text = screen.text(usize::from(ROWS)).join("\n").to_lowercase();
+                    let text = screen.text(usize::from(rows)).join("\n").to_lowercase();
                     OPENCODE_ERRORS
                         .iter()
                         .find(|words| text.contains(**words))
@@ -2490,7 +2528,7 @@ impl Frames {
         let watched = wire.request(
             "watch",
             json!({ "topic": "attach", "args": {
-                "target": agent.reference, "size": { "cols": COLS, "rows": ROWS }, "viewer": "storm",
+                "target": agent.reference, "size": { "cols": cols, "rows": rows }, "viewer": "storm",
             } }),
             Duration::from_secs(30),
         )?;
