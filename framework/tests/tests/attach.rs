@@ -243,6 +243,7 @@ fn foreground_exit_keeps_primary_output_after_the_shell_page() {
             "MAIN-FRAME",
             false,
             &["MAIN-FRAME", "Resume with -c MAIN-HINT"][..],
+            true,
         ),
         (
             "Alternate-hint",
@@ -253,6 +254,7 @@ fn foreground_exit_keeps_primary_output_after_the_shell_page() {
             "ALT-FRAME",
             true,
             &["To continue this session", "demo resume ALT-HINT"][..],
+            true,
         ),
         (
             "Transcript",
@@ -265,9 +267,10 @@ fn foreground_exit_keeps_primary_output_after_the_shell_page() {
             "TRANSCRIPT-FRAME",
             true,
             &["TRANSCRIPT-LINE 0", "TRANSCRIPT-LINE 39"][..],
+            false,
         ),
     ];
-    for (name, gate, script, frame, alternate, guest_lines) in cases {
+    for (name, gate, script, frame, alternate, guest_lines, short_output) in cases {
         let mut term = start_below_a_shell_page(&home, name, script);
         assert!(
             term.wait_for(LOADED_TIMEOUT, |view| view.contains(frame))
@@ -285,12 +288,26 @@ fn foreground_exit_keeps_primary_output_after_the_shell_page() {
             status.is_some_and(|status| status.success()),
             "{name}: {status:?}"
         );
+        let receipt = format!("{name} ({address}) exited with code 0.");
         assert_primary_transcript_kept(
             &term,
             &format!("Started {name} ({address}). Press Ctrl+] to detach."),
-            &format!("{name} ({address}) exited with code 0."),
+            &receipt,
             guest_lines,
         );
+        if short_output {
+            let rows = term.viewport_rows();
+            let last = guest_lines.last().expect("a final guest line");
+            let following = rows
+                .iter()
+                .rposition(|row| row.trim() == *last)
+                .and_then(|row| rows.get(row + 1));
+            assert_eq!(
+                following.map(|row| row.trim_end()),
+                Some(receipt.as_str()),
+                "{name}: expected the receipt immediately below {last:?}: {rows:?}"
+            );
+        }
         if alternate {
             assert!(!term.text_with_scrollback().contains(frame));
         }
