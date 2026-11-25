@@ -49,11 +49,8 @@ const MOUSE_TRACKING_MODES: [(u16, TermMode); 3] = [
     (1003, TermMode::MOUSE_MOTION),
 ];
 
-const MOUSE_OPTIONS: [(u16, TermMode); 3] = [
-    (1006, TermMode::SGR_MOUSE),
-    (1005, TermMode::UTF8_MOUSE),
-    (1007, TermMode::ALTERNATE_SCROLL),
-];
+const MOUSE_ENCODING_MODES: [(u16, TermMode); 2] =
+    [(1006, TermMode::SGR_MOUSE), (1005, TermMode::UTF8_MOUSE)];
 
 impl Screen {
     /// A redraw. With `keep_scrollback` the viewer's own scrollback stays; with
@@ -408,7 +405,15 @@ impl<'a> Redraw<'a> {
         // Some terminals clear all tracking when any of the three modes is reset.
         let mut tracking = MOUSE_TRACKING_MODES;
         tracking.sort_by_key(|&(_, mode)| terminal.has(mode));
-        for (number, mode) in DEC_MODES.into_iter().chain(tracking).chain(MOUSE_OPTIONS) {
+        // Emit the inactive encoding first so the requested encoding is set last.
+        let mut encodings = MOUSE_ENCODING_MODES;
+        encodings.sort_by_key(|&(_, mode)| terminal.has(mode));
+        let modes = DEC_MODES
+            .into_iter()
+            .chain(tracking)
+            .chain(encodings)
+            .chain([(1007, TermMode::ALTERNATE_SCROLL)]);
+        for (number, mode) in modes {
             let on_off = if terminal.has(mode) { 'h' } else { 'l' };
             write!(self.out, "\x1b[?{number}{on_off}").unwrap();
         }
