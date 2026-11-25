@@ -602,3 +602,78 @@ fn an_agents_colors_follow_the_last_editor_to_resize() {
         "the attach detached"
     );
 }
+
+/// An editor resize seeds the palette for the first queries after an editor or detached resume.
+#[test]
+fn an_editors_colors_survive_editor_and_detached_resumes() {
+    let home = TestHome::new("resume-editor-colors");
+    let transcript = home.folder().join("color-queries");
+    let keys = home.folder().join("keys");
+    std::fs::write(
+        &transcript,
+        b"\x1b]10;?\x07\x1b]11;?\x1b\\\x1b]12;?\x07\x1b[c",
+    )
+    .unwrap();
+    let session = "55000000-0000-4000-8000-000000000012";
+    let env = [
+        ("FAKECLI_SCREEN_FILE", transcript.to_str().unwrap()),
+        ("FAKECLI_KEYS", keys.to_str().unwrap()),
+        ("FAKECLI_SESSION", session),
+    ];
+    let worker = home.start_fake_with("painter", &env);
+    let mut client = editor(&home);
+    let (watch, _) = attach(&mut client, &worker.id, "editor");
+    let resized = client.call(
+        "attach.resize",
+        json!({
+            "watch": watch, "size": { "cols": 80, "rows": 24 },
+            "colors": { "foreground": "#eeeeee", "background": "#225588", "cursor": "#112233" },
+        }),
+    );
+    assert!(resized["result"].is_object(), "{resized}");
+    let wait_for_queries = |expected: &[u8]| {
+        assert!(
+            wait_until(LOADED_TIMEOUT, || std::fs::read(&keys)
+                .is_ok_and(|input| input.ends_with(b"\x1b[?6c"))),
+            "{}\n{:?}",
+            home.screen(&worker.id),
+            std::fs::read(&keys),
+        );
+        assert_eq!(std::fs::read(&keys).unwrap(), expected);
+    };
+    wait_for_queries(b"\x1b[?6c");
+    assert!(wait_until(
+        LOADED_TIMEOUT,
+        || agent(&home, &worker.id)["session"] == session
+    ));
+    let stop = || {
+        home.run_facade_ok(&["stop", &worker.id]);
+        std::fs::remove_file(&keys).unwrap();
+    };
+    stop();
+    let editor_env: std::collections::BTreeMap<_, _> = home
+        .isolating_env()
+        .into_iter()
+        .chain(env.map(|(key, value)| (key, value.to_string())))
+        .collect();
+    let resumed = client.call(
+        "agent.resume",
+        json!({
+            "target": { "kind": "selector", "selector": worker.id },
+            "env": editor_env,
+            "size": { "cols": 80, "rows": 24 },
+        }),
+    );
+    assert!(resumed["result"].is_object(), "{resumed}");
+    let expected = b"\x1b]10;rgb:eeee/eeee/eeee\x07\x1b]11;rgb:2222/5555/8888\x1b\\\x1b]12;rgb:1111/2222/3333\x07\x1b[?6c";
+    wait_for_queries(expected);
+    stop();
+    let detached = home
+        .command(&test_binaries().facade)
+        .args(["resume", "-d", &worker.id])
+        .envs(env)
+        .output()
+        .unwrap();
+    assert!(detached.status.success(), "{}", stderr(&detached));
+    wait_for_queries(expected);
+}

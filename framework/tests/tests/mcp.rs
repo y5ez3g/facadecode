@@ -1511,8 +1511,8 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
 }
 
 /// An Antigravity run's first turn has Facade's tools. Keys the person types in an attached
-/// terminal while the start readies them, through a panel that shows them ready two seconds late,
-/// wait until that is done, then go in.
+/// terminal while the start's panel is open, which shows them ready five seconds late, wait until
+/// that is done, then go in.
 #[test]
 fn keys_typed_while_an_antigravity_start_readies_its_tools_wait_for_it() {
     let home = TestHome::new("agyhold");
@@ -1528,7 +1528,7 @@ fn keys_typed_while_an_antigravity_start_readies_its_tools_wait_for_it() {
     command
         .env("PATH", &path)
         .env("FAKECLI_LOOK", "agy")
-        .env("FAKECLI_PANEL_DELAY_MS", "2000");
+        .env("FAKECLI_PANEL_DELAY_MS", "5000");
     let started = command
         .args(["start", "-d", "--name", "ada", "agy"])
         .stdin(Stdio::null())
@@ -1540,6 +1540,12 @@ fn keys_typed_while_an_antigravity_start_readies_its_tools_wait_for_it() {
             .args(["attach", "ada"]),
         80,
         24,
+    );
+    // A key before the panel opens would take over from the start instead.
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |text| text.contains("MCP Servers")),
+        "{}",
+        term.text()
     );
     term.send(b"hello\r");
     assert!(
@@ -1570,6 +1576,119 @@ fn keys_typed_while_an_antigravity_start_readies_its_tools_wait_for_it() {
         "{}",
         home.agent_from_watch("ada").unwrap()
     );
+}
+
+/// A slow host's split and whole OSC replies are still Shell's input while the composer starts.
+#[cfg(unix)]
+#[test]
+fn late_host_colors_do_not_take_over_antigravity_startup() {
+    let home = TestHome::new("agy-late-colors");
+    let programs = home.folder().join("programs");
+    install_program(&programs, "agy", &test_binaries().fakecli);
+    let path = format!("{}{PATH_SEPARATOR}{}", programs.display(), home.test_path());
+    let gate = home.folder().join("composer");
+    let keys = home.folder().join("keys");
+    let mut command = home.facade_in_an_empty_home();
+    command
+        .args(["start", "--name", "ada", "agy"])
+        .env("PATH", path)
+        .env("FAKECLI_LOOK", "agy")
+        .env("FAKECLI_COMPOSER_GATE", &gate)
+        .env("FAKECLI_KEYS", &keys);
+    let mut term = TestTerminal::spawn(&mut command, 100, 30);
+    assert!(term.wait_for_bytes(0, b"\x1b]4;15;?\x1b\\", LOADED_TIMEOUT));
+    term.send(b"\x1b]10;rgb:bad-value\x07\x1b]11;rgb:12/");
+    // The relay waits for a composer, and for any input that is really a human key.
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |text| text.contains("Starting up")),
+        "{}",
+        term.text()
+    );
+    term.send(b"34/56\x1b\\\x1b]12;rgb:ff/ff/ff\x07");
+    std::fs::write(gate, "").unwrap();
+    assert!(
+        wait_until(LOADED_TIMEOUT, || home
+            .agent_from_watch("ada")
+            .is_some_and(|agent| agent["tools_state"] == "available")),
+        "{}\n{:?}",
+        term.text(),
+        std::fs::read(&keys),
+    );
+    term.send(b"first-");
+    term.send(b"\x1b]4;3;rgb:2/3/4\x07second\r");
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .submitted_messages()
+        .iter()
+        .any(|line| line == "first-second")));
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(secs(10))
+            .is_some_and(|status| status.success())
+    );
+    let input = std::fs::read(keys).unwrap();
+    assert!(!input.contains(&b']'), "guest input: {input:?}");
+    assert!(input.ends_with(b"first-second\r"), "guest input: {input:?}");
+    let turns = home.submitted_messages();
+    assert_eq!(
+        turns.iter().filter(|line| *line == "first-second").count(),
+        1,
+        "{turns:?}"
+    );
+    assert!(
+        !turns
+            .iter()
+            .any(|line| line == "turn without Facade's server"),
+        "{turns:?}"
+    );
+}
+
+#[test]
+fn first_human_keys_reach_cursor_and_antigravity_while_the_composer_starts() {
+    for cli in ["agent", "agy"] {
+        let home = TestHome::new(&format!("first-key-{cli}"));
+        let programs = home.folder().join("programs");
+        install_program(&programs, cli, &test_binaries().fakecli);
+        let path = format!("{}{PATH_SEPARATOR}{}", programs.display(), home.test_path());
+        let gate = home.folder().join("composer");
+        let keys = home.folder().join("keys");
+        let mut command = home.facade_in_an_empty_home();
+        command
+            .args(["start", "--name", "ada", cli])
+            .env("PATH", path)
+            .env("FAKECLI_LOOK", cli)
+            .env("FAKECLI_COMPOSER_GATE", &gate)
+            .env("FAKECLI_MCP_DELAY_MS", "60000")
+            .env("FAKECLI_KEYS", &keys);
+        let mut term = TestTerminal::spawn(&mut command, 100, 30);
+        assert!(
+            term.wait_for(LOADED_TIMEOUT, |text| text.contains("Starting up")),
+            "{cli}: {}",
+            term.text()
+        );
+        assert_eq!(home.inspect_agent("ada")["input"]["state"], "unknown");
+        term.send(b"first-");
+        term.send(b"second\r");
+        assert!(
+            wait_until(secs(10), || home
+                .submitted_messages()
+                .iter()
+                .any(|line| line == "first-second")),
+            "{cli}: {:?}\n{}",
+            std::fs::read(&keys),
+            home.daemon_log(),
+        );
+        std::fs::write(gate, "").unwrap();
+        assert!(wait_until(
+            LOADED_TIMEOUT,
+            || home.inspect_agent("ada")["input"]["state"] == "usable"
+        ));
+        term.send(b"\x1d");
+        assert!(
+            term.wait_exit(secs(10))
+                .is_some_and(|status| status.success())
+        );
+        assert_eq!(std::fs::read(keys).unwrap(), b"first-second\r", "{cli}");
+    }
 }
 
 /// A start prompt to Antigravity goes once its start readied its tools, through a panel that shows

@@ -3149,7 +3149,7 @@ fn a_start_a_stop_and_a_type_under_way_finish_before_the_takeover_ends() {
     );
 }
 
-/// The test CLI under each of the six CLIs' names, through a v1 takeover: each keeps its process and
+/// The test CLI under each CLI's name, through a v1 takeover: each keeps its process and
 /// its tools reconnect. Nothing its run was given names a build's folder, so once the new build
 /// proves healthy, the hook lines its CLI runs through the launcher use the new build. Muse Code
 /// and Antigravity still receive the instructions stored with the run. Pi and OpenCode report their
@@ -3157,7 +3157,10 @@ fn a_start_a_stop_and_a_type_under_way_finish_before_the_takeover_ends() {
 #[test]
 fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_run_the_new_build()
 {
-    const CLIS: [&str; 6] = ["claude", "codex", "agy", "muse", "opencode", "pi"];
+    const CLIS: [&str; 11] = [
+        "claude", "codex", "agy", "muse", "opencode", "pi", "devin", "agent", "kiro-cli", "qoder",
+        "omp",
+    ];
     const SESSION: &str = "96da4482-2bae-4a45-b193-a5664c19826c";
     let home = TestHome::new("takeoversix");
     let old = &test_binaries().facade;
@@ -3190,6 +3193,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         // the test CLI runs the others' from the launcher their settings name, as each CLI does.
         match cli {
             "agy" => start.env("FAKECLI_LOOK", "agy"),
+            _ if Native::of(cli).is_some() => start.env("FAKECLI_LOOK", cli),
             _ => start.env("FAKECLI_MCP", bin.join(program_name("facade-mcp"))),
         };
         let name = format!("{cli}-run");
@@ -3268,6 +3272,9 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         if *cli == "agy" {
             folders.push(home.project.join(".agents/plugins/facade"));
         }
+        if *cli == "kiro-cli" {
+            folders.push(home.project.join(".kiro/agents"));
+        }
         let before_files = given.len();
         for folder in folders {
             given.extend(
@@ -3285,7 +3292,11 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
                 );
             }
         }
-        // The environment holds no hook line of the six CLIs'.
+        // The stand-ins for these run the hooks their own files hold: see providers.rs.
+        if Native::of(cli).is_some() {
+            continue;
+        }
+        // The environment holds no hook line of the other CLIs'.
         let mut lines: Vec<String> = given[..1]
             .iter()
             .chain(&given[given.len() - files..])

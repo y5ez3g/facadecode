@@ -45,7 +45,7 @@
                 "cli": {
                   "type": "string",
                   "minLength": 1,
-                  "description": "CLI name: claude, codex, agy, muse, opencode, pi, or another a machine's settings add; list_agents shows each machine's when known."
+                  "description": "CLI name: claude, codex, agy, muse, opencode, pi, devin, agent, kiro-cli, qoder, omp, copilot, or another a machine's settings add; list_agents shows each machine's when known."
                 },
                 "machine": {
                   "type": "string",
@@ -441,7 +441,7 @@
     "response": {
       "status": "failure",
       "reason": "not_found",
-      "message": "No CLI \"nope\" is configured at <test>/project; the CLIs there are claude, codex, agy, muse, opencode, pi, fake.\nAvailable CLIs: fake."
+      "message": "No CLI \"nope\" is configured at <test>/project; the CLIs there are claude, codex, agy, muse, opencode, pi, devin, agent, kiro-cli, qoder, omp, copilot, fake.\nAvailable CLIs: fake."
     }
   },
   "send_message": {

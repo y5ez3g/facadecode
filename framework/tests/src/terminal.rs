@@ -130,12 +130,28 @@ fn readable(reader: &File, ms: i32) -> Option<bool> {
 
 impl TestTerminal {
     pub fn spawn(command: &mut Command, cols: u16, rows: u16) -> TestTerminal {
+        Self::spawn_with_colors(
+            command,
+            cols,
+            rows,
+            facade_screen::TerminalColors::default(),
+        )
+    }
+
+    pub fn spawn_with_colors(
+        command: &mut Command,
+        cols: u16,
+        rows: u16,
+        colors: facade_screen::TerminalColors,
+    ) -> TestTerminal {
         #[cfg(unix)]
         let (child, master, mut reader) = start(command, cols, rows);
         #[cfg(windows)]
         let (console, child, master, reader) = windows::start(command, cols, rows);
         let writer = Arc::new(Mutex::new(master));
-        let screen = Arc::new(Mutex::new(facade_screen::Screen::new(cols, rows, 1000)));
+        let mut screen = facade_screen::Screen::new(cols, rows, 1000);
+        screen.set_colors(colors);
+        let screen = Arc::new(Mutex::new(screen));
         let output = Arc::new(Mutex::new(Vec::new()));
         let arrived = Arc::new(std::sync::Condvar::new());
         let arrived_in = arrived.clone();
@@ -258,6 +274,11 @@ impl TestTerminal {
     /// Visible cells before wrapped rows are joined into logical lines.
     pub fn view(&self) -> facade_screen::ScreenView {
         self.screen.lock().unwrap().view()
+    }
+
+    /// Whether the displayed program has taken the host's mouse events.
+    pub fn reports_mouse(&self) -> bool {
+        self.screen.lock().unwrap().reports_mouse()
     }
 
     /// Returns visible text with one line per screen row.
