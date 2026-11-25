@@ -4,6 +4,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import type { AgentRef } from '../base/frameworkProtocol';
+import type { WindowIdentity } from '../base/windowIdentity';
 import { codeOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
 import type { FrameworkPin, Pin } from '../core/ports';
@@ -18,7 +20,39 @@ export interface LegacyPinInput {
 	readonly unrecognized: readonly unknown[];
 }
 
-export type LegacyPinSnapshot = (owner: string) => LegacyPinInput | undefined;
+export interface LegacyPredecessor {
+	readonly owner: string;
+	readonly window?: WindowIdentity;
+}
+
+export interface LegacyResumeTarget {
+	readonly reference: AgentRef;
+	readonly startedAt: string;
+}
+
+export interface LegacyResumeAttempt extends LegacyResumeTarget {
+	readonly requestedAt: number;
+}
+
+export interface SharedPinRecovery {
+	begin(target?: LegacyResumeTarget): Promise<void>;
+	refused(): Promise<void>;
+}
+
+export type LegacyPinOutcome = { readonly kind: 'deferred' } | { readonly kind: 'unconfirmed' }
+	| { readonly kind: 'confirmed'; readonly reference: AgentRef };
+
+export interface LegacyPinMigration {
+	snapshot(): LegacyPinInput | undefined;
+	recover(pin: LegacySessionPin, previousAttempt: () => boolean,
+		perform: (reservation: SharedPinRecovery) => Promise<AgentRef>,
+		reconcile?: (attempt: LegacyResumeAttempt) => Promise<AgentRef | undefined>): Promise<LegacyPinOutcome>;
+}
+
+export interface LegacyMigrationSource {
+	readonly predecessor?: LegacyPredecessor;
+	readonly pins: (owner: string) => LegacyPinMigration;
+}
 
 export function isFrameworkPin(value: unknown): value is FrameworkPin {
 	return isPin(value) && value.agent !== undefined && value.machine_id !== undefined;

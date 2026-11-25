@@ -13,7 +13,8 @@ import { openFacadeSettings } from './framework/settings';
 import { DaemonError } from './framework/types';
 import { homeReloadText, UnusableHome, unusableHomeText, useFacadeHome } from './home';
 import { prepareFramework } from './implementation';
-import { cutoverPins } from './legacyCutover';
+import { legacyPinMigration } from './legacyCutover';
+import type { LegacyPredecessor } from './legacyPins';
 
 /**
  * Why this window's Facade could not start, in the person's words: shown as it is; `reloadHelps` where reloading tries again, and
@@ -84,12 +85,13 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	}
 	const root = facadeRoot();
 	const home = path.join(root, 'extension');
-	const pending = await prepareFramework(context, home);
+	let predecessor: LegacyPredecessor | undefined;
+	const pending = await prepareFramework(context, home, prior => { predecessor = prior; });
 	if (pending) { return async () => pending.dispose(); }
 
 	await vscode.commands.executeCommand('setContext', 'facade.implementation', 'framework');
 	try {
-		return await activateOrchestrator(context, { root, home, legacyPins: owner => cutoverPins(home, owner) });
+		return await activateOrchestrator(context, { root, home, legacy: { predecessor, pins: owner => legacyPinMigration(home, owner) } });
 	} catch (error) {
 		const cause = error instanceof Error ? error.cause : undefined;
 		if (cause instanceof DaemonError && (cause.reason === 'protocol_incompatible' || cause.reason === 'refused')) {

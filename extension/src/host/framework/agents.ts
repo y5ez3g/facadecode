@@ -10,10 +10,11 @@ import { isSameFolder } from '../../base/files';
 import { disposeAll } from '../../base/lifecycle';
 import type { AgentRef, DaemonOperations, DaemonTopics } from '../../base/frameworkProtocol';
 import type { LocationPort, LogPort, RunChange, RunError, RunFacts, RunId, FrameworkPin, Pin, PinLaunch } from '../../core/ports';
+import type { LegacyResumeTarget } from '../legacyPins';
 import { errorOf, unavailable } from './rpc';
 import { agentFacts, agentKey, failedPinFacts, referenceOf, referenceOfPin } from './agentFacts';
 import { restoreFrameworkPins } from './pinRestore';
-import { recoverLegacyPin } from './legacyRecovery';
+import { confirmsLegacyResume, matchesLegacyPin, recoverLegacyPin } from './legacyRecovery';
 import type { OrchestratorTerminals } from './terminals';
 import { DaemonError, type OrchestratorLink } from './types';
 import type { FrameworkWorkspace, WorkspacePinFailure } from './workspace';
@@ -27,6 +28,7 @@ type AgentsSnapshot = DaemonTopics['agents']['snapshot'];
 type AgentsChange = DaemonTopics['agents']['change'];
 type AgentMachineState = AgentsSnapshot['machines'][number];
 
+const LEGACY_RECHECK_MS = 4_000;
 const INITIAL_TERMINAL_SIZE = { cols: 80, rows: 24 };
 declare const FACADE_TEST_MODE: boolean;
 
@@ -67,6 +69,10 @@ export class OrchestratorAgents implements vscode.Disposable {
 	private pinPositions = new Map<string, number>();
 	private pinRecovery?: Promise<unknown>;
 	private recoveringHere = false;
+	private legacyRecovery?: Promise<void>;
+	private migratedInRound = false;
+	private legacyTimer?: ReturnType<typeof setTimeout>;
+	private readonly deferredLegacyPins = new Set<string>();
 	private pruning = false;
 	private disconnected = false;
 	private disposed = false;
@@ -218,13 +224,14 @@ export class OrchestratorAgents implements vscode.Disposable {
 	dispose(): void {
 		if (this.disposed) { return; }
 		this.disposed = true;
+		clearTimeout(this.legacyTimer);
 		this.first.resolve();
 		disposeAll(this.subscriptions, error => this.deps.log.event(messageOf(error)));
 	}
 
 	/** The host keeps its connection while this window commits the shared outcome it started. */
 	pendingPinRecovery(): Promise<unknown> | undefined {
-		return this.recoveringHere ? this.pinRecovery : undefined;
+		return this.recoveringHere ? this.pinRecovery : this.legacyRecovery;
 	}
 
 	private async show(record: AgentInfo): Promise<RunId> {
@@ -386,39 +393,104 @@ export class OrchestratorAgents implements vscode.Disposable {
 			},
 			isMissingSession: error => error instanceof DaemonError && error.reason === 'session_not_found'
 		});
-		for (const pin of this.deps.workspace.pendingLegacyPins()) {
+		this.migratedInRound = true;
+		await this.recoverLegacyPins(false);
+		return failed;
+	}
+
+	/** Retry just the deferred legacy Pins, outside the ordinary workspace restore round. */
+	recheckLegacyPins(): void {
+		if (this.disposed || this.legacyTimer || this.legacyRecovery || !this.deps.workspace.legacyPinMigration()) { return; }
+		const pending = this.deps.workspace.pendingLegacyPins();
+		if (!this.migratedInRound) {
+			for (const pin of pending) { this.deferredLegacyPins.add(pin.id); }
+			this.migratedInRound = true;
+		}
+		if (!pending.some(pin => this.deferredLegacyPins.has(pin.id))) { return; }
+		this.legacyTimer = setTimeout(() => {
+			this.legacyTimer = undefined;
+			const recovery = this.recoverLegacyPins(true);
+			this.legacyRecovery = recovery;
+			void recovery.catch(this.deps.notifyError).finally(() => {
+				this.legacyRecovery = undefined;
+				if (this.deferredLegacyPins.size) { this.recheckLegacyPins(); }
+			});
+		}, LEGACY_RECHECK_MS);
+		this.legacyTimer.unref?.();
+	}
+
+	private async recoverLegacyPins(background: boolean): Promise<void> {
+		const { workspace, link } = this.deps;
+		const migration = workspace.legacyPinMigration();
+		if (!migration) { return; }
+		for (const pin of workspace.pendingLegacyPins()) {
 			if (this.disposed) { break; }
+			if (background && !this.deferredLegacyPins.has(pin.id)) { continue; }
+			let reconcileAttempt = false;
 			try {
 				let launchedFromSession = false;
-				const record = await recoverLegacyPin(pin, {
-					link: this.deps.link,
-					inspect: reference => this.inspect(reference),
-					resume: async (machine, target, folder) => {
-						const result = await this.requestResume(machine, target, folder);
-						launchedFromSession = target.kind === 'session' && result.from_saved_session === true;
-						return result.agent;
-					},
-					restart: () => this.startPinned(pin, this.deps.link.machineId, undefined,
-						() => this.deps.workspace.beginLegacyPinResume(pin),
-						() => this.deps.workspace.clearLegacyPinAttempt(pin)),
-					begin: () => !this.disposed && this.deps.workspace.beginLegacyPinResume(pin),
-					confirmedNoStart: () => this.deps.workspace.clearLegacyPinAttempt(pin),
+				let confirmed: AgentInfo | undefined;
+				const outcome = await migration.recover(pin, () => workspace.legacyPinAttempted(pin), async reservation => {
+					const begin = async (target?: LegacyResumeTarget) => {
+						if (this.disposed || !workspace.pendingLegacyPins().some(each => each.id === pin.id)) { return false; }
+						await reservation.begin(target);
+						if (!this.disposed && workspace.beginLegacyPinResume(pin)) {
+							reconcileAttempt = target !== undefined;
+							return true;
+						}
+						await reservation.refused();
+						return false;
+					};
+					const refused = async () => {
+						reconcileAttempt = false;
+						workspace.clearLegacyPinAttempt(pin);
+						await reservation.refused();
+					};
+					confirmed = await recoverLegacyPin(pin, {
+						link,
+						inspect: target => this.inspect(target),
+						resume: async (machine, target, folder) => {
+							const result = await this.requestResume(machine, target, folder);
+							launchedFromSession = target.kind === 'session' && result.from_saved_session === true;
+							return result.agent;
+						},
+						restart: () => this.startPinned(pin, link.machineId, undefined, () => begin(), refused),
+						begin,
+						confirmedNoStart: refused,
+					});
+					return confirmed.reference;
+				}, async attempt => {
+					const observed = await this.inspect(attempt.reference).catch(() => undefined);
+					if (!observed || !confirmsLegacyResume(pin, link.machineId, attempt, observed)) { return; }
+					confirmed = observed;
+					return observed.reference;
 				});
+				if (outcome.kind === 'deferred') {
+					this.deferredLegacyPins.add(pin.id);
+					continue;
+				}
+				this.deferredLegacyPins.delete(pin.id);
+				if (outcome.kind === 'unconfirmed' || this.disposed) { continue; }
+				const { reference } = outcome;
+				const record = confirmed ?? await this.inspect(reference);
+				if (agentKey(record.reference) !== agentKey(reference) || !matchesLegacyPin(pin, link.machineId, record)) { continue; }
 				this.remember(record);
 				const recovered = this.pinFor(record, pin);
-				this.deps.workspace.importLegacyPin(pin, recovered);
+				if (!workspace.importLegacyPin(pin, recovered)) { continue; }
 				if (launchedFromSession) { await this.restoreLegacyPinName(recovered, pin.name); }
+				if (background && this.currentPin(recovered) && record.process === 'running') { await this.attach(record, true); }
 			} catch (error) {
+				if (reconcileAttempt) { this.deferredLegacyPins.add(pin.id); }
+				else { this.deferredLegacyPins.delete(pin.id); }
 				if (!this.disposed) {
 					const reason = vscode.l10n.t('Could not recover the legacy Pin for {0}: {1}', pin.name || pin.conversation.cli, messageOf(error));
-					if (this.deps.workspace.reportLegacyPinFailure(pin, reason)) {
+					if (workspace.reportLegacyPinFailure(pin, reason)) {
 						this.deps.log.event(reason);
 						this.deps.notifyError(new Error(reason));
 					}
 				}
 			}
 		}
-		return failed;
 	}
 
 	private async restoreLegacyPinName(recovered: FrameworkPin, savedName: string): Promise<void> {
@@ -452,9 +524,9 @@ export class OrchestratorAgents implements vscode.Disposable {
 	}
 
 	private async startPinned(pin: Pin, machineId: string, launch: PinLaunch | undefined,
-		begin: (requestId: string) => boolean, clear: (requestId: string) => void): Promise<AgentInfo> {
+		begin: (requestId: string) => boolean | Promise<boolean>, clear: (requestId: string) => void | Promise<void>): Promise<AgentInfo> {
 		const requestId = `start-${randomBytes(16).toString('hex')}`;
-		if (this.disposed || !begin(requestId)) { throw unconfirmedPinStart(pin); }
+		if (this.disposed || !await begin(requestId)) { throw unconfirmedPinStart(pin); }
 		const local = machineId === this.deps.link.machineId;
 		const args = launch?.args;
 		try {
@@ -473,7 +545,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 		} catch (error) {
 			// Definite argument or settings refusals precede launch. Other outcomes can have started an agent.
 			if (error instanceof DaemonError && ['invalid_argument', 'invalid_settings', 'configuration_invalid'].includes(error.reason)) {
-				clear(requestId);
+				await clear(requestId);
 			}
 			throw error;
 		}

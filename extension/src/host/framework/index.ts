@@ -14,7 +14,7 @@ import { registerOrchestratorUi, type OrchestratorUiDeps } from '../../ui/comman
 import { registerWorktreeCommands } from '../../ui/commands/worktree';
 import { WindowColours } from '../execution/terminalColours';
 import { WindowHuman } from '../human';
-import type { LegacyPinSnapshot } from '../legacyPins';
+import type { LegacyMigrationSource } from '../legacyPins';
 import { createWorktreeService } from '../locations/index';
 import { facadeInTerminals, startEnvironment } from './environment';
 import { startDaemon } from './rpc';
@@ -36,7 +36,7 @@ type MachineInfo = DaemonTopics['machines']['snapshot'][number];
 interface OrchestratorDeps {
 	readonly root: string;
 	readonly home: string;
-	readonly legacyPins?: LegacyPinSnapshot;
+	readonly legacy?: LegacyMigrationSource;
 }
 
 class HostSettingsError extends Error {}
@@ -103,7 +103,7 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 		const workspace = openFrameworkWorkspace(context, {
 			home: deps.home,
 			log,
-			legacyPins: deps.legacyPins
+			legacy: deps.legacy
 		});
 		disposables.push(workspace);
 		step = vscode.l10n.t('set up the terminals');
@@ -187,7 +187,7 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 			// A pending legacy roster can already have local Pins available for recovery.
 			if (imported || pins.length || workspace.pendingLegacyPins().length) { await agents.restorePins(); }
 			await terminals.pinnedSequenceOver(knownRuns);
-		}).catch(notifyError);
+		}).catch(notifyError).finally(() => agents.recheckLegacyPins());
 		const settings = frameworkSettings({ status: () => link.call('daemon.status', {}), log });
 		disposables.push(...registerWorktreeCommands({
 			locations, worktrees: createWorktreeService(locations, log, deps.home), notifyError: reportError, log,

@@ -2,38 +2,62 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { withLongFileLock } from '../base/lock';
-import { isWindowIdentity, WINDOW_IDENTITY_COMMAND } from '../base/windowIdentity';
+import { isJsonObject } from '../base/json';
+import { isOwnerClaim } from '../base/ownership';
+import { isWindowIdentity, WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_HANDOFF_COMMAND } from '../base/windowIdentity';
 import { workspaceRecord } from '../record/workspace';
 import { COMMANDS, PANEL_VIEW } from '../ui/catalog';
 import { FACADE_PROGRAM } from './framework/daemonTypes';
-import { approveLegacyCutover, checkLegacyCutover, LegacyCustody, type CutoverPlan, type CutoverState } from './legacyCutover';
+import { approveLegacyCutover, checkLegacyCutover, cutoverPlanIdentity, type CutoverState, type LegacyCutoverScope } from './legacyCutover';
+import { isLegacyWorkspaceKey, type LegacyPredecessor } from './legacyPins';
 
 const CHECK_MS = 2_000;
 
-interface CustodyLease {
-	readonly owner: string;
-	readonly controller: AbortController;
-	custody?: LegacyCustody;
-}
-
-function planIdentity(plan: CutoverPlan): string {
-	return JSON.stringify(plan.runs.map(run => [run.socket, run.owner, run.run]));
-}
-
-async function legacyOwner(context: vscode.ExtensionContext, home: string): Promise<string | undefined> {
-	const folders = vscode.workspace.workspaceFolders ?? [];
-	const uri = (vscode.workspace.workspaceFile ?? folders[0]?.uri)?.toString();
-	if (!uri) { return undefined; }
+async function resolvePredecessor(home: string): Promise<
+	{ readonly predecessor: LegacyPredecessor; readonly scope: LegacyCutoverScope } | undefined
+> {
+	const folders = (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.toString());
 	const session = vscode.env.sessionId;
-	const identity: unknown = await Promise.resolve(vscode.commands.executeCommand(WINDOW_IDENTITY_COMMAND, session)).catch(() => undefined);
-	const record = workspaceRecord(uri, home, context.workspaceState.get('facade.workspaceKey'),
-		isWindowIdentity(identity, session) ? { token: identity.token, folders: folders.map(folder => folder.uri.toString()) } : undefined);
-	return record.key === record.binding.key || record.key === record.handedOver ? record.key : undefined;
+	const uri = (vscode.workspace.workspaceFile ?? vscode.workspace.workspaceFolders?.[0]?.uri)?.toString() ?? `untitled:${session}`;
+	const identify = async (command: string, ...args: string[]): Promise<unknown> => {
+		try { return await vscode.commands.executeCommand(command, session, ...args); }
+		catch { return undefined; }
+	};
+	const reply = await identify(WINDOW_IDENTITY_COMMAND);
+	const window = isWindowIdentity(reply, session) ? reply : undefined;
+	const record = workspaceRecord(uri, home, undefined,
+		window ? { token: window.token, folders } : undefined);
+	const owner = record.handedOver ?? record.binding.key ?? (window && !folders.length
+		? folderlessOwner(home, window.token, uri) : undefined);
+	if (!owner) { return undefined; }
+	const handoff = window && window.remote === undefined && vscode.env.remoteName === undefined
+		? await identify(WINDOW_LEGACY_HANDOFF_COMMAND, owner) : undefined;
+	const retired = isJsonObject(handoff) && handoff.version === 1 && handoff.session === session && handoff.token === window?.token
+		&& isOwnerClaim(handoff.claim) && handoff.claim.owner === owner
+		&& Array.isArray(handoff.runs) && handoff.runs.every(run => typeof run === 'string' && /^run-[0-9a-f]{32}$/.test(run))
+		? { claim: handoff.claim, runs: handoff.runs } : undefined;
+	return { predecessor: { owner, window }, scope: { owner, retired } };
+}
+
+function folderlessOwner(home: string, token: string, uri: string): string | undefined {
+	const key = createHash('sha256').update(token).digest('hex').slice(0, 16);
+	try {
+		const prior: unknown = JSON.parse(fs.readFileSync(path.join(home, 'windows', `${key}.json`), 'utf8'));
+		const normalized = uri.replace(/\/+$/, '');
+		const expected = process.platform === 'linux' ? normalized : normalized.toLowerCase();
+		if (isJsonObject(prior) && isLegacyWorkspaceKey(prior.key) && Array.isArray(prior.folders) && !prior.folders.length
+			&& typeof prior.uri === 'string' && (prior.uri === expected
+				|| prior.uri.startsWith('untitled:') && expected.startsWith('untitled:'))) {
+			return prior.key;
+		}
+	} catch { /* No verified native predecessor. */ }
+	return undefined;
 }
 
 function status(state: CutoverState): string {
@@ -51,14 +75,17 @@ function status(state: CutoverState): string {
 	return [waiting, ...state.pendingExits ?? []].join(' ');
 }
 
-/** ARCHITECTURE-1.4. A pending cutover owns only its notice and observation. Framework starts after a fresh exit check. */
-export async function prepareFramework(context: vscode.ExtensionContext, home: string): Promise<vscode.Disposable | undefined> {
+/** ARCHITECTURE-1.4. A pending cutover owns the consent notice for this workspace. */
+export async function prepareFramework(context: vscode.ExtensionContext, home: string,
+	resolved?: (prior: LegacyPredecessor | undefined) => void): Promise<vscode.Disposable | undefined> {
 	if (!fs.existsSync(path.join(context.extensionPath, FACADE_PROGRAM))) {
 		throw new Error(vscode.l10n.t('The Facade Code Framework program is missing from this extension.'));
 	}
 
-	const local = vscode.env.remoteName === undefined;
-	const initial = await checkLegacyCutover(home).catch((error): CutoverState => ({
+	const prior = await resolvePredecessor(home);
+	resolved?.(prior?.predecessor);
+	const scope = prior?.scope;
+	const initial = await checkLegacyCutover(home, scope).catch((error): CutoverState => ({
 		ready: false, unavailable: [messageOf(error)], unconfirmed: 0, waitingForOwner: 0
 	}));
 	if (initial.ready) { return undefined; }
@@ -72,7 +99,6 @@ export async function prepareFramework(context: vscode.ExtensionContext, home: s
 	let current = initial;
 	let description = status(current);
 	let cancelNotice: (() => void) | undefined;
-	let lease: CustodyLease | undefined;
 	const panel = vscode.window.registerWebviewViewProvider(PANEL_VIEW, {
 		resolveWebviewView: opened => {
 			view = opened;
@@ -88,7 +114,6 @@ export async function prepareFramework(context: vscode.ExtensionContext, home: s
 		disposed = true;
 		clearTimeout(timer);
 		cancelNotice?.();
-		lease?.controller.abort();
 	} });
 	context.subscriptions.push(pending);
 
@@ -101,15 +126,17 @@ export async function prepareFramework(context: vscode.ExtensionContext, home: s
 
 	function offer(): void {
 		const plan = current.plan;
-		if (prompting || !plan || disposed) { return; }
-		if (offered === planIdentity(plan)) { return; }
+		if (prompting || !plan || !scope || disposed) { return; }
+		if (offered === cutoverPlanIdentity(plan)) { return; }
 		prompting = true;
-		// Only one window presents consent for this execution home while the notice is open.
-		void withLongFileLock(path.join(home, 'legacy-cutover-notice'), async () => {
+		// Only the windows that share this verified owner serialize their notices.
+		void withLongFileLock(path.join(home, 'claims', `legacy-cutover-notice-${scope.owner}`), async () => {
 			if (disposed || !current.plan) { return; }
-			const latest = await checkLegacyCutover(home);
+			const visible = await resolvePredecessor(home);
+			if (visible?.scope.owner !== scope.owner) { return; }
+			const latest = await checkLegacyCutover(home, visible.scope);
 			if (!latest.plan || disposed) { return; }
-			offered = planIdentity(latest.plan);
+			offered = cutoverPlanIdentity(latest.plan);
 			const pins = Object.values(latest.plan.snapshots).reduce((sum, each) => sum + each.pins.length + each.unrecognized.length, 0);
 			const action = vscode.l10n.t('Switch and Resume Pins');
 			const cancel = new Promise<undefined>(resolve => { cancelNotice = () => resolve(undefined); });
@@ -119,7 +146,8 @@ export async function prepareFramework(context: vscode.ExtensionContext, home: s
 			), action), cancel]);
 			cancelNotice = undefined;
 			if (chosen !== action || disposed) { return; }
-			if (!await approveLegacyCutover(home, latest.plan)) {
+			const verified = await resolvePredecessor(home);
+			if (verified?.scope.owner !== scope.owner || !await approveLegacyCutover(home, verified.scope, latest.plan)) {
 				offered = undefined;
 			}
 		}, 0).catch(error => {
@@ -131,40 +159,15 @@ export async function prepareFramework(context: vscode.ExtensionContext, home: s
 		}).finally(() => { prompting = false; });
 	}
 
-	function keepCustody(owner: string | undefined): LegacyCustody | undefined {
-		if (!owner || lease?.owner !== owner) {
-			lease?.controller.abort();
-			lease = undefined;
-		}
-		if (!owner || lease) { return lease?.custody; }
-		const attempt: CustodyLease = { owner, controller: new AbortController() };
-		lease = attempt;
-		void withLongFileLock(path.join(home, 'claims', `legacy-cutover-${owner}`), async () => {
-			const { signal } = attempt.controller;
-			if (signal.aborted) { return; }
-			attempt.custody = new LegacyCustody(home, owner, local);
-			await new Promise<void>(resolve => signal.addEventListener('abort', () => {
-				attempt.custody?.dispose();
-				resolve();
-			}, { once: true }));
-		}, 0).catch(() => {
-			// Another activation of the workspace holds temporary custody or the lock is presently unavailable.
-		}).finally(() => {
-			if (lease === attempt) { lease = undefined; }
-		});
-		return attempt.custody;
-	}
-
 	async function poll(): Promise<void> {
 		if (disposed || checking) { return; }
 		checking = true;
 		try {
-			const owner = await legacyOwner(context, home);
+			const verified = await resolvePredecessor(home);
 			if (disposed) { return; }
-			current = await checkLegacyCutover(home, keepCustody(owner));
+			current = await checkLegacyCutover(home, verified?.scope);
 			if (disposed) { return; }
 			if (current.ready) {
-				lease?.controller.abort();
 				await vscode.commands.executeCommand('workbench.action.reloadWindow');
 				return;
 			}
