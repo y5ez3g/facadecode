@@ -49,8 +49,8 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand(WINDOW_LEGACY_HANDOFF_COMMAND, (session: unknown, owner: unknown) => {
 			if (!here(session) || vscode.env.remoteName !== undefined || typeof owner !== 'string') { return undefined; }
 			const token = handover();
-			const retired = previousInstance && terminals.retiredOwner(owner);
-			return retired ? { version: 1, token, session: vscode.env.sessionId, claim: retired.claim, runs: retired.runs.map(run => run.run) } : undefined;
+			const claim = previousInstance && terminals.retiredClaim(owner);
+			return claim ? { version: 1, token, session: vscode.env.sessionId, claim } : undefined;
 		}),
 		vscode.commands.registerCommand(WINDOW_IDENTITY_COMMAND, (session: unknown): WindowIdentity | DamagedWindowIdentity | UnreadableWindowIdentity | undefined => {
 			if (!here(session)) { return undefined; }

@@ -39,9 +39,7 @@ async function resolvePredecessor(home: string): Promise<
 	const handoff = window && window.remote === undefined && vscode.env.remoteName === undefined
 		? await identify(WINDOW_LEGACY_HANDOFF_COMMAND, owner) : undefined;
 	const retired = isJsonObject(handoff) && handoff.version === 1 && handoff.session === session && handoff.token === window?.token
-		&& isOwnerClaim(handoff.claim) && handoff.claim.owner === owner
-		&& Array.isArray(handoff.runs) && handoff.runs.every(run => typeof run === 'string' && /^run-[0-9a-f]{32}$/.test(run))
-		? { claim: handoff.claim, runs: handoff.runs } : undefined;
+		&& isOwnerClaim(handoff.claim) && handoff.claim.owner === owner ? handoff.claim : undefined;
 	return { predecessor: { owner, window }, scope: { owner, retired } };
 }
 

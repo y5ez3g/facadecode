@@ -56,9 +56,9 @@ export class WindowTerminals implements vscode.Disposable {
 		];
 	}
 
-	/** Read the exact owner and runs retired by this native window's graceful predecessor. */
-	retiredOwner(owner: string): RetiredTerminals | undefined {
-		return this.retired.get(owner);
+	/** Read the ownership claim retired by this native window's graceful predecessor. */
+	retiredClaim(owner: string): OwnerClaim | undefined {
+		return this.retired.get(owner)?.claim;
 	}
 
 	/** A same-host caller may supply its real reference; a cross-host caller sends only the plain request. */

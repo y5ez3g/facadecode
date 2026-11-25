@@ -163,19 +163,19 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		}
 	});
 
-	test('the native handoff returns only the retired owner for the current local session (ARCHITECTURE-1.4)', async () => {
+	test('the native handoff returns the local retired claim after the old terminal views close (ARCHITECTURE-1.4)', async () => {
 		const token = '03fded10-d96f-4f93-a0e9-ed8553af5606';
 		const claim = { owner: '0123456789abcdef', token: 'old-claim', generation: 1 };
 		fs.writeFileSync(path.join(temp, 'handover.json'), JSON.stringify({ version: 1, token }));
 		fs.writeFileSync(path.join(temp, 'terminals.json'), JSON.stringify({
-			version: 1, epoch: token, retired: [{ claim, runs: [{ run: 'original-run', title: 'Ada' }] }]
+			version: 1, epoch: token, retired: [{ claim, runs: [] }]
 		}));
 		const window = activateWindowComponent(temp);
 		try {
 			assert.strictEqual(await window.command(WINDOW_LEGACY_HANDOFF_COMMAND, 'older-session', claim.owner), undefined);
 			assert.strictEqual(await window.command(WINDOW_LEGACY_HANDOFF_COMMAND, session, 'different-owner'), undefined);
 			assert.deepStrictEqual(await window.command(WINDOW_LEGACY_HANDOFF_COMMAND, session, claim.owner), {
-				version: 1, token, session, claim, runs: ['original-run']
+				version: 1, token, session, claim
 			});
 		} finally {
 			window.dispose();

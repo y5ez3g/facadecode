@@ -106,7 +106,7 @@ suite('Scoped legacy cutover', () => {
 		try {
 			const saved = pin('pin-a', 'scope-a');
 			f.savePins(A, [saved, { opaque: true }]);
-			const scope = { owner: A, retired: { claim: CLAIM, runs: [RUN_A] } };
+			const scope = { owner: A, retired: CLAIM };
 			f.rows[0].attached = true;
 			const offered = (await checkLegacyCutover(f.home, scope)).plan;
 			assert.ok(offered);
@@ -137,7 +137,7 @@ suite('Scoped legacy cutover', () => {
 			fs.writeFileSync(path.join(f.registry, 'unavailable.json'), JSON.stringify({
 				protocol: 16, build: 'aaaa', pid: process.pid, socket: path.join(f.home, 'unavailable.sock'),
 			}));
-			const scope = { owner: A, retired: { claim: CLAIM, runs: [RUN_A] } };
+			const scope = { owner: A, retired: CLAIM };
 			const offered = (await checkLegacyCutover(f.home, scope)).plan;
 			assert.ok(offered);
 			assert.ok(await approveLegacyCutover(f.home, scope, offered));
@@ -186,7 +186,7 @@ suite('Scoped legacy cutover', () => {
 		if (process.platform === 'win32') { this.skip(); }
 		const f = await fixture();
 		try {
-			const scope = { owner: A, retired: { claim: CLAIM, runs: [RUN_A] } };
+			const scope = { owner: A, retired: CLAIM };
 			const offered = (await checkLegacyCutover(f.home, scope)).plan;
 			assert.ok(offered);
 			assert.ok(await approveLegacyCutover(f.home, scope, offered));
@@ -241,7 +241,7 @@ suite('Scoped legacy cutover', () => {
 			f.savePins(B, [pinB]);
 			const a = legacyPinMigration(f.home, A);
 			const b = legacyPinMigration(f.home, B);
-			const scope = { owner: A, retired: { claim: CLAIM, runs: [RUN_A] } };
+			const scope = { owner: A, retired: CLAIM };
 			const offered = (await checkLegacyCutover(f.home, scope)).plan;
 			assert.ok(offered);
 			let started = 0;

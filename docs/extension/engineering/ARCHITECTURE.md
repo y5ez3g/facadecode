@@ -95,6 +95,13 @@ fenced. A window waiting for its authorized stops reloads when they are confirme
 wait for, it activates Framework immediately. Framework activation failure reports the error and offers a reload.
 Group 6 owns Framework connection and workspace recovery.
 
+For a local successor, the Window Component supplies its predecessor's retired workspace claim. The released
+component records the owner generation even when it has already disposed of all terminal views. The migration
+adapter obtains process identities from the verified supervisor. It reuses the retired claim only while its
+generation and token still match the persisted owner and no live row of that owner on the supervisor is attached
+elsewhere. Claim validation and dispatch share the generation lock. Each stop names an approved, unambiguous run
+and its confirmed process identity.
+
 ## 2 Ownership and recovery
 
 ### 2.1 Routes without shared-remote-home assumptions

@@ -50,7 +50,7 @@ interface LegacyRunIdentity {
 
 export interface LegacyCutoverScope {
 	readonly owner: string;
-	readonly retired?: { readonly claim: OwnerClaim; readonly runs: readonly string[] };
+	readonly retired?: OwnerClaim;
 }
 
 interface ObservedRun {
@@ -443,9 +443,8 @@ export async function checkLegacyCutover(home: string, scope?: LegacyCutoverScop
 					seen.add(run);
 				}
 			}
-			const retired = scope.retired && { ...scope.retired, runs: scope.retired.runs.filter(run => !duplicate.has(run)) };
 			await Promise.all(fresh.listings.map(listing =>
-				stopApproved(home, { ...scope, retired }, listing, () => checked.runs, (run, stop) => {
+				stopApproved(home, scope, listing, duplicate, () => checked.runs, (run, stop) => {
 					const next = { ...checked, runs: checked.runs.map(each =>
 						runKey(each) === runKey(run) ? { ...each, nativeStop: true as const, stop } : each) };
 					save(home, checked, next);
@@ -461,36 +460,37 @@ export async function checkLegacyCutover(home: string, scope?: LegacyCutoverScop
 	});
 }
 
-async function stopApproved(home: string, scope: LegacyCutoverScope, listing: Listing,
+async function stopApproved(home: string, scope: LegacyCutoverScope, listing: Listing, duplicate: ReadonlySet<string>,
 	progress: () => readonly ObservedRun[], advance: (run: ObservedRun, stop: 'requested' | 'confirmed') => void): Promise<void> {
 	const { client, endpoint } = listing;
 	const retired = scope.retired;
-	if (!client || !retired || endpoint.protocol !== PTYD_PROTOCOL || retired.claim.owner !== scope.owner
-		|| retired.claim.local === false || !isCurrentOwner(retired.claim, home)) { return; }
-	const retiredIds = new Set(retired.runs);
+	if (!client || !retired || endpoint.protocol !== PTYD_PROTOCOL || retired.owner !== scope.owner
+		|| retired.local === false || !isCurrentOwner(retired, home)) { return; }
 	const retiredOwnerRows = (rows: readonly RunInfo[]) => rows.filter(row => row.owner === scope.owner && !row.exited);
-	const covered = (rows: readonly RunInfo[]) => rows.every(row => retiredIds.has(row.run) && row.meta.environment === 'local' && !row.claimedElsewhere);
+	const unclaimed = (rows: readonly RunInfo[]) => rows.every(row => row.meta.environment === 'local' && !row.claimedElsewhere);
 	const targets = (rows: readonly RunInfo[]) => progress().filter(run => run.owner === scope.owner && run.incarnation
 		&& run.approved && !run.stop && run.pid > 0 && run.processStartedAt !== undefined
+		&& !duplicate.has(run.run) && /^run-[0-9a-f]{32}$/u.test(run.run)
 		&& rows.some(row => sameRun(run, observed(listing, row))));
 	const rows = retiredOwnerRows(listing.runs);
-	if (!covered(rows) || !targets(rows).length) { return; }
+	if (!unclaimed(rows) || !targets(rows).length) { return; }
 	const requests: Promise<void>[] = [];
 	let lost = false;
 	client.onDidLoseOwner(owner => { if (owner === scope.owner) { lost = true; } });
 	try {
 		const beforeClaim = retiredOwnerRows(await list(client));
-		if (!covered(beforeClaim) || !targets(beforeClaim).length || !isCurrentOwner(retired.claim, home)) { return; }
-		// The native local retirement carries the old claim and exact registered run IDs. Never allocate a successor claim.
+		if (!unclaimed(beforeClaim) || !targets(beforeClaim).length) { return; }
+		// The released host can close every terminal view before recording retirement. Its claim still
+		// identifies the local owner, while the supervisor supplies the exact run and process identities.
 		let claim: Promise<void> | undefined;
-		writeAsOwner(retired.claim, home, () => { claim = client.request('claim', { ...retired.claim, local: true }); });
+		writeAsOwner(retired, home, () => { claim = client.request('claim', { ...retired, local: true }); });
 		if (!claim) { return; }
 		await claim;
 		const beforeStop = retiredOwnerRows(await list(client));
-		if (!covered(beforeStop)) { return; }
+		if (!unclaimed(beforeStop)) { return; }
 		for (const run of targets(beforeStop)) {
-			if (lost || client.isClosed || !isCurrentOwner(retired.claim, home)) { break; }
-			const sent = writeAsOwner(retired.claim, home, () => {
+			if (lost || client.isClosed) { break; }
+			const sent = writeAsOwner(retired, home, () => {
 				advance(run, 'requested');
 				const answer = client.request('terminate', { run: run.run, graceMs: TERMINATE_GRACE_MS });
 				requests.push(answer.then(result => {
