@@ -65,6 +65,7 @@ interface ObservedRun {
 	readonly startedAt?: number;
 	readonly identity?: LegacyRunIdentity;
 	readonly stop?: 'requested' | 'confirmed';
+	readonly nativeStop?: true;
 }
 
 interface CutoverRecord {
@@ -138,7 +139,8 @@ function isObservedRun(value: unknown): value is ObservedRun {
 		&& (value.incarnation === undefined || nonempty(value.incarnation))
 		&& (value.startedAt === undefined || typeof value.startedAt === 'number' && Number.isFinite(value.startedAt))
 		&& (value.identity === undefined || isLegacyRunIdentity(value.identity))
-		&& typeof value.approved === 'boolean' && (value.stop === undefined || value.stop === 'requested' || value.stop === 'confirmed');
+		&& typeof value.approved === 'boolean' && (value.stop === undefined || value.stop === 'requested' || value.stop === 'confirmed')
+		&& (value.nativeStop === undefined || value.nativeStop === true && value.approved && value.stop !== undefined);
 }
 
 function isRecoveryRecord(value: unknown): value is RecoveryRecord {
@@ -408,6 +410,18 @@ export async function approveLegacyCutover(home: string, scope: LegacyCutoverSco
 
 const READY: CutoverState = { ready: true, unavailable: [], waitingForOwner: 0, unconfirmed: 0 };
 
+function stopStatus(record: CutoverRecord, fresh: Scan, owner: string): CutoverState {
+	// Our dispatched stops still gate this workspace after a reload loses the native retirement reply.
+	const pending = record.runs.filter(run => run.owner === owner && run.nativeStop && run.stop === 'requested');
+	if (!pending.length) { return READY; }
+	const live = activeScope(fresh, owner);
+	const unavailable = fresh.listings.flatMap(listing => listing.unavailable
+		&& pending.some(run => run.socket === listing.endpoint.socket) ? [listing.unavailable] : []);
+	const pendingExits = pending.filter(run => !live.some(row => sameRun(run, row)))
+		.map(run => `${run.run} (${run.socket}, PID ${run.pid})`);
+	return { ready: false, unavailable, unconfirmed: pending.length, pendingExits, waitingForOwner: 0 };
+}
+
 /** ARCHITECTURE-1.4. Inventory elsewhere can qualify a Pin, but cannot keep this window out of Framework. */
 export async function checkLegacyCutover(home: string, scope?: LegacyCutoverScope): Promise<CutoverState> {
 	if (!scope) { return READY; }
@@ -433,11 +447,11 @@ export async function checkLegacyCutover(home: string, scope?: LegacyCutoverScop
 			await Promise.all(fresh.listings.map(listing =>
 				stopApproved(home, { ...scope, retired }, listing, () => checked.runs, (run, stop) => {
 					const next = { ...checked, runs: checked.runs.map(each =>
-						runKey(each) === runKey(run) ? { ...each, stop } : each) };
+						runKey(each) === runKey(run) ? { ...each, nativeStop: true as const, stop } : each) };
 					save(home, checked, next);
 					checked = next;
 				})));
-			return READY;
+			return stopStatus(checked, fresh, scope.owner);
 		} finally {
 			close(fresh);
 		}

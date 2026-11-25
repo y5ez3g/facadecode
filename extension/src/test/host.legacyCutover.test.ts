@@ -129,7 +129,7 @@ suite('Scoped legacy cutover', () => {
 		}
 	});
 
-	test('fences a requested stop across repeated checks and preserves unrelated availability (ARCHITECTURE-1.4)', async function () {
+	test('keeps a dispatched stop pending across reload and leaves independent workspaces ready (ARCHITECTURE-1.4)', async function () {
 		if (process.platform === 'win32') { this.skip(); }
 		const f = await fixture();
 		try {
@@ -141,13 +141,42 @@ suite('Scoped legacy cutover', () => {
 			const offered = (await checkLegacyCutover(f.home, scope)).plan;
 			assert.ok(offered);
 			assert.ok(await approveLegacyCutover(f.home, scope, offered));
-			assert.ok((await checkLegacyCutover(f.home, scope)).ready);
-			assert.ok((await checkLegacyCutover(f.home, scope)).ready);
+			const waiting = await checkLegacyCutover(f.home, scope);
+			assert.strictEqual(waiting.ready, false);
+			assert.strictEqual(waiting.unconfirmed, 1);
+			assert.deepStrictEqual(waiting.unavailable, [], 'an unrelated endpoint does not change the pending status');
+			assert.strictEqual((await checkLegacyCutover(f.home, { owner: A })).ready, false, 'reload without native proof stays pending');
+			assert.strictEqual((await checkLegacyCutover(f.home, { owner: 'cccccccccccccccc' })).ready, true);
 			assert.deepStrictEqual(f.effects.map(effect => effect.method), ['claim', 'terminate']);
 			const progress = JSON.parse(fs.readFileSync(f.journal, 'utf8'));
-			assert.strictEqual(progress.runs[0].stop, 'requested');
+			assert.deepStrictEqual([progress.runs[0].stop, progress.runs[0].nativeStop], ['requested', true]);
 			assert.deepStrictEqual(await legacyPinMigration(f.home, A).recover(pin('pin-a', 'scope-a'), () => false,
 				async () => assert.fail('unconfirmed stop released recovery')), { kind: 'deferred' });
+			f.rows[0].ended = true;
+			assert.strictEqual((await checkLegacyCutover(f.home, { owner: A })).ready, true);
+			assert.deepStrictEqual(f.effects.map(effect => effect.method), ['claim', 'terminate']);
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	test('preserves an older v1 request fence and defers its Pin when custody was unproven (ARCHITECTURE-1.4)', async function () {
+		if (process.platform === 'win32') { this.skip(); }
+		const f = await fixture();
+		try {
+			const saved = pin('pin-a', 'scope-a');
+			const offered = (await checkLegacyCutover(f.home, { owner: A })).plan;
+			assert.ok(offered);
+			const [run] = offered.runs;
+			fs.writeFileSync(f.journal, JSON.stringify({
+				version: 1, snapshots: { [A]: [saved] },
+				runs: [{ socket: run.socket, owner: A, run: RUN_A, pid: run.pid, approved: true, stop: 'requested' }],
+			}));
+			assert.strictEqual((await checkLegacyCutover(f.home, { owner: A })).ready, true);
+			assert.deepStrictEqual(await legacyPinMigration(f.home, A).recover(saved, () => false,
+				async () => assert.fail('the historic request fence was lost')), { kind: 'deferred' });
+			assert.strictEqual(JSON.parse(fs.readFileSync(f.journal, 'utf8')).runs[0].stop, 'requested');
+			assert.strictEqual(f.effects.length, 0);
 		} finally {
 			await f.dispose();
 		}
