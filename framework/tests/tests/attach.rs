@@ -954,9 +954,12 @@ fn attach_tracks_mouse_only_while_the_displayed_cli_requests_it() {
     let transcript = home.folder().join("fullscreen-screen");
     let keys = home.folder().join("fullscreen-keys");
     let sizes = home.folder().join("fullscreen-sizes");
+    let frame_title = "Fullscreen mouse frame";
     std::fs::write(
         &transcript,
-        b"\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003;2004h\x1b[?1006h\x1b[?1007hFULLSCREEN-CLI",
+        format!(
+            "\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003;2004h\x1b[?1006h\x1b[?1007hFULLSCREEN-CLI\x1b]2;{frame_title}\x1b\\"
+        ),
     )
     .unwrap();
     home.add_custom_cli("mouse-fixture", &test_binaries().fakecli);
@@ -972,19 +975,29 @@ fn attach_tracks_mouse_only_while_the_displayed_cli_requests_it() {
     assert!(started.status.success(), "{}", stderr(&started));
     let agent = home.started_agent(&stdout(&started));
     let mut term = TestTerminal::spawn(
-        home.command(shell()).args([
-            "-c",
-            "printf '\\033[?1007h'; exec facade attach \"$1\"",
-            "host",
-            &agent.address,
-        ]),
+        home.command(shell())
+            .env("FACADE_TEST_GATES", "attach-evidence")
+            .args([
+                "-c",
+                "printf '\\033[?1007h'; exec facade attach \"$1\"",
+                "host",
+                &agent.address,
+            ]),
         100,
         24,
     );
+    // A redraw writes its visible text before the terminal has parsed the mouse modes.
+    let wait_for_tracking = |term: &TestTerminal, expected: &str| {
+        assert!(
+            wait_until(LOADED_TIMEOUT, || term.reports_mouse()),
+            "{expected}: {}",
+            term.text()
+        );
+    };
     assert!(term.wait_for(LOADED_TIMEOUT, |text| text.contains("FULLSCREEN-PROMPT")));
+    wait_for_tracking(&term, "the first draw preserves tracking");
     assert!(term.on_alternate_screen());
     assert!(term.bracketed_paste());
-    assert!(term.reports_mouse(), "the first draw preserves tracking");
     let send_and_check = |term: &TestTerminal, event: &[u8]| {
         let mark = std::fs::metadata(&keys).unwrap().len() as usize;
         term.send(event);
@@ -1003,7 +1016,7 @@ fn attach_tracks_mouse_only_while_the_displayed_cli_requests_it() {
         &sizes
     )
     .is_ok_and(|log| log.lines().any(|line| line == "110x30"))));
-    assert!(term.reports_mouse(), "tracking survives the resized draw");
+    wait_for_tracking(&term, "tracking survives the resized draw");
     send_and_check(&term, b"\x1b[<65;13;4M");
 
     let mut large = TestTerminal::spawn(
@@ -1013,11 +1026,17 @@ fn attach_tracks_mouse_only_while_the_displayed_cli_requests_it() {
         40,
     );
     assert!(large.wait_for(LOADED_TIMEOUT, |text| text.contains("FULLSCREEN-PROMPT")));
-    assert!(large.reports_mouse());
+    wait_for_tracking(&large, "the larger view preserves tracking");
+    // The full draw writes the title after its tracking and encoding settings.
+    wait_for_title(&large, 0, frame_title);
     let repaint = large.output_len();
     send_and_check(&large, b"\x1b[<0;13;4M");
     term.send(b"z");
     assert!(large.wait_for(secs(5), |text| text.contains("❯ z")));
+    send_and_check(&large, b"\x1b[<32;15;4M\x1b[<0;15;4m");
+    send_and_check(&term, b"\x03");
+    // The cleared draft is a later paint, so the drag repaint's trailing modes have arrived.
+    assert!(large.wait_for(secs(5), |text| !text.contains("❯ z")));
     let frame = large.output_since(repaint);
     let tracking_repeated =
         String::from_utf8_lossy(&frame)
@@ -1036,9 +1055,6 @@ fn attach_tracks_mouse_only_while_the_displayed_cli_requests_it() {
                 })
             });
     assert!(!tracking_repeated, "repaint changed tracking during a drag");
-    send_and_check(&large, b"\x1b[<32;15;4M\x1b[<0;15;4m");
-    send_and_check(&term, b"\x03");
-    assert!(large.wait_for(secs(5), |text| !text.contains("❯ z")));
 
     let mode = |bytes: &[u8]| {
         std::fs::write(&transcript, bytes).unwrap();
@@ -1070,19 +1086,24 @@ fn attach_tracks_mouse_only_while_the_displayed_cli_requests_it() {
     home.wait_for_daemon_after(old_daemon, secs(10))
         .expect("the keeper brings back the daemon");
     assert!(term.wait_for_bytes(before_reconnect, b"FULLSCREEN-PROMPT", LOADED_TIMEOUT));
-    assert!(term.reports_mouse(), "reconnect redraw restores tracking");
+    // Attach has finished the redraw and reopened input. The reader can still be decoding it.
+    home.wait_for_gate("attach-reconnected");
+    wait_for_tracking(&term, "reconnect redraw restores tracking");
     send_and_check(&term, b"\x1b[<64;15;4M");
     term.send(b"\x1d");
     assert!(
         term.wait_exit(secs(10))
             .is_some_and(|status| status.success())
     );
+    assert_detach_receipt(&term, "Fullscreen", &agent.address);
     assert_eq!(
         term.output_count("1007"),
         1,
         "only the host sets alternate scrolling"
     );
 
+    assert!(!term.on_alternate_screen());
+    assert!(!term.bracketed_paste());
     assert!(
         !term.reports_mouse(),
         "detach leaves mouse control with the host"
