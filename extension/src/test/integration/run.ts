@@ -13,10 +13,7 @@ import { execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { parse as parseJsonc, ParseError } from 'jsonc-parser';
-import { isDeepStrictEqual } from 'util';
 import { frameworkCall, frameworkListens, frameworkProgram, EDITOR_FLAGS, editorProfile, endFramework, endEditors, fakeClis, newRepository, officialEditor, sanitizedEnvironment, testProcessCleanup } from './editors';
-import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { runRemoteWorktree } from './remoteWorktree';
 import { assertTemporaryState, probeEnvironment } from './probeState';
@@ -105,6 +102,9 @@ async function main(): Promise<void> {
 	// For a look at what a run left: its folder kept, and one part of it alone (`journeys`, `cross` or `conversion`)
 	const keep = !!process.env.FACADE_IT_KEEP;
 	const only = process.env.FACADE_IT_ONLY;
+	if (only === 'real') {
+		throw new Error('Use FACADE_IT_ONLY=real-lifecycle for the Framework editor with a real CLI.');
+	}
 	const attachFake = process.env.FACADE_IT_FAKECLI;
 	const attachUpgrade = process.env.FACADE_IT_ATTACH_UPGRADE;
 	// Current builds activate Framework. The legacy selector is only for fixtures using earlier packages.
@@ -164,8 +164,8 @@ async function main(): Promise<void> {
 	};
 	const passed = Object.fromEntries((process.env.FACADE_IT_REAL_PASS ?? '').split(',').filter(name => name && process.env[name] !== undefined).map(name => [name, process.env[name]!]));
 	// A prepared temporary home may be used directly, or copied from an isolated state template.
-	const prepared = only === 'real' || nativeLifecycle ? process.env.FACADE_IT_REAL_AGENTS_HOME : undefined;
-	if (only === 'real' || nativeLifecycle) {
+	const prepared = nativeLifecycle ? process.env.FACADE_IT_REAL_AGENTS_HOME : undefined;
+	if (nativeLifecycle) {
 		probeEnvironment(realEnv, realHome, realConfig);
 		probeEnvironment(passed, realHome);
 		if (prepared !== undefined) { assertTemporaryState(prepared, 'FACADE_IT_REAL_AGENTS_HOME'); }
@@ -195,7 +195,7 @@ async function main(): Promise<void> {
 	// Only terminal configuration points to this temporary CLI home; the editor keeps its own HOME.
 	const agentsHome = prepared ?? path.join(root, 'agents-home');
 	fs.mkdirSync(agentsHome, { recursive: true });
-	if ((only === 'real' || nativeLifecycle) && realState) { fs.cpSync(realState, agentsHome, { recursive: true }); }
+	if ((nativeLifecycle) && realState) { fs.cpSync(realState, agentsHome, { recursive: true }); }
 	// Antigravity merges trust into its existing temporary settings (CLIS-3.3).
 	fs.mkdirSync(path.join(agentsHome, '.gemini', 'antigravity-cli'), { recursive: true });
 	const agySettingsFile = path.join(agentsHome, '.gemini', 'antigravity-cli', 'settings.json');
@@ -224,7 +224,7 @@ async function main(): Promise<void> {
 	 */
 	const facadeSettings = (facade: string, clis: { readonly [name: string]: Entry } = {}, yolo?: boolean) => {
 		// Resume listing reads the settings entry's effective environment on the Orchestrator machine.
-		const fixtureEnv = implementation === 'framework' && only !== 'real' && !nativeLifecycle
+		const fixtureEnv = implementation === 'framework' && !nativeLifecycle
 			? { HOME: agentsHome, USERPROFILE: agentsHome, ...isolatedStorage }
 			: undefined;
 		const entries: { [name: string]: Entry } = Object.fromEntries(BUILT_INS.map(cli => [cli.id, {
@@ -576,24 +576,14 @@ async function main(): Promise<void> {
 			}
 		}
 	};
-	/**
-	 * An update from a released build with a running agent, then a reload (VERIFICATION E05, J17): the released build's two packages
-	 * installed in an isolated profile, an agent started there with its tab open, the current packages installed over them and the
-	 * window reloaded. The agent stays with its released ptyd, its tab hidden, and each question its CLI asks its terminal is answered
-	 * once: with its tab open by the editor, the window passing the answer on; hidden, by the window's headless terminal; open again,
-	 * by the editor once more (ARCHITECTURE-2.3, LIFECYCLE-3.5). It needs the released packages and runs only when asked.
-	 */
-	const update = async (mode: 'update' | 'install-pair' = 'update') => {
-		const installPair = mode === 'install-pair';
-		if (installPair && !current) {
-			throw new Error(mode + ' requires a candidate pair directory in FACADE_IT_CURRENT.');
-		}
-		if (!installPair && !released) {
-			throw new Error('FACADE_IT_ONLY=update installs a released build: set FACADE_IT_RELEASED to a folder holding its facadecode and window VSIX files.');
+	/** Install the candidate pair in an empty isolated profile and observe one real Framework start. */
+	const installPair = async () => {
+		if (!current) {
+			throw new Error('FACADE_IT_ONLY=install-pair requires FACADE_IT_CURRENT.');
 		}
 		const packages = (dir: string) => {
 			const files = fs.readdirSync(dir, { withFileTypes: true }).filter(file => file.name.endsWith('.vsix'));
-			if (installPair && (files.length !== 2 || files.some(file => !file.isFile()))) {
+			if (files.length !== 2 || files.some(file => !file.isFile())) {
 				throw new Error(`${dir} must contain exactly two regular VSIX files.`);
 			}
 			const component = files.find(file => file.name.includes('-window-'));
@@ -603,8 +593,7 @@ async function main(): Promise<void> {
 			}
 			return [path.join(dir, component.name), path.join(dir, main.name)];
 		};
-		const from = released && !installPair ? packages(released) : [];
-		const to = packages(current ?? path.resolve(__dirname, '..', '..', '..', 'vsix'));
+		const candidate = packages(current);
 		const folder = path.join(root, 'update');
 		newRepository(folder);
 		const profile = editorProfile(root, 'upd');
@@ -613,31 +602,23 @@ async function main(): Promise<void> {
 		for (const dir of [path.join(user, 'User'), facade, driver]) {
 			fs.mkdirSync(dir, { recursive: true });
 		}
-		// The released build reads its CLIs from the editor's settings, as released builds did: the update moves them into Facade's
-		// settings file, which the updated build's agents then start by (CONFIGURATION-6)
-		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings,
-			...Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.path`, launchers[cli.id] ?? fake])),
-			...Object.fromEntries(BUILT_INS.filter(each => each.id !== 'claude').map(each => [`facade.${each.segment}.enabled`, false])) }));
+		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify(settings));
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'update-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
 		fs.copyFileSync(path.join(__dirname, 'updateDriver.js'), path.join(driver, 'extension.js'));
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
 			fs.rmSync(path.join(root, file));
 		}
-		const env = { ...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_UPDATE: out, CLAUDE_CONFIG_DIR: claudeConfig,
-			...(installPair ? { FACADE_IT_UPDATE_ROLE: 'install' } : {}) };
-		const install = (files: readonly string[]) => installLocalVsixes(executable, profile, files, env, 30_000);
+		const env = { ...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_UPDATE: out, CLAUDE_CONFIG_DIR: claudeConfig };
 		const pairVersion = (pair: string[]): string => {
 			const files = pair.map(file => path.basename(file));
 			const version = /^facadecode-window-(\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?)\.vsix$/iu.exec(files[0])?.[1];
 			assert.ok(version && files[1] === ['facadecode', process.platform, process.arch, version].join('-') + '.vsix', 'the package names are a matching native pair');
 			return version;
 		};
-		const candidateVersion = installPair ? pairVersion(to) : undefined;
-		if (installPair) {
-			assert.strictEqual((await runEditorCli(executable, profile, ['--list-extensions'], env, 30_000)).trim(), '', 'the editor profile has no installed extensions');
-			facadeSettings(facade, alone('claude'));
-		}
-		await install(installPair ? to : from);
+		const candidateVersion = pairVersion(candidate);
+		assert.strictEqual((await runEditorCli(executable, profile, ['--list-extensions'], env, 30_000)).trim(), '', 'the editor profile has no installed extensions');
+		facadeSettings(facade, alone('claude'));
+		await installLocalVsixes(executable, profile, candidate, env, 30_000);
 		let editorOutput = '';
 		const editor = spawn(executable, [folder, '--new-window', ...profile.args,
 			`--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], { stdio: ['ignore', 'pipe', 'pipe'], env });
@@ -663,90 +644,26 @@ async function main(): Promise<void> {
 			}
 		};
 		const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-		/**
-		 * What its CLI asks, then each kind of answer it got after, by how many came within a few seconds - and what it got unasked
-		 * since the last time it asked, which is to be nothing: the window's own questions' answers are the window's (ARCHITECTURE-2.3).
-		 */
-		let asked = 0;
-		let answered = 0;
-		const ask = async (alias: string) => {
-			const log = `${record}.stdin.${alias}`;
-			const since = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').length : 0;
-			const unasked = (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').slice(answered, since) : '').split('\n').filter(Boolean).map(line => (JSON.parse(line) as { data: string }).data).join('');
-			// Its cursor, the device attributes and its background colour
-			fs.writeFileSync(`${record}.quirks.${alias}`, JSON.stringify({ ask: '\x1b[6n\x1b[c\x1b]11;?\x1b\\', asked: ++asked }));
-			await new Promise(resolve => setTimeout(resolve, 4_000));
-			const got = (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').slice(since) : '').split('\n').filter(Boolean).map(line => (JSON.parse(line) as { data: string }).data).join('');
-			answered = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').length : 0;
-			// eslint-disable-next-line no-control-regex
-			return { cursor: got.match(/\x1b\[\d+;\d+R/g)?.length ?? 0, attributes: got.match(/\x1b\[\?[\d;]*c/g)?.length ?? 0, colour: got.match(/\x1b\]11;rgb:[0-9a-fA-F/]+(?:\x07|\x1b\\)/g)?.length ?? 0, ...unasked ? { unasked } : {} };
-		};
-		const once = { cursor: 1, attributes: 1, colour: 1 };
 		try {
 			const started = await phase('started') as { phase: string; version: string; alias: string; tabs: string[][] };
 			const pid = Number(fs.readFileSync(`${record}.${started.alias}`, 'utf8').trim());
-			if (installPair) {
-				const observed = started as typeof started & { component: string; componentPath: string; mainPath: string; token: string };
-				assert.strictEqual(observed.version, candidateVersion);
-				assert.strictEqual(observed.component, candidateVersion);
-				const extensions = path.join(profile.env.VSCODE_PORTABLE, 'extensions');
-				for (const installed of [observed.mainPath, observed.componentPath]) {
-					assert.strictEqual(path.dirname(installed), extensions, 'activation came from the isolated install');
-				}
-				assert.ok(observed.token && Number.isSafeInteger(pid) && pid > 0 && alive(pid), 'New Agent has a live fake CLI and a native Window Component');
-				const { agents } = await frameworkCall(facade, 'agent.list', {});
-				assert.strictEqual(agents.length, 1, 'only one Framework agent started');
-				const { agent } = await frameworkCall(facade, 'agent.inspect', { target: agents[0].reference });
-				assert.deepStrictEqual([agent.process, agent.pid, agent.reference.agent_id], ['running', pid, observed.alias.slice(1)]);
-				const launches = fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`));
-				assert.deepStrictEqual(launches, [`${path.basename(record)}.starts.${observed.alias}`]);
-				assert.deepStrictEqual(fs.readFileSync(path.join(path.dirname(record), launches[0]), 'utf8').trim().split(/\r?\n/u).map(Number), [pid]);
-				console.log(`  ✔ clean candidate pair activation and one New Agent effect: ${JSON.stringify({ ...observed, pid })}`);
-				driverPassed('install-pair', 'framework');
-				return;
+			const observed = started as typeof started & { component: string; componentPath: string; mainPath: string; token: string };
+			assert.strictEqual(observed.version, candidateVersion);
+			assert.strictEqual(observed.component, candidateVersion);
+			const extensions = path.join(profile.env.VSCODE_PORTABLE, 'extensions');
+			for (const installed of [observed.mainPath, observed.componentPath]) {
+				assert.strictEqual(path.dirname(installed), extensions, 'activation came from the isolated install');
 			}
-			// What it got before it first asked - the released build's terminal opening - is not this journey's
-			answered = fs.existsSync(`${record}.stdin.${started.alias}`) ? fs.readFileSync(`${record}.stdin.${started.alias}`, 'utf8').length : 0;
-			const before = await ask(started.alias);
-			await install(to);
-			fs.writeFileSync(`${out}.reload`, '');
-			const updated = await phase('updated') as { phase: string; version: string; tabs: string[][] };
-			// The updated build made Facade's settings file from the editor's settings the released build read (CONFIGURATION-6.1): every
-			// built-in with its defaults under what those settings gave it, in a file with comments
-			// A file that does not parse is no migration, whatever value a lenient parser makes of it
-			const migrated = (() => {
-				try {
-					const errors: ParseError[] = [];
-					const value = parseJsonc(fs.readFileSync(path.join(facade, 'facade.json'), 'utf8'), errors, { allowTrailingComma: true }) as unknown;
-					return errors.length ? { unparsed: errors.map(error => error.error) } : value;
-				} catch {
-					return undefined;
-				}
-			})();
-			// Each built-in shows its type, icon, enabled flag, args, env and migrated program. The file keeps the built-in names.
-			const moved = { yolo: true, names: [...BUILT_IN_NAMES], clis: Object.fromEntries(BUILT_INS.map(cli => [cli.id, {
-				type: cli.id, icon: cli.id, enabled: cli.id === 'claude', args: [], env: {}, program: launchers[cli.id] ?? fake
-			}])) };
-			const hidden = await ask(started.alias);
-			fs.writeFileSync(`${out}.open`, '');
-			const opened = await phase('opened') as { phase: string; tabs: string[][] };
-			await new Promise(resolve => setTimeout(resolve, 2_000));
-			const shown = await ask(started.alias);
-			console.log(`  Journey: update from ${started.version} to ${updated.version} with a running agent, then a reload (E05, J17)\n    ${JSON.stringify({ started, before, updated, hidden, opened, shown })}`);
-			const problems = [
-				...updated.version === started.version ? ['the window did not reload into the update'] : [],
-				...isDeepStrictEqual(migrated, moved) ? [] : [`the settings file was not made from the editor's settings: ${JSON.stringify(migrated)}`],
-				...JSON.stringify(before) !== JSON.stringify(once) ? [`with its tab open in the released build its questions were answered ${JSON.stringify(before)}`] : [],
-				...updated.tabs.flat().length ? [`its tab came back open after the update: ${JSON.stringify(updated.tabs)}`] : [],
-				...JSON.stringify(hidden) !== JSON.stringify(once) ? [`with its tab hidden its questions were answered ${JSON.stringify(hidden)}`] : [],
-				...opened.tabs.flat().length !== 1 ? [`Go to Agent did not open its one tab: ${JSON.stringify(opened.tabs)}`] : [],
-				...JSON.stringify(shown) !== JSON.stringify(once) ? [`with its tab open again its questions were answered ${JSON.stringify(shown)}`] : [],
-				...alive(pid) ? [] : ['its process did not survive the update']
-			];
-			if (problems.length) {
-				throw new Error(`The update journey failed: ${problems.join('; ')}.`);
-			}
-			console.log('    ✔ the agent kept its process; its tab came back hidden; each question was answered once - by the editor, by the window\'s headless terminal while hidden, and by the editor again');
+			assert.ok(observed.token && Number.isSafeInteger(pid) && pid > 0 && alive(pid), 'New Agent has a live fake CLI and a native Window Component');
+			const { agents } = await frameworkCall(facade, 'agent.list', {});
+			assert.strictEqual(agents.length, 1, 'only one Framework agent started');
+			const { agent } = await frameworkCall(facade, 'agent.inspect', { target: agents[0].reference });
+			assert.deepStrictEqual([agent.process, agent.pid, agent.reference.agent_id], ['running', pid, observed.alias.slice(1)]);
+			const launches = fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`));
+			assert.deepStrictEqual(launches, [`${path.basename(record)}.starts.${observed.alias}`]);
+			assert.deepStrictEqual(fs.readFileSync(path.join(path.dirname(record), launches[0]), 'utf8').trim().split(/\r?\n/u).map(Number), [pid]);
+			console.log(`  ✔ clean candidate pair activation and one New Agent effect: ${JSON.stringify({ ...observed, pid })}`);
+			driverPassed('install-pair', 'framework');
 		} catch (error) {
 			console.error(`Editor output for the update journey (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
 			throw error;
@@ -755,8 +672,7 @@ async function main(): Promise<void> {
 				await endEditors([editor]);
 			} finally {
 				endMatching(profile.env.VSCODE_PORTABLE);
-				endMatching(path.join(facade, 'extension', 'ptyd'));
-			await cleanUpFramework(facade);
+				await cleanUpFramework(facade);
 			}
 		}
 	};
@@ -1004,7 +920,7 @@ async function main(): Promise<void> {
 				cutover === 'uncertain' ? 'none' : 'framework');
 		}
 		if (only === 'install-pair') {
-			await update(only);
+			await installPair();
 		}
 		if (nativeLifecycle) {
 			const cli = BUILT_INS.find(each => each.id === realCli);

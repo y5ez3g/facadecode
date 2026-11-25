@@ -68,8 +68,8 @@ jobs:
           - { os: macos-latest, target: darwin-arm64 }
           - { os: macos-15-intel, target: darwin-x64 }
     runs-on: ${{ matrix.os }}
-    # The windows-11-arm jobs take 37 to 45 minutes unsigned; signing adds about half a minute
-    timeout-minutes: 60
+    # The native job packages Framework and runs the editor journeys on the same runner.
+    timeout-minutes: 75
     env:
       FACADE_PACKAGE_TARGET: ${{ matrix.target }}
       FACADE_SIGN: ${{ inputs.sign && startsWith(matrix.target, 'win32-') && '--sign' || '' }}
@@ -183,6 +183,7 @@ jobs:
           node ../framework/scripts/package-framework.mjs --target "$FACADE_PACKAGE_TARGET" \
             --vsix "build/vsix/facadecode-$FACADE_PACKAGE_TARGET-"*.vsix --out-dir build/framework
       - name: Install the local framework archive on Linux and macOS
+        if: runner.os != 'Windows'
         run: |
           root=$(mktemp -d "$RUNNER_TEMP/facade-install.XXXXXX")
           mkdir "$root/home" "$root/tmp"
@@ -193,6 +194,7 @@ jobs:
           test "$("$root/state/framework/bin/facade" --version)" = "facade $build"
           test -x "$root/state/framework/bin/facade-mcp"
       - name: Install the local framework archive on Windows
+        if: runner.os == 'Windows'
         shell: powershell
         run: |
           $target = $env:FACADE_PACKAGE_TARGET
@@ -236,9 +238,6 @@ jobs:
           name: native-install-linux-x64-${{ github.run_attempt }}
           path: extension/build/native-install/
           if-no-files-found: ignore
-      # The Framework implementation's journeys need the built extension and framework's programs (scripts/build-it.mjs), not the packages
-      - run: npm run bundle
-        if: "!inputs.package_only"
       - name: Build the isolated editor fixtures
         if: "!inputs.package_only"
         run: node scripts/build-it.mjs
@@ -268,6 +267,7 @@ jobs:
           FACADE_IT_IMPLEMENTATION: framework
         run: node build/out/test/integration/run.js 2>&1 | tee build/integration.log
       - name: Verify the published 0.1.5 cutover in the packaged editor
+        id: packaged-cutover
         if: "!inputs.package_only && matrix.target == 'linux-x64'"
         timeout-minutes: 18
         env:
@@ -293,7 +293,7 @@ jobs:
               2>&1 | tee "build/cutover/$variant.log"
           done
       - name: Keep the packaged cutover evidence
-        if: always() && !inputs.package_only && matrix.target == 'linux-x64'
+        if: always() && (steps.packaged-cutover.outcome == 'success' || steps.packaged-cutover.outcome == 'failure')
         uses: actions/upload-artifact@v4
         with:
           name: published-cutover-linux-x64

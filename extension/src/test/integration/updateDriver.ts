@@ -2,27 +2,17 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The update journey's driver (VERIFICATION E05, J17): an extension beside an installed released build of Facade Code, in an
-// editor that runs no extension tests, as a released build has none of the suite's commands. It starts an agent in the released
-// build as a person does, reloads the window into the update the runner installed, and opens the agent's tab when asked. Each
-// step is a line of FACADE_IT_UPDATE for the runner to judge, and the runner asks for the next by a file `<FACADE_IT_UPDATE>.<step>`.
-// This driver is copied alone into the test window's extensions, so it imports nothing of the extension's at run time.
-
+// Native driver for a clean install of the workspace and Window Component packages.
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import type { WindowIdentity } from '../../base/windowIdentity';
-import type { Directory } from './legacyDirectory';
 
 const OUT = process.env.FACADE_IT_UPDATE!;
 const RECORD = process.env.FACADE_IT_RECORD!;
 
 function write(line: object): void {
 	fs.appendFileSync(OUT, `${JSON.stringify(line)}\n`);
-}
-
-function said(): { readonly phase: string }[] {
-	return fs.existsSync(OUT) ? fs.readFileSync(OUT, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { phase: string }) : [];
 }
 
 async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = 20_000): Promise<T> {
@@ -95,68 +85,10 @@ async function installCandidate(): Promise<void> {
 	write({ phase: 'started', alias, tabs: tabs(), ...installed });
 }
 
-/** The actual installed component and the running agents it publishes. */
-async function published(aliases: readonly string[]) {
-	return until('the installed Window Component to publish the exact live agents', async () => {
-		const main = vscode.extensions.getExtension('facade.facadecode');
-		const component = vscode.extensions.getExtension('facade.facadecode-window');
-		if (!main?.isActive || !component?.isActive) { return undefined; }
-		const token = vscode.env.sessionId;
-		const answer = await vscode.commands.executeCommand<WindowIdentity>('facade.window.identity', token);
-		if (!answer || answer.session !== token) { return undefined; }
-		const directory = await vscode.commands.executeCommand<Directory>('facade.window.directory', token);
-		const agents = directory?.windows.find(window => window.window === directory.self)?.agents.filter(agent => agent.lifecycle === 'running');
-		return directory && agents && aliases.every(alias => agents.some(agent => agent.alias === alias)) ? {
-			version: version(), mainPath: main.extensionPath, component: answer.component, componentPath: component.extensionPath,
-			window: directory.self, token: answer.token, hostPid: process.pid, agents
-		} : undefined;
-	}, 30_000);
-}
-
-/** Observe a running agent in the fresh install or a replaced Window Component. */
-async function replacement(): Promise<void> {
-	const first = said().find(line => line.phase === 'started') as { phase: string; alias: string } | undefined;
-	await activated();
-	const alias = first?.alias ?? await newAgent();
-	const { agents, ...identity } = await published([alias]);
-	const agent = agents.find(each => each.alias === alias)!;
-	write({ phase: first ? 'updated' : 'started', ...identity, run: agent.run, alias });
-	if (!first && process.env.FACADE_IT_UPDATE_ROLE === 'receiver') {
-		await until('the replacement install', async () => fs.existsSync(`${OUT}.reload`) ? true : undefined, 120_000);
-		write({ phase: 'reloading', at: Date.now() });
-		void vscode.commands.executeCommand('workbench.action.reloadWindow').then(undefined, () => undefined);
-	}
-}
-
 export async function activate(): Promise<void> {
 	try {
-		if (process.env.FACADE_IT_UPDATE_ROLE === 'install') { return await installCandidate(); }
-		if (process.env.FACADE_IT_UPDATE_ROLE) { return await replacement(); }
-		if (!said().some(line => line.phase === 'reloading')) {
-			// The released build: one agent, started as a person starts one, its tab open
-			await until('the released build', async () => version() && (await vscode.commands.getCommands(true)).includes('facade.newAgent') ? true : undefined, 90_000);
-			const alias = await pick('its agent', 'facade.newAgent', () => started()[0]);
-			await until('its tab', async () => tabs().flat().length ? true : undefined);
-			write({ phase: 'started', version: version(), alias, tabs: tabs() });
-			await until('the update', async () => fs.existsSync(`${OUT}.reload`) ? true : undefined, 300_000);
-			write({ phase: 'reloading' });
-			// Its own extension host goes with the reload, which cancels the command's answer
-			void vscode.commands.executeCommand('workbench.action.reloadWindow').then(undefined, () => undefined);
-			return;
-		}
-		// The update, the window reloaded into it: the agent comes back as the update shows it
-		await until('the updated build', async () => (await vscode.commands.getCommands(true)).includes('facade.newAgent') ? true : undefined, 90_000);
-		await new Promise(resolve => setTimeout(resolve, 8_000));
-		write({ phase: 'updated', version: version(), tabs: tabs(), terminals: vscode.window.terminals.map(terminal => terminal.name) });
-		await until('the opening', async () => fs.existsSync(`${OUT}.open`) ? true : undefined, 300_000);
-		// Go to Agent's only agent
-		await pick('its tab opened', 'facade.goToAgent', () => tabs().flat().length ? true : undefined);
-		write({ phase: 'opened', tabs: tabs() });
-	} catch (err) {
-		write({ phase: 'error', message: err instanceof Error ? err.stack ?? err.message : String(err) });
+		await installCandidate();
+	} catch (error) {
+		write({ phase: 'error', message: error instanceof Error ? error.stack ?? error.message : String(error) });
 	}
-}
-
-export function deactivate(): void {
-	// Nothing to let go
 }
