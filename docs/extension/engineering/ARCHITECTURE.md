@@ -80,8 +80,9 @@ three bundle graphs and both VSIX contents. Only the entry points, host and UI i
 
 A compatible Framework activation reconnects to existing agents. To upgrade a legacy workspace, resolve its
 execution home and predecessor identity. When its legacy agents still run, show the existing confirmation with
-the counts of affected runs and saved Pins. Approval freezes the saved Pins for those exact runs. Restore each
-Pin after confirmed exit of the legacy process that can hold it.
+the counts of affected runs and saved Pins. Preserve the gate for known runs across a supervisor outage.
+Present and accept the offer when current inventory can verify the whole outstanding scope. Approval freezes
+the saved Pins for those exact runs. Restore each Pin after confirmed exit of the legacy process that can hold it.
 
 An independent old workspace retains ownership of its agents and can upgrade later. Its processes do not hold
 the current workspace at the cutover screen. An old window can finish or stop its own agents. When the legacy

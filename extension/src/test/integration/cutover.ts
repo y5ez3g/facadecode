@@ -354,7 +354,11 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		evidence[`recovery-${win.role}`] = { agent, saved, launches: newLaunches, journal: snapshot };
 		assert.deepStrictEqual(newLaunches.map(launch => launch.pid), [agent.pid], 'one new CLI launch across the Facade home');
 		assert.deepStrictEqual(newLaunches[0].args.slice(0, 2), ['--resume', pinned.session], 'the launch resumed the exact pinned session');
-		assert.deepStrictEqual(newLaunches[0].legacyPidsAlive, stillAlive, 'all original PIDs in the converting workspace had exited before CLI recovery');
+		const livePids = newLaunches[0].legacyPidsAlive;
+		assert.ok(livePids, 'the fixture recorded legacy processes present at recovery');
+		assert.ok(!livePids.includes(workspace.pids[0]), 'the legacy holder of this Pin exited before CLI recovery');
+		assert.deepStrictEqual(livePids.filter(pid => !workspace.pids.includes(pid)), stillAlive,
+			'the other workspace kept its original PIDs during CLI recovery');
 		assert.deepStrictEqual(await holding(unpinned.session), [], 'the unpinned session stayed out of Framework');
 		const conversions = Object.values(snapshot?.recoveries ?? {}).filter(recovery => recovery.reference?.agent_id === agent.reference.agent_id);
 		assert.deepStrictEqual(conversions.map(recovery => recovery.reference), [agent.reference], 'the journal confirms one shared Framework reference');

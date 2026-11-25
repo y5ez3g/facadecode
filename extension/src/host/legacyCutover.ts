@@ -414,12 +414,15 @@ function isActiveRun(scan: Scan, run: ObservedRun): boolean {
 	return scan.listings.some(listing => listing.runs.some(row => !row.exited && sameRun(run, listing, row)));
 }
 
-function consentPlan(home: string, before: CutoverRecord, scan: Scan, owner: string): CutoverPlan | undefined {
+function awaitingConsent(before: CutoverRecord, owner: string): readonly ObservedRun[] {
 	// A still-active older window can start more work after consent. The approved snapshot and run set remain fixed.
-	if (frozenPins(before, owner)) { return undefined; }
-	const runs = before.runs.filter(run => run.owner === owner && !run.approved && run.stop !== 'confirmed'
-		&& isActiveRun(scan, run));
-	return runs.length ? planFor(home, before, owner, runs) : undefined;
+	if (frozenPins(before, owner)) { return []; }
+	return before.runs.filter(run => run.owner === owner && !run.approved && run.stop !== 'confirmed');
+}
+
+function consentPlan(home: string, before: CutoverRecord, scan: Scan, owner: string): CutoverPlan | undefined {
+	const runs = awaitingConsent(before, owner);
+	return runs.length && runs.every(run => isActiveRun(scan, run)) ? planFor(home, before, owner, runs) : undefined;
 }
 
 /** Revalidate the identities and immutable Pin input the person was actually shown. */
@@ -444,8 +447,9 @@ export async function approveLegacyCutover(home: string, scope: LegacyCutoverSco
 
 const READY: CutoverState = { ready: true, unavailable: [], waitingForOwner: 0, unconfirmed: 0 };
 
-function previousStopStatus(record: CutoverRecord, fresh: Scan, owner: string): CutoverState {
-	const pending = record.runs.filter(run => run.owner === owner && run.nativeStop && run.stop === 'requested');
+function pendingStatus(record: CutoverRecord, fresh: Scan, owner: string): CutoverState {
+	const requested = record.runs.filter(run => run.owner === owner && run.nativeStop && run.stop === 'requested');
+	const pending = [...awaitingConsent(record, owner), ...requested];
 	if (!pending.length) { return READY; }
 	const unavailable = fresh.listings.flatMap(listing => listing.unavailable
 		&& pending.some(run => run.socket === listing.endpoint.socket) ? [listing.unavailable] : []);
@@ -466,7 +470,7 @@ export async function checkLegacyCutover(home: string, scope?: LegacyCutoverScop
 		if (plan) { return { ...READY, ready: false, plan }; }
 		// Protocol 17 reports run attachment, never whether another socket holds the workspace claim.
 		// Keep the supervisor's own grace period intact and leave live sessions fenced during Pin recovery.
-		return previousStopStatus(checked, fresh, scope.owner);
+		return pendingStatus(checked, fresh, scope.owner);
 	}, JOURNAL_WAIT_MS).catch(error => {
 		if (error instanceof InvalidCutoverRecord) { return READY; }
 		throw error;

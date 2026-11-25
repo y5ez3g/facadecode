@@ -54,6 +54,7 @@ async function fixture(published = true) {
 	].map(row => ({ ...row, pid, uncertain: false, ended: false }));
 	const effects: string[] = [];
 	const sockets = new Set<net.Socket>();
+	let listAvailable = true;
 	const server = net.createServer(socket => {
 		sockets.add(socket);
 		socket.on('close', () => sockets.delete(socket));
@@ -68,6 +69,10 @@ async function fixture(published = true) {
 				if (method === 'hello') {
 					result = { protocol: 17, pid, build };
 				} else if (method === 'list') {
+					if (!listAvailable) {
+						socket.write(JSON.stringify({ id, error: 'Could not list the legacy workspace' }) + '\n');
+						continue;
+					}
 					result = rows.map(row => ({
 						owner: row.owner, run: row.run, pid: row.pid, cwd: row.cwd, startedAt,
 						claimedElsewhere: row.attached, ...(row.ended ? { exited: { exitCode: 0 } } : {}),
@@ -88,6 +93,7 @@ async function fixture(published = true) {
 	await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(socketFile, resolve); });
 	return {
 		home, journal, claimFile, registry, registryFile, lockFile, rows, effects,
+		setListAvailable(available: boolean) { listAvailable = available; },
 		savePins(owner: string, pins: unknown[]) {
 			const workspace = path.join(home, 'workspaces', owner);
 			fs.mkdirSync(workspace, { recursive: true });
@@ -269,6 +275,38 @@ suite('Scoped legacy cutover', () => {
 			fs.unlinkSync(f.lockFile);
 			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
 			assert.deepStrictEqual(await a.recover(saved, () => ({ attempted: false }), async () => REFERENCE), { kind: 'confirmed', reference: REFERENCE });
+			assert.deepStrictEqual(f.effects, []);
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	test('preserves the consent gate when a known legacy run cannot be verified (ARCHITECTURE-1.4)', async () => {
+		const f = await fixture();
+		try {
+			const scope = { owner: A };
+			const other = { ...f.rows[0], run: 'run-cccccccccccccccccccccccccccccccc' };
+			f.rows.push(other);
+			const offered = (await checkLegacyCutover(f.home, scope)).plan;
+			assert.ok(offered);
+			assert.strictEqual(offered.runs.length, 2);
+			f.setListAvailable(false);
+			const pending = await checkLegacyCutover(f.home, scope);
+			assert.strictEqual(pending.ready, false);
+			assert.strictEqual(pending.plan, undefined);
+			assert.strictEqual(pending.unconfirmed, 2);
+			assert.ok(pending.unavailable.some(reason => reason.includes('Could not list the legacy workspace')));
+			assert.strictEqual(await approveLegacyCutover(f.home, scope, offered), false);
+			assert.strictEqual((await checkLegacyCutover(f.home, { owner: B })).ready, true, 'the failed inventory leaves other owners alone');
+			f.setListAvailable(true);
+			f.rows.pop();
+			const partial = await checkLegacyCutover(f.home, scope);
+			assert.strictEqual(partial.ready, false);
+			assert.strictEqual(partial.plan, undefined, 'a partial inventory cannot narrow an outstanding offer');
+			f.rows.push(other);
+			assert.deepStrictEqual((await checkLegacyCutover(f.home, scope)).plan, offered);
+			assert.strictEqual(await approveLegacyCutover(f.home, scope, offered), true);
+			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
 			assert.deepStrictEqual(f.effects, []);
 		} finally {
 			await f.dispose();
