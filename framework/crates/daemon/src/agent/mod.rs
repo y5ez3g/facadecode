@@ -71,14 +71,21 @@ const START_TIMEOUT: Duration = Duration::from_secs(30);
 // The screen log sizes its largest record by what one feed takes; a read never brings more.
 const _: () = assert!(terminal::MAX_READ_BYTES <= screen::MAX_FEED_BYTES);
 
+static VIEW_STORAGE: Mutex<Vec<ScreenView>> = Mutex::new(Vec::new());
+
+/// Releases the row storage after all managed runs have settled.
+pub(crate) fn release_view_storage() {
+    let idle = std::mem::take(&mut *VIEW_STORAGE.lock().unwrap());
+    drop(idle);
+}
+
 /// Keeps a few ordinary views' row allocations for subsequent input and state readings. A
 /// reader fills its own storage and runs without the pool lock.
 fn with_screen_view<T>(screen: &Screen, read: impl FnOnce(&ScreenView) -> T) -> T {
     const RETAINED_VIEWS: usize = 4;
     const RETAINED_VIEW_BYTES: usize = 160 * 1024;
-    static SCRATCH: Mutex<Vec<ScreenView>> = Mutex::new(Vec::new());
 
-    let mut view = SCRATCH.lock().unwrap().pop().unwrap_or_default();
+    let mut view = VIEW_STORAGE.lock().unwrap().pop().unwrap_or_default();
     screen.refresh_view(&mut view);
     let result = read(&view);
     let bytes = view.rows.capacity() * size_of::<Vec<VisibleCell>>()
@@ -88,7 +95,7 @@ fn with_screen_view<T>(screen: &Screen, read: impl FnOnce(&ScreenView) -> T) -> 
         for row in &mut view.rows {
             row.clear();
         }
-        let mut returned = SCRATCH.lock().unwrap();
+        let mut returned = VIEW_STORAGE.lock().unwrap();
         if returned.len() < RETAINED_VIEWS {
             returned.push(view);
         }

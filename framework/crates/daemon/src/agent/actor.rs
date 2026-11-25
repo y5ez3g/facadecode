@@ -106,7 +106,11 @@ pub(super) fn spawn(
     let mut actor = new_actor(start, links, recovered)?;
     // The record shows the state from the start.
     actor.record_state();
-    tokio::spawn(actor.run(commands, recovered, allow_auto_trust, colors));
+    tokio::spawn(async move {
+        actor
+            .run(commands, recovered, allow_auto_trust, colors)
+            .await;
+    });
     Ok(())
 }
 
@@ -366,13 +370,13 @@ impl Actor {
     }
 
     async fn run(
-        mut self,
+        &mut self,
         mut commands: mpsc::Receiver<AgentCommand>,
         recovered: bool,
         allow_auto_trust: bool,
         colors: TerminalColors,
     ) {
-        self.begin(recovered, allow_auto_trust, colors).await;
+        Box::pin(self.begin(recovered, allow_auto_trust, colors)).await;
         // A recovered run's first viewer needs the glyph from its restored evidence.
         self.publish_state();
         loop {

@@ -990,12 +990,23 @@ impl Daemon {
             daemon.lifecycle.clear_exit_delay();
             let mut settled = agent.settled();
             let _ = settled.wait_for(|settled| *settled).await;
-            daemon.runs.release(&id);
+            daemon.release_ended_run(&id).await;
             drop(saving);
         });
         let agents = self.agents.lock().unwrap();
         self.runs
             .keep_exit_task(&writer, task, || agents.contains_key(&writer));
+    }
+
+    /// Releases a run and gives unused display and database storage back once all runs settled.
+    pub(crate) async fn release_ended_run(&self, id: &str) {
+        if self.runs.release(id) && self.runs.busy().is_none() {
+            agent::release_view_storage();
+            let store = self.store.clone();
+            if let Err(error) = blocking(move || store.release_cache()).await {
+                log("warn", &error.message);
+            }
+        }
     }
 
     /// Removes an agent: stops it first, then deletes its record with its inbox in one transaction,
