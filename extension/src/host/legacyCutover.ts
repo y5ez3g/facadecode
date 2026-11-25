@@ -603,18 +603,33 @@ function recoveryKey(pin: LegacySessionPin, owner: string, row: ObservedRun | un
 		: row ? [row.incarnation, runKey(row)] : [owner, pin.id, environment, cli, builtIn ?? cli, normalizedFolder(pin.cwd)]);
 }
 
+function sameReference(expected: AgentRef, actual: AgentRef | undefined): actual is AgentRef {
+	return actual !== undefined && expected.agent_id === actual.agent_id && expected.machine_id === actual.machine_id;
+}
+
 /** Shared conversion progress remains in the adapter after a workspace consumes its own Pin. */
 export function legacyPinMigration(home: string, owner: string): LegacyPinMigration {
 	const file = journal(home);
 	return {
 		snapshot: () => frozenPins(readCutover(home), owner),
-		async recover(pin, previousAttempt, perform, reconcileAttempt): Promise<LegacyPinOutcome> {
-			const select = (record: CutoverRecord) => {
+		async recover(pin, previousAttempt, perform, reconcileAttempt, reconcilePrevious): Promise<LegacyPinOutcome> {
+			const select = (record: CutoverRecord): {
+				readonly key: string;
+				readonly runs: readonly string[];
+				readonly reference?: AgentRef;
+				readonly previous?: ReturnType<typeof previousAttempt>;
+			} | undefined => {
 				const exact = record.runs.filter(row => exactPinRun(pin, row));
 				if (!pin.conversation.sessionId && exact.length > 1) { return; }
 				const key = recoveryKey(pin, owner, exact[0]);
 				const runs = exact.map(run => JSON.stringify([run.incarnation, runKey(run)]));
 				return { key, runs, reference: record.recoveries?.[key]?.reference };
+			};
+			const readHistorical = () => {
+				const existing = select(readCutover(home));
+				if (!existing || existing.reference) { return existing; }
+				const previous = previousAttempt();
+				return previous.attempted ? { ...existing, previous } : undefined;
 			};
 			const observe = async () => withLongFileLock(file, async () => {
 				const before = readCutover(home);
@@ -637,12 +652,12 @@ export function legacyPinMigration(home: string, owner: string): LegacyPinMigrat
 					close(fresh);
 				}
 			}, JOURNAL_WAIT_MS);
-			const selection = await observe();
+			const selection = readHistorical() ?? await observe();
 			if (!selection) { return { kind: 'deferred' }; }
 			if (selection.reference) { return { kind: 'confirmed', reference: selection.reference }; }
 			const lockKey = createHash('sha256').update(selection.key).digest('hex');
 			return withLongFileLock(path.join(home, 'claims', `legacy-pin-${lockKey}`), async () => {
-				const current = await observe();
+				const current = readHistorical() ?? await observe();
 				if (!current || current.key !== selection.key) { return { kind: 'deferred' }; }
 				if (current.reference) { return { kind: 'confirmed', reference: current.reference }; }
 				const { key, runs } = current;
@@ -659,14 +674,22 @@ export function legacyPinMigration(home: string, owner: string): LegacyPinMigrat
 				};
 				const known = readCutover(home).recoveries?.[key];
 				if (known?.reference) { return { kind: 'confirmed', reference: known.reference }; }
-				if (known?.pending && known.attempt && reconcileAttempt) {
-					const reference = await reconcileAttempt(known.attempt);
-					if (reference?.agent_id === known.attempt.reference.agent_id
-						&& reference.machine_id === known.attempt.reference.machine_id) { return commit(reference); }
+				const previous = current.previous ?? previousAttempt();
+				if (previous.attempted && !known?.pending) {
+					await update(before => ({ ...before, pending: true }));
+				}
+				const historical = previous.attempted ? previous.reference : undefined;
+				if (historical && reconcilePrevious && (!known?.attempt || sameReference(known.attempt.reference, historical))) {
+					const inspected = await reconcilePrevious(historical);
+					if (sameReference(historical, inspected)) { return commit(inspected); }
 					return { kind: 'deferred' };
 				}
-				if (known?.pending || previousAttempt()) {
-					if (!known?.pending) { await update(before => ({ ...before, pending: true })); }
+				if (known?.pending && known.attempt && reconcileAttempt) {
+					const reference = await reconcileAttempt(known.attempt);
+					if (sameReference(known.attempt.reference, reference)) { return commit(reference); }
+					return { kind: 'deferred' };
+				}
+				if (known?.pending || previous.attempted) {
 					return { kind: 'unconfirmed' };
 				}
 				const reservation: SharedPinRecovery = {

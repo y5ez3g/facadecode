@@ -123,7 +123,7 @@ suite('Scoped legacy cutover', () => {
 			const scope = { owner: A, retired: CLAIM };
 			const saved = pin('pin-a', 'scope-a');
 			assert.ok(!fs.existsSync(f.registry));
-			assert.deepStrictEqual(await legacyPinMigration(f.home, A).recover(saved, () => false,
+			assert.deepStrictEqual(await legacyPinMigration(f.home, A).recover(saved, () => ({ attempted: false }),
 				async () => assert.fail('the unpublished supervisor still holds this session')), { kind: 'deferred' });
 			const offered = (await checkLegacyCutover(f.home, scope)).plan;
 			assert.ok(offered);
@@ -191,18 +191,18 @@ suite('Scoped legacy cutover', () => {
 			assert.ok(offered);
 			assert.ok(await approveLegacyCutover(f.home, scope, offered));
 			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, false);
-			assert.deepStrictEqual(await a.recover(saved, () => false, neverStart), { kind: 'deferred' });
+			assert.deepStrictEqual(await a.recover(saved, () => ({ attempted: false }), neverStart), { kind: 'deferred' });
 			f.rows.splice(0, 1);
 			fs.renameSync(f.registryFile, `${f.registryFile}.hidden`);
 			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, false);
-			assert.deepStrictEqual(await a.recover(saved, () => false, neverStart), { kind: 'deferred' });
+			assert.deepStrictEqual(await a.recover(saved, () => ({ attempted: false }), neverStart), { kind: 'deferred' });
 			fs.renameSync(`${f.registryFile}.hidden`, f.registryFile);
 			fs.writeFileSync(f.lockFile, String(process.pid), { flag: 'wx', mode: 0o600 });
 			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, false, 'a newer listener cannot settle the old queue');
-			assert.deepStrictEqual(await a.recover(saved, () => false, neverStart), { kind: 'deferred' });
+			assert.deepStrictEqual(await a.recover(saved, () => ({ attempted: false }), neverStart), { kind: 'deferred' });
 			fs.unlinkSync(f.lockFile);
 			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
-			assert.deepStrictEqual(await a.recover(saved, () => false, async () => REFERENCE), { kind: 'confirmed', reference: REFERENCE });
+			assert.deepStrictEqual(await a.recover(saved, () => ({ attempted: false }), async () => REFERENCE), { kind: 'confirmed', reference: REFERENCE });
 			assert.deepStrictEqual(f.effects, []);
 		} finally {
 			await f.dispose();
@@ -278,7 +278,7 @@ suite('Scoped legacy cutover', () => {
 			assert.deepStrictEqual(f.effects.map(effect => effect.method), ['claim', 'terminate']);
 			const progress = JSON.parse(fs.readFileSync(f.journal, 'utf8'));
 			assert.deepStrictEqual([progress.runs[0].stop, progress.runs[0].nativeStop], ['requested', true]);
-			assert.deepStrictEqual(await legacyPinMigration(f.home, A).recover(pin('pin-a', 'scope-a'), () => false,
+			assert.deepStrictEqual(await legacyPinMigration(f.home, A).recover(pin('pin-a', 'scope-a'), () => ({ attempted: false }),
 				async () => assert.fail('unconfirmed stop released recovery')), { kind: 'deferred' });
 			f.rows[0].ended = true;
 			assert.strictEqual((await checkLegacyCutover(f.home, { owner: A })).ready, true);
@@ -301,7 +301,7 @@ suite('Scoped legacy cutover', () => {
 				runs: [{ socket: run.socket, owner: A, run: RUN_A, pid: run.pid, approved: true, stop: 'requested' }],
 			}));
 			assert.strictEqual((await checkLegacyCutover(f.home, { owner: A })).ready, true);
-			assert.deepStrictEqual(await legacyPinMigration(f.home, A).recover(saved, () => false,
+			assert.deepStrictEqual(await legacyPinMigration(f.home, A).recover(saved, () => ({ attempted: false }),
 				async () => assert.fail('the historic request fence was lost')), { kind: 'deferred' });
 			assert.strictEqual(JSON.parse(fs.readFileSync(f.journal, 'utf8')).runs[0].stop, 'requested');
 			assert.strictEqual(f.effects.length, 0);
@@ -338,9 +338,9 @@ suite('Scoped legacy cutover', () => {
 			const a = legacyPinMigration(f.home, A);
 			const b = legacyPinMigration(f.home, B);
 			assert.ok((await checkLegacyCutover(f.home, { owner: A })).ready);
-			assert.deepStrictEqual(await a.recover(pin('pin-a'), () => false,
+			assert.deepStrictEqual(await a.recover(pin('pin-a'), () => ({ attempted: false }),
 				async () => assert.fail('an old session was still live')), { kind: 'deferred' });
-			assert.deepStrictEqual(await a.recover(pin('unrelated', 'other'), () => false, async () => REFERENCE),
+			assert.deepStrictEqual(await a.recover(pin('unrelated', 'other'), () => ({ attempted: false }), async () => REFERENCE),
 				{ kind: 'confirmed', reference: REFERENCE });
 			f.rows[1].ended = true;
 			let launches = 0;
@@ -350,8 +350,8 @@ suite('Scoped legacy cutover', () => {
 				return REFERENCE;
 			};
 			assert.deepStrictEqual(await Promise.all([
-				a.recover(pin('pin-a'), () => false, convert),
-				b.recover(pin('pin-b'), () => false, convert),
+				a.recover(pin('pin-a'), () => ({ attempted: false }), convert),
+				b.recover(pin('pin-b'), () => ({ attempted: false }), convert),
 			]), [{ kind: 'confirmed', reference: REFERENCE }, { kind: 'confirmed', reference: REFERENCE }]);
 			assert.strictEqual(launches, 1);
 		} finally {
@@ -378,7 +378,7 @@ suite('Scoped legacy cutover', () => {
 				started++;
 				return REFERENCE;
 			};
-			assert.deepStrictEqual(await b.recover(pinB, () => false, convert), { kind: 'deferred' });
+			assert.deepStrictEqual(await b.recover(pinB, () => ({ attempted: false }), convert), { kind: 'deferred' });
 			assert.strictEqual(started, 0);
 			assert.ok(await approveLegacyCutover(f.home, scope, offered));
 			assert.strictEqual((await checkLegacyCutover(f.home, scope)).ready, true);
@@ -388,8 +388,8 @@ suite('Scoped legacy cutover', () => {
 			assert.strictEqual(f.rows[1].ended, false, 'the second workspace’s unrelated agent is still live');
 			const confirmed = { kind: 'confirmed', reference: REFERENCE };
 			assert.deepStrictEqual(await Promise.all([
-				a.recover(pinA, () => false, convert),
-				b.recover(pinB, () => false, convert),
+				a.recover(pinA, () => ({ attempted: false }), convert),
+				b.recover(pinB, () => ({ attempted: false }), convert),
 			]), [confirmed, confirmed]);
 			assert.strictEqual(started, 1);
 			const journal = JSON.parse(fs.readFileSync(f.journal, 'utf8')) as {
@@ -400,10 +400,48 @@ suite('Scoped legacy cutover', () => {
 			assert.strictEqual(recoveries[0].runs.length, 1);
 			assert.ok(recoveries[0].runs[0].includes(RUN_A), 'the recovery is tied to the exact stopped run');
 			fs.writeFileSync(path.join(f.registry, 'unreadable.json'), '{');
-			assert.deepStrictEqual(await legacyPinMigration(f.home, B).recover(pinB, () => false,
+			assert.deepStrictEqual(await legacyPinMigration(f.home, B).recover(pinB, () => ({ attempted: false }),
 				async () => assert.fail('the saved recovery was launched again')), confirmed);
-			assert.deepStrictEqual(await b.recover(pin('different', 'different-session'), () => false,
+			assert.deepStrictEqual(await b.recover(pin('different', 'different-session'), () => ({ attempted: false }),
 				async () => assert.fail('incomplete inventory authorized a new start')), { kind: 'deferred' });
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	test('confirms an exact historical reference once despite unreadable legacy inventory (ARCHITECTURE-1.4)', async () => {
+		const f = await fixture();
+		try {
+			f.rows[0].ended = true;
+			fs.writeFileSync(path.join(f.registry, 'unreadable.json'), '{');
+			const pinA = pin('pin-a', 'scope-a');
+			const pinB = pin('pin-shared-b', 'scope-a');
+			const a = legacyPinMigration(f.home, A);
+			const b = legacyPinMigration(f.home, B);
+			const history = () => ({ attempted: true, reference: REFERENCE });
+			const noStart = async () => assert.fail('historical intent allowed a new start');
+			const stored = () => Object.values(JSON.parse(fs.readFileSync(f.journal, 'utf8')).recoveries);
+			assert.deepStrictEqual(await a.recover(pinA, history, noStart, undefined, async () => {
+				assert.deepStrictEqual(stored(), [{ pending: true }]);
+				return { ...REFERENCE, machine_id: 'unrelated-machine' };
+			}), { kind: 'deferred' });
+			assert.deepStrictEqual(stored(), [{ pending: true }]);
+			assert.deepStrictEqual(await b.recover(pinB, () => ({ attempted: true }), noStart), { kind: 'unconfirmed' });
+
+			let inspections = 0;
+			const inspect = async (reference: typeof REFERENCE) => {
+				assert.deepStrictEqual(reference, REFERENCE);
+				inspections++;
+				return REFERENCE;
+			};
+			const confirmed = { kind: 'confirmed', reference: REFERENCE };
+			assert.deepStrictEqual(await Promise.all([
+				a.recover(pinA, history, noStart, undefined, inspect),
+				b.recover(pinB, history, noStart, undefined, inspect),
+			]), [confirmed, confirmed]);
+			assert.strictEqual(inspections, 1);
+			assert.deepStrictEqual(stored(), [{ reference: REFERENCE, runs: [] }]);
+			assert.deepStrictEqual(await b.recover(pinB, () => assert.fail('the known result lost priority'), noStart, undefined, noStart), confirmed);
 		} finally {
 			await f.dispose();
 		}
@@ -415,17 +453,17 @@ suite('Scoped legacy cutover', () => {
 		try {
 			f.rows.forEach(row => { row.ended = true; });
 			const a = legacyPinMigration(f.home, A);
-			assert.deepStrictEqual(await a.recover(pin('pin-a'), () => false, async reservation => {
+			assert.deepStrictEqual(await a.recover(pin('pin-a'), () => ({ attempted: false }), async reservation => {
 				f.rows.push({ ...f.rows[1], run: 'run-cccccccccccccccccccccccccccccccc', ended: false });
 				await reservation.begin();
 				return assert.fail('a fresh legacy holder allowed resume');
 			}), { kind: 'deferred' });
 			f.rows[2].ended = true;
-			await assert.rejects(a.recover(pin('pin-a'), () => false, async reservation => {
+			await assert.rejects(a.recover(pin('pin-a'), () => ({ attempted: false }), async reservation => {
 				await reservation.begin();
 				throw new Error('lost reply');
 			}), /lost reply/);
-			assert.deepStrictEqual(await legacyPinMigration(f.home, B).recover(pin('pin-b'), () => false,
+			assert.deepStrictEqual(await legacyPinMigration(f.home, B).recover(pin('pin-b'), () => ({ attempted: false }),
 				async () => assert.fail('ambiguous attempt replayed')), { kind: 'unconfirmed' });
 		} finally {
 			await f.dispose();
@@ -446,14 +484,14 @@ suite('Scoped legacy cutover', () => {
 				created_at: '2026-01-01T00:00:00.000Z', address: 'a7@machine', cli: 'codex', args: [],
 				cwd: saved.cwd, session: saved.conversation.sessionId, name: 'Fixture', yolo: false, state: 'ended', tools_state: 'available',
 			};
-			await assert.rejects(a.recover(saved, () => false, async reservation => {
+			await assert.rejects(a.recover(saved, () => ({ attempted: false }), async reservation => {
 				await reservation.begin({ reference: REFERENCE, startedAt: before.started_at });
 				throw new Error('lost exact resume');
 			}), /lost exact resume/);
 			const neverReplay = async () => assert.fail('the exact resume replayed');
-			assert.deepStrictEqual(await a.recover(saved, () => false, neverReplay, async attempt =>
+			assert.deepStrictEqual(await a.recover(saved, () => ({ attempted: false }), neverReplay, async attempt =>
 				confirmsLegacyResume(saved, REFERENCE.machine_id, attempt, before) ? REFERENCE : undefined), { kind: 'deferred' });
-			assert.deepStrictEqual(await a.recover(saved, () => false, neverReplay, async attempt => {
+			assert.deepStrictEqual(await a.recover(saved, () => ({ attempted: false }), neverReplay, async attempt => {
 				const after = { ...before, started_at: new Date(attempt.requestedAt + 1).toISOString() };
 				assert.strictEqual(confirmsLegacyResume(saved, REFERENCE.machine_id, attempt, {
 					...after, reference: { ...REFERENCE, agent_id: 'a8' },

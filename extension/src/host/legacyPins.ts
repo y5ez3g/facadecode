@@ -44,9 +44,10 @@ export type LegacyPinOutcome = { readonly kind: 'deferred' } | { readonly kind: 
 
 export interface LegacyPinMigration {
 	snapshot(): LegacyPinInput | undefined;
-	recover(pin: LegacySessionPin, previousAttempt: () => boolean,
+	recover(pin: LegacySessionPin, previousAttempt: () => { readonly attempted: boolean; readonly reference?: AgentRef },
 		perform: (reservation: SharedPinRecovery) => Promise<AgentRef>,
-		reconcile?: (attempt: LegacyResumeAttempt) => Promise<AgentRef | undefined>): Promise<LegacyPinOutcome>;
+		reconcile?: (attempt: LegacyResumeAttempt) => Promise<AgentRef | undefined>,
+		reconcilePrevious?: (reference: AgentRef) => Promise<AgentRef | undefined>): Promise<LegacyPinOutcome>;
 }
 
 export interface LegacyMigrationSource {
