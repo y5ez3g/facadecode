@@ -599,9 +599,9 @@ export class FrameworkWorkspace implements Disposable {
 		}));
 	}
 
-	forget(ref: AgentRef): void {
+	forget(ref: AgentRef, explicitlyRemoved = false): void {
 		this.edit(latest => {
-			this.discardLegacyPins(latest.pins.filter(pin => sameRef(refOf(pin), ref)).map(pin => pin.id), ref);
+			this.discardLegacyPins(latest.pins.filter(pin => sameRef(refOf(pin), ref)), explicitlyRemoved);
 			return {
 				...latest,
 				members: latest.members.filter(each => !sameRef(each, ref)),
@@ -669,9 +669,9 @@ export class FrameworkWorkspace implements Disposable {
 		return saved.pins.find(each => sameRef(refOf(each), ref))!;
 	}
 
-	removePin(id: string): void {
+	removePin(id: string, explicitlyRemoved = true): void {
 		this.edit(latest => {
-			this.discardLegacyPins([id]);
+			this.discardLegacyPins(latest.pins.filter(pin => pin.id === id), explicitlyRemoved);
 			return { ...latest, pins: latest.pins.filter(pin => pin.id !== id) };
 		});
 	}
@@ -763,11 +763,13 @@ export class FrameworkWorkspace implements Disposable {
 		}
 	}
 
-	private discardLegacyPins(ids: readonly string[], reference?: AgentRef): void {
+	private discardLegacyPins(pins: readonly FrameworkPin[], explicitlyRemoved: boolean): void {
+		if (!pins.length) { return; }
 		const recovery = this.readLegacyRecovery();
 		if (!recovery) { return; }
-		const removed = recovery.pending.filter(pin => ids.includes(pin.id) || reference && recovery.commits?.some(commit =>
-			commit.id === pin.id && sameRef(commit.reference, reference))).map(pin => pin.id);
+		const removed = recovery.pending.filter(previous => pins.some(pin => pin.id === previous.id
+			&& (explicitlyRemoved || recovery.commits?.some(commit => commit.id === pin.id
+				&& sameRef(commit.reference, refOf(pin)))))).map(pin => pin.id);
 		if (removed.length) { this.writeLegacyRecovery({ ...recovery, removed: [...new Set([...recovery.removed ?? [], ...removed])] }); }
 	}
 

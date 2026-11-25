@@ -273,6 +273,9 @@ suite('Scoped legacy cutover', () => {
 			assert.strictEqual(workspace.importLegacyPin(previous, recovered), false);
 			assert.deepStrictEqual(workspace.pendingLegacyPins(), [previous]);
 			workspace.removePin('pin-conflicting');
+			workspace.savePin({ ...recovered, agent: 'other' });
+			workspace.removePin(recovered.id, false);
+			assert.deepStrictEqual(workspace.pendingLegacyPins(), [previous]);
 			assert.strictEqual(workspace.importLegacyPin(previous, recovered), true);
 			assert.deepStrictEqual(workspace.snapshot().pins, [recovered]);
 			assert.deepStrictEqual(workspace.pendingLegacyPins(), []);

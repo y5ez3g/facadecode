@@ -199,7 +199,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 		if (!reference) { return; }
 		await this.deps.link.call('agent.remove', { target: reference });
 		this.records.delete(run);
-		this.deps.workspace.forget(reference);
+		this.deps.workspace.forget(reference, true);
 		this.closeView(run);
 	}
 
@@ -379,7 +379,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 				if (!this.currentPin(pin)) { return; }
 				const reference = referenceOfPin(pin);
 				if (this.records.has(agentKey(reference))) {
-					this.deps.workspace.removePin(pin.id);
+					this.deps.workspace.removePin(pin.id, false);
 				} else {
 					this.deps.workspace.forget(reference);
 				}
