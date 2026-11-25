@@ -4,11 +4,9 @@
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "Novo Agente...",
-	"command.goToAgent": "Go to Agent...",
 	"command.openTerminal": "Abrir terminal",
-	"command.hideAgent": "Ocultar",
 	"command.renameAgent": "Renomear Agente...",
-	"command.stopAgent": "Parar Agente",
+	"command.stopAgent": "Parar Agente...",
 	"command.deleteAgent": "Remover",
 	"command.copyAgentReference": "Copiar referência do agente",
 	"command.dismissAgent": "Ocultar Agente",
@@ -28,7 +26,7 @@
 	"config.pi.title": "Pi",
 	"windowDisplayName": "Componente de Janela do Facade Code",
 	"windowDescription": "Fecha as abas de terminal antigas do Facade Code após a reconexão de uma janela remota ou a reinicialização da extensão.",
-	"command.filter": "Filtrar por Local de Trabalho...",
+	"command.filter": "Filtrar agentes...",
 	"command.showAgentLaunch": "Mostrar Linha de Comando do Agente...",
 	"command.showAgentsLog": "Mostrar Log dos Agentes",
 	"icon.newAgent": "Ícone de Novo Agente",
@@ -37,7 +35,6 @@
 	"command.continueSession": "Continuar sessão...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "Somente para a implementação anterior. Esta pasta guarda as configurações, o histórico dos agentes e as mensagens dessa implementação. Um caminho definido aqui tem prioridade sobre `FACADE_HOME` e sobre o padrão `~/.facade`.\n\n[Editar no facade.json](command:facade.openSettingsFile) para alterar o YOLO, os nomes sugeridos e como as CLIs são iniciadas.",
-	"config.home.pattern": "O caminho deve começar com ~/ ou ser absoluto.",
-	"config.framework": "Controla qual implementação executa seus agentes.\n\n- `auto`: usa o Facade Code Framework. Uma janela passa a usá-lo assim que nenhum agente da implementação anterior estiver em execução neste computador. Agentes em execução nunca são interrompidos, e o Facade sugere recarregar a janela assim que a troca for possível.\n- `off`: usa a implementação anterior. Se o Facade Code Framework causar problemas, selecione `off`, recarregue a janela e [abra uma issue no GitHub](https://github.com/y5ez3g/facadecode/issues).\n\nEm uma janela remota, aplica-se a configuração da máquina remota."
+	"config.home": "A pasta do Facade que esta janela usa para configurações, registros de agentes e migração de versões anteriores. Um caminho definido aqui tem prioridade sobre `FACADE_HOME` e sobre o padrão `~/.facade`.\n\n[Editar no facade.json](command:facade.openSettingsFile) para alterar o YOLO, os nomes sugeridos e como as CLIs são iniciadas.",
+	"config.home.pattern": "O caminho deve começar com ~/ ou ser absoluto."
 }

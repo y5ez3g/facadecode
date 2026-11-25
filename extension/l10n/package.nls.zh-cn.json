@@ -4,11 +4,9 @@
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "新建 Agent...",
-	"command.goToAgent": "Go to Agent...",
 	"command.openTerminal": "打开终端",
-	"command.hideAgent": "隐藏",
 	"command.renameAgent": "重命名 Agent...",
-	"command.stopAgent": "停止 Agent",
+	"command.stopAgent": "停止 Agent...",
 	"command.deleteAgent": "移除",
 	"command.copyAgentReference": "复制 Agent 引用",
 	"command.dismissAgent": "收起 Agent",
@@ -28,7 +26,7 @@
 	"config.pi.title": "Pi",
 	"windowDisplayName": "Facade Code 窗口组件",
 	"windowDescription": "远程窗口重新连接或扩展重启时，关闭 Facade Code 遗留的终端选项卡。",
-	"command.filter": "按工作位置筛选...",
+	"command.filter": "筛选 Agent...",
 	"command.showAgentLaunch": "显示 Agent 命令行...",
 	"command.showAgentsLog": "显示 Agent 日志",
 	"icon.newAgent": "新建 Agent 图标",
@@ -37,7 +35,6 @@
 	"command.continueSession": "继续会话...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "仅用于旧版实现。此目录保存旧版实现的设置、Agent 历史和消息。此处设置的路径优先于 `FACADE_HOME` 和默认路径 `~/.facade`。\n\n[在 facade.json 中编辑](command:facade.openSettingsFile)可更改 YOLO、建议的名称和 CLI 的启动方式。",
-	"config.home.pattern": "路径必须以 ~/ 开头或是绝对路径。",
-	"config.framework": "控制运行 Agent 的实现。\n\n- `auto`：使用 Facade Code Framework。这台计算机上旧版实现的 Agent 全部结束后，窗口才会切换过去。正在运行的 Agent 不会被打断；一旦可以切换，Facade 会提示你重新加载窗口。\n- `off`：使用旧版实现。如果 Facade Code Framework出了问题，请选择 `off` 并重新加载窗口，然后[在 GitHub 上提交问题](https://github.com/y5ez3g/facadecode/issues)告诉我们。\n\n在远程窗口中，以远程计算机上的设置为准。"
+	"config.home": "此窗口用于存放设置、Agent 记录和迁移旧版数据的 Facade 目录。此处设置的路径优先于 `FACADE_HOME` 和默认路径 `~/.facade`。\n\n[在 facade.json 中编辑](command:facade.openSettingsFile)可更改 YOLO、建议的名称和 CLI 的启动方式。",
+	"config.home.pattern": "路径必须以 ~/ 开头或是绝对路径。"
 }

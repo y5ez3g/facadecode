@@ -165,7 +165,7 @@ def render_table(cases, inventory, product):
     print('See the [CI design](CI.md) for the acceptance policy.\n')
     print(f'{apis} API obligations and {len(selected) - apis} P0 cases. '
           f'{bound} have exact bindings and {len(selected) - bound} are pending.\n')
-    print('A bound row requires passing evidence for the current run. Candidate test references are for review.\n')
+    print('Bound rows in the current plan require passing evidence. Historical rows describe checks for earlier builds.\n')
     print('| Case | Stage | Exact binding | Expected behavior | Code and candidate tests |')
     print('| --- | --- | --- | --- | --- |')
     for case in selected:

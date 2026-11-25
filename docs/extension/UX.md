@@ -114,8 +114,8 @@ Durations and curves are Fluent's, chosen and decided: a card's insertion 200 ms
 card in view after a normal process exit fades as its row closes up from its own height in 150 ms, `cubic-bezier(1,0,1,1)`,
 as its fast motion leaves - one out of view or cut by an edge, or the list gliding, goes at once; a card's details enter
 as Fluent's popover does, fading in as they slide 10 px in from the ⓘ's side over 400 ms, `cubic-bezier(0,0,0,1)`, and
-leave at once (PANEL-1.5); text changes in place. No motion on first draw/filter change. Stop Agent, Dismiss Agent and confirmed location removal remove the card and terminal
-immediately, without animation. Dot and scrolling durations belong to PANEL. Long-running animation changes only
+leave at once (PANEL-1.5); text changes in place. No motion on first draw or filter change. Stop Agent keeps the record available for Resume.
+Dot and scrolling durations belong to PANEL. Long-running animation changes only
 opacity/transform. The panel and a busy tab's spinner (LIFECYCLE-2.2) follow both `workbench.reduceMotion` and the
 system preference; as the extension host cannot read the system preference, the tab takes it from the panel's page, and
 under `auto` keeps one frame still until the page has reported that motion is allowed. Test 180, 260, 420 and 720 px
@@ -173,33 +173,31 @@ as menu-only. Arguments bypass a picker only
 when their schema fully identifies the target; invalid arguments fail without guessing. The table is the authoritative
 command inventory, not a second description of behavior.
 
-For Rename, Pin, Unpin, Stop Agent, Dismiss Agent and Show Agent Details, a palette invocation without an explicit target uses
-PANEL-2.1's current selected run. If no selected run exists or the action is unavailable for it, the command is unavailable; it does not
-open a target picker. Rename still asks for the new name. Explicit arguments and the card menu target that exact run and
-are validated against current state, without falling back to the selection.
+Rename, Pin, Unpin and Show Agent Details use the selected card for palette invocations.
+The card menu acts on the card where it was opened. Resume Agent and Stop Agent open their own
+target pickers. Rename asks for the new name. Commands with explicit targets validate those targets against
+the current state.
 
 | ID after `facade.` | Title | Availability / other surface | Owner |
 | --- | --- | --- | --- |
-| `newAgent` | New Agent... | Always; panel/empty state | LIFECYCLE-1.1 |
-| `continueSession` | Continue Session... | Both implementations; palette and empty panel. Legacy implementation panel title | LIFECYCLE-3.2 |
-| `pinAgent` | Pin Agent | Unpinned agent whose CLI can resume its exact conversation, before it names one too; the card's Pin button | LIFECYCLE-3.4 |
-| `unpinAgent` | Unpin Agent | Pinned record; the card's Pin button | LIFECYCLE-3.4 |
-| `goToAgent` | Go to Agent... | Always; Command Palette | LIFECYCLE-2.3 |
-| `renameAgent` | Rename Agent... | Known owned record; card/F2 | LIFECYCLE-2.1 |
-| `stopAgent` | Stop Agent | Starting or running agent; card and Go to Agent | LIFECYCLE-3.1 |
-| `dismissAgent` | Dismiss Agent | Ended pair in this window; card and Go to Agent | LIFECYCLE-3.1 |
+| `newAgent` | New Agent... | Panel, empty state and Command Palette | LIFECYCLE-5.1 |
+| `resumeAgent` | Resume Agent... | Panel, empty state and Command Palette | LIFECYCLE-5.4 |
+| `pinAgent` | Pin Agent | Eligible unpinned record, card button and Command Palette | LIFECYCLE-5.5 |
+| `unpinAgent` | Unpin Agent | Pinned record, card button and Command Palette | LIFECYCLE-5.5 |
+| `openTerminal` | Open Terminal | Selected running card, Command Palette | RULES-6.3 |
+| `renameAgent` | Rename Agent... | Card menu, F2 and selected card in Command Palette | LIFECYCLE-2.1 |
+| `stopAgent` | Stop Agent... | Command Palette, with a picker for running managed agents | LIFECYCLE-5.3 |
+| `deleteAgent` | Remove | Selected card, Command Palette | RULES-6.3 |
+| `copyAgentReference` | Copy Agent Reference | Command Palette for the selected card | PANEL-4.1 |
 | `showAgentDetails` | Show Agent Details | A selected record whose card the filter shows; the card's ⓘ | PANEL-1.5 |
-| `filter` | Filter by Working Location... | Panel title and Command Palette, except where every agent works in the window's one place to work and no filter is on | PANEL-2.3 |
+| `filter` | Filter Agents... | Panel title and Command Palette | PANEL-4.3 |
 | `openSettings` | Open Settings | Always; panel `…` menu, New Agent's gear and configuration entries; opens the Settings section or remote facade.json under CONFIGURATION-1.2 | CONFIGURATION-1.2 |
-| `showAgentLaunch` | Show Agent Command Line... | Legacy implementation; Command Palette | CLIS-4.1 |
 | `showAgentsLog` | Show Agents Log | Always; Command Palette | ARCHITECTURE-3.3 |
 | `newWorktree` | New Worktree... | Menu-only: panel `…` when a workspace folder is open; hidden from Command Palette | WORKTREES-2.1, 4.3 |
 
-PANEL-1.1 places the editor's own Add Folder to Workspace... command in the view menu; it is not another `facade.` command.
-This table and 3.2 list every command Facade contributes; there are no others and no aliases. Some actions are
-deliberately not commands: Go to Agent's item button copies an agent's reference (LIFECYCLE-2.3), the filter picker's
-first item and the filtered empty state's button clear a filter (PANEL-2.3, 1.2), and a message to the person opens from
-its notification (UX-1.2).
+PANEL-1.1 places the editor's Add Folder to Workspace... command in the view menu. Clear Filters is available in
+the filter picker and filtered empty state. The retired legacy IDs `continueSession`, `dismissAgent` and
+`showAgentLaunch` remain in the manifest without a Framework command surface.
 
 ### 3.2 Context and internal commands
 
@@ -208,11 +206,8 @@ its notification (UX-1.2).
 Hidden from palette: `newWorktree` (view-menu creation), `moveUp` (Move Up) and `moveDown` (Move Down) in the card menu,
 `filterOn` (the filled-icon form of `filter`, shown while a filter is active), `revealAgent` (Show Agent,
 notification navigation), and `openSettingsFile` (Open facade.json, used by Edit in facade.json links and error notifications under
-CONFIGURATION-1.2). The worktree command follows WORKTREES-4.3. Facade contributes no terminal-tab context
-entries; the card's gear menu covers Rename, Move Up, Move Down, Stop Agent and Dismiss Agent. Its Pin button handles pinning and unpinning
-(PANEL-1.3, 2.2). The palette offers Rename, Pin, Unpin, Stop Agent, Dismiss Agent and Show Agent Details as applicable (3.1). No internal
-`$mid` terminal-context trick is used. There is no scripted-start command; UI and MCP use the same internal launch
-service.
+CONFIGURATION-1.2). The worktree command follows WORKTREES-4.3. The card's gear menu contains Rename, Move Up,
+and Move Down. Its Pin button handles pinning and unpinning (PANEL-4.2).
 
 The two components exchange requests only through the uncontributed commands ARCHITECTURE-1.1 names: they validate
 every argument, appear in no palette or menu and are not a public API.
@@ -314,24 +309,18 @@ they cannot certify native picker placement, focus or remote terminal behavior. 
 
 **Use the same names on the Panel, cards and Command Palette.**
 
-New Agent, Go to Agent and Resume Agent are the main entries. Go to Agent and Resume Agent use LIFECYCLE-5.2 and
-LIFECYCLE-5.4. Use Attach for opening the terminal, Hide for removing a workspace card, and Stop for ending the
-agent. PANEL-4 owns the card menu, state, title and details.
+Use New Agent, Resume Agent, Stop Agent and Filter Agents under LIFECYCLE-5 and PANEL-4.
+Closing an editor tab closes its live view. Keep existing command IDs for these user-facing names.
 
 ### 6.2 Settings and languages
 
 **Use the shared [glossary](../framework/GLOSSARY.md) and keep the product's command terms across locales.**
 
-Pin, Resume, Go to Agent, Attach, YOLO and Guest keep their names in all translations. Mark `facade.home` as an
-legacy implementation setting. Open Settings opens the machine's `facade.json` directly under
-CONFIGURATION-7.1. For a settings problem on that machine, Edit in facade.json opens the same file. For a
-settings problem on another machine, report the target and direct the person to the Shell and SSH steps in
-CONFIGURATION-7.1.
+Pin, Resume, YOLO and Guest keep their names in all translations. Open Settings follows CONFIGURATION-1.2.
+For a settings problem on that machine, Edit in facade.json opens the file under CONFIGURATION-7.1. For a problem on another machine, report the target and direct the person to its settings.
 
-Report agent and start errors using the machine or folder involved. Use window names for the editor and
-Attach viewers where relevant. If the editor falls back to the legacy implementation, name the machine it runs on and
-the step that failed. Say that the window is using the legacy implementation. Explain that after correcting the failure,
-the person can select `auto` in **Facade: Framework** and reopen the window.
+Report agent and start errors using the machine or folder involved. Report the step that failed when activation
+cannot start or connect to Framework. The legacy cutover uses the action in ARCHITECTURE-1.4.
 
 ## Checks
 

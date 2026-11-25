@@ -6,17 +6,12 @@ import * as assert from 'assert';
 import { execFile, execFileSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
-import * as os from 'os';
 import * as path from 'path';
 import { createInterface } from 'readline';
 import { isDeepStrictEqual } from 'util';
 import type { AgentInfo, AgentRef, DaemonHelloResult, HelloParams, HelloResult, InspectResult } from '../../base/frameworkProtocol';
 import { isProcessRunning } from '../../base/system';
-import type { OwnerClaim } from '../../base/ownership';
-import { ptydRecords, recordedPtyds } from '../../base/ptydRegistry';
-import { PtydClient } from '../../host/execution/ptydClient';
-import { isCurrentOwner, writeAsOwner } from '../../record/ownership';
-import type { Pin, FrameworkPin } from '../../core/ports';
+import type { FrameworkPin } from '../../core/ports';
 import { freePort, Workbench } from './cdpInput';
 import { callInFramework, frameworkCall, frameworkListens, frameworkSocket, detachedStartReference, endEditors, helloInFramework, normalizeDriveLetter, until } from './editors';
 import type { AttachView, SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './frameworkMultiWindowDriver';
@@ -125,78 +120,11 @@ export async function withFrameworkWindows(files: WindowFiles, start: StartEdito
 	}
 }
 
-/** Two actual legacy implementation windows replace the active claim for one workspace and keep both original agents. */
-export async function staleOwner(open: OpenWindow, folder: string, env: NodeJS.ProcessEnv): Promise<void> {
-	const home = path.join(env.FACADE_HOME!, 'extension');
-	const claim = () => {
-		const directory = path.join(home, 'claims');
-		const files = fs.readdirSync(directory).filter(file => file.endsWith('.json'));
-		assert.strictEqual(files.length, 1, 'exactly this fixture workspace has a claim');
-		return JSON.parse(fs.readFileSync(path.join(directory, files[0]), 'utf8')) as OwnerClaim;
-	};
-	const first = await open(folder, 'legacy');
-	assert.strictEqual(first.ready.machineId, null, 'the legacy implementation owns the agents');
-	const start = () => first.act<{ runId: string; alias: string }>({ kind: 'start-fallback' });
-	const agents = [await start(), await start()] as const;
-	const runs = [agents[0].runId, agents[1].runId] as const;
-	assert.notStrictEqual(runs[0], runs[1]);
-	for (const run of runs) { await first.act({ kind: 'pin-owned', run }); }
-	const oldPage = await first.act<string>({ kind: 'panel-generation' });
-	const previous = claim();
-	const stateFile = path.join(home, 'workspaces', previous.owner, 'workspace-state.json');
-	const savedPins = (): readonly string[] => {
-		const state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as { readonly 'facade.pins'?: readonly Pick<Pin, 'id'>[] };
-		return (state['facade.pins'] ?? []).map(pin => pin.id);
-	};
-	const services = recordedPtyds(ptydRecords(path.join(home, 'ptyd')));
-	assert.strictEqual(services.length, 1, 'the two actual fake CLIs use one legacy supervisor');
-	const service = services[0];
-	const ptyd = await PtydClient.connect(service.socket, '', path.join(home, 'ptyd', 'unused.log'), { start: false, protocol: service.protocol });
-	const list = () => ptyd.request('list', { owner: previous.owner });
-	const snapshot = async () => (await list()).map(row => ({
-		run: row.run, pid: row.pid, cwd: row.cwd, startedAt: row.startedAt, exited: row.exited, name: row.meta.name
-	})).sort((a, b) => a.run.localeCompare(b.run));
-	try {
-		const original = await snapshot();
-		assert.deepStrictEqual(original.map(row => row.run), [...runs].sort((a, b) => a.localeCompare(b)));
-		for (const agent of agents) {
-			const recorded = Number(fs.readFileSync(`${env.FACADE_IT_RECORD}.${agent.alias}`, 'utf8').trim());
-			assert.ok(recorded > 0 && isProcessRunning(recorded));
-			assert.strictEqual(original.find(row => row.run === agent.runId)?.pid, recorded);
-		}
-		const pins = await until('both runs’ durable Pins', async () => {
-			const saved = savedPins();
-			const live = await list();
-			const linked = runs.map(run => live.find(row => row.run === run)?.meta.pin);
-			return saved.length === runs.length && new Set(linked).size === runs.length
-				&& linked.every(id => typeof id === 'string' && saved.includes(id)) ? saved : undefined;
-		});
-		await first.close({ waitForExit: true });
-		assert.deepStrictEqual(savedPins(), pins, 'the predecessor saved both exact Pins through normal shutdown');
-		console.log(`  ✔ Both original Pins survived the predecessor’s clean exit (${pins.join(', ')})`);
-		const successor = await open(folder, 'new');
-		assert.strictEqual(successor.ready.machineId, null);
-		assert.notStrictEqual(successor.ready.hostPid, first.ready.hostPid);
-		const current = claim();
-		assert.strictEqual(current.owner, previous.owner);
-		assert.strictEqual(current.generation, previous.generation + 1);
-		assert.notStrictEqual(current.token, previous.token);
-		assert.strictEqual(isCurrentOwner(current, home), true);
-		const before = fs.readFileSync(stateFile);
-		assert.strictEqual(writeAsOwner(previous, home, () => assert.fail('a stale writer reached the current workspace record')), false);
-		assert.deepStrictEqual(fs.readFileSync(stateFile), before);
-		await assert.rejects(ptyd.request('claim', previous), /ownership was transferred or expired/i);
-		for (const run of runs) {
-			await assert.rejects(ptyd.request('input', { run, data: 'unexpected stale input' }), /ownership was transferred or expired/i);
-			await assert.rejects(ptyd.request('terminate', { run, graceMs: 0 }), /ownership was transferred or expired/i);
-		}
-		const replay = await successor.act<{ page: string; refusedActions: number }>({ kind: 'stale-owner', previous, current, page: oldPage, runs });
-		assert.deepStrictEqual(await snapshot(), original, 'both exact fake CLI processes survived stale effects');
-		assert.strictEqual(replay.refusedActions, 2);
-		console.log(`  ✔ Stale claim ${previous.generation} lost to ${current.generation}; stale page ${oldPage} changed neither run; current page ${replay.page} unpinned only ${runs[0]}; original fake PIDs ${original.map(row => row.pid).join(', ')}`);
-		for (const runId of runs) { await successor.act({ kind: 'stop-fallback', runId }); }
-		await successor.close();
-	} finally { ptyd.dispose(); }
+async function expectListed(window: DrivenWindow, id: string): Promise<void> {
+	await until(`${id}'s running card with no terminal in ${window.ready.folder}`, async () => {
+		const { cards, terminals } = await window.act<WindowView>({ kind: 'snapshot' });
+		return terminals === 0 && cards.some(card => card.id === id && card.running && !card.pinned && card.column === null) || undefined;
+	});
 }
 
 async function expectAgent(window: DrivenWindow, id: string, pinned: boolean): Promise<void> {
@@ -291,48 +219,27 @@ export async function missingSessionUnpin(open: OpenWindow, folder: string, env:
 		JSON.stringify({ home, expired: missing.id, unpinned: unpinned.id, notice, launches: original }));
 }
 
-/** A present but unlaunchable staged Framework falls back to one usable legacy implementation panel. */
+/** A Framework startup refusal reports the cause and leaves every launch unavailable. */
 export async function activationFailure(open: OpenWindow, folder: string, env: NodeJS.ProcessEnv, faultProgram: string): Promise<void> {
 	const home = env.FACADE_HOME!;
 	const record = env.FACADE_IT_RECORD!;
-	const launches = () => fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`));
 	const window = await open(folder, 'fault');
 	assert.strictEqual(normalizeDriveLetter(window.ready.home), normalizeDriveLetter(home));
 	assert.deepStrictEqual([window.ready.remote, window.ready.machineId], [null, null]);
-	assert.ok(!frameworkListens(home), 'there is no Framework daemon for this fixture');
-	assert.deepStrictEqual(await window.act<WindowView>({ kind: 'snapshot' }), { cards: [], terminals: 0 });
-	assert.deepStrictEqual(launches(), [], 'activation did not launch an agent');
-	const warningStart = `The legacy implementation is active on ${os.hostname()}. Could not connect to the Orchestrator. Could not run ${faultProgram}: `;
-	const warningEnd = 'Fix the problem, set facade.framework to `auto`, and reload the window to try Facade Code Framework again.';
+	assert.ok(!frameworkListens(home));
 	const workbench = await window.workbench();
-	let warning: string;
 	try {
 		await window.act({ kind: 'show-notifications' });
-		const warningText = `Array.from(document.querySelectorAll('.notification-list-item-message'))
-			.map(node => node.textContent?.trim()).find(text => text?.startsWith(${JSON.stringify(warningStart)})
-				&& text.endsWith(${JSON.stringify(warningEnd)}))`;
-		warning = await until('the startup warning naming the failed Framework executable and recovery', async () =>
-			await workbench.cdp.evaluate<string | undefined>(warningText));
+		const message = await until('the startup failure naming the Framework executable', async () =>
+			workbench.cdp.evaluate<string | undefined>(`Array.from(document.querySelectorAll('.notification-list-item-message'))
+				.map(node => node.textContent?.trim()).find(text => text?.includes(${JSON.stringify(faultProgram)}))`));
+		assert.match(message, /Could not start|Could not run/u);
 	} finally {
 		workbench.cdp.close();
 	}
-	const agent = await window.act<{ runId: string; alias: string; name: string }>({ kind: 'start-fallback' });
-	const launchFile = `${record}.starts.${agent.alias}`;
-	const pids = () => fs.readFileSync(launchFile, 'utf8').trim().split(/\r?\n/u).map(Number);
-	const pid = await until('the legacy implementation fake CLI PID', () => fs.existsSync(launchFile) ? pids()[0] || undefined : undefined);
-	assert.ok(isProcessRunning(pid), 'the fake CLI is alive');
-	const view = await window.act<WindowView>({ kind: 'snapshot' });
-	assert.deepStrictEqual(view.cards.map(card => [card.id, card.name]), [[agent.alias, agent.name]]);
-	assert.strictEqual(view.terminals, 1);
-	assert.ok(!frameworkListens(home));
-	await window.act({ kind: 'stop-fallback', runId: agent.runId });
-	await until('the one legacy implementation fake CLI to stop', () => !isProcessRunning(pid) || undefined);
+	assert.deepStrictEqual(fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`)), []);
 	await window.close();
-	assert.deepStrictEqual(launches(), [path.basename(launchFile)]);
-	assert.deepStrictEqual(pids(), [pid], 'the one requested legacy run launched exactly one process');
-	assert.ok(!frameworkListens(home));
-	console.log('  ✔ Framework startup failed visibly. The legacy panel served one requested agent and its process stopped. ' +
-		JSON.stringify({ home, warning, before: 0, after: { alias: agent.alias, pids: pids() }, cliStopped: true }));
+	console.log('  ✔ Framework startup failed visibly and started no agent.');
 }
 
 /** An incompatible hello refuses activation, including the actual Facade webview and commands. */
@@ -433,7 +340,7 @@ export async function incompatibleActivation(open: OpenWindow, folder: string, e
 	assert.ok(!frameworkListens(home), 'the private endpoint was removed');
 }
 
-/** Go to Agent attaches to a Shell run that survives closing the VS Code window. */
+/** A Shell run appears in the open VS Code window and survives closing it. */
 export async function shellHandoff(open: OpenWindow, folder: string, facade: string, env: NodeJS.ProcessEnv): Promise<void> {
 	const run = (...args: string[]) => execFileSync(facade, args, { cwd: folder, env, encoding: 'utf8', timeout: 20_000 });
 	const home = env.FACADE_HOME!;
@@ -441,6 +348,8 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	const prompt = 'Review the isolated Shell handoff';
 	const branch = 'shell-handoff-worktree';
 	const worktree = path.join(`${folder}.worktrees`, branch);
+	const window = await open(folder, 'sh');
+	assert.deepStrictEqual((await window.act<WindowView>({ kind: 'snapshot' })).cards, []);
 	const [started, location, ...extra] = run('start', '-d', '--name', name, '--worktree', branch, 'codex', '--', prompt).trimEnd().split(/\r?\n/u);
 	const address = detachedStartReference(started, name);
 	assert.ok(location?.startsWith('Worktree: '));
@@ -458,7 +367,7 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	assert.strictEqual(normalizeDriveLetter(fs.realpathSync(launch.cwd)), normalizeDriveLetter(fs.realpathSync(worktree)));
 	assert.deepStrictEqual(launch.args.filter(arg => arg === '--' || arg === prompt), ['--', prompt], 'the two Shell arguments each arrive once');
 	assert.deepStrictEqual(launch.args.slice(-2), ['--', prompt], 'the prompt follows its separator at the end of argv');
-	const window = await open(folder, 'sh');
+	await expectListed(window, before.reference.agent_id);
 	assert.strictEqual(await window.act<boolean>({ kind: 'window-component' }), false);
 	const status = run('status');
 	const settingsFile = /^Settings {2,}([^\r\n]+)$/mu.exec(status)?.[1];
@@ -478,7 +387,7 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 
 	execFileSync(process.execPath, [path.join(__dirname, 'shellAttachFixture.js'), facade, address, marker], { cwd: folder, env, timeout: 65_000 });
 	assert.strictEqual((await inspect()).pid, before.pid);
-	console.log('  ✔ Shell start, Go to Agent and Shell Attach used the same terminal after closing VS Code');
+	console.log('  ✔ Shell start appeared automatically and the card and Shell opened the same live terminal');
 
 	const session = await until('the fake CLI to report its session', async () => (await inspect()).session);
 	const startLog = `${env.FACADE_IT_RECORD}.starts.#${before.reference.agent_id}`;
@@ -536,19 +445,16 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	assert.strictEqual(restored.session, session);
 	assert.notStrictEqual(restored.pid, before.pid);
 	assert.deepStrictEqual(starts().slice(priorStarts), [restored.pid], 'reopening started the saved Pin once');
-	await restoredPeer.act({ kind: 'hide-shell-agent', name });
-	await until('the hidden card, tab, workspace member and Pin to go', async () => {
-		const views = await Promise.all([restoredWindow, restoredPeer].map(window => window.act<WindowView>({ kind: 'snapshot' })));
-		const saved = roster();
-		return views.every(view => !view.cards.some(card => card.name === name) && view.terminals === 0)
-			&& saved.members.length === 0 && saved.pins.length === 0 || undefined;
+	await restoredPeer.act({ kind: 'close-shell-view', name });
+	await until('closing the view to keep the card and Pin', async () => {
+		const peer = await restoredPeer.act<WindowView>({ kind: 'snapshot' });
+		return peer.terminals === 0 && peer.cards.some(card => card.name === name && card.pinned && card.running) || undefined;
 	});
-	assert.strictEqual((await inspect()).pid, restored.pid, 'Hide leaves the resumed agent running');
-	await restoredWindow.act({ kind: 'open-shell-agent', name, address, text: 'reopened before removal' });
-	await restoredWindow.act({ kind: 'shell-pin', name, set: true });
 	checkSavedPin();
+	assert.strictEqual((await inspect()).pid, restored.pid, 'closing the view leaves the resumed agent running');
+	await restoredPeer.act({ kind: 'open-shell-agent', name, address, text: 'reopened before removal' });
 	await Promise.all([restoredWindow.close(), restoredPeer.close()]);
-	console.log('  ✔ Both windows shared the Pin, reopened one original session, and hid the card while it kept running');
+	console.log('  ✔ Both windows shared the Pin, reopened one original session, and closing its tab kept the card and Pin');
 
 	const reference = before.reference;
 	assert.deepStrictEqual(await frameworkCall(home, 'agent.remove', { target: reference }), { reference, address });
@@ -564,23 +470,27 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 }
 
 /** Exercise simultaneous product viewers on the same native fake CLI. */
-export async function sharedAttachJourney(open: OpenWindow, folder: string, facade: string, env: NodeJS.ProcessEnv, replacement?: string): Promise<void> {
+export async function sharedAttachJourney(open: OpenWindow, folder: string, facade: string, env: NodeJS.ProcessEnv, replacement?: string,
+	expectedSession?: string): Promise<void> {
 	const run = (program: string, ...args: string[]) =>
 		execFileSync(program, args, { cwd: folder, env, encoding: 'utf8', timeout: 30_000 });
 	const home = env.FACADE_HOME!;
 	const name = 'shell-attach';
 	const address = detachedStartReference(run(facade, 'start', '-d', '--name', name, 'qa-fake'), name);
 	const inspect = async () => (await frameworkCall(home, 'agent.inspect', { target: address })).agent;
-	const before = await inspect();
+	const before = expectedSession ? await until('the original Framework to report the exact CLI session', async () => {
+		const agent = await inspect();
+		return agent.session === expectedSession ? agent : undefined;
+	}) : await inspect();
 	assert.ok(before.pid && before.process === 'running', JSON.stringify(before));
 	const window = await open(folder, 'attach');
 	const marker = 'typed in the editor';
 	await window.act({ kind: 'open-shell-agent', name, address, text: marker });
 	if (replacement) {
-		const version = (program: string) => /^facade (\d+\.\d+\.\d+)$/u.exec(run(program, '--version').trim())?.[1];
+		const version = (program: string) => /^facade (\d+\.\d+\.\d+(?:\+\d+\.[a-f0-9]{40})?)$/u.exec(run(program, '--version').trim())?.[1];
 		const old = version(facade);
 		const next = version(replacement);
-		assert.ok(old && next && old !== next, 'Select two different numeric package versions.');
+		assert.ok(old && next && old !== next, 'Select two distinct Framework builds.');
 		const lock = (service: 'daemon' | 'keeper') =>
 			JSON.parse(fs.readFileSync(path.join(home, 'framework', `${service}.lock`), 'utf8')) as { pid: number; birth: string };
 		const accepted = async () => {
@@ -592,26 +502,20 @@ export async function sharedAttachJourney(open: OpenWindow, folder: string, faca
 		};
 		const daemon = lock('daemon');
 		const keeper = lock('keeper');
-		assert.strictEqual((await accepted()).build.split('+')[0], old);
+		assert.strictEqual((await accepted()).build, old);
 		const retained = 'input after v1 daemon takeover';
 		run(replacement, 'type', address, retained, '--enter');
-		assert.strictEqual((await accepted()).build.split('+')[0], next);
+		assert.strictEqual((await accepted()).build, next);
 		const changed = lock('daemon');
 		assert.notStrictEqual(changed.pid, daemon.pid);
 		assert.notStrictEqual(changed.birth, daemon.birth);
 		assert.deepStrictEqual(lock('keeper'), keeper);
-		assert.strictEqual((await inspect()).pid, before.pid);
+		const resumed = await inspect();
+		assert.deepStrictEqual([resumed.reference, resumed.session, resumed.pid], [before.reference, before.session, before.pid]);
 		await window.act<AttachView>({ kind: 'shell-attach-view', text: retained });
-		console.log(`  ✔ The existing VS Code Attach recovered across v1 builds ${old} → ${next}. Daemon ${JSON.stringify(daemon)} → ${JSON.stringify(changed)}, keeper ${JSON.stringify(keeper)}, CLI PID ${before.pid}`);
+		console.log(`  ✔ The existing VS Code Attach recovered across v1 builds ${old} → ${next}. Daemon ${JSON.stringify(daemon)} → ${JSON.stringify(changed)}, keeper ${JSON.stringify(keeper)}, CLI PID ${before.pid}, session ${before.session ?? 'unreported'}`);
 	}
 	await sharedShellAttach(window, folder, replacement ?? facade, env, address, marker);
-	const old = await open(folder, 'legacy');
-	assert.strictEqual(old.ready.machineId, null);
-	const view = await old.act<WindowView>({ kind: 'snapshot' });
-	assert.ok(!view.cards.some(card => card.name === name), JSON.stringify(view));
-	assert.strictEqual(view.terminals, 0);
-	await old.close();
-	console.log('  ✔ The separately profiled legacy implementation left the Framework agent and terminal alone');
 	await window.close();
 	const after = await inspect();
 	assert.strictEqual(after.pid, before.pid);
@@ -673,7 +577,7 @@ async function expectViews(window: DrivenWindow, agent: string, count: number): 
 		(await window.act<InspectResult>({ kind: 'inspect', agent })).viewers.length === count || undefined);
 }
 
-/** Go to Agent shares the same run. Both workspaces keep their Pin when it stops and restore one process. */
+/** Both workspaces list the same run, open their own views and restore one process from their Pins. */
 export async function frameworkMultiWindow(open: OpenWindow, journey: WindowJourney): Promise<void> {
 	const { folder, peer, home, remote } = journey;
 	let machineId: string | undefined;
@@ -696,7 +600,7 @@ export async function frameworkMultiWindow(open: OpenWindow, journey: WindowJour
 	const before = await first.act<RunningAgent>({ kind: 'start', screen });
 	await expectAgent(first, before.id, false);
 	const other = await start(peer, 'b');
-	assert.deepStrictEqual((await other.act<WindowView>({ kind: 'snapshot' })).cards, [], 'an independent workspace starts without the agent');
+	await expectListed(other, before.id);
 	assertSameRun(await other.act<RunningAgent>({ kind: 'adopt', agent: before.id }), before);
 	await expectAgent(other, before.id, false);
 	await expectViews(first, before.id, 2);
@@ -714,7 +618,7 @@ export async function frameworkMultiWindow(open: OpenWindow, journey: WindowJour
 	await expectAgent(firstBack, before.id, true);
 	await expectViews(other, before.id, 2);
 	assertSameRun(await firstBack.act<RunningAgent>({ kind: 'running', agent: before.id, screen }), before);
-	console.log('  ✔ Go to Agent shares the process and screen. Each workspace attaches and detaches its own view');
+	console.log('  ✔ Both windows list the same agent and open their own views of its process and screen');
 
 	await firstBack.act({ kind: 'stop', agent: before.id });
 	await other.act({ kind: 'wait-for-exit', pid: before.pid });
@@ -777,7 +681,9 @@ async function removeAndResume(windows: readonly DrivenWindow[], home: string, l
 	await source.act({ kind: 'wait-for-exit', pid: live.pid });
 	await assertRemoved(live.id);
 	const saved = await findSaved();
-	const resumed = await source.act<RunningAgent>({ kind: 'resume-saved', cli: saved.cli, session: saved.session });
+	const resumed = await source.act<RunningAgent>({
+		kind: 'resume-saved', cli: saved.cli, session: saved.session, selector: saved.session_selector ?? saved.session.slice(0, 8)
+	});
 	assert.notStrictEqual(resumed.id, live.id, 'Resume Agent gives the saved session a fresh identity');
 	assert.deepStrictEqual([resumed.session, normalizeDriveLetter(resumed.cwd)], [live.session, normalizeDriveLetter(live.cwd)]);
 	await source.act({ kind: 'pin', agent: resumed.id });
@@ -800,7 +706,7 @@ async function worktreeLifetime(source: DrivenWindow, peer: DrivenWindow): Promi
 	const agent = await source.act<AgentInfo>({ kind: 'worktree', branch });
 	const parts = agent.cwd.split(/[\\/]/u);
 	assert.deepStrictEqual(parts.slice(-2), [source.ready.folder.split(/[\\/]/u).at(-1) + '.worktrees', branch]);
-	assert.deepStrictEqual((await source.act<WindowView>({ kind: 'snapshot' })).cards, [], 'a Shell start leaves the workspace unchanged');
+	await expectListed(source, agent.reference.agent_id);
 
 	const adopted = await peer.act<RunningAgent>({ kind: 'adopt', agent: agent.reference.agent_id });
 	assert.strictEqual(adopted.pid, agent.pid);
@@ -845,7 +751,7 @@ async function sameWorkspace(open: OpenWindow, journey: WindowJourney): Promise<
 		return { column: snapshot.cards.find(each => each.id === id)?.column, filter: snapshot.filter };
 	};
 	const before = await Promise.all([presentation(left, agentLeft.id), presentation(right, agentRight.id)]);
-	assert.strictEqual(before[0].filter?.kind, 'location');
+	assert.strictEqual(before[0].filter?.kind, 'agents');
 	assert.strictEqual(before[1].filter, undefined);
 	assert.deepStrictEqual(before.map(each => each.column), [2, 1]);
 

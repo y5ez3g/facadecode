@@ -43,10 +43,10 @@ candidate.
 | Shell and invoked process entry points | [Clap commands and parser dispatch](../framework/crates/facade/src/cli.rs), [hook commands](../framework/crates/facade/src/hooks.rs) and [Shell contract](PRODUCT.md#shell) | Run the built executable with an expected argv and assert exit status, observed output and effect. Include documented modes such as foreground and detached launches. |
 | Daemon v1 requests, topics and frames | [Rust registry](../framework/crates/base/src/protocol/api_v1/daemon/registry.rs) and [generated schema](../framework/protocol/protocol.schema.json) | Cover each operation, topic and frame. Receive actual events at subscriber boundaries. Reconcile terminal, Extension, MCP and authenticated peer access with the registry. |
 | Keeper v1 and relay connections | [Keeper schema](../framework/protocol/keeper.schema.json), [Keeper contract](../framework/protocol/KEEPER.md) and [relay handshake](../framework/crates/relay/src/daemon.rs) | Exercise requests and notifications with the real processes. Cover independent version negotiation, reconnect, and native terminal-resource ownership where used. |
-| Both MCP implementations | [Framework tool catalog](../framework/crates/base/src/texts/tools.json), [Framework transport](../framework/crates/daemon/src/mcp/lines.rs), [legacy tool catalog](../extension/src/schema/tools.ts) and [Extension transport](../extension/src/transport/mcpServer.ts) | Send real stdio frames to each implementation and check the advertised tool catalog. Each of the eight names has separate tool evidence for both implementations. Check applicable managed and Guest behavior. |
+| Framework MCP | [Tool catalog](../framework/crates/base/src/texts/tools.json), [stdio transport](../framework/crates/daemon/src/mcp/lines.rs) | Exercise the same advertised tool catalog from Shell and the editor. Check the managed and Guest behavior. |
 | Extension commands | [VS Code contributions](../extension/package.json) and [command handlers](../extension/src/ui/commands/index.ts) | Invoke each supported command through VS Code. Check the handler for each implementation in which the command appears and assert the user-visible or persisted result. |
-| Extension process and UI boundaries | [Window network declarations](../extension/src/base/windowNetwork.ts), [local window socket](../extension/src/host/windowNetwork.ts), [window identity and terminal registration](../extension/src/base/windowIdentity.ts), [legacy supervisor](../extension/src/ptyd/protocol.ts), [panel host](../extension/src/ui/panel.ts) and [Webview receiver](../extension/src/webview/panel.ts) | Exercise VS Code component commands and the socket's request, correlated response, rejected version, expiry and disconnect paths. Exercise supervisor events and panel actions through the corresponding boundary. Verify sequence, page generation and target identity. |
-| Configuration and reload | [Framework settings reader](../framework/crates/base/src/settings.rs), [VS Code settings](../extension/package.json) and [Extension settings schema](../extension/media/settings.schema.json) | Exercise the real readers for `facade.json`, `facade.home` and `facade.framework`. Verify defaults, malformed input, scoped home, actual implementation selection and live reload where supported. Observe refusal before effects. |
+| Extension process and UI boundaries | [Island map](../extension/islands.json), [native window contract](../extension/src/base/windowIdentity.ts), [released supervisor reader](../extension/src/host/migration/supervisor.ts), [panel host](../extension/src/ui/panel.ts) and [webview receiver](../extension/src/webview/panel.ts) | Check named interfaces, native session and terminal identity, legacy retirement, page generation and exact card targets. |
+| Configuration and reload | [Framework settings reader](../framework/crates/base/src/settings.rs), [VS Code settings](../extension/package.json) and [Extension settings schema](../extension/media/settings.schema.json) | Exercise the readers for `facade.json` and `facade.home`. Verify defaults, malformed input, scoped home and reload. Verify legacy cutover using the previous build under VERIFICATION-5.2. |
 
 Cover each registered, supported entry with at least one observed behavior. A read needs the expected data
 and identity. A mutation needs corroborating observation of the intended state or effect. An event needs its
@@ -91,13 +91,13 @@ missing individual case even when other cases in the same journey are present.
 | `framework/p0/watch` Watch lifecycle | Watch the initial state and a subsequent correlated update. Unwatch releases resources and ends delivery for that watch. Reconnect gives a fresh snapshot and discards stale events. | PR · [protocol scenarios](../framework/tests/tests/protocol.rs), [terminal and watch scenarios](../framework/tests/tests/attach.rs) | `snapshot-update`, `unwatch`, `reconnect` |
 | `framework/p0/service-recovery` Daemon and Keeper recovery | Replace or restart either service as applicable. Verify original CLI identity, Attach, terminal output and an exactly-once pending effect. Verify resource and process cleanup after the test. | PR and targeted native · [recovery scenarios](../framework/tests/tests/recovery.rs), [Keeper scenarios](../framework/tests/tests/keeper.rs) | `daemon-restart`, `keeper-recovery`, `pending-effect` |
 | `framework/p0/prior-build` Real prior-build compatibility | Negotiate against pinned supported builds. Compatible hot replacement keeps the live process. Disjoint versions refuse before changing state or programs. | Compatibility-sensitive PR and candidate · [compatibility scenarios](framework/ENGINEERING.md#compatibility-contracts) | `hot-replacement`, `incompatible-version` |
-| `extension/p0/activation-shell` Editor activation and Shell handoff | In isolated official VS Code with Framework active, start or locate the same Framework agent from Shell and the editor. Operate on its original process and worktree. With the legacy implementation, run the separate start, MCP, terminal and worktree journeys in its own supervisor. Check the actual serving implementation. A failed automatic Framework startup shows the recovery warning and leaves the legacy implementation ready without launching an agent on its own. | PR · [editor journeys](../extension/src/test/integration/run.ts), [Shell handoff scenario](../extension/src/test/integration/frameworkMultiWindow.ts) | `framework-handoff`, `legacy-supervisor`, `activation-failure`, `startup-fallback` |
-| `extension/p0/pin-reload` Pin, reload and multiple windows | Verify a Pin restores the exact session once. Close one member window and observe the other keeps the same run. A missing session gives the prescribed outcome and an Unpin prevents resurrection. The legacy scheduled and candidate case also tests its close-last grace with the production timer, reconnect before expiry and cleanup afterward. | PR · [window journeys](../extension/src/test/integration/frameworkMultiWindow.ts) | `resume-legacy`, `resume-framework`, `pinned-reload`, `close-one-window`, `missing-session-unpin`, `legacy-last-window-grace` |
+| `extension/p0/activation-shell` Editor activation and Shell handoff | In isolated official VS Code with Framework active, locate the same agent from Shell and the editor. Operate on its original process and worktree. Check that the panel and commands report incompatible startup and an executable that fails to launch. | PR · [editor journeys](../extension/src/test/integration/run.ts), [Shell handoff scenario](../extension/src/test/integration/frameworkMultiWindow.ts) | `framework-handoff`, `activation-failure`, `startup-failure` |
+| `extension/p0/pin-reload` Pin, reload and multiple windows | Verify a Pin restores the exact session once. Close one member window and observe the other keeps the same run. A missing session gives the prescribed outcome and an Unpin prevents resurrection. | PR · [window journeys](../extension/src/test/integration/frameworkMultiWindow.ts) | `resume-framework`, `pinned-reload`, `close-one-window`, `missing-session-unpin` |
 | `extension/p0/message-delivery` Draft protection in the editor running Framework | Run a real CLI stand-in through Framework. An explicit delivery wait blocked by a draft never writes to it or delivers after the draft is cleared. | PR · [MCP editor journey](../extension/src/test/integration/mcp.it.ts) | `draft-protection-framework` |
 | `extension/p0/remote-host` Extension host reconnect | Test an actual Remote SSH editor host and controlled peer. Disconnect and reconnect. Verify identity, window ownership and pending message settlement. | Remote-sensitive PR, scheduled and candidate · [remote journeys](../extension/src/test/integration/remote.ts) | `ssh-connect`, `ssh-reconnect` |
-| `extension/p0/window-replacement` Window replacement and implementation behavior | Verify both implementation paths, Window Component activation and an update with a message in flight. Observe the documented result with no duplicate effect. Stale claims and Webview generations cannot affect the current owner or a different agent. | PR and candidate · [editor runner](../extension/src/test/integration/run.ts), [command tests](../extension/src/test/commands.test.ts) | `window-activation-legacy`, `window-activation-framework`, `replacement-in-flight`, `stale-owner` |
+| `extension/p0/window-replacement` Window replacement and implementation behavior | Verify Window Component activation, exact agent identity and isolation between Framework windows. | PR and candidate · [editor runner](../extension/src/test/integration/run.ts), [command tests](../extension/src/test/commands.test.ts) | `window-activation-framework` |
 | `framework/p0/install-upgrade` Framework install and upgrade | Install the candidate archive, start and query a fake CLI, and upgrade a pinned prior installation. An invalid digest or incompatible target preserves the working installation. | Installer-sensitive PR and candidate · [upgrade scenarios](../framework/tests/tests/upgrade.rs), [native installers](../.github/workflows/extension-check.yml) | `install`, `upgrade`, `bad-archive` |
-| `extension/p0/vsix-upgrade` Installed VSIX and upgrade | Install both candidate VSIX components in clean profiles and exercise activation and a real command. Upgrade the prior supported package and check persisted workspace state, Pins and the Window Component. | Packaging-sensitive PR and candidate · [package tests](../extension/scripts/package.test.mjs), [VSIX upgrade journey](../extension/src/test/integration/run.ts) | `install-pair`, `upgrade-pair` |
+| `extension/p0/vsix-upgrade` Installed VSIX and upgrade | Install both candidate VSIX components in clean profiles and exercise activation and a real command. Upgrade the pinned prior package. Check the original Pin after confirmed exit and after an explicit live cutover. A stop with unconfirmed exit leaves the candidate pending. | Packaging-sensitive PR and candidate · [package tests](../extension/scripts/package.test.mjs), [VSIX upgrade journey](../extension/src/test/integration/run.ts) | `cutover-live`, `cutover-uncertain`, `install-pair`, `upgrade-pair` |
 | `extension/p0/release` Release promotion | The trusted candidate record accounts for every expected signed package. Corrupt, missing, wrong-version or stale-source artifacts block promotion. Verify bytes and the stable pointer after promotion. | Candidate · [release script tests](../extension/scripts/release.test.mjs), [release workflow](../.github/workflows/extension-release.yml) | `signed-artifacts`, `invalid-artifact`, `stable-pointer` |
 
 ## Candidate routing and enforcement
@@ -108,7 +108,7 @@ missing individual case even when other cases in the same journey are present.
 | --- | --- | --- |
 | Documentation or IDE-only paths | Check the changed CI and product contract documents, links and scope. Emit an explicit empty product plan when no Framework or Extension behavior is affected. | Regular scheduled matrix remains the integration baseline. |
 | Framework runtime, tests, assets or toolchain | Framework format, lint, lockfile and the every-commit build and lockfile check for a Framework change. Run all applicable Framework API smoke and fast P0 cases. Run Extension Framework contract and smoke against the same Framework source. | Expanded native Framework and Extension coverage. |
-| Extension runtime, tests, manifests or toolchain | Type, localization and spec checks as applicable, all Extension API smoke, and deterministic editor P0. Exercise each implementation that can be affected. Shared contract changes also select Framework. | Expanded native and implementation coverage. |
+| Extension runtime, tests, manifests or toolchain | Type, localization and spec checks as applicable, all Extension API smoke, and deterministic editor P0. Exercise Framework and the published pair where cutover can be affected. Shared contract changes also select Framework. | Expanded native and implementation coverage. |
 | Wire, durable state, PTY, paths, SSH, packaging, signing or installers | Add the corresponding exact-version, real transport, native target or candidate-package checks before merge. On shared protocol changes check Framework and Extension together. | Six native targets, supported editor versions, native combinations and release fitness. |
 | Workflow, CI policy, shared root files or ambiguous diff | Run policy exercises and every possibly affected product and risk lane. Choose the known complete plan if a diff is ambiguous. A candidate whose source identity is unresolved is blocked. | Review scope drift and the first result on `main`. |
 
@@ -405,8 +405,8 @@ which holds the reviewed assertions, stages, candidate test sources and exact bi
 checker discovers Framework's CLI, daemon, Keeper, relay, MCP and configuration
 interfaces from their registries and schemas. It discovers Extension commands, the Window Component,
 local window transport, supervisor, Webview, MCP and settings from declarations and serving code.
-Extension API IDs identify the legacy or Framework implementation when the implementations differ. The P0 table above
-declares each required journey case by name. Every bound PR row enters the plan automatically.
+Extension API IDs identify the Framework-backed editor surface and the released supervisor retirement protocol. The P0 table above
+declares each required journey case by name. Every bound PR row enters the plan automatically. Historical editor rows refer to earlier builds that still served the legacy engine.
 The catalog rejects any PR P0 row without a binding. Discovery and the P0 table are independent of
 the test bindings. Both installed VSIX rehearsals also require a binding. A surviving obligation
 with a binding at the base commit must keep an executable test. The PR and main checks report
@@ -578,15 +578,15 @@ python3 -B ci/merge_review.py --repo OWNER/REPO --pr NUMBER --head "$head" --bas
 ```
 
 Review requires the current `main` base and GitHub test merge, the four first-attempt
-workflows, all 24 jobs on their expected runner labels, and successful execution and
+workflows, all 18 jobs on their expected runner labels, and successful execution and
 evidence steps. It checks the registered workflow and matching GitHub Actions check for
 each job. The expanded review preserves each base catalog obligation and exact existing binding.
 It requires a binding for every new obligation and sends intentional catalog changes for separate
 review. It rehashes the original shadow and native archives, reconciles exact shadow case proofs,
-six typed runtime case records and two release fixture case records, and verifies all six unsigned
-native package sets and their paired VSIX bytes. The Linux x64 legacy editor log must show the
-same process on immediate reopen and the same session in a new process after the production
-close-last grace. Each of the 12 native editor logs must meet the reviewed 61-pass baseline and
+typed runtime case records and two release fixture case records, and verifies all six unsigned native
+package sets and their paired VSIX bytes. The Linux x64 cutover evidence binds the published 0.1.5 pair
+and the candidate pair to the six [packaged upgrade journeys](extension/engineering/VERIFICATION.md#52-verify-upgrade-and-compatibility-against-the-previous-build).
+Each of the six native editor logs must meet the reviewed 61-pass baseline and
 record completed profile cleanup. The verifier checks the current
 PR, base, workflows and local checkout again before reporting success. Drafts can be reviewed.
 
@@ -605,7 +605,7 @@ It retains the first failed attempt and its failing step links even after a reru
 result replays both main shadow artifacts. The protected health lock and merge authority
 remain separate deployment steps.
 
-The Linux x64 legacy implementation PR job archives the complete release-script suite with its exact
+The Linux x64 Extension PR job archives the complete release-script suite with its exact
 test names and the producing source and attempt. Its disposable GitHub and website
 transports prove corrupt and stale candidates cannot switch stable, and an interrupted
 promotion can finish with the same verified pointer and manifest.
@@ -638,13 +638,15 @@ map from name to SHA-256).
 | --- | --- |
 | `framework-install.log` | Run the tagged installer on the accepted Framework archive in an isolated install root. Keep the installer's output followed by the installed Shell's `facade --version` output. |
 | `install-pair.log` | Give `install-pair` the released native and Window Component VSIX files through `FACADE_IT_CURRENT`. Check activation and one New Agent effect in the clean profile. |
-| `upgrade-pair.log` | Give `upgrade-pair` the same candidate pair and the pinned prior pair through `FACADE_IT_RELEASED`. Check the workspace, Pins, Window Component and original sessions. |
+| `upgrade-pair.log` | Give `upgrade-pair` the same candidate pair and the pinned prior pair through `FACADE_IT_RELEASED`. Check the original pinned session is resumed exactly once after confirmed legacy exit. |
 
-Run the existing installed-pair drivers with `FACADE_IT_IMPLEMENTATION=legacy`,
+Run the installed-pair drivers with `FACADE_IT_IMPLEMENTATION=framework`,
 `FACADE_IT_BUILT_IN=claude` and the same check name in `FACADE_IT_ONLY` and
 `FACADE_IT_EXPECT_DRIVER`. Their final lines report isolated profile cleanup and the exact
 driver result. Hash staged inputs before and after testing, record the actual exit status
 and retain the original logs alongside the package digests.
+Replay expects the Framework marker for Framework-only workspace VSIXs. Historical workspace
+VSIXs that include the TypeScript supervisor retain their original legacy marker.
 
 Framework transcript replay checks the install report and the source-stamped Shell version. For evidence
 of installed program digests, a live fake Agent and installer refusal behavior on Linux x64,
@@ -835,9 +837,8 @@ planned case on the same source, plan, platform and run attempt. The editor test
 serving implementation from the live host. The status describes the shadow pilot only. The existing product
 jobs and merge and release rules continue to own their checks.
 
-VS Code `1.105.1` lacks the built-in Git extension's `Repository.createWorktree` method. The
-legacy implementation's New Worktree success case needs an editor with that capability. The minimum-editor
-pilot exercises the legacy supervisor using a real linked checkout created by the fixture.
+VS Code `1.105.1` lacks the built-in Git extension's `Repository.createWorktree` method.
+The remote worktree pilot exercises Framework's worktree operation through the editor and the Shell.
 
 Run from the repository root on Linux x64. Install the pinned Rust toolchain and musl target, the
 Node version from `extension/.nvmrc`, `musl-gcc`, `xvfb-run` and VS Code's runtime libraries.

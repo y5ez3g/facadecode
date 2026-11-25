@@ -376,7 +376,7 @@ fn a_prompt_settled_while_a_guest_s_inbox_goes_writes_it_no_result() {
     assert!(
         wait_until(secs(10), || !home
             .list_table()
-            .column("REF")
+            .column("REFERENCE")
             .contains(&address.as_str())),
         "the guest's end goes on"
     );

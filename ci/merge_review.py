@@ -27,7 +27,6 @@ TARGETS = {
     'darwin-x64': ('macOS', 'macos-15-intel'), 'darwin-arm64': ('macOS', 'macos-latest'),
     'win32-x64': ('Windows', 'windows-latest'), 'win32-arm64': ('Windows', 'windows-11-arm'),
 }
-IMPLEMENTATIONS = ('legacy', 'framework')
 SHADOW = 'ci-acceptance.yml'
 FRAMEWORK = 'framework-check.yml'
 EXTENSION = 'extension-check.yml'
@@ -46,16 +45,16 @@ REQUIRED = {
            for target, (os, _) in TARGETS.items()},
     },
     EXTENSION: {
-        f'Extension on {target}, {implementation} implementation': (
+        f'Extension on {target}, framework implementation': (
             'Run npm run compile', 'Build the isolated editor fixtures',
             'Download official VS Code for isolated tests',
             f'Isolated editor journeys on {os}', 'Keep editor test output',
-            *(('Run npm test', 'Run npm run test:package', 'Pack framework from the native VSIX',
-               'Install the local framework archive on Windows' if os == 'Windows'
-               else 'Install the local framework archive on Linux and macOS',
-               'Record the tested native package digests', 'Keep tested packages') if implementation == 'legacy' else ()),
+            'Run npm test', 'Run npm run test:package', 'Pack framework from the native VSIX',
+            'Install the local framework archive on Windows' if os == 'Windows'
+            else 'Install the local framework archive on Linux and macOS',
+            'Record the tested native package digests', 'Keep tested packages',
         )
-        for target, (os, _) in TARGETS.items() for implementation in IMPLEMENTATIONS
+        for target, (os, _) in TARGETS.items()
     },
     REMOTE: {'Extension Remote SSH connect (linux-x64)': ('Stage the verified official desktop editor',
                                                         'Observe ownership in the actual Remote SSH workspace',
@@ -66,17 +65,17 @@ REQUIRED[FRAMEWORK]['Framework on linux-x64'] += (
     'Keep the real SSH route evidence', 'Run and verify the exact Keeper recovery',
     'Keep the Keeper recovery evidence',
 )
-REQUIRED[EXTENSION]['Extension on linux-x64, legacy implementation'] += (
+REQUIRED[EXTENSION]['Extension on linux-x64, framework implementation'] += (
     'Verify the installed Linux x64 candidate', 'Keep the Linux x64 candidate install evidence',
     'Keep the checked-out source tree', 'Release script tests', 'Record the release fixture results',
-    'Keep the release fixture output',
+    'Keep the release fixture output', 'Verify the published 0.1.5 cutover in the packaged editor',
+    'Keep the packaged cutover evidence',
 )
 RUNNERS = {
     **dict.fromkeys(REQUIRED[SHADOW] | REQUIRED[REMOTE], 'ubuntu-24.04'),
     'Framework at each commit': 'ubuntu-latest',
     **{f'Framework on {target}': runner for target, (_, runner) in TARGETS.items()},
-    **{f'Extension on {target}, {implementation} implementation': runner
-       for target, (_, runner) in TARGETS.items() for implementation in IMPLEMENTATIONS},
+    **{f'Extension on {target}, framework implementation': runner for target, (_, runner) in TARGETS.items()},
 }
 
 
@@ -257,7 +256,8 @@ def required_artifact_names(workflow, attempt):
         EXTENSION: {
             'tested-extension-tree', f'native-install-linux-x64-{attempt}', f'release-fixture-linux-x64-{attempt}',
             *(f'extension-{target}' for target in TARGETS),
-            *(f'editor-tests-{target}-{implementation}' for target in TARGETS for implementation in IMPLEMENTATIONS),
+            'published-cutover-linux-x64',
+            *(f'editor-tests-{target}-framework' for target in TARGETS),
         },
     }[workflow]
 

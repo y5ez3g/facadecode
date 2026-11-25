@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type * as vscode from 'vscode';
 import { isTerminalRegistration, TERMINAL_REGISTRATION_MS, type TerminalOwner } from '../base/windowIdentity';
-import type { AgentTerminals } from '../host/execution/agentTerminals';
+import type { AgentTerminals } from '../host/terminal/agentTerminals';
 import type { WindowTerminals } from '../host/windowTerminals';
 import { FakeClock } from './clock';
 import { TestEmitter, withModules } from './withModules';
@@ -70,7 +70,7 @@ suite('Window terminal registration: actual objects across workspace host genera
 		return snapshot;
 	};
 	const manager = (remote = true) => {
-		const { AgentTerminals: Manager } = load<typeof import('../host/execution/agentTerminals')>(require.resolve('../host/execution/agentTerminals'));
+		const { AgentTerminals: Manager } = load<typeof import('../host/terminal/agentTerminals')>(require.resolve('../host/terminal/agentTerminals'));
 		const result = new Manager({ media: {} as vscode.Uri, log: () => undefined, terminalOwner: { ...owner, remote },
 			activated: () => undefined, closed: () => undefined, renamed: () => undefined });
 		managers.push(result);
@@ -245,6 +245,21 @@ suite('Window terminal registration: actual objects across workspace host genera
 		await clock.tick(0);
 		assert.deepStrictEqual(terminals.map(each => each.disposed), [0]);
 		assert.strictEqual(terminals.length, 1);
+	});
+
+	test('a native claim survives reloads without registration and is consumed by an exact successor (ARCHITECTURE-2.2)', () => {
+		const { WindowTerminals: Registry } = load<typeof import('../host/windowTerminals')>(require.resolve('../host/windowTerminals'));
+		const claim = owner.claim;
+		const retired = () => JSON.parse(fs.readFileSync(path.join(storage.dir, 'terminals.json'), 'utf8')).retired;
+		for (let reload = 0; reload < 2; reload++) {
+			registry.dispose();
+			registry = new Registry({ directory: storage.dir, log: assert.fail });
+			assert.deepStrictEqual(retired(), [{ claim, runs: [] }]);
+			assert.strictEqual(registry.request({ ...owner, kind: 'activate', claim: { ...claim, token: 'different' } }), false);
+			assert.deepStrictEqual(retired(), [{ claim, runs: [] }]);
+		}
+		nextHost(true);
+		assert.deepStrictEqual(retired(), []);
 	});
 
 	test('local runtime supplies the actual object and never a title-shaped reconstruction', async () => {

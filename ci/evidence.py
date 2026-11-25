@@ -29,6 +29,9 @@ HARNESS_FILES = (
     'extension/src/test/integration/index.ts',
     'extension/src/test/integration/journey.it.ts',
     'extension/src/test/integration/run.ts',
+    'extension/src/test/integration/builtinFixtures.ts',
+    'extension/src/test/integration/cutover.ts',
+    'extension/src/test/integration/cutoverDriver.ts',
 )
 INPUT_FILES = (*HARNESS_FILES, '.github/workflows/ci-acceptance.yml', 'docs/CI.md')
 EDITOR_PASS = 'Facade acceptance test '
@@ -39,6 +42,8 @@ PACKAGE_INPUTS = {
     REPLACEMENT_JOURNEY: ('prior', 'candidate'),
     'install-pair': ('candidate',),
     'upgrade-pair': ('prior', 'candidate'),
+    'cutover-live': ('prior', 'candidate'),
+    'cutover-uncertain': ('prior', 'candidate'),
 }
 PRIOR_VSIX_URL = 'https://github.com/y5ez3g/facadecode/releases/download/extension/0.1.5/'
 PRIOR_VSIX = {

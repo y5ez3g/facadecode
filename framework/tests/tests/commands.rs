@@ -245,7 +245,7 @@ fn commands_start_list_read_and_stop_agents() {
         table.header,
         [
             "NAME",
-            "REF",
+            "REFERENCE",
             "STATE",
             "CLI",
             "TYPE",
@@ -262,7 +262,7 @@ fn commands_start_list_read_and_stop_agents() {
         .strip_suffix("m ago")
         .expect("a recent start");
     assert!(
-        table.cell(row, "REF") == address
+        table.cell(row, "REFERENCE") == address
             && table.cell(row, "TYPE") == "Managed"
             && table.cell(row, "STATE") == "Starting"
             && table.cell(row, "CLI") == "fake"
@@ -326,7 +326,7 @@ fn list_and_inspect_show_names_on_one_line_in_aligned_columns() {
     // The newest start first.
     let name = table.cell(&table.rows[1], "NAME");
     assert!(
-        table.cell(&table.rows[1], "REF") == address
+        table.cell(&table.rows[1], "REFERENCE") == address
             && name.starts_with("evil [2J")
             && name.ends_with("name")
             && table.cell(&table.rows[0], "NAME") == "w2",

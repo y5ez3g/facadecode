@@ -76,8 +76,16 @@ function hashKey(value: string): string {
 	return crypto.createHash('sha256').update(value).digest('hex').slice(0, 16);
 }
 
+/** A pre-ledger record can supply Pins only if the ledger has not moved or displaced its key. */
+export function mayReadPreLedgerWorkspace(key: string, workspaceUri: string, home: string): boolean {
+	const uri = normalizedUri(workspaceUri);
+	const { owners, bindings } = readUris(home);
+	return owners[key] === undefined || bindings[uri] === key;
+}
+
 /** Proven same-window handover, then exact URI binding, then a still-valid kept key, then a new URI key. */
-export function workspaceRecord(workspaceUri: string, home: string = facadeHome(), kept?: unknown, window?: { readonly token: string; readonly folders: readonly string[] }): WorkspaceRecord {
+export function resolveWorkspaceRecord(workspaceUri: string, home: string, kept?: unknown,
+	window?: { readonly token: string; readonly folders: readonly string[] }): WorkspaceRecord {
 	const uri = normalizedUri(workspaceUri);
 	const state = readUris(home);
 	const handedOver = window && windowKey(state, window.token, window.folders, home, uri);
@@ -90,12 +98,17 @@ export function workspaceRecord(workspaceUri: string, home: string = facadeHome(
 		}
 	}
 	const dir = path.join(home, 'workspaces', key);
-	fs.mkdirSync(dir, { recursive: true });
-	const identity = path.join(dir, 'identity.json');
-	if (!fs.existsSync(identity)) {
-		replaceFile(identity, `${JSON.stringify({ workspace: workspaceUri }, undefined, '\t')}\n`);
-	}
 	return { key, dir, binding: { uri, key: state.bindings[uri], previousUri: state.owners[key] }, handedOver, ...window && !window.folders.length ? { folderless: true } : {} };
+}
+
+export function workspaceRecord(workspaceUri: string, home: string = facadeHome(), kept?: unknown,
+	window?: { readonly token: string; readonly folders: readonly string[] }): WorkspaceRecord {
+	const record = resolveWorkspaceRecord(workspaceUri, home, kept, window);
+	// An existing directory's missing identity is part of the predecessor evidence.
+	if (fs.mkdirSync(record.dir, { recursive: true }) !== undefined) {
+		replaceFile(path.join(record.dir, 'identity.json'), `${JSON.stringify({ workspace: workspaceUri }, undefined, '\t')}\n`);
+	}
+	return record;
 }
 
 /**

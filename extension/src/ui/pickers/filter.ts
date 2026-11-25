@@ -7,9 +7,10 @@ import * as vscode from 'vscode';
 import { homeRelative } from '../../base/files';
 import { messageOf } from '../../base/errors';
 import type { Catalog, Location, LocationPort, LogPort, WorkspaceFolderInfo } from '../../core/ports';
-import type { PanelFilter } from '../../webview/protocol';
+import type { DisplayFilter, FilterChoice, PanelFilter } from '../../webview/protocol';
 import { locationLabel } from '../cardView';
 import { PanelModel } from '../model';
+import { agentFilter, filterCategory, filterChoiceKey } from '../order';
 import { agentCountText, plainText } from '../presentation';
 import { catalogStep, CatalogStepOptions, folderIconOf, inStepOrder, locationIcon, locationsIn } from './location';
 import { BACK, Flow } from './stepping';
@@ -143,8 +144,12 @@ function step(flow: Flow, locations: Locations, options: Omit<CatalogStepOptions
 export async function pickFilter(model: PanelModel, locations: Locations, log: LogPort): Promise<void> {
 	locations.refresh().catch(err => log.event(`Could not refresh the working locations: ${messageOf(err)}`));
 	const current = model.currentFilter();
+	if (model.usesOrchestrator?.()) {
+		await pickAgentFilter(model, locations, current);
+		return;
+	}
 	const title = vscode.l10n.t("Filter by Working Location");
-	const firstOf = (catalog: Catalog) => firstAt(catalog, current);
+	const firstOf = (catalog: Catalog) => firstAt(catalog, current?.kind === 'agents' ? undefined : current);
 	const flow = new Flow();
 	let at = firstOf(locations.snapshot());
 	let chosen: PanelFilter | 'all' | undefined;
@@ -177,5 +182,75 @@ export async function pickFilter(model: PanelModel, locations: Locations, log: L
 	flow.close();
 	if (chosen !== undefined) {
 		model.setFilter(chosen === 'all' ? undefined : chosen);
+	}
+}
+
+type AgentItem = vscode.QuickPickItem & { readonly choice?: FilterChoice };
+
+/** The native multi-select owns the draft until Accept or the explicit Clear Filters action (PANEL-4.3). */
+async function pickAgentFilter(model: PanelModel, locations: Locations, current: DisplayFilter | undefined): Promise<void> {
+	const picker = vscode.window.createQuickPick<AgentItem>();
+	const clear = { iconPath: new vscode.ThemeIcon('clear-all'), tooltip: vscode.l10n.t("Clear Filters") };
+	picker.title = vscode.l10n.t("Filter Agents");
+	picker.placeholder = vscode.l10n.t("Select filters to show matching agents");
+	picker.canSelectMany = true;
+	picker.matchOnDescription = true;
+	picker.buttons = [clear];
+
+	const rows: readonly [ReturnType<typeof filterCategory>, string][] = [
+		['location', vscode.l10n.t("Working Location")],
+		['machine', vscode.l10n.t("Machine")],
+		['cli', vscode.l10n.t("CLI")],
+		['state', vscode.l10n.t("State")],
+		['pin', vscode.l10n.t("Pin")]
+	];
+	const pinChoices: readonly FilterChoice[] = [
+		{ kind: 'pin', id: 'pinned', label: vscode.l10n.t("Pinned") },
+		{ kind: 'pin', id: 'unpinned', label: vscode.l10n.t("Unpinned") }
+	];
+	const selectedChoices = () => picker.selectedItems.flatMap(item => item.choice ? [item.choice] : []);
+	const render = (selected: readonly FilterChoice[]) => {
+		const catalog = locations.snapshot();
+		const choices = new Map([...selected, ...model.filterChoices(catalog), ...pinChoices].map(choice => [filterChoiceKey(choice), choice]));
+		const included = new Set(selected.map(filterChoiceKey));
+		const machines = new Map([...choices.values()].flatMap(choice => choice.kind === 'machine' ? [[choice.id, choice.label]] : []));
+		const items = rows.flatMap(([category, label]): AgentItem[] => {
+			const group = [...choices.values()].filter(choice => filterCategory(choice) === category)
+				.sort((a, b) => a.label.localeCompare(b.label) || filterChoiceKey(a).localeCompare(filterChoiceKey(b)));
+			return group.length ? [
+				{ label, kind: vscode.QuickPickItemKind.Separator },
+				...group.map(choice => ({
+					label: plainText(choice.label),
+					...(choice.kind === 'directory' ? { description: plainText(machines.get(choice.machineId) ?? choice.machineId) } : {}),
+					choice
+				}))
+			] : [];
+		});
+		picker.items = items;
+		picker.selectedItems = items.filter(item => item.choice && included.has(filterChoiceKey(item.choice)));
+	};
+	const initial = current?.kind === 'agents' ? current.choices : current ? [current] : [];
+	render(initial);
+	const listeners = [locations.onDidChange(() => render(selectedChoices()))];
+	try {
+		await new Promise<void>(resolve => {
+			listeners.push(
+				picker.onDidAccept(() => {
+					model.setFilter(agentFilter(selectedChoices()));
+					resolve();
+				}),
+				picker.onDidTriggerButton(button => {
+					if (button === clear) {
+						model.setFilter(undefined);
+						resolve();
+					}
+				}),
+				picker.onDidHide(resolve)
+			);
+			picker.show();
+		});
+	} finally {
+		listeners.forEach(listener => listener.dispose());
+		picker.dispose();
 	}
 }

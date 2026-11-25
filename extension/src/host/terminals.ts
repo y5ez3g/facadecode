@@ -7,8 +7,7 @@
 
 import * as vscode from 'vscode';
 import { isJsonObject } from '../base/json';
-import type { EnvironmentMap } from '../clis/environment';
-import type { DestinationEnvironment } from '../clis/plan';
+import type { EnvironmentLayers, EnvironmentMap } from '../base/terminalEnvironment';
 
 /** The platform's name in VS Code's terminal settings. */
 function settingsPlatform(platform: NodeJS.Platform): 'osx' | 'linux' | 'windows' {
@@ -34,7 +33,7 @@ function mapOf(value: unknown): EnvironmentMap | undefined {
  * the folder's `terminal.integrated.env.<platform>`, and the `env` of the profile `terminal.integrated.defaultProfile.<platform>`
  * names in `terminal.integrated.profiles.<platform>` - none where no default profile is set or it has no env map.
  */
-export function destinationEnvironment(scope: vscode.Uri | undefined): DestinationEnvironment {
+export function destinationEnvironment(scope: vscode.Uri | undefined): EnvironmentLayers & { readonly platform: NodeJS.Platform } {
 	const platform = process.platform;
 	const key = settingsPlatform(platform);
 	const terminal = vscode.workspace.getConfiguration('terminal.integrated', scope);
@@ -44,12 +43,7 @@ export function destinationEnvironment(scope: vscode.Uri | undefined): Destinati
 	return {
 		host: process.env,
 		...mapOf(terminal.get<unknown>(`env.${key}`)) ? { terminal: mapOf(terminal.get<unknown>(`env.${key}`)) } : {},
-		...profile ? { profile, profileName: name as string } : {},
+		...profile ? { profile } : {},
 		platform
 	};
-}
-
-/** The terminal environment setting of this platform, as Show Agent Launch names that layer (CLIS-1.2, 4.1). */
-export function terminalEnvSetting(): string {
-	return `terminal.integrated.env.${settingsPlatform(process.platform)}`;
 }

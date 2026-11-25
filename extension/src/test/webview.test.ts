@@ -57,7 +57,7 @@ suite('The agent panel in Chromium', function () {
 	let tested: string;
 	let css: string;
 	/** The page's words: each its own key, the templates as the extension gives them. */
-	const words = { noAgentsIn: 'No agents found in "{0}".', otherAgents: '{0} other agents are in this workspace.', otherAgent: '1 other agent is in this workspace.', started: 'Started {0}', startedBy: 'Started {0} by {1}', copyReference: 'Copy Agent Reference',
+	const words = { noAgentsIn: 'No agents found in "{0}".', otherAgents: '{0} other agents are in this workspace.', otherAgent: '1 other agent is in this workspace.', started: 'Started {0}', startedBy: 'Started {0} by {1}',
 		ago: { now: 'just now', secs: '{0} secs ago', min: '{0} min ago', mins: '{0} mins ago', hr: '{0} hr ago', hrs: '{0} hrs ago', day: '{0} day ago', days: '{0} days ago', wk: '{0} wk ago', wks: '{0} wks ago', mo: '{0} mo ago', mos: '{0} mos ago', yr: '{0} yr ago', yrs: '{0} yrs ago' } };
 	/** Loads a new page of the panel, as the view does each time it shows. */
 	const load = async (bundle = shipped, saved?: unknown) => {
@@ -163,23 +163,24 @@ suite('The agent panel in Chromium', function () {
 		})()`), [true, true, true, 'dot none', 'Fix the login', 'Agent 1, #a1, Idle, project, Claude Code, Fix the login',
 			['Fix the login', 'Agent 1 #a1', 'Started just now', 'main', '/project'],
 			'Title: Fix the login, Started just now, Path: /project']);
-		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { alias: 'a1', dot: 'none', stateText: 'Just done',
-			orchestrator: { cli: 'Claude Code', running: true }, line: '<daemon title>', label: 'Agent 1, a1, Claude Code, Just done',
-			details: detailsFor(1, { summary: { id: 'title', label: 'Title: ', value: '<daemon title>' },
-				machine: { id: 'machine', label: 'Machine: ', value: 'devbox' },
-				address: { id: 'address', label: 'Address: ', value: 'a1@devbox' } }) })], { revision: 3 })`) });
+		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { alias: 'a1', dot: 'just_done', stateText: 'Just done',
+			orchestrator: { cli: 'Claude Code', running: true }, line: '<latest submission>', label: 'Agent 1, a1, Claude Code, Just done, <latest submission>',
+			details: detailsFor(1, { summary: { id: 'session', label: 'Session: ', value: 'session-uuid' },
+				titleLabel: 'Session: ', address: { id: 'address', label: 'Agent reference: ', value: 'a1@devbox' } }) })], { revision: 3 })`) });
 		assert.deepStrictEqual(await evaluate(`(() => {
 			const card = document.querySelector('.agent');
+			document.documentElement.style.setProperty('--vscode-charts-yellow', '#deb921');
+			const dot = card.querySelector('.dot');
 			const facts = detailsOf(card);
 			card.querySelector('.details-button').click();
-			const copy = document.querySelector('.details .button');
-			copy.focus();
-			copy.click();
-			return [card.querySelector('.card-meta').textContent, card.querySelector('.title').textContent, card.getAttribute('aria-label'),
-				facts, copy.textContent, document.activeElement === copy, window.posted.filter(message => message.type === 'act').map(({ what, target }) => [what, target]), window.errors];
-		})()`), ['Just done · Claude Code ·', '<daemon title>', 'Agent 1, a1, Claude Code, Just done',
-			['<daemon title>', 'Agent 1', 'Started just now', 'main', '/project', 'devbox', 'a1@devbox'],
-			'Copy Agent Reference', true, [['copyReference', 'run-1']], []]);
+			return [card.querySelector('.line.bottom').textContent, card.getAttribute('aria-label'), dot.className,
+				getComputedStyle(dot).getPropertyValue('--facade-dot-color').trim(), getComputedStyle(dot, '::after').animationName,
+				document.querySelectorAll('.details .details-fact').length, facts,
+				document.querySelector('.details-more').textContent.trim(), document.querySelectorAll('.details button').length,
+				window.posted.filter(message => message.type === 'act').map(({ what, target }) => [what, target]), window.errors];
+		})()`), ['<latest submission>', 'Agent 1, a1, Claude Code, Just done, <latest submission>', 'dot just_done', '#deb921', 'none', 4,
+			['session-uuid', 'Agent 1 a1@devbox · Just done', 'Started just now', '/project'],
+			'a1@devbox', 0, [], []]);
 	});
 
 	test('PANEL-1.5: a card\'s details are five rows, each an icon and one line: its title, No title yet where it has none and Title unavailable where none can come, after the same Title: label; its name and short ID, an empty name its ID alone; when it started - and who started it; where it works, its icon its kind\'s; its path', async () => {
@@ -1389,9 +1390,9 @@ suite('The agent panel in Chromium', function () {
 				[JSON.parse(card.dataset.vscodeContext), card.querySelector('.pin-button').hidden, Boolean(card.querySelector('.pin'))]);
 		})()`), [
 			[{ webviewSection: 'agent', run_id: 'local/a1', webviewAgentRunning: true, webviewAgentPinned: false,
-				webviewAgentPinnable: true, preventDefaultContextMenuItems: true }, true, false],
+				webviewAgentPinnable: true, preventDefaultContextMenuItems: true }, false, false],
 			[{ webviewSection: 'agent', run_id: 'remote/a1', webviewAgentRunning: false, webviewAgentPinned: true,
-				webviewAgentPinnable: false, preventDefaultContextMenuItems: true }, true, true]
+				webviewAgentPinnable: false, preventDefaultContextMenuItems: true }, false, true]
 		]);
 	});
 

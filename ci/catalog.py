@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 PRODUCTS = ('framework', 'extension')
-STAGES = ('pr', 'native', 'scheduled', 'release')
+STAGES = ('pr', 'native', 'scheduled', 'release', 'historical')
 CASE_ID = re.compile(r'(?:framework|extension)(?:/[A-Za-z0-9._-]+){3}')
 FLOW_ID = re.compile(r'(?:framework|extension)/p0/[A-Za-z0-9._-]+')
 CASE_NAME = re.compile(r'\x60([A-Za-z0-9._-]+)\x60')
@@ -44,26 +44,24 @@ NATIVE_ROUTES = {binding['runner'] for binding in NATIVE_BINDINGS.values()}
 REQUIRED_EDITOR_ROUTES = {
     'framework/p0/remote-execution/remote-worktree': 'remote-worktree',
     'extension/p0/activation-shell/activation-failure': 'incompatible-activation',
-    'extension/p0/window-replacement/replacement-in-flight': 'replacement-in-flight',
-    'extension/p0/window-replacement/stale-owner': 'stale-owner',
+    'extension/p0/activation-shell/startup-failure': 'activation-failure',
     'extension/p0/vsix-upgrade/install-pair': 'install-pair',
     'extension/p0/vsix-upgrade/upgrade-pair': 'upgrade-pair',
+    'extension/p0/vsix-upgrade/cutover-live': 'cutover-live',
+    'extension/p0/vsix-upgrade/cutover-uncertain': 'cutover-uncertain',
 }
 EDITOR_DRIVERS = {
-    'activation-failure': ('legacy', 'claude'),
-    'conversion': ('legacy', 'claude'),
-    'expiry': ('legacy', 'claude'),
+    'activation-failure': ('none', 'claude'),
+    'cutover-live': ('framework', 'claude'),
+    'cutover-uncertain': ('framework', 'claude'),
     'incompatible-activation': ('none', 'claude'),
-    'install-pair': ('legacy', 'claude'),
+    'install-pair': ('framework', 'claude'),
     'lifetime': ('framework', 'claude'),
     'missing-session-unpin': ('framework', 'claude'),
     'multi-window': ('framework', 'claude'),
     'remote-worktree': ('framework', 'fake'),
-    'replacement-in-flight': ('legacy', 'claude'),
     'shell-handoff': ('framework', 'codex'),
-    'stale-owner': ('legacy', 'claude'),
-    'switch': ('framework', 'claude'),
-    'upgrade-pair': ('legacy', 'claude'),
+    'upgrade-pair': ('framework', 'claude'),
 }
 
 
@@ -194,6 +192,8 @@ def read_cases(root):
         if not isinstance(refs, list) or not all(reference_exists(root, ref) for ref in refs):
             raise AcceptanceError(f'{case_id}: invalid existing test reference')
         test = validate_binding(row['test'], case_id) if 'test' in row else None
+        if row['stage'] == 'historical' and (not test or test.get('implementation') != 'legacy'):
+            raise AcceptanceError(f'{case_id}: historical stage requires an earlier legacy editor journey')
         if test == NATIVE_INSTALL_BINDING and row['stage'] not in ('native', 'release'):
             raise AcceptanceError(f'{case_id}: native install requires a native or release stage')
         if case_id in NATIVE_BINDINGS:

@@ -3,22 +3,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import * as fs from 'fs';
-import * as path from 'path';
+import { productionGraph, sourceCycles } from './sourceGraph';
 
 /** What each layer may import of the others (ARCHITECTURE-1.3): business rules depend on ports, never on the editor or a socket. */
 const MAY_IMPORT: { readonly [layer: string]: readonly string[] } = {
 	'extension.ts': ['host'],
-	host: ['ui', 'contract', 'core', 'record', 'clis', 'transport', 'schema', 'ptyd', 'base'],
+	host: ['ui', 'core', 'record', 'base'],
 	ui: ['core', 'webview', 'base'],
 	webview: [],
-	contract: ['core', 'schema', 'base'],
 	core: ['base'],
 	record: ['base'],
-	clis: ['base'],
-	ptyd: ['base'],
-	transport: ['ptyd', 'schema', 'base'],
-	schema: ['base'],
 	base: []
 };
 
@@ -26,56 +20,42 @@ const MAY_IMPORT: { readonly [layer: string]: readonly string[] } = {
 const MAY_IMPORT_VSCODE: readonly string[] = ['extension.ts', 'host', 'ui'];
 
 /** The only module of `webview` that other layers may import: plain types shared by host and page (PANEL-3.1). */
-const WEBVIEW_PROTOCOL = path.join('webview', 'protocol');
-
-const SRC = path.join(__dirname, '..', '..', '..', 'src');
-const IMPORT = /(?:^|\s)(?:import|export)\s(?:[^'";]*?\sfrom\s)?['"](?<module>[^'"]+)['"]|\b(?:require|import)\(\s*['"](?<called>[^'"]+)['"]\s*\)/g;
-
-function sourcesIn(dir: string): string[] {
-	return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
-		const file = path.join(dir, entry.name);
-		return entry.isDirectory() ? sourcesIn(file) : file.endsWith('.ts') ? [file] : [];
-	});
-}
+const WEBVIEW_PROTOCOL = 'webview/protocol.ts';
 
 /** A file's layer: the folder under `src` it is in, or the file itself at the top. */
 function layerOf(file: string): string {
-	return path.relative(SRC, file).split(path.sep)[0];
-}
-
-function importsOf(file: string): string[] {
-	return [...fs.readFileSync(file, 'utf8').matchAll(IMPORT)].map(match => match.groups?.module ?? match.groups?.called ?? '');
+	return file.split('/')[0];
 }
 
 suite('Layers: what each file may import (ARCHITECTURE-1.3)', () => {
 
+	const graph = productionGraph();
+
 	test('imports point down the layers only, and vscode is imported by the host, the UI and the activation alone', () => {
 		const wrong: string[] = [];
-		for (const file of sourcesIn(SRC).filter(each => layerOf(each) !== 'test')) {
+		for (const [file, dependencies] of graph) {
 			const layer = layerOf(file);
 			const allowed = MAY_IMPORT[layer];
-			const shown = path.relative(SRC, file);
 			if (!allowed) {
-				wrong.push(`${shown} is in no layer`);
+				wrong.push(`${file} is in no layer`);
 				continue;
 			}
-			for (const specifier of importsOf(file)) {
+			for (const { specifier, target } of dependencies) {
 				if (specifier === 'vscode') {
 					if (!MAY_IMPORT_VSCODE.includes(layer)) {
-						wrong.push(`${shown} imports vscode`);
+						wrong.push(`${file} imports vscode`);
 					}
-				} else if (specifier.startsWith('.')) {
-					const resolved = path.relative(SRC, path.resolve(path.dirname(file), specifier));
-					const target = layerOf(path.resolve(path.dirname(file), specifier));
-					if (target === 'test') {
-						wrong.push(`${shown} imports test code ${specifier}`);
-					} else if (target !== layer && !allowed.includes(target)) {
-						wrong.push(`${shown} imports ${specifier}`);
-					} else if (target === 'webview' && layer !== 'webview' && resolved !== WEBVIEW_PROTOCOL) {
-						wrong.push(`${shown} imports webview code other than its protocol: ${specifier}`);
+				} else if (target) {
+					const targetLayer = layerOf(target);
+					if (!graph.has(target)) {
+						wrong.push(`${file} imports outside production source: ${specifier}`);
+					} else if (targetLayer !== layer && !allowed.includes(targetLayer)) {
+						wrong.push(`${file} imports ${specifier}`);
+					} else if (targetLayer === 'webview' && layer !== 'webview' && target !== WEBVIEW_PROTOCOL) {
+						wrong.push(`${file} imports webview code other than its protocol: ${specifier}`);
 					}
 				} else if (layer === 'webview') {
-					wrong.push(`${shown} imports the module ${specifier}: the page bundles nothing but its own code`);
+					wrong.push(`${file} imports the module ${specifier}: the page bundles nothing but its own code`);
 				}
 			}
 		}
@@ -83,42 +63,16 @@ suite('Layers: what each file may import (ARCHITECTURE-1.3)', () => {
 	});
 
 	test('production modules have no import cycles, including type-only dependencies', () => {
-		const files = sourcesIn(SRC).filter(file => layerOf(file) !== 'test');
-		const known = new Set(files);
-		const dependencies = new Map(files.map(file => [file, importsOf(file)
-			.filter(specifier => specifier.startsWith('.'))
-			.map(specifier => path.resolve(path.dirname(file), `${specifier}.ts`))
-			.filter(target => known.has(target))]));
-		const visited = new Set<string>();
-		const visiting: string[] = [];
-		const cycles: string[] = [];
-		const visit = (file: string): void => {
-			const at = visiting.indexOf(file);
-			if (at >= 0) {
-				cycles.push([...visiting.slice(at), file].map(each => path.relative(SRC, each)).join(' -> '));
-				return;
-			}
-			if (visited.has(file)) {
-				return;
-			}
-			visiting.push(file);
-			for (const target of dependencies.get(file) ?? []) {
-				visit(target);
-			}
-			visiting.pop();
-			visited.add(file);
-		};
-		files.forEach(visit);
-		assert.deepStrictEqual(cycles, []);
+		assert.deepStrictEqual(sourceCycles(graph), []);
 	});
 
-	test('execution depends on shared presentation, never a picker or command flow', () => {
+	test('the terminal view depends on shared presentation and calls no picker or command flow', () => {
 		const wrong: string[] = [];
-		for (const file of sourcesIn(path.join(SRC, 'host', 'execution'))) {
-			for (const specifier of importsOf(file).filter(each => each.startsWith('.'))) {
-				const target = path.relative(SRC, path.resolve(path.dirname(file), specifier));
-				if (target.startsWith(`ui${path.sep}`) && target !== path.join('ui', 'presentation')) {
-					wrong.push(`${path.relative(SRC, file)} imports ${specifier}`);
+		for (const [file, dependencies] of graph) {
+			if (!file.startsWith('host/terminal/')) { continue; }
+			for (const { target } of dependencies) {
+				if (target?.startsWith('ui/') && target !== 'ui/presentation.ts') {
+					wrong.push(`${file} imports ${target}`);
 				}
 			}
 		}

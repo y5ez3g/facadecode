@@ -94,7 +94,7 @@ fn a_table_pads_each_column_to_its_widest_cell_and_keeps_each_row_on_one_line() 
 fn a_narrow_resume_table_fits_wide_session_names_and_keeps_the_full_session_ref() {
     let headers = [
         "NAME",
-        "REF",
+        "REFERENCE",
         "STATE",
         "CLI",
         "TYPE",
@@ -226,7 +226,7 @@ fn the_list_is_one_row_per_agent_with_a_copyable_ref() {
     .unwrap();
     assert_eq!(
         trimmed(&list_text(&rows, now())),
-        "NAME    REF         STATE             CLI      TYPE      WORKING DIRECTORY   STARTED   SESSION\n\
+        "NAME    REFERENCE   STATE             CLI      TYPE      WORKING DIRECTORY   STARTED   SESSION\n\
          Visor   a5@laptop   Online            agent    Guest     -                   1m ago    -\n\
          Pixel   a3@devbox   Working           claude   Managed   /work/site          2m ago    A session with forty visible characters…\n\
          Ada     a4@devbox   Waiting for you   codex    Managed   /work/site          5m ago    -"

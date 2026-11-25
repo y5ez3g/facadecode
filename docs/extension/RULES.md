@@ -343,7 +343,7 @@ New Agent launch failure retains the accepted pair even when no CLI process was 
 
 ### 3.4 Notifications without an attention queue
 
-**Use native notifications, their Show action and Go to Agent; maintain no separate human-attention queue.**
+**Use native notifications and their Show action.**
 
 Human notifications follow 1.8. The one-time settings migration notice follows
 CONFIGURATION-6.3 and appears only in the window that created the file. There is no universal exactly-once-per-error popup
@@ -487,24 +487,25 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 
 ### 6.1 Workspace presentation
 
-**Each workspace shares one list of agents and Pins across its windows.**
+**The panel shows every running Managed Agent visible to this window's Orchestrator.**
 
-The list contains agents started or opened there through Go to Agent, and their descendants in the creation tree.
-Descendants appear as cards automatically and open a terminal only on request. Store the list and Pins across
-reloads and reopens. Keep the Facade home and editor workspace storage when changing builds. The editor reads
-workspace members and Pins under ARCHITECTURE-6.2 and keeps confirmed entries while a source is unavailable. The Orchestrator
-owns agent records, processes and terminal state. The extension owns cards, Pins and tab placement. A remote
-extension host connects to the Orchestrator on the machine where it runs.
+Agents started from Shell, other windows or other agents appear automatically. Opening a card opens its terminal.
+The workspace remembers the agents started or opened there, their descendants and its Pins across reloads and
+reopens. Those agents can keep cards after exit. Observing an unrelated live record leaves the saved roster alone
+until its card is opened or pinned. Keep a last observed card and mark it unavailable when the source is
+temporarily unreachable. The Orchestrator owns the records and processes. The extension owns presentation and
+Pins under ARCHITECTURE-6.2.
+A remote extension host connects to the Orchestrator on the machine where it runs.
 
 ### 6.2 References and results
 
 **The editor uses the Orchestrator's addresses, state, title and scoped query results.**
 
-An agent address is `a3@devbox` or `a3@9a0d44b2`; keep the full address for Copy Agent Reference. Go to Agent lists
-the same active managed agents that can Attach from Shell's `facade list`. Resume Agent uses the same scoped results
+An agent address is `a3@devbox` or `a3@9a0d44b2`; keep the full address for Copy Agent Reference. The panel follows
+the same active Managed Agents as Shell's `facade list`. Resume Agent uses the same scoped results
 as `facade resume`: ended agents with sessions and the CLI's own saved sessions. It resumes an ended agent at
 its original address or resumes a saved session as a new agent. Show an actionable error if a session is already
-in use. The Panel shows the CLI's TITLE and the same state as the list; details show the machine.
+in use. PANEL-4.1 owns the card presentation. The editor uses the complete identity for every operation.
 
 ### 6.3 Attach and card actions
 
@@ -515,22 +516,26 @@ dimension across live Attach viewers that have reported it. Each view draws at t
 recalculates the grid for the remaining views and leaves the agent running. Use VS Code for terminal colors.
 
 Input entered during a disconnect is dropped. The reconnected view reports the number of input bytes dropped after
-displaying the current screen. Hide removes the card from this workspace and clears its Pin. Stop ends the agent's run
-and leaves its card and Pin. Remove stops the agent if it is running and removes its record. On a successful
-Remove, clear this workspace's card and Pin and close its terminal view. Rename keeps the address. The card menu
-offers Open Terminal, Hide, Stop, Remove, Pin or Unpin, and Rename. Copy Agent Reference, Filter,
-Add Folder, Show Agents Log and Open Settings stay available through their own surfaces.
+displaying the current screen. Stop Agent ends the run. The workspace keeps the cards it remembers under 6.1 and
+their Pins. Other cards leave when their exit is confirmed. The existing Remove
+command, where invoked explicitly, stops a running agent and removes its record. A successful Remove clears this
+workspace's card, Pin and view. Rename keeps the address. PANEL-4 owns the available card actions.
 
 ### 6.4 Pin and reopening
 
-**Pin is available for agents with a session, including agents on reachable remote machines.**
+**Pin is available as soon as Framework accepts a managed agent's start, including agents on reachable remote machines.**
 
 When a workspace opens after its last window closed, make one recovery attempt per Pin. All windows share the
-result. Wake a sleeping machine for the stored reference, Attach to a running pinned agent or Resume a stopped or
-crashed agent. On an unresolved lookup or a failure,
-keep the Pin and show the reason on its red card. For a record confirmed to have expired, remove its unpinned
-card or resume its saved session as a new agent and update the card and Pin. If the session is confirmed gone,
-remove the Pin and tell the person. Explicit removal clears the card and Pin and ends automatic recovery for it.
+result. Wake a sleeping machine for the stored reference and Attach to a running agent. For a stopped, crashed
+or expired agent, Resume its known session. If it had no saved session, start an agent at the same machine and
+actual working directory using the Pin's startup settings. For an earlier Pin with no startup settings, use its
+CLI, working directory and name with the CLI's current settings. Recover a sessionless legacy Pin only after its
+execution environment is verified and the legacy cutover confirms exit under ARCHITECTURE-1.4.
+
+Save the new reference in the same Pin. Persist the attempt before starting. Keep an unresolved attempt from
+starting another agent after a lost result. On an unresolved lookup or a failure, keep the Pin and show the reason
+on its red card. A confirmed missing saved session removes the Pin and tells the person. Explicit removal clears
+the card and Pin and ends automatic recovery for it.
 
 ### 6.5 Start and location
 
@@ -547,8 +552,8 @@ A later start or resume follows the Orchestrator's path validation.
 
 **The Orchestrator applies settings and permissions on the agent's machine.**
 
-Use that machine's `facade.json` and its `FACADE_HOME` or default home. `facade.home` applies to the legacy implementation
-during the transition. A local start uses the initiating Shell, editor, or agent environment, including a Guest's
+Use that machine's `facade.json`. The editor resolves its execution home under CONFIGURATION-7.1. A local
+start uses the initiating Shell, editor, or agent environment, including a Guest's
 relay environment. A start on another machine uses its SSH login environment. Resume keeps the original session,
 location, model, effort and CLI arguments, and uses the machine's current settings, including YOLO.
 
@@ -562,7 +567,7 @@ The [product's CLI table](../PRODUCT.md#cli-differences) owns the summary of dif
 
 ### 6.7 Messages, machines and tools
 
-**The editor entry point handles starts, Attach and recovery; Shell handles machines and sending messages.**
+**The editor entry point handles starts, opening terminals and recovery. Shell handles machines and sending messages.**
 
 The Orchestrator owns the common Shell and MCP contracts, including Guest identity, delivery outcomes and the eight
 tools. A failed background delivery or a watchdog incident produces a Facade notice (🔔). Startup trouble and

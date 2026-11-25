@@ -89,7 +89,7 @@ managed relay and session-start hook use a Facade profile.
   lists this machine's candidates with zero SSH. `--machine <MACHINE>` lists the named machine's resumable managed
   agents. The `SESSION` column uses the same native name or preview as `list`. The state is `Ended` for a managed
   agent whose run ended, however it ended, or `Saved` for a session from the CLI's history. Copy a reference from
-  the `REF` column to `facade resume <REFERENCE>` in the same directory. A `Saved` row's `REF`, its session selector,
+  the `REFERENCE` column to `facade resume <REFERENCE>` in the same directory. A `Saved` row's `REFERENCE`, its session selector,
   is the first eight characters of its ID when they match no other session in the CLI histories `facade resume`
   searches in that directory, including sessions that managed agents use, and its full ID otherwise.
 - `facade status <AGENT>` shows the same Agent State as `list` while the agent runs, with the reason for

@@ -30,7 +30,7 @@ use crate::{
 
 const ROSTER_COLUMNS: [&str; 8] = [
     "NAME",
-    "REF",
+    "REFERENCE",
     "STATE",
     "CLI",
     "TYPE",

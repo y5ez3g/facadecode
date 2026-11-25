@@ -579,7 +579,19 @@ export interface Pin {
 	readonly machine_id?: string;
 }
 
-export type FrameworkPin = Pin & { readonly machine_id: string; readonly agent: string };
+/** Settings from an accepted editor start. Location and name live on the Pin itself. */
+export interface PinLaunch {
+	readonly args: readonly string[];
+	readonly model?: string;
+	readonly effort?: string;
+}
+
+export type FrameworkPin = Pin & {
+	readonly machine_id: string;
+	readonly agent: string;
+	readonly launch?: PinLaunch;
+	readonly restartAttempt?: string;
+};
 
 /** Pins in workspace storage, in their saved order (ARCHITECTURE-3.1). */
 export interface PinStore {

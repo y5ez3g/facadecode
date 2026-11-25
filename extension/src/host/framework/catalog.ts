@@ -28,7 +28,7 @@ export class OrchestratorLocations implements LocationPort, Disposable {
 	private readonly subscription: Disposable;
 	private readonly removals = new Map<LocationId, LocationRemoval['cause']>();
 	private rows: LocationListResult['locations'] = [];
-	private pending?: LocationListArgs;
+	private pending?: Promise<void>;
 	private catalog: Catalog;
 
 	constructor(private readonly options: LocationOptions) {
@@ -46,32 +46,58 @@ export class OrchestratorLocations implements LocationPort, Disposable {
 		return this.catalog.locations.find(location => location.id === id);
 	}
 
+	locationAt(directory: string): Location | undefined {
+		const key = folderKeyOf(directory);
+		return this.catalog.locations.find(location => isEqualPath(location.path, key));
+	}
+
 	removalOf(id: LocationId): LocationRemoval['cause'] | undefined {
 		return this.removals.get(id);
 	}
 
-	async refresh(): Promise<void> {
+	refresh(): Promise<void> {
 		const folders = this.options.folders();
-		const request: LocationListArgs = { folders: folders.map(folder => folder.path) };
-		this.pending = request;
 		if (!folders.length) {
 			this.rows = [];
 			this.pending = undefined;
 			this.publish(folders, false);
-			return;
+			return Promise.resolve();
 		}
+		const request: Promise<void> = Promise.resolve().then(async () => {
+			try {
+				const rows = await this.readLocations(folders);
+				if (this.pending === request) {
+					this.rows = rows;
+				}
+			} catch (error) {
+				if (this.pending === request) { throw error; }
+			} finally {
+				// A folder change can supersede a read before it returns.
+				if (this.pending === request) {
+					this.pending = undefined;
+					this.publish(folders, false);
+				}
+			}
+			// Callers resolving a path after refresh need the catalog published by any superseding read.
+			await this.pending;
+		});
+		this.pending = request;
 		this.publish(folders, true);
+		return request;
+	}
+
+	private async readLocations(folders: readonly WorkspaceFolderInfo[]): Promise<LocationListResult['locations']> {
 		try {
-			const result = await this.options.list(request);
-			if (this.pending === request) {
-				this.rows = result.locations;
-			}
-		} finally {
-			// A folder change can supersede a read before it returns.
-			if (this.pending === request) {
-				this.pending = undefined;
-				this.publish(folders, false);
-			}
+			return (await this.options.list({ folders: folders.map(folder => folder.path) })).locations;
+		} catch (error) {
+			if (folders.length === 1) { throw error; }
+			const results = await Promise.allSettled(folders.map(folder => this.options.list({ folders: [folder.path] })));
+			if (results.every(result => result.status === 'rejected')) { throw error; }
+			return results.flatMap((result, index) => {
+				if (result.status === 'fulfilled') { return result.value.locations; }
+				this.options.log.event(`Could not read working locations for ${folders[index].path}: ${messageOf(result.reason)}`);
+				return [];
+			});
 		}
 	}
 
@@ -105,6 +131,30 @@ export class OrchestratorLocations implements LocationPort, Disposable {
 			}
 		}
 		this.changed.fire();
+	}
+}
+
+/** Recent successful New Agent destinations in this workspace, independently keyed by machine identity (LIFECYCLE-5.1). */
+export class LaunchLocationHistory {
+	constructor(private readonly state: Pick<vscode.Memento, 'get' | 'update'>, private readonly log: LogPort) { }
+
+	recent(machine: string): readonly string[] {
+		const value = this.state.get<unknown>(this.key(machine));
+		return Array.isArray(value) ? value.filter((folder): folder is string => typeof folder === 'string' && folder.length > 0) : [];
+	}
+
+	remember(machine: string, folder: string): void {
+		const failed = (error: unknown) => this.log.event(`Could not save the last launch directory: ${messageOf(error)}`);
+		try {
+			const history = [folder, ...this.recent(machine).filter(previous => previous !== folder)].slice(0, 20);
+			void Promise.resolve(this.state.update(this.key(machine), history)).catch(failed);
+		} catch (error) {
+			failed(error);
+		}
+	}
+
+	private key(machine: string): string {
+		return `facade.orchestrator.launchLocations.${machine}`;
 	}
 }
 

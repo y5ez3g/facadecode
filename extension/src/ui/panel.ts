@@ -6,9 +6,9 @@ import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { isJsonObject, JsonObject } from '../base/json';
 import type { LogPort } from '../core/ports';
-import type { Act, Outcome, PageAct, PanelState, Scrolling, Strings } from '../webview/protocol';
+import type { Act, Outcome, PanelState, Scrolling, Strings } from '../webview/protocol';
 import { isAgentRunning } from './cardView';
-import { COMMANDS, CONTEXT, PANEL_VIEW } from './catalog';
+import { CONTEXT, PANEL_VIEW } from './catalog';
 import { PanelModel } from './model';
 import { agentCountText } from './presentation';
 
@@ -41,7 +41,7 @@ const isTarget: Check = value => typeof value === 'string' && value.length > 0 &
 const isFlag: Check = value => typeof value === 'boolean';
 
 /** What the person can do on the page (PANEL-3.1, 1.2), each with whether it is a card's and so names the card's run. */
-const ACTS: { readonly [what in PageAct]: { readonly target: boolean } } = {
+const ACTS: { readonly [what in Act]: { readonly target: boolean } } = {
 	open: { target: true },
 	new: { target: false },
 	continueSession: { target: false },
@@ -51,8 +51,7 @@ const ACTS: { readonly [what in PageAct]: { readonly target: boolean } } = {
 	rename: { target: true },
 	// A card's Pin button (PANEL-1.3), as Pin Agent and Unpin Agent in the palette (UX-3.1)
 	pin: { target: true },
-	unpin: { target: true },
-	copyReference: { target: true }
+	unpin: { target: true }
 };
 
 /**
@@ -86,7 +85,7 @@ function webviewMessageOf(raw: unknown): (JsonObject & { readonly type: string; 
 		return undefined;
 	}
 	// A card's action names its card's run, and no other has one
-	if (raw.type === 'act' && ACTS[raw.what as PageAct].target !== (raw.target !== undefined)) {
+	if (raw.type === 'act' && ACTS[raw.what as Act].target !== (raw.target !== undefined)) {
 		return undefined;
 	}
 	return raw as JsonObject & { readonly type: string; readonly page: string };
@@ -237,17 +236,10 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 			return;
 		}
 		let reason: Outcome['reason'] | undefined;
-		const what = message.what as PageAct;
+		const what = message.what as Act;
 		const target = message.target as string | undefined;
 		try {
-			if (what === 'copyReference') {
-				const facts = target === undefined ? undefined : this.model.runFacts(target);
-				if (this.model.usesOrchestrator() && facts?.address) {
-					await vscode.commands.executeCommand(COMMANDS.copyAgentReference, { run_id: facts.id });
-				} else {
-					reason = 'gone';
-				}
-			} else if (what === 'open' && this.model.usesOrchestrator()) {
+			if (what === 'open' && this.model.usesOrchestrator()) {
 				const facts = target === undefined ? undefined : this.model.select(target);
 				reason = !facts ? 'gone' : isAgentRunning(facts) ? await this.actions(what, target) : undefined;
 			} else {
@@ -337,12 +329,12 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 			agents: vscode.l10n.t("Agents"),
 			newAgent: vscode.l10n.t("New Agent"),
 			continueSession: this.model.usesOrchestrator() ? vscode.l10n.t("Resume Agent") : vscode.l10n.t("Continue Session"),
-			...(this.model.usesOrchestrator() ? { copyReference: vscode.l10n.t("Copy Agent Reference") } : {}),
-			clearFilter: vscode.l10n.t("Clear Filter"),
+			clearFilter: this.model.usesOrchestrator() ? vscode.l10n.t("Clear Filters") : vscode.l10n.t("Clear Filter"),
 			// The empty panel, for why it is empty (PANEL-1.2)
 			noAgents: vscode.l10n.t("Start an agent in this workspace."),
 			// {0} is the location or folder the filter shows
 			noAgentsIn: vscode.l10n.t("No agents found in \"{0}\"."),
+			noAgentsMatching: vscode.l10n.t("No agents match the selected filters."),
 			// {0} is how many agents the filter hides, 2 or more
 			otherAgents: vscode.l10n.t("{0} other agents are in this workspace."),
 			otherAgent: vscode.l10n.t("1 other agent is in this workspace."),
@@ -350,6 +342,7 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 			openFolder: vscode.l10n.t("Open Folder"),
 			// When an agent started, in its details (PANEL-1.5). {0} is how long ago, as Resume Agent says it: just now, 5 mins ago, 2 hrs ago
 			started: vscode.l10n.t("Started {0}"),
+			startTime: vscode.l10n.t("Start time: {0}"),
 			// {0} is as in "Started {0}"; {1} is the agent that started it: its name and short ID, such as Ada #a3
 			startedBy: vscode.l10n.t("Started {0} by {1}"),
 			// How long ago, in the words Resume Agent's list says it in (LIFECYCLE-3.2): {0} is how many

@@ -119,9 +119,8 @@ async function main(): Promise<void> {
 		throw new Error(`FACADE_IT_ONLY is one of ${SCENARIOS.join(', ')}.`);
 	}
 	const keep = !!process.env.FACADE_IT_KEEP;
-	// The implementation the windows run on, as `run.ts` has it: `legacy` (the default) writes `facade.framework: off`, `framework` writes `auto`. The
-	// setting is the machine's: a remote window reads its own host's, which this run writes where it can (a container's user settings)
-	const implementation = process.env.FACADE_IT_IMPLEMENTATION ?? 'legacy';
+	// Framework is the current runtime. Use the legacy mode with a checkout of a legacy build.
+	const implementation = process.env.FACADE_IT_IMPLEMENTATION ?? 'framework';
 	if (implementation !== 'legacy' && implementation !== 'framework') {
 		throw new Error('FACADE_IT_IMPLEMENTATION is legacy or framework.');
 	}
@@ -228,7 +227,7 @@ async function main(): Promise<void> {
 		'window.restoreWindows': 'none',
 		'workbench.startupEditor': 'none',
 		'update.mode': 'none',
-		'facade.framework': implementation === 'framework' ? 'auto' : 'off',
+		...(implementation === 'legacy' ? { 'facade.framework': 'off' } : {}),
 		'extensions.autoUpdate': false,
 		'extensions.autoCheckUpdates': false,
 		'telemetry.telemetryLevel': 'off',
@@ -343,11 +342,11 @@ node -p ${quoted(`JSON.stringify(require(${JSON.stringify(installed + '/product.
 				}
 
 				// A machine setting belongs to the remote server, before its first extension activation.
-				if (host.platform !== 'windows') {
+				if (implementation === 'legacy' && host.platform !== 'windows') {
 					const qaMachine = host.kind === 'container'
 						? '/home/node/.vscode-server/data/Machine/settings.json'
 						: `${server(host)}/.vscode-server/data/Machine/settings.json`;
-					const qaValue = implementation === 'legacy' ? 'off' : 'auto';
+					const qaValue = 'off';
 					const qaText = JSON.stringify({ 'facade.framework': qaValue });
 					const qaNode = "const fs=require('fs'),crypto=require('crypto');const p=process.argv[1],s=fs.readFileSync(p,'utf8');console.log(JSON.stringify({path:p,sha256:crypto.createHash('sha256').update(s).digest('hex'),settings:JSON.parse(s)}))";
 					const qaReadback = host.run(`set -e
@@ -616,14 +615,14 @@ ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 					});
 					const firstText = 'Input from the first remote window';
 					assert.strictEqual(await first.act<string>({ kind: 'open-shell-agent', name, address, text: firstText }), address);
-					assert.strictEqual(await first.act<string>({ kind: 'remote-card', agent: address, machine: localName }), address);
+					assert.strictEqual(await first.act<string>({ kind: 'remote-card', agent: address }), address);
 					const [firstViewer] = await expectViews(1);
 					const second = await open(`${root}/remote-peer`, 'b');
 					assert.strictEqual(second.ready.machineId, theirId);
 					assert.strictEqual(second.ready.remote, 'ssh-remote');
 					const secondText = 'Input from the second remote window';
 					assert.strictEqual(await second.act<string>({ kind: 'open-shell-agent', name, address, text: secondText }), address);
-					assert.strictEqual(await second.act<string>({ kind: 'remote-card', agent: address, machine: localName }), address);
+					assert.strictEqual(await second.act<string>({ kind: 'remote-card', agent: address }), address);
 					const both = await expectViews(2);
 					assert.ok(both.includes(firstViewer));
 					const secondViewer = both.find(viewer => viewer !== firstViewer);
@@ -649,7 +648,7 @@ ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 					assert.strictEqual(await expectLink(true), session);
 					await back.close();
 					assert.deepStrictEqual(await expectViews(1), [secondViewer]);
-					await second.act({ kind: 'hide-shell-agent', name });
+					await second.act({ kind: 'close-shell-view', name });
 					await expectViews(0);
 					await second.close();
 					assert.strictEqual(await expectLink(true), session);

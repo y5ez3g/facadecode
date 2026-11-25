@@ -68,8 +68,10 @@ interface OrchestratorCardWords {
 	readonly ended: string;
 	readonly unknown: string;
 	readonly stateError: string;
-	readonly machine: (value: string) => string;
+	readonly toolsError?: string;
 	readonly address: (value: string) => string;
+	readonly session: (value: string) => string;
+	readonly name: (value: string) => string;
 }
 
 /** Where a card's agent works, as the card says it (PANEL-1.3). */
@@ -140,11 +142,11 @@ export interface CardSaid {
  * `🧑‍💻`, another agent's message `📨`, or Facade's own, unmarked: a Facade result, or a notable state while it lasts - its start, over
  * any message; what its CLI waits for; why its dot is red - then the last message again; before any, its known opening,
  * `New session started`, `Agent resumed` or `Session continued`. Its state in words is the accessible label's, never the second line's, nor is a
- * title. Orchestrator-backed cards use the daemon's state and title (PANEL-4.1).
+ * title. Framework cards use the daemon's state and latest submission (PANEL-4.1).
  */
 export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 	if (facts.orchestrator && words.orchestrator) {
-		return orchestratorStatusOf(facts.orchestrator.state, facts, words, words.orchestrator);
+		return orchestratorStatusOf(facts.orchestrator.state, facts, words);
 	}
 	if (facts.remoteMachine !== undefined && facts.disconnected) {
 		return { dot: 'none', stateText: words.connectionLost, ...noticeOf(words.connectionLost) };
@@ -156,8 +158,7 @@ export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 		return { dot, stateText: words.error(reason), ...noticeOf(reason) };
 	}
 	if (facts.blocker) {
-		const kind = facts.blocker.kind === 'permission' ? words.needsPermission : facts.blocker.kind === 'auth' ? words.needsSignIn
-			: facts.blocker.kind === 'question' ? words.hasQuestion : words.needsAttention;
+		const kind = blockerText(facts.blocker.kind, words, words.needsAttention);
 		const detail = facts.blocker.text?.trim();
 		const said = detail && detail !== kind ? `${kind} · ${detail}` : kind;
 		return { dot, stateText: kind, ...noticeOf(said), ...detail && detail !== kind ? { reason: detail } : {} };
@@ -189,23 +190,53 @@ export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 	return { dot, stateText, ...noticeOf(opening), ...unsaid };
 }
 
-/** The same state and TITLE as the Orchestrator's list (RULES-6.2, PANEL-4.1). */
-function orchestratorStatusOf(state: NonNullable<RunFacts['orchestrator']>['state'], facts: RunFacts, words: CardWords, terms: OrchestratorCardWords): CardStatus {
+type FrameworkState = NonNullable<RunFacts['orchestrator']>['state'];
+
+export function frameworkStateOf(state: FrameworkState, facts: RunFacts): FrameworkState {
+	if (facts.error || state === 'error') { return 'error'; }
+	return facts.disconnected ? 'unknown' : state;
+}
+
+export function frameworkStateText(state: FrameworkState, words: CardWords): string {
+	const terms = words.orchestrator;
 	const states = {
 		starting: words.starting,
 		working: words.working,
-		waiting_for_you: terms.waitingForYou,
-		just_done: terms.justDone,
+		waiting_for_you: terms?.waitingForYou ?? words.needsAttention,
+		just_done: terms?.justDone ?? words.notWorking,
 		idle: words.notWorking,
-		error: terms.stateError,
-		ended: terms.ended,
-		unknown: terms.unknown
+		error: terms?.stateError ?? words.activityUnavailable,
+		ended: terms?.ended ?? words.notWorking,
+		unknown: terms?.unknown ?? words.activityUnavailable
 	};
-	const failure = facts.error && errorReasonOf(facts, words);
+	return states[state];
+}
+
+function blockerText(kind: NonNullable<RunFacts['blocker']>['kind'], words: CardWords, unknown: string): string {
+	return kind === 'permission' ? words.needsPermission : kind === 'auth' ? words.needsSignIn : kind === 'question' ? words.hasQuestion : unknown;
+}
+
+/** Framework supplies the last submission, with active error and wait reasons taking precedence (PANEL-4.1). */
+function orchestratorStatusOf(reported: FrameworkState, facts: RunFacts, words: CardWords): CardStatus {
+	const state = frameworkStateOf(reported, facts);
+	const stateText = state === 'unknown' && facts.disconnected ? words.connectionLost : frameworkStateText(state, words);
+	let line = facts.said ?? '';
+	if (facts.error) {
+		line = errorReasonOf(facts, words);
+	} else if (state === 'error' && facts.tools === 'unavailable') {
+		line = facts.toolsProblem === 'disconnected' ? words.toolsUnavailable(facts.toolsProblem, undefined)
+			: words.orchestrator?.toolsError ?? words.activityUnavailable;
+	} else if (state === 'error' && facts.notReady) {
+		line = words.activityUnknown('waiting');
+	} else if (state === 'waiting_for_you') {
+		const reason = blockerText(facts.blocker?.kind ?? 'unknown', words, stateText);
+		const detail = facts.blocker?.text?.trim();
+		line = detail && detail !== reason ? `${reason} · ${detail}` : reason;
+	}
 	return {
-		dot: failure || state === 'error' ? 'error' : state === 'working' || state === 'starting' ? 'working' : 'none',
-		stateText: failure ? words.error(failure) : states[state],
-		line: facts.title ?? ''
+		dot: state === 'working' || state === 'error' || state === 'just_done' ? state : 'none',
+		stateText,
+		line
 	};
 }
 
@@ -377,11 +408,12 @@ interface CardInput {
 /** Workspace card content comes from the Orchestrator (PANEL-4.1). */
 function orchestratorCardOf(facts: RunFacts, record: NonNullable<RunFacts['orchestrator']>, input: CardInput, terms: OrchestratorCardWords): Card {
 	const { place, words } = input;
-	const { dot, stateText, line } = orchestratorStatusOf(record.state, facts, words, terms);
+	const { dot, stateText, line } = orchestratorStatusOf(record.state, facts, words);
 	const field = (id: DetailId, format: (value: string) => string, value: string): DetailField => ({ id, label: labelOf(format), value });
 	const alias = record.reference.agent_id;
-	const machine = record.machine ?? record.reference.machine_id;
 	const address = facts.address;
+	const session = terms.session;
+	const cwd = facts.cwd || '-';
 	return {
 		runId: facts.id,
 		name: facts.name,
@@ -394,20 +426,20 @@ function orchestratorCardOf(facts: RunFacts, record: NonNullable<RunFacts['orche
 		stateText,
 		line,
 		orchestrator: { cli: facts.displayName, running: isAgentRunning(facts) },
-		label: [facts.name, alias, facts.pin && words.pinned, facts.displayName, stateText].filter(Boolean).join(', '),
+		label: [facts.name, alias, facts.pin && words.pinned, facts.displayName, stateText, line !== stateText && line].filter(Boolean).join(', '),
 		details: {
-			...(line ? { summary: field('title', words.title, line) } : { untitled: words.untitledPending }),
-			titleLabel: labelOf(words.title),
-			machine: field('machine', terms.machine, machine),
-			...(address ? { address: field('address', terms.address, address) } : {}),
+			summary: field('session', session, facts.sessionId || '-'),
+			titleLabel: labelOf(session),
+			nameLabel: labelOf(terms.name),
+			address: field('address', terms.address, address || '-'),
 			location: { ...field('location', words.location, place.context), kind: place.kind },
-			path: field('path', words.path, place.path),
+			path: field('path', words.path, cwd),
 			description: {
-				title: words.title(line || words.untitledPending),
-				place: [terms.machine(machine), address && terms.address(address), words.location(place.context), words.path(place.path)].filter(Boolean).join(', ')
+				title: session(facts.sessionId || '-'),
+				place: words.path(cwd)
 			}
 		},
-		startedAt: facts.startedAt ?? facts.createdAt,
+		...(facts.startedAt !== undefined ? { startedAt: facts.startedAt } : {}),
 		menu: input.menu
 	};
 }

@@ -7,10 +7,9 @@ import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
 import { compactPath, folderKeyOf, homeRelative, isInsideFolder } from '../../base/files';
 import { isJsonObject } from '../../base/json';
-import { isDeletableWorktree, runsLaunchedIn } from '../../core/locations/catalog';
+import { isDeletableWorktree, placeKindOf, runsLaunchedIn } from '../../core/locations/catalog';
 import { WorktreeProblem, worktreeProblemOf } from '../../core/locations/problems';
 import type { Agents, Catalog, HumanPort, Location, LocationId, LocationPort, LogPort, WorkspaceFolderInfo, WorktreePlan, WorktreePort } from '../../core/ports';
-import { placeKindOf } from '../model';
 import { plainText } from '../presentation';
 import { BACK, Flow, StepAction } from './stepping';
 

@@ -3,26 +3,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { FacadeError, invalid } from '../../core/errors';
+import { invalid } from '../../core/errors';
 import { labelOf, normalizeName } from '../../core/names';
-import { canDismiss, type Agents, type ExecutionPort, type HumanPort, type RunFacts, type RunId } from '../../core/ports';
-import { referenceOf } from '../../core/reach';
+import type { Agents, HumanPort, RunFacts, RunId } from '../../core/ports';
 import { isAgentRunning } from '../cardView';
 import { COMMANDS } from '../catalog';
 import { PanelModel } from '../model';
 import { reasonOf } from '../presentation';
 import { BACK, Flow } from '../pickers/stepping';
 
-export interface AgentCommandDeps {
-	readonly agents: Agents;
-	readonly model: PanelModel;
-	readonly execution: Pick<ExecutionPort, 'reveal' | 'tabOpen'>;
-	readonly notifyError: HumanPort['error'];
-}
-
 export interface FrameworkCardActions {
 	open(run: RunId): Promise<boolean>;
-	hide(run: RunId): Promise<void>;
 	stop(run: RunId): Promise<void>;
 	remove(run: RunId): Promise<void>;
 	setPinned(run: RunId, pinned: boolean): Promise<void>;
@@ -45,112 +36,6 @@ export function targetOf(arg: unknown, model: Pick<PanelModel, 'selectedAgent'>,
 	return agents.get(given.run_id) ? given.run_id : undefined;
 }
 
-/** The person's actions on one agent, shared by its card, the Command Palette and Go to Agent. */
-export class AgentActions {
-	constructor(private readonly deps: AgentCommandDeps) { }
-
-	/** Shows the run's own terminal - a retained red one's too - and selects its card (PANEL-2.1, LIFECYCLE-2.2). */
-	async reveal(run: RunId): Promise<boolean> {
-		if (!this.deps.agents.get(run)) {
-			return false;
-		}
-		this.deps.model.select(run);
-		return this.deps.execution.reveal(run, { preserveFocus: false });
-	}
-
-	/**
-	 * Pins or Unpins `run`, as the person asked - from its card, the Command Palette or a key: their attention to that agent. Saved, its
-	 * tab is shown as a click on the card shows it, with the focus, and its mark goes on there; a Pin opens it where it has none open,
-	 * while an Unpin leaves a hidden one hidden, and one not saved shows nothing (LIFECYCLE-3.4).
-	 */
-	pin(run: RunId, pinned: boolean): void {
-		const facts = this.deps.agents.get(run);
-		if (!facts) { return; }
-		try {
-			if (pinned) { this.deps.agents.pin(run); } else { this.deps.agents.unpin(run); }
-			// Shown where it opens or is open now: a tab not open - hidden, or a pinned agent's before its turn - stays so on an Unpin
-			if (pinned || this.deps.execution.tabOpen(run)) {
-				this.deps.model.select(run);
-				void this.deps.execution.reveal(run, { preserveFocus: false });
-			}
-		} catch (err) {
-			// Closed meanwhile: nothing is left to pin, and no run's ID is said
-			if (!(err instanceof FacadeError && err.code === 'NOT_FOUND')) {
-				this.deps.notifyError(pinned ? vscode.l10n.t("Could not pin {0}: {1}", labelOf(facts), reasonOf(err))
-					: vscode.l10n.t("Could not unpin {0}: {1}", labelOf(facts), reasonOf(err)), {});
-			}
-		}
-	}
-
-	/** Copies `@name #aN`, with no toast: Go to Agent's item button (LIFECYCLE-2.1). */
-	async copyReference(run: RunId, facts = this.deps.agents.get(run)): Promise<void> {
-		if (facts) {
-			await vscode.env.clipboard.writeText(referenceOf({ name: facts.name, alias: facts.address ?? facts.alias }));
-		}
-	}
-
-	/** Stop Agent (LIFECYCLE-3.1) uses the active implementation's stop and reports its result to the initiator. */
-	async stop(run: RunId, outside?: { readonly facts: RunFacts; readonly stop: () => ReturnType<Agents['stop']> }): Promise<boolean> {
-		const facts = outside?.facts ?? this.deps.agents.get(run);
-		if (!facts) {
-			return false;
-		}
-		try {
-			const outcome = await (outside ? outside.stop() : this.deps.agents.stop(run));
-			if (outcome === 'failed') {
-				if (outside) {
-					throw new Error(vscode.l10n.t('Facade cannot do this right now'));
-				}
-				this.deps.notifyError(vscode.l10n.t("{0}'s card and terminal were closed, but its process could not be stopped.", labelOf(facts)), {});
-			} else if (outcome === 'unconfirmed') {
-				this.deps.notifyError(vscode.l10n.t("Could not stop {0}: {1}", labelOf(facts), vscode.l10n.t("Stop unconfirmed · check process")), {});
-			}
-			return outcome === 'terminated' || outcome === 'already_exited' || outcome === 'already_ended';
-		} catch (err) {
-			if (!(err instanceof FacadeError && err.code === 'NOT_FOUND')) {
-				this.deps.notifyError(vscode.l10n.t("Could not stop {0}: {1}", labelOf(facts), reasonOf(err)), {});
-			}
-			return false;
-		}
-	}
-
-	/** Dismiss Agent (LIFECYCLE-3.1) closes only the ended pair in this window. */
-	async dismiss(run: RunId): Promise<void> {
-		const facts = this.deps.agents.get(run);
-		if (!facts || !canDismiss(facts)) { return; }
-		try {
-			await this.deps.agents.dismiss(run);
-		} catch (err) {
-			if (!(err instanceof FacadeError && err.code === 'NOT_FOUND')) {
-				this.deps.notifyError(vscode.l10n.t("Could not dismiss {0}: {1}", labelOf(facts), reasonOf(err)), {});
-			}
-		}
-	}
-
-	/** Rename Agent (LIFECYCLE-2.1): the editor's own input box for the label; the run keeps its every identity. */
-	async rename(run: RunId): Promise<void> {
-		const facts = this.deps.agents.get(run);
-		if (!facts) {
-			return;
-		}
-		const name = await askName(facts, {
-			placeholder: vscode.l10n.t("Leave blank for an unused name, or its ID"),
-			prompt: vscode.l10n.t("Rename {0}", referenceOf(facts))
-		});
-		if (name === undefined) {
-			return;
-		}
-		try {
-			this.deps.agents.rename(run, name);
-		} catch (err) {
-			// Closed while its name was being typed: nothing is left to rename
-			if (!(err instanceof FacadeError && err.code === 'NOT_FOUND')) {
-				this.deps.notifyError(vscode.l10n.t("Could not rename {0}: {1}", labelOf(facts), reasonOf(err)), {});
-			}
-		}
-	}
-}
-
 async function askName(facts: RunFacts, copy: { readonly placeholder: string; readonly prompt?: string }): Promise<string | undefined> {
 	const flow = new Flow();
 	const typed = await flow.text({ title: vscode.l10n.t("Rename Agent"), value: facts.name, ...copy });
@@ -159,48 +44,20 @@ async function askName(facts: RunFacts, copy: { readonly placeholder: string; re
 	return name === facts.name ? undefined : name;
 }
 
-/**
- * The commands about one agent (UX-3.1, 3.2): Go to Agent, Pin, Unpin, Rename, Stop, Dismiss and the card's menu - Move Up and
- * Move Down among them (PANEL-2.2).
- */
-export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActions, flows: { readonly goToAgent: () => Promise<void> }): vscode.Disposable[] {
-	const { model, agents } = deps;
-	/** A command about one run: `palette` where the Command Palette offers it for the selected run. */
-	const on = (id: string, palette: boolean, does: (run: RunId) => unknown) => vscode.commands.registerCommand(id, (arg?: unknown) => {
-		const run = targetOf(arg, model, agents, palette);
-		return run === undefined ? undefined : does(run);
-	});
-	return [
-		vscode.commands.registerCommand(COMMANDS.goToAgent, () => flows.goToAgent()),
-		on(COMMANDS.pinAgent, true, run => actions.pin(run, true)),
-		on(COMMANDS.unpinAgent, true, run => actions.pin(run, false)),
-		on(COMMANDS.renameAgent, true, run => actions.rename(run)),
-		on(COMMANDS.stopAgent, true, async run => { await actions.stop(run); }),
-		on(COMMANDS.dismissAgent, true, run => actions.dismiss(run)),
-		// Notification navigation: the exact run it names, never another (UX-3.2)
-		vscode.commands.registerCommand(COMMANDS.revealAgent, (arg?: unknown) => {
-			if (arg === undefined) {
-				throw invalid('missing_argument', 'Expected { "run_id": "<run ID>" }.');
-			}
-			const run = targetOf(arg, model, agents, false);
-			return run === undefined ? false : actions.reveal(run);
-		}),
-		on(COMMANDS.moveUp, false, run => model.move(run, -1)),
-		on(COMMANDS.moveDown, false, run => model.move(run, 1))
-	];
-}
-
 /** The workspace card's actions use its current run and the parent's Orchestrator callbacks (PANEL-4.2). */
-export function registerFrameworkAgentCommands(deps: Pick<AgentCommandDeps, 'model' | 'notifyError'> & {
+export function registerFrameworkAgentCommands(deps: {
+	readonly model: PanelModel;
+	readonly notifyError: HumanPort['error'];
 	readonly agents: Pick<Agents, 'get'>;
 	readonly actions: FrameworkCardActions;
-	readonly goToAgent: () => Promise<void>;
+	readonly stopAgent: () => Promise<void>;
 }): vscode.Disposable[] {
 	const { agents, model, actions } = deps;
 	type Failure = (name: string, reason: string) => string;
 	const openFailure: Failure = (name, reason) => vscode.l10n.t("Could not open {0}: {1}", name, reason);
-	const on = (id: string, does: (facts: RunFacts) => Promise<unknown>, failure?: Failure, palette = true) =>
+	const on = (id: string, does: (facts: RunFacts) => unknown, failure?: Failure, palette = true, pick?: () => Promise<void>) =>
 		vscode.commands.registerCommand(id, async (arg?: unknown) => {
+			if (arg === undefined && pick) { return pick(); }
 			const run = targetOf(arg, model, agents, palette);
 			const facts = run === undefined ? undefined : agents.get(run);
 			if (!facts) { return undefined; }
@@ -214,13 +71,13 @@ export function registerFrameworkAgentCommands(deps: Pick<AgentCommandDeps, 'mod
 		});
 	const open = async (facts: RunFacts): Promise<boolean> => isAgentRunning(facts) && await actions.open(facts.id);
 	return [
-		vscode.commands.registerCommand(COMMANDS.goToAgent, () => deps.goToAgent()),
 		on(COMMANDS.openTerminal, open, openFailure),
-		on(COMMANDS.hideAgent, facts => actions.hide(facts.id), (name, reason) => vscode.l10n.t("Could not hide {0}: {1}", name, reason)),
 		on(COMMANDS.stopAgent, async facts => {
 			if (isAgentRunning(facts)) { await actions.stop(facts.id); }
-		}, (name, reason) => vscode.l10n.t("Could not stop {0}: {1}", name, reason)),
+		}, (name, reason) => vscode.l10n.t("Could not stop {0}: {1}", name, reason), false, deps.stopAgent),
 		on(COMMANDS.deleteAgent, facts => actions.remove(facts.id), (name, reason) => vscode.l10n.t("Could not remove {0}: {1}", name, reason)),
+		on(COMMANDS.moveUp, facts => model.move(facts.id, -1), undefined, false),
+		on(COMMANDS.moveDown, facts => model.move(facts.id, 1), undefined, false),
 		on(COMMANDS.pinAgent, async facts => {
 			if (facts.pinnable && !facts.pin) { await actions.setPinned(facts.id, true); }
 		}, (name, reason) => vscode.l10n.t("Could not pin {0}: {1}", name, reason)),

@@ -8,7 +8,6 @@ import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { DatabaseSync } from 'node:sqlite';
 import * as vscode from 'vscode';
-import { piSessionFolderName } from '../../clis/history/pi';
 import { BUILT_IN_NAMES } from '../../base/names';
 import type { PanelState } from '../../webview/protocol';
 import type { Pin } from '../../core/ports';
@@ -16,7 +15,7 @@ import { linesOf } from '../detailLines';
 import { unspun } from '../../base/tabSpinner';
 import { observeAcceptanceImplementation } from './acceptanceImplementation';
 import { frameworkSocket } from './editors';
-import { fixturePid, legacyStopResult, pidGone, windowsProcessStart } from './journeyProcess';
+import { fixturePid, pidGone, windowsProcessStart } from './journeyProcess';
 import { RESUME_PICKER_STATE, type ResumePickerState } from './resumePickerFixture';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
@@ -38,6 +37,11 @@ const ARGUMENTS: { readonly [cli: string]: readonly string[] } = {
 	'my-cli': ['--from-custom', 'two words']
 };
 /** Whether the windows run on the Framework: framework starts each CLI with its own wiring rather than the extension's run files. */
+// Session fixture layout read by the Rust Pi integration.
+function piSessionFolderName(cwd: string): string {
+	return `--${path.resolve(cwd).replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
+}
+
 const FRAMEWORK = process.env.FACADE_IT_IMPLEMENTATION === 'framework';
 /** Whether this run's CLI is the suite's program rather than a built-in. */
 const CUSTOM = CLI === 'my-cli';
@@ -121,10 +125,10 @@ async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = 
 /** New Agent with the preselected CLI, accepted as soon as its picker shows: the card it creates. */
 async function newCard(): Promise<PanelState['cards'][number]> {
 	const before = new Set((await state()).cards.map(card => card.runId));
-	void vscode.commands.executeCommand('facade.newAgent');
+	const launch = vscode.commands.executeCommand('facade.newAgent');
 	// The picker shows once its CLIs are found: accepted as soon as it is there, however long that takes. A new card goes last
 	// (PANEL-2.1): it is the one not there before.
-	return until('a new card', async () => {
+	const card = until('a new card', async () => {
 		const now = await state();
 		const added = now.cards.find(card => !before.has(card.runId));
 		// On the Framework its short ID comes with framework's answer to the start (RULES-2.2): the card is the test's once it has it
@@ -136,12 +140,21 @@ async function newCard(): Promise<PanelState['cards'][number]> {
 		}
 		return undefined;
 	});
+	// The watch can show a managed card before the launch command finishes opening its terminal.
+	const [added] = await Promise.all([card, launch]);
+	return added;
 }
 
-/** Stop and clear the fixture from the workspace once its lifecycle has been checked. */
-async function stopAndHide(runId: string): Promise<void> {
+/** Clear the stopped fixture after checking its lifecycle. */
+async function removeStoppedCard(runId: string): Promise<void> {
+	await vscode.commands.executeCommand('facade.deleteAgent', { run_id: runId });
+	await until('the stopped card to be removed', async () =>
+		(await state()).cards.every(card => card.runId !== runId) ? true : undefined);
+}
+
+async function stopAndRemove(runId: string): Promise<void> {
 	await vscode.commands.executeCommand('facade.stopAgent', { run_id: runId });
-	if (FRAMEWORK) { await vscode.commands.executeCommand('facade.hideAgent', { run_id: runId }); }
+	if (FRAMEWORK) { await removeStoppedCard(runId); }
 }
 
 function alive(pid: number): boolean {
@@ -164,7 +177,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 	teardown(async () => {
 		if (firstRun !== undefined) {
 			try {
-				await stopAndHide(firstRun);
+				await stopAndRemove(firstRun);
 			} finally {
 				firstRun = undefined;
 			}
@@ -175,8 +188,8 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		const card = await newCard();
 		firstRun = card.runId;
 		observeAcceptanceImplementation(this, card);
-		const terminal = vscode.window.terminals.find(each => unspun(each.name) === card.name);
-		assert.ok(terminal, 'its editor terminal shows only the agent name');
+		const terminal = await until('the editor terminal to show only the agent name', async () =>
+			vscode.window.terminals.find(each => unspun(each.name) === card.name), 10_000);
 		const alias = fixtureAlias(card);
 		assert.ok(alias, 'the card shows its short ID');
 		const pidFile = `${RECORD}.${alias}`;
@@ -257,18 +270,12 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		assert.ok(!dots.has('error'), `never red as it started: ${[...dots].join(', ')}`);
 		for (const title of ['✳ Checking responsive layout', '⠐ Checking responsive layout', '● 检查标题更新 | workspace']) {
 			fs.writeFileSync(`${RECORD}.quirks.${alias}`, JSON.stringify({ title, reportedTitle: 'Plain activity title' }));
-			if (FRAMEWORK) {
-				// RULES-6.2 shows the Orchestrator's terminal title in the card and its details.
-				const shown = await until(`the card title ${title}`, async () => (await state()).cards.find(each => each.runId === card.runId && each.line === title));
-				assert.ok(linesOf(shown).includes(`Title: ${title}`), JSON.stringify(shown));
-				assert.ok(!linesOf(shown).some(line => line.includes('Plain activity title')), JSON.stringify(shown));
-			} else {
-				// CLIS-2.4 gives the legacy implementation a title from history. Let the fixture publish both other titles before checking.
-				await new Promise(resolve => setTimeout(resolve, 1_000));
-				const shown = (await state()).cards.find(each => each.runId === card.runId);
-				const said = shown ? [shown.line, ...linesOf(shown)] : [];
-				assert.deepStrictEqual([!!shown && !/^(?:\u{1F9D1}|\u{1F4E8}|\u{1F514})/u.test(shown.line), said.filter(line => /Checking responsive layout|检查标题更新|Plain activity title/.test(line))], [true, []], JSON.stringify(shown));
-			}
+			await new Promise(resolve => setTimeout(resolve, 1_000));
+			const shown = (await state()).cards.find(each => each.runId === card.runId);
+			assert.ok(shown);
+			const said = [shown.line, ...linesOf(shown)];
+			assert.deepStrictEqual(said.filter(line => /Checking responsive layout|检查标题更新|Plain activity title/.test(line)), [], JSON.stringify(shown));
+			if (FRAMEWORK) { assert.strictEqual(shown.details.summary?.id, 'session'); }
 			assert.strictEqual(unspun(terminal.name), card.name, 'CLI titles never change the native terminal name');
 			await until('the name-only editor tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs)
 				.some(tab => tab.input instanceof vscode.TabInputTerminal && unspun(tab.label) === card.name) ? true : undefined);
@@ -294,12 +301,11 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			});
 		} catch (error) {
 			const identity = windowsLegacy ? ` Windows creation before Stop ${creation ?? 'unavailable'}, last ${lastCreation ?? 'unavailable'}.` : '';
-			const cleanup = !FRAMEWORK ? ` Stop result ${legacyStopResult(process.env.FACADE_HOME, card.runId) ?? 'unavailable'}.` : '';
-			throw new Error(`${error.message}. Run ${card.runId}, fixture PID ${pid}.${identity}${cleanup}`, { cause: error });
+			throw new Error(`${error.message}. Run ${card.runId}, fixture PID ${pid}.${identity}`, { cause: error });
 		}
 		if (FRAMEWORK) {
 			await until('Stop to retain the ended card', async () => (await state()).cards.find(each => each.runId === card.runId && each.orchestrator?.running === false));
-			await vscode.commands.executeCommand('facade.hideAgent', { run_id: card.runId });
+			await removeStoppedCard(card.runId);
 		}
 		firstRun = undefined;
 	});
@@ -322,7 +328,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			const cards = (await state()).cards;
 			assert.ok(alive(kept) && cards.some(card => card.runId === survivor.runId));
 		} finally {
-			await stopAndHide(survivor.runId);
+			await stopAndRemove(survivor.runId);
 		}
 	});
 
@@ -366,7 +372,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			assert.strictEqual(fs.existsSync(`${RECORD}.received.${alias}`), false, 'the draft was never submitted');
 		} finally {
 			watching?.dispose();
-			await stopAndHide(card.runId);
+			await stopAndRemove(card.runId);
 		}
 	});
 
@@ -419,7 +425,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			shell.dispose();
 		} finally {
 			for (const run of cards) {
-				await stopAndHide(run).then(undefined, () => undefined);
+				await stopAndRemove(run).then(undefined, () => undefined);
 			}
 			await vscode.commands.executeCommand('workbench.action.closeAllGroups');
 		}
@@ -536,7 +542,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		} finally {
 			await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
 			await history.then(undefined, () => undefined);
-			await Promise.all((await started()).map(card => stopAndHide(card.runId)));
+			await Promise.all((await started()).map(card => stopAndRemove(card.runId)));
 			await until('the resumed cards to close', async () => (await started()).length === 0 || undefined);
 		}
 	});
@@ -560,11 +566,12 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			void vscode.commands.executeCommand('facade.filter');
 			await new Promise(resolve => setTimeout(resolve, 2_500));
 			await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
+			if (FRAMEWORK) { await vscode.commands.executeCommand('workbench.action.quickPickManyToggle'); }
 			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 			await new Promise(resolve => setTimeout(resolve, 500));
 			return (await state()).filter ? await state() : undefined;
 		}, 60_000);
-		await stopAndHide(card.runId);
+		await stopAndRemove(card.runId);
 		const left = await until('the filtered empty panel', async () => { const now = await state(); return now.empty === 'noMatch' ? now : undefined; });
 		const said = await until('the page to say so', async () => {
 			const text = await vscode.commands.executeCommand<string[]>('facade.probe', { op: 'read', selector: '#empty p' });
@@ -573,7 +580,8 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		assert.strictEqual(await vscode.commands.executeCommand('facade.probe', { op: 'click', selector: '#empty button', index: 0 }), true);
 		const cleared = await until('Clear Filter', async () => { const now = await state(); return now.filter === undefined ? now : undefined; });
 		assert.deepStrictEqual([filtered.filter?.kind, filtered.cards.map(each => each.runId), filtered.cardCount, left.cardCount, said, cleared.empty], [
-			'location', [card.runId], 1, 0, [`No agents found in "${filtered.filter?.label}".`], 'noAgents'
+			FRAMEWORK ? 'agents' : 'location', [card.runId], 1, 0,
+			[FRAMEWORK ? 'No agents match the selected filters.' : `No agents found in "${filtered.filter?.label}".`], 'noAgents'
 		]);
 	});
 
@@ -632,7 +640,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 					retained: { run: second.runId, session: secondSession, pin: remaining[0].id },
 				}));
 			} finally {
-				await Promise.all(cards.map(card => stopAndHide(card.runId)));
+				await Promise.all(cards.map(card => stopAndRemove(card.runId)));
 			}
 		});
 	}

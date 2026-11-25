@@ -3061,7 +3061,7 @@ fn each_cli_s_guest_server_responds_as_recorded(through: Through) {
             "{cli}'s guests get a run's tools"
         );
         let meta = meta_key.map_or(Value::Null, |key| json!({ key: session }));
-        assert_eq!(home.list_table().column("REF"), ["a1@golden-host"]);
+        assert_eq!(home.list_table().column("REFERENCE"), ["a1@golden-host"]);
         let listed = server.call_in("list_agents", json!({}), meta.clone());
         assert_eq!(listed["status"], "success", "{listed}");
         let rows = listed["data"]["agents"]

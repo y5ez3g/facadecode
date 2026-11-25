@@ -5,7 +5,7 @@
 import * as assert from 'assert';
 import type { AgentInfo } from '../base/frameworkProtocol';
 import type { FrameworkPin } from '../core/ports';
-import type { AgentPty } from '../host/execution/agentPty';
+import type { AgentPty } from '../host/terminal/agentPty';
 import { restoreFrameworkPins } from '../host/framework/pinRestore';
 import { DaemonError, type AttachListener, type AttachWatchArgs, type OrchestratorLink, type ResizeAttach } from '../host/framework/types';
 import { TestEmitter, withModules } from './withModules';
@@ -30,8 +30,8 @@ suite('Orchestrator terminals', () => {
 			l10n: { t: (message: string, ...args: unknown[]) => message.replace(/\{(\d+)\}/g, (_, at: string) => String(args[Number(at)])) }
 		};
 		const load = withModules({ vscode });
-		const { AgentPty } = load<typeof import('../host/execution/agentPty')>(require.resolve('../host/execution/agentPty'));
-		const { WindowColours } = load<typeof import('../host/execution/terminalColours')>(require.resolve('../host/execution/terminalColours'));
+		const { AgentPty } = load<typeof import('../host/terminal/agentPty')>(require.resolve('../host/terminal/agentPty'));
+		const { WindowColours } = load<typeof import('../host/terminal/terminalColours')>(require.resolve('../host/terminal/terminalColours'));
 		const colors = new WindowColours();
 		const pty: AgentPty = new AgentPty('Fixture', () => undefined, undefined, (osc, rgb) => colors.learn(osc, rgb));
 		pty.onDidOverrideDimensions(grid => renderer.push(grid));
@@ -59,7 +59,7 @@ suite('Orchestrator terminals', () => {
 			retries.delete(callback);
 			callback();
 		};
-		const { OrchestratorTerminals } = withModules({ vscode, '../execution/agentTerminals': { AgentTerminals } }, timers)<typeof import('../host/framework/terminals')>(require.resolve('../host/framework/terminals'));
+		const { OrchestratorTerminals } = withModules({ vscode, '../terminal/agentTerminals': { AgentTerminals } }, timers)<typeof import('../host/framework/terminals')>(require.resolve('../host/framework/terminals'));
 		let canSend = true;
 		const ref = { machine_id: gpu, agent_id: 'a7' };
 		const link: OrchestratorLink = {
@@ -194,19 +194,30 @@ suite('Orchestrator terminals', () => {
 		const deleted = pin('deleted', { ...running, reference: { machine_id: gpu, agent_id: 'a3' } });
 		const missingRecord = pin('missing-record', { ...running, reference: { machine_id: gpu, agent_id: 'a4' } });
 		const offline = pin('offline', { ...running, reference: { machine_id: server, agent_id: 'a7' }, session: 'remote' });
+		const beforeSession = { ...running, reference: { machine_id: gpu, agent_id: 'a10' }, session: undefined };
+		const beforeSessionEnd = { ...beforeSession, reference: { machine_id: gpu, agent_id: 'a11' }, process: 'ended' as const };
+		const early = pin('early', beforeSession);
+		const restart = { ...pin('restart', beforeSessionEnd), launch: { args: ['--model', 'example'], model: 'example' } };
+		const earlier = pin('earlier', { ...beforeSessionEnd, reference: { machine_id: gpu, agent_id: 'a12' } });
+		const pending = { ...pin('pending', beforeSessionEnd), restartAttempt: 'start-pending' };
 		const refusal = new DaemonError("clis.work runs Codex now, but this conversation is Claude Code's; it cannot be resumed with it",
 			'unsupported', { reason: 'unsupported', details: { entry: 'work' } });
 		const unavailable = new DaemonError('Lost route', 'unavailable', { reason: 'unavailable' });
 		const gone = new DaemonError('Session is gone', 'session_not_found', { reason: 'session_not_found' });
 		const unknown = new DaemonError('Agent is unknown', 'not_found', { reason: 'not_found' });
-		const records = new Map([[runningPin, running], [crashedPin, crashed], [refusedPin, refused]]);
+		const waiting = new Error('Previous start unconfirmed');
+		const records = new Map([
+			[runningPin, running], [crashedPin, crashed], [refusedPin, refused],
+			[early, beforeSession], [restart, beforeSessionEnd], [pending, beforeSessionEnd],
+		]);
 		const effects: unknown[][] = [];
-		await restoreFrameworkPins([refusedPin, runningPin, crashedPin, expiredRecord, missingSession, deleted, missingRecord, offline], {
+		await restoreFrameworkPins([refusedPin, runningPin, crashedPin, expiredRecord, missingSession, deleted, missingRecord, offline,
+			early, restart, earlier, pending], {
 			lookup: async pin => {
 				effects.push(['lookup', pin]);
 				if (pin === offline) { throw unavailable; }
 				if (pin === deleted) { return { removal: 'removed' }; }
-				if (pin === expiredRecord || pin === missingSession) { return { removal: 'expired' }; }
+				if (pin === expiredRecord || pin === missingSession || pin === earlier) { return { removal: 'expired' }; }
 				const agent = records.get(pin);
 				if (!agent) { throw unknown; }
 				return { agent };
@@ -221,6 +232,8 @@ suite('Orchestrator terminals', () => {
 				if (pin === missingSession) { throw gone; }
 				return restored;
 			},
+			restart: async pin => { effects.push(['restart', pin]); return restored; },
+			unconfirmedStart: () => waiting,
 			opened: async (pin, agent) => { effects.push(['opened', pin, agent]); },
 			removed: pin => { effects.push(['removed', pin]); },
 			expired: pin => { effects.push(['expired', pin]); },
@@ -235,7 +248,11 @@ suite('Orchestrator terminals', () => {
 			['lookup', missingSession], ['resume session', missingSession], ['expired', missingSession],
 			['lookup', deleted], ['removed', deleted],
 			['lookup', missingRecord], ['failed', missingRecord, unknown],
-			['lookup', offline], ['failed', offline, unavailable]
+			['lookup', offline], ['failed', offline, unavailable],
+			['lookup', early], ['opened', early, beforeSession],
+			['lookup', restart], ['restart', restart], ['opened', restart, restored],
+			['lookup', earlier], ['restart', earlier], ['opened', earlier, restored],
+			['lookup', pending], ['failed', pending, waiting]
 		]);
 	});
 });

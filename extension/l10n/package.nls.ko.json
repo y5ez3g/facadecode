@@ -4,11 +4,9 @@
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "새 에이전트...",
-	"command.goToAgent": "Go to Agent...",
 	"command.openTerminal": "터미널 열기",
-	"command.hideAgent": "숨기기",
 	"command.renameAgent": "에이전트 이름 바꾸기...",
-	"command.stopAgent": "에이전트 중지",
+	"command.stopAgent": "에이전트 중지...",
 	"command.deleteAgent": "제거",
 	"command.copyAgentReference": "에이전트 참조 복사",
 	"command.dismissAgent": "에이전트 닫기",
@@ -28,7 +26,7 @@
 	"config.pi.title": "Pi",
 	"windowDisplayName": "Facade Code 창 구성 요소",
 	"windowDescription": "원격 창이 다시 연결되거나 확장이 다시 시작될 때 남아 있는 이전 Facade Code 터미널 탭을 닫습니다.",
-	"command.filter": "작업 위치별 필터링...",
+	"command.filter": "에이전트 필터링...",
 	"command.showAgentLaunch": "에이전트 명령줄 표시...",
 	"command.showAgentsLog": "Agent 로그 표시",
 	"icon.newAgent": "새 에이전트 아이콘",
@@ -37,7 +35,6 @@
 	"command.continueSession": "세션 계속...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "기존 구현 전용입니다. 이 폴더에는 기존 구현의 설정, 에이전트 기록, 메시지가 저장됩니다. 여기에 지정한 경로는 `FACADE_HOME` 및 기본 경로 `~/.facade`보다 우선합니다.\n\n[facade.json에서 편집](command:facade.openSettingsFile)에서 YOLO, 추천 이름, CLI 시작 방식을 변경합니다.",
-	"config.home.pattern": "경로는 ~/로 시작하거나 절대 경로여야 합니다.",
-	"config.framework": "에이전트를 실행할 구현을 선택합니다.\n\n- `auto`: Facade Code Framework을 사용합니다. 이 컴퓨터에서 기존 구현의 에이전트가 모두 끝나면 창이 전환됩니다. 실행 중인 에이전트는 중단되지 않으며, 전환할 수 있게 되면 Facade가 창을 다시 로드하도록 안내합니다.\n- `off`: 기존 구현을 사용합니다. Facade Code Framework에 문제가 있으면 `off`를 선택하고 창을 다시 로드한 다음, [GitHub에 이슈를 남겨](https://github.com/y5ez3g/facadecode/issues) 알려 주세요.\n\n원격 창에서는 원격 컴퓨터의 설정이 적용됩니다."
+	"config.home": "이 창에서 설정, 에이전트 기록, 이전 버전에서의 마이그레이션에 사용하는 Facade 홈 폴더입니다. 여기에 지정한 경로는 `FACADE_HOME` 및 기본 경로 `~/.facade`보다 우선합니다.\n\n[facade.json에서 편집](command:facade.openSettingsFile)에서 YOLO, 추천 이름, CLI 시작 방식을 변경합니다.",
+	"config.home.pattern": "경로는 ~/로 시작하거나 절대 경로여야 합니다."
 }
