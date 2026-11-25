@@ -676,7 +676,9 @@ async function removeAndResume(windows: readonly DrivenWindow[], home: string, l
 	await source.act({ kind: 'wait-for-exit', pid: live.pid });
 	await assertRemoved(live.id);
 	const saved = await findSaved();
-	const resumed = await source.act<RunningAgent>({ kind: 'resume-saved', cli: saved.cli, session: saved.session });
+	const resumed = await source.act<RunningAgent>({
+		kind: 'resume-saved', cli: saved.cli, session: saved.session, selector: saved.session_selector ?? saved.session.slice(0, 8)
+	});
 	assert.notStrictEqual(resumed.id, live.id, 'Resume Agent gives the saved session a fresh identity');
 	assert.deepStrictEqual([resumed.session, normalizeDriveLetter(resumed.cwd)], [live.session, normalizeDriveLetter(live.cwd)]);
 	await source.act({ kind: 'pin', agent: resumed.id });

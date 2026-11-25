@@ -33,7 +33,7 @@ type Action =
 	| { readonly kind: 'close-shell-view'; readonly name: string }
 	| { readonly kind: 'start'; readonly screen?: string; readonly secondGroup?: boolean }
 	| { readonly kind: 'adopt' | 'resume' | 'pin' | 'unpin' | 'stop' | 'remove' | 'inspect' | 'saved-pin'; readonly agent: string }
-	| { readonly kind: 'resume-saved'; readonly session: string; readonly cli: string }
+	| { readonly kind: 'resume-saved'; readonly session: string; readonly cli: string; readonly selector: string }
 	| { readonly kind: 'remote-card'; readonly agent: string }
 	| { readonly kind: 'running'; readonly agent: string; readonly screen?: string }
 	| { readonly kind: 'send'; readonly to: string; readonly text: string }
@@ -402,7 +402,10 @@ async function perform(action: Action): Promise<unknown> {
 				await until(`the saved session ${action.cli}:${action.session} in Resume Agent`, async () => {
 					const rows = await vscode.commands.executeCommand<ResumePickerState>(RESUME_PICKER_STATE).then(value => value, () => undefined);
 					if (!rows || rows.busy) { return undefined; }
-					const target = rows.descriptions.findIndex(description => description?.endsWith(` · ${action.cli}:${action.session}`));
+				const matching = rows.descriptions.flatMap((description, index) =>
+					description?.endsWith(` · ${action.cli}:${action.selector}`) ? [index] : []);
+				assert.ok(matching.length < 2, 'the saved session selector identifies one native picker row');
+				const target = matching[0] ?? -1;
 					if (target < 0) { return undefined; }
 					if (target === rows.active) { return true; }
 					await vscode.commands.executeCommand(target < rows.active ? 'workbench.action.quickOpenSelectPrevious' : 'workbench.action.quickOpenSelectNext');
