@@ -842,11 +842,14 @@ fn probe_buffering(
             frames.buffering_bounds().is_some()
         })
     } else {
+        // Working can appear before the first model request, while Codex runs its startup hook.
+        let during_response = Instant::now() + Duration::from_secs(5);
         wait_until(Duration::from_secs(12), || {
-            field
-                .lab
-                .inspect(boss)
-                .is_ok_and(|info| info["agent"]["state"] == "working")
+            Instant::now() >= during_response
+                && field
+                    .lab
+                    .inspect(boss)
+                    .is_ok_and(|info| info["agent"]["state"] == "working")
         })
     };
     let mut sent = Vec::new();
