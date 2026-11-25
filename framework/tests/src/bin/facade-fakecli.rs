@@ -99,8 +99,9 @@
 //! shows for long pastes, the server its run's own configuration names, its resume option, and the
 //! session reports and files it makes, saved under `FAKECLI_TRANSCRIPTS` where it names its file.
 //! It fails its start when that configuration is not what the CLI reads. `FAKECLI_MCP_INITIALIZE=<file>`
-//! keeps the server's MCP initialize response. `/mcp list` opens
-//! Cursor's panel of MCP servers, which Escape closes.
+//! keeps the server's MCP initialize response. `FAKECLI_MCP_TAKEOVER=<folder>` records Devin's
+//! relay PID and catalog and roster replies. Its `read-roster` and `read-catalog` files release the
+//! corresponding requests on the same connection. `/mcp list` opens Cursor's MCP panel, which Escape closes.
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -1567,6 +1568,21 @@ fn start_server(
     let roster = std::env::var_os("FAKECLI_MCP_ROSTER").map(PathBuf::from);
     let ask_roster = roster.is_some();
     let initialize = std::env::var_os("FAKECLI_MCP_INITIALIZE").map(PathBuf::from);
+    let takeover = std::env::var_os("FAKECLI_MCP_TAKEOVER").map(PathBuf::from);
+    let mut receipt = if let Some(folder) = &takeover {
+        anyhow::ensure!(
+            folder
+                .canonicalize()?
+                .starts_with(isolated_home()?.canonicalize()?),
+            "the takeover probe must stay in its test home"
+        );
+        let file = folder.join("responses.jsonl");
+        let text = format!("{}\n", serde_json::json!({ "relay_pid": server.id() }));
+        write_whole(&file, &text)?;
+        Some((file, text))
+    } else {
+        None
+    };
     std::thread::spawn(move || {
         for line in std::io::BufReader::new(answers)
             .lines()
@@ -1583,6 +1599,14 @@ fn start_server(
                     .is_ok_and(|reply| reply["id"] == 3)
             {
                 let _ = write_whole(file, &line);
+            }
+            if let Some((file, text)) = &mut receipt
+                && serde_json::from_str::<serde_json::Value>(&line)
+                    .is_ok_and(|reply| matches!(reply["id"].as_u64(), Some(2..=4)))
+            {
+                text.push_str(&line);
+                text.push('\n');
+                let _ = write_whole(file, text);
             }
         }
     });
@@ -1606,7 +1630,36 @@ fn start_server(
             })
         )?;
     }
+    if let Some(folder) = takeover {
+        // The original handle stays with the relay child after this probe's writes finish.
+        #[cfg(unix)]
+        let writer = std::os::fd::AsFd::as_fd(input).try_clone_to_owned()?;
+        #[cfg(windows)]
+        let writer = std::os::windows::io::AsHandle::as_handle(input).try_clone_to_owned()?;
+        std::thread::spawn(move || probe_takeover(folder, std::fs::File::from(writer)));
+    }
     Ok(server)
+}
+
+/// A takeover test requests real responses on the relay's existing stdio connection.
+fn probe_takeover(folder: PathBuf, mut input: std::fs::File) -> std::io::Result<()> {
+    for (gate, request) in [
+        (
+            "read-roster",
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_agents","arguments":{}}}"#,
+        ),
+        (
+            "read-catalog",
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/list"}"#,
+        ),
+    ] {
+        let gate = folder.join(gate);
+        if !facade_scenarios::wait_until(Duration::from_secs(180), || gate.is_file()) {
+            return Ok(());
+        }
+        writeln!(input, "{request}")?;
+    }
+    Ok(())
 }
 
 fn run() -> anyhow::Result<()> {
