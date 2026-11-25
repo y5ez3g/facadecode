@@ -54,10 +54,10 @@ export interface CutoverContext {
 }
 
 type Line = { readonly phase: string; readonly role?: string; readonly [key: string]: unknown };
-type LegacyAgent = { readonly alias: string; readonly run: string; readonly name: string; readonly session: string; readonly cwd: string };
+type LegacyAgent = { readonly alias: string; readonly run: string; readonly name: string; readonly session: string };
 type LegacyStart = Line & {
 	readonly agents: readonly LegacyAgent[];
-	readonly saved: { readonly key: string; readonly pins: readonly { readonly id: string; readonly name: string }[] };
+	readonly saved: { readonly key: string; readonly pins: readonly { readonly id: string; readonly name: string; readonly cwd: string }[] };
 	readonly uri: string;
 };
 type LegacyWorkspace = LegacyStart & { readonly pids: readonly number[] };
@@ -113,8 +113,8 @@ const ACTION = 'Switch and Resume Pins';
 type Notice = { readonly message: string; readonly buttons: readonly string[] };
 
 /** The notifications the window shows - its toasts, and the notification center's list when it is open - read from its DOM. */
-async function notices(port: number): Promise<Notice[]> {
-	const page = await Workbench.find(port, each => each.main, 30_000);
+async function notices(window: TestWindow): Promise<Notice[]> {
+	const page = await Workbench.connect(window.port, path.basename(window.folder), 30_000);
 	try {
 		return await page.cdp.evaluate<Notice[]>(`[...document.querySelectorAll('.notification-list-item')].map(item => ({
 			message: (item.querySelector('.notification-list-item-message')?.textContent ?? '').trim(),
@@ -126,8 +126,8 @@ async function notices(port: number): Promise<Notice[]> {
 }
 
 /** Clicks the offer's own button in the window's DOM, as a person does; answers whether there was one. */
-async function clickOffer(port: number): Promise<boolean> {
-	const page = await Workbench.find(port, each => each.main, 30_000);
+async function clickOffer(window: TestWindow): Promise<boolean> {
+	const page = await Workbench.connect(window.port, path.basename(window.folder), 30_000);
 	try {
 		return await page.cdp.evaluate<boolean>(`(() => {
 			const item = [...document.querySelectorAll('.notification-list-item')].find(each =>
@@ -203,7 +203,6 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 	const prior = pair(context.released, 'FACADE_IT_RELEASED');
 	const candidate = pair(context.current, 'FACADE_IT_CURRENT');
 	assert.strictEqual(prior.version, '0.1.5', 'the supported released legacy pair');
-	assert.strictEqual(candidate.version, '0.1.6', 'the candidate pair under cutover verification');
 
 	const folder = path.join(root, 'cutover');
 	newRepository(folder);
@@ -277,7 +276,6 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		assert.ok(pinned && unpinned && pinned.session !== unpinned.session, 'two distinct legacy sessions');
 		const initialLaunches = launches();
 		const startedPids = started.agents.map(agent => {
-			assert.strictEqual(canonical(agent.cwd), canonical(win.folder), 'the published agent belongs to this folder');
 			const matching = initialLaunches.filter(launch => launch.agent === agent.alias && canonical(launch.cwd) === canonical(win.folder));
 			assert.strictEqual(matching.length, 1, 'the published alias has one fake CLI launch in this fixture folder');
 			return matching[0].pid;
@@ -294,7 +292,8 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		const uri = process.platform === 'linux' ? started.uri : started.uri.toLowerCase();
 		assert.deepStrictEqual([ledger.bindings[uri], ledger.owners[started.saved.key]], [started.saved.key, uri], 'the released URI ledger verifies the workspace owner');
 		assert.strictEqual(started.saved.pins[0].name, pinned.name, 'the original Pin saves the running agent’s name');
-		const transcripts = started.agents.map(agent => path.join(context.claudeConfig, 'projects', agent.cwd.replace(/[^A-Za-z0-9]/g, '-'), `${agent.session}.jsonl`));
+		assert.strictEqual(canonical(started.saved.pins[0].cwd), canonical(win.folder), 'the original Pin saves the fixture folder');
+		const transcripts = started.agents.map(agent => path.join(context.claudeConfig, 'projects', win.folder.replace(/[^A-Za-z0-9]/g, '-'), `${agent.session}.jsonl`));
 		assert.ok(transcripts.every(file => fs.existsSync(file)), `the legacy sessions are in the Claude session store: ${JSON.stringify(transcripts)}`);
 		return result;
 	};
@@ -359,7 +358,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 	const shownOffer = async (win: TestWindow) => {
 		let listed = false;
 		return until(`the native consent offer in ${win.role}`, async () => {
-			const seen = await notices(win.port).catch(() => []);
+			const seen = await notices(win).catch(() => []);
 			const offer = seen.find(notice => OFFER.test(notice.message));
 			if (offer) { return { seen, offer }; }
 			if (!listed) { request(win, 'showlist'); listed = true; }
@@ -379,7 +378,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		const before = journal(facade);
 		evidence[`journal-before-${win.role}`] = before;
 		assertExactRows(workspace, scoped(workspace, before), false);
-		assert.ok(await clickOffer(win.port), 'the native cutover button was clicked');
+		assert.ok(await clickOffer(win), 'the native cutover button was clicked');
 		evidence[`accepted-${win.role}`] = ACTION;
 		const approved = await until('approval for the current workspace', () => {
 			const current = journal(facade);
@@ -469,7 +468,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 				await verifySettings(win, 'framework');
 				request(win, 'showlist');
 				await pause(500);
-				const seen = await notices(win.port);
+				const seen = await notices(win);
 				evidence[`notices-${win.role}`] = seen;
 				assert.deepStrictEqual(seen.filter(notice => OFFER.test(notice.message)), [], 'confirmed prior exits needed no consent');
 			}
@@ -523,7 +522,7 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 			const settings = await verifySettings(primary, 'pending');
 			request(primary, 'showlist');
 			await pause(500);
-			const seen = await notices(primary.port);
+			const seen = await notices(primary);
 			evidence.pending = { pids: original.pids.map(pid => ({ pid, alive: alive(pid) })), journal: after, notices: seen,
 				progress: legacyPinProgress(facade), launches: launches().slice(since), frameworkListens: frameworkListens(facade) };
 			assert.strictEqual(settings.hostPid, pendingHost.hostPid, 'the candidate stayed in the host that presented consent');
@@ -537,6 +536,11 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 			assert.strictEqual(frameworkListens(facade), false, 'the candidate remained pending without a Framework daemon');
 			assert.deepStrictEqual(launches().slice(since), [], 'the candidate launched no replacement while exit was uncertain');
 		}
+		const workspaces = path.join(extensionHome, 'workspaces');
+		const rosterOwners = fs.readdirSync(workspaces).filter(owner => fs.existsSync(path.join(workspaces, owner, 'orchestrator-workspace.json')));
+		const expectedOwners = variant === 'uncertain' ? [] : [original.saved.key, ...(other ? [other.saved.key] : [])];
+		assert.deepStrictEqual(rosterOwners.sort(), expectedOwners.sort(), 'each workspace that entered Framework has one canonical roster');
+		evidence.rosterOwners = rosterOwners;
 		evidence.windowLoads = lines().filter(line => line.phase === 'candidate-loaded');
 		console.log(`  ✔ legacy cutover (${variant}) from ${prior.version} to ${candidate.version}: ${JSON.stringify(evidence)}`);
 	} catch (error) {

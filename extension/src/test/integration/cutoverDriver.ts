@@ -103,7 +103,7 @@ async function legacy(): Promise<void> {
 			const id: unknown = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).session_id : undefined;
 			return typeof id === 'string' && id ? id : undefined;
 		});
-		return { alias, run: agent.run, name: agent.name, session, cwd: agent.cwd };
+		return { alias, run: agent.run, name: agent.name, session };
 	}));
 	await vscode.commands.executeCommand('facade.pinAgent', { run_id: agents[0].run });
 	type Pin = { id: string; conversation?: { sessionId?: string } };
