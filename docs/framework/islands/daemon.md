@@ -258,6 +258,9 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     An already visible interaction takes the Escape itself. The actor offers confirmed frames
     to the typist before retiring their Enter. Later keys wait within the paste's hold limit.
   - Every screen change goes into the screen log before the screen takes it.
+  - Input and state readings can reuse screen-view row allocations. The daemon keeps up to four
+    reusable views, each with up to 160 KiB of storage. It refreshes a borrowed view before a read
+    and drops its cell contents before returning the storage.
   - The record shows a run's end before anything waiting on the run learns it. The installed run
     number changes when its terminal is installed. Input is fenced from the previous run as soon
     as restart preparation begins.

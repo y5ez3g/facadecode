@@ -2219,9 +2219,9 @@ fn read_box(
         (None, _) => unknown("the agent has no CLI rule to read its input by", None),
         (Some(rule), _) if ended => unknown("the agent ended", Some(rule)),
         (Some(rule), Some(why)) => unknown(why, Some(rule)),
-        (Some(rule), None) => {
-            facade_rules::read_box_for_typing(rule, &screen.view(), untouched_input)
-        }
+        (Some(rule), None) => super::with_screen_view(screen, |view| {
+            facade_rules::read_box_for_typing(rule, view, untouched_input)
+        }),
     }
 }
 

@@ -446,11 +446,10 @@ fn bounded(view: &StartView<'_>, deadline: Instant) -> Instant {
 }
 
 fn shows(screen: &Screen, pattern: &Pattern) -> bool {
-    for row in screen.view().rows {
-        let text: String = row.iter().map(|cell| cell.text()).collect();
-        if pattern.is_match(text.trim_end()) {
-            return true;
-        }
-    }
-    false
+    super::with_screen_view(screen, |view| {
+        view.rows.iter().any(|row| {
+            let text: String = row.iter().map(|cell| cell.text()).collect();
+            pattern.is_match(text.trim_end())
+        })
+    })
 }
