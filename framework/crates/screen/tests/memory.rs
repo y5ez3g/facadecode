@@ -84,6 +84,23 @@ fn a_view_keeps_single_characters_inside_its_cells() {
     );
 }
 
+#[test]
+fn replacing_a_view_of_the_same_size_reuses_its_rows() {
+    let mut screen = Screen::new(COLS, ROWS, 0);
+    screen.feed("old界".as_bytes());
+    let mut view = screen.view();
+    screen.feed(b"\rnew!");
+    let before = measure_peak();
+    screen.refresh_view(&mut view);
+    assert_eq!(
+        PEAK.get() - before,
+        0,
+        "temporary bytes needed for the next view"
+    );
+    assert_eq!(view.rows[0][0].text(), "n");
+    assert_eq!(view.cursor, (4, 0));
+}
+
 /// The output a synchronized update holds back takes memory until the update ends, however it ends.
 #[test]
 fn a_synchronized_update_takes_memory_only_while_it_is_open() {

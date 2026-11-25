@@ -49,7 +49,7 @@ impl VisibleCell {
 }
 
 /// The screen as drawn, with the cursor.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScreenView {
     /// Each visible row's cells, from the top.
     pub rows: Vec<Vec<VisibleCell>>,
@@ -66,8 +66,9 @@ pub struct ScreenView {
     pub synchronized_update: bool,
 }
 
-fn visible_cells(row: &Row<Cell>, cols: usize) -> Vec<VisibleCell> {
-    let mut cells = Vec::with_capacity(cols);
+fn visible_cells(row: &Row<Cell>, cols: usize, cells: &mut Vec<VisibleCell>) {
+    cells.clear();
+    cells.reserve(cols);
     for column in 0..cols {
         let cell = &row[Column(column)];
         if is_spacer(cell) {
@@ -83,30 +84,33 @@ fn visible_cells(row: &Row<Cell>, cols: usize) -> Vec<VisibleCell> {
             colored: cell.fg != Color::Named(NamedColor::Foreground),
         });
     }
-    cells
 }
 
 impl Screen {
     /// The visible rows with how their cells are drawn, and the cursor.
     pub fn view(&self) -> ScreenView {
+        let mut view = ScreenView::default();
+        self.refresh_view(&mut view);
+        view
+    }
+
+    /// Replaces the view's contents, reusing its row storage.
+    pub fn refresh_view(&self, view: &mut ScreenView) {
         let grid = self.terminal.grid();
-        let (cols, height) = (grid.columns(), grid.screen_lines() as i32);
+        let (cols, height) = (grid.columns(), grid.screen_lines());
         let oldest = -(grid.history_size() as i32);
-        let mut rows = Vec::with_capacity(height as usize);
-        let mut continues = Vec::with_capacity(height as usize);
-        for line in 0..height {
-            rows.push(visible_cells(&grid[Line(line)], cols));
-            continues.push(line > oldest && wraps(&grid[Line(line - 1)], cols));
+        view.rows.resize_with(height, Vec::new);
+        view.continues.resize(height, false);
+        for (y, row) in view.rows.iter_mut().enumerate() {
+            let line = y as i32;
+            visible_cells(&grid[Line(line)], cols, row);
+            view.continues[y] = line > oldest && wraps(&grid[Line(line - 1)], cols);
         }
         let (column, row) = self.cursor();
-        ScreenView {
-            rows,
-            cols,
-            continues,
-            cursor: (column.into(), row.into()),
-            cursor_visible: self.terminal.has(TermMode::SHOW_CURSOR),
-            synchronized_update: self.is_drawing(),
-        }
+        view.cols = cols;
+        view.cursor = (column.into(), row.into());
+        view.cursor_visible = self.terminal.has(TermMode::SHOW_CURSOR);
+        view.synchronized_update = self.is_drawing();
     }
 }
 

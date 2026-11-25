@@ -35,7 +35,7 @@ use facade_base::{
     model::agent::{AgentRef, AgentsUpdate, ManagedAgent},
     model::terminal::InputInfo,
 };
-use facade_screen::{Screen, TerminalColors};
+use facade_screen::{Screen, ScreenView, TerminalColors, VisibleCell};
 use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::time::Instant;
 
@@ -70,6 +70,31 @@ const START_TIMEOUT: Duration = Duration::from_secs(30);
 
 // The screen log sizes its largest record by what one feed takes; a read never brings more.
 const _: () = assert!(terminal::MAX_READ_BYTES <= screen::MAX_FEED_BYTES);
+
+/// Keeps a few ordinary views' row allocations for subsequent input and state readings. A
+/// reader fills its own storage and runs without the pool lock.
+fn with_screen_view<T>(screen: &Screen, read: impl FnOnce(&ScreenView) -> T) -> T {
+    const RETAINED_VIEWS: usize = 4;
+    const RETAINED_VIEW_BYTES: usize = 160 * 1024;
+    static SCRATCH: Mutex<Vec<ScreenView>> = Mutex::new(Vec::new());
+
+    let mut view = SCRATCH.lock().unwrap().pop().unwrap_or_default();
+    screen.refresh_view(&mut view);
+    let result = read(&view);
+    let bytes = view.rows.capacity() * size_of::<Vec<VisibleCell>>()
+        + view.rows.iter().map(Vec::capacity).sum::<usize>() * size_of::<VisibleCell>()
+        + view.continues.capacity();
+    if bytes <= RETAINED_VIEW_BYTES {
+        for row in &mut view.rows {
+            row.clear();
+        }
+        let mut returned = SCRATCH.lock().unwrap();
+        if returned.len() < RETAINED_VIEWS {
+            returned.push(view);
+        }
+    }
+    result
+}
 
 /// What was said to an agent, and who said it.
 #[derive(Clone, Debug, PartialEq, Eq)]

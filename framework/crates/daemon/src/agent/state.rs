@@ -258,8 +258,9 @@ impl StateTracker {
             return;
         }
         if let Some(rule) = self.rule {
-            self.evidence
-                .observe(facade_rules::read_state(rule, &screen.view()));
+            let observed =
+                super::with_screen_view(screen, |view| facade_rules::read_state(rule, view));
+            self.evidence.observe(observed);
         }
     }
 
