@@ -1536,7 +1536,14 @@ impl Daemon {
                         }
                     }
                 };
-                if wait_for.is_some() {
+                if let Some(wait) = wait_for {
+                    // Only delivery and result waits reserve time for settlement.
+                    let until = match wait {
+                        wire::SendWait::Inbox => until,
+                        wire::SendWait::Delivery | wire::SendWait::Result => {
+                            until + messages::RESPONSE_GRACE * 2
+                        }
+                    };
                     tokio::time::timeout_at(until, delivery)
                         .await
                         .map_err(|_| {
