@@ -42,6 +42,74 @@ mod tests {
         }
     }
 
+    #[test]
+    fn editor_named_colors_preserve_indexed_replies_until_the_next_launch() {
+        let mut screen =
+            LoggedScreen::recovered(PathBuf::new(), "a1", Screen::new(80, 24, 0), None);
+        let mut launch_colors = TerminalColors {
+            foreground: Some([0x11; 3]),
+            background: Some([0x22; 3]),
+            cursor: Some([0x33; 3]),
+            ..TerminalColors::default()
+        };
+        launch_colors.ansi[0] = Some([0x44; 3]);
+        launch_colors.ansi[15] = Some([0x55; 3]);
+        screen.set_colors(launch_colors);
+
+        let queries =
+            b"\x1b]10;?\x07\x1b]4;0;?\x07\x1b]11;?\x07\x1b]4;7;?\x07\x1b]12;?\x07\x1b]4;15;?\x07";
+        assert_eq!(
+            screen.feed(queries).query_replies,
+            b"\x1b]10;rgb:1111/1111/1111\x07\x1b]4;0;rgb:4444/4444/4444\x07\
+              \x1b]11;rgb:2222/2222/2222\x07\x1b]12;rgb:3333/3333/3333\x07\
+              \x1b]4;15;rgb:5555/5555/5555\x07",
+        );
+
+        screen.set_named_colors(TerminalColors {
+            foreground: Some([0x66; 3]),
+            background: Some([0x77; 3]),
+            cursor: Some([0x88; 3]),
+            ..TerminalColors::default()
+        });
+        assert_eq!(
+            screen.feed(queries).query_replies,
+            b"\x1b]10;rgb:6666/6666/6666\x07\x1b]4;0;rgb:4444/4444/4444\x07\
+              \x1b]11;rgb:7777/7777/7777\x07\x1b]12;rgb:8888/8888/8888\x07\
+              \x1b]4;15;rgb:5555/5555/5555\x07",
+        );
+
+        let editor_colors = TerminalColors {
+            foreground: Some([0x99; 3]),
+            background: None,
+            cursor: Some([0xaa; 3]),
+            ..TerminalColors::default()
+        };
+        screen.set_named_colors(editor_colors);
+        assert_eq!(
+            screen.colors,
+            TerminalColors {
+                ansi: launch_colors.ansi,
+                ..editor_colors
+            },
+        );
+        assert_eq!(
+            screen.feed(queries).query_replies,
+            b"\x1b]10;rgb:9999/9999/9999\x07\x1b]4;0;rgb:4444/4444/4444\x07\
+              \x1b]12;rgb:aaaa/aaaa/aaaa\x07\x1b]4;15;rgb:5555/5555/5555\x07",
+        );
+
+        let mut next_launch = TerminalColors {
+            background: Some([0xbb; 3]),
+            ..TerminalColors::default()
+        };
+        next_launch.ansi[7] = Some([0xcc; 3]);
+        screen.set_colors(next_launch);
+        assert_eq!(
+            screen.feed(queries).query_replies,
+            b"\x1b]11;rgb:bbbb/bbbb/bbbb\x07\x1b]4;7;rgb:cccc/cccc/cccc\x07",
+        );
+    }
+
     /// Agent a1's screen folder in a folder of the test's own.
     fn temp_dir(test: &str) -> (TestFolder, PathBuf) {
         let folder = TestFolder::new(&format!("screen-log-{test}"));

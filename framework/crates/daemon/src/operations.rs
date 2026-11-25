@@ -136,6 +136,7 @@ pub(crate) struct StartRequest {
     pub(crate) env: BTreeMap<String, String>,
     pub(crate) cols: u16,
     pub(crate) rows: u16,
+    pub(crate) colors: facade_screen::TerminalColors,
     pub(crate) call_id: Option<String>,
     pub(crate) result_message_id: Option<String>,
     pub(crate) result_message_machine_id: Option<String>,
@@ -160,6 +161,8 @@ pub(crate) struct RestartRequest {
     pub(crate) env: BTreeMap<String, String>,
     pub(crate) cols: u16,
     pub(crate) rows: u16,
+    /// None keeps the colors the agent's screen already has.
+    pub(crate) colors: Option<facade_screen::TerminalColors>,
 }
 
 pub(crate) type StartAnswer = Option<Result<Started, ErrorBody>>;
@@ -719,7 +722,7 @@ impl Daemon {
         gate_for_test("after-start-record");
         let screen = self.screens.folder(&id);
         let actor = ActorStart {
-            colors: Default::default(),
+            colors: args.colors,
             info: info.clone(),
             master: Some(started.master),
             screen: ScreenStart::New(screen.clone()),
@@ -1147,15 +1150,18 @@ impl Daemon {
             .ok_or_else(|| {
                 unavailable(format!("{id}'s CLI rule {rule_name} is not in this build"))
             })?;
+        let no_saved_session = || {
+            unavailable(format!(
+                "{id} has no session to resume yet: its CLI has not saved one, as when no turn has run"
+            ))
+        };
         let Some(session) = info.session.clone() else {
-            let message = if self.runs.has_unsaved_session(&id).await {
-                format!(
-                    "{id} has no session to resume yet: its CLI has not saved one, as when no turn has run"
-                )
-            } else {
-                format!("{id} has no recorded session to resume")
-            };
-            return Err(unavailable(message));
+            if self.runs.has_unsaved_session(&id).await {
+                return Err(no_saved_session());
+            }
+            return Err(unavailable(format!(
+                "{id} has no recorded session to resume"
+            )));
         };
         let _session_claim = self.claim_session(&id, rule_name, &session, true)?;
         if !std::path::Path::new(&info.cwd).is_dir() {
@@ -1175,6 +1181,14 @@ impl Daemon {
         })?;
         let resumed =
             command_line::resume_entry(&settings, rule, &info.cli, &info.cwd, &args.env, options)?;
+        if rule.session.resume_requires_saved_session
+            && crate::blocking_in_place(|| {
+                self.saved_session(rule, &info, &resumed.env, &resumed.words)
+            })?
+            .is_none()
+        {
+            return Err(no_saved_session());
+        }
         let (creator, creator_name) = self.recorded_creator(&info);
         let request = RunRequest {
             id: &id,
@@ -1274,6 +1288,7 @@ impl Daemon {
             captures: prepared.captures,
             launch_command: prepared.launch_command.take(),
             tools: prepared.tools,
+            colors: args.colors,
             reply,
         };
         if !agent.send(install).await {

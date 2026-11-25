@@ -30,6 +30,17 @@ fn max_enter_held() -> Duration {
     MAX_ENTER_HELD
 }
 
+/// A focus notification alone does not take over from the startup probe.
+pub(super) fn has_key(mut bytes: &[u8]) -> bool {
+    while let Some(rest) = bytes
+        .strip_prefix(b"\x1b[I")
+        .or_else(|| bytes.strip_prefix(b"\x1b[O"))
+    {
+        bytes = rest;
+    }
+    !bytes.is_empty()
+}
+
 /// An Enter in the person's keys that may submit the input.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Enter {

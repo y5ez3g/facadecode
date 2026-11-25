@@ -15,12 +15,14 @@ use facade_base::model::{
     machine::{MachineQueryResult, MachineState},
 };
 use facade_base::process::ProcessState;
+use facade_base::start::LaunchColors;
 use facade_base::{
     jsonrpc::decode_arguments,
     model::error::{ErrorBody, Reason},
 };
 use facade_base::{model::agent::AgentRef, model::machine::MachineQueryStatus};
-use facade_rules::{LaunchOrigin, entries};
+use facade_rules::{LaunchOrigin, Rule, SavedSession, entries};
+use tokio::sync::OnceCell;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 
@@ -29,7 +31,9 @@ use crate::api;
 use crate::network_operations::{LIST_DEADLINE, machine_query_result, require_person};
 use crate::operations::{RestartRequest, StartOrigin, StartRequest};
 use crate::records::{self, OperationTarget, Reach};
-use crate::service::{check_size, sender_from, value_of};
+use crate::service::{
+    check_size, launch_color_environment, sender_from, shell_launch_colors, value_of,
+};
 use crate::{Daemon, blocking_in_place, command_line};
 
 #[derive(Default)]
@@ -37,6 +41,9 @@ pub(crate) struct ResumeFilter {
     pub(crate) folder: Option<String>,
     pub(crate) all: bool,
 }
+
+type LoginEnvironment = (BTreeMap<String, String>, String);
+type ResumeLogin = OnceCell<Result<LoginEnvironment, ErrorBody>>;
 
 struct ResumeSelector {
     reference: String,
@@ -48,6 +55,7 @@ struct ResumeRequest {
     target: ResumeSelector,
     machine_id: Option<String>,
     env: BTreeMap<String, String>,
+    colors: Option<LaunchColors>,
     cols: u16,
     rows: u16,
 }
@@ -293,9 +301,10 @@ impl Daemon {
         include_sessions: bool,
         include_labels: bool,
     ) -> Result<Vec<ResumeCandidate>, ErrorBody> {
+        let login = ResumeLogin::new();
         let folder = match (&args.folder, include_sessions || !args.all) {
             (Some(folder), _) => Some(PathBuf::from(folder)),
-            (None, true) => Some(PathBuf::from(self.login_environment().await?.1)),
+            (None, true) => Some(PathBuf::from(&self.resume_login(&login).await?.1)),
             (None, false) => None,
         };
         if let Some(folder) = &folder
@@ -314,10 +323,10 @@ impl Daemon {
             let Some(session) = info.session.clone() else {
                 continue;
             };
-            let Some(rule) = agent.rule().map(str::to_owned) else {
+            let Some(rule_name) = agent.rule() else {
                 continue;
             };
-            used.insert((rule, session.clone()));
+            used.insert((rule_name.to_owned(), session.clone()));
             if info.process != ProcessState::Ended
                 || (!args.all
                     && folder.as_ref().is_some_and(|folder| {
@@ -327,14 +336,27 @@ impl Daemon {
             {
                 continue;
             }
-            let session_name = if include_labels && Instant::now() < label_deadline {
-                tokio::time::timeout_at(label_deadline, self.native_session_name(&agent, &info))
+            let saved = match facade_rules::find(rule_name).ok().flatten() {
+                Some(rule) if rule.session.resume_requires_saved_session => {
+                    let Some(saved) = self.native_session(rule, &info, &login).await else {
+                        continue;
+                    };
+                    Some(saved)
+                }
+                Some(rule) if include_labels && Instant::now() < label_deadline => {
+                    tokio::time::timeout_at(
+                        label_deadline,
+                        self.native_session(rule, &info, &login),
+                    )
                     .await
                     .ok()
                     .flatten()
-            } else {
-                None
+                }
+                _ => None,
             };
+            let session_name = saved
+                .filter(|_| include_labels)
+                .and_then(|saved| saved.title);
             let info = self.public_agent(info)?;
             let reference = api::agent_ref(info.reference);
             items.push(ResumeCandidate {
@@ -356,8 +378,8 @@ impl Daemon {
         if let Some(folder) = &folder
             && include_sessions
         {
-            let (environment, _) = self.login_environment().await?;
-            let sessions = self.saved_candidates(folder, environment, None)?;
+            let (environment, _) = self.resume_login(&login).await?;
+            let sessions = self.saved_candidates(folder, environment.clone(), None)?;
             let mut listed = BTreeSet::new();
             for candidate @ (rule, item) in &sessions {
                 let key = (rule.clone(), item.session.clone());
@@ -376,13 +398,35 @@ impl Daemon {
         Ok(items)
     }
 
+    async fn resume_login<'a>(
+        &self,
+        login: &'a ResumeLogin,
+    ) -> Result<&'a LoginEnvironment, ErrorBody> {
+        login
+            .get_or_init(|| self.launch_context(None, BTreeMap::new()))
+            .await
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
     pub(crate) async fn native_session_name(
         self: &Arc<Self>,
         agent: &AgentHandle,
         info: &ManagedAgent,
     ) -> Option<String> {
-        let session = info.session.clone()?;
         let rule = facade_rules::find(agent.rule()?).ok().flatten()?;
+        self.native_session(rule, info, &ResumeLogin::new())
+            .await?
+            .title
+    }
+
+    async fn native_session(
+        self: &Arc<Self>,
+        rule: &'static Rule,
+        info: &ManagedAgent,
+        login: &ResumeLogin,
+    ) -> Option<SavedSession> {
+        info.session.as_ref()?;
         let settings = command_line::read_settings().ok();
         let configured = settings.as_ref().map(entries::read).unwrap_or_default();
         let entry = entries::find(&configured, &info.cli);
@@ -397,42 +441,52 @@ impl Daemon {
                 .ok()
                 .flatten()?
         } else {
-            let (login, _) = self.login_environment().await.ok()?;
+            let (login, _) = self.resume_login(login).await.ok()?;
             match entry {
-                Some(entry) => entry.environment(&login),
-                None => login,
+                Some(entry) => entry.environment(login),
+                None => login.clone(),
             }
         };
-        let folder = PathBuf::from(&info.cwd);
         let daemon = self.clone();
-        let agent_id = info.agent_id.clone();
-        tokio::task::spawn_blocking(move || {
-            let report = daemon.runs.session_report_path(&agent_id);
-            facade_rules::session_for_id(
-                rule,
-                &folder,
-                &environment,
-                &args,
-                &session,
-                report.as_deref(),
-            )
+        let info = info.clone();
+        tokio::task::spawn_blocking(move || daemon.saved_session(rule, &info, &environment, &args))
+            .await
             .ok()
-            .flatten()?
-            .title
-        })
-        .await
-        .ok()
-        .flatten()
+            .and_then(Result::ok)
+            .flatten()
+    }
+
+    /// Reads the exact recorded session using the supplied launch choices. Blocking.
+    pub(crate) fn saved_session(
+        &self,
+        rule: &Rule,
+        info: &ManagedAgent,
+        environment: &BTreeMap<String, String>,
+        args: &[String],
+    ) -> Result<Option<SavedSession>, ErrorBody> {
+        let Some(session) = info.session.as_deref() else {
+            return Ok(None);
+        };
+        let report = self.runs.session_report_path(&info.agent_id);
+        facade_rules::session_for_id(
+            rule,
+            Path::new(&info.cwd),
+            environment,
+            args,
+            session,
+            report.as_deref(),
+        )
     }
 
     pub(crate) async fn api_resume(
         self: &Arc<Self>,
         caller: &Caller,
-        args: wire::ResumeArgs,
+        mut args: wire::ResumeArgs,
         forwarded: bool,
     ) -> Result<wire::ResumeResult, ErrorBody> {
         require_person(caller)?;
         check_size(args.size.cols, args.size.rows)?;
+        let colors = shell_launch_colors(caller, args.env.as_mut());
         let exact_machine = match &args.target {
             wire::ResumeTarget::Agent { reference } => Some(reference.machine_id.clone()),
             wire::ResumeTarget::Session { machine_id, .. } => Some(machine_id.clone()),
@@ -454,7 +508,7 @@ impl Daemon {
                 ));
             }
             return self
-                .forward_resume(id, caller, args.target, args.size)
+                .forward_resume(id, caller, args.target, args.size, colors.as_ref())
                 .await;
         }
         let (target, exact_session) = match args.target {
@@ -519,6 +573,7 @@ impl Daemon {
                 target,
                 machine_id: exact_machine,
                 env: args.env.unwrap_or_default(),
+                colors,
                 cols: args.size.cols,
                 rows: args.size.rows,
             },
@@ -550,7 +605,9 @@ impl Daemon {
                 ));
             }
             let target = self.remote_resume_target(caller, id, &args.target).await?;
-            return self.forward_resume(id, caller, target, size).await;
+            return self
+                .forward_resume(id, caller, target, size, args.colors.as_ref())
+                .await;
         }
 
         let input = args
@@ -664,6 +721,10 @@ impl Daemon {
                             env: session_env,
                             cols: args.cols,
                             rows: args.rows,
+                            colors: args
+                                .colors
+                                .map(crate::presence::launch_colors)
+                                .unwrap_or_default(),
                             call_id: None,
                             result_message_id: None,
                             result_message_machine_id: None,
@@ -693,7 +754,13 @@ impl Daemon {
                 reference: api::wire_ref(&agent),
             };
             return self
-                .forward_resume(&agent.machine_id, caller, target, size)
+                .forward_resume(
+                    &agent.machine_id,
+                    caller,
+                    target,
+                    size,
+                    args.colors.as_ref(),
+                )
                 .await;
         }
 
@@ -711,6 +778,7 @@ impl Daemon {
                     env,
                     cols: args.cols,
                     rows: args.rows,
+                    colors: args.colors.map(crate::presence::launch_colors),
                 },
             )
             .await
@@ -853,6 +921,7 @@ impl Daemon {
         caller: &Caller,
         target: wire::ResumeTarget,
         size: Size,
+        colors: Option<&LaunchColors>,
     ) -> Result<wire::ResumeResult, ErrorBody> {
         self.ensure_machine_route(id, caller).await?;
         let expected_agent = match &target {
@@ -867,7 +936,7 @@ impl Daemon {
                 args: value_of(wire::ResumeArgs {
                     target,
                     size,
-                    env: None,
+                    env: launch_color_environment(colors),
                 }),
             }),
             time_left_ms: None,

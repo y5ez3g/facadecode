@@ -21,6 +21,7 @@ use facade_base::model::terminal::MAX_SCREEN_LINES;
 use facade_base::model::terminal::TerminalColors;
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::sockets::{ServerReader, ServerWriter};
+use facade_base::start::LaunchColors;
 use facade_base::{
     jsonrpc::decode_arguments,
     model::error::{ErrorBody, Reason},
@@ -685,6 +686,7 @@ impl Daemon {
                 "start_agent accepts a configured CLI without trailing arguments",
             ));
         }
+        let colors = shell_launch_colors(caller, args.env.as_mut());
         let machine = api::single_machine(args.scope.take());
         let name = incoming
             .as_ref()
@@ -700,7 +702,7 @@ impl Daemon {
             && machine != self.machine_id
         {
             self.ensure_machine_route(&machine, caller).await?;
-            args.env = Some(Default::default());
+            args.env = Some(launch_color_environment(colors.as_ref()).unwrap_or_default());
             if args.folder_is_default {
                 args.folder = None;
             }
@@ -735,7 +737,13 @@ impl Daemon {
                 args.folder = None;
             }
         }
-        let mut args = api::start_args(args, start_result);
+        let mut args = api::start_args(
+            args,
+            start_result,
+            colors
+                .map(crate::presence::launch_colors)
+                .unwrap_or_default(),
+        );
         let caller_folder = if let Caller::Agent { agent, .. } = caller
             && agent.machine_id == self.machine_id
         {
@@ -1507,6 +1515,26 @@ pub(crate) fn stored_message(message: wire::Message) -> Message {
         at: message.at,
         delivery: message.delivery,
     }
+}
+
+/// Takes the launch context out of any caller's environment and returns a Terminal caller's colors.
+pub(crate) fn shell_launch_colors(
+    caller: &Caller,
+    env: Option<&mut std::collections::BTreeMap<String, String>>,
+) -> Option<LaunchColors> {
+    env.and_then(facade_base::start::take_terminal_colors)
+        .filter(|_| matches!(caller, Caller::Terminal { .. }))
+}
+
+/// The only environment a start or resume forwards to another machine.
+pub(crate) fn launch_color_environment(
+    colors: Option<&LaunchColors>,
+) -> Option<std::collections::BTreeMap<String, String>> {
+    colors.map(|colors| {
+        let mut env = std::collections::BTreeMap::new();
+        facade_base::start::carry_terminal_colors(&mut env, colors);
+        env
+    })
 }
 
 pub(crate) fn terminal_colors(

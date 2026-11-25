@@ -18,7 +18,7 @@ use facade_screen::{BlockKind, ReportedState, Screen, StatusEvent, StatusReport}
 use serde::{Deserialize, Serialize};
 use tokio::{sync::watch, time::Instant};
 
-use super::{START_TIMEOUT, Submission};
+use super::{START_TIMEOUT, Submission, ToolsConnections};
 use crate::ToolsGiven;
 
 const WORK_HOLD: Duration = Duration::from_secs(1);
@@ -119,12 +119,13 @@ impl StateTracker {
             .progress
             .advance(Turn::from(current), now, viewing, &mut self.saved);
         let start_deadline = self.question.deadline(self.started);
-        let starting =
-            now < start_deadline && (!self.evidence.shown || tools == ToolsState::Connecting);
+        let tools_pending =
+            tools == ToolsState::Connecting && !matches!(self.connection, Connection::Initialized);
+        let starting = now < start_deadline && (!self.evidence.shown || tools_pending);
         reading.wake = [
             held_until,
             starting.then_some(start_deadline),
-            (tools == ToolsState::Connecting && !self.question.open)
+            (tools_pending && !self.question.open)
                 .then(|| self.question.deadline(self.tools_since)),
         ]
         .into_iter()
@@ -310,6 +311,13 @@ impl StateTracker {
         (!self.question.open).then(|| self.question.deadline(self.started))
     }
 
+    /// Whether the native startup allows the Typist to take the first prompt.
+    pub(super) fn native_prompt_ready(&self, not_ready: bool) -> bool {
+        (self.evidence.shown || not_ready)
+            && !self.question.open
+            && !matches!(self.evidence.current(), Some(EvidenceState::Blocked { .. }))
+    }
+
     /// Restarts the tool connection allowance after daemon recovery.
     pub(crate) fn recovered(&mut self, now: Instant) {
         self.tools_since = now;
@@ -330,13 +338,26 @@ impl StateTracker {
         self.saved.tools_not_started = true;
     }
 
-    /// Updates the last tool connection while retaining evidence of a lost connection.
-    pub(crate) fn tools_connection(&mut self, open: bool) {
-        self.connection = match (open, self.connection) {
-            (true, _) => Connection::Open,
-            (false, Connection::Pending) => Connection::Pending,
-            (false, _) => Connection::Lost,
+    /// Reads the live stages and the retained proof of a verified connection for this run.
+    pub(super) fn tools_connections(&mut self, connections: ToolsConnections) {
+        self.connection = if connections.listed > 0 {
+            Connection::Listed
+        } else if connections.initialized > 0 {
+            Connection::Initialized
+        } else if connections.verified {
+            Connection::Lost
+        } else {
+            Connection::Pending
         };
+    }
+
+    #[cfg(test)]
+    fn tools_connection(&mut self, open: bool) {
+        self.tools_connections(ToolsConnections {
+            listed: usize::from(open),
+            verified: open || !matches!(self.connection, Connection::Pending),
+            ..ToolsConnections::new(super::FIRST_RUN, true)
+        });
     }
 
     fn tool_reading(&self, now: Instant) -> (ToolsState, Option<ToolsReason>) {
@@ -349,7 +370,8 @@ impl StateTracker {
             Some(ToolsReason::NotGiven)
         } else {
             match self.connection {
-                Connection::Open => return (ToolsState::Available, None),
+                Connection::Listed => return (ToolsState::Available, None),
+                Connection::Initialized => return (ToolsState::Connecting, None),
                 Connection::Lost => Some(ToolsReason::Disconnected),
                 Connection::Pending if self.question.open => None,
                 Connection::Pending if self.saved.tools_not_started => {
@@ -416,7 +438,8 @@ impl Question {
 #[derive(Clone, Copy)]
 enum Connection {
     Pending,
-    Open,
+    Initialized,
+    Listed,
     Lost,
 }
 
@@ -561,14 +584,16 @@ impl Evidence {
 
     fn reads_screen(&self) -> bool {
         match self.rule {
-            Some(StateRule::FrameTranscript(_)) => !matches!(self.source, Source::Reports),
+            Some(StateRule::FrameTranscript(_) | StateRule::Composer(_)) => {
+                !matches!(self.source, Source::Reports)
+            }
             Some(StateRule::BackgroundCorrection(_)) => {
                 matches!(self.base, Some(EvidenceState::Working))
             }
             Some(StateRule::TurnError(_)) => {
                 matches!(self.base, Some(EvidenceState::Idle | EvidenceState::Done))
             }
-            _ => false,
+            Some(StateRule::BackgroundReport(_)) | None => false,
         }
     }
 

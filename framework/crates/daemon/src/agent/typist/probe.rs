@@ -63,9 +63,10 @@ impl Probe {
         &self.before.cells
     }
 
-    /// One step at `now`. The input is read every [`PROBE_READ`] until two readings in a row show
-    /// the same row and cursor, for at most [`PROBE_STILL`]: a draft read half drawn after the
-    /// space could pass for a hint, so a verdict waits for the input to be still.
+    /// One step at `now`. The input is read every [`PROBE_READ`] for up to [`PROBE_STILL`]
+    /// after each key. A half-drawn draft could pass for a hint, so a verdict waits for two
+    /// readings that agree. After Space the probe can keep waiting while those readings show
+    /// the pre-key row and cursor.
     pub(super) fn next(
         &mut self,
         agent: &str,
@@ -73,20 +74,32 @@ impl Probe {
         typed: u64,
         read_screen: &dyn Fn() -> BoxReading,
     ) -> Next {
+        let deadline = self.since + PROBE_STILL;
+        let after_space = self.pressed == Pressed::Space;
+        let wake_at = |at: Instant| {
+            if after_space { at.min(deadline) } else { at }
+        };
         let due = self.last.as_ref().map_or(self.since, |(at, _)| *at) + PROBE_READ;
-        if now < due {
-            return Next::Wait(due);
+        let wake = wake_at(due);
+        if now < wake {
+            return Next::Wait(wake);
         }
         let reading = read_screen();
-        // A reading with no row, as one taken inside a synchronized update, is never still: the
-        // probe waits for the whole frame.
-        let still = reading.line.is_some()
+        // Still readings need a full read interval and a visible row. A synchronized update can
+        // hide the row until the whole frame is drawn.
+        let still = now >= due
+            && reading.line.is_some()
             && self.last.as_ref().is_some_and(|(_, last)| {
                 last.info.state == reading.info.state && last.line == reading.line
             });
-        if !still && now < self.since + PROBE_STILL {
+        // The CLI may keep showing the pre-key row and cursor while it draws the space.
+        let waiting_for_echo = after_space
+            && typed == self.typed
+            && reading.info.state != InputState::Interaction
+            && reading.line.as_ref() == Some(&self.before);
+        if (!still || waiting_for_echo) && now < deadline {
             self.last = Some((now, reading));
-            return Next::Wait(now + PROBE_READ);
+            return Next::Wait(wake_at(now + PROBE_READ));
         }
         let before = shape_of(Some(&self.before));
         let after = shape_of(reading.line.as_ref());

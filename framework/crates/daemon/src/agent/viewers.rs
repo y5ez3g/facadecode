@@ -82,8 +82,7 @@ impl ViewKind {
         )
     }
 
-    /// A Shell attachment shows the CLI's final instructions next to its exit receipt.
-    fn resume_hint(&self, screen: &Screen) -> Option<String> {
+    fn is_shell(&self) -> bool {
         matches!(
             self,
             Self::Attach {
@@ -94,7 +93,11 @@ impl ViewKind {
                 ..
             }
         )
-        .then(|| final_resume_hint(screen))
+    }
+
+    /// A Shell attachment shows the CLI's final instructions next to its exit receipt.
+    fn resume_hint(&self, screen: &Screen) -> Option<String> {
+        self.is_shell().then(|| final_resume_hint(screen))
     }
 
     /// Whether the viewer stays once told the run's exit. An attached viewer ends with the run.
@@ -146,6 +149,8 @@ struct Viewer {
     size: Option<Size>,
     tx: ViewerSender,
     keep_scrollback: bool,
+    /// Include the screen's scrollback with the first fitting, nonempty primary frame.
+    primary_scrollback_pending: bool,
     drawing: Drawing,
 }
 
@@ -277,12 +282,17 @@ impl Viewers {
         if process != ProcessState::Running && !request.kind.outlives_exit() {
             return;
         }
+        let primary_scrollback_pending = request.include_scrollback
+            && !request.keep_scrollback
+            && request.kind.is_shell()
+            && !fitting_primary_frame(screen, request.size);
         self.active.push(Viewer {
             id: request.viewer,
             kind: request.kind,
             size: request.size,
             tx: request.tx,
             keep_scrollback: request.keep_scrollback,
+            primary_scrollback_pending,
             drawing: Drawing::Current,
         });
     }
@@ -409,12 +419,17 @@ impl Viewer {
     fn draw(&mut self, screen: &Screen, exit: Option<&ProcessExit>) -> bool {
         let owes_exit = self.drawing == Drawing::RedrawThenExit;
         self.drawing = Drawing::Current;
+        let include_scrollback =
+            self.primary_scrollback_pending && fitting_primary_frame(screen, self.size);
         let frame = ViewerChange::Redraw {
-            bytes: screen.redraw(self.keep_scrollback, false),
+            bytes: screen.redraw(self.keep_scrollback, include_scrollback),
             cols: screen.cols(),
             rows: screen.rows(),
         };
         let mut alive = self.tx.send(frame);
+        if alive && include_scrollback {
+            self.primary_scrollback_pending = false;
+        }
         if let Some(exit) = exit.filter(|_| owes_exit) {
             alive &= self.tx.send(ViewerChange::Exit(
                 exit.clone(),
@@ -424,6 +439,18 @@ impl Viewer {
         }
         alive
     }
+}
+
+/// Matches the conditions for Attach to display its first primary frame.
+fn fitting_primary_frame(screen: &Screen, capacity: Option<Size>) -> bool {
+    !screen.on_alternate_screen()
+        && capacity.is_none_or(|size| screen.cols() <= size.cols && screen.rows() <= size.rows)
+        && screen
+            .view()
+            .rows
+            .iter()
+            .flatten()
+            .any(|cell| !cell.text.trim().is_empty() || cell.inverse)
 }
 
 /// Keeps the CLI's own recovery instruction at the bottom, including its command lines.

@@ -142,6 +142,23 @@ impl Readiness {
         })
     }
 
+    /// Whether the tool startup is still watching for the composer, before typing anything.
+    pub(crate) fn waiting_for_input(&self) -> bool {
+        self.tools
+            .as_ref()
+            .is_some_and(|tools| matches!(tools.phase, ToolPhase::Input))
+    }
+
+    /// Lets the person type when the probe is only watching. A confirmed native question
+    /// already allows keys and can still be followed by the tool probe.
+    pub(crate) fn yield_to_input(&mut self, input: InputState) -> bool {
+        if self.waiting_for_input() && input != InputState::Interaction {
+            self.tools = None;
+            return true;
+        }
+        false
+    }
+
     /// Whether the tools are being readied: messages wait as behind a draft.
     pub(crate) fn readies_tools(&self) -> bool {
         self.tools.is_some()

@@ -4,6 +4,7 @@
 mod environment;
 mod folder;
 mod plugin;
+mod projection;
 mod session;
 
 use std::collections::{BTreeMap, HashSet};
@@ -191,6 +192,8 @@ impl Preparation {
             launch_env,
             captures,
             files: contents,
+            config_links,
+            workspace_file,
             tools,
             ..
         } = command_line;
@@ -204,8 +207,18 @@ impl Preparation {
             Some(session) => Some(Some(session)),
             None => captures.then_some(None),
         };
-        let create = captures || !contents.is_empty();
-        files.fill(session, contents);
+        let create = captures
+            || !contents.is_empty()
+            || !config_links.is_empty()
+            || workspace_file.is_some();
+        files.fill(session, contents, config_links);
+        if let Some((relative, contents)) = workspace_file {
+            files.project(projection::Projection {
+                workspace: PathBuf::from(request.cwd),
+                relative,
+                contents,
+            });
+        }
         if request.kind == RunKind::Start && create {
             let created = files.clone();
             file_work(move || created.create()).await?;
@@ -257,6 +270,13 @@ impl Preparation {
     /// Blocking file work holds only the plugin lock.
     pub(crate) fn plugin_released(&self, id: &str) {
         self.plugins.released(id);
+    }
+
+    /// Retires a failed resume's workspace projection while keeping its session report.
+    pub(crate) fn retire_projection(&self, id: &str) {
+        if let Some(run) = folder::find(&self.folders, id) {
+            folder::retire_projection(&run);
+        }
     }
 
     /// Removes an agent's private folders, logging a failure. Blocking; takes no lock.

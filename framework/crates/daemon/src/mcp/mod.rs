@@ -19,10 +19,9 @@ pub(crate) mod verified;
 mod verified_tools;
 
 use std::collections::BTreeMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::Instant;
 
-use facade_base::api_v1::daemon_client::DaemonClient;
 use facade_base::jsonrpc::decode_arguments;
 use facade_base::model::error::{ErrorBody, Reason};
 use serde::Deserialize;
@@ -32,9 +31,30 @@ pub(crate) use inbox_page::project_inbox;
 pub(crate) use result_files::{clean_results, results_folder};
 pub(crate) use verified::{ActorIdentity, ActorServices, DiscoverClis, ReadReply};
 
-/// The instructions for the managed run that the daemon can verify during initialization.
+pub(crate) type PresenceLease = Box<dyn Send + Sync>;
+
+/// Grants a prepared lease while the relay is open. Preparation does any verification and I/O.
+pub(crate) type AcquirePresence = Box<dyn FnOnce() -> Option<PresenceLease> + Send>;
+
+pub(crate) struct Initialization {
+    pub(crate) instructions: Option<String>,
+    pub(crate) acquire: Option<AcquirePresence>,
+}
+
+/// Resolves the managed instructions and any presence acquisition for a successful initialize.
 pub(crate) type ManagedInstructions =
-    Box<dyn Fn(Option<&str>) -> Result<Option<String>, ErrorBody> + Send + Sync>;
+    Box<dyn Fn(Option<&str>) -> Result<Initialization, ErrorBody> + Send + Sync>;
+
+#[derive(Clone, Copy)]
+pub(crate) enum CatalogEvent {
+    Listed,
+    Reconnect,
+}
+
+/// Prepares a lease if the daemon verifies that the event shows the run's tools are available.
+pub(crate) type Ready = Box<
+    dyn Fn(Option<&str>, CatalogEvent) -> anyhow::Result<Option<AcquirePresence>> + Send + Sync,
+>;
 
 /// The version of the relay contract this daemon speaks, as a relay's hello names it.
 pub(crate) const RELAY_CONTRACT: u32 = 1;
@@ -100,8 +120,19 @@ pub(crate) struct Relay {
     verified: verified::Verified,
     /// Its `send_message` and `read_messages` calls not yet answered.
     sends: in_flight::Sends,
-    /// The connection that shows the daemon its actor's tools are there, once they are.
-    presence: Mutex<Option<DaemonClient>>,
+    /// The leases held by the open transport. Closing takes the entire value.
+    presence: Mutex<Option<Presence>>,
+}
+
+#[derive(Default)]
+struct Presence {
+    initialized: Option<PresenceLease>,
+    listed: Option<PresenceLease>,
+}
+
+enum PresenceStage {
+    Initialized,
+    Listed,
 }
 
 impl Relay {
@@ -119,7 +150,7 @@ impl Relay {
             birth,
             verified: verified::Verified::new(services),
             sends: in_flight::Sends::default(),
-            presence: Mutex::default(),
+            presence: Mutex::new(Some(Presence::default())),
         }
     }
 
@@ -150,10 +181,41 @@ impl Relay {
         lines::respond(self, line, arrived)
     }
 
-    /// Shows the daemon that the verified run's tools are there, from now until the relay's
-    /// connection ends. Runs in a blocking task.
-    pub(crate) fn hold_verified_presence(&self) {
-        self.verified.hold_presence(self);
+    /// Holds verified catalog presence until the relay's connection ends. Runs in a blocking task.
+    pub(crate) fn hold_verified_presence(&self, event: CatalogEvent) {
+        {
+            let presence = self.presence.lock().unwrap_or_else(PoisonError::into_inner);
+            if presence.as_ref().is_none_or(|open| open.listed.is_some()) {
+                return;
+            }
+        }
+        if let Some(acquire) = self.verified.prepare_presence(self, event) {
+            self.acquire_presence(PresenceStage::Listed, acquire);
+        }
+    }
+
+    fn acquire_presence(&self, stage: PresenceStage, acquire: AcquirePresence) {
+        let mut presence = self.presence.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(open) = presence.as_mut() else {
+            return;
+        };
+        let held = match stage {
+            PresenceStage::Initialized => &mut open.initialized,
+            PresenceStage::Listed => &mut open.listed,
+        };
+        if held.is_none() {
+            *held = acquire();
+        }
+    }
+
+    /// Prevents further acquisition and releases both leases outside the lock.
+    pub(crate) fn close_presence(&self) {
+        let held = self
+            .presence
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        drop(held);
     }
 }
 
@@ -331,17 +393,15 @@ impl Relay {
             authenticate: Box::new(|_, _, _| Err(ErrorBody::internal("unit tests have no daemon"))),
             connect: Box::new(|_, _| anyhow::bail!("unit tests have no daemon")),
             read_inbox: Box::new(|_, _, _| Err(ErrorBody::internal("unit tests have no daemon"))),
-            managed_instructions: Box::new(|_| Ok(None)),
-            ready: Box::new(|_| anyhow::bail!("unit tests have no daemon")),
+            managed_instructions: Box::new(|_| {
+                Ok(Initialization {
+                    instructions: None,
+                    acquire: None,
+                })
+            }),
+            ready: Box::new(|_, _| anyhow::bail!("unit tests have no daemon")),
         };
-        Relay {
-            hello,
-            pid: 7,
-            birth: "1".to_string(),
-            verified: verified::Verified::new(services),
-            sends: in_flight::Sends::default(),
-            presence: Mutex::default(),
-        }
+        Relay::of_verified(hello, 7, "1".to_string(), services)
     }
 }
 

@@ -211,7 +211,11 @@ pub(crate) fn project_machine(
     machine
 }
 
-pub(crate) fn start_args(args: wire::StartArgs, result: Option<wire::MessageRef>) -> StartRequest {
+pub(crate) fn start_args(
+    args: wire::StartArgs,
+    result: Option<wire::MessageRef>,
+    colors: facade_screen::TerminalColors,
+) -> StartRequest {
     StartRequest {
         cli: args.cli,
         args: args.args,
@@ -224,6 +228,7 @@ pub(crate) fn start_args(args: wire::StartArgs, result: Option<wire::MessageRef>
         env: args.env.unwrap_or_default(),
         cols: args.size.cols,
         rows: args.size.rows,
+        colors,
         call_id: args.call_id,
         request_id: args.request_id,
         result_message_id: result.as_ref().map(|result| result.message_id.clone()),
