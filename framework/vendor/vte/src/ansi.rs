@@ -38,6 +38,10 @@ const SYNC_UPDATE_TIMEOUT: Duration = Duration::from_millis(150);
 /// Maximum number of bytes read in one synchronized update (2MiB).
 const SYNC_BUFFER_SIZE: usize = 0x20_0000;
 
+/// The first allocation for a frame which spans more than one read.
+const SYNC_FIRST_BLOCK: usize = 4 * 1024;
+const SYNC_BLOCKS: usize = (SYNC_BUFFER_SIZE / SYNC_FIRST_BLOCK).trailing_zeros() as usize + 1;
+
 /// Number of bytes in the BSU/ESU CSI sequences.
 const SYNC_ESCAPE_LEN: usize = 8;
 
@@ -255,16 +259,56 @@ struct SyncState<T: Timeout> {
     timeout: T,
 
     /// Bytes read during the synchronized update.
-    buffer: Vec<u8>,
+    buffer: SyncBuffer,
     /// Length of the new update's retained opening marker. A resumed partial frame has no floor.
     start_marker_len: Option<usize>,
 }
 
 impl<T: Timeout> Default for SyncState<T> {
     fn default() -> Self {
-        // Facade (memory): was `Vec::with_capacity(SYNC_BUFFER_SIZE)`, 2 MiB for every terminal
-        // from its start. The buffer takes memory only while an update holds output back.
-        Self { buffer: Vec::new(), timeout: Default::default(), start_marker_len: Some(0) }
+        Self { buffer: SyncBuffer::default(), timeout: Default::default(), start_marker_len: Some(0) }
+    }
+}
+
+/// Holds bytes across reads in blocks of 4 KiB, 4 KiB, 8 KiB, …, 1 MiB. The capacities sum to
+/// 2 MiB. No block grows or shares an allocation with a previous frame.
+#[derive(Debug, Default)]
+struct SyncBuffer {
+    blocks: [Vec<u8>; SYNC_BLOCKS],
+    len: usize,
+}
+
+impl SyncBuffer {
+    fn append(&mut self, mut bytes: &[u8]) {
+        self.len += bytes.len();
+        for (index, block) in self.blocks.iter_mut().enumerate() {
+            if bytes.is_empty() {
+                break;
+            }
+            let capacity = SYNC_FIRST_BLOCK << index.saturating_sub(1);
+            let needed = (capacity - block.len()).min(bytes.len());
+            if needed > 0 {
+                if block.is_empty() {
+                    *block = Vec::with_capacity(capacity);
+                }
+                block.extend_from_slice(&bytes[..needed]);
+                bytes = &bytes[needed..];
+            }
+        }
+        debug_assert!(bytes.is_empty());
+    }
+
+    fn tail<'a>(&self, scratch: &'a mut [u8; SYNC_ESCAPE_LEN - 1]) -> &'a [u8] {
+        let mut start = scratch.len();
+        for block in self.blocks.iter().rev() {
+            let kept = block.len().min(start);
+            scratch[start - kept..start].copy_from_slice(&block[block.len() - kept..]);
+            start -= kept;
+            if start == 0 {
+                break;
+            }
+        }
+        &scratch[start..]
     }
 }
 
@@ -320,7 +364,8 @@ impl<T: Timeout> Processor<T> {
     where
         H: Handler,
     {
-        self.stop_sync_internal(handler, None);
+        self.replay_sync(handler, &[]);
+        self.close_sync(handler);
     }
 
     /// Reopens an update after its output had to be applied before the frame was complete.
@@ -336,54 +381,31 @@ impl<T: Timeout> Processor<T> {
     pub fn sync_holds_output(&self) -> bool {
         let sync = &self.state.sync_state;
         sync.timeout.pending_timeout()
-            && sync.start_marker_len.map_or(true, |len| sync.buffer.len() > len)
+            && sync.start_marker_len.map_or(true, |len| sync.buffer.len > len)
     }
 
-    /// End a synchronized update.
-    ///
-    /// The `bsu_offset` parameter should be passed if the sync buffer contains
-    /// a new BSU escape that is not part of the current synchronized
-    /// update.
-    fn stop_sync_internal<H>(&mut self, handler: &mut H, bsu_offset: Option<usize>)
-    where
-        H: Handler,
-    {
-        // Process all synchronized bytes.
-        //
-        // NOTE: We do not use `advance_until_terminated` here since BSU sequences are
-        // processed automatically during the synchronized update.
+    /// Applies the held bytes and this read's visible prefix. A new frame may allocate once
+    /// these blocks have gone.
+    fn replay_sync<H: Handler>(&mut self, handler: &mut H, visible: &[u8]) {
         let buffer = mem::take(&mut self.state.sync_state.buffer);
-        let offset = bsu_offset.unwrap_or(buffer.len());
         let mut performer = Performer::new(&mut self.state, handler);
-        self.parser.advance(&mut performer, &buffer[..offset]);
-        self.state.sync_state.buffer = buffer;
-
-        match bsu_offset {
-            // Just clear processed bytes if there is a new BSU.
-            //
-            // NOTE: We do not need to re-process for a new ESU since the `advance_sync`
-            // function checks for BSUs in reverse.
-            Some(bsu_offset) => {
-                let new_len = self.state.sync_state.buffer.len() - bsu_offset;
-                self.state.sync_state.buffer.copy_within(bsu_offset.., 0);
-                self.state.sync_state.buffer.truncate(new_len);
-                self.state.sync_state.start_marker_len = Some(SYNC_ESCAPE_LEN);
-            },
-            // Report mode and clear state if no new BSU is present.
-            None => {
-                handler.unset_private_mode(NamedPrivateMode::SyncUpdate.into());
-                self.state.sync_state.timeout.clear_timeout();
-                self.state.sync_state.start_marker_len = Some(0);
-                // Facade (memory): was `buffer.clear()`, which kept the memory for the next update.
-                self.state.sync_state.buffer = Vec::new();
-            },
+        // BSUs in the held bytes were already found by the sync scanner.
+        for block in buffer.blocks.iter().take_while(|block| !block.is_empty()) {
+            self.parser.advance(&mut performer, block);
         }
+        self.parser.advance(&mut performer, visible);
+    }
+
+    fn close_sync<H: Handler>(&mut self, handler: &mut H) {
+        handler.unset_private_mode(NamedPrivateMode::SyncUpdate.into());
+        self.state.sync_state.timeout.clear_timeout();
+        self.state.sync_state.start_marker_len = Some(0);
     }
 
     /// Number of bytes in the synchronization buffer.
     #[inline]
     pub fn sync_bytes_count(&self) -> usize {
-        self.state.sync_state.buffer.len()
+        self.state.sync_state.buffer.len
     }
 
     /// Process a new byte during a synchronized update.
@@ -394,57 +416,64 @@ impl<T: Timeout> Processor<T> {
     where
         H: Handler,
     {
-        // Advance sync parser or stop sync if we'd exceed the maximum buffer size.
-        if self.state.sync_state.buffer.len() + bytes.len() >= SYNC_BUFFER_SIZE - 1 {
-            // Terminate the synchronized update.
-            self.stop_sync_internal(handler, None);
-
-            // Just parse the bytes normally.
+        if self.sync_bytes_count() + bytes.len() >= SYNC_BUFFER_SIZE - 1 {
+            self.stop_sync(handler);
             let mut performer = Performer::new(&mut self.state, handler);
-            self.parser.advance_until_terminated(&mut performer, bytes)
+            return self.parser.advance_until_terminated(&mut performer, bytes);
+        }
+        let sync = &mut self.state.sync_state;
+        let mut tail = [0; SYNC_ESCAPE_LEN - 1];
+        let tail = sync.buffer.tail(&mut tail);
+        if let Some(end) = find_sync_end(&mut sync.timeout, tail, bytes) {
+            // Any BSU after a newly completed ESU starts inside this read.
+            let (visible, hidden) = bytes.split_at(end.next_start.unwrap_or(bytes.len()));
+            self.replay_sync(handler, visible);
+            if hidden.is_empty() {
+                self.close_sync(handler);
+            } else {
+                self.state.sync_state.buffer.append(hidden);
+                self.state.sync_state.start_marker_len = Some(SYNC_ESCAPE_LEN);
+            }
         } else {
-            // Facade (memory): take the 2 MiB on the first buffered byte. A single allocation
-            // keeps the peak within the limit even when growing could move the buffer.
-            let buffer = &mut self.state.sync_state.buffer;
-            if buffer.capacity() == 0 {
-                *buffer = Vec::with_capacity(SYNC_BUFFER_SIZE);
-            }
-            buffer.extend_from_slice(bytes);
-            self.advance_sync_csi(handler, bytes.len());
-            bytes.len()
+            sync.buffer.append(bytes);
+        }
+        bytes.len()
+    }
+}
+
+struct SyncEnd {
+    /// Offset in this read where the next synchronized frame begins.
+    next_start: Option<usize>,
+}
+
+/// Scans exact sync escapes, from the end of this read back to the first newly completed escape.
+fn find_sync_end<T: Timeout>(timeout: &mut T, tail: &[u8], bytes: &[u8]) -> Option<SyncEnd> {
+    let mut next_start = None;
+    let end = bytes.len().saturating_sub(SYNC_ESCAPE_LEN - 1);
+    for offset in memchr::memchr_iter(0x1B, &bytes[..end]).rev() {
+        let escape = &bytes[offset..offset + SYNC_ESCAPE_LEN];
+        if escape == BSU_CSI {
+            timeout.set_timeout(SYNC_UPDATE_TIMEOUT);
+            next_start = Some(offset);
+        } else if escape == ESU_CSI {
+            return Some(SyncEnd { next_start });
         }
     }
 
-    /// Handle BSU/ESU CSI sequences during synchronized update.
-    fn advance_sync_csi<H>(&mut self, handler: &mut H, new_bytes: usize)
-    where
-        H: Handler,
-    {
-        // Get constraints within which a new escape character might be relevant.
-        let buffer_len = self.state.sync_state.buffer.len();
-        let start_offset = (buffer_len - new_bytes).saturating_sub(SYNC_ESCAPE_LEN - 1);
-        let end_offset = buffer_len.saturating_sub(SYNC_ESCAPE_LEN - 1);
-        let search_buffer = &self.state.sync_state.buffer[start_offset..end_offset];
-
-        // Search for termination/extension escapes in the added bytes.
-        //
-        // NOTE: It is technically legal to specify multiple private modes in the same
-        // escape, but we only allow EXACTLY `\e[?2026h`/`\e[?2026l` to keep the parser
-        // more simple.
-        let mut bsu_offset = None;
-        for index in memchr::memchr_iter(0x1B, search_buffer).rev() {
-            let offset = start_offset + index;
-            let escape = &self.state.sync_state.buffer[offset..offset + SYNC_ESCAPE_LEN];
-
-            if escape == BSU_CSI {
-                self.state.sync_state.timeout.set_timeout(SYNC_UPDATE_TIMEOUT);
-                bsu_offset = Some(offset);
-            } else if escape == ESU_CSI {
-                self.stop_sync_internal(handler, bsu_offset);
-                break;
-            }
+    // An escape can start in the held tail and finish within the first seven bytes of the read.
+    let head = &bytes[..bytes.len().min(SYNC_ESCAPE_LEN - 1)];
+    let len = tail.len() + head.len();
+    let mut joined = [0; 2 * (SYNC_ESCAPE_LEN - 1)];
+    joined[..tail.len()].copy_from_slice(tail);
+    joined[tail.len()..len].copy_from_slice(head);
+    for escape in joined[..len].windows(SYNC_ESCAPE_LEN).rev() {
+        if escape == BSU_CSI {
+            timeout.set_timeout(SYNC_UPDATE_TIMEOUT);
+        } else if escape == ESU_CSI {
+            return Some(SyncEnd { next_start });
         }
     }
+    None
 }
 
 /// Helper type that implements `crate::Perform`.
@@ -2464,6 +2493,43 @@ mod tests {
         parser.advance(&mut handler, b"\x1b[?2026l");
         assert_eq!(parser.state.sync_state.timeout.is_sync, 0);
         assert_eq!(handler.attr.take(), Some(Attr::Underline));
+    }
+
+    #[test]
+    fn an_end_split_over_two_blocks_and_a_read_releases_only_its_frame() {
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, BSU_CSI.as_slice());
+        let mut first = b"\x1b[1m".to_vec();
+        first.resize(SYNC_FIRST_BLOCK - 3, b'x');
+        first.extend_from_slice(&ESU_CSI[..6]);
+        parser.advance(&mut handler, &first);
+        assert!(handler.attr.is_none());
+
+        parser.advance(&mut handler, b"6l\x1b[?2026h\x1b[4m");
+        assert_eq!(handler.attr.take(), Some(Attr::Bold));
+        assert_eq!(parser.sync_bytes_count(), b"\x1b[?2026h\x1b[4m".len());
+        assert_eq!(parser.state.sync_state.timeout.is_sync, 2);
+
+        parser.advance(&mut handler, ESU_CSI.as_slice());
+        assert_eq!(handler.attr.take(), Some(Attr::Underline));
+        assert_eq!(parser.sync_bytes_count(), 0);
+        assert_eq!(parser.state.sync_state.timeout.is_sync, 0);
+    }
+
+    #[test]
+    fn a_complete_frame_leaves_the_next_frame_hidden_within_the_same_read() {
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, b"\x1b[?2026h\x1b[1m\x1b[?2026l\x1b[?2026h\x1b[4m");
+        assert_eq!(handler.attr.take(), Some(Attr::Bold));
+        assert_eq!(parser.sync_bytes_count(), b"\x1b[?2026h\x1b[4m".len());
+        assert_eq!(parser.state.sync_state.timeout.is_sync, 2);
+
+        parser.advance(&mut handler, ESU_CSI.as_slice());
+        assert_eq!(handler.attr.take(), Some(Attr::Underline));
+        assert_eq!(parser.sync_bytes_count(), 0);
+        assert_eq!(parser.state.sync_state.timeout.is_sync, 0);
     }
 
     #[test]

@@ -169,8 +169,8 @@ which replays at most `REDRAW_SCROLLBACK_ROWS` (1,000) scrollback rows. A redraw
 - `view() -> ScreenView`.
 
 **Rules** (`rules/src/state.rs`, `rules/src/input/`): `ScreenView { rows, cols, continues, cursor,
-cursor_visible, synchronized_update }` and `VisibleCell { text, column, bold, dim, inverse,
-colored }`, to find a CLI's input box and state on screen.
+cursor_visible, synchronized_update }` and each cell's `text()`, `column`, and attributes identify
+a CLI's input box and state on screen.
 
 **Scenario tests** (`framework/tests`): a `Screen` per viewer, to check what a viewer would show.
 
@@ -182,12 +182,12 @@ limits it sets.
 - `alacritty_terminal` 0.26.0 from `framework/vendor/`, whose changes let a grid hand the rows its
   scrollback lets go of to a `HistoryKeeper` and take rows back (`vendor/README.md`).
   The Screen queries the cursor row's damage as applied by the terminal parser.
-- `vte` 0.15.0, alacritty's parser, from `framework/vendor/`. Upstream sets up the 2 MiB that a
-  synchronized update may hold back with each parser and keeps them, as a private field. Its changes,
-  marked `Facade (memory)`, allocate the 2 MiB once when an update first holds output back. The
-  buffer stays with the next update if one write ends an update and begins another. It is freed
-  when no update is open. The parser reports whether that buffer holds output after the new
-  update's opening marker. It also tracks a partial frame resumed after a tab-stop change.
+- `vte` 0.15.0, alacritty's parser, from `framework/vendor/`. Complete synchronized frames are
+  parsed from the incoming bytes. An open frame holds what it needs across reads in fixed-capacity
+  blocks starting at 4 KiB, with 2 MiB total capacity. It releases those blocks when the frame ends,
+  before a subsequent frame can allocate its own. The parser reports whether the current frame
+  holds output beyond its opening marker and tracks a partial frame resumed after a tab-stop change.
+- `arrayvec`, for single UTF-8 characters stored inside cells.
 - `base64`, for the words in status reports.
 - No Facade crate.
 

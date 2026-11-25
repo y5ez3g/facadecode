@@ -135,6 +135,32 @@ fn expect_peak_within_limit(from: isize) {
     assert!(peak <= HELD_BACK as isize, "{peak} bytes at peak");
 }
 
+#[test]
+fn an_update_in_one_read_does_not_take_a_sync_buffer() {
+    let mut parser: Processor = Processor::new();
+    let from = measure_peak();
+    parser.advance(&mut NoopHandler, b"\x1b[?2026h\x1b[Hone frame\x1b[?2026l");
+    assert!(parser.sync_timeout().sync_timeout().is_none());
+    assert_eq!(PEAK.get() - from, 0, "complete frame heap bytes");
+}
+
+#[test]
+fn a_small_update_split_across_reads_takes_only_the_first_block() {
+    let mut parser: Processor = Processor::new();
+    let from = measure_peak();
+    parser.advance(&mut NoopHandler, b"\x1b[?2026h");
+    parser.advance(&mut NoopHandler, &[b'x'; 3000]);
+    assert_eq!(parser.sync_bytes_count(), 3000);
+    parser.advance(&mut NoopHandler, b"\x1b[?2026l");
+    assert!(parser.sync_timeout().sync_timeout().is_none());
+    assert!(
+        PEAK.get() - from <= 4096,
+        "{} bytes at peak",
+        PEAK.get() - from
+    );
+    assert_eq!(ALLOCATED.get(), from, "after the update");
+}
+
 /// Feeds uneven writes, as a CLI would. A buffer that doubles without a cap outgrows the parser's
 /// limit before the update reaches it.
 fn advance_in_uneven_chunks(parser: &mut Processor, mut output: &[u8]) {
