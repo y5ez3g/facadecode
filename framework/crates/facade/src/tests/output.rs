@@ -209,7 +209,7 @@ fn the_list_is_one_row_per_agent_with_a_copyable_ref() {
         {
             "reference": { "agent_id": "a5", "machine_id": "11111111-1111-4111-8111-111111111111" },
             "address": "a5@laptop", "name": "Visor", "type": "guest", "state": "online",
-            "cli": "cursor", "folder": "/work/site", "started_at": before(60),
+            "cli": "agent", "folder": "/work/site", "started_at": before(60),
         },
         {
             "reference": { "agent_id": "a3", "machine_id": "22222222-2222-4222-8222-222222222222" },
@@ -227,7 +227,7 @@ fn the_list_is_one_row_per_agent_with_a_copyable_ref() {
     assert_eq!(
         trimmed(&list_text(&rows, now())),
         "NAME    REF         STATE             CLI      TYPE      WORKING DIRECTORY   STARTED   SESSION\n\
-         Visor   a5@laptop   Online            cursor   Guest     -                   1m ago    -\n\
+         Visor   a5@laptop   Online            agent    Guest     -                   1m ago    -\n\
          Pixel   a3@devbox   Working           claude   Managed   /work/site          2m ago    A session with forty visible characters…\n\
          Ada     a4@devbox   Waiting for you   codex    Managed   /work/site          5m ago    -"
     );
@@ -349,14 +349,14 @@ fn inspect_describes_custom_programs_guests_and_ended_agents() {
 
     let guest = shown(
         json!({
-            "type": "guest", "cli": "cursor", "state": "online",
+            "type": "guest", "cli": "agent", "state": "online",
             "pid": null, "size": null,
         }),
         None,
         None,
     );
     assert_eq!(field(&guest, "Type").as_deref(), Some("Guest"));
-    assert_eq!(field(&guest, "CLI").as_deref(), Some("cursor"));
+    assert_eq!(field(&guest, "CLI").as_deref(), Some("agent"));
     for label in [
         "Started by",
         "PID",

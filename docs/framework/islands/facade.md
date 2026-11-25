@@ -118,51 +118,72 @@ resume, or a reconnect, can read the final snapshot of the exact run. Each recon
 stable identity and begins with a fresh redraw. Each watch requests the visible screen and up to
 `REDRAW_SCROLLBACK_ROWS` preceding rows.
 
+After connecting to the local daemon for a foreground start or resume, Shell enters raw mode and asks the terminal app
+for its default foreground, background and cursor colors with OSC 10, 11 and 12, and for the ANSI palette with one
+OSC 4 query per color. It waits for the replies up to 100 ms. The launch passes the colors that arrived as display
+context, and the agent's screen answers the CLI's color queries with them. A color without a readable reply in that
+time stays absent. Detached launches and ordinary Attach ask nothing.
+
+Every reply to those queries belongs to Shell, including one with a value it cannot use. `attach/palette.rs` takes
+complete replies out of the input and hands Attach the same console reader, the remaining input in order, the queries
+still unanswered and any unfinished reply. Attach takes late replies out the same way and forwards the rest in order,
+including a held prefix that turns out to be other input. A read in Attach that ends in ESC or ESC ] counts as Escape
+or Alt+], so a late reply split there goes through to the CLI. Late replies leave the launch's colors as they were.
+One console mode lease keeps echo off from the first query through the launch and first watch snapshot. Shell pauses
+console reads while the daemon calls are in flight, then Attach resumes with the same reader after displaying the
+snapshot. Shell restores the original console modes before reporting a failure or an ended run without a view.
+Replies arriving after that handback belong to the host shell.
+
 The console sends key and resize notifications through the current connection. It drops queued input when a
 connection ends and counts keys typed while disconnected. It leaves keys already handed to that connection there.
 During a planned takeover, any write already in progress completes before Attach acknowledges `closing`. The
-reconnect shows the current screen before it resumes sending input. It shows a bottom-line notice on stderr when
-any bytes could not be sent. The same policy applies to a local or remote terminal. The Orchestrator chooses the
-smallest active viewer size in each dimension. Shell seeds a local `Screen` and its scrollback from each watch's
-snapshot. It feeds new output into that Screen and reflows its history at the confirmed shared size on redraws.
-An empty initial main viewport leaves the shell page visible, even if the snapshot contained history. Attach
-forwards title changes and native activity while waiting for visible content.
-The first frame with main-screen content or the first alternate frame enters the host's alternate screen.
-Attach keeps that view through screen switches, resizes and
-reconnects. Full frames use `Screen::redraw_for_attach` and carry the known native title. During ordinary output,
-an equally sized console accepts native bytes and a larger console rewrites the shared rows in place with
-`Screen::redraw_in_viewport_update`. A new connection, geometry change or output containing a screen switch or
-terminal reset takes the full draw path. An undersized console reports the current layout size in the alternate
-screen. Screen carries the CLI's native activity bytes through derived draws.
+reconnect shows the current screen before it resumes sending input. When bytes could not be sent, Attach reports
+them immediately on redirected stderr or as a bottom-line notice in the host alternate screen. When stderr is
+a terminal and the host shows its primary screen, Attach keeps the counts for a later alternate-screen
+reconnect notice or reports them in the final warning at handback. The same policy applies to a local or remote
+terminal. The Orchestrator chooses the smallest active viewer size in each dimension. Shell seeds a local
+`Screen` and its scrollback from each watch's snapshot. It feeds new output into that Screen and reflows its
+history at the confirmed shared size on redraws.
+Attach follows the guest's primary and alternate screens, including on a first attachment to an agent started
+with `-d`. An empty initial primary view leaves the shell page visible. When Attach needs to report that the
+view is undersized, it uses the host alternate screen to protect that page. Title and activity can reach the host
+while Attach waits.
+On the first fitting primary presentation, Attach scrolls the previous shell page into native history
+and seeds bounded guest history once. A larger host uses the same styled history renderer for this first
+seed and for later appends. The terminal app displays and scrolls that primary history. Attach filters
+the guest's erase-saved-lines command to preserve host history.
+
+A fitting alternate frame uses the host alternate screen. During ordinary primary updates, an equally
+sized console accepts native bytes. A larger console appends newly retained styled history to native
+scrollback and repaints the shared rows with `Screen::redraw_in_viewport_update`. Attach advances its
+history position after the terminal write and flush succeed. The same local history position survives
+host-only resizing and can be used when a hidden or alternate view returns to primary. A replacement
+watch, an authoritative replacement frame or a change to the shared grid reanchors the local position
+without replaying the history already in the host. Screen carries the CLI's native activity bytes through
+derived draws.
 
 Attach keeps the host terminal's title until the CLI sets its own. When the attachment ends, Attach clears
 the title only if it showed a CLI title. It always uses the terminal's title stack, where supported, to
 restore the host's previous title.
 
-When Attach shows the CLI's main grid and mouse reporting is off, it requests SGR button, drag and wheel reports
-and disables alternate-scroll arrows. The wheel moves three rows per tick. Shell holds the exact viewport that it
-painted, so a drag selects the text that is still visible even as history ages out. Ctrl+C or a right press copies
-a completed selection to the host terminal's clipboard through OSC 52. Attach accepts legacy ETX, Kitty
-Ctrl+C presses and the ordinary Win32 Ctrl+C key record. When Attach copies on a Kitty press, it consumes
-that key's repeats and release. A Control-only repeat copies again while the selection is visible. A click
-clears the selection, and Shift still lets terminals with a native selection override handle the gesture.
+During `attach <AGENT>` and foreground start and resume, Shell honors CLI mouse tracking while the agent's grid
+is visible and fits. Live output and redraws carry the supported tracking and encoding modes. Shell forwards raw
+terminal reports, including button reports, and uses Screen to encode Windows console wheel records for the active
+CLI mode. Shell releases reporting when the grid is hidden, undersized or disconnected, and when the attachment ends.
 
-The live Screen continues to receive output while browsing or selecting. The host keeps receiving the CLI's input
-mode changes, title and activity. Wheel steps start from the browsed row while it remains in history, or from the
-oldest retained row after it falls out. Scrolling clears the selection. Typing, scrolling to the bottom, clearing
-history, a full redraw or a change in mouse ownership brings back the live view.
+When the CLI leaves tracking off, the terminal app handles selection, copy, right-click actions and the wheel.
+The terminal app's alternate-scroll mode 1007 stays as it was through restoration. A terminal app with alternate
+scroll on can turn the wheel into Up and Down in its alternate screen. Shell forwards those keys and Ctrl+C to the CLI.
+Windows uses deferred wrapping during Attach so cursor moves after a full row follow the same geometry as the
+agent's screen.
 
-Base captures native Windows wheel events for local browsing and CLI mouse tracking, and reports native pointer
-actions for local selection. When the CLI tracks mouse input, Attach forwards its raw mouse reports and Screen
-encodes native wheels in the CLI's mouse format.
-An untracked CLI alternate grid uses the host's existing wheel behavior. Windows uses deferred wrapping during
-Attach so cursor moves after a full row follow the same geometry as the agent's screen.
-
-At the end of an attachment, Attach leaves the alternate screen if it entered it, returning to the shell page,
-cursor and scrollback. It restores the terminal modes and prints the receipt and any unsent-input warning after
-the opening line. A normal exit returns the status in the daemon's final event or exact ended snapshot. The daemon
-lets an active dedicated watcher receive the final output and exit in order, then closes that connection within its
-post-exit grace period. A removal or lost connection uses the corresponding Shell diagnostic.
+At the end of an attachment, Attach leaves the alternate screen and restores the terminal modes. If it presented
+primary output, it prints the receipt and any unsent-input warning below the guest view. The preceding shell
+page is in the terminal's history. If it presented only alternate output, it returns to the original shell
+page and prints the receipt there. A normal exit returns the status in the daemon's final event or exact ended
+snapshot. The daemon lets an active dedicated watcher receive the final output and exit in order, then closes
+that connection within its post-exit grace period. A removal or lost connection uses the corresponding Shell
+diagnostic.
 
 ### hooks
 

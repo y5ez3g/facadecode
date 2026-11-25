@@ -39,10 +39,12 @@ passed to that CLI unchanged. Use that CLI's own flags for model, reasoning,
 and prompts."#,
     usage: r#"Usage: facade start [OPTIONS] <CLI> [CLI_ARGS]..."#,
     examples: r#"  facade start codex
+  facade start agent
+  facade start kiro-cli
   facade start -d -n Nova codex --model gpt-6.2-sol
   facade start --machine devbox --workdir /work/app -d codex"#,
     details: r#"Arguments
-  <CLI>          Configured coding CLI (e.g. claude, codex)
+  <CLI>          Built-in CLI command or configured name (e.g. claude, codex)
   [CLI_ARGS]...  Arguments passed to the CLI unchanged
 
 Options

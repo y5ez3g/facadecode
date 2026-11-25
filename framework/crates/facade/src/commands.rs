@@ -24,7 +24,9 @@ use facade_base::model::terminal::{DEFAULT_TERMINAL_SIZE, display_line, plain};
 use facade_base::time::parse_iso_time;
 
 use crate::errors::{self, AgentCommand, Problem};
-use crate::{ExitText, Opening, Shown, StartOptions, agent_address, roster_table, single_line};
+use crate::{
+    ExitText, LaunchConsole, Opening, Shown, StartOptions, agent_address, roster_table, single_line,
+};
 
 const ROSTER_COLUMNS: [&str; 8] = [
     "NAME",
@@ -40,7 +42,7 @@ const ROSTER_COLUMNS: [&str; 8] = [
 pub(crate) fn start(
     client: &mut DaemonClient,
     options: StartOptions,
-    terminal: Option<(u16, u16)>,
+    terminal: Option<&LaunchConsole>,
 ) -> anyhow::Result<Option<Shown>> {
     let StartOptions {
         name,
@@ -54,7 +56,7 @@ pub(crate) fn start(
         return Err(Problem::MissingCli { available }.into());
     };
 
-    let (cols, rows) = terminal.unwrap_or(DEFAULT_TERMINAL_SIZE);
+    let (cols, rows) = terminal.map_or(DEFAULT_TERMINAL_SIZE, |console| console.size);
     let folder_is_default = workdir.is_none();
     let selected = machine.clone();
     let (machine, folder) = start_folder(client, machine, workdir).map_err(|error| {
@@ -67,7 +69,7 @@ pub(crate) fn start(
         folder: Some(folder),
         folder_is_default,
         scope: Some(single_machine_scope(machine)),
-        env: Some(environment()),
+        env: Some(terminal_environment(terminal)),
         size: Size { cols, rows },
         prompt: None,
         call_id: None,
@@ -173,10 +175,10 @@ fn selects_local_machine(client: &mut DaemonClient, selector: &str) -> anyhow::R
 pub(crate) fn resume(
     client: &mut DaemonClient,
     reference: String,
-    terminal: Option<(u16, u16)>,
+    terminal: Option<&LaunchConsole>,
 ) -> anyhow::Result<Option<Shown>> {
-    let (cols, rows) = terminal.unwrap_or(DEFAULT_TERMINAL_SIZE);
-    let mut env = environment();
+    let (cols, rows) = terminal.map_or(DEFAULT_TERMINAL_SIZE, |console| console.size);
+    let mut env = terminal_environment(terminal);
     env.insert("PWD".into(), current_dir()?);
     let resumed = client
         .call::<AgentResume>(ResumeArgs {
@@ -703,14 +705,23 @@ fn made_request_id() -> String {
     format!("facade-{}-{}-1", std::process::id(), since_1970.as_millis())
 }
 
+fn terminal_environment(terminal: Option<&LaunchConsole>) -> BTreeMap<String, String> {
+    let mut env = environment();
+    if let Some(console) = terminal {
+        facade_base::start::carry_terminal_colors(&mut env, &console.probe.colors);
+    }
+    env
+}
+
 /// Pass the shell's environment to the daemon for local launches.
 fn environment() -> BTreeMap<String, String> {
-    let (variables, left_out) = crate::launch_environment();
+    let (mut variables, left_out) = crate::launch_environment();
+    facade_rules::restore_config_environment(&mut variables);
     if !left_out.is_empty() {
-        eprintln!(
+        crate::attach::write_console_warning(format_args!(
             "warning: omitted non-UTF-8 environment variables: {}",
             left_out.join(", ")
-        );
+        ));
     }
     variables
 }

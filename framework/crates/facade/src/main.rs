@@ -349,6 +349,11 @@ fn local_machine_name() -> String {
     })
 }
 
+struct LaunchConsole {
+    size: (u16, u16),
+    probe: attach::Probe,
+}
+
 /// Foreground commands need a console on both ends of the attachment.
 fn require_console(command: &str, tip: &str) -> anyhow::Result<()> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
@@ -372,20 +377,26 @@ fn read_screen_tip(agent: &str) -> String {
     }
 }
 
-fn launch_console(detach: bool, command: &str, tip: &str) -> anyhow::Result<Option<(u16, u16)>> {
+fn launch_console(detach: bool) -> anyhow::Result<Option<LaunchConsole>> {
     if detach {
         return Ok(None);
     }
-    require_console(command, tip)?;
-    Ok(Some(
-        attach::console_size().unwrap_or(DEFAULT_TERMINAL_SIZE),
-    ))
+    let probe = attach::Probe::read()?;
+    let size = attach::console_size().unwrap_or(DEFAULT_TERMINAL_SIZE);
+    Ok(Some(LaunchConsole { size, probe }))
 }
 
 /// Shows the agent a start or resume returned, until the person detaches or it ends.
-fn show(client: DaemonClient, shown: Option<Shown>) -> anyhow::Result<i32> {
+fn show(
+    client: DaemonClient,
+    shown: Option<Shown>,
+    terminal: Option<LaunchConsole>,
+) -> anyhow::Result<i32> {
     match shown {
-        Some(Shown { target, opening }) => attach::attach(client, target, opening, &reconnect),
+        Some(Shown { target, opening }) => {
+            let probe = terminal.map(|console| console.probe).unwrap_or_default();
+            attach::attach(client, target, opening, probe, &reconnect)
+        }
         None => Ok(0),
     }
 }
@@ -457,28 +468,32 @@ fn run(command: Command) -> anyhow::Result<i32> {
             Ok(missing_cli(options))
         }
         Command::Start { options, detach } => {
-            let terminal = launch_console(
-                detach,
-                "start",
-                "Pass '-d' to start the agent in the background.\nExample: facade start -d codex",
-            )?;
+            if !detach {
+                require_console(
+                    "start",
+                    "Pass '-d' to start the agent in the background.\nExample: facade start -d codex",
+                )?;
+            }
             let mut client = connect_or_start()?;
-            let shown = commands::start(&mut client, options, terminal)?;
-            show(client, shown)
+            let terminal = launch_console(detach)?;
+            let shown = commands::start(&mut client, options, terminal.as_ref())?;
+            show(client, shown, terminal)
         }
         Command::Resume {
             reference: Some(reference),
             detach,
             ..
         } => {
-            let terminal = launch_console(
-                detach,
-                "resume",
-                "Pass '-d' to resume the agent in the background.\nExample: facade resume -d a5@laptop",
-            )?;
+            if !detach {
+                require_console(
+                    "resume",
+                    "Pass '-d' to resume the agent in the background.\nExample: facade resume -d a5@laptop",
+                )?;
+            }
             let mut client = connect_or_start()?;
-            let shown = commands::resume(&mut client, reference, terminal)?;
-            show(client, shown)
+            let terminal = launch_console(detach)?;
+            let shown = commands::resume(&mut client, reference, terminal.as_ref())?;
+            show(client, shown, terminal)
         }
         Command::Resume { local, machine, .. } => {
             commands::resume_list(&mut connect_or_start()?, scope(local, machine)).map(done)
@@ -486,7 +501,13 @@ fn run(command: Command) -> anyhow::Result<i32> {
         Command::Attach(Target { agent }) => {
             require_console("attach", &read_screen_tip(&agent))?;
             let target = AgentTarget::Selector(agent);
-            attach::attach(connect_or_start()?, target, Opening::Attached, &reconnect)
+            attach::attach(
+                connect_or_start()?,
+                target,
+                Opening::Attached,
+                attach::Probe::default(),
+                &reconnect,
+            )
         }
         Command::List { local, machine } => {
             commands::list(&mut connect_or_start()?, scope(local, machine)).map(done)
