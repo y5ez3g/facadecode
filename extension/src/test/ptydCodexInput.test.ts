@@ -131,6 +131,30 @@ suite('Codex passive transcript footers keep ordinary input separate from active
 		}
 	});
 
+	test('a wrapped Codex 0.171.0 session title allows one paste and one Enter when shortcuts hide during typing (CLIS-2.1)', async () => {
+		const screen = screenOf(capture('new-activity-empty'));
+		const footer = screen.rows.length - 1;
+		const wrapped = (input: InputScreen, hint: string) => {
+			const withHint = changedRow(input, footer, hint);
+			const continuation = changedRow(input, footer, '  continuation of the long session title').rows[footer];
+			return { ...withHint, rows: [...withHint.rows.slice(0, footer), continuation, withHint.rows[footer]] };
+		};
+		const shortcuts = '  ← for agents · ? for shortcuts';
+		const empty = wrapped(screen, shortcuts);
+		const message = 'A message to a session with a long title.';
+		const draft = changedRow(wrapped(screen, ''), screen.cursor.y, `› ${message}`);
+		const pasted = { ...draft, cursor: { x: message.length + 2, y: screen.cursor.y } };
+		const { input, writes } = delivery(empty, pasted);
+
+		assert.deepStrictEqual((await input.submit('fixture', message)).effects, { outcome: 'confirmed', text_written: 'full', enter_written: true });
+		assert.deepStrictEqual(writes, [{ text: message, enter: false }, { keys: ['Enter'] }]);
+		assert.strictEqual(await delivery(pasted).input.inspect('fixture'), 'draft');
+		assert.strictEqual(read(wrapped(screen, `${shortcuts}    ⚠ 3 warnings · f2 to view`)).state, 'usable');
+		assert.strictEqual(read(wrapped(screen, '  Unrecognized footer')).state, 'unknown');
+		assert.strictEqual(read(changedRow(empty, footer - 2, '  Missing blank separator')).state, 'unknown');
+		assert.strictEqual(read({ ...empty, cursor: { x: 2, y: footer } }).state, 'unknown');
+	});
+
 	test('an actual synchronized terminal drawing is unavailable until its complete frame arrives', async () => {
 		const each = capture('new-activity-empty'), screen = screenOf(each);
 		const terminal = new Terminal({ cols: each.cols, rows: each.rows.length, allowProposedApi: true });

@@ -223,8 +223,10 @@ finds Pi's own drawn cursor by its column, after wide characters too. Codex has 
 with the input or its dim placeholder, the draft going on in rows indented two spaces, blank ones among them, and its
 own earlier messages begin `› ` too, higher up: the box is the one the cursor is in. It ends at the blank row above the
 row Codex draws its model and folder on - two spaces, the model, ` · ` and the folder's path - which its reader finds by
-that shape and its place, the last row Codex draws or the one above it. The row under it, where Codex draws one, changes
-with its state and is not read - among them a status at the right end, `⚠ 1 warning · f2 to view`, when `-c` overrides
+that shape and its place, the last row Codex draws or the one above it. When a long directory or session title wraps
+the status line, its first row starts the contiguous, indented footer above a recognized shortcuts, queue or warning
+hint. The blank row still separates it from the input. The footer contributes no draft text. Codex can draw a status
+at the right end, `⚠ 1 warning · f2 to view`, when `-c` overrides
 run it outside its background server, as Facade starts it with `--no-daemon`, and in a passive transcript view
 `enter/esc latest` or, under a resting draft, `esc latest`, led by `New activity · `, by `Earlier messages available.  `
 while older history is not loaded, or by both. Its transcript browsing, search and selection keep the box drawn while

@@ -301,12 +301,15 @@ const CODEX_MENU: Menu = { selected: /^› \d+\. \S/, next: /^ {2}\d+\. \S/ };
  * draws or the one above it, a row of hints or a status under it, which is not read (CLIS-2.1).
  */
 const CODEX_MODEL = /^ {2}\S.*? · (?:[~/]|[A-Za-z]:\\)/;
+/** The same wrapped-footer tail as the Codex Framework rule, including right-aligned status. */
+const CODEX_WRAPPED_FOOTER_HINT = /^(?: {2}(?:(?:← for agents · )?\? for shortcuts(?: {2,}\S.*)?|tab to queue message)| {20,}⚠ (?:1 warning|(?:[2-9]|[1-9][0-9]+) warnings) · f2 to view)$/;
 
 /**
  * Codex's input, which has no frame: a prompt row `› ` with the input or its dim placeholder, the draft going on in rows indented
  * two spaces, blank ones among them. It ends at the blank row above the row of its model and folder, found by that row's shape and
- * place - nothing under that row is read, whatever its hints, status or passive transcript footer say. Its own earlier messages
- * begin `› ` too, higher up: the input is the one the cursor is in. Its slash menu is drawn above the input. Its transcript
+ * place. When it wraps above a recognized hint, the model row starts the contiguous indented footer. Nothing below the model row
+ * is part of the draft. Earlier messages begin `› ` too, higher up: the input is the one the cursor is in. Its slash menu is drawn
+ * above the input. Its transcript
  * browsing, search and selection keep the input drawn but put the cursor under it, and its trust question draws a menu in its
  * place (CLIS-2.1).
  */
@@ -316,8 +319,21 @@ function readCodexPrompt(screen: InputScreen): InputReading {
 	while (last >= 0 && isBlank(rows[last])) {
 		last--;
 	}
-	const model = [last, last - 1].find(y => y >= 2 && CODEX_MODEL.test(textOf(rows[y])));
-	if (model === undefined || !isBlank(rows[model - 1])) {
+	const modelAt = (y: number) => y >= 2 && isBlank(rows[y - 1]) && CODEX_MODEL.test(textOf(rows[y]));
+	let model = [last, last - 1].find(modelAt);
+	if (model === undefined && last >= 3 && CODEX_WRAPPED_FOOTER_HINT.test(textOf(rows[last]).trimEnd())) {
+		let first = last - 1;
+		while (first >= 2 && isContinuation(rows[first]) && !isBlank(rows[first])) {
+			if (isBlank(rows[first - 1])) {
+				if (modelAt(first)) {
+					model = first;
+				}
+				break;
+			}
+			first--;
+		}
+	}
+	if (model === undefined) {
 		return noInput(rows, CODEX_MENU, 'no blank row above a model line at its bottom');
 	}
 	const end = model - 1;
