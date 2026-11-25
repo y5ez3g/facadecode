@@ -578,15 +578,15 @@ python3 -B ci/merge_review.py --repo OWNER/REPO --pr NUMBER --head "$head" --bas
 ```
 
 Review requires the current `main` base and GitHub test merge, the four first-attempt
-workflows, all 24 jobs on their expected runner labels, and successful execution and
+workflows, all 18 jobs on their expected runner labels, and successful execution and
 evidence steps. It checks the registered workflow and matching GitHub Actions check for
 each job. The expanded review preserves each base catalog obligation and exact existing binding.
 It requires a binding for every new obligation and sends intentional catalog changes for separate
 review. It rehashes the original shadow and native archives, reconciles exact shadow case proofs,
-six typed runtime case records and two release fixture case records, and verifies all six unsigned
-native package sets and their paired VSIX bytes. The Linux x64 legacy editor log must show the
-same process on immediate reopen and the same session in a new process after the production
-close-last grace. Each of the 12 native editor logs must meet the reviewed 61-pass baseline and
+typed runtime case records and two release fixture case records, and verifies all six unsigned native
+package sets and their paired VSIX bytes. The Linux x64 cutover evidence binds the published 0.1.5 pair
+and the candidate pair to the six [packaged upgrade journeys](extension/engineering/VERIFICATION.md#52-verify-upgrade-and-compatibility-against-the-previous-build).
+Each of the six native editor logs must meet the reviewed 61-pass baseline and
 record completed profile cleanup. The verifier checks the current
 PR, base, workflows and local checkout again before reporting success. Drafts can be reviewed.
 
@@ -605,7 +605,7 @@ It retains the first failed attempt and its failing step links even after a reru
 result replays both main shadow artifacts. The protected health lock and merge authority
 remain separate deployment steps.
 
-The Linux x64 legacy implementation PR job archives the complete release-script suite with its exact
+The Linux x64 Extension PR job archives the complete release-script suite with its exact
 test names and the producing source and attempt. Its disposable GitHub and website
 transports prove corrupt and stale candidates cannot switch stable, and an interrupted
 promotion can finish with the same verified pointer and manifest.
@@ -835,9 +835,8 @@ planned case on the same source, plan, platform and run attempt. The editor test
 serving implementation from the live host. The status describes the shadow pilot only. The existing product
 jobs and merge and release rules continue to own their checks.
 
-VS Code `1.105.1` lacks the built-in Git extension's `Repository.createWorktree` method. The
-legacy implementation's New Worktree success case needs an editor with that capability. The minimum-editor
-pilot exercises the legacy supervisor using a real linked checkout created by the fixture.
+VS Code `1.105.1` lacks the built-in Git extension's `Repository.createWorktree` method.
+The remote worktree pilot exercises Framework's worktree operation through the editor and the Shell.
 
 Run from the repository root on Linux x64. Install the pinned Rust toolchain and musl target, the
 Node version from `extension/.nvmrc`, `musl-gcc`, `xvfb-run` and VS Code's runtime libraries.

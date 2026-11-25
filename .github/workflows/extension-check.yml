@@ -290,7 +290,7 @@ jobs:
           Path('build/cutover/packages.json').write_text(json.dumps(pairs, indent=2) + '\n')
           PY
           export FACADE_IT_RELEASED="$prior" FACADE_IT_CURRENT="$PWD/build/vsix"
-          for variant in exited live uncertain two-windows prior-owner; do
+          for variant in exited live uncertain two-windows prior-owner separate-workspaces; do
             FACADE_IT_ONLY="cutover-$variant" FACADE_IT_EXPECT_DRIVER="cutover-$variant" \
               python -B ../ci/run_native_extension.py xvfb-run -a node build/out/test/integration/run.js \
               2>&1 | tee "build/cutover/$variant.log"

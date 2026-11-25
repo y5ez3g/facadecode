@@ -142,10 +142,16 @@ async function newCard(): Promise<PanelState['cards'][number]> {
 	});
 }
 
-/** Stop and clear the fixture from the workspace once its lifecycle has been checked. */
-async function stopAndHide(runId: string): Promise<void> {
+/** Clear the stopped fixture after checking its lifecycle. */
+async function removeStoppedCard(runId: string): Promise<void> {
+	await vscode.commands.executeCommand('facade.deleteAgent', { run_id: runId });
+	await until('the stopped card to be removed', async () =>
+		(await state()).cards.every(card => card.runId !== runId) ? true : undefined);
+}
+
+async function stopAndRemove(runId: string): Promise<void> {
 	await vscode.commands.executeCommand('facade.stopAgent', { run_id: runId });
-	if (FRAMEWORK) { await vscode.commands.executeCommand('facade.hideAgent', { run_id: runId }); }
+	if (FRAMEWORK) { await removeStoppedCard(runId); }
 }
 
 function alive(pid: number): boolean {
@@ -168,7 +174,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 	teardown(async () => {
 		if (firstRun !== undefined) {
 			try {
-				await stopAndHide(firstRun);
+				await stopAndRemove(firstRun);
 			} finally {
 				firstRun = undefined;
 			}
@@ -296,7 +302,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		}
 		if (FRAMEWORK) {
 			await until('Stop to retain the ended card', async () => (await state()).cards.find(each => each.runId === card.runId && each.orchestrator?.running === false));
-			await vscode.commands.executeCommand('facade.hideAgent', { run_id: card.runId });
+			await removeStoppedCard(card.runId);
 		}
 		firstRun = undefined;
 	});
@@ -319,7 +325,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			const cards = (await state()).cards;
 			assert.ok(alive(kept) && cards.some(card => card.runId === survivor.runId));
 		} finally {
-			await stopAndHide(survivor.runId);
+			await stopAndRemove(survivor.runId);
 		}
 	});
 
@@ -363,7 +369,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			assert.strictEqual(fs.existsSync(`${RECORD}.received.${alias}`), false, 'the draft was never submitted');
 		} finally {
 			watching?.dispose();
-			await stopAndHide(card.runId);
+			await stopAndRemove(card.runId);
 		}
 	});
 
@@ -416,7 +422,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			shell.dispose();
 		} finally {
 			for (const run of cards) {
-				await stopAndHide(run).then(undefined, () => undefined);
+				await stopAndRemove(run).then(undefined, () => undefined);
 			}
 			await vscode.commands.executeCommand('workbench.action.closeAllGroups');
 		}
@@ -533,7 +539,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		} finally {
 			await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
 			await history.then(undefined, () => undefined);
-			await Promise.all((await started()).map(card => stopAndHide(card.runId)));
+			await Promise.all((await started()).map(card => stopAndRemove(card.runId)));
 			await until('the resumed cards to close', async () => (await started()).length === 0 || undefined);
 		}
 	});
@@ -562,7 +568,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			await new Promise(resolve => setTimeout(resolve, 500));
 			return (await state()).filter ? await state() : undefined;
 		}, 60_000);
-		await stopAndHide(card.runId);
+		await stopAndRemove(card.runId);
 		const left = await until('the filtered empty panel', async () => { const now = await state(); return now.empty === 'noMatch' ? now : undefined; });
 		const said = await until('the page to say so', async () => {
 			const text = await vscode.commands.executeCommand<string[]>('facade.probe', { op: 'read', selector: '#empty p' });
@@ -631,7 +637,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 					retained: { run: second.runId, session: secondSession, pin: remaining[0].id },
 				}));
 			} finally {
-				await Promise.all(cards.map(card => stopAndHide(card.runId)));
+				await Promise.all(cards.map(card => stopAndRemove(card.runId)));
 			}
 		});
 	}

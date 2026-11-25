@@ -21,7 +21,7 @@ import remote_editor_evidence as remote
 
 
 NATIVE_EDITOR_MINIMUM = 61
-RELEASED_CUTOVER_CASES = ('exited', 'live', 'uncertain', 'two-windows', 'prior-owner')
+RELEASED_CUTOVER_CASES = ('exited', 'live', 'uncertain', 'two-windows', 'prior-owner', 'separate-workspaces')
 CUTOVER_TYPED_CASES = (
     'extension/p0/vsix-upgrade/upgrade-pair', 'extension/p0/vsix-upgrade/cutover-live',
     'extension/p0/vsix-upgrade/cutover-uncertain',
