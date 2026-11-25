@@ -856,7 +856,13 @@ fn start_agent_refuses_a_blank_model_or_effort() {
         without_wiring(&home, args_in(&file)),
         ["--model", "m2", "--effort", "high"]
     );
-    let before = home.agents();
+    let processes = || {
+        home.agents()
+            .into_iter()
+            .map(|agent| json!([agent["reference"], agent["pid"], agent["started_at"]]))
+            .collect::<Vec<_>>()
+    };
+    let before = processes();
     let refused = ada.call(
         "start_agent",
         json!({
@@ -882,7 +888,7 @@ fn start_agent_refuses_a_blank_model_or_effort() {
             "{outcome}"
         );
     }
-    assert_eq!(home.agents(), before, "nothing started");
+    assert_eq!(processes(), before, "nothing started");
 }
 
 /// A resume refuses an entry that is now turned off, or wrong, as a start does (CONFIGURATION-3.4).
