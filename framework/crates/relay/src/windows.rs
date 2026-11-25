@@ -28,6 +28,7 @@ use windows_sys::Win32::System::IO::{
     CancelIoEx, CreateIoCompletionPort, GetOverlappedResult, GetQueuedCompletionStatus, OVERLAPPED,
     PostQueuedCompletionStatus,
 };
+use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::Win32::System::Pipes::{GetNamedPipeServerProcessId, WaitNamedPipeW};
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CreateEventW, GetCurrentProcess, INFINITE, OpenProcess, OpenProcessToken,
@@ -36,6 +37,19 @@ use windows_sys::Win32::System::Threading::{
 
 const INPUT_KEY: usize = 1;
 const READ_BYTES: usize = 64 * 1024;
+
+/// The local daemon's monotonic clock, in nanoseconds on the same QPC time base.
+pub(crate) fn monotonic_now() -> u64 {
+    let (mut count, mut frequency) = (0, 0);
+    // SAFETY: both calls take an output pointer to an i64.
+    unsafe {
+        QueryPerformanceCounter(&raw mut count);
+        QueryPerformanceFrequency(&raw mut frequency);
+    }
+    let count = u128::try_from(count).unwrap_or(0);
+    let frequency = u128::try_from(frequency).unwrap_or(1).max(1);
+    u64::try_from(count * 1_000_000_000 / frequency).unwrap_or(u64::MAX)
+}
 
 /// No console window for the only program the relay starts.
 pub(crate) fn no_window(command: &mut Command) {
@@ -70,6 +84,18 @@ impl Events {
             .name("relay-stdin".into())
             .spawn(move || read_input(input, &reader_port))?;
         Ok((Self { port, next_key: 2 }, Input(Cursor::new(Vec::new()))))
+    }
+
+    /// Posts a marker after the stdin chunks already queued. The relay loop is the only reader
+    /// of the port. Its next wait that reaches the marker returns with neither stream ready.
+    pub(crate) fn mark_ready_input_end(&self) -> io::Result<()> {
+        // SAFETY: the port is live and the null operation carries no data to free.
+        if unsafe { PostQueuedCompletionStatus(self.port.as_raw_handle(), 0, 0, ptr::null_mut()) }
+            == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 
     /// Arms one daemon read, then waits for that read, the CLI, or the reconnect deadline.

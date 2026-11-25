@@ -18,10 +18,16 @@ use std::time::{Duration, Instant};
 use crate::windows::{Events, Input};
 #[cfg(unix)]
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+#[cfg(unix)]
+use nix::time::{ClockId, clock_gettime};
 
 use crate::daemon::{self, DaemonLink, RelayHelloParams};
-use crate::jsonrpc::{self, Message};
+use crate::jsonrpc::{self, Id, Message};
 use crate::lines::Lines;
+#[cfg(unix)]
+use crate::unix::ready_input_bytes;
+#[cfg(windows)]
+use crate::windows::monotonic_now;
 
 /// The first wait before the relay tries a daemon again, and the longest.
 const MIN_RECONNECT_DELAY: Duration = Duration::from_millis(100);
@@ -69,18 +75,16 @@ pub(crate) fn run(socket: PathBuf, hello: RelayHelloParams) -> ExitCode {
             return ExitCode::SUCCESS;
         }
         relay.connect_when_due();
-        #[cfg(unix)]
-        let (cli_ready, daemon_ready) = relay.wait();
-        #[cfg(windows)]
         let (cli_ready, daemon_ready) = match relay.wait() {
             Ok(ready) => ready,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) => {
                 log("error", &format!("cannot wait for input: {err}"));
                 return ExitCode::FAILURE;
             }
         };
         if cli_ready {
-            relay.read_cli();
+            relay.read_cli(usize::MAX);
         }
         if daemon_ready && relay.read_daemon().is_err() {
             return ExitCode::FAILURE;
@@ -94,7 +98,10 @@ enum Daemon {
     Connected { link: DaemonLink },
     /// It said `closing`: lines from the CLI wait for the next daemon, and its responses still
     /// go to the CLI until it closes.
-    Closing { link: DaemonLink },
+    Closing {
+        link: DaemonLink,
+        acknowledged: bool,
+    },
     /// Not connected: the relay tries again at `next_try`. Since it was last connected, `logged`:
     /// it logged why; `started_facade`: it ran `facade daemon --detach`.
     Disconnected {
@@ -116,16 +123,66 @@ impl Daemon {
 
     fn link(&mut self) -> Option<&mut DaemonLink> {
         match self {
-            Daemon::Connected { link } | Daemon::Closing { link } => Some(link),
+            Daemon::Connected { link } | Daemon::Closing { link, .. } => Some(link),
             Daemon::Disconnected { .. } => None,
         }
     }
 }
 
-/// A request the daemon has not responded to: its `id` as written, and its line.
+#[derive(Clone, Copy)]
+enum Replay {
+    First,
+    Planned,
+    Interrupted,
+}
+
+impl Replay {
+    fn name(self) -> &'static str {
+        match self {
+            Self::First => "first",
+            Self::Planned => "planned",
+            Self::Interrupted => "interrupted",
+        }
+    }
+}
+
+/// A request that still needs a response.
 struct Pending {
-    id: Vec<u8>,
+    id: Id,
     line: Vec<u8>,
+    first_line_ns: u64,
+    replay: Replay,
+    cancelled: bool,
+}
+
+impl Pending {
+    fn lost(&mut self, replay: Replay) {
+        if !matches!(self.replay, Replay::Interrupted) {
+            self.replay = replay;
+        }
+    }
+
+    fn write_to(&self, link: &mut DaemonLink) -> io::Result<()> {
+        if !link.request_context {
+            return link.stream.write_all(&self.line);
+        }
+        let mut frame = Vec::with_capacity(self.line.len() + 128);
+        write!(
+            frame,
+            "{{\"relay_request\":{{\"first_line_ns\":{},\"replay\":\"{}\",\"cancelled\":{}}},\"request\":",
+            self.first_line_ns,
+            self.replay.name(),
+            self.cancelled,
+        )?;
+        frame.extend_from_slice(self.line.trim_ascii());
+        frame.extend_from_slice(b"}\n");
+        link.stream.write_all(&frame)
+    }
+}
+
+enum ClientLine {
+    Request(Pending),
+    Other(Vec<u8>),
 }
 
 struct Relay {
@@ -145,7 +202,7 @@ struct Relay {
     reconnect_delay: Duration,
     pending: Vec<Pending>,
     /// Lines from the CLI that wait for a daemon to take them.
-    held: Vec<Vec<u8>>,
+    held: Vec<ClientLine>,
 }
 
 impl Relay {
@@ -158,13 +215,13 @@ impl Relay {
     /// Blocks until the CLI's input or the daemon has something, or, while no daemon is
     /// connected, until it is time to try again. Gives which of the two has something.
     #[cfg(unix)]
-    fn wait(&self) -> (bool, bool) {
+    fn wait(&self) -> io::Result<(bool, bool)> {
         let cli = self
             .input
             .as_ref()
             .map(|input| PollFd::new(input.as_fd(), PollFlags::POLLIN));
         let (daemon, timeout) = match &self.daemon {
-            Daemon::Connected { link } | Daemon::Closing { link } => (
+            Daemon::Connected { link } | Daemon::Closing { link, .. } => (
                 Some(PollFd::new(link.stream.as_fd(), PollFlags::POLLIN)),
                 PollTimeout::NONE,
             ),
@@ -176,18 +233,15 @@ impl Relay {
         };
         let (has_cli, has_daemon) = (cli.is_some(), daemon.is_some());
         let mut fds: Vec<PollFd> = cli.into_iter().chain(daemon).collect();
-        if poll(&mut fds, timeout).is_err() {
-            // Interrupted by a signal: the loop waits again.
-            return (false, false);
-        }
+        poll(&mut fds, timeout)?;
         let has_events = |fd: Option<&PollFd>| {
             fd.and_then(PollFd::revents)
                 .is_some_and(|events| !events.is_empty())
         };
-        (
+        Ok((
             has_cli && has_events(fds.first()),
             has_daemon && has_events(fds.last()),
-        )
+        ))
     }
 
     #[cfg(windows)]
@@ -253,7 +307,7 @@ impl Relay {
         self.reconnect_delay = MIN_RECONNECT_DELAY;
         self.daemon = Daemon::Connected { link };
         for line in mem::take(&mut self.held) {
-            self.handle_cli_line(line);
+            self.forward(line);
         }
     }
 
@@ -265,46 +319,137 @@ impl Relay {
             #[cfg(windows)]
             &mut self.events,
         )?;
-        for pending in &self.pending {
-            link.stream.write_all(&pending.line).map_err(|err| {
-                io::Error::other(format!(
-                    "Facade closed as it took the pending requests: {err}"
-                ))
-            })?;
+        if !self.pending.is_empty() {
+            self.take_ready_cli()?;
+        }
+        let failed =
+            self.pending.iter().enumerate().find_map(|(at, pending)| {
+                pending.write_to(&mut link).err().map(|error| (at, error))
+            });
+        if let Some((at, error)) = failed {
+            for pending in self.pending.iter_mut().take(at + 1) {
+                pending.lost(Replay::Interrupted);
+            }
+            return Err(io::Error::other(format!(
+                "Facade closed as it took the pending requests: {error}"
+            )));
         }
         Ok(link)
     }
 
-    /// Reads what the CLI wrote and passes each whole line on. A failed read counts as the end
-    /// of the input.
-    fn read_cli(&mut self) {
-        let Some(input) = &mut self.input else {
-            return;
-        };
-        if !matches!(self.cli_lines.fill(input), Ok(1..)) {
-            self.input = None;
-            return;
+    /// Applies complete cancellations already waiting in stdin before replaying any request.
+    #[cfg(unix)]
+    fn take_ready_cli(&mut self) -> io::Result<()> {
+        if let Some(input) = self.input.as_mut() {
+            let bytes = ready_input_bytes(input)?;
+            drain_ready_input(bytes, |limit| self.read_cli(limit));
         }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn take_ready_cli(&mut self) -> io::Result<()> {
+        self.events.mark_ready_input_end()?;
+        loop {
+            match self.wait() {
+                Ok((true, _)) => {
+                    self.read_cli(usize::MAX);
+                }
+                Ok((false, _)) => return Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Reads a chunk of at most `limit` bytes and passes each whole line on. Returns zero at the
+    /// end of the input, including when a read fails.
+    fn read_cli(&mut self, limit: usize) -> usize {
+        let Some(input) = &mut self.input else {
+            return 0;
+        };
+        let Ok(read @ 1..) = self.cli_lines.fill_up_to(input, limit) else {
+            self.input = None;
+            return 0;
+        };
         while let Some(line) = self.cli_lines.next_line() {
             self.handle_cli_line(line);
         }
+        read
     }
 
     /// Passes a line from the CLI on to the daemon, or holds it while no daemon takes lines.
     fn handle_cli_line(&mut self, line: Vec<u8>) {
+        let read = match jsonrpc::read(&line) {
+            Message::Request { id } => ClientLine::Request(Pending {
+                id: Id::read(id),
+                line,
+                first_line_ns: monotonic_now(),
+                replay: Replay::First,
+                cancelled: false,
+            }),
+            Message::Notification { method } => {
+                if let Some(id) = jsonrpc::cancelled_id(&line, method) {
+                    self.note_cancellation(&id);
+                }
+                ClientLine::Other(line)
+            }
+            Message::Other if line.trim_ascii().starts_with(b"[") => {
+                for id in jsonrpc::batch_cancellations(&line) {
+                    self.note_cancellation(&id);
+                }
+                ClientLine::Other(line)
+            }
+            Message::Response { .. } | Message::Other => ClientLine::Other(line),
+        };
+        self.forward(read);
+    }
+
+    fn note_cancellation(&mut self, id: &Id) {
+        let held = self.held.iter_mut().filter_map(|line| match line {
+            ClientLine::Request(request) => Some(request),
+            ClientLine::Other(_) => None,
+        });
+        if let Some(pending) = self
+            .pending
+            .iter_mut()
+            .chain(held)
+            .find(|request| &request.id == id)
+        {
+            pending.cancelled = true;
+        }
+    }
+
+    fn forward(&mut self, line: ClientLine) {
         let Daemon::Connected { link } = &mut self.daemon else {
             self.held.push(line);
             return;
         };
-        if link.stream.write_all(&line).is_err() {
-            self.held.push(line);
-            self.daemon = Daemon::ended();
-            return;
+        let written = match line {
+            ClientLine::Request(request) => {
+                let written = request.write_to(link);
+                self.pending.push(request);
+                written
+            }
+            ClientLine::Other(line) => link.stream.write_all(&line),
+        };
+        if written.is_err() {
+            self.lose_daemon();
         }
-        if let Message::Request { id } = jsonrpc::read(&line) {
-            let id = id.to_vec();
-            self.pending.push(Pending { id, line });
+    }
+
+    fn lose_daemon(&mut self) {
+        let replay = match &self.daemon {
+            Daemon::Closing {
+                link,
+                acknowledged: true,
+            } if link.request_context => Replay::Planned,
+            _ => Replay::Interrupted,
+        };
+        for pending in &mut self.pending {
+            pending.lost(replay);
         }
+        self.daemon = Daemon::ended();
     }
 
     /// Reads what the daemon sent and handles each whole line. Fails where the CLI's output
@@ -314,7 +459,7 @@ impl Relay {
             return Ok(());
         };
         if !matches!(link.lines.fill(&mut link.stream), Ok(1..)) {
-            self.daemon = Daemon::ended();
+            self.lose_daemon();
             return Ok(());
         }
         while let Some(line) = self.daemon.link().and_then(|link| link.lines.next_line()) {
@@ -325,7 +470,7 @@ impl Relay {
 
     /// Responds to `closing`, or passes a line on to the CLI, a response ending its request.
     fn handle_daemon_line(&mut self, line: &[u8]) -> io::Result<()> {
-        match jsonrpc::read(line) {
+        let answered = match jsonrpc::read(line) {
             Message::Notification {
                 method: b"\"closing\"",
             } => {
@@ -333,21 +478,119 @@ impl Relay {
                     Daemon::Connected { mut link } => {
                         // A failed write means the connection ended, which the next read finds;
                         // the relay connects again either way.
-                        let _ = link.respond_to_closing();
-                        Daemon::Closing { link }
+                        let acknowledged = link.respond_to_closing().is_ok();
+                        Daemon::Closing { link, acknowledged }
                     }
                     daemon => daemon,
                 };
                 return Ok(());
             }
             Message::Response { id, .. } => {
-                if let Some(at) = self.pending.iter().position(|pending| pending.id == id) {
-                    self.pending.remove(at);
-                }
+                let id = Id::read(id);
+                self.pending.iter().position(|pending| pending.id == id)
             }
-            Message::Request { .. } | Message::Notification { .. } | Message::Other => {}
-        }
+            Message::Request { .. } | Message::Notification { .. } | Message::Other => None,
+        };
         self.output.write_all(line)?;
-        self.output.flush()
+        self.output.flush()?;
+        if let Some(at) = answered {
+            self.pending.remove(at);
+        }
+        Ok(())
+    }
+}
+
+/// Reads the Unix stdin prefix that was queued at one instant. Later input can keep `poll`
+/// readable, but only the bytes in this prefix can precede the replay.
+#[cfg(any(unix, test))]
+fn drain_ready_input(mut remaining: usize, mut read: impl FnMut(usize) -> usize) {
+    while remaining > 0 {
+        let bytes = read(remaining);
+        if bytes == 0 {
+            break;
+        }
+        remaining -= bytes;
+    }
+}
+
+/// The local daemon's monotonic clock, in nanoseconds on the same clock.
+#[cfg(unix)]
+fn monotonic_now() -> u64 {
+    let Ok(now) = clock_gettime(ClockId::CLOCK_MONOTONIC) else {
+        return 0;
+    };
+    let seconds = u64::try_from(now.tv_sec()).unwrap_or(0);
+    let nanos = u64::try_from(now.tv_nsec()).unwrap_or(0);
+    seconds.saturating_mul(1_000_000_000).saturating_add(nanos)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::io::{self, Read};
+
+    use super::{Lines, drain_ready_input, jsonrpc};
+
+    #[test]
+    fn a_readable_unix_stdin_cannot_delay_replay_past_its_ready_prefix() -> io::Result<()> {
+        const CANCEL: &[u8] = b"[{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":1}}]\n";
+        const LATER: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n";
+
+        struct PollInput(VecDeque<u8>);
+
+        impl PollInput {
+            fn poll_readable(&self) -> bool {
+                !self.0.is_empty()
+            }
+        }
+
+        impl Read for PollInput {
+            fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+                // A short read, with another notification arriving before every subsequent poll.
+                let read = bytes.len().min(17).min(self.0.len());
+                for (byte, queued) in bytes.iter_mut().zip(self.0.drain(..read)) {
+                    *byte = queued;
+                }
+                self.0.extend(LATER);
+                Ok(read)
+            }
+        }
+
+        // The second line's opening byte is ready when hello completes. Its tail and a steady
+        // stream of notifications arrive as the relay reads.
+        let mut input = PollInput(CANCEL.iter().chain(LATER.first()).copied().collect());
+        let ready_bytes = input.0.len();
+        input.0.extend(LATER.iter().skip(1));
+        let mut lines = Lines::default();
+        let mut before_replay = Vec::new();
+        let mut attempts = 0;
+        drain_ready_input(ready_bytes, |limit| {
+            assert!(input.poll_readable());
+            attempts += 1;
+            assert!(
+                attempts <= ready_bytes,
+                "replay starved while poll stayed readable"
+            );
+            let read = lines.fill_up_to(&mut input, limit).unwrap_or(0);
+            while let Some(line) = lines.next_line() {
+                before_replay.push(line);
+            }
+            read
+        });
+
+        assert_eq!(before_replay, [CANCEL]);
+        assert!(before_replay.iter().any(|line| {
+            jsonrpc::batch_cancellations(line).any(|id| id == jsonrpc::Id::read(b"1"))
+        }));
+        assert!(input.poll_readable(), "poll remains readable at replay");
+        assert!(lines.next_line().is_none());
+        let later = loop {
+            assert!(lines.fill(&mut input)? > 0);
+            if let Some(later) = lines.next_line() {
+                break later;
+            }
+        };
+        assert_eq!(later, LATER);
+        Ok(())
     }
 }

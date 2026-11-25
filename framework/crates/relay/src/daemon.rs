@@ -61,6 +61,7 @@ pub(crate) struct DaemonLink {
     pub(crate) stream: Stream,
     /// What the daemon sent that is no whole line yet.
     pub(crate) lines: Lines,
+    pub(crate) request_context: bool,
 }
 
 impl DaemonLink {
@@ -116,7 +117,12 @@ impl DaemonLink {
                 said.trim_end()
             )));
         }
-        Ok(DaemonLink { stream, lines })
+        let request_context = jsonrpc::supports_request_context(&response);
+        Ok(DaemonLink {
+            stream,
+            lines,
+            request_context,
+        })
     }
 
     /// Responds to the daemon's `closing`.
