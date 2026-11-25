@@ -64,6 +64,12 @@ artifacts. See the [editor setup](../../extension/GUIDE.md#install-for-your-work
 A managed agent runs a CLI in a terminal the Orchestrator holds. A Guest is an external MCP client's connection and
 gets a name and inbox when it first calls a tool. From that point it can receive messages and appear in `list`.
 
+Start the built-in adapters with their native command names, including `facade start devin`,
+`facade start agent`, `facade start kiro-cli`, `facade start qoder`, `facade start omp` for Oh My Pi
+and `facade start copilot` for GitHub Copilot CLI. Kiro uses its V3 terminal.
+A Kiro session saved with a native profile retains that profile's tools when resumed. Facade's
+managed relay and session-start hook use a Facade profile.
+
 - `facade start [OPTIONS] <CLI> [CLI_ARGS]...` starts a built-in or configured CLI. Put `--name`, `--machine`,
   `--workdir`, `--worktree` and `-d` before the CLI name. Arguments after that name go to the CLI, including its own
   options for models and prompts. A foreground start opens the terminal. A background start prints the name and
@@ -87,7 +93,8 @@ gets a name and inbox when it first calls a tool. From that point it can receive
   is the first eight characters of its ID when they match no other session in the CLI histories `facade resume`
   searches in that directory, including sessions that managed agents use, and its full ID otherwise.
 - `facade status <AGENT>` shows the same Agent State as `list` while the agent runs, with the reason for
-  `Waiting for you` and `Error`. For an ended agent it shows `Ended (stopped by Facade)`, `Ended (code N)`,
+  `Waiting for you` and `Error`. Recognized CLI choices such as a Codex update or a Cursor tool approval
+  report `Waiting for you` while the CLI awaits a response. For an ended agent it shows `Ended (stopped by Facade)`, `Ended (code N)`,
   `Ended (signal <SIGNAL>)`, or `Ended` when the way it ended is unknown. Its `Session` line shows the same native
   name or preview as `list`, and `Session ID` the CLI's full session ID.
 - Resuming an `Ended` agent keeps its reference, directory and session and starts with an empty terminal.
@@ -105,25 +112,33 @@ wake it when needed.
 ## Terminals
 
 - `facade attach a3@devbox` opens a running managed agent's terminal. Ctrl+] detaches with exit code 0 and leaves
-  the agent running. A CLI exit returns its actual exit status. The attached view uses the terminal app's alternate
-  screen, as any full-screen program does. Every end returns to the shell page and scrollback from before the attach
-  and prints one receipt. While attached, the wheel browses the CLI's main-screen scrollback when mouse reporting
-  is off. Drag to select text in the live view or its scrollback and press Ctrl+C to copy it through the terminal.
-  Scrolling back down or typing returns to the live screen. A CLI that enables mouse reporting receives the
-  mouse itself. The Facade Code editor labels the terminal with the CLI's title
+  the agent running. A CLI exit returns its actual exit status. The attached view follows the CLI's primary and
+  alternate screens. A primary view adds the CLI's retained rows to the terminal app's native history and leaves
+  the next shell prompt below the guest output. The preceding shell page stays in that history. A view that used
+  only the alternate screen returns to the original shell page. Both paths print one receipt.
+  A CLI that requests mouse reporting receives the reports the terminal sends, including
+  wheel input. Otherwise the terminal app handles the mouse, selection, copy and right-click actions. In macOS
+  Terminal, select text and use Command+C to copy. Ctrl+C sent by the terminal reaches the CLI. Some terminals
+  send Up and Down for wheel input on the alternate screen. Those keys reach the CLI.
+  The Facade Code editor labels the terminal with the CLI's title
   while it is attached, and the terminal's own title returns when the attachment ends. Until the CLI sets a title, and
   for a CLI that never sets one, the terminal keeps its own title, as when the CLI runs alone. Claude Code's title
   keeps the status glyph it shows when run alone, which it leaves out once Facade takes its state reports: `◐` and `◑`
   in turn while it works, `✳` while it is idle, done, waiting for you or in error. A Claude Code agent whose turn
   ended while background work still runs is `Idle`, as a Codex agent is.
+- Before a foreground `start` or `resume`, Facade gives the terminal app up to 100 ms to report its default
+  foreground, background and cursor colors and ANSI colors 0–15. The agent's screen uses replies received in that
+  window to answer the CLI's color queries from its first output. The CLI chooses its own theme fallback for any
+  color it cannot query.
 - `facade screen [-n <lines>] <agent>` reads the last lines of the screen and scrollback as text. It also reads the
   last screen of an ended agent.
 - `facade type <agent> "hello" -k Enter "again" -k Enter` pastes text and presses keys in the given order.
   Quote each text argument that contains spaces. Facade queues the sequence as one input operation.
   `facade type --help` lists the key names.
 - Attach viewers share the smallest open terminal width and height. A larger Shell displays the shared grid in its
-  top-left corner and updates rows in place. The shared grid changes as viewers resize or leave. VS Code can provide
-  terminal colors.
+  top-left corner and updates rows in place. The shared grid changes as viewers resize or leave.
+  Foreground Shell starts and resumes read the terminal's reported default colors before launching the CLI.
+  VS Code can supply colors as its terminal resizes.
 - After reconnecting, Attach redraws the current screen. It reports discarded input in bytes when any was lost.
 
 ## Messages and tools
