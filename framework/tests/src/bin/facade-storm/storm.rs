@@ -341,7 +341,7 @@ pub struct Field {
     seq: AtomicUsize,
     found: Mutex<Vec<Violation>>,
     people: Mutex<HashMap<String, Did>>,
-    draws: Mutex<HashMap<String, u64>>,
+    draws: Mutex<HashMap<String, (u64, u64)>>,
     strangers: Mutex<HashMap<String, usize>>,
     /// Agents the storm stopped, or whose CLI it ended, and when.
     ended: Mutex<HashMap<String, u64>>,
@@ -395,9 +395,17 @@ impl Field {
     }
 
     /// Takes `agent` into the judgement.
-    pub fn watch(&self, agent: &Agent, draw_ms: u64) {
+    pub fn watch(&self, agent: &Agent, env: &[(&str, &str)]) {
+        let delay = |key| {
+            env.iter()
+                .rev()
+                .find(|(name, _)| *name == key)
+                .and_then(|(_, value)| value.parse::<u64>().ok())
+                .unwrap_or_default()
+        };
+        let timing = (delay("FAKECLI_DRAW_MS"), delay("FAKECLI_ECHO_MS"));
         self.agents.lock().unwrap().push(agent.clone());
-        self.draws.lock().unwrap().insert(agent.id.clone(), draw_ms);
+        self.draws.lock().unwrap().insert(agent.id.clone(), timing);
     }
 
     /// Takes a real CLI into the judgement.
@@ -409,7 +417,7 @@ impl Field {
     /// Starts a fake CLI and waits until its input is empty.
     pub fn start(&self, name: &str, env: &[(&str, &str)]) -> anyhow::Result<Agent> {
         let agent = self.lab.start_fake(name, env)?;
-        self.watch(&agent, 0);
+        self.watch(&agent, env);
         self.lab
             .wait_ready(std::slice::from_ref(&agent), Duration::from_secs(60))?;
         Ok(agent)
@@ -425,7 +433,7 @@ impl Field {
         let names: Vec<String> = (1..=count).map(|n| format!("{prefix}{n:02}")).collect();
         let agents = start_many(&self.lab, &names, env)?;
         for agent in &agents {
-            self.watch(agent, 0);
+            self.watch(agent, env);
         }
         if !agents.is_empty() {
             self.lab.wait_ready(&agents, Duration::from_secs(120))?;
@@ -621,7 +629,7 @@ impl Field {
         let windows: Vec<Window> = agents
             .iter()
             .map(|agent| {
-                let draw_ms = draws.get(&agent.id).copied().unwrap_or_default();
+                let (draw_ms, echo_ms) = draws.get(&agent.id).copied().unwrap_or_default();
                 if let Some((cli, submissions, timeline)) = reals.remove(&agent.id) {
                     return Window {
                         agent: agent.id.clone(),
@@ -633,6 +641,7 @@ impl Field {
                             false => self.lab.input_state(agent),
                         },
                         draw_ms: 0,
+                        submit_clear_ms: cli.submit_clear_ms,
                         service_ms: cli.service_ms,
                         strangers: strangers.get(&agent.id).copied().unwrap_or_default(),
                         ended_us: ended.get(&agent.id).copied(),
@@ -652,8 +661,9 @@ impl Field {
                         false => self.lab.input_state(agent),
                     },
                     draw_ms,
-                    // Its CLI draws the draft, then the input emptied.
-                    service_ms: FAKE_SERVICE_MS + 2 * draw_ms,
+                    submit_clear_ms: echo_ms + draw_ms,
+                    // For both the paste and Enter, the CLI applies the input and then draws.
+                    service_ms: FAKE_SERVICE_MS + 2 * (echo_ms + draw_ms),
                     strangers: strangers.get(&agent.id).copied().unwrap_or_default(),
                     ended_us: ended.get(&agent.id).copied(),
                 }
@@ -749,7 +759,7 @@ pub fn run(spec: &Spec, out: &Path) -> anyhow::Result<Outcome> {
         }
         _ => (field.lab.start_as(spec.cli, "boss", &env)?, None),
     };
-    field.watch(&boss, spec.draw_ms);
+    field.watch(&boss, &env);
     let senders = field.start_all("s", spec.senders, &[])?;
     field
         .lab

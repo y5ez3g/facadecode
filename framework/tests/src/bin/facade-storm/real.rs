@@ -27,6 +27,8 @@ pub struct Cli {
     pub args: &'static [&'static str],
     /// The least time one short message takes in its input: its settle time and the store's writes.
     pub service_ms: u64,
+    /// E2's submit-to-empty budget, provisionally twice the quiet maximum.
+    pub submit_clear_ms: u64,
 }
 
 pub const CLIS: &[Cli] = &[
@@ -36,6 +38,7 @@ pub const CLIS: &[Cli] = &[
         effort: Some("low"),
         args: &[],
         service_ms: 86,
+        submit_clear_ms: 582,
     },
     Cli {
         name: "codex",
@@ -43,6 +46,7 @@ pub const CLIS: &[Cli] = &[
         effort: Some("low"),
         args: &[],
         service_ms: 86,
+        submit_clear_ms: 132,
     },
     Cli {
         name: "agy",
@@ -50,6 +54,7 @@ pub const CLIS: &[Cli] = &[
         effort: None,
         args: &[],
         service_ms: 176,
+        submit_clear_ms: 352,
     },
     Cli {
         name: "muse",
@@ -57,6 +62,7 @@ pub const CLIS: &[Cli] = &[
         effort: None,
         args: &["--provider", "echo"],
         service_ms: 256,
+        submit_clear_ms: 78,
     },
     Cli {
         name: "opencode",
@@ -64,6 +70,7 @@ pub const CLIS: &[Cli] = &[
         effort: None,
         args: &[],
         service_ms: 86,
+        submit_clear_ms: 316,
     },
     Cli {
         name: "pi",
@@ -71,6 +78,7 @@ pub const CLIS: &[Cli] = &[
         effort: Some("off"),
         args: &[],
         service_ms: 86,
+        submit_clear_ms: 3_134,
     },
 ];
 

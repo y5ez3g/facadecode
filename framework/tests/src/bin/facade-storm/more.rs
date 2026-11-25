@@ -288,7 +288,7 @@ fn start_by(
         .wire
         .call("agent.inspect", json!({ "target": address }))?;
     let agent = crate::lab::Lab::agent(&info["agent"])?;
-    field.watch(&agent, 0);
+    field.watch(&agent, &[]);
     Ok((agent, took))
 }
 
@@ -384,7 +384,7 @@ fn s2(name: &str, out: &Path) -> anyhow::Result<Outcome> {
             .wire
             .call("agent.inspect", json!({ "target": started["data"]["id"] }))?;
         let agent = crate::lab::Lab::agent(&info["agent"])?;
-        field.watch(&agent, 0);
+        field.watch(&agent, &[]);
         agents.push((agent, prompt));
     }
     for (agent, prompt) in &agents {
@@ -493,7 +493,7 @@ fn s9(name: &str, out: &Path) -> anyhow::Result<Outcome> {
                     .lab
                     .wire
                     .call("agent.inspect", json!({ "target": address }))?;
-                field.watch(&crate::lab::Lab::agent(&info["agent"])?, 0);
+                field.watch(&crate::lab::Lab::agent(&info["agent"])?, &[]);
             }
         } else if answer["message"].as_str().is_none_or(str::is_empty) {
             field.violation("I11", format!("{arguments} failed without words: {answer}"));

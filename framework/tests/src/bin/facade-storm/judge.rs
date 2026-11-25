@@ -140,6 +140,8 @@ pub struct Window {
     pub end_state: String,
     /// How long its CLI takes to draw what it read.
     pub draw_ms: u64,
+    /// How long to allow the CLI to empty and redraw its input after Enter.
+    pub submit_clear_ms: u64,
     /// The least time one message takes in its input.
     pub service_ms: u64,
     /// Times a viewer the storm did not open was seen.
@@ -973,8 +975,8 @@ fn keys(window: &Window, say: &mut dyn FnMut(&'static str, String, Option<&'stat
     let given: String = person.chars.iter().map(|(ch, _)| ch).collect();
     let got: String = read.iter().map(|(ch, _)| ch).collect();
     let mut late = Vec::new();
-    // The input tape comes from the fake CLI. Use the rule's settle time and measure each paste
-    // from its first byte to the frame showing its full draft.
+    // The input tape comes from the fake CLI. Measure each paste through its full draft and
+    // allow the settle time and the CLI's redraw after submission.
     let fake_rule = facade_rules::find("fake").ok().flatten();
     let pastes: Vec<_> = window
         .tape
@@ -1006,8 +1008,17 @@ fn keys(window: &Window, say: &mut dyn FnMut(&'static str, String, Option<&'stat
                             Piece::Pasted(text) | Piece::Typed(text) => *text == paste.text,
                         })
                 })
-                .map_or(ready, |submission| submission.us);
-            Some((paste.began_us, submitted.max(ready), ready - paste.began_us))
+                .map(|submission| submission.us);
+            let (until, clearing) = submitted.map_or((ready, 0), |at| {
+                let empty = window
+                    .tape
+                    .boxes
+                    .iter()
+                    .find(|(drawn, box_text)| *drawn >= at && box_text.is_empty())
+                    .map_or(at + window.submit_clear_ms * 1000, |(drawn, _)| *drawn);
+                (ready.max(empty), window.submit_clear_ms * 1000)
+            });
+            Some((paste.began_us, until, ready - paste.began_us + clearing))
         })
         .collect();
     if given == got {
@@ -1016,14 +1027,14 @@ fn keys(window: &Window, say: &mut dyn FnMut(&'static str, String, Option<&'stat
             let delay = read.saturating_sub(*sent) as f64 / 1000.0;
             late.push(delay);
             // Only a paste that could have held this key contributes to its allowance.
-            let paste_and_settle = pastes
+            let paste_and_redraw = pastes
                 .iter()
                 .filter(|(began, until, _)| *began <= *read && *until >= *sent)
                 .map(|(_, _, took)| *took)
                 .max()
                 .unwrap_or(0) as f64
                 / 1000.0;
-            let allowed = paste_and_settle + 200.0;
+            let allowed = paste_and_redraw + 200.0;
             if delay - allowed > worst.0 - worst.1 {
                 worst = (delay, allowed);
             }
@@ -1033,7 +1044,7 @@ fn keys(window: &Window, say: &mut dyn FnMut(&'static str, String, Option<&'stat
                 "I13",
                 format!(
                     "{}: a key reached the CLI {:.0} ms late, beyond the {:.0} ms the CLI's reading \
-                     of a message, its settle time and 200 ms allow",
+                     of a message, its settle time, its redraw after submitting and 200 ms allow",
                     window.agent, worst.0, worst.1
                 ),
                 None,
