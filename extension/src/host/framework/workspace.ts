@@ -73,6 +73,7 @@ type AgentInfo = DaemonTopics['agents']['snapshot']['agents'][number];
 const WORKSPACE_KEY = 'facade.workspaceKey';
 const EMPTY_WORKSPACE_KEY = 'facade.orchestratorEmptyWorkspaceKey';
 const ROSTER = 'orchestrator-workspace.json';
+const ROSTER_POLL_MS = 1_000;
 const LEGACY_PIN_RECOVERY = 'orchestrator-legacy-pins.json';
 const WINDOW_FILE_FORMAT = /^[0-9a-f]{16}\.json$/;
 const EMPTY: SavedRoster = { version: 1, members: [], pins: [], hidden: [], imported: false, importedPins: false };
@@ -362,7 +363,7 @@ export class FrameworkWorkspace implements Disposable {
 	private readonly legacyRecoveryFile: string;
 	private readonly changed = new vscode.EventEmitter<void>();
 	readonly onDidChange: Event<void> = this.changed.event;
-	private readonly watcher: fs.FSWatcher;
+	private readonly watcher: Disposable;
 	private readonly restoration: PinRestoreRound;
 	private current: SavedRoster;
 	private disposed = false;
@@ -374,23 +375,12 @@ export class FrameworkWorkspace implements Disposable {
 		this.file = path.join(directory, ROSTER);
 		this.legacyRecoveryFile = path.join(directory, LEGACY_PIN_RECOVERY);
 		this.current = readRoster(this.file) ?? EMPTY;
-		this.watcher = fs.watch(directory, { persistent: false }, (_event, name) => {
-			if (name !== null && name !== ROSTER) { return; }
-			try {
-				this.publish(readRoster(this.file) ?? EMPTY);
-			} catch (error) {
-				this.log.event(`Could not read the Facade workspace: ${messageOf(error)}`);
-			}
-		});
-		this.watcher.on('error', error => {
-			this.log.event(`Could not watch the Facade workspace: ${messageOf(error)}`);
-			this.watcher.close();
-		});
+		this.watcher = this.watchRoster(directory);
 		try {
 			this.current = readRoster(this.file) ?? EMPTY;
 			this.restoration = new PinRestoreRound(directory, log);
 		} catch (error) {
-			this.watcher.close();
+			this.watcher.dispose();
 			this.changed.dispose();
 			throw error;
 		}
@@ -463,7 +453,7 @@ export class FrameworkWorkspace implements Disposable {
 	dispose(): void {
 		if (this.disposed) { return; }
 		this.disposed = true;
-		this.watcher.close();
+		this.watcher.dispose();
 		this.changed.dispose();
 		this.restoration.dispose();
 	}
@@ -806,6 +796,31 @@ export class FrameworkWorkspace implements Disposable {
 		if (this.disposed || JSON.stringify(this.current) === JSON.stringify(next)) { return; }
 		this.current = next;
 		this.changed.fire();
+	}
+
+	private watchRoster(directory: string): Disposable {
+		const refresh = () => {
+			try { this.refresh(); }
+			catch (error) { this.log.event(`Could not read the Facade workspace: ${messageOf(error)}`); }
+		};
+		let close = () => {};
+		const poll = (error: unknown) => {
+			close();
+			if (this.disposed) { return; }
+			this.log.event(`Could not watch the Facade workspace: ${messageOf(error)}`);
+			fs.watchFile(this.file, { persistent: false, interval: ROSTER_POLL_MS }, refresh);
+			close = () => fs.unwatchFile(this.file, refresh);
+		};
+		try {
+			const watcher = fs.watch(directory, { persistent: false }, (_event, name) => {
+				if (name === null || name === ROSTER) { refresh(); }
+			});
+			close = () => watcher.close();
+			watcher.once('error', poll);
+		} catch (error) {
+			poll(error);
+		}
+		return { dispose: () => close() };
 	}
 
 	private refresh(): void {

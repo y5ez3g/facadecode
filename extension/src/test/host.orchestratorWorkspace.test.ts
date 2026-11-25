@@ -97,6 +97,45 @@ async function bringsBackFolderlessWorkspace(home: string, withPin: boolean): Pr
 }
 
 suite('Orchestrator workspace roster (RULES-6.1)', () => {
+	test('a full native watch limit keeps the roster open and observing other windows (ARCHITECTURE-3.1)', () => {
+		const temp = tempDir('fd-orchestrator-watch-');
+		const file = path.join(temp.dir, 'orchestrator-workspace.json');
+		const messages: string[] = [];
+		let refresh: (() => void) | undefined;
+		const { FrameworkWorkspace } = withModules({
+			vscode: { EventEmitter: TestEmitter },
+			fs: {
+				...fs,
+				watch: () => { throw Object.assign(new Error('Too many open files'), { code: 'EMFILE' }); },
+				watchFile: (target: string, options: { readonly persistent: boolean }, listener: () => void) => {
+					assert.strictEqual(target, file);
+					assert.strictEqual(options.persistent, false);
+					refresh = listener;
+				},
+				unwatchFile: (target: string, listener: () => void) => {
+					assert.strictEqual(target, file);
+					assert.strictEqual(listener, refresh);
+					refresh = undefined;
+				}
+			}
+		})<typeof import('../host/framework/workspace')>(require.resolve('../host/framework/workspace'));
+		const workspace = new FrameworkWorkspace(temp.dir, {}, { event: message => messages.push(message) });
+		try {
+			const member = { machine_id: local, agent_id: 'a2' };
+			fs.writeFileSync(file, JSON.stringify({
+				version: 1, members: [member], pins: [], hidden: [], imported: true, importedPins: true
+			}));
+			assert.ok(refresh);
+			refresh();
+			assert.deepStrictEqual(workspace.snapshot().members, [member]);
+			assert.deepStrictEqual(messages, ['Could not watch the Facade workspace: Too many open files']);
+		} finally {
+			workspace.dispose();
+			temp.remove();
+		}
+		assert.strictEqual(refresh, undefined);
+	});
+
 	test('startup settings and the one restart attempt survive another window, and the Pin follows the new reference and session (RULES-6.4)', () => {
 		const temp = tempDir('fd-orchestrator-restart-');
 		const { FrameworkWorkspace } = withModules({ vscode: { EventEmitter: TestEmitter } })
