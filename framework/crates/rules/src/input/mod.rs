@@ -46,6 +46,18 @@ pub struct BoxReading {
     pub unsure: bool,
 }
 
+impl BoxReading {
+    /// A reading without captured input geometry or probe evidence.
+    pub fn new(info: InputInfo, draft: Option<String>) -> Self {
+        Self {
+            info,
+            draft,
+            line: None,
+            unsure: false,
+        }
+    }
+}
+
 /// An input's first row from the column its input starts at to its last cell that draws
 /// something, and the cursor.
 #[derive(Clone, Debug, PartialEq, Eq)]
