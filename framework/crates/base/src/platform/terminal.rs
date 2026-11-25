@@ -111,6 +111,19 @@ pub struct PtyIo {
     master: PtyMaster,
 }
 
+/// Authorizes a first write at its system-call boundary. The callback reports whether the
+/// system accepted bytes or may accept them later. A full nonblocking pipe can be tried again.
+pub trait WritePermit: Sync {
+    fn try_issue(&self, issue: &mut dyn FnMut() -> bool) -> bool;
+}
+
+/// What happened at the first-write boundary of a staged paste.
+pub enum WriteAttempt {
+    Written(usize),
+    Revoked,
+    ReadFirst,
+}
+
 impl PtyIo {
     pub fn new(master: PtyMaster) -> io::Result<PtyIo> {
         let io = imp::Io::new(&master.0)?;
@@ -146,7 +159,25 @@ impl PtyIo {
         bytes: &[u8],
         before: Option<&OnceLock<Option<usize>>>,
     ) -> io::Result<usize> {
-        self.io.write(bytes, before).await
+        self.io
+            .write(bytes, before, None)
+            .await
+            .map(|attempt| match attempt {
+                WriteAttempt::Written(count) => count,
+                _ => unreachable!("an ordinary write needs no permit"),
+            })
+    }
+
+    /// Before issuing a new write, yields for already readable output or a revoked permit.
+    /// Both outcomes leave the input untouched. Once issued, completion is collected as in
+    /// `write`.
+    pub async fn write_with_permit(
+        &self,
+        bytes: &[u8],
+        before: &OnceLock<Option<usize>>,
+        permit: &dyn WritePermit,
+    ) -> io::Result<WriteAttempt> {
+        self.io.write(bytes, Some(before), Some(permit)).await
     }
 
     /// Sets the terminal's size at once: Unix `TIOCSWINSZ`; Windows the resize packet on its copy
@@ -296,6 +327,53 @@ impl TestCli {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_that_arrives_inside_the_permit_is_read_before_the_first_write() {
+        use std::sync::Mutex;
+
+        const FRAME: &[u8] = b"menu frame";
+        struct FrameAtPermit(Mutex<TestCli>);
+        impl WritePermit for FrameAtPermit {
+            fn try_issue(&self, issue: &mut dyn FnMut() -> bool) -> bool {
+                self.0.lock().unwrap().write_output(FRAME).unwrap();
+                issue();
+                true
+            }
+        }
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (master, cli) = test_terminal(80, 24).unwrap();
+            let terminal = PtyIo::new(master).unwrap();
+            let permit = FrameAtPermit(Mutex::new(cli));
+            let before = OnceLock::new();
+            let first = terminal
+                .write_with_permit(b"x", &before, &permit)
+                .await
+                .unwrap();
+            assert!(matches!(first, WriteAttempt::ReadFirst));
+            assert!(before.get().is_none());
+            let mut frame = [0; FRAME.len()];
+            let mut read = 0;
+            while read < frame.len() {
+                let n = terminal.read(&mut frame[read..]).await.unwrap();
+                assert!(n > 0);
+                read += n;
+            }
+            assert_eq!(&frame, FRAME);
+            assert_eq!(terminal.write(b"y", None).await.unwrap(), 1);
+            let mut received = [0; 1];
+            assert_eq!(
+                permit.0.lock().unwrap().read_input(&mut received).unwrap(),
+                1
+            );
+            assert_eq!(&received, b"y");
+        });
+    }
 
     #[test]
     fn a_key_record_names_the_key_its_character_the_keys_held_and_whether_it_goes_down() {

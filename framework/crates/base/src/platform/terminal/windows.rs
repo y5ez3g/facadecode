@@ -283,29 +283,69 @@ impl Io {
         &self,
         bytes: &[u8],
         before: Option<&OnceLock<Option<usize>>>,
-    ) -> io::Result<usize> {
+        permit: Option<&dyn super::WritePermit>,
+    ) -> io::Result<super::WriteAttempt> {
+        use super::WriteAttempt;
+
         let write = {
             let mut writing = lock(&self.writing);
             match writing.as_ref() {
                 Some(write) => Arc::clone(write),
                 None => {
                     if bytes.is_empty() {
-                        return Ok(0);
+                        return Ok(WriteAttempt::Written(0));
                     }
                     let write = Operation::new(bytes[..bytes.len().min(CHUNK_BYTES)].to_vec());
                     let input = self.input.as_raw_handle();
-                    let under_way = io_thread::issue(&write, |buffer, length, overlapped| {
-                        if let Some(before) = before {
-                            let _ = before.set(self.queued_output_bytes().ok());
+                    let mut read_first = false;
+                    let mut immediate = None;
+                    let mut issue = || {
+                        let guarded_prefix = if permit.is_some() {
+                            match self.queued_output_bytes() {
+                                Ok(0) => Some(0),
+                                Ok(_) => {
+                                    read_first = true;
+                                    return false;
+                                }
+                                Err(error) => {
+                                    immediate = Some(Err(error));
+                                    return false;
+                                }
+                            }
+                        } else {
+                            None
+                        };
+                        if io_thread::issue(&write, |buffer, length, overlapped| {
+                            if let Some(before) = before {
+                                let prefix =
+                                    guarded_prefix.or_else(|| self.queued_output_bytes().ok());
+                                let _ = before.set(prefix);
+                            }
+                            // SAFETY: the handle is open and bound. The operation keeps its
+                            // buffer and overlapped alive until the write completes.
+                            unsafe {
+                                WriteFile(input, buffer, length, std::ptr::null_mut(), overlapped)
+                            }
+                        }) {
+                            return true;
                         }
-                        // SAFETY: the handle is open and bound; buffer and overlapped live in
-                        // the operation, which outlives the write.
-                        unsafe {
-                            WriteFile(input, buffer, length, std::ptr::null_mut(), overlapped)
+                        let result = write.done.take().unwrap_or(Ok(0));
+                        let copied = result.as_ref().is_ok_and(|n| *n > 0);
+                        immediate = Some(result);
+                        copied
+                    };
+                    if let Some(permit) = permit {
+                        if !permit.try_issue(&mut issue) {
+                            return Ok(WriteAttempt::Revoked);
                         }
-                    });
-                    if !under_way {
-                        return write.done.take().unwrap_or(Ok(0));
+                    } else {
+                        issue();
+                    }
+                    if read_first {
+                        return Ok(WriteAttempt::ReadFirst);
+                    }
+                    if let Some(result) = immediate {
+                        return result.map(WriteAttempt::Written);
                     }
                     *writing = Some(Arc::clone(&write));
                     write
@@ -320,7 +360,11 @@ impl Io {
         {
             *writing = None;
         }
-        write.done.take().unwrap_or(Ok(0))
+        write
+            .done
+            .take()
+            .unwrap_or(Ok(0))
+            .map(WriteAttempt::Written)
     }
 
     pub(super) fn set_size(&self, master: &Master, cols: u16, rows: u16) {

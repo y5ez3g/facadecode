@@ -72,6 +72,16 @@ pub(super) async fn send_verified(
         (_, Some("result")) => (SendWait::Result, Duration::from_secs(seconds)),
         _ => unreachable!("validated send wait"),
     };
+    if wait_for == SendWait::Inbox && crate::trace_message_batches() {
+        crate::log(
+            "info",
+            &format!(
+                "message send received: request={} age_us={}",
+                call.request_id,
+                call.arrived.elapsed().as_micros(),
+            ),
+        );
+    }
     let answer_grace = match wait_for {
         SendWait::Inbox => ANSWER_GRACE,
         SendWait::Delivery | SendWait::Result => ANSWER_GRACE + RESPONSE_GRACE,
@@ -215,6 +225,8 @@ async fn sent_result(
                 original,
                 sender,
                 wait_until: tokio::time::Instant::from_std(deadline),
+                admit_run: None,
+                relay: None,
             },
             cancel,
             output,

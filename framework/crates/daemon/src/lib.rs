@@ -57,6 +57,7 @@ mod waits;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -249,6 +250,17 @@ fn log(level: &str, message: &str) {
     facade_base::log::write("daemon", level, message);
 }
 
+#[cfg(debug_assertions)]
+fn trace_message_batches() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("FACADE_TEST_MESSAGE_BATCH_TIMING").is_some())
+}
+
+#[cfg(not(debug_assertions))]
+fn trace_message_batches() -> bool {
+    false
+}
+
 /// A test barrier: holds here while a test asks, in debug builds only. On a worker of the
 /// multi-thread runtime its other tasks move to another thread first.
 pub(crate) fn gate_for_test(point: &str) {
@@ -312,7 +324,6 @@ pub(crate) struct Daemon {
     claimed_sessions: Mutex<HashMap<SessionKey, String>>,
     screens: Screens,
     messages: Arc<Messages>,
-    relay_send_store: tokio::sync::Mutex<()>,
     command_replies: command_replies::CommandReplies,
     runs: Runs,
     records: Records,
@@ -388,6 +399,18 @@ impl LifecycleActivity for Daemon {
 
     fn keeper_build(&self) -> Option<String> {
         self.runs.keeper_info().map(|keeper| keeper.build)
+    }
+
+    fn paste_pause(&self) -> Arc<AtomicBool> {
+        self.messages.paste_pause()
+    }
+
+    fn commitment_uncertain(&self) -> bool {
+        self.messages.commitment_uncertain()
+    }
+
+    async fn clear_unused_pastes(&self) -> Result<(), facade_base::model::error::ErrorBody> {
+        self.messages.clear_unused_pastes().await
     }
 
     async fn settle_pastes(&self) -> Vec<oneshot::Receiver<()>> {
@@ -523,7 +546,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
     let messages = Arc::new(Messages::new(
         store.message_table(),
         opened.machine_id.clone(),
-    ));
+    )?);
     let (network_events, network_events_rx) = mpsc::unbounded_channel();
     let home = framework
         .parent()
@@ -553,7 +576,6 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         results: mcp::results_folder(&framework),
         watch_ends: Mutex::default(),
         messages,
-        relay_send_store: tokio::sync::Mutex::default(),
         command_replies: command_replies::CommandReplies::default(),
         runs,
         records,
@@ -565,7 +587,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         remote_changes: broadcast::channel(MAX_QUEUED_AGENT_CHANGES).0,
         store,
     });
-    daemon.sweep(SystemTime::now());
+    daemon.sweep(SystemTime::now()).await;
     gate_for_test("before-recovery");
     let recovered_prompts = opened
         .records
@@ -678,17 +700,19 @@ impl Daemon {
 
     /// The hourly cleanup, in this order: guests not heard from for as long as messages are
     /// kept end, messages kept for 30 days go, then the result files no one can use.
-    fn sweep(&self, now: SystemTime) {
-        match self.messages.expire(now) {
+    async fn sweep(&self, now: SystemTime) {
+        match self.messages.expire(now).await {
             Ok(0) => {}
             Ok(deleted) => log(
                 "info",
                 &format!("deleted {deleted} messages kept for 30 days"),
             ),
-            Err(err) => log("warn", &format!("{err:#}")),
+            Err(err) => log("warn", &err.message),
         }
-        mcp::clean_results(&self.results, now, &|number| self.messages.keeps(number));
-        if let Err(err) = lifecycle::prune(now) {
+        blocking_in_place(|| {
+            mcp::clean_results(&self.results, now, &|number| self.messages.keeps(number))
+        });
+        if let Err(err) = blocking_in_place(|| lifecycle::prune(now)) {
             log(
                 "warn",
                 &format!("could not prune the daemon's log: {err:#}"),
@@ -704,10 +728,9 @@ async fn sweep_every_hour(daemon: Arc<Daemon>) {
         hours.tick().await;
         let now = SystemTime::now();
         let before = kept_since(now);
-        daemon.end_unheard_guests(&before);
+        daemon.end_unheard_guests(&before).await;
         daemon.expire_agents(&before).await;
-        let sweeping = daemon.clone();
-        let _ = tokio::task::spawn_blocking(move || sweeping.sweep(now)).await;
+        daemon.sweep(now).await;
     }
 }
 

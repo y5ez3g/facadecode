@@ -6,7 +6,7 @@
 //! (a `messages` snapshot, or a guest's prompt or turn-end hook) takes it, its deadline passes,
 //! or the person's window delivery is settled.
 //!
-//! The rules, each kept under the one lock over the open deliveries:
+//! The writer orders durable changes and publishes them to open deliveries:
 //! - The table hears of a fact before anyone acts on it: a message before it is answered or typed,
 //!   a paste before it is written, a read before its snapshot is answered, a settlement before the
 //!   send it answers. A restart so finds at most one paste of each agent begun and not settled.
@@ -26,10 +26,13 @@ mod human;
 mod inbox;
 mod outcome;
 mod restart;
+mod saved;
 mod settle;
+mod write_queue;
+mod writer;
 
 use std::collections::HashMap;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, SystemTime};
 
@@ -45,14 +48,20 @@ use facade_base::{
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::time::Instant;
 
-use crate::store::{Kept, KeptMessage, MessageTable, RequestId, SendRouteBinding};
+#[cfg(test)]
+use crate::store::SendRouteBinding;
+use crate::store::{Kept, KeptMessage, MessageTable, RequestId};
 use crate::{Cancel, HUMAN, REQUEST_HOUR, blocking_in_place};
 
-pub(crate) use handle::DeliveryHandle;
+pub(crate) use handle::{DeliveryHandle, PasteGrant};
 pub(crate) use human::human_result;
-pub(crate) use inbox::{InboxRead, InboxSelection, ReplyRead, read_before_deadline};
+pub(crate) use inbox::{
+    InboxRead, InboxSelection, ReadAdmission, ReadAnswer, ReplyRead, read_before_deadline,
+};
 pub(crate) use outcome::{Due, Outcome};
 pub(crate) use restart::{Recipient, TakeUp, decide};
+pub(crate) use saved::Saving;
+pub(crate) use settle::BeginNext;
 
 /// How long messages are kept (RULES-5.3).
 pub(crate) const KEPT_FOR: Duration = Duration::from_secs(30 * 24 * 60 * 60);
@@ -191,11 +200,27 @@ fn warn(message: &str) {
     facade_base::log::write("daemon", "warn", message);
 }
 
+fn cancelled_delivery() -> Delivery {
+    Delivery {
+        status: DeliveryStatus::Failure,
+        reason: None,
+        text_written: TextWritten::None,
+        enter_written: Some(false),
+        deadline: None,
+        delivered_via: None,
+        delivered_at: None,
+    }
+}
+
 /// A message being delivered.
 struct Open {
     message: Message,
     /// Whether its paste began: the compatibility read can still take it.
     pasted: bool,
+    /// Exclusive live authority where a persisted paste may still have written no bytes.
+    paste_grant: Option<PasteGrant>,
+    cancelling: bool,
+    terminal_proof: bool,
     /// Whether it is a start's prompt, which has no send call to cancel.
     prompt: bool,
     /// The result it owes, where it is a start's prompt from an agent or guest.
@@ -239,11 +264,26 @@ struct GuestReplyWait {
     reference: MessageRef,
     until: Instant,
     cancel: Cancel,
+    relay: Option<Arc<crate::lifecycle::RelayLink>>,
 }
 
 impl GuestReplyWait {
     fn active(&self) -> bool {
-        self.until > Instant::now() && !self.cancel.is_requested()
+        self.stopped().is_none()
+    }
+
+    fn stopped(&self) -> Option<writer::EffectStop> {
+        use writer::EffectStop;
+
+        if self.cancel.is_requested() {
+            Some(EffectStop::Cancelled)
+        } else if self.until <= Instant::now() {
+            Some(EffectStop::Expired)
+        } else if self.relay.as_ref().is_some_and(|relay| relay.is_closing()) {
+            Some(EffectStop::Frozen)
+        } else {
+            None
+        }
     }
 }
 
@@ -251,8 +291,11 @@ impl GuestReplyWait {
 struct Deliveries {
     machine_id: String,
     table: MessageTable,
-    /// By number. Taken before any write to the table, so that a read, the beginning of a paste and
-    /// a settlement never interleave.
+    writer: writer::Writer,
+    paste_paused: Arc<AtomicBool>,
+    /// One complete candidate page and its projection can be materialized at a time.
+    page_budget: Arc<tokio::sync::Semaphore>,
+    /// The published deliveries, by number. Taken only to inspect or publish their state.
     open: Mutex<OpenDeliveries>,
     changes: broadcast::Sender<Change>,
     results: mpsc::UnboundedSender<PostedResult>,
@@ -269,6 +312,50 @@ struct OpenDeliveries {
 impl Deliveries {
     fn lock(&self) -> MutexGuard<'_, OpenDeliveries> {
         self.open.lock().unwrap()
+    }
+
+    #[cfg(test)]
+    fn withdraw_open(&self, open: &mut OpenMap, number: u64) -> bool {
+        let Some(delivery) = open.get(&number) else {
+            return false;
+        };
+        let armed = delivery.pasted
+            && !delivery.prompt
+            && delivery.owes.is_none()
+            && delivery
+                .paste_grant
+                .as_ref()
+                .is_some_and(PasteGrant::request_cancel);
+        if !armed && !delivery.may_cancel() {
+            return false;
+        }
+        let cancelled = cancelled_delivery();
+        let write = [(number, &cancelled)];
+        let written = blocking_in_place(|| {
+            if armed {
+                self.table.settle_cleaned_paste(&write, &[])
+            } else {
+                self.table.settle_with_withdrawals(&write, &[], &[number])
+            }
+        });
+        match written {
+            Ok(written) if written.settled.contains(&number) => {}
+            Ok(_) => return false,
+            Err(error) => {
+                warn(&format!("{error:#}; could not withdraw #m{number}"));
+                return false;
+            }
+        }
+        self.withdrawn(open, number)
+    }
+
+    fn withdrawn(&self, open: &mut OpenMap, number: u64) -> bool {
+        let Some(gone) = open.remove(&number) else {
+            return false;
+        };
+        gone.settled.send_replace(Some(Settled::Cancelled));
+        self.removed(gone.message.to);
+        true
     }
 
     fn reference(&self, message_id: String) -> MessageRef {
@@ -313,6 +400,9 @@ impl Deliveries {
         let delivery = Open {
             message,
             pasted,
+            paste_grant: None,
+            cancelling: false,
+            terminal_proof: false,
             prompt,
             owes,
             expected_reply_to: None,
@@ -324,6 +414,7 @@ impl Deliveries {
 
     /// Writes `message` under the next number, unless its sender kept one with `request_id` within
     /// the hour.
+    #[cfg(test)]
     fn keep(
         &self,
         message: &Message,
@@ -414,18 +505,30 @@ pub(crate) struct Messages {
 }
 
 impl Messages {
-    pub(crate) fn new(table: MessageTable, machine_id: String) -> Messages {
+    /// Gives back storage for settled messages when all local runs have ended.
+    pub(crate) fn release_idle_storage(&self) {
+        let mut open = self.deliveries.lock();
+        if open.agents.is_empty() {
+            open.agents.shrink_to_fit();
+        }
+    }
+
+    pub(crate) fn new(table: MessageTable, machine_id: String) -> anyhow::Result<Messages> {
         let (results, receiver) = mpsc::unbounded_channel();
-        Messages {
+        let writer = writer::Writer::new(table.clone())?;
+        Ok(Messages {
             deliveries: Arc::new(Deliveries {
                 machine_id,
                 table,
+                writer,
+                paste_paused: Arc::new(AtomicBool::new(false)),
+                page_budget: Arc::new(tokio::sync::Semaphore::new(1)),
                 open: Mutex::default(),
                 changes: broadcast::channel(CHANGES_QUEUED).0,
                 results,
             }),
             results: Mutex::new(Some(receiver)),
-        }
+        })
     }
 
     /// The handle an agent's typist delivers through.
@@ -444,8 +547,25 @@ impl Messages {
         self.deliveries.changes.subscribe()
     }
 
+    pub(crate) async fn ordered<T: Send + 'static>(
+        &self,
+        bytes: usize,
+        record: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+    ) -> Result<T, ErrorBody> {
+        self.deliveries.writer.ordered(bytes, record).await
+    }
+
+    pub(crate) fn commitment_uncertain(&self) -> bool {
+        self.deliveries.writer.uncertain()
+    }
+
+    pub(crate) fn paste_pause(&self) -> Arc<AtomicBool> {
+        self.deliveries.paste_paused.clone()
+    }
+
     /// Keeps a new pending message and opens its delivery. Where its sender kept one with
     /// `request_id` within the hour, keeps nothing and returns that one instead.
+    #[cfg(test)]
     pub(crate) fn post(
         &self,
         message: Message,
@@ -456,6 +576,7 @@ impl Messages {
         self.post_with_route(message, request_id, caller_window_id, notify_failure, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn post_with_route(
         &self,
         message: Message,
@@ -476,6 +597,7 @@ impl Messages {
     }
 
     /// The message this caller kept for `to` with `request_id` within the hour, if any.
+    #[cfg(test)]
     pub(crate) fn find_request(
         &self,
         from_machine_id: &str,
@@ -501,35 +623,39 @@ impl Messages {
     }
 
     /// Keeps the confirmed command reply as a private receipt under its reserved number.
-    pub(crate) fn keep_command_reply(
+    pub(crate) async fn keep_command_reply(
         &self,
         message: &Message,
         request_id: Option<&str>,
     ) -> Result<Message, ErrorBody> {
-        let _open = self.deliveries.lock();
-        let since = hour_ago();
-        let request = request_id.map(|id| RequestId {
-            id,
-            since: &since,
-            caller_window_id: None,
-        });
-        let mut kept =
-            blocking_in_place(|| self.deliveries.table.keep_command_reply(message, request))
-                .map_err(ErrorBody::internal)?;
-        self.deliveries.identify(&mut kept);
-        Ok(kept)
+        let deliveries = self.deliveries.clone();
+        let (message, id) = (message.clone(), request_id.map(str::to_owned));
+        self.ordered(message.text.len(), move || {
+            let since = hour_ago();
+            let request = id.as_deref().map(|id| RequestId {
+                id,
+                since: &since,
+                caller_window_id: None,
+            });
+            let mut kept = deliveries.table.keep_command_reply(&message, request)?;
+            deliveries.identify(&mut kept);
+            Ok(kept)
+        })
+        .await
     }
 
     /// Commits a local number for a start result or command reply before handoff.
-    pub(crate) fn reserve_result(&self) -> Result<MessageRef, ErrorBody> {
-        let _open = self.deliveries.lock();
-        let number = blocking_in_place(|| self.deliveries.table.reserve_result_number())
-            .map_err(ErrorBody::internal)?;
-        Ok(self.deliveries.reference(format!("m{number}")))
+    pub(crate) async fn reserve_result(&self) -> Result<MessageRef, ErrorBody> {
+        let deliveries = self.deliveries.clone();
+        self.ordered(0, move || {
+            let number = deliveries.table.reserve_result_number()?;
+            Ok(deliveries.reference(format!("m{number}")))
+        })
+        .await
     }
 
     /// Keeps a result under its reserved number and opens its delivery on this machine.
-    pub(crate) fn accept_reserved_result(
+    pub(crate) async fn accept_reserved_result(
         &self,
         recipient: &AgentRef,
         message: &Message,
@@ -539,90 +665,87 @@ impl Messages {
                 "the start result names a different recipient",
             ));
         }
-        let mut open = self.deliveries.lock();
-        let kept = blocking_in_place(|| {
-            self.deliveries
+        let deliveries = self.deliveries.clone();
+        let (recipient, message) = (recipient.clone(), message.clone());
+        self.ordered(message.text.len(), move || {
+            let kept = deliveries
                 .table
-                .insert_reserved_result(recipient, message)
+                .insert_reserved_result(&recipient, &message)?;
+            let mut open = deliveries.lock();
+            Ok(kept.map(|kept| deliveries.posted(&mut open, kept)))
         })
-        .map_err(ErrorBody::internal)?;
-        Ok(kept.map(|kept| self.deliveries.posted(&mut open, kept)))
+        .await
     }
 
     /// Withdraws message `number` for its send's `cancel` before its paste begins. After the store
     /// hides it and keeps any replay receipt, the send learns it was cancelled and watchers that
     /// it is gone.
+    #[cfg(test)]
     pub(crate) fn withdraw(&self, number: u64) -> bool {
         let deliveries = &self.deliveries;
         let mut open = deliveries.lock();
-        if !open.agents.get(&number).is_some_and(Open::may_cancel) {
-            return false;
-        }
-        let cancelled = Delivery {
-            status: DeliveryStatus::Failure,
-            reason: None,
-            text_written: TextWritten::None,
-            enter_written: Some(false),
-            deadline: None,
-            delivered_via: None,
-            delivered_at: None,
-        };
-        match blocking_in_place(|| {
-            deliveries
-                .table
-                .settle_with_withdrawals(&[(number, &cancelled)], &[], &[number])
-        }) {
-            Ok(written) if written.settled.contains(&number) => {}
-            Ok(_) => return false,
-            Err(err) => {
-                warn(&format!("{err:#}; #m{number} goes on"));
-                return false;
-            }
-        }
-        let Some(gone) = open.agents.remove(&number) else {
-            return false;
-        };
-        gone.settled.send_replace(Some(Settled::Cancelled));
-        deliveries.removed(gone.message.to);
-        true
+        deliveries.withdraw_open(&mut open.agents, number)
     }
 
     /// Opens the delivery of a start's prompt, kept with its agent's record and pending with no
     /// deadline until its delivery begins. `owes` is the result it owes its sender.
+    #[cfg(test)]
     pub(crate) fn deliver_prompt(
         &self,
         prompt: Message,
         owes: Option<OwedResult>,
     ) -> watch::Receiver<Option<Settled>> {
-        let mut open = self.deliveries.lock();
-        self.deliveries.updated(&prompt);
-        Deliveries::open(&mut open.agents, prompt, false, true, owes)
+        self.deliveries.open_prompt(prompt, owes)
+    }
+
+    pub(crate) async fn open_saved_prompt(
+        &self,
+        prompt: Message,
+        owes: Option<OwedResult>,
+    ) -> Result<watch::Receiver<Option<Settled>>, ErrorBody> {
+        let deliveries = self.deliveries.clone();
+        self.ordered(prompt.text.len(), move || {
+            Ok(deliveries.open_prompt(prompt, owes))
+        })
+        .await
     }
 
     /// Begins the delivery of prompt `number` once its agent's tools connected or never will: gives
     /// it `deadline`, and `from_name` where it had no sender's name. Returns the prompt as it now
     /// stands, or None where it is no longer open. A deadline the table could not write is only
     /// logged: after a restart the prompt gets a whole delivery's time.
+    #[cfg(test)]
     pub(crate) fn begin_prompt(
         &self,
         number: u64,
         deadline: &str,
         from_name: Option<String>,
     ) -> Option<Message> {
-        let mut open = self.deliveries.lock();
-        let prompt = &mut open.agents.get_mut(&number)?.message;
-        let table = &self.deliveries.table;
-        if let Err(err) =
-            blocking_in_place(|| table.begin_prompt(number, deadline, from_name.as_deref()))
+        self.deliveries
+            .begin_saved_prompt(number, deadline, from_name)
+            .unwrap()
+    }
+
+    pub(crate) async fn begin_prompt_saved(
+        &self,
+        number: u64,
+        deadline: &str,
+        from_name: Option<String>,
+    ) -> Option<Message> {
+        let deliveries = self.deliveries.clone();
+        let deadline = deadline.to_owned();
+        match self
+            .ordered(0, move || {
+                deliveries.begin_saved_prompt(number, &deadline, from_name)
+            })
+            .await
         {
-            warn(&format!("{err:#}"));
+            Ok(prompt) => prompt,
+            Err(error) => {
+                warn(&error.message);
+                None
+            }
         }
-        prompt.delivery.deadline = Some(deadline.to_string());
-        if prompt.from_name.is_none() {
-            prompt.from_name = from_name;
-        }
-        self.deliveries.updated(prompt);
-        Some(prompt.clone())
     }
 
     /// Message `id` as it stands, where it is kept.
@@ -641,6 +764,46 @@ impl Messages {
     /// deleted on a guess.
     pub(crate) fn keeps(&self, number: u64) -> bool {
         blocking_in_place(|| self.deliveries.table.keeps_message(number)).unwrap_or(true)
+    }
+}
+
+impl Deliveries {
+    fn open_prompt(
+        &self,
+        prompt: Message,
+        owes: Option<OwedResult>,
+    ) -> watch::Receiver<Option<Settled>> {
+        let mut open = self.lock();
+        self.updated(&prompt);
+        Self::open(&mut open.agents, prompt, false, true, owes)
+    }
+
+    fn begin_saved_prompt(
+        &self,
+        number: u64,
+        deadline: &str,
+        from_name: Option<String>,
+    ) -> anyhow::Result<Option<Message>> {
+        let changed = self
+            .table
+            .begin_prompt(number, deadline, from_name.as_deref())?;
+        let mut open = self.lock();
+        let Some(prompt) = open.agents.get_mut(&number) else {
+            return Ok(None);
+        };
+        if changed {
+            prompt.message.delivery.deadline = Some(deadline.to_owned());
+            if prompt.message.from_name.is_none() {
+                prompt.message.from_name = from_name;
+            }
+            self.updated(&prompt.message);
+        }
+        Ok(prompt
+            .message
+            .delivery
+            .deadline
+            .as_ref()
+            .map(|_| prompt.message.clone()))
     }
 }
 

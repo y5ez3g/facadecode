@@ -455,7 +455,10 @@ impl Daemon {
         let mut first_prompts = HashMap::new();
         for kept in self.messages.pending()? {
             let is_prompt = recovered_prompts.contains(&messages::number(&kept.message));
-            if let Some((id, prompt)) = self.take_up(kept, is_prompt, now, started, &mut typists) {
+            if let Some((id, prompt)) = self
+                .take_up(kept, is_prompt, now, started, &mut typists)
+                .await
+            {
                 first_prompts.insert(id, prompt);
             }
         }
@@ -465,14 +468,14 @@ impl Daemon {
         }
         for (id, work) in typists {
             let agent = self.get_agent(&id).expect("a running recipient");
-            let begun = self.begun_paste(&id, work.pastes)?;
+            let begun = self.begun_paste(&id, work.pastes).await?;
             tokio::spawn(self.clone().feed_typist(agent, begun, work.messages));
         }
         Ok(())
     }
 
     /// Takes up one pending message: settles it, leaves it waiting, or gives it to its typist.
-    fn take_up(
+    async fn take_up(
         self: &Arc<Self>,
         KeptMessage {
             message,
@@ -527,11 +530,13 @@ impl Daemon {
         if message.delivery.deadline.is_none() && !matches!(decided, TakeUp::Settle(_)) {
             // A prompt whose delivery had not begun begins it now; a later restart keeps the rest.
             let deadline = facade_base::time::iso_time(now + crate::delivery_limit());
-            self.messages.begin_prompt(number, &deadline, None);
+            self.messages
+                .begin_prompt_saved(number, &deadline, None)
+                .await;
         }
         let to = message.to.clone();
         match decided {
-            TakeUp::Settle(outcome) => self.messages.settle(&[number], outcome),
+            TakeUp::Settle(outcome) => self.messages.settle_written(&[number], outcome).await,
             TakeUp::Wait(left) => self.await_settlement((message, settled), started + left),
             TakeUp::Type(left) => typists.entry(to).or_default().messages.push((
                 started + left,
@@ -555,7 +560,7 @@ impl Daemon {
 
     /// The one paste `id`'s typist is to finish, rebuilt as it was pasted. Logs that its CLI may
     /// still be inside a paste; fails them all as unconfirmed where there is more than one.
-    fn begun_paste(
+    async fn begun_paste(
         &self,
         id: &str,
         pastes: BTreeMap<u64, (Instant, Vec<Delivering>)>,
@@ -581,7 +586,9 @@ impl Daemon {
         );
         if pastes.len() > 1 {
             let numbers: Vec<u64> = pending().map(messages::number).collect();
-            self.messages.settle(&numbers, Outcome::UNCONFIRMED);
+            self.messages
+                .settle_written(&numbers, Outcome::UNCONFIRMED)
+                .await;
             return Ok(None);
         }
         let (paste, (deadline, pending)) = pastes.into_iter().next().expect("one paste");
@@ -684,9 +691,13 @@ impl Daemon {
                     text_written: TextWritten::Unknown,
                     enter_written: None,
                 };
-                self.messages.settle(&numbers, ended);
+                self.messages.settle_written(&numbers, ended).await;
             }
-            Err(_late) => self.messages.settle(&numbers, Outcome::UNCONFIRMED),
+            Err(_late) => {
+                self.messages
+                    .settle_written(&numbers, Outcome::UNCONFIRMED)
+                    .await
+            }
         }
     }
 

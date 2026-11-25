@@ -2,7 +2,6 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
-use facade_base::api_v1::daemon::DRAIN_TIME;
 use facade_base::model::error::{ErrorBody, Reason};
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock, watch};
 use tokio::time::Instant;
@@ -38,9 +37,19 @@ impl RelayDrain {
         Ok(link)
     }
 
+    #[cfg(test)]
+    pub(crate) async fn prepare_for_test(&self, deadline: Instant) -> Result<(), ErrorBody> {
+        let _frozen = self.prepare("test", deadline).await?;
+        Ok(())
+    }
+
     /// Freezes effects, then closes each admitted relay on its own outbox. The caller retains the
     /// freeze until publication either fails or the old daemon exits.
-    pub(super) async fn prepare(&self, build: &str) -> Result<RelayFreeze, ErrorBody> {
+    pub(super) async fn prepare(
+        &self,
+        build: &str,
+        deadline: Instant,
+    ) -> Result<RelayFreeze, ErrorBody> {
         facade_base::service::mark_for_test("upgrade-relay-preparing");
         let settled = async {
             let effects = self.effects.clone().write_owned().await;
@@ -64,7 +73,7 @@ impl RelayDrain {
             }
             Some(freeze)
         };
-        tokio::time::timeout_at(Instant::now() + DRAIN_TIME, settled)
+        tokio::time::timeout_at(deadline, settled)
             .await
             .ok()
             .flatten()
@@ -111,6 +120,10 @@ impl RelayLink {
 
     pub(crate) fn is_sealed(&self) -> bool {
         *self.sealed.borrow()
+    }
+
+    pub(crate) fn is_closing(&self) -> bool {
+        self.is_sealed() || self.closing.borrow().is_some()
     }
 
     /// None while a takeover is preparing. Once the link is sealed it cannot start another effect.

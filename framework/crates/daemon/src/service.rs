@@ -813,7 +813,7 @@ impl Daemon {
             let start_result =
                 if by_model && args.prompt.is_some() && effect_time_left(deadline).is_ok() {
                     Some(wire::MessageRef {
-                        message_id: self.messages.reserve_result()?.message_id,
+                        message_id: self.messages.reserve_result().await?.message_id,
                         machine_id: self.machine_id.clone(),
                     })
                 } else {
@@ -1041,11 +1041,15 @@ impl Daemon {
         if !reach.reaches(&info) {
             return Err(Reach::refusal(&reference.agent_id));
         }
+        let candidate = LookupCandidate {
+            info: self.project_agent_info(info, Default::default())?,
+            has_rule: agent.rule().is_some(),
+        };
         records::lookup(
             facade_base::address::selector::AgentKey::Number(&reference.agent_id),
             &reach,
             operation,
-            &[self.lookup_candidate(&agent)?],
+            &[candidate],
         )?;
         Ok(agent)
     }
@@ -1163,13 +1167,22 @@ impl Daemon {
     }
 
     pub(crate) fn public_agent(&self, info: ManagedAgent) -> Result<wire::AgentInfo, ErrorBody> {
-        let local = info.machine_id == self.machine_id;
-        let fields = if local {
+        let details = if info.machine_id == self.machine_id {
             blocking_in_place(|| self.store.launch_details(&info.agent_id))
                 .map_err(ErrorBody::internal)?
         } else {
             crate::store::LaunchDetails::default()
         };
+        self.project_agent_info(info, details)
+    }
+
+    /// Capability checks for an exact local target use the in-memory record and the same labels.
+    fn project_agent_info(
+        &self,
+        info: ManagedAgent,
+        fields: crate::store::LaunchDetails,
+    ) -> Result<wire::AgentInfo, ErrorBody> {
+        let local = info.machine_id == self.machine_id;
         let options = fields.options.unwrap_or_default();
         let address = self.agent_address(&info.reference())?;
         let title = local

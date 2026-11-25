@@ -6,8 +6,10 @@ use std::io;
 use std::sync::OnceLock;
 use std::task::Poll;
 
-use facade_base::terminal::{PtyIo, PtyMaster};
+use facade_base::terminal::{PtyIo, PtyMaster, WriteAttempt};
 use tokio::time::Instant;
+
+use crate::messages::PasteGrant;
 
 /// The most bytes one read takes from the terminal.
 pub(crate) const MAX_READ_BYTES: usize = 64 * 1024;
@@ -21,6 +23,10 @@ pub(crate) enum TerminalEvent {
     Closed,
     /// Queued input was written.
     Wrote,
+    /// The first write of a staged paste was issued to the terminal.
+    PasteIssued { offset: u64, length: usize },
+    /// The staged paste reached no terminal bytes and lost its permission to start.
+    PasteSkipped,
     /// Writing failed: the terminal takes no more input.
     WriteFailed(std::io::Error),
 }
@@ -28,6 +34,7 @@ pub(crate) enum TerminalEvent {
 /// What `Terminal::ready` waits for.
 pub(crate) enum TerminalWait {
     ReadAndWrite,
+    ReadAndWriteWithoutNewPaste,
     WriteOnly,
 }
 
@@ -56,8 +63,13 @@ struct SubmissionOrder {
 
 enum IoReady {
     Issued(Option<usize>),
-    Written(io::Result<usize>, Option<Option<usize>>),
+    Written(io::Result<WriteAttempt>, Option<Option<usize>>),
     Read(io::Result<usize>),
+}
+
+struct OfferedPaste {
+    bytes: Vec<u8>,
+    permit: PasteGrant,
 }
 
 /// An agent's terminal and the input waiting for it. Owned by its actor, without locks.
@@ -65,6 +77,7 @@ pub(crate) struct Terminal {
     /// None between runs and once the run's output ended.
     master: Option<PtyIo>,
     input: VecDeque<u8>,
+    offered: Option<OfferedPaste>,
     /// The bytes at the head of `input` that a write under way was given: the terminal may still
     /// take them, so they stay at the head until a write returns.
     writing: usize,
@@ -83,6 +96,7 @@ impl Terminal {
         let mut terminal = Self {
             master: None,
             input: VecDeque::new(),
+            offered: None,
             writing: 0,
             sent: 0,
             last_write: None,
@@ -114,6 +128,7 @@ impl Terminal {
         self.master = None;
         self.writing = 0;
         self.input = VecDeque::new();
+        self.offered = None;
         self.buffer = Vec::new();
         self.received = 0;
         self.output_read = 0;
@@ -122,9 +137,10 @@ impl Terminal {
     }
 
     /// Waits until output can be read (only with `ReadAndWrite`) or queued input can be written, and does one of them.
-    /// Pending forever while there is nothing to do. Safe to cancel in `select!`; takes no locks.
+    /// Pending forever while there is nothing to do. Safe to cancel in `select!`.
     pub(crate) async fn ready(&mut self, wait: TerminalWait) -> TerminalEvent {
-        let read = matches!(wait, TerminalWait::ReadAndWrite);
+        let read = !matches!(wait, TerminalWait::WriteOnly);
+        let start_paste = matches!(wait, TerminalWait::ReadAndWrite);
         loop {
             let read_size = self.read_limit();
             let Some(master) = self.master.as_ref() else {
@@ -137,19 +153,41 @@ impl Terminal {
             if self.input.as_slices().0.len() < self.writing {
                 self.input.make_contiguous();
             }
-            let (head, _) = self.input.as_slices();
-            let head = match self.writing {
-                0 => &head[..head.len().min(MAX_WRITE_BYTES)],
-                writing => &head[..writing],
+            let (first, _) = self.input.as_slices();
+            let offer = self
+                .offered
+                .as_ref()
+                .filter(|_| start_paste && self.input.is_empty());
+            let head = if let Some(offer) = offer {
+                &offer.bytes[..offer.bytes.len().min(MAX_WRITE_BYTES)]
+            } else {
+                let length = match self.writing {
+                    0 => first.len().min(MAX_WRITE_BYTES),
+                    writing => writing,
+                };
+                self.writing = length;
+                &first[..length]
             };
-            self.writing = head.len();
-            let end = self.sent + head.len() as u64;
-            let watch = self
-                .output_boundaries()
-                .any(|boundary| boundary.in_write(self.sent, end));
+            let length = head.len();
+            let end = self.sent + length as u64;
+            let watch = offer.is_some()
+                || self
+                    .output_boundaries()
+                    .any(|boundary| boundary.in_write(self.sent, end));
             let started = OnceLock::new();
             let write = async {
-                let mut writing = std::pin::pin!(master.write(head, watch.then_some(&started)));
+                let mut writing = std::pin::pin!(async {
+                    if let Some(offer) = offer {
+                        master
+                            .write_with_permit(head, &started, &offer.permit)
+                            .await
+                    } else {
+                        master
+                            .write(head, watch.then_some(&started))
+                            .await
+                            .map(WriteAttempt::Written)
+                    }
+                });
                 poll_fn(|cx| match writing.as_mut().poll(cx) {
                     Poll::Ready(result) => {
                         Poll::Ready(IoReady::Written(result, started.get().copied()))
@@ -167,12 +205,49 @@ impl Terminal {
                 result = master.read(&mut self.buffer), if read => IoReady::Read(result),
                 else => pending().await,
             };
+            let event = match event {
+                IoReady::Written(Ok(WriteAttempt::ReadFirst), _) => {
+                    IoReady::Read(master.read(&mut self.buffer).await)
+                }
+                event => event,
+            };
+            let offered = offer.is_some();
+            let issuing_paste = offered
+                && match &event {
+                    IoReady::Issued(_) => true,
+                    IoReady::Written(Ok(WriteAttempt::Written(n)), _) => *n > 0,
+                    _ => false,
+                };
+            let paste = issuing_paste.then(|| {
+                let offer = self.offered.take().expect("issued a staged paste");
+                let offset = self.sent;
+                self.writing = length;
+                self.input = offer.bytes.into();
+                self.observe_paste_from(offset + 1);
+                TerminalEvent::PasteIssued {
+                    offset,
+                    length: self.input.len(),
+                }
+            });
             match event {
-                IoReady::Issued(prefix) => self.mark_output(end, prefix),
+                IoReady::Issued(prefix) => {
+                    self.mark_output(end, prefix);
+                    if let Some(paste) = paste {
+                        return paste;
+                    }
+                }
                 IoReady::Written(result, prefix) => {
                     self.writing = 0;
                     let n = match result {
-                        Ok(n) => n,
+                        Ok(WriteAttempt::Written(0)) if offered => {
+                            return TerminalEvent::WriteFailed(io::ErrorKind::WriteZero.into());
+                        }
+                        Ok(WriteAttempt::Written(n)) => n,
+                        Ok(WriteAttempt::Revoked) => {
+                            self.discard_offer();
+                            return TerminalEvent::PasteSkipped;
+                        }
+                        Ok(WriteAttempt::ReadFirst) => unreachable!("read takes precedence"),
                         Err(error) => return TerminalEvent::WriteFailed(error),
                     };
                     let written = self.sent + n as u64;
@@ -198,7 +273,7 @@ impl Terminal {
                     self.input.drain(..n);
                     self.sent = written;
                     self.last_write = Some(Instant::now());
-                    return TerminalEvent::Wrote;
+                    return paste.unwrap_or(TerminalEvent::Wrote);
                 }
                 IoReady::Read(Ok(n)) if n > 0 => {
                     self.record_read(n);
@@ -322,16 +397,36 @@ impl Terminal {
         self.input.extend(bytes);
     }
 
+    pub(crate) fn offer_paste(&mut self, bytes: Vec<u8>, permit: PasteGrant) {
+        debug_assert!(self.offered.is_none() && !bytes.is_empty());
+        self.offered = Some(OfferedPaste { bytes, permit });
+    }
+
+    /// Whether a paste is still waiting for its first native write.
+    pub(crate) fn has_offer(&self) -> bool {
+        self.offered.is_some()
+    }
+
+    pub(crate) fn discard_offer(&mut self) {
+        self.offered = None;
+    }
+
     /// Drops the queued input, but for what a write under way was given.
     pub(crate) fn clear(&mut self) {
         self.input.truncate(self.writing);
+        self.discard_offer();
         self.paste = None;
         self.stop_observing_submission();
     }
 
     /// Bytes queued and not yet written.
     pub(crate) fn queued(&self) -> usize {
-        self.input.len()
+        self.input.len() + self.offered.as_ref().map_or(0, |offer| offer.bytes.len())
+    }
+
+    /// The end of the ordered input stream. An unissued paste has no byte offsets yet.
+    pub(crate) fn queued_through(&self) -> u64 {
+        self.sent + self.input.len() as u64
     }
 
     /// Bytes written since the actor started, including earlier runs.
@@ -536,6 +631,7 @@ mod tests {
                 TerminalEvent::Closed => break,
                 TerminalEvent::Wrote => {}
                 TerminalEvent::WriteFailed(_) => terminal.clear(),
+                TerminalEvent::PasteIssued { .. } | TerminalEvent::PasteSkipped => unreachable!(),
             }
         }
         assert_eq!(read, b"last words");

@@ -36,7 +36,12 @@ pub(crate) trait LifecycleActivity: Send + Sync + 'static {
     fn running_managed_agents(&self) -> Vec<AgentLabel>;
     fn keeper_api_version(&self) -> Option<ApiVersion>;
     fn keeper_build(&self) -> Option<String>;
+    fn paste_pause(&self) -> Arc<AtomicBool>;
+    fn commitment_uncertain(&self) -> bool;
     fn announce_machine_sleeping(&self) -> impl Future<Output = ()> + Send;
+    fn clear_unused_pastes(
+        &self,
+    ) -> impl Future<Output = Result<(), facade_base::model::error::ErrorBody>> + Send;
     fn settle_pastes(&self) -> impl Future<Output = Vec<oneshot::Receiver<()>>> + Send;
     fn quiet_agents(&self, deadline: tokio::time::Instant) -> impl Future<Output = bool> + Send;
 }

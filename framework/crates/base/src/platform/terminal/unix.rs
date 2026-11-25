@@ -124,18 +124,46 @@ impl Io {
         &self,
         bytes: &[u8],
         before: Option<&OnceLock<Option<usize>>>,
-    ) -> io::Result<usize> {
+        permit: Option<&dyn super::WritePermit>,
+    ) -> io::Result<super::WriteAttempt> {
+        use super::WriteAttempt;
+
         loop {
             let mut ready = self.0.writable().await?;
             match ready.try_io(|file| {
-                let prefix = before.and_then(|_| self.queued_output_bytes().ok());
-                let written = file.get_ref().write(bytes);
-                if written.as_ref().is_ok_and(|n| *n > 0)
-                    && let Some(before) = before
-                {
-                    let _ = before.set(prefix);
+                let mut result = Ok(WriteAttempt::Written(0));
+                let mut issue = || {
+                    let prefix = if permit.is_some() {
+                        match self.queued_output_bytes() {
+                            Ok(0) => Some(0),
+                            Ok(_) => {
+                                result = Ok(WriteAttempt::ReadFirst);
+                                return false;
+                            }
+                            Err(error) => {
+                                result = Err(error);
+                                return false;
+                            }
+                        }
+                    } else {
+                        before.and_then(|_| self.queued_output_bytes().ok())
+                    };
+                    let written = file.get_ref().write(bytes);
+                    let took_bytes = written.as_ref().is_ok_and(|n| *n > 0);
+                    if took_bytes && let Some(before) = before {
+                        let _ = before.set(prefix);
+                    }
+                    result = written.map(WriteAttempt::Written);
+                    took_bytes
+                };
+                if let Some(permit) = permit {
+                    if !permit.try_issue(&mut issue) {
+                        return Ok(WriteAttempt::Revoked);
+                    }
+                } else {
+                    issue();
                 }
-                written
+                result
             }) {
                 Ok(written) => return written,
                 // A full PTY master can go on reporting writable while a write would block, as

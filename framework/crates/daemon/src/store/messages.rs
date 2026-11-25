@@ -123,6 +123,7 @@ pub(crate) struct SendRoute {
 }
 
 /// A locally resolved route that becomes durable with its first message.
+#[derive(Clone)]
 pub(crate) struct SendRouteBinding {
     pub(crate) target: String,
     pub(crate) route: SendRoute,
@@ -184,6 +185,161 @@ fn read_send_route(row: &Row<'_>) -> rusqlite::Result<SendRoute> {
     })
 }
 
+fn saved_route(
+    connection: &Connection,
+    sender: &str,
+    request: &str,
+    target: &str,
+) -> rusqlite::Result<Option<(String, SendRoute)>> {
+    use rusqlite::OptionalExtension;
+    connection
+        .query_row(
+            "SELECT machine_id, agent_id, reply_message_id, reply_machine_id, at FROM send_routes
+         WHERE sender = ?1 AND request_id = ?2 AND target = ?3",
+            params![sender, request, target],
+            |row| Ok((row.get(4)?, read_send_route(row)?)),
+        )
+        .optional()
+}
+
+fn kept_number(connection: &Connection, number: u64) -> rusqlite::Result<Option<KeptMessage>> {
+    use rusqlite::OptionalExtension;
+    connection
+        .prepare_cached(&format!("SELECT {COLUMNS} FROM messages WHERE number = ?1"))?
+        .query_row([number as i64], read_message)
+        .optional()
+}
+
+struct RouteChange {
+    sender: String,
+    request: String,
+    target: String,
+    before: Option<(String, SendRoute)>,
+    after: Option<(String, SendRoute)>,
+}
+
+/// The rows a save expects after commitment, including a separately retained route.
+pub(crate) struct SaveFacts {
+    row: Option<(u64, KeptMessage)>,
+    route: Option<RouteChange>,
+}
+
+impl SaveFacts {
+    pub(crate) fn states(&self, connection: &Connection) -> rusqlite::Result<(bool, bool)> {
+        let (mut before, mut after) = (true, true);
+        if let Some((number, expected)) = &self.row {
+            let saved = kept_number(connection, *number)?;
+            before = saved.is_none();
+            after = saved.as_ref() == Some(expected);
+        }
+        if let Some(route) = &self.route
+            && route.before != route.after
+        {
+            let saved = saved_route(connection, &route.sender, &route.request, &route.target)?;
+            before &= saved == route.before;
+            after &= saved == route.after;
+        }
+        Ok((before, after))
+    }
+}
+
+/// The affected rows in one delivery operation, before and after its savepoint.
+pub(crate) struct PasteFacts {
+    before: PasteSnapshot,
+    after: PasteSnapshot,
+    rows: PasteRows,
+}
+
+#[derive(Default)]
+struct PasteRows {
+    delivery: Vec<u64>,
+    full: Vec<u64>,
+}
+
+#[derive(PartialEq, Eq)]
+struct PasteSnapshot {
+    delivery: Vec<Option<PasteDelivery>>,
+    full: Vec<Option<KeptMessage>>,
+}
+
+/// A normal handoff changes delivery and paste facts without rewriting the message.
+/// Withdrawals and result writes can change the contents and retain full row evidence.
+#[derive(PartialEq, Eq)]
+struct PasteDelivery {
+    delivery: Delivery,
+    paste: Option<i64>,
+    owed: Option<i64>,
+    owing_to: Option<String>,
+    withdrawn: bool,
+    private_receipt: bool,
+}
+
+impl PasteRows {
+    fn snapshot(&self, connection: &Connection) -> rusqlite::Result<PasteSnapshot> {
+        let mut delivery = Vec::with_capacity(self.delivery.len());
+        if !self.delivery.is_empty() {
+            let mut query = connection.prepare_cached(
+                "SELECT status, reason, text_written, enter_written, deadline, delivered_via,
+                 delivered_at, paste, result_owed, result_owed_machine_id, withdrawn, private_receipt
+                 FROM messages WHERE number = ?1",
+            )?;
+            for &number in &self.delivery {
+                let row = query.query_row([number as i64], |row| {
+                    Ok(PasteDelivery {
+                        delivery: read_delivery(row)?,
+                        paste: row.get("paste")?,
+                        owed: row.get("result_owed")?,
+                        owing_to: row.get("result_owed_machine_id")?,
+                        withdrawn: row.get("withdrawn")?,
+                        private_receipt: row.get("private_receipt")?,
+                    })
+                });
+                delivery.push(row.optional()?);
+            }
+        }
+        let full = self
+            .full
+            .iter()
+            .map(|&number| kept_number(connection, number))
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(PasteSnapshot { delivery, full })
+    }
+}
+
+impl PasteFacts {
+    fn capture<T>(
+        connection: &Connection,
+        rows: PasteRows,
+        write: impl FnOnce(&PasteSnapshot) -> rusqlite::Result<T>,
+    ) -> rusqlite::Result<(T, Self)> {
+        let before = rows.snapshot(connection)?;
+        let result = write(&before)?;
+        let after = rows.snapshot(connection)?;
+        Ok((
+            result,
+            Self {
+                before,
+                after,
+                rows,
+            },
+        ))
+    }
+
+    pub(crate) fn states(&self, connection: &Connection) -> rusqlite::Result<(bool, bool)> {
+        if self.before == self.after {
+            return Ok((true, true));
+        }
+        let actual = self.rows.snapshot(connection)?;
+        Ok((actual == self.before, actual == self.after))
+    }
+}
+
+pub(crate) struct PasteWrite {
+    pub(crate) settlement: Settlement,
+    pub(crate) began: bool,
+    pub(crate) facts: PasteFacts,
+}
+
 /// A send's own ID as its sender gave it, and the earliest time at which a kept message still
 /// answers it.
 #[derive(Clone, Copy, Debug)]
@@ -206,6 +362,13 @@ pub(crate) enum Kept {
     New(Message),
     Earlier(KeptMessage),
 }
+
+pub(crate) enum SaveRejection {
+    ChangedRoute,
+    MissingRecipient,
+}
+
+type SaveResult = Result<Kept, SaveRejection>;
 
 #[cfg(test)]
 impl Kept {
@@ -276,11 +439,23 @@ fn named<T: DeserializeOwned>(name: String) -> rusqlite::Result<T> {
     })
 }
 
+fn read_delivery(row: &Row) -> rusqlite::Result<Delivery> {
+    let reason: Option<String> = row.get("reason")?;
+    let via: Option<String> = row.get("delivered_via")?;
+    Ok(Delivery {
+        status: named(row.get("status")?)?,
+        reason: reason.map(named).transpose()?,
+        text_written: named(row.get("text_written")?)?,
+        enter_written: row.get("enter_written")?,
+        deadline: row.get("deadline")?,
+        delivered_via: via.map(named).transpose()?,
+        delivered_at: row.get("delivered_at")?,
+    })
+}
+
 fn read_message(row: &Row) -> rusqlite::Result<KeptMessage> {
     let number: i64 = row.get("number")?;
     let reply_to: Option<i64> = row.get("reply_to")?;
-    let reason: Option<String> = row.get("reason")?;
-    let via: Option<String> = row.get("delivered_via")?;
     let paste: Option<i64> = row.get("paste")?;
     let result_owed: Option<i64> = row.get("result_owed")?;
     let result_machine: Option<String> = row.get("result_owed_machine_id")?;
@@ -301,15 +476,6 @@ fn read_message(row: &Row) -> rusqlite::Result<KeptMessage> {
                 })
         })
         .transpose()?;
-    let delivery = Delivery {
-        status: named(row.get("status")?)?,
-        reason: reason.map(named).transpose()?,
-        text_written: named(row.get("text_written")?)?,
-        enter_written: row.get("enter_written")?,
-        deadline: row.get("deadline")?,
-        delivered_via: via.map(named).transpose()?,
-        delivered_at: row.get("delivered_at")?,
-    };
     Ok(KeptMessage {
         message: Message {
             message_id: format!("m{number}"),
@@ -326,7 +492,7 @@ fn read_message(row: &Row) -> rusqlite::Result<KeptMessage> {
             call_id: row.get("call_id")?,
             result: result.and_then(|facts| serde_json::from_str(&facts).ok()),
             at: row.get("at")?,
-            delivery,
+            delivery: read_delivery(row)?,
         },
         paste: paste.map(|paste| paste as u64),
         result_owed: result_owed
@@ -433,6 +599,52 @@ pub(super) fn insert(connection: &Connection, message: &Message) -> rusqlite::Re
         message_id: format!("m{number}"),
         ..message.clone()
     })
+}
+
+fn insert_requested(
+    connection: &Connection,
+    message: &Message,
+    request: Option<RequestId<'_>>,
+    notify_failure: bool,
+    binding: Option<&SendRouteBinding>,
+    require_recipient: bool,
+) -> rusqlite::Result<SaveResult> {
+    let earlier = match request {
+        Some(request) => find_request(
+            connection,
+            message.from_machine_id.as_deref(),
+            &message.from,
+            &message.to,
+            request,
+        )?,
+        None => None,
+    };
+    if require_recipient && earlier.is_none() && !recipient_there(connection, &message.to)? {
+        return Ok(Err(SaveRejection::MissingRecipient));
+    }
+    if let Some(binding) = binding {
+        let request = request.expect("a route binding belongs to a request ID");
+        let (pinned, _) = keep_send_route(
+            connection,
+            &message.from,
+            request.id,
+            &binding.target,
+            &binding.route,
+            crate::send_route_cutoff,
+        )?;
+        if pinned != binding.route {
+            return Ok(Err(SaveRejection::ChangedRoute));
+        }
+    }
+    if let Some(earlier) = earlier {
+        return Ok(Ok(Kept::Earlier(earlier)));
+    }
+    let number = take_number(connection)?;
+    write(connection, number, message, request, notify_failure)?;
+    Ok(Ok(Kept::New(Message {
+        message_id: format!("m{number}"),
+        ..message.clone()
+    })))
 }
 
 /// Takes the next number for the result prompt `prompt` owes and keeps it on the prompt, in
@@ -600,25 +812,23 @@ fn write_delivery(
     delivery: &Delivery,
     condition: &str,
 ) -> rusqlite::Result<bool> {
-    let changed = connection.execute(
-        &format!(
-            "UPDATE messages SET status = ?2, reason = ?3, text_written = ?4, enter_written = ?5, \
-             deadline = ?6, delivered_via = ?7, delivered_at = ?8, \
-             result_owed = CASE WHEN ?2 = 'success' THEN NULL ELSE result_owed END, \
-             result_owed_machine_id = CASE WHEN ?2 = 'success' THEN NULL ELSE result_owed_machine_id END \
-             WHERE number = ?1 AND withdrawn = 0 AND private_receipt = 0 AND ({condition})"
-        ),
-        params![
-            number as i64,
-            name(&delivery.status),
-            delivery.reason.as_ref().map(name),
-            name(&delivery.text_written),
-            delivery.enter_written,
-            delivery.deadline,
-            delivery.delivered_via.as_ref().map(name),
-            delivery.delivered_at,
-        ],
-    )?;
+    let mut write = connection.prepare_cached(&format!(
+        "UPDATE messages SET status = ?2, reason = ?3, text_written = ?4, enter_written = ?5, \
+         deadline = ?6, delivered_via = ?7, delivered_at = ?8, \
+         result_owed = CASE WHEN ?2 = 'success' THEN NULL ELSE result_owed END, \
+         result_owed_machine_id = CASE WHEN ?2 = 'success' THEN NULL ELSE result_owed_machine_id END \
+         WHERE number = ?1 AND withdrawn = 0 AND private_receipt = 0 AND ({condition})"
+    ))?;
+    let changed = write.execute(params![
+        number as i64,
+        name(&delivery.status),
+        delivery.reason.as_ref().map(name),
+        name(&delivery.text_written),
+        delivery.enter_written,
+        delivery.deadline,
+        delivery.delivered_via.as_ref().map(name),
+        delivery.delivered_at,
+    ])?;
     Ok(changed == 1)
 }
 
@@ -632,14 +842,91 @@ enum Withdrawal<'a> {
     CleanedPaste,
 }
 
+fn record_paste(connection: &Connection, numbers: &[u64]) -> rusqlite::Result<usize> {
+    let Some(first) = numbers.first() else {
+        return Ok(0);
+    };
+    let mut changed = 0;
+    let mut set = connection.prepare_cached(
+        "UPDATE messages SET paste = ?1
+         WHERE number = ?2 AND status = 'pending' AND paste IS NULL
+         AND withdrawn = 0 AND private_receipt = 0",
+    )?;
+    for number in numbers {
+        changed += set.execute(params![*first as i64, *number as i64])?;
+    }
+    Ok(changed)
+}
+
+fn release_paste(connection: &Connection, number: u64) -> rusqlite::Result<bool> {
+    let changed = connection.execute(
+        "UPDATE messages SET paste = NULL
+         WHERE number = ?1 AND paste = ?1 AND status = 'pending'
+         AND withdrawn = 0 AND private_receipt = 0",
+        [number as i64],
+    )?;
+    Ok(changed == 1)
+}
+
+fn record_deliveries(
+    connection: &Connection,
+    deliveries: &[(u64, &Delivery)],
+    condition: &str,
+    results: &[(u64, Message)],
+    withdrawal: Withdrawal<'_>,
+) -> rusqlite::Result<Settlement> {
+    let mut written = Settlement::default();
+    for (number, delivery) in deliveries {
+        let (withdraw, eligible) = match withdrawal {
+            Withdrawal::CleanedPaste => (true, "status = 'pending' AND paste IS NOT NULL"),
+            Withdrawal::Unstarted(numbers) if numbers.contains(number) => {
+                (true, "status = 'pending' AND paste IS NULL")
+            }
+            Withdrawal::Unstarted(_) => (false, condition),
+        };
+        if !write_delivery(connection, *number, delivery, eligible)? {
+            continue;
+        }
+        written.settled.push(*number);
+        let result = results.iter().find(|(prompt, _)| prompt == number);
+        if let Some((_, result)) = result
+            && write_result(connection, *number, result)?
+        {
+            written.results.push(*number);
+        }
+        if withdraw {
+            hide_withdrawal(connection, *number)?;
+        }
+    }
+    Ok(written)
+}
+
 impl MessageTable {
+    pub(crate) async fn read_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.0.read_admission.lock().await
+    }
+
+    pub(crate) fn write_batch(
+        &self,
+        write: impl FnOnce(&mut super::Batch<'_>) -> rusqlite::Result<()>,
+    ) -> super::BatchResult {
+        self.0.write_batch(write)
+    }
+
+    pub(crate) fn verify_write<T>(
+        &self,
+        read: impl FnOnce(&Connection) -> rusqlite::Result<T>,
+    ) -> anyhow::Result<T> {
+        self.0.verify_write(read)
+    }
+
     pub(super) fn new(store: Arc<Store>) -> MessageTable {
         MessageTable(store)
     }
 
     /// Commits a message number before a result or command reply crosses a handoff.
     pub(crate) fn reserve_result_number(&self) -> anyhow::Result<u64> {
-        self.0.with(
+        self.0.transaction(
             || "reserve a result message number".to_string(),
             |connection| take_number(connection).map(|number| number as u64),
         )
@@ -704,7 +991,7 @@ impl MessageTable {
         route_cutoff: impl FnOnce() -> String,
     ) -> anyhow::Result<Option<SendRoute>> {
         use rusqlite::OptionalExtension;
-        self.0.with(
+        self.0.read(
             || "read the original send recipient".into(),
             |connection| {
                 connection
@@ -721,6 +1008,7 @@ impl MessageTable {
 
     /// Keeps the first resolved target for retries on this machine, including after takeover.
     /// Samples the cutoff inside the transaction after dating a new route.
+    #[cfg(test)]
     pub(crate) fn keep_send_target(
         &self,
         sender: &str,
@@ -737,9 +1025,45 @@ impl MessageTable {
         )
     }
 
+    pub(crate) fn keep_send_target_in(
+        batch: &mut super::Batch<'_>,
+        sender: String,
+        request: String,
+        binding: SendRouteBinding,
+    ) -> rusqlite::Result<rusqlite::Result<((SendRoute, bool), SaveFacts)>> {
+        batch.operation(|connection| {
+            let target = binding.target;
+            let before = saved_route(connection, &sender, &request, &target)?;
+            let kept = keep_send_route(
+                connection,
+                &sender,
+                &request,
+                &target,
+                &binding.route,
+                crate::send_route_cutoff,
+            )?;
+            let after = saved_route(connection, &sender, &request, &target)?;
+            let route = RouteChange {
+                sender,
+                request,
+                target,
+                before,
+                after,
+            };
+            Ok((
+                kept,
+                SaveFacts {
+                    row: None,
+                    route: Some(route),
+                },
+            ))
+        })
+    }
+
     /// Takes the next number and writes `message` under it, in one transaction, with `request`,
     /// its send's request ID, where it had one. Where that transaction finds a message the sender
     /// kept with the same ID within its hour, it keeps nothing and answers that message.
+    #[cfg(test)]
     pub(crate) fn insert_message(
         &self,
         message: &Message,
@@ -747,44 +1071,82 @@ impl MessageTable {
         notify_failure: bool,
         binding: Option<&SendRouteBinding>,
     ) -> anyhow::Result<Kept> {
-        self.0
-            .transaction(
-                || "save a message".to_string(),
-                |transaction| {
-                    if let Some(binding) = binding {
-                        let request = request.expect("a route binding belongs to a request ID");
-                        let (pinned, _) = keep_send_route(
-                            transaction,
-                            &message.from,
-                            request.id,
-                            &binding.target,
-                            &binding.route,
-                            crate::send_route_cutoff,
-                        )?;
-                        if pinned != binding.route {
-                            return Ok(None);
-                        }
-                    }
-                    if let Some(request) = request
-                        && let Some(earlier) = find_request(
-                            transaction,
-                            message.from_machine_id.as_deref(),
-                            &message.from,
-                            &message.to,
-                            request,
-                        )?
-                    {
-                        return Ok(Some(Kept::Earlier(earlier)));
-                    }
-                    let number = take_number(transaction)?;
-                    write(transaction, number, message, request, notify_failure)?;
-                    Ok(Some(Kept::New(Message {
-                        message_id: format!("m{number}"),
-                        ..message.clone()
-                    })))
-                },
-            )?
-            .ok_or_else(|| anyhow::anyhow!("the retained send route changed before saving"))
+        match self.0.transaction(
+            || "save a message".to_string(),
+            |transaction| {
+                insert_requested(
+                    transaction,
+                    message,
+                    request,
+                    notify_failure,
+                    binding,
+                    false,
+                )
+            },
+        )? {
+            Ok(kept) => Ok(kept),
+            Err(SaveRejection::ChangedRoute) => {
+                anyhow::bail!("the retained send route changed before saving")
+            }
+            Err(SaveRejection::MissingRecipient) => {
+                unreachable!("the fixture does not require a recipient")
+            }
+        }
+    }
+
+    pub(crate) fn insert_message_in(
+        batch: &mut super::Batch<'_>,
+        message: &Message,
+        request: Option<RequestId<'_>>,
+        notify_failure: bool,
+        binding: Option<&SendRouteBinding>,
+    ) -> rusqlite::Result<rusqlite::Result<(SaveResult, SaveFacts)>> {
+        batch.operation(|connection| {
+            let route_key = request
+                .zip(binding)
+                .map(|(request, binding)| (request.id, &binding.target));
+            let mut route = if let Some((id, target)) = route_key {
+                Some(RouteChange {
+                    sender: message.from.clone(),
+                    request: id.to_owned(),
+                    target: target.clone(),
+                    before: saved_route(connection, &message.from, id, target)?,
+                    after: None,
+                })
+            } else {
+                None
+            };
+            let kept =
+                insert_requested(connection, message, request, notify_failure, binding, true)?;
+            if let Some(route) = &mut route {
+                route.after =
+                    saved_route(connection, &route.sender, &route.request, &route.target)?;
+            }
+            let row = match &kept {
+                Ok(Kept::New(message)) => {
+                    let number = number_of(message);
+                    Some((
+                        number,
+                        kept_number(connection, number)?
+                            .ok_or(rusqlite::Error::QueryReturnedNoRows)?,
+                    ))
+                }
+                _ => None,
+            };
+            Ok((kept, SaveFacts { row, route }))
+        })
+    }
+
+    pub(crate) fn find_request_in(
+        batch: &mut super::Batch<'_>,
+        from_machine_id: &str,
+        from: &str,
+        to: &str,
+        request: RequestId<'_>,
+    ) -> rusqlite::Result<rusqlite::Result<Option<KeptMessage>>> {
+        batch.operation(|connection| {
+            find_request(connection, Some(from_machine_id), from, to, request)
+        })
     }
 
     /// The message this caller kept for `to` with the same request ID within its hour.
@@ -795,7 +1157,7 @@ impl MessageTable {
         to: &str,
         request: RequestId,
     ) -> anyhow::Result<Option<KeptMessage>> {
-        self.0.with(
+        self.0.read(
             || "read messages".to_string(),
             |connection| find_request(connection, Some(from_machine_id), from, to, request),
         )
@@ -865,7 +1227,7 @@ impl MessageTable {
         owner: &str,
         number: u64,
     ) -> anyhow::Result<Option<KeptMessage>> {
-        self.0.with(
+        self.0.read(
             || format!("read #m{number} in {owner}'s inbox"),
             |connection| {
                 connection
@@ -890,7 +1252,7 @@ impl MessageTable {
         deadline: &str,
         from_name: Option<&str>,
     ) -> anyhow::Result<bool> {
-        let changed = self.0.with(
+        let changed = self.0.transaction(
             || format!("begin the delivery of #m{number}"),
             |connection| {
                 connection.execute(
@@ -904,28 +1266,120 @@ impl MessageTable {
     }
 
     /// Records, in one transaction, that the paste of `numbers` begins, named by its first.
+    #[cfg(test)]
     pub(crate) fn begin_paste(&self, numbers: &[u64]) -> anyhow::Result<()> {
         let Some(first) = numbers.first() else {
             return Ok(());
         };
         self.0.transaction(
             || format!("record that #m{first}'s paste began"),
-            |transaction| {
-                for number in numbers {
-                    transaction.execute(
-                        "UPDATE messages SET paste = ?1 WHERE number = ?2 AND withdrawn = 0 AND private_receipt = 0",
-                        params![*first as i64, *number as i64],
-                    )?;
-                }
-                Ok(())
-            },
+            |transaction| record_paste(transaction, numbers).map(|_| ()),
         )
+    }
+
+    pub(crate) fn write_paste_in(
+        batch: &mut super::Batch<'_>,
+        deliveries: &[(u64, &Delivery)],
+        results: &[(u64, Message)],
+        withdrawals: &[u64],
+        cleaned_paste: bool,
+        next: Option<u64>,
+    ) -> rusqlite::Result<rusqlite::Result<PasteWrite>> {
+        batch.operation(|connection| {
+            let mut rows = PasteRows::default();
+            for &(number, _) in deliveries {
+                if cleaned_paste || withdrawals.contains(&number) {
+                    rows.full.push(number);
+                } else {
+                    rows.delivery.push(number);
+                }
+            }
+            rows.delivery.extend(next);
+            for (_, message) in results {
+                if let Some(reference) = &message.message_ref
+                    && let Ok(number) = result_number(reference)
+                {
+                    rows.full.push(number as u64);
+                }
+            }
+            let withdrawal = if cleaned_paste {
+                Withdrawal::CleanedPaste
+            } else {
+                Withdrawal::Unstarted(withdrawals)
+            };
+            let ((settlement, began), facts) = PasteFacts::capture(connection, rows, |_| {
+                let settlement = record_deliveries(
+                    connection,
+                    deliveries,
+                    "status = 'pending'",
+                    results,
+                    withdrawal,
+                )?;
+                let began = match next {
+                    Some(number) => record_paste(connection, &[number])? == 1,
+                    None => false,
+                };
+                Ok((settlement, began))
+            })?;
+            Ok(PasteWrite {
+                settlement,
+                began,
+                facts,
+            })
+        })
+    }
+
+    pub(crate) fn release_paste_in(
+        batch: &mut super::Batch<'_>,
+        number: u64,
+    ) -> rusqlite::Result<rusqlite::Result<(bool, PasteFacts)>> {
+        batch.operation(|connection| {
+            let rows = PasteRows {
+                delivery: vec![number],
+                full: Vec::new(),
+            };
+            PasteFacts::capture(connection, rows, |_| release_paste(connection, number))
+        })
+    }
+
+    pub(crate) fn withdraw_in(
+        batch: &mut super::Batch<'_>,
+        number: u64,
+        delivery: &Delivery,
+        unused_grant: bool,
+    ) -> rusqlite::Result<rusqlite::Result<(bool, PasteFacts)>> {
+        batch.operation(|connection| {
+            let rows = PasteRows {
+                delivery: Vec::new(),
+                full: vec![number],
+            };
+            PasteFacts::capture(connection, rows, |before| {
+                let can_withdraw_grant = unused_grant
+                    && before.full[0]
+                        .as_ref()
+                        .is_some_and(|kept| kept.paste == Some(number));
+                let withdrawal = if can_withdraw_grant {
+                    Withdrawal::CleanedPaste
+                } else {
+                    Withdrawal::Unstarted(std::slice::from_ref(&number))
+                };
+                let written = record_deliveries(
+                    connection,
+                    &[(number, delivery)],
+                    "status = 'pending'",
+                    &[],
+                    withdrawal,
+                )?;
+                Ok(written.settled.contains(&number))
+            })
+        })
     }
 
     /// Writes, in one transaction, each delivery whose message is still pending, and the results
     /// that the prompts among them owe, each paired with its prompt's number. A result is written
     /// only for a caller still there. A message settled before, or deleted with its recipient's
     /// inbox, is left as it is.
+    #[cfg(test)]
     pub(crate) fn settle_messages(
         &self,
         settled: &[(u64, &Delivery)],
@@ -936,6 +1390,7 @@ impl MessageTable {
 
     /// Settles still-pending deliveries and withdraws only those whose paste has yet to start.
     /// Owed results, the final receipt, and the withdrawal are committed with the delivery.
+    #[cfg(test)]
     pub(crate) fn settle_with_withdrawals(
         &self,
         settled: &[(u64, &Delivery)],
@@ -951,6 +1406,7 @@ impl MessageTable {
     }
 
     /// Post uses this after the terminal confirms clearing its own paste before Enter.
+    #[cfg(test)]
     pub(crate) fn settle_cleaned_paste(
         &self,
         settled: &[(u64, &Delivery)],
@@ -975,19 +1431,7 @@ impl MessageTable {
         self.write_deliveries(read, UNDELIVERED, results, Withdrawal::Unstarted(&[]))
     }
 
-    /// Commits only still-pending messages whose terminal paste has yet to begin.
-    pub(crate) fn record_unstarted_reads(
-        &self,
-        read: &[(u64, &Delivery)],
-    ) -> anyhow::Result<Settlement> {
-        self.write_deliveries(
-            read,
-            "status = 'pending' AND paste IS NULL",
-            &[],
-            Withdrawal::Unstarted(&[]),
-        )
-    }
-
+    #[cfg(test)]
     fn write_deliveries(
         &self,
         deliveries: &[(u64, &Delivery)],
@@ -998,32 +1442,7 @@ impl MessageTable {
         self.0.transaction(
             || "save the delivery of messages".to_string(),
             |transaction| {
-                let mut written = Settlement::default();
-                for (number, delivery) in deliveries {
-                    let (withdraw, eligible) = match withdrawal {
-                        Withdrawal::CleanedPaste => {
-                            (true, "status = 'pending' AND paste IS NOT NULL")
-                        }
-                        Withdrawal::Unstarted(numbers) if numbers.contains(number) => {
-                            (true, "status = 'pending' AND paste IS NULL")
-                        }
-                        Withdrawal::Unstarted(_) => (false, condition),
-                    };
-                    if !write_delivery(transaction, *number, delivery, eligible)? {
-                        continue;
-                    }
-                    written.settled.push(*number);
-                    let result = results.iter().find(|(prompt, _)| prompt == number);
-                    if let Some((_, result)) = result
-                        && write_result(transaction, *number, result)?
-                    {
-                        written.results.push(*number);
-                    }
-                    if withdraw {
-                        hide_withdrawal(transaction, *number)?;
-                    }
-                }
-                Ok(written)
+                record_deliveries(transaction, deliveries, condition, results, withdrawal)
             },
         )
     }
@@ -1036,35 +1455,9 @@ impl MessageTable {
         limit: Option<usize>,
         values: impl rusqlite::Params,
     ) -> anyhow::Result<Vec<KeptMessage>> {
-        let limit = limit
-            .map(|limit| format!(" LIMIT {limit}"))
-            .unwrap_or_default();
-        self.0.with(
-            || "read messages".to_string(),
-            |connection| {
-                let mut statement = connection.prepare(&format!(
-                    "SELECT {COLUMNS} FROM messages WHERE withdrawn = 0 AND private_receipt = 0 AND ({filter}) ORDER BY number{limit}"
-                ))?;
-                let mut rows = statement.query(values)?;
-                let mut messages = Vec::new();
-                while let Some(row) = rows.next()? {
-                    match read_message(row) {
-                        Ok(message) => messages.push(message),
-                        Err(err) => {
-                            let number = row
-                                .get::<_, i64>(0)
-                                .map_or("with no number".to_string(), |n| format!("#m{n}"));
-                            log(
-                                "warn",
-                                &format!(
-                                    "skipping message {number} that this build cannot read: {err}"
-                                ),
-                            );
-                        }
-                    }
-                }
-                Ok(messages)
-            },
+        self.0.read(
+            || "read messages".to_owned(),
+            |connection| select_from(connection, filter, limit, values),
         )
     }
 
@@ -1160,32 +1553,44 @@ impl MessageTable {
         page: &InboxPage<'_>,
         sender: Option<&AgentRef>,
     ) -> anyhow::Result<Vec<Message>> {
-        let history = page.after.is_some() || page.last.is_some() || page.reply_to.is_some();
-        let (reply_machine, reply_number) = page.reply_to.unzip();
-        let values = params![
-            owner,
-            page.after.unwrap_or(0) as i64,
-            page.now,
-            history,
-            reply_number.map(|number| number as i64),
-            page.machine_id,
-            reply_machine,
-            sender.map(|sender| &sender.agent_id),
-            sender.map(|sender| &sender.machine_id),
-        ];
-        let eligible = "\"to\" = ?1 AND number > ?2 \
-            AND ((status = 'pending' AND paste IS NULL AND (deadline IS NULL OR deadline > ?3)) \
-                 OR (?4 AND status = 'success')) \
-            AND (?5 IS NULL OR (reply_to = ?5 AND COALESCE(reply_to_machine_id, ?6) = ?7)) \
-            AND (?8 IS NULL OR (\"from\" = ?8 AND from_machine_id IS NULLIF(?9, (SELECT machine_id FROM machine))))";
-        match page.last {
-            Some(last) => self.select_messages(
-                &format!("number IN (SELECT number FROM messages WHERE withdrawn = 0 AND private_receipt = 0 AND ({eligible}) ORDER BY number DESC LIMIT {last})"),
-                None,
-                values,
-            ),
-            None => self.select_messages(eligible, Some(page.limit), values),
-        }
+        self.0.read(
+            || "prepare an inbox page".into(),
+            |connection| select_page(connection, owner, page, sender),
+        )
+    }
+
+    pub(crate) fn read_page_in(
+        batch: &mut super::Batch<'_>,
+        owner: &str,
+        page: &InboxPage<'_>,
+        sender: Option<&AgentRef>,
+    ) -> rusqlite::Result<rusqlite::Result<Vec<Message>>> {
+        batch.operation(|connection| select_page(connection, owner, page, sender))
+    }
+
+    pub(crate) fn take_page_in(
+        batch: &mut super::Batch<'_>,
+        writes: &[(u64, &Delivery)],
+    ) -> rusqlite::Result<rusqlite::Result<(Settlement, PasteFacts)>> {
+        batch.operation(|connection| {
+            let rows = PasteRows {
+                delivery: writes.iter().map(|(number, _)| *number).collect(),
+                full: Vec::new(),
+            };
+            PasteFacts::capture(connection, rows, |_| {
+                let written = record_deliveries(
+                    connection,
+                    writes,
+                    "status = 'pending' AND paste IS NULL",
+                    &[],
+                    Withdrawal::Unstarted(&[]),
+                )?;
+                if written.settled.len() != writes.len() {
+                    return Err(rusqlite::Error::QueryReturnedNoRows);
+                }
+                Ok(written)
+            })
+        })
     }
 
     /// Every kept message of `owner`'s inbox, by number.
@@ -1226,7 +1631,7 @@ impl MessageTable {
         receipt_cutoff: impl FnOnce() -> String,
         route_cutoff: impl FnOnce() -> String,
     ) -> anyhow::Result<Vec<Gone>> {
-        self.0.with(
+        self.0.transaction(
             || "delete expired messages".to_string(),
             |connection| {
                 let since = receipt_cutoff();
@@ -1239,6 +1644,76 @@ impl MessageTable {
             },
         )
     }
+}
+
+fn select_page(
+    connection: &Connection,
+    owner: &str,
+    page: &InboxPage<'_>,
+    sender: Option<&AgentRef>,
+) -> rusqlite::Result<Vec<Message>> {
+    let history = page.after.is_some() || page.last.is_some() || page.reply_to.is_some();
+    let (reply_machine, reply_number) = page.reply_to.unzip();
+    let values = params![
+        owner,
+        page.after.unwrap_or(0) as i64,
+        page.now,
+        history,
+        reply_number.map(|number| number as i64),
+        page.machine_id,
+        reply_machine,
+        sender.map(|sender| &sender.agent_id),
+        sender.map(|sender| &sender.machine_id),
+    ];
+    let eligible = "\"to\" = ?1 AND number > ?2 \
+        AND ((status = 'pending' AND paste IS NULL AND (deadline IS NULL OR deadline > ?3)) \
+             OR (?4 AND status = 'success')) \
+        AND (?5 IS NULL OR (reply_to = ?5 AND COALESCE(reply_to_machine_id, ?6) = ?7)) \
+        AND (?8 IS NULL OR (\"from\" = ?8 AND from_machine_id IS NULLIF(?9, (SELECT machine_id FROM machine))))";
+    let rows = match page.last {
+        Some(last) => select_from(
+            connection,
+            &format!(
+                "number IN (SELECT number FROM messages WHERE withdrawn = 0 AND private_receipt = 0 AND ({eligible}) ORDER BY number DESC LIMIT {last})"
+            ),
+            None,
+            values,
+        ),
+        None => select_from(connection, eligible, Some(page.limit), values),
+    }?;
+    Ok(rows.into_iter().map(|row| row.message).collect())
+}
+
+fn select_from(
+    connection: &Connection,
+    filter: &str,
+    limit: Option<usize>,
+    values: impl rusqlite::Params,
+) -> rusqlite::Result<Vec<KeptMessage>> {
+    let limit = limit
+        .map(|limit| format!(" LIMIT {limit}"))
+        .unwrap_or_default();
+    let mut statement = connection.prepare(&format!(
+        "SELECT {COLUMNS} FROM messages WHERE withdrawn = 0 AND private_receipt = 0
+         AND ({filter}) ORDER BY number{limit}"
+    ))?;
+    let mut rows = statement.query(values)?;
+    let mut messages = Vec::new();
+    while let Some(row) = rows.next()? {
+        match read_message(row) {
+            Ok(message) => messages.push(message),
+            Err(error) => {
+                let number = row
+                    .get::<_, i64>(0)
+                    .map_or("with no number".into(), |n| format!("#m{n}"));
+                log(
+                    "warn",
+                    &format!("skipping message {number} that this build cannot read: {error}"),
+                );
+            }
+        }
+    }
+    Ok(messages)
 }
 
 #[cfg(test)]
@@ -1319,6 +1794,57 @@ mod tests {
             deadline: None,
             delivered_via: Some(DeliveredVia::ReadByRecipient),
             delivered_at: Some(at.into()),
+        }
+    }
+
+    #[test]
+    fn a_handoff_witness_distinguishes_a_commit_from_rollback_and_a_partial_change() {
+        let framework = Framework::new("paste-witness");
+        let store = framework.open();
+        let table = store.message_table();
+        for _ in 0..2 {
+            store.insert_message(&message(0, "a2"), None).unwrap();
+        }
+        table.begin_paste(&[1]).unwrap();
+        let delivered = read_at("2026-11-10T00:00:01.000Z");
+        for rollback in [true, false] {
+            let mut witness = None;
+            let result = table.write_batch(|batch| {
+                let written = MessageTable::write_paste_in(
+                    batch,
+                    &[(1, &delivered)],
+                    &[],
+                    &[],
+                    false,
+                    Some(2),
+                )??;
+                assert_eq!(written.settlement.settled, [1]);
+                assert!(written.began);
+                witness = Some(written.facts);
+                if rollback {
+                    return Err(rusqlite::Error::InvalidQuery);
+                }
+                Ok(())
+            });
+            let witness = witness.unwrap();
+            let states = || {
+                table
+                    .verify_write(|connection| witness.states(connection))
+                    .unwrap()
+            };
+            if rollback {
+                assert!(matches!(result, crate::store::BatchResult::Aborted(_)));
+                assert_eq!(states(), (true, false));
+            } else {
+                assert!(matches!(result, crate::store::BatchResult::Committed));
+                assert_eq!(states(), (false, true));
+                let result = table.write_batch(|batch| {
+                    assert!(MessageTable::release_paste_in(batch, 2)??.0);
+                    Ok(())
+                });
+                assert!(matches!(result, crate::store::BatchResult::Committed));
+                assert_eq!(states(), (false, false));
+            }
         }
     }
 

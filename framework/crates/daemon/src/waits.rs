@@ -18,7 +18,7 @@ use crate::agent::{AgentCommand, AgentHandle};
 use crate::api;
 use crate::delivery::pending_message;
 use crate::lifecycle::Work;
-use crate::messages::{self, Due, Posted, PromptWatch};
+use crate::messages::{self, Due, Posted, PromptWatch, Saving};
 use crate::{Daemon, Sender, log};
 
 /// How long a continuously blocked or errored run waits before its creator is told.
@@ -338,7 +338,19 @@ impl Daemon {
         };
         let mut message = pending_message(from, agent.id(), text, None, Some(due.at));
         message.from_machine_id = (source != self.machine_id).then(|| source.to_string());
-        if let Posted::New(message, mut settled) = self.messages.post(message, None, None, false)?
+        if let Some(Posted::New(message, mut settled)) = self
+            .messages
+            .save(Saving {
+                message,
+                request_id: None,
+                notify_failure: false,
+                binding: None,
+                until: Some(due.instant),
+                cancel: Default::default(),
+                relay: None,
+                ordinary: false,
+            })
+            .await?
             && (agent.is_guest() || self.hand_to_typist(&agent, &message, due.instant).await)
         {
             self.messages

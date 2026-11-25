@@ -8,7 +8,7 @@ use tokio::sync::{OwnedRwLockReadGuard, TryAcquireError};
 
 use super::lines::Response;
 use crate::lifecycle::RelayLink;
-use crate::messages::InboxSelection;
+use crate::messages::{InboxSelection, ReadAnswer};
 use crate::server::{MAX_OUTBOX_BYTES, Outbox, OutboxRoom};
 
 pub(crate) enum InboxAnswer {
@@ -59,6 +59,17 @@ impl ReplyTarget {
         let Some(effect) = self.link.try_effect()? else {
             return Ok(None);
         };
+        Ok(self.try_outbox(bytes, reserved)?.map(|room| EffectRoom {
+            room,
+            _effect: effect,
+        }))
+    }
+
+    fn try_outbox(
+        &self,
+        bytes: usize,
+        reserved: Option<OutboxRoom>,
+    ) -> Result<Option<OutboxRoom>, ErrorBody> {
         let room = match reserved.filter(|room| room.fits(bytes)) {
             Some(room) => room,
             None => match self.outbox.try_reserve(bytes) {
@@ -67,10 +78,7 @@ impl ReplyTarget {
                 Err(TryAcquireError::Closed) => return Err(closed()),
             },
         };
-        Ok(Some(EffectRoom {
-            room,
-            _effect: effect,
-        }))
+        Ok(Some(room))
     }
 
     async fn reserve(&self, bytes: usize) -> Result<OutboxRoom, ErrorBody> {
@@ -107,6 +115,10 @@ pub(crate) struct InboxOutput {
 }
 
 impl InboxOutput {
+    pub(crate) fn link(&self) -> &Arc<RelayLink> {
+        &self.target.link
+    }
+
     pub(crate) fn prepare(
         &self,
         count: usize,
@@ -123,19 +135,15 @@ impl InboxOutput {
         }
         let line = self.target.line(page);
         let bytes = line.len();
-        if let Some(room) = self.target.try_room(bytes, reserved)? {
+        if let Some(room) = self.target.try_outbox(bytes, reserved)? {
             return Ok(InboxSelection::Ready {
                 count,
                 result: InboxAnswer::Answered,
-                enqueue: Some(Box::new(move || {
-                    crate::gate_for_test("mcp-inbox-answer");
-                    room.send(line);
-                })),
+                enqueue: Some(ReadAnswer::new(self.target.link.clone(), room, line)),
             });
         }
         let target = self.target.clone();
         Ok(InboxSelection::Wait(Box::pin(async move {
-            drop(target.link.effect().await?);
             target.reserve(bytes).await
         })))
     }
@@ -237,7 +245,11 @@ mod tests {
                             reserved = Some(reservation.await.unwrap())
                         }
                         InboxSelection::Ready { enqueue, .. } => {
-                            enqueue.expect("a nonempty page queues an answer")();
+                            enqueue
+                                .expect("a nonempty page queues an answer")
+                                .claim()
+                                .unwrap()
+                                .expect("the test relay is open")();
                             return;
                         }
                     }

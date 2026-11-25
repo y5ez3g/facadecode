@@ -2359,6 +2359,55 @@ fn a_delayed_mcp_send_withdraws_its_message_by_the_original_deadline() {
     assert_eq!(std::fs::read(&keys).unwrap(), expected);
 }
 
+/// A new relay resolves its target while an earlier message holds the SQLite write connection.
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the test gates of debug builds")]
+fn an_ordinary_mcp_send_resolves_while_another_send_commits() {
+    let home = TestHome::new("relay-concurrent-commit");
+    let commit = "before-message-batch-commit";
+    let resolved = "before-ordinary-message-save";
+    home.start_facade_with(&[("FACADE_TEST_GATES", &format!("{commit},{resolved}"))]);
+    let first = home.start_named_fake("first sender", &[]);
+    let second = home.start_named_fake("second sender", &[]);
+    let recipient = home.start_named_fake("recipient", &[]);
+    let mut first = McpTestClient::open_configured(&home, &first.id);
+    let mut second = McpTestClient::open_configured(&home, &second.id);
+
+    let first_send = first.send(
+        "tools/call",
+        json!({
+            "name": "send_message",
+            "arguments": {
+                "to": recipient.address, "text": "first",
+                "wait_for": "delivery", "timeout_seconds": 25,
+            },
+        }),
+    );
+    home.wait_for_gate(commit);
+    // The unqualified selector uses both the machine list and the stored agent launch details.
+    let second_send = second.send(
+        "tools/call",
+        json!({"name": "send_message", "arguments": {"to": "recipient", "text": "second"}}),
+    );
+    let before_commit = wait_until(secs(10), || {
+        home.path
+            .join(format!("framework/reached-{resolved}"))
+            .exists()
+    });
+    home.release_gate(resolved);
+    home.release_gate(commit);
+    assert!(
+        before_commit,
+        "the send could not resolve its target while the writer was held"
+    );
+
+    let first = first.tool_answer(first_send);
+    let second = second.tool_answer(second_send);
+    assert_eq!(first["status"], "success", "{first}");
+    assert_eq!(second["status"], "success", "{second}");
+    assert_ne!(first["data"]["id"], second["data"]["id"]);
+}
+
 #[test]
 fn a_relay_replay_past_its_first_deadline_answers_only_an_existing_receipt() {
     let home = TestHome::new("relay-original-deadline");

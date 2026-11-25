@@ -152,7 +152,7 @@ impl Store {
     }
 
     pub(crate) fn machine_last_seen(&self) -> anyhow::Result<HashMap<String, String>> {
-        self.with(|| "read machine contact times".into(), |connection| {
+        self.read(|| "read machine contact times".into(), |connection| {
             connection.prepare("SELECT machine_id, last_seen FROM known_machines WHERE last_seen IS NOT NULL")?
                 .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect()
         })
@@ -193,7 +193,7 @@ impl Store {
     }
 
     pub(crate) fn known_machine_names(&self) -> anyhow::Result<HashMap<String, String>> {
-        self.with(
+        self.read(
             || "read the known machine names".to_string(),
             |connection| {
                 connection

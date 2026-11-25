@@ -344,7 +344,7 @@ impl Daemon {
         &self,
         actor: &BoundActor,
         evidence: &RelayEvidence,
-        selection: RelayInbox,
+        mut selection: RelayInbox,
         cancel: Cancel,
         output: Option<InboxOutput>,
     ) -> Result<InboxAnswer, ErrorBody> {
@@ -352,6 +352,22 @@ impl Daemon {
             handle,
             info: ManagedAgent { guest, .. },
         } = actor.current(self, &evidence.process)?;
+        let active = handle.clone();
+        let run = actor.run.map(|(run, _)| run);
+        let admit_run: crate::messages::ReadAdmission = Arc::new(move || {
+            active.exit().borrow().is_none() && run.is_none_or(|run| active.run() == run)
+        });
+        let link = output.as_ref().map(|output| output.link().clone());
+        match &mut selection {
+            RelayInbox::Page(read) => {
+                read.admit_run = Some(admit_run);
+                read.relay = link;
+            }
+            RelayInbox::Reply(read) => {
+                read.admit_run = Some(admit_run);
+                read.relay = link;
+            }
+        }
         let machines = self.machine_identities()?;
         let project = |page: &facade_base::model::message::MessagesSnapshot, room| {
             let render = if page.messages.iter().any(|message| message.result.is_some()) {
@@ -367,7 +383,7 @@ impl Daemon {
             };
             let (count, projected) =
                 mcp::project_inbox(render.as_ref().unwrap_or(page), &self.machine_id, &machines)?;
-            // The delivery lock covers projection and recording the returned messages together.
+            // The writer rechecks this run and the complete prefix when taking the page.
             actor.current(self, &evidence.process)?;
             if let Some(output) = &output {
                 output.prepare(count, projected, room)
@@ -643,7 +659,7 @@ impl RelayLines for RelayConnection {
 
     fn ended(&self, closing_answered: bool) {
         if !closing_answered && let Some(id) = self.daemon.guests.end_member(&self.process) {
-            self.daemon.end_listed_guest(&id);
+            let _ = self.daemon.end_listed_guest(&id);
         }
     }
 }

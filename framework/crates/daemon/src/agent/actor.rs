@@ -381,6 +381,7 @@ impl Actor {
         self.publish_state();
         loop {
             if !self.typist.pasting()
+                && !self.typist.saving_paste()
                 && !self.holds_input_for_probe
                 && let Some(reply) = self.settling.take()
             {
@@ -394,11 +395,7 @@ impl Actor {
                 .map(Instant::from_std);
             let enter_at = self.enter_wake();
             let held_at = self.held_wake();
-            let wait = if !self.terminal.is_closed() && !full && !self.quiet {
-                TerminalWait::ReadAndWrite
-            } else {
-                TerminalWait::WriteOnly
-            };
+            let wait = self.terminal_wait(full);
             let writing = self.screen().checkpoint_running();
             let screen = self
                 .screen
@@ -416,6 +413,11 @@ impl Actor {
                 _ = wait_for_prompt(&mut self.prompt_result) => self.report_trouble(),
                 // Continuous terminal output must not hold back a glyph frame.
                 _ = sleep_until(self.glyph_at), if self.glyph_at.is_some() => self.advance_glyph(),
+                saved = self.typist.paste_saved() => {
+                    if saved {
+                        self.type_next();
+                    }
+                }
                 event = self.terminal.ready(wait) => self.take_terminal(event),
                 Ok(()) = self.links.tools_connections.changed() => {
                     let open = *self.links.tools_connections.borrow_and_update() > 0;
@@ -452,6 +454,10 @@ impl Actor {
                 _ = sleep_until(held_at), if held_at.is_some() => {}
             }
             self.end_turn().await;
+        }
+        self.typist.hold_pastes();
+        while self.typist.saving_paste() {
+            self.typist.paste_saved().await;
         }
     }
 
@@ -820,8 +826,12 @@ impl Actor {
                 let _ = reply.send(());
             }
             AgentCommand::SettlePaste { reply } => {
+                self.terminal.discard_offer();
                 self.typist.hold_pastes();
                 self.settling = Some(reply);
+                if self.typist.pasting() {
+                    self.typist_at = Some(Instant::now());
+                }
             }
             AgentCommand::Rename { name, reply } => {
                 self.links.shared.record.lock().unwrap().info.name = name;
@@ -1003,11 +1013,16 @@ impl Actor {
     /// Logs and applies a size to the screen, then to the terminal. Answers whether the record's
     /// size changed, which redraws viewers.
     fn resize(&mut self, cols: u16, rows: u16) -> bool {
-        if (cols, rows) != self.size() {
+        let changed = (cols, rows) != self.size();
+        if changed {
             self.screen_mut().checkpoint_if_due();
         }
         self.screen_mut().resize(cols, rows);
         self.terminal.set_size(cols, rows);
+        // A size change can invalidate the last reading without any new terminal output.
+        if changed && self.terminal.has_offer() {
+            self.type_next();
+        }
         {
             let mut record = self.links.shared.record.lock().unwrap();
             let info = &mut record.info;
@@ -1040,12 +1055,17 @@ impl Actor {
         match event {
             TerminalEvent::Read => self.take_output(),
             TerminalEvent::Closed => {
+                self.typist.reject_offer();
                 // The CLI's side closed: a known exit goes to viewers now.
                 if self.drain_deadline.is_some() {
                     self.send_exit();
                 }
             }
-            TerminalEvent::Wrote => {
+            event @ (TerminalEvent::Wrote | TerminalEvent::PasteIssued { .. }) => {
+                if let TerminalEvent::PasteIssued { offset, length } = event {
+                    self.typist.paste_issued(offset, length);
+                    self.escape_may_edit = false;
+                }
                 self.links.room.notify_waiters();
                 if self.typist.busy() {
                     self.type_next();
@@ -1063,6 +1083,10 @@ impl Actor {
                 {
                     let _ = reply.send(());
                 }
+            }
+            TerminalEvent::PasteSkipped => {
+                self.typist.reject_offer();
+                self.links.room.notify_waiters();
             }
             TerminalEvent::WriteFailed(err) => {
                 self.stop_input(&format!(
@@ -1579,6 +1603,16 @@ impl Actor {
         )
     }
 
+    fn terminal_wait(&self, full: bool) -> TerminalWait {
+        if self.terminal.is_closed() || full || self.quiet {
+            TerminalWait::WriteOnly
+        } else if paste_frame_complete(self.screen().screen()) {
+            TerminalWait::ReadAndWrite
+        } else {
+            TerminalWait::ReadAndWriteWithoutNewPaste
+        }
+    }
+
     /// Lets the typist take its next step and queues what it writes.
     fn type_next(&mut self) {
         self.typist_at = None;
@@ -1599,7 +1633,7 @@ impl Actor {
                 == ManagedAgentState::Working,
         };
         let written = self.terminal.written();
-        let queued = written + self.terminal.queued() as u64;
+        let queued = self.terminal.queued_through();
         let probing = self.typist.probing();
         let pasting = self.typist.pasting();
         let (rule, ended, undrawn) = (self.input_rule, self.ended(), self.undrawn);
@@ -1625,7 +1659,12 @@ impl Actor {
         let partial_until = self.person.partial_until(now);
         let writes = if self.escape_may_edit {
             BoxWrites::AwaitingEscape
-        } else if start_first || held_first || self.person_first(now) || person_submitting {
+        } else if start_first
+            || held_first
+            || self.person_first(now)
+            || person_submitting
+            || !self.terminal.is_open()
+        {
             BoxWrites::ObserveOnly
         } else {
             BoxWrites::Allowed
@@ -1648,6 +1687,13 @@ impl Actor {
                 awaiting_after_interaction,
             }
         };
+        if self
+            .typist
+            .revoke_offer(writes, paste_frame_complete(screen.screen()), &read_screen)
+        {
+            self.terminal.discard_offer();
+            self.typist.reject_offer();
+        }
         let step = self
             .typist
             .step(now, written, queued, modes, writes, &observe);
@@ -1656,11 +1702,11 @@ impl Actor {
             self.holds_input_for_probe =
                 !read_box(rule, ended, undrawn, screen.screen(), false).unsure;
         }
-        if !pasting && self.typist.pasting() && !step.write.is_empty() {
-            self.escape_may_edit = false;
-            self.terminal.observe_paste_from(queued + 1);
+        if let Some(permit) = step.permit {
+            self.terminal.offer_paste(step.write, permit);
+        } else {
+            self.terminal.push(&step.write);
         }
-        self.terminal.push(&step.write);
         let shown_by = (unshown_until.into_iter())
             .chain(partial_until)
             .min()
@@ -1940,7 +1986,7 @@ impl Actor {
 
     /// Through which byte the input is queued.
     fn queued_through(&self) -> u64 {
-        self.terminal.written() + self.terminal.queued() as u64
+        self.terminal.queued_through()
     }
 
     /// A held Enter goes now: an agent that reads its terminal no more cannot see the input drawn.
@@ -2201,6 +2247,11 @@ impl Actor {
 
 /// A CLI's input as `rule` reads `screen`, with a draft's text and its first row. Unknown without a
 /// rule, once the run `ended`, or while the screen may not show the input yet, `undrawn` saying why.
+/// A new paste needs a whole frame, even when a synchronized update has only just opened.
+fn paste_frame_complete(screen: &facade_screen::Screen) -> bool {
+    screen.synchronized_update_deadline().is_none() && !screen.has_unfinished_unit()
+}
+
 fn read_box(
     rule: Option<&InputRule>,
     ended: bool,
@@ -2336,14 +2387,200 @@ mod tests {
         actor.input_drawn_at = Some(Instant::now());
     }
 
+    async fn drain_delivery_writes(actor: &mut Actor) {
+        // These fixtures advance Tokio's clock themselves. The SQLite writer runs in real time.
+        while actor.typist.saving_paste() {
+            if actor.typist.paste_saved().await {
+                actor.type_next();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_ready_frame_is_read_before_a_staged_message_can_write() {
+        for (frame, split) in [
+            (plain_claude_frame("a person's draft", ""), 0),
+            (claude_trust_frame(false), 0),
+            (claude_trust_frame(false), b"\x1b[?2026".len()),
+            (claude_trust_frame(false), b"\x1b[?2026h".len()),
+        ] {
+            let home = crate::test_folder::TestFolder::new("read-before-paste");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = actor_with_cli(&home, messages.delivery_handle()).await;
+            draw_input(&mut actor, "");
+            let (kept, _) = post_new(&messages, message(0, "a1"));
+            let deadline = Instant::now() + Duration::from_secs(120);
+            actor.typist.deliver(MessageTyping::new(
+                "a message".into(),
+                crate::messages::number(&kept),
+                deadline,
+                Submission {
+                    text: "a message".into(),
+                    sender: Sender::person(),
+                },
+            ));
+            actor.type_next();
+            drain_delivery_writes(&mut actor).await;
+            assert!(actor.terminal.queued() > 0);
+            assert_eq!(actor.terminal.written(), 0);
+            let frame = synchronized(&frame);
+            let (prefix, rest) = frame.as_bytes().split_at(split);
+            if !prefix.is_empty() {
+                cli.write_output(prefix).unwrap();
+                read_buffered_frames(&mut actor, prefix.len()).await;
+                assert!(actor.terminal.has_offer());
+                assert_eq!(actor.typist_at, Some(deadline));
+                let wait = actor.terminal_wait(false);
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(20), actor.terminal.ready(wait))
+                        .await
+                        .is_err(),
+                    "a partial frame cannot authorize a new paste"
+                );
+            }
+            cli.write_output(rest).unwrap();
+            read_buffered_frames(&mut actor, rest.len()).await;
+            assert_eq!(actor.terminal.written(), 0);
+            assert_eq!(
+                actor.terminal.queued(),
+                0,
+                "the frame changed the input box"
+            );
+            actor.terminal.push(b"x");
+            write_input(&mut actor).await;
+            let mut first_byte = [0];
+            assert_eq!(cli.read_input(&mut first_byte).unwrap(), 1);
+            assert_eq!(&first_byte, b"x", "the PTY only received the person's key");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_resize_revalidates_a_staged_paste_before_the_pipe_write() {
+        let home = crate::test_folder::TestFolder::new("resize-before-paste");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = actor_with_cli(&home, messages.delivery_handle()).await;
+        draw_input(&mut actor, "");
+        assert_eq!(actor.read_screen_input().info.state, InputState::Usable);
+        queue_a_message(
+            &mut actor,
+            &messages,
+            Instant::now() + Duration::from_secs(120),
+        );
+        actor.type_next();
+        drain_delivery_writes(&mut actor).await;
+        assert!(actor.terminal.has_offer());
+        assert_eq!(actor.terminal.written(), 0);
+
+        actor.take_size(SizeRequest::Direct(Size { cols: 5, rows: 4 }));
+        assert_eq!(actor.size(), (5, 4));
+        assert_ne!(actor.read_screen_input().info.state, InputState::Usable);
+        let wait = actor.terminal_wait(false);
+        let event =
+            tokio::time::timeout(Duration::from_millis(100), actor.terminal.ready(wait)).await;
+        assert!(event.is_err(), "the resized terminal must take no paste");
+        assert_eq!(actor.terminal.written(), 0);
+
+        actor.terminal.push(b"x");
+        write_input(&mut actor).await;
+        let mut received = [0];
+        assert_eq!(cli.read_input(&mut received).unwrap(), 1);
+        assert_eq!(&received, b"x", "ordinary keys still go to the terminal");
+    }
+
+    #[tokio::test]
+    async fn a_prepared_paste_stays_revocable_until_the_pipe_write() {
+        for case in ["deadline", "cancel", "closing"] {
+            let home = crate::test_folder::TestFolder::new("guarded-first-write");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = actor_with_cli(&home, messages.delivery_handle()).await;
+            draw_input(&mut actor, "");
+            let (kept, _) = post_new(&messages, message(0, "a1"));
+            let number = crate::messages::number(&kept);
+            let deadline = Instant::now() + Duration::from_secs(120);
+            let text = "a message";
+            actor.typist.deliver(MessageTyping::new(
+                text.into(),
+                number,
+                deadline,
+                Submission {
+                    text: text.into(),
+                    sender: Sender::person(),
+                },
+            ));
+            actor.type_next();
+            drain_delivery_writes(&mut actor).await;
+            assert!(actor.terminal.queued() > 0);
+            assert_eq!(actor.terminal.written(), 0);
+
+            match case {
+                "deadline" => {
+                    tokio::time::pause();
+                    tokio::time::advance(
+                        deadline.saturating_duration_since(Instant::now())
+                            + Duration::from_millis(1),
+                    )
+                    .await;
+                    tokio::time::resume();
+                }
+                "cancel" => assert!(messages.withdraw_queued(number).await),
+                "closing" => {
+                    messages
+                        .paste_pause()
+                        .store(true, std::sync::atomic::Ordering::Release);
+                    messages.clear_unused_pastes().await.unwrap();
+                    assert_eq!(messages.pending().unwrap()[0].paste, None);
+                }
+                _ => unreachable!(),
+            }
+            let event = tokio::time::timeout(
+                Duration::from_secs(5),
+                actor.terminal.ready(TerminalWait::ReadAndWrite),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(event, TerminalEvent::PasteSkipped), "{case}");
+            actor.take_terminal(event);
+            assert_eq!(actor.terminal.written(), 0, "{case}");
+
+            actor.terminal.push(b"x");
+            let event = tokio::time::timeout(
+                Duration::from_secs(5),
+                actor.terminal.ready(TerminalWait::WriteOnly),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(event, TerminalEvent::Wrote));
+            let mut first_byte = [0];
+            assert_eq!(cli.read_input(&mut first_byte).unwrap(), 1);
+            assert_eq!(&first_byte, b"x", "the PTY received no paste for {case}");
+        }
+    }
+
     async fn write_input(actor: &mut Actor) {
-        let event = tokio::time::timeout(
-            Duration::from_secs(5),
-            actor.terminal.ready(TerminalWait::WriteOnly),
-        )
-        .await
-        .expect("the terminal takes the queued input");
-        assert!(matches!(event, TerminalEvent::Wrote));
+        drain_delivery_writes(actor).await;
+        let wait = if actor.terminal.has_offer() {
+            TerminalWait::ReadAndWrite
+        } else {
+            TerminalWait::WriteOnly
+        };
+        let event = tokio::time::timeout(Duration::from_secs(5), actor.terminal.ready(wait))
+            .await
+            .expect("the terminal takes the queued input");
+        if let TerminalEvent::PasteIssued { offset, length } = event {
+            actor.typist.paste_issued(offset, length);
+            actor.escape_may_edit = false;
+            if actor.terminal.written() == offset {
+                let next = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    actor.terminal.ready(TerminalWait::WriteOnly),
+                )
+                .await
+                .expect("the issued paste completes");
+                assert!(matches!(next, TerminalEvent::Wrote));
+            }
+        } else {
+            assert!(matches!(event, TerminalEvent::Wrote));
+        }
     }
 
     async fn read_output(actor: &mut Actor, cli: &mut TestCli, bytes: &[u8]) {
@@ -2356,6 +2593,7 @@ mod tests {
         .expect("output reaches the actor");
         assert!(matches!(event, TerminalEvent::Read));
         actor.take_terminal(event);
+        drain_delivery_writes(actor).await;
     }
 
     fn synchronized(frame: &str) -> String {
@@ -2391,16 +2629,15 @@ mod tests {
 
     async fn read_buffered_frames(actor: &mut Actor, mut left: usize) {
         while left > 0 {
-            let event = tokio::time::timeout(
-                Duration::from_secs(5),
-                actor.terminal.ready(TerminalWait::ReadAndWrite),
-            )
-            .await
-            .expect("buffered output can be read again");
+            let wait = actor.terminal_wait(actor.screen().is_full());
+            let event = tokio::time::timeout(Duration::from_secs(5), actor.terminal.ready(wait))
+                .await
+                .expect("buffered output can be read again");
             assert!(matches!(event, TerminalEvent::Read));
             left -= actor.terminal.output().len();
             actor.take_terminal(event);
         }
+        drain_delivery_writes(actor).await;
     }
 
     fn was_delivered(settled: &watch::Receiver<Option<Settled>>) -> bool {
@@ -2485,6 +2722,7 @@ mod tests {
         tokio::time::advance(Duration::from_secs(16)).await;
         actor.follow_enter();
         actor.type_next();
+        drain_delivery_writes(&mut actor).await;
         let result = settled.borrow();
         let Some(Settled::Kept(message)) = result.as_ref() else {
             panic!("the deadline settles delivery: {result:?}");
@@ -2621,6 +2859,7 @@ mod tests {
         let mut input = vec![0; bytes.len()];
         let n = cli.read_input(&mut input).unwrap();
         assert_eq!(&input[..n], bytes);
+        drain_delivery_writes(actor).await;
     }
 
     async fn focus_while_output_waits(parts: &[&[u8]]) -> bool {
@@ -2703,6 +2942,7 @@ mod tests {
             read += n;
         }
         assert_eq!(input, *b"I\r");
+        drain_delivery_writes(&mut actor).await;
         assert!(
             was_delivered(&settled),
             "the first Enter already submitted the message: {:?}",
@@ -2945,6 +3185,7 @@ mod tests {
             tokio::time::sleep_until(wake + Duration::from_millis(2)).await;
             actor.type_next();
         }
+        drain_delivery_writes(&mut actor).await;
         let result = settled.borrow();
         assert!(
             matches!(result.as_ref(), Some(Settled::Kept(message)) if message.delivery.status == DeliveryStatus::Success),
@@ -3171,6 +3412,8 @@ mod tests {
         tokio::time::resume();
         read_output(&mut actor, &mut cli, plain_claude_frame("", "").as_bytes()).await;
         assert_eq!(actor.read_screen_input().info.state, InputState::Usable);
+        actor.type_next();
+        drain_delivery_writes(&mut actor).await;
 
         let expected = b"\x1b[200~a message\x1b[201~";
         assert_eq!(
@@ -3215,6 +3458,7 @@ mod tests {
         if wake <= deadline {
             actor.type_next();
         }
+        drain_delivery_writes(&mut actor).await;
         assert!(
             matches!(
                 settled.borrow().as_ref(),
@@ -3245,6 +3489,7 @@ mod tests {
             0,
             "an Escape that reached the CLI must invalidate automatic cleanup"
         );
+        drain_delivery_writes(&mut actor).await;
         let result = settled.borrow();
         let Some(Settled::Kept(message)) = result.as_ref() else {
             panic!("the deadline settles delivery: {result:?}");
@@ -3296,6 +3541,7 @@ mod tests {
         actor.feed_own(format!("\x1b[?25h{}", plain_claude_frame("a message", "")).as_bytes());
         assert_eq!(actor.read_screen_input().info.state, InputState::Draft);
         actor.type_next();
+        drain_delivery_writes(&mut actor).await;
         (actor, settled)
     }
 
@@ -3373,6 +3619,7 @@ mod tests {
         }
         assert_eq!(actor.read_screen_input().info.state, InputState::Draft);
         actor.type_next();
+        drain_delivery_writes(&mut actor).await;
         (actor, settled)
     }
 
@@ -3425,6 +3672,7 @@ mod tests {
         tokio::time::pause();
         tokio::time::advance(deadline.saturating_duration_since(Instant::now())).await;
         actor.type_next();
+        drain_delivery_writes(&mut actor).await;
         assert_eq!(actor.terminal.queued(), 0);
         assert!(matches!(
             settled.borrow().as_ref(),
@@ -3455,6 +3703,7 @@ mod tests {
         assert!(classify_by < deadline);
         tokio::time::advance(deadline - now).await;
         actor.type_next();
+        drain_delivery_writes(&mut actor).await;
         assert_eq!(actor.terminal.queued(), 0);
         assert!(matches!(
             settled.borrow().as_ref(),

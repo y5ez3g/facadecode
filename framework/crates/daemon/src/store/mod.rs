@@ -32,6 +32,7 @@ use rusqlite::{Connection, OpenFlags, Row, params};
 
 use crate::StartKey;
 
+mod batch;
 mod guests;
 mod integrations;
 mod machines;
@@ -39,10 +40,11 @@ mod membership;
 mod messages;
 mod windows;
 
+pub(crate) use batch::{Batch, BatchResult, CommitUnknown};
 pub(crate) use guests::{GuestRecord, GuestTable};
 pub(crate) use messages::{
-    CommandRequest, Gone, InboxPage, Kept, KeptMessage, MessageTable, RequestId, SendRoute,
-    SendRouteBinding, Settlement,
+    CommandRequest, Gone, InboxPage, Kept, KeptMessage, MessageTable, PasteWrite, RequestId,
+    SaveRejection, SendRoute, SendRouteBinding, Settlement,
 };
 #[cfg(test)]
 use windows::WindowTable;
@@ -204,6 +206,13 @@ pub(crate) struct OpenedStore {
 /// `facade.db`, with its one connection.
 pub(crate) struct Store {
     connection: Mutex<Connection>,
+    path: Option<std::path::PathBuf>,
+    reader: Option<Mutex<Connection>>,
+    read_admission: tokio::sync::Mutex<()>,
+    #[cfg(test)]
+    commits: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    abort_next_batch: std::sync::atomic::AtomicBool,
 }
 
 impl Store {
@@ -297,9 +306,22 @@ impl Store {
             )
             .map_err(unreadable)?;
         let (records, agent_ids) = read_records(&connection).map_err(unreadable)?;
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let reader = Connection::open_with_flags(&path, flags).map_err(unreadable)?;
+        #[cfg(windows)]
+        reader
+            .pragma_update(None, "cache_size", -128)
+            .map_err(unreadable)?;
         Ok(OpenedStore {
             store: Arc::new(Store {
                 connection: Mutex::new(connection),
+                path: Some(path),
+                reader: Some(Mutex::new(reader)),
+                read_admission: tokio::sync::Mutex::new(()),
+                #[cfg(test)]
+                commits: std::sync::atomic::AtomicUsize::new(0),
+                #[cfg(test)]
+                abort_next_batch: std::sync::atomic::AtomicBool::new(false),
             }),
             machine_id,
             machine_name,
@@ -315,12 +337,18 @@ impl Store {
         work: impl FnOnce(&Connection) -> rusqlite::Result<T>,
     ) -> anyhow::Result<T> {
         let mut connection = self.connection.lock().unwrap();
-        let done = connection.transaction().and_then(|transaction| {
+        let done = (|| -> anyhow::Result<T> {
+            let transaction = connection.transaction()?;
             let value = work(&transaction)?;
-            transaction.commit()?;
-            Ok(value)
-        });
-        done.map_err(|err| anyhow::anyhow!("could not {}: {err}", what()))
+            match self.commit(transaction) {
+                BatchResult::Committed => Ok(value),
+                BatchResult::Aborted(error) => Err(error),
+                BatchResult::Uncertain(error) | BatchResult::Unverified(error) => {
+                    Err(CommitUnknown(error).into())
+                }
+            }
+        })();
+        done.map_err(|error| error.context(format!("could not {}", what())))
     }
 
     /// Runs one statement's `work` on the connection. Blocks.
@@ -333,12 +361,32 @@ impl Store {
         work(&connection).map_err(|err| anyhow::anyhow!("could not {}: {err}", what()))
     }
 
-    /// Releases SQLite's unused pager memory. Blocks.
+    /// Reads the last committed WAL snapshot while the write connection may be committing.
+    fn read<T>(
+        &self,
+        what: impl FnOnce() -> String,
+        work: impl FnOnce(&Connection) -> rusqlite::Result<T>,
+    ) -> anyhow::Result<T> {
+        let connection = self
+            .reader
+            .as_ref()
+            .unwrap_or(&self.connection)
+            .lock()
+            .unwrap();
+        work(&connection).map_err(|err| anyhow::anyhow!("could not {}: {err}", what()))
+    }
+
+    /// Releases both connections' unused statements and pager memory. Blocks.
     pub(crate) fn release_cache(&self) -> anyhow::Result<()> {
-        self.with(
-            || "release unused database cache".to_owned(),
-            Connection::release_memory,
-        )
+        let release = |connection: &Connection| {
+            connection.flush_prepared_statement_cache();
+            connection.release_memory()
+        };
+        self.with(|| "release unused database cache".to_owned(), release)?;
+        if self.reader.is_some() {
+            self.read(|| "release unused database read cache".to_owned(), release)?;
+        }
+        Ok(())
     }
 
     /// Commits agent `agent_id`'s new name. Blocks.
@@ -570,7 +618,7 @@ impl Store {
     pub(crate) fn launch_details(&self, agent_id: &str) -> anyhow::Result<LaunchDetails> {
         use rusqlite::OptionalExtension;
 
-        let details = self.with(
+        let details = self.read(
             || format!("read the launch details of {agent_id}"),
             |connection| connection.query_row(
                 "SELECT started_at, creation_source, launch_options, creator, start_window_id, start_machine_id FROM agents WHERE agent_id = ?1",
@@ -759,7 +807,29 @@ impl Store {
         migrate(&mut connection, settings::Settings::default).unwrap();
         Arc::new(Store {
             connection: Mutex::new(connection),
+            path: None,
+            reader: None,
+            read_admission: tokio::sync::Mutex::new(()),
+            commits: std::sync::atomic::AtomicUsize::new(0),
+            abort_next_batch: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn abort_next_batch(&self) {
+        self.abort_next_batch
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn commits(&self) -> usize {
+        self.commits.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    fn note_commit(&self) {
+        self.commits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

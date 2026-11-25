@@ -692,23 +692,24 @@ impl Daemon {
                         machine_id,
                         message_id,
                     });
-                blocking(move || {
-                    store
-                        .insert_launch_with_prompt(
-                            &record,
-                            &message,
-                            owes,
-                            reserved.as_ref(),
-                            Some(&InitialLaunch {
-                                source,
-                                options: &options,
-                                relay: &relay,
-                                command: launch_command.as_deref(),
-                            }),
-                        )
-                        .map(Some)
-                })
-                .await
+                self.messages
+                    .ordered(message.text.len(), move || {
+                        store
+                            .insert_launch_with_prompt(
+                                &record,
+                                &message,
+                                owes,
+                                reserved.as_ref(),
+                                Some(&InitialLaunch {
+                                    source,
+                                    options: &options,
+                                    relay: &relay,
+                                    command: launch_command.as_deref(),
+                                }),
+                            )
+                            .map(Some)
+                    })
+                    .await
             }
         };
         let kept = match kept {
@@ -746,7 +747,10 @@ impl Daemon {
                     release_name();
                     self.runs.remove_folders(&id);
                     let (store, removed) = (self.store.clone(), id.clone());
-                    let _ = blocking(move || store.delete(&removed, an_hour_ago)).await;
+                    let _ = self
+                        .messages
+                        .remove_inbox(id.clone(), move || store.delete(&removed, an_hour_ago))
+                        .await;
                     self.runs.abandon(&id);
                     return Err(ErrorBody::internal(format!(
                         "could not read agent {id}'s terminal: {err}"
@@ -766,7 +770,10 @@ impl Daemon {
                         agent.prompt_result_facts()
                     })
                 });
-                let settled = self.messages.deliver_prompt(prompt.clone(), owes);
+                let settled = self
+                    .messages
+                    .open_saved_prompt(prompt.clone(), owes)
+                    .await?;
                 let (ready, started) = oneshot::channel();
                 if prompt.from_name.is_none() && prompt.from_machine_id.is_none() {
                     prompt.from_name = self.get_agent(&prompt.from).map(|agent| agent.info().name);
@@ -1002,6 +1009,7 @@ impl Daemon {
     pub(crate) async fn release_ended_run(&self, id: &str) {
         if self.runs.release(id) && self.runs.busy().is_none() {
             agent::release_view_storage();
+            self.messages.release_idle_storage();
             let store = self.store.clone();
             if let Err(error) = blocking(move || store.release_cache()).await {
                 log("warn", &error.message);
@@ -1051,7 +1059,13 @@ impl Daemon {
         let id = agent.id().to_string();
         self.runs.end_session_following(&id).await;
         let (store, deleted) = (self.store.clone(), id.clone());
-        blocking(move || store.delete_listed(&deleted, cause, an_hour_ago)).await?;
+        self.messages
+            .remove_inbox(id.clone(), move || {
+                store
+                    .delete_listed(&deleted, cause, an_hour_ago)
+                    .map(|_| Vec::new())
+            })
+            .await?;
         pause_for_test("after-record-delete");
         if self.agents.lock().unwrap().remove(&id).is_some() {
             let _ = self.changes.send(AgentsUpdate::Removed {
@@ -1071,8 +1085,6 @@ impl Daemon {
             );
         }
         self.runs.remove_folders(&id);
-        // The transaction deleted the inbox already: nothing to tell watchers.
-        self.messages.drop_inbox(&id, Vec::new());
         Ok(())
     }
 

@@ -104,6 +104,11 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   reads and writes one, with `stop_reading` and `let_go_before_stop`. A caller can ask `write` for the
   readable output prefix at the start of its native write. On Windows that includes output a
   completed read has collected. An overlapped write records this position once, when it is issued.
+  `write_with_permit` offers a first write to the same platform boundary. It samples readable
+  output within the `WritePermit` callback and yields `ReadFirst` for the caller to review the
+  screen. The permit can refuse before the system receives the write. On Unix a full pipe retries on readiness with
+  the permit still revocable. An issued Windows overlapped write is handed to the system and its
+  completion is collected once.
   `PASTE_BYTES_PER_MS` estimates paste time.
   `KeyRecord` and `key_down_records` encode console keys. `KeyRecord::press_len` and
   `key_down_records_len` count the encoded bytes. `test_terminal` gives tests both sides of a terminal.

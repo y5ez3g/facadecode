@@ -120,6 +120,7 @@ pub(super) fn read_delivery(before: &Delivery, typing: bool, at: &str) -> Delive
 }
 
 /// When a delivery beginning now must end: on the daemon's clock, and as the store writes it.
+#[derive(Clone)]
 pub(crate) struct Due {
     pub(crate) instant: Instant,
     pub(crate) at: String,

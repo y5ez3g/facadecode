@@ -3150,6 +3150,62 @@ fn a_remote_start_replayed_after_its_deadline_answers_only_a_saved_receipt() {
 }
 
 #[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the test gates of debug builds")]
+fn an_unpublished_paste_grant_must_clear_before_a_handover() {
+    let home = TestHome::new("takeover-paste-grant");
+    home.start_facade_with(&[("FACADE_TEST_GATES", "before-paste-grant-publication")]);
+    let worker = home.start_named_fake("worker", &[]);
+    let before = home.hello_result().unwrap();
+    let daemon = home.daemon_pid();
+    let mut sender = connect(&home);
+    let sent = sender.send(
+        "call",
+        json!({ "op": "agent.send", "args": {
+            "to": worker.address, "text": "through a refused upgrade",
+            "request_id": "pause-grant", "wait_for": "delivery", "time_left_ms": 20000
+        } }),
+    );
+    home.wait_for_gate("before-paste-grant-publication");
+    let db = rusqlite::Connection::open(home.path.join("framework/facade.db")).unwrap();
+    let (number, paste, status): (i64, Option<i64>, String) = db
+        .query_row(
+            "SELECT number, paste, status FROM messages WHERE request_id = 'pause-grant'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(paste, Some(number));
+    assert_eq!(status, "pending");
+
+    let replacement = newer();
+    let program = program_of_build(&home, &replacement);
+    let refused = connect(&home).call(
+        "daemon.upgrade",
+        json!({
+            "build": replacement, "program": program,
+            "daemon_api_versions": [1], "keeper_api_versions": [1],
+        }),
+    );
+    assert_eq!(
+        refused["error"]["data"]["reason"], "unavailable",
+        "{refused}"
+    );
+    assert_eq!(home.daemon_pid(), daemon);
+    assert_eq!(home.hello_result().unwrap()["build"], before["build"]);
+    assert!(home.submitted_messages().is_empty());
+
+    home.release_gate("before-paste-grant-publication");
+    let answered = sender
+        .wait_for_response(sent, secs(10))
+        .expect("the original send resumes");
+    assert_eq!(
+        answered["result"]["message"]["delivery"]["status"], "success",
+        "{answered}"
+    );
+    assert_eq!(home.submitted_messages().len(), 1);
+}
+
+#[test]
 fn a_relay_that_has_not_confirmed_closing_keeps_the_old_daemon_selected() {
     let home = TestHome::new("relay-confirmation");
     let agent = home.start_named_fake("agent", &[]);

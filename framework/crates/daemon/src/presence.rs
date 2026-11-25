@@ -11,36 +11,44 @@ use crate::{Daemon, an_hour_ago, blocking_in_place, gate_for_test, log};
 
 impl Daemon {
     /// Ends the guest of `cli`'s `session`, as its session-end hook or its process's end says.
-    pub(crate) fn end_guest(&self, cli: &str, session: &str) {
-        if let Some(id) = self.guests.end(cli, session) {
-            self.end_listed_guest(&id);
+    async fn end_guest(&self, cli: &str, session: &str) {
+        if let Some(id) = self.guests.end(cli, session)
+            && let Some(ending) = self.end_listed_guest(&id)
+        {
+            let _ = ending.await;
         }
     }
 
     /// Takes guest `id` out of the list: its record says it ended first, then its record goes with
     /// its inbox in one transaction, and watchers learn of each message that went.
-    pub(crate) fn end_listed_guest(&self, id: &str) {
-        let Some(guest) = self.agents.lock().unwrap().remove(id) else {
-            return;
-        };
+    pub(crate) fn end_listed_guest(&self, id: &str) -> Option<tokio::task::JoinHandle<()>> {
+        let guest = self.agents.lock().unwrap().remove(id)?;
         guest.mark_ended();
         // Its record and inbox go before anything else can settle: a result its start's prompt
         // owes it is then never written.
-        let gone = match blocking_in_place(|| self.store.delete_guest(id, an_hour_ago)) {
-            Ok(gone) => gone,
-            Err(err) => {
-                log("warn", &format!("{err:#}"));
-                Vec::new()
+        let store = self.store.clone();
+        let messages = self.messages.clone();
+        let changes = self.changes.clone();
+        let machine = self.machine_id.clone();
+        let lifecycle = self.lifecycle.clone();
+        let id = id.to_owned();
+        let removed = id.clone();
+        Some(tokio::spawn(async move {
+            if let Err(error) = messages
+                .remove_inbox(removed.clone(), move || {
+                    store.delete_guest(&removed, an_hour_ago)
+                })
+                .await
+            {
+                log("warn", &error.message);
             }
-        };
-        gate_for_test("before-guest-inbox-removal");
-        self.messages.drop_inbox(id, gone);
-        let _ = self.changes.send(AgentsUpdate::Removed {
-            agent_id: id.to_string(),
-            machine_id: self.machine_id.clone(),
-        });
-        // With its last guest gone, the daemon may become idle.
-        self.lifecycle.note_change();
+            gate_for_test("before-guest-inbox-removal");
+            let _ = changes.send(AgentsUpdate::Removed {
+                agent_id: id,
+                machine_id: machine,
+            });
+            lifecycle.note_change();
+        }))
     }
 
     /// Lists again the guests a daemon before this one had; ends those that ended meanwhile, by
@@ -73,9 +81,9 @@ impl Daemon {
     }
 
     /// Ends the guests not heard from since `before`.
-    pub(crate) fn end_unheard_guests(&self, before: &str) {
+    pub(crate) async fn end_unheard_guests(&self, before: &str) {
         for (cli, session) in self.guests.unheard(before) {
-            self.end_guest(&cli, &session);
+            self.end_guest(&cli, &session).await;
         }
     }
 }

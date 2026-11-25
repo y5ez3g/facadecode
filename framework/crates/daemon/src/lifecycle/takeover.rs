@@ -34,6 +34,24 @@ const CLEAN_END: &str = "clean-end";
 /// Whether the daemon before this one handed over cleanly, as its note said.
 static HANDED_OVER_CLEANLY: AtomicBool = AtomicBool::new(false);
 
+/// Holds new paste admission through preparation and handover.
+struct PasteFreeze {
+    paused: Arc<AtomicBool>,
+}
+
+impl PasteFreeze {
+    fn new(paused: Arc<AtomicBool>) -> Self {
+        paused.store(true, Ordering::Release);
+        Self { paused }
+    }
+}
+
+impl Drop for PasteFreeze {
+    fn drop(&mut self) {
+        self.paused.store(false, Ordering::Release);
+    }
+}
+
 /// Takes the clean-end note of the daemon before, if it left one: each screen log is then whole,
 /// so recovery asks no CLI to redraw, and what the CLIs wrote meanwhile waits in their terminals.
 pub(crate) fn take_clean_end(framework: &Path) {
@@ -87,11 +105,11 @@ impl Lifecycle {
         if let Some(answer) = under_way.as_ref() {
             return Ok(answer.clone());
         }
-        let (answer, relays) = self.prepare_takeover(&args, activity.as_ref()).await?;
+        let (answer, relays, pastes) = self.prepare_takeover(&args, activity.as_ref()).await?;
         *under_way = Some(answer.clone());
         // Draining from before the answer: a client's hello after it meets no daemon serving on.
         self.draining.store(true, Ordering::SeqCst);
-        tokio::spawn(self.clone().hand_over(args.build, activity, relays));
+        tokio::spawn(self.clone().hand_over(args.build, activity, relays, pastes));
         Ok(answer)
     }
 
@@ -101,7 +119,7 @@ impl Lifecycle {
         &self,
         args: &DaemonUpgradeArgs,
         activity: &impl LifecycleActivity,
-    ) -> Result<(DaemonUpgradeResult, RelayFreeze), ErrorBody> {
+    ) -> Result<(DaemonUpgradeResult, RelayFreeze, PasteFreeze), ErrorBody> {
         let ours = facade_base::build_id();
         if !facade_base::takes_over(&args.build, &ours) {
             return Err(operation_error(
@@ -168,11 +186,32 @@ impl Lifecycle {
         })
         .await
         .map_err(|error| install_error(args, &error))?;
-        let relays = self
-            .relays
-            .prepare(&args.build)
-            .await
-            .map_err(crate::api::project_error)?;
+        let pastes = PasteFreeze::new(activity.paste_pause());
+        let deadline = tokio::time::Instant::now() + DRAIN_TIME;
+        let clear_pastes = async {
+            tokio::time::timeout_at(deadline, activity.clear_unused_pastes())
+                .await
+                .map_err(|_| {
+                    operation_error(
+                        Reason::Unavailable,
+                        "Unused paste grants did not clear before the handover",
+                    )
+                })?
+                .map_err(crate::api::project_error)
+        };
+        let relays = async {
+            self.relays
+                .prepare(&args.build, deadline)
+                .await
+                .map_err(crate::api::project_error)
+        };
+        let (relays, ()) = tokio::try_join!(relays, clear_pastes)?;
+        if activity.commitment_uncertain() {
+            return Err(operation_error(
+                Reason::Unavailable,
+                "The message writer could not confirm a durable change before the handover",
+            ));
+        }
         let build = args.build.clone();
         crate::blocking(move || {
             facade_base::programs::select_for_takeover(&installed, &build, &builds)
@@ -193,6 +232,7 @@ impl Lifecycle {
                 agent_count: running as u64,
             },
             relays,
+            pastes,
         ))
     }
 
@@ -203,6 +243,7 @@ impl Lifecycle {
         build: String,
         activity: Arc<impl LifecycleActivity>,
         _relays: RelayFreeze,
+        _pastes: PasteFreeze,
     ) {
         crate::gate_for_test("upgrade-draining");
         let drain_deadline = tokio::time::Instant::now() + DRAIN_TIME;

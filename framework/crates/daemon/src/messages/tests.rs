@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use facade_base::model::error::Reason;
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::{
     model::agent::ManagedAgent,
     model::message::{
@@ -32,14 +32,14 @@ pub(crate) fn post_new(
 /// Messages over a store in memory, and that store.
 pub(crate) fn messages() -> (Arc<Messages>, Arc<Store>) {
     let store = Store::in_memory();
-    let messages = Messages::new(store.message_table(), store.test_machine_id());
+    let messages = Messages::new(store.message_table(), store.test_machine_id()).unwrap();
     (Arc::new(messages), store)
 }
 
 /// A store with its actual machine identity for tests of message references and request keys.
 fn messages_on_disk(folder: &TestFolder) -> (Messages, Arc<Store>) {
     let opened = Store::open(folder, &[]).unwrap();
-    let messages = Messages::new(opened.store.message_table(), opened.machine_id);
+    let messages = Messages::new(opened.store.message_table(), opened.machine_id).unwrap();
     (messages, opened.store)
 }
 
@@ -78,6 +78,657 @@ fn kept(settled: &watch::Receiver<Option<Settled>>) -> Message {
         Some(Settled::Kept(message)) => *message,
         other => panic!("not settled as kept: {other:?}"),
     }
+}
+
+fn save_attempt(to: &str, id: &str) -> Saving {
+    let mut message = message(0, to);
+    message.at = facade_base::time::iso_now();
+    Saving {
+        message,
+        request_id: Some(id.to_owned()),
+        notify_failure: false,
+        binding: None,
+        until: Some(Instant::now() + Duration::from_secs(20)),
+        cancel: Cancel::default(),
+        relay: None,
+        ordinary: true,
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unclaimed_save_expires_while_the_writer_is_busy() {
+    let (post, _) = messages();
+    let (ready, entered) = tokio::sync::oneshot::channel();
+    let (release, held) = std::sync::mpsc::channel();
+    let held_post = post.clone();
+    let writer = tokio::spawn(async move {
+        held_post
+            .ordered(0, move || {
+                let _ = ready.send(());
+                let _ = held.recv();
+                Ok(())
+            })
+            .await
+    });
+    entered.await.unwrap();
+    let mut saving = save_attempt("a2", "pre-admission-deadline");
+    saving.until = Some(Instant::now() + Duration::from_millis(10));
+    let expired = tokio::time::timeout(Duration::from_millis(11), post.save(saving)).await;
+    release.send(()).unwrap();
+    writer.await.unwrap().unwrap();
+    let Err(error) = expired.expect("the cutoff did not wait for the busy writer") else {
+        panic!("the request was not saved");
+    };
+    assert_eq!(error.message, crate::delivery::SEND_BEFORE_DEADLINE);
+    assert!(post.pending().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_batch_that_cannot_start_reports_a_known_failure_to_its_callers() {
+    let (post, store) = messages();
+    store.set_read_only(true);
+    let Err(error) = post.save(save_attempt("a2", "read-only-batch")).await else {
+        panic!("the database cannot admit a save while query_only is set");
+    };
+    assert_eq!(error.data.reason, Reason::Internal);
+    assert!(!post.deliveries.writer.uncertain());
+    assert!(post.pending().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_unclaimed_full_page_frees_its_room_and_budget_on_cancel_or_freeze() {
+    check_unclaimed_full_page(false).await;
+    check_unclaimed_full_page(true).await;
+}
+
+async fn check_unclaimed_full_page(freeze: bool) {
+    use crate::lifecycle::Lifecycle;
+    use crate::server::{MAX_OUTBOX_BYTES, Outbox};
+    use tokio::sync::Notify;
+
+    let (post, _) = messages();
+    for number in 0..100 {
+        let mut row = message(number, "a2");
+        row.text = "x".repeat(8000);
+        row.delivery.deadline = Some("2999-01-01T00:00:00.000Z".into());
+        post_new(&post, row);
+    }
+    let lifecycle = Lifecycle::new();
+    let link = lifecycle.relays.join().unwrap();
+    let (outbox, mut drain) = Outbox::for_test();
+    let (cancel, stop) = watch::channel(false);
+    let (ready, entered) = tokio::sync::oneshot::channel();
+    let (release, held) = std::sync::mpsc::channel();
+    let held_post = post.clone();
+    let writer = tokio::spawn(async move {
+        held_post
+            .ordered(0, move || {
+                let _ = ready.send(());
+                let _ = held.recv();
+                Ok(())
+            })
+            .await
+    });
+    entered.await.unwrap();
+
+    let projected = Arc::new(Notify::new());
+    let planned = projected.clone();
+    let read_post = post.clone();
+    let reserved = outbox.clone();
+    let read_link = link.clone();
+    let read = tokio::spawn(async move {
+        read_post
+            .read_inbox(
+                "a2",
+                false,
+                InboxRead {
+                    relay: Some(read_link.clone()),
+                    ..InboxRead::default()
+                },
+                Cancel::of(stop),
+                |snapshot, _: Option<()>| {
+                    assert_eq!(snapshot.messages.len(), 100);
+                    let room = reserved.try_reserve(MAX_OUTBOX_BYTES).unwrap();
+                    planned.notify_one();
+                    Ok(InboxSelection::Ready {
+                        count: 100,
+                        result: (),
+                        enqueue: Some(inbox::ReadAnswer::new(
+                            read_link.clone(),
+                            room,
+                            vec![b'x'; MAX_OUTBOX_BYTES],
+                        )),
+                    })
+                },
+            )
+            .await
+    });
+    projected.notified().await;
+    assert!(outbox.try_reserve(1).is_err());
+    assert!(post.deliveries.page_budget.try_acquire().is_err());
+    let preparing = if freeze {
+        let drain = lifecycle.clone();
+        let preparing = tokio::spawn(async move {
+            drain
+                .relays
+                .prepare_for_test(Instant::now() + Duration::from_secs(20))
+                .await
+        });
+        let closing = b"closing".to_vec();
+        let room = tokio::time::timeout(Duration::from_secs(10), outbox.reserve(closing.len()))
+            .await
+            .expect("free the unclaimed page's room while the writer is still busy")
+            .unwrap();
+        assert!(room.send(closing));
+        assert!(post.deliveries.page_budget.try_acquire().is_ok());
+        Some(preparing)
+    } else {
+        None
+    };
+    cancel.send_replace(true);
+    let result = tokio::time::timeout(Duration::from_secs(5), read)
+        .await
+        .expect("cancelling does not wait for the writer")
+        .unwrap();
+    assert_eq!(result.unwrap_err().data.reason, Reason::Cancelled);
+    if let Some(preparing) = preparing {
+        link.seal();
+        assert_eq!(drain(), b"closing");
+        link.finish(true);
+        preparing.await.unwrap().unwrap();
+    }
+    assert!(outbox.try_reserve(MAX_OUTBOX_BYTES).is_ok());
+    assert!(post.deliveries.page_budget.try_acquire().is_ok());
+    release.send(()).unwrap();
+    writer.await.unwrap().unwrap();
+    assert_eq!(post.pending().unwrap().len(), 100);
+}
+
+#[tokio::test]
+async fn a_page_waiting_for_room_yields_to_a_smaller_closing_frame() {
+    check_page_waiting_for_room(true).await;
+    check_page_waiting_for_room(false).await;
+}
+
+async fn check_page_waiting_for_room(seal: bool) {
+    use crate::lifecycle::Lifecycle;
+    use crate::server::{MAX_OUTBOX_BYTES, Outbox, OutboxRoom};
+    use std::future::poll_fn;
+    use tokio::sync::Notify;
+
+    let (post, _) = messages();
+    let mut row = message(0, "a2");
+    row.delivery.deadline = Some("2999-01-01T00:00:00.000Z".into());
+    let (row, _) = post_new(&post, row);
+    let original = number(&row);
+    let lifecycle = Lifecycle::new();
+    let link = lifecycle.relays.join().unwrap();
+    let (outbox, mut drain) = Outbox::for_test();
+    let closing = b"closing".to_vec();
+    let occupied = outbox
+        .try_reserve(MAX_OUTBOX_BYTES - closing.len())
+        .unwrap();
+    let waiting = Arc::new(Notify::new());
+    let entered = waiting.clone();
+    let page_outbox = outbox.clone();
+    let page_link = link.clone();
+    let reader = tokio::spawn(async move {
+        post.read_inbox(
+            "a2",
+            false,
+            InboxRead {
+                admit_by: Some(Instant::now() + Duration::from_secs(120)),
+                relay: Some(page_link.clone()),
+                ..InboxRead::default()
+            },
+            Cancel::default(),
+            |snapshot, room: Option<OutboxRoom>| {
+                assert_eq!(snapshot.messages.len(), 1);
+                if let Some(room) = room {
+                    return Ok(InboxSelection::Ready {
+                        count: 1,
+                        result: number(&snapshot.messages[0]),
+                        enqueue: Some(inbox::ReadAnswer::new(
+                            page_link.clone(),
+                            room,
+                            b"page for the original request".to_vec(),
+                        )),
+                    });
+                }
+                let outbox = page_outbox.clone();
+                let entered = entered.clone();
+                Ok(InboxSelection::Wait(Box::pin(async move {
+                    let reserve = outbox.reserve(1024);
+                    tokio::pin!(reserve);
+                    poll_fn(|cx| {
+                        let state = reserve.as_mut().poll(cx);
+                        if state.is_pending() {
+                            entered.notify_one();
+                        }
+                        state
+                    })
+                    .await
+                    .map_err(ErrorBody::internal)
+                })))
+            },
+        )
+        .await
+    });
+    waiting.notified().await;
+    let preparing_lifecycle = lifecycle.clone();
+    let prepare = tokio::spawn(async move {
+        preparing_lifecycle
+            .relays
+            .prepare_for_test(Instant::now() + Duration::from_secs(30))
+            .await
+    });
+    let room = tokio::time::timeout(Duration::from_secs(15), outbox.reserve(closing.len()))
+        .await
+        .expect("the large waiting page leaves the outbox queue at freeze")
+        .unwrap();
+    if seal {
+        link.seal();
+        assert!(room.send(closing.clone()));
+        assert_eq!(drain(), closing);
+        link.finish(true);
+        prepare.await.unwrap().unwrap();
+        assert_eq!(
+            reader.await.unwrap().unwrap_err().data.reason,
+            Reason::Upgrading
+        );
+    } else {
+        drop(room);
+        link.finish(false);
+        assert!(prepare.await.unwrap().is_err());
+        assert!(
+            link.closing().has_changed().is_ok(),
+            "the daemon stays alive"
+        );
+        drop(occupied);
+        let number = tokio::time::timeout(Duration::from_secs(15), reader)
+            .await
+            .expect("the original read resumed after the aborted freeze")
+            .unwrap()
+            .unwrap();
+        assert_eq!(number, original);
+        assert_eq!(drain(), b"page for the original request");
+    }
+}
+
+#[tokio::test]
+async fn an_unclaimed_guest_reply_wait_obeys_its_deadline_and_the_closing_cancel() {
+    check_guest_reply_wait_interruption(false).await;
+}
+
+#[tokio::test]
+async fn a_queried_guest_reply_wait_can_leave_before_batch_publication() {
+    check_guest_reply_wait_interruption(true).await;
+}
+
+async fn check_guest_reply_wait_interruption(after_query: bool) {
+    for closing in [false, true] {
+        let (post, _) = messages();
+        let lifecycle = crate::lifecycle::Lifecycle::new();
+        let link = lifecycle.relays.join().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let (cancel, stop) = watch::channel(false);
+        let (busy, entered) = tokio::sync::oneshot::channel();
+        let (release, hold) = std::sync::mpsc::channel();
+        let writer_post = post.clone();
+        let writer = tokio::spawn(async move {
+            writer_post
+                .ordered(0, move || {
+                    let _ = busy.send(());
+                    let _ = hold.recv();
+                    Ok(())
+                })
+                .await
+        });
+        entered.await.unwrap();
+        let read = post.read_inbox(
+            "a2",
+            true,
+            InboxRead {
+                reply_to: Some(MessageRef {
+                    machine_id: post.deliveries.machine_id.clone(),
+                    message_id: "m1".into(),
+                }),
+                wait_until: Some(deadline),
+                relay: closing.then(|| link.clone()),
+                ..InboxRead::default()
+            },
+            Cancel::of(stop),
+            |snapshot, _room: Option<()>| {
+                Ok(InboxSelection::ready(
+                    snapshot.messages.len(),
+                    snapshot.messages.len(),
+                ))
+            },
+        );
+        let mut read = std::pin::pin!(tokio::task::unconstrained(read));
+        let first_poll = std::future::poll_fn(|cx| std::task::Poll::Ready(read.as_mut().poll(cx)));
+        assert!(first_poll.await.is_pending());
+        assert!(post.deliveries.page_budget.try_acquire().is_ok());
+        let stalled_batch = if after_query {
+            // The query and this operation enter the same ordered batch in that order.
+            // This operation starts only after the query ran and holds up the batch's answer.
+            let (queried, entered) = tokio::sync::oneshot::channel();
+            let (release_batch, hold_batch) = std::sync::mpsc::channel();
+            let ticket = post
+                .deliveries
+                .writer
+                .enqueue(write_queue::Lane::Ordered, 0, move |_| {
+                    let _ = queried.send(());
+                    let _ = hold_batch.recv();
+                    Ok(writer::Prepared::known(Ok(())))
+                })
+                .await
+                .unwrap();
+            release.send(()).unwrap();
+            entered.await.unwrap();
+            Some((release_batch, ticket))
+        } else {
+            None
+        };
+        if closing {
+            let mut closing = link.closing();
+            let prepare = tokio::spawn(async move {
+                lifecycle
+                    .relays
+                    .prepare_for_test(Instant::now() + Duration::from_secs(30))
+                    .await
+            });
+            closing.wait_for(Option::is_some).await.unwrap();
+            cancel.send_replace(true);
+            link.seal();
+            let result = tokio::time::timeout(Duration::from_secs(15), read.as_mut())
+                .await
+                .expect("the ACK's cancellation can complete before the writer is available");
+            assert_eq!(result.unwrap_err().data.reason, Reason::Cancelled);
+            link.finish(true);
+            prepare.await.unwrap().unwrap();
+        } else {
+            tokio::time::pause();
+            tokio::time::advance(
+                deadline.saturating_duration_since(Instant::now()) + Duration::from_millis(1),
+            )
+            .await;
+            let result = tokio::time::timeout(Duration::from_millis(1), read.as_mut())
+                .await
+                .expect("the original cutoff is independent of the busy writer");
+            tokio::time::resume();
+            assert_eq!(result.unwrap(), 0);
+        }
+        assert!(post.deliveries.lock().guest_reply_waits.is_empty());
+        if let Some((release_batch, ticket)) = stalled_batch {
+            release_batch.send(()).unwrap();
+            writer::answer(ticket).await.unwrap();
+        } else {
+            release.send(()).unwrap();
+        }
+        writer.await.unwrap().unwrap();
+        assert!(post.deliveries.lock().guest_reply_waits.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn two_ready_sends_share_one_commit_without_holding_up_the_committed_snapshot() {
+    use std::future::poll_fn;
+    use std::task::Poll;
+
+    let folder = TestFolder::new("message-group-commit");
+    let (post, store) = messages_on_disk(&folder);
+    store.insert(&record("a2")).unwrap();
+    store.insert(&record("a3")).unwrap();
+    let before = store.commits();
+    let (opened, inside) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let stalled = post
+        .deliveries
+        .writer
+        .enqueue(write_queue::Lane::Ordered, 0, move |_| {
+            opened.send(()).unwrap();
+            wait.recv().unwrap();
+            Ok(writer::Prepared::known(Ok(())))
+        })
+        .await
+        .unwrap();
+    inside.await.unwrap();
+
+    let mut first = std::pin::pin!(post.save(save_attempt("a2", "first")));
+    let mut second = std::pin::pin!(post.save(save_attempt("a3", "second")));
+    poll_fn(|cx| {
+        assert!(first.as_mut().poll(cx).is_pending());
+        assert!(second.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    let snapshot = tokio::time::timeout(
+        Duration::from_secs(3),
+        post.saved_request(
+            &post.deliveries.machine_id,
+            "a1",
+            "a2",
+            "first",
+            &Cancel::default(),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(snapshot.is_none());
+    assert_eq!(store.commits(), before);
+    release.send(()).unwrap();
+    writer::answer(stalled).await.unwrap();
+
+    for (saved, id) in [(first.await, "m1"), (second.await, "m2")] {
+        let Some(Posted::New(message, _)) = saved.unwrap() else {
+            panic!("the send was saved")
+        };
+        assert_eq!(message.message_id, id);
+    }
+    assert_eq!(
+        store.commits(),
+        before + 2,
+        "the empty barrier and one transaction for both sends"
+    );
+}
+
+#[tokio::test]
+async fn removing_a_guest_rejects_later_saves_and_preserves_earlier_receipts() {
+    let (post, store) = messages();
+    let at = facade_base::time::iso_now();
+    store
+        .guest_table()
+        .keep_guest(&crate::store::GuestRecord {
+            agent_id: "a2".into(),
+            name: "guest".into(),
+            cli: "claude".into(),
+            session: "session".into(),
+            cwd: "/w".into(),
+            created_at: at.clone(),
+            heard_at: at,
+        })
+        .unwrap();
+    let Some(Posted::New(sent, settled)) = post.save(save_attempt("a2", "old")).await.unwrap()
+    else {
+        panic!("the guest was present at the save");
+    };
+    post.settle_written(&[number(&sent)], Outcome::Typed).await;
+    assert_eq!(kept(&settled).message_id, sent.message_id);
+    let removing = store.clone();
+    post.remove_inbox("a2".into(), move || {
+        removing.delete_guest("a2", crate::an_hour_ago)
+    })
+    .await
+    .unwrap();
+    let old = post.save(save_attempt("a2", "old")).await.unwrap();
+    assert!(
+        matches!(old, Some(Posted::Earlier(Earlier::Settled(ref receipt))) if receipt.message_id == sent.message_id)
+    );
+    let rejected = post.save(save_attempt("a2", "new")).await;
+    assert!(matches!(rejected, Err(error) if error.data.reason == Reason::Ended));
+    assert!(post.inbox("a2").is_empty());
+}
+
+#[tokio::test]
+async fn cancellation_withdraws_a_saved_paste_that_has_written_nothing() {
+    let (post, store) = messages();
+    let mut pending = message(0, "a2");
+    pending.at = facade_base::time::iso_now();
+    let Posted::New(message, settled) = post
+        .post(pending, Some("cancel-at-grant"), None, false)
+        .unwrap()
+    else {
+        panic!("the request should save a message");
+    };
+    let number = number(&message);
+    let handle = post.delivery_handle();
+    let grant = handle
+        .clone()
+        .save_paste(
+            Vec::new(),
+            Outcome::Typed,
+            BeginNext {
+                number,
+                deadline: Instant::now() + Duration::from_secs(30),
+                paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(post.pending().unwrap()[0].paste, Some(number));
+    assert!(post.withdraw_queued(number).await);
+    assert!(
+        !grant.write(),
+        "the same authority cannot write after cancellation"
+    );
+    handle.return_grant(grant, false).await.unwrap();
+    assert!(matches!(&*settled.borrow(), Some(Settled::Cancelled)));
+    let earlier = post
+        .saved_request(
+            &store.test_machine_id(),
+            "a1",
+            "a2",
+            "cancel-at-grant",
+            &Cancel::default(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(earlier, Some(Earlier::Withdrawn(message)) if super::number(&message) == number)
+    );
+}
+
+#[tokio::test]
+async fn preparing_a_handover_returns_only_paste_grants_with_zero_bytes() {
+    let (post, _) = messages();
+    let (first, _) = post_new(&post, message(0, "a2"));
+    let (second, _) = post_new(&post, message(0, "a3"));
+    let handle = post.delivery_handle();
+    let paste = |number, handle: DeliveryHandle| {
+        handle.save_paste(
+            Vec::new(),
+            Outcome::Typed,
+            BeginNext {
+                number,
+                deadline: Instant::now() + Duration::from_secs(20),
+                paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            },
+        )
+    };
+    let started = paste(number(&first), handle.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(started.write());
+    let unused = paste(number(&second), handle).await.unwrap().unwrap();
+
+    post.paste_pause()
+        .store(true, std::sync::atomic::Ordering::Release);
+    post.clear_unused_pastes().await.unwrap();
+    assert!(
+        !unused.write(),
+        "the old authority can no longer hand bytes to a terminal"
+    );
+    let markers: Vec<_> = post
+        .pending()
+        .unwrap()
+        .into_iter()
+        .map(|kept| kept.paste)
+        .collect();
+    assert_eq!(markers, [Some(number(&first)), None]);
+}
+
+#[tokio::test]
+async fn an_expired_paste_grant_settles_the_original_number_without_enter_or_text() {
+    let (post, store) = messages();
+    let mut pending = message(0, "a2");
+    pending.at = facade_base::time::iso_now();
+    let Posted::New(sent, settled) = post.post(pending, Some("late-grant"), None, false).unwrap()
+    else {
+        panic!("the request should save a message");
+    };
+    let handle = post.delivery_handle();
+    let grant = handle
+        .clone()
+        .save_paste(
+            Vec::new(),
+            Outcome::Typed,
+            BeginNext {
+                number: number(&sent),
+                deadline: Instant::now() + Duration::from_secs(30),
+                paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let before = store.commits();
+    handle.return_grant(grant.clone(), true).await.unwrap();
+    assert_eq!(store.commits(), before + 1);
+    assert!(!grant.write());
+    assert!(
+        matches!(&*settled.borrow(), Some(Settled::Withdrawn(receipt))
+        if receipt.message_id == sent.message_id
+            && receipt.delivery.reason == Some(DeliveryFailure::Timeout)
+            && receipt.delivery.text_written == TextWritten::None
+            && receipt.delivery.enter_written == Some(false))
+    );
+}
+
+#[tokio::test]
+async fn a_late_release_of_an_old_grant_leaves_a_new_grant_armed() {
+    let (post, _) = messages();
+    let (kept, _) = post_new(&post, message(0, "a2"));
+    let number = number(&kept);
+    let handle = post.delivery_handle();
+    let begin = || {
+        handle.clone().save_paste(
+            Vec::new(),
+            Outcome::Typed,
+            BeginNext {
+                number,
+                deadline: Instant::now() + Duration::from_secs(30),
+                paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            },
+        )
+    };
+    let first = begin().await.unwrap().unwrap();
+    handle
+        .clone()
+        .return_grant(first.clone(), false)
+        .await
+        .unwrap();
+    let second = begin().await.unwrap().unwrap();
+    handle.return_grant(first, false).await.unwrap();
+    assert_eq!(post.pending().unwrap()[0].paste, Some(number));
+    assert!(second.write());
+    assert!(
+        !post.withdraw_queued(number).await,
+        "a paste in flight owns the actual outcome"
+    );
 }
 
 /// The message a failure withdrew, as its send was told.
@@ -624,8 +1275,8 @@ fn a_removed_inbox_takes_its_messages_and_tells_their_sends() {
 
 /// Messages are kept 30 days from when they were sent; watchers are told each deleted one is
 /// removed, and the numbers of deleted ones are never given again.
-#[test]
-fn messages_older_than_30_days_are_deleted_and_numbers_go_on() {
+#[tokio::test]
+async fn messages_older_than_30_days_are_deleted_and_numbers_go_on() {
     let (post, _store) = messages();
     let now = facade_base::time::parse_iso_time("2026-12-10T00:00:00.001Z").unwrap();
     self::post(&post, 1, "a2");
@@ -638,7 +1289,7 @@ fn messages_older_than_30_days_are_deleted_and_numbers_go_on() {
     );
     let mut changes = post.subscribe();
     assert_eq!(
-        post.expire(now).unwrap(),
+        post.expire(now).await.unwrap(),
         1,
         "only the one sent more than 30 days before"
     );
@@ -702,12 +1353,7 @@ async fn a_send_whose_typist_never_answers_settles_after_the_deadline_and_two_gr
         "its typist began typing it"
     );
     let deadline = Instant::now() + Duration::from_millis(50);
-    tokio::time::timeout(
-        Duration::from_secs(5),
-        post.settle_by_deadline(1, &mut settled, deadline),
-    )
-    .await
-    .expect("the send is answered");
+    post.settle_by_deadline(1, &mut settled, deadline).await;
     let waited = Instant::now() - deadline;
     assert!(
         waited >= RESPONSE_GRACE * 2 && waited < RESPONSE_GRACE * 3,

@@ -62,8 +62,8 @@ public `run()` entry point.
   the actor proved by the relay connection. The caller's permissions come from the installed run
   record verified for that call.
 - On Windows, the daemon keeps two Tokio workers for asynchronous work. The blocking pool has
-  up to ten threads and returns idle threads after 150 ms. Its SQLite connection uses a 128 KiB
-  page cache target with WAL and FULL synchronization.
+  up to ten threads and returns idle threads after 150 ms. Each SQLite connection uses a 128 KiB
+  page cache target. The write connection uses WAL and FULL synchronization.
 - A terminal can request takeover by a newer build. The daemon checks the target daemon's
   supported API separately from the version negotiated with the keeper holding its CLIs.
   A compatible takeover hands each PTY back to the new daemon through `agent.sync`.
@@ -92,9 +92,14 @@ public `run()` entry point.
 ### Current design
 
 During recovery, the daemon holds the home's service lock and opens `$FACADE_HOME/framework/facade.db`.
-It owns one mutex-protected SQLite write connection in WAL mode with `synchronous=FULL`. Table
-handles share that connection. Shell's offline machine-name reader opens a separate read-only
-connection. [Store::open](../../../framework/crates/daemon/src/store/mod.rs#L231-L303) ·
+Store owns the SQLite write connection in WAL mode with `synchronous=FULL` and a separate read-only
+WAL connection for message snapshots and address resolution, including machine metadata, launch
+details and original messages used by replies. Store releases both connections' unused pager
+memory when the last run settles. The Messages writer uses a savepoint on the write connection for
+each operation that can roll back independently. Store can resolve an
+uncertain commit against a fresh snapshot of the affected rows. Shell's offline machine-name reader
+opens its own read-only connection. [Store::open](../../../framework/crates/daemon/src/store/mod.rs) ·
+[Message batches](../../../framework/crates/daemon/src/store/batch.rs) ·
 [Offline name reader](../../../framework/crates/daemon/src/store/mod.rs#L211-L228)
 
 | Tables and keys | What they keep |
@@ -316,7 +321,8 @@ The agent layer is `agent/mod.rs` (the interface above), `agent/actor.rs` (the t
 They have no task or lock. The actor passes what each child learns to the next. Its loop waits on
 commands, the terminal, tools connections and timers. Output goes from the terminal into the screen, then to
 viewers, state, readiness and the typist. Readiness hands the keys it wants pressed to a closure
-that turns them into typist calls. The typist's output goes into the terminal's input queue.
+that turns them into typist calls. The typist's ordinary output goes into the terminal's input queue.
+An automatic paste is staged separately until its permit reaches the terminal's first write.
 The actor feeds each state reading to the status glyph and sends any title update through viewers.
 Only the actor publishes the record.
 
@@ -324,10 +330,24 @@ Only the actor publishes the record.
 
 The terminal, as a `PtyIo`, and the input waiting for it.
 
-- **Owns:** the `PtyIo` (none between runs or once the run's output ended), the input queue, the last output read, the bytes written so far and when.
+- **Owns:** the `PtyIo` (none between runs or once the run's output ended), the input queue, one staged
+  paste and its permit, the last output read, and the written byte count and time.
 - **Keeps:** Input is written in order, at most 64 KiB at a time; a read takes at most 64 KiB. The count of bytes written never resets, across runs too: the typist finds its own bytes by it. Letting go of the terminal, as a read that finds the end of its output does, drops the queued input and the last output. `ready` can be cancelled safely. A write under way is given the same head of the queue until it returns; clearing the queue keeps those bytes. `stop_reading` leaves no read under way.
 - **Never does:** parse output, decide what input may wait, or select a submission key.
-- **Interface:** `new(Option<PtyMaster>)`, `install(PtyMaster)`, `detach()`, `stop_reading() -> Option<usize>` (async), `let_go_before_stop()`; `ready(TerminalWait) -> TerminalEvent` (`Read`, `Closed`, `Wrote`, `WriteFailed`), `read_now() -> Option<usize>`, `output() -> &[u8]`; `push(&[u8])`, `clear()`, `queued()`, `written()`, `written_at()`; `is_open()`, `is_closed()`, `set_size(cols, rows)`.
+- A staged paste receives stream offsets when the platform issues its first write. When output is
+  already readable, Terminal yields it to the actor to review the input before attempting that
+  write again. A new paste waits while a synchronized frame is open or a control unit is partial,
+  with its original deadline still armed. Queued ordinary keys run in order. `PasteGrant` checks the original deadline,
+  cancellation and takeover at native issue. Windows claims the permit for an issued overlapped
+  write. On Unix a full nonblocking pipe leaves the permit available for another readiness check.
+  The actor rechecks a staged paste after a change in terminal geometry and discards it if the
+  current input box can no longer take it.
+- **Interface** `offer_paste(bytes, permit)` and `discard_offer()` stage and retire local bytes.
+  `ready(TerminalWait)` reports `Read`, `Closed`, `Wrote`, `WriteFailed`, `PasteIssued`, or
+  `PasteSkipped`. `queued()` includes staged bytes for capacity accounting. `queued_through()`
+  counts the end of the ordered stream. The actor uses `new`, `install`, `detach`, `stop_reading`,
+  `let_go_before_stop`, `read_now`, `output`, `push`, `clear`, `written`, `written_at`, `is_open`,
+  `is_closed` and `set_size` for the remaining terminal operations.
 
 #### screen
 
@@ -384,8 +404,9 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   Backspace to finish.
 - **Keeps:**
   - Each call goes in whole and in order; a pause counts from when its bytes reached the terminal.
-  - `DeliveryHandle::begin_paste` records the paste before the typist writes the complete message in one paste.
-    Automatic delivery takes its paste brackets from the CLI rule, including after a daemon restart.
+  - `DeliveryHandle::save_paste` asynchronously records the paste and returns its permit after
+    commit. The actor continues handling the screen and keys while the writer works. Automatic
+    delivery takes its paste brackets from the CLI rule, including after a daemon restart.
     A direct text call follows the screen's bracketed paste mode.
   - The submission key goes over a reading of the moment that shows this paste alone in the input box, once it
     has shown for the CLI's settle time. Unread readings in between, as in the middle of a frame, keep that
@@ -397,9 +418,11 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     that ownership until a complete frame reads as an empty input. A menu, question, unread frame
     or cropped draft keeps the paste under the typist's care.
     Cleanup keeps the last paste number it observed through a menu or an ambiguous row.
-  - A message is delivered once its submission key reaches the terminal, or once a person's Enter submitted the
-    whole of it. One that somebody else takes out of the input ends unconfirmed once the input has read empty
-    for the CLI's settle time.
+  - The typist settles delivery from its submission receipt or proof that a person's Enter submitted
+    the whole message. If the same box can take a waiting message, the typist uses its existing
+    clear-frame budget and the two original deadlines to submit the settlement and next paste as
+    one operation. The Messages writer retries a confirmed rollback using the original terminal
+    outcome. Client receipts depend on the durable result.
   - After its deadline the typist erases its paste once where a current reading shows the same draft alone,
     nobody typed since it went in and its length is known. It remembers a displayed paste's placeholder number
     through menus and unread frames. It follows the erased draft until a complete reading shows that the paste
@@ -414,7 +437,7 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses
   `new(agent, rule, console_typing, DeliveryHandle)`, `push`, `deliver`, `deliver_first`, `finish_paste`,
   `fail_prompt(prompt, reason)`, `fail_all(written, why)`, `hold_pastes()`, and
-  `step(now, written, queued, modes, writes, observe) -> Step { write, wake }`. The `writes` argument
+  `step(now, written, queued, modes, writes, observe) -> Step { write, wake, permit }`. The `writes` argument
   (`BoxWrites`) tells the typist whether it may write into the input box on its own. The `observe`
   callback gives the current reading in `InputObservation` and the draft proved submitted by the
   person's Enter. That proof may come from earlier frames in the same read. A pending observation
@@ -424,8 +447,9 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   requests a probe and `clear_probes()` starts a run with fresh probe evidence. The actor reads
   `take_submitted()`, `take_entered()`, `held_bytes()`, `console()`, `paste_rule()`, `busy()`,
   `pasting()`, `occupies_input()`, `paste_hold_until()`, `types_calls()`, `reads_input()` and
-  `probing()`. Through `DeliveryHandle` it asks `still_to_type(number)`, records
-  `begin_paste(numbers)` and settles a delivery with `settle(numbers, outcome)`.
+  `probing()`. The actor polls `paste_saved()` and reports issuance or rejection via `paste_issued`
+  and `reject_offer`. Through `DeliveryHandle` the typist finds waiting messages, does
+  `save_paste` or `save_outcome`, and returns an unissued `PasteGrant` by its attempt identity.
 
 #### viewers
 
@@ -450,7 +474,7 @@ question stays available for the person.
 
 ### messages
 
-Post assigns a message number in the SQLite transaction that keeps it. The receiving machine owns
+Messages assigns a message number in the SQLite transaction that keeps it. The receiving machine owns
 delivery state. A managed terminal confirms delivery when the submission key reaches it. A Guest confirms
 delivery by taking the message from its inbox. Both use the same deadline.
 
@@ -478,14 +502,25 @@ address. The holder assigns a reply number and the source accepts only the first
 request. If the source is a peer, confirmation goes back along an authenticated route before the sender gets
 the private reply receipt. The persisted original remains identifiable after the waiter ends.
 
-- Post serializes the first terminal paste, inbox settlement and withdrawal under its delivery
-  lock. A read takes only pending messages whose paste has yet to begin. An explicit history page
-  can also include previously delivered messages. The selector and optional reply filter run
-  before applying the limit. The client projects complete messages and returns the prefix Post
-  must settle. Post commits that prefix and the results it owes together.
+- The Messages writer orders saves, paste markers, settlements, reads, withdrawals and inbox
+  removal. It groups ready operations into up to 128 operations or 2 MiB of queued message bodies
+  per transaction. Ordinary saves, ordered effects, and closing cancellations have separate
+  queue capacity. The short queue and published-state locks are released for the commit. Messages
+  publishes the corresponding watches and receipts after Store confirms the commit.
+- A read takes pending messages whose paste has yet to begin. A history page can also include
+  delivered messages. The selector and reply filter precede the limit. Readers reserve capacity
+  for one full candidate page and frame across the daemon before materializing it. The writer
+  verifies the complete page selection before taking a reply's reserved outbox room and effect
+  permit. A still-unclaimed plan leaves the queue on its cutoff, cancellation or relay freeze.
+  A page waiting for its initial outbox reservation leaves that queue at the same boundary.
+  A committed page enters the same outbox before releasing the permit for `closing`.
 - A send without a reply reference can overlap a Guest waiting for a specific reply. When the
   deadline withdraws that send, its receipt can carry the reference. The sending machine checks
   that the original message is in the sender's inbox and came from that Guest.
+  A Guest's wait registration uses the same writer order as saves. Closing, cancellation and the
+  original deadline can withdraw it through the query and until publication begins.
+- Terminal proof is recorded in published state when the actor observes it. Writing the receipt
+  may wait in the writer queue. A deadline can only supply a fallback before the proof exists.
 - A start's prompt reserves a result number and settles by the same delivery rules. Start results
   and wait notices follow a creator's stable reference. A reply identifies the original message
   by its machine and number and must name the original sender.
@@ -496,8 +531,8 @@ the private reply receipt. The persisted original remains identifiable after the
   A local MCP send commits its route and message number in the same transaction. Cross-machine
   sends keep their route before forwarding.
   A private receipt is available to retry lookup. Inbox and history queries only see visible mail.
-- `MessageTable` gives Post the stored records and the settlement transaction. The actor submits
-  paste and delivery facts through `DeliveryHandle`, and relays read through `Messages::read_inbox`.
+- `MessageTable` implements the store's SQL and commit outcomes. The actor submits paste and
+  delivery facts through `DeliveryHandle`. Relays use `Messages::save` and `Messages::read_inbox`.
 
 ### runs
 
@@ -701,8 +736,11 @@ note and `framework/logs/daemon.log`. The keeper points the daemon's standard er
   follows committed read and input responses in the same outbox. The daemon allows three seconds
   for this preparation. If it expires, the original launcher stays selected and the daemon resumes
   admitting effects. Once a connection queues `closing`, it stays sealed until it reconnects.
-  After confirmation, takeover selects the launcher, settles pastes and work, asks the actors to go
-  quiet, records a clean end when they all do, and sends `closing` to ordinary API clients.
+  The same preparation pauses new terminal writes and waits for the Messages writer to publish
+  earlier operations. It returns zero-byte paste permits before selecting the launcher. Cancels
+  read before the old relay's ACK can enter the writer through reserved closing capacity.
+  After confirmation, takeover selects the launcher, settles issued pastes and work, asks the actors
+  to go quiet, records a clean end when they all do, and sends `closing` to ordinary API clients.
   The keeper holds the terminals throughout.
 - The parent implements `LifecycleActivity` to report activity, screen writes and keeper details,
   and to send paste and quiet commands to actors. The parent takes the clean-end note at startup
@@ -811,7 +849,7 @@ It uses the same address, creation source and run context as launch preparation.
 
 The daemon dispatches tools for the verified actor through its typed operation registry. The
 validated process brings a run's tools online. The daemon rechecks the run for each new request.
-A waiting inbox read ends with its bound run, and Post checks the bound actor while it settles
+A waiting inbox read ends with its bound run, and the Messages writer checks the bound actor while it settles
 the available page. When a run ends, the daemon releases its tools readiness guard.
 
 One table defines the eight tools served by `tools/list` and dispatched by `tools/call`. The
