@@ -183,6 +183,13 @@ fn main() {
         }
         return;
     }
+    if options.set == "inspect-curve" {
+        if let Err(err) = perf::inspect_curve(&options.out, options.each.unwrap_or(40)) {
+            eprintln!("the inspect measures could not run: {err:#}");
+            std::process::exit(2);
+        }
+        return;
+    }
     let storms = scenes::set(&options.set, options.senders, options.each)
         .unwrap_or_else(|| refuse(&format!("no set is named {}", options.set)));
     let mut outcomes = Vec::new();
@@ -259,8 +266,10 @@ pub fn programs() -> Value {
         .map(Path::to_path_buf)
         .unwrap_or_default();
     let head = std::fs::read_to_string(folder.join("HEAD")).unwrap_or_default();
+    let storm_head = std::fs::read_to_string(folder.join("STORM_HEAD")).unwrap_or_default();
     json!({
         "head": head.trim(), "bin": folder.display().to_string(),
+        "storm_head": storm_head.trim(),
         "build": env!("CARGO_PKG_VERSION"),
     })
 }
@@ -271,6 +280,7 @@ fn real_storms(options: &Options) -> ! {
     let specs = real::specs(options.only.as_deref(), options.senders, options.each);
     let mut outcomes = Vec::new();
     let mut broken = false;
+    let mut unable = specs.is_empty();
     for round in 1..=options.repeat {
         for spec in &specs {
             let name = match options.repeat {
@@ -285,6 +295,7 @@ fn real_storms(options: &Options) -> ! {
                     outcomes.push(outcome.to_json());
                 }
                 Err(err) => {
+                    unable = true;
                     println!("   could not run: {err:#}");
                     outcomes.push(json!({ "name": name, "could_not_run": format!("{err:#}") }));
                 }
@@ -292,7 +303,13 @@ fn real_storms(options: &Options) -> ! {
             write_report(options, &outcomes);
         }
     }
-    std::process::exit(i32::from(broken));
+    std::process::exit(if broken {
+        1
+    } else if unable {
+        2
+    } else {
+        0
+    });
 }
 
 /// The outcome for a person to read: how many rules broke, and the first of each.

@@ -2,6 +2,7 @@
 //! storm's specification names T1 to T9, C1 to C4 and M1 to M5. Run it on a machine doing nothing
 //! else.
 
+use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::Barrier;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,14 +45,19 @@ pub fn run(folder: &Path, agents: usize, shared: bool) -> anyhow::Result<()> {
             continue;
         }
         println!("== {name}");
+        let machine = crate::sample::machine();
         match part() {
-            Ok(value) => {
+            Ok(mut value) => {
+                value["machine_cpu_percent"] = json!(crate::sample::machine_percent(machine));
                 println!("   {value}");
                 out[name] = value;
             }
             Err(err) => {
                 println!("   could not run: {err:#}");
-                out[name] = json!({ "could_not_run": format!("{err:#}") });
+                out[name] = json!({
+                    "could_not_run": format!("{err:#}"),
+                    "machine_cpu_percent": crate::sample::machine_percent(machine),
+                });
             }
         }
         crate::save(folder, &out);
@@ -759,6 +765,100 @@ pub fn cost(home: &Path) -> anyhow::Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+/// Measures an inspect call against synthetic Claude session files at increasing sizes.
+pub fn inspect_curve(out: &Path, calls: usize) -> anyhow::Result<()> {
+    const SESSION: &str = "72814b8d-3e92-4159-8f5f-442057739f30";
+    const PROMPT: &str = "Inspect benchmark session";
+    const TITLE: &str = "Inspect benchmark custom title";
+    anyhow::ensure!(calls > 0, "give at least one call per size");
+    let machine = crate::sample::machine();
+    let lab = Lab::fake("inspect-curve")?;
+    lab.home.save_claude_session(SESSION, PROMPT);
+    let projects = lab.home.user_home().join(".claude/projects");
+    let project = std::fs::read_dir(projects)?
+        .next()
+        .context("the synthetic session's project")??;
+    let path = project.path().join(format!("{SESSION}.jsonl"));
+    let agent = lab.start_as("claude", "inspect", &[("FAKECLI_SESSION", SESSION)])?;
+    anyhow::ensure!(
+        wait_until(LOADED_TIMEOUT, || lab
+            .inspect(&agent)
+            .is_ok_and(|info| { info["session_name"] == PROMPT })),
+        "inspect did not find the synthetic session"
+    );
+    let pid = lab.home.daemon_pid().context("the daemon PID")?;
+    let padding = json!({
+        "type": "assistant",
+        "sessionId": SESSION,
+        "message": { "role": "assistant", "content": "x".repeat(3900) },
+    });
+    let mut file = std::fs::OpenOptions::new().write(true).open(&path)?;
+    let mut size = file.seek(SeekFrom::End(0))?;
+    let measure = |op: &str, args: Value, title: Option<&str>| -> anyhow::Result<Value> {
+        let cpu = Over::start(pid);
+        let mut elapsed = Vec::with_capacity(calls);
+        for _ in 0..calls {
+            let began = Instant::now();
+            let response = lab.wire.call(op, args.clone())?;
+            elapsed.push(ms(began.elapsed()));
+            if let Some(title) = title {
+                anyhow::ensure!(
+                    response["session_name"] == title,
+                    "inspect did not return the expected session title at {op}"
+                );
+            }
+        }
+        Ok(json!({
+            "wall_ms": summary(elapsed),
+            "daemon_cpu_ms_per_call": round(1000.0 * cpu.cpu_s() / calls as f64),
+        }))
+    };
+    let inspect = json!({ "target": agent.reference });
+    let screen = json!({ "target": agent.reference, "lines": 60 });
+    let mut report = crate::programs();
+    report["set"] = json!("inspect-curve");
+    report["calls_per_point"] = json!(calls);
+    let mut points = Vec::new();
+    for kib in [0, 256, 1024, 4096, 16384, 32768] {
+        while size < kib * 1024 {
+            writeln!(file, "{padding}")?;
+            size = file.stream_position()?;
+        }
+        file.flush()?;
+        let machine_at_size = crate::sample::machine();
+        let without_title = measure("agent.inspect", inspect.clone(), Some(PROMPT))?;
+        writeln!(
+            file,
+            "{}",
+            json!({ "type": "custom-title", "customTitle": TITLE })
+        )?;
+        file.flush()?;
+        let tail_title = measure("agent.inspect", inspect.clone(), Some(TITLE))?;
+        file.set_len(size)?;
+        file.seek(SeekFrom::Start(size))?;
+        let screen = measure("agent.screen", screen.clone(), None)?;
+        let point = json!({
+            "session_bytes": size,
+            "inspect_without_custom_title": without_title,
+            "inspect_with_tail_custom_title": tail_title,
+            "screen": screen,
+            "machine_cpu_percent": crate::sample::machine_percent(machine_at_size),
+        });
+        println!("   {point}");
+        points.push(point);
+        report["points"] = json!(points);
+        report["machine_cpu_percent"] = json!(crate::sample::machine_percent(machine));
+        crate::save(out, &report);
+    }
+    let mut verdict = crate::judge::Verdict::default();
+    crate::storm::stop_all(&lab, &[agent], &mut verdict);
+    anyhow::ensure!(
+        verdict.violations.is_empty(),
+        "the synthetic CLI did not stop"
+    );
     Ok(())
 }
 

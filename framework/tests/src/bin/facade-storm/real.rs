@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context;
@@ -80,6 +80,8 @@ pub fn cli(name: &str) -> anyhow::Result<&'static Cli> {
         .with_context(|| format!("no CLI under test is named {name}"))
 }
 
+const MUSE_BUSY_DELAY_MS: &str = "1800";
+
 /// The variables a person's terminal has: this process's, without any run's or Facade's own.
 pub fn person_env() -> BTreeMap<String, String> {
     std::env::vars_os()
@@ -96,7 +98,7 @@ pub fn person_env() -> BTreeMap<String, String> {
 impl Lab {
     /// A home whose agents run real CLIs, under `root`, its daemon running.
     pub fn real(root: &Path, name: &str, work: &Path) -> anyhow::Result<Lab> {
-        Self::real_with(root, name, work, &[], own_model().as_deref())
+        Self::real_with(root, name, work, &[], own_model().as_deref(), false)
     }
 
     /// [`Lab::real`], each CLI with `env` besides.
@@ -106,6 +108,7 @@ impl Lab {
         work: &Path,
         env: &[(&str, &str)],
         model: Option<&str>,
+        busy_muse: bool,
     ) -> anyhow::Result<Lab> {
         let folder = root.join(format!("stress-{name}-{}", std::process::id()));
         let home = TestHome {
@@ -121,6 +124,12 @@ impl Lab {
         for cli in CLIS {
             let mut entry = serde_json::Map::new();
             let mut args: Vec<String> = cli.args.iter().map(|arg| arg.to_string()).collect();
+            if busy_muse && cli.name == "muse" {
+                args.extend([
+                    "--echo-delay-ms".to_string(),
+                    MUSE_BUSY_DELAY_MS.to_string(),
+                ]);
+            }
             if let (Some(url), "codex") = (model, cli.name) {
                 for set in [
                     "model_provider=storm".to_string(),
@@ -404,6 +413,8 @@ pub enum Course {
     Shapes,
     /// One sends each of [`endings`] this many times.
     Endings(usize),
+    /// One sends each of the body shapes containing a tab this many times.
+    Tabs(usize),
     /// [`Course::Endings`], each with each of [`TAILS`] after it.
     Tails(usize),
     /// One sends a message that nothing completes, one at a time, this many times.
@@ -436,8 +447,8 @@ pub fn specs(only: Option<&str>, senders: Option<usize>, each: Option<usize>) ->
         for (what, busy, hogs) in [
             ("idle", false, 0),
             ("busy", true, 0),
-            ("idle cores", false, 14),
-            ("busy cores", true, 14),
+            ("idle cores", false, 15),
+            ("busy cores", true, 15),
         ] {
             specs.push(RealSpec {
                 name: format!("{} {what}.", cli.name),
@@ -454,6 +465,8 @@ pub fn specs(only: Option<&str>, senders: Option<usize>, each: Option<usize>) ->
             ("shapes", 0, Course::Shapes),
             ("endings", 0, Course::Endings(times)),
             ("endings cores", 15, Course::Endings(times)),
+            ("tabs", 0, Course::Tabs(times)),
+            ("tabs cores", 15, Course::Tabs(times)),
             ("tails", 0, Course::Tails(each.unwrap_or(10))),
             ("plain", 0, Course::Plain(times)),
             ("plain cores", 15, Course::Plain(times)),
@@ -505,7 +518,15 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
         .join("work")
         .join("real")
         .join(format!("{tag}{}", std::process::id()));
-    let lab = Lab::real(&root.join("homes"), &tag, &work)?;
+    let busy_muse = spec.busy && spec.cli.name == "muse";
+    let lab = Lab::real_with(
+        &root.join("homes"),
+        &tag,
+        &work,
+        &[],
+        own_model().as_deref(),
+        busy_muse,
+    )?;
     let field = Field::over(name, format!("{spec:?}"), lab)?;
     let lead = field.start("lead", &[])?;
     let senders = field.start_all("s", spec.senders, &[])?;
@@ -570,7 +591,12 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
         "ready_s",
         json!(crate::sample::round(began.elapsed().as_secs_f64())),
     );
-    let frames = Frames::watch(&field.lab, &boss, spec.cli.name)?;
+    let frames = Frames::watch_drafts(
+        &field.lab,
+        &boss,
+        spec.cli.name,
+        matches!(spec.course, Course::Delays(_)),
+    )?;
     let timeline = Timeline::watch(
         &field.lab.home.daemon_socket(),
         &boss.reference,
@@ -583,9 +609,10 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
         since,
         timeline,
     });
-    if spec.busy {
+    if spec.busy && !busy_muse {
         std::thread::sleep(Duration::from_millis(2500));
     }
+    let traffic_cpu = crate::sample::machine();
     let hogs = crate::storm::Hogs::start(spec.hogs);
     let saved = RealAgent {
         agent: boss.clone(),
@@ -631,7 +658,10 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
             split(&field, &saved, out)?;
         }
         Course::Shapes => send_shapes(&field, &clients[0], &senders[0], &boss)?,
-        Course::Endings(times) | Course::Tails(times) | Course::Plain(times) => {
+        Course::Endings(times)
+        | Course::Tails(times)
+        | Course::Plain(times)
+        | Course::Tabs(times) => {
             let wanted = std::env::var("FACADE_STORM_TAILS").unwrap_or_default();
             let tails: Vec<(&str, &str)> = TAILS
                 .iter()
@@ -642,6 +672,13 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
                 .collect();
             let (kinds, tails) = match spec.course {
                 Course::Plain(_) => (vec![("plain", PLAIN)], &[("", "")][..]),
+                Course::Tabs(_) => (
+                    vec![
+                        ("leading tab", "first line\n\tindented line, answer ok"),
+                        ("interior tab", "two columns:\tsecond column, answer ok"),
+                    ],
+                    &[("", "")][..],
+                ),
                 Course::Tails(_) => (endings(), tails.as_slice()),
                 _ => (endings(), &[("", "")][..]),
             };
@@ -676,6 +713,10 @@ pub fn run(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
         }
     });
     field.quiet()?;
+    field.note(
+        "traffic_machine_cpu_percent",
+        json!(crate::sample::machine_percent(traffic_cpu)),
+    );
     drop(hogs);
     let state_after = field.lab.inspect(&boss)?["agent"]["state"].clone();
     field.note(
@@ -757,7 +798,7 @@ pub fn shapes() -> Vec<(&'static str, String)> {
         ("M9 slash", "/help".into()),
         ("M9 bang", "!echo hi".into()),
         ("M9 hash", "# remember this".into()),
-        ("M9 at", "@README.md".into()),
+        ("M9 at", "@sample.txt".into()),
         ("M10 backslash", "ends with a backslash \\".into()),
         ("M11 address", "answer ok to @a1@aaron-pc".into()),
         ("M11 name", "answer ok to @lead".into()),
@@ -829,11 +870,11 @@ fn send_shapes(
 }
 
 /// Ends of a message that a CLI may offer to complete, or take its Enter for something else, each with
-/// a name. `README.md` and `src/main.rs` are in the CLI's folder.
+/// a name. `sample.txt` and `src/main.rs` are in the CLI's folder.
 pub fn endings() -> Vec<(&'static str, &'static str)> {
     let wanted = std::env::var("FACADE_STORM_ENDINGS").unwrap_or_default();
     let mut all = vec![
-        ("at a file", "no reply needed about @README.md"),
+        ("at a file", "no reply needed about @sample.txt"),
         ("at no file", "no reply needed about @nosuchfile"),
         ("at an address", "no reply needed to @a1@aaron-pc"),
         ("at a name", "no reply needed to @lead"),
@@ -1427,8 +1468,13 @@ fn delays(
         .ok()
         .and_then(|each| each.parse().ok())
         .unwrap_or(2);
+    anyhow::ensure!(
+        lines > 0 && !waits.is_empty(),
+        "give at least one line and delay"
+    );
     let mut counts: BTreeMap<String, BTreeMap<&str, usize>> = BTreeMap::new();
-    let mut names: Vec<(String, u64, &str)> = Vec::new();
+    let mut names = Vec::new();
+    let mut delays_ms: BTreeMap<u64, Vec<f64>> = BTreeMap::new();
     let mut odd: Vec<Value> = Vec::new();
     let started = crate::sample::machine();
     let mut n = 0;
@@ -1436,39 +1482,41 @@ fn delays(
         for wait in &waits {
             let name = format!("x{n:05}");
             n += 1;
-            let body: Vec<String> = (0..lines)
+            let body = (0..lines)
                 .map(|line| match line + 1 == lines {
                     true => format!("{name} line {line}, answer ok "),
                     false => format!("{name} line {line}"),
                 })
-                .collect();
-            let paste = format!("\x1b[200~{}\x1b[201~", body.join("\r"));
+                .collect::<Vec<_>>()
+                .join("\n");
+            let paste = format!("\x1b[200~{}\x1b[201~", body.replace('\n', "\r"));
+            let since = now_us();
             type_raw(field, boss, paste.as_bytes())?;
-            // The whole paste shows: its last line's words.
-            let shown = wait_until(Duration::from_secs(10), || {
-                let (_, input, draft) = frames.last();
-                input == "draft" && draft.contains(&name) && draft.contains("answer ok")
-            });
-            let what = if !shown {
-                "never showed whole"
-            } else {
-                std::thread::sleep(Duration::from_millis(*wait));
-                type_raw(field, boss, b"\r")?;
-                let let_go = wait_until(Duration::from_secs(6), || {
-                    let (_, input, draft) = frames.last();
-                    !(input == "draft" && draft.contains(&name))
-                });
-                match let_go {
-                    true => "taken",
-                    false => "stayed",
-                }
-            };
+            let what =
+                if let Some(shown) = frames.wait_for_draft(since, &body, Duration::from_secs(10)) {
+                    std::thread::sleep(Duration::from_millis(*wait));
+                    delays_ms
+                        .entry(*wait)
+                        .or_default()
+                        .push(now_us().saturating_sub(shown) as f64 / 1000.0);
+                    type_raw(field, boss, b"\r")?;
+                    let let_go = wait_until(Duration::from_secs(6), || {
+                        let (_, input, draft) = frames.last();
+                        !(input == "draft" && draft.contains(&name))
+                    });
+                    match let_go {
+                        true => "taken",
+                        false => "stayed",
+                    }
+                } else {
+                    "never showed whole"
+                };
             *counts
                 .entry(format!("{wait} ms"))
                 .or_default()
                 .entry(what)
                 .or_default() += 1;
-            names.push((name.clone(), *wait, what));
+            names.push((name.clone(), body, *wait, what));
             if what != "taken" {
                 if odd.len() < 20 {
                     odd.push(json!({ "name": name, "wait": wait, "what": what,
@@ -1494,13 +1542,12 @@ fn delays(
         })
         .collect();
     let mut session: BTreeMap<String, BTreeMap<&str, usize>> = BTreeMap::new();
-    for (name, wait, what) in &names {
+    for (name, body, wait, what) in &names {
         let with: Vec<&String> = saved
             .iter()
             .filter(|text| text.contains(name.as_str()))
             .collect();
-        let whole = with.len() == 1
-            && (0..lines).all(|line| with[0].contains(&format!("{name} line {line}")));
+        let whole = with.len() == 1 && crate::judge::plain(with[0]).trim_end() == body.trim_end();
         let kind = match (with.len(), whole, *what) {
             (0, _, "taken") => "taken but not in the session",
             (0, _, _) => "not in the session",
@@ -1514,8 +1561,13 @@ fn delays(
             .entry(kind)
             .or_default() += 1;
     }
+    let delays: BTreeMap<_, _> = delays_ms
+        .into_iter()
+        .map(|(wait, actual)| (wait, crate::judge::summary(actual)))
+        .collect();
     let report = json!({
         "lines": lines, "counts": counts, "session": session, "odd": odd,
+        "full_draft_to_enter_call_ms": delays,
         "machine_cpu_percent": crate::sample::machine_percent(started),
     });
     println!("   {report}");
@@ -1975,6 +2027,7 @@ fn returns(spec: &RealSpec, name: &str, root: &Path, out: &Path) -> anyhow::Resu
             &work,
             env,
             model.as_deref(),
+            false,
         )?;
         let field = Field::over(name, format!("{spec:?} {part}"), lab)?;
         let lead = field.start("lead", &[])?;
@@ -2172,7 +2225,7 @@ fn cut_short(
 
 /// What a CLI needs in its folder.
 fn prepare(cli: &Cli, folder: &Path, model: Option<&str>) -> anyhow::Result<()> {
-    std::fs::write(folder.join("README.md"), "A test folder.\n")?;
+    std::fs::write(folder.join("sample.txt"), "A test folder.\n")?;
     // Claude Code asks before every command here, whatever mode its person chose.
     if cli.name == "claude" && std::env::var_os("FACADE_STORM_ASKS").is_some() {
         std::fs::create_dir_all(folder.join(".claude"))?;
@@ -2224,6 +2277,7 @@ fn screen_text(lab: &Lab, agent: &Agent) -> String {
 /// it.
 pub struct Frames {
     seen: Arc<Mutex<Vec<Value>>>,
+    draft_changed: Option<Arc<Condvar>>,
     _wire: client::Rpc,
     /// The agent's state as the daemon told its watchers, and when.
     states: Arc<Mutex<Vec<Value>>>,
@@ -2257,6 +2311,27 @@ const OPENCODE_ERRORS: &[&str] = &[
 ];
 
 impl Frames {
+    /// The first complete frame of this draft, as soon as the viewer receives it.
+    fn wait_for_draft(&self, since: u64, expected: &str, timeout: Duration) -> Option<u64> {
+        let changed = self.draft_changed.as_ref()?;
+        let mut seen = self.seen.lock().unwrap();
+        let mut next = seen.partition_point(|frame| frame["us"].as_u64().unwrap_or(0) < since);
+        let until = Instant::now() + timeout;
+        loop {
+            if let Some(frame) = seen[next..].iter().find(|frame| {
+                frame["input"] == "draft"
+                    && frame["draft"].as_str().is_some_and(|draft| {
+                        crate::judge::plain(draft).trim_end() == expected.trim_end()
+                    })
+            }) {
+                return frame["us"].as_u64();
+            }
+            next = seen.len();
+            let remaining = until.checked_duration_since(Instant::now())?;
+            seen = changed.wait_timeout(seen, remaining).ok()?.0;
+        }
+    }
+
     /// How the input read after each piece, where that changed. A piece in the middle of a frame says
     /// nothing.
     pub fn readings(&self) -> Vec<(u64, String)> {
@@ -2344,12 +2419,18 @@ impl Frames {
     }
 
     pub fn watch(lab: &Lab, agent: &Agent, cli: &str) -> anyhow::Result<Frames> {
+        Self::watch_drafts(lab, agent, cli, false)
+    }
+
+    fn watch_drafts(lab: &Lab, agent: &Agent, cli: &str, full: bool) -> anyhow::Result<Frames> {
         use facade_base::base64;
         let rule = facade_rules::find(cli)
             .map_err(anyhow::Error::msg)?
             .with_context(|| format!("no rule for {cli}"))?;
         let seen: Arc<Mutex<Vec<Value>>> = Arc::default();
         let seen_in = seen.clone();
+        let draft_changed = full.then(|| Arc::new(Condvar::new()));
+        let changed_in = draft_changed.clone();
         let screen = Arc::new(Mutex::new(facade_screen::Screen::new(COLS, ROWS, 200)));
         let screen_in = screen.clone();
         let opencode = cli == "opencode";
@@ -2387,8 +2468,15 @@ impl Frames {
                 "data": change["data"],
                 "input": format!("{:?}", reading.info.state).to_lowercase(),
                 "in_update": screen.synchronized_update_deadline().is_some(),
-                "draft": reading.draft.as_deref().map(crate::judge::short),
+                "draft": if full {
+                    reading.draft
+                } else {
+                    reading.draft.as_deref().map(crate::judge::short)
+                },
             }));
+            if let Some(changed) = &changed_in {
+                changed.notify_one();
+            }
         })?;
         let watched = wire.request(
             "watch",
@@ -2423,6 +2511,7 @@ impl Frames {
         )?;
         Ok(Frames {
             seen,
+            draft_changed,
             _wire: wire,
             states,
             _states_wire: states_wire,
