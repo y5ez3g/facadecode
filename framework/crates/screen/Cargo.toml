@@ -8,4 +8,5 @@ description = "A headless terminal for one agent: query replies, reads, views an
 
 [dependencies]
 alacritty_terminal.workspace = true
+arrayvec = "0.7"
 base64.workspace = true

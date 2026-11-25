@@ -278,7 +278,7 @@ impl<'a> Redraw<'a> {
         let cell = &row[Column(margin)];
         write!(self.out, "\x1b[{line};{}H", margin + 1).unwrap();
         self.put(sgr(cell, false).as_bytes());
-        self.put(cell_text(cell).as_bytes());
+        self.put(cell_text(cell).as_str().as_bytes());
     }
 
     /// Drawing, key and paste modes; the keyboard flags of the screen in use; modifyOtherKeys
@@ -421,7 +421,7 @@ fn write_row(
             write_link(out, cell_link.as_ref());
             link = cell_link;
         }
-        out.extend_from_slice(cell_text(cell).as_bytes());
+        out.extend_from_slice(cell_text(cell).as_str().as_bytes());
         written = x + 1 + usize::from(cell.flags.contains(Flags::WIDE_CHAR));
     }
     if link.is_some() {

@@ -190,7 +190,7 @@ fn line_of(
         cells: from[..end]
             .iter()
             .map(|cell| LineCell {
-                text: cell.text.clone(),
+                text: cell.text().to_owned(),
                 dim: cell.dim,
                 colored: cell.colored,
             })
@@ -234,12 +234,12 @@ fn drafted(place: &str, marks: (Option<u32>, Option<u32>), lines: &[&Cells]) -> 
 }
 
 fn joined(cells: &Cells) -> String {
-    cells.iter().map(|cell| cell.text.as_str()).collect()
+    cells.iter().map(VisibleCell::text).collect()
 }
 
 /// A cell that draws something other than space.
 fn draws(cell: &VisibleCell) -> bool {
-    !cell.text.trim().is_empty()
+    !cell.text().trim().is_empty()
 }
 
 fn all_space(cells: &Cells) -> bool {
@@ -361,7 +361,7 @@ impl<'a> Screen<'a> {
     /// starts at column 0, so its first cells' indexes are their columns.
     fn char(&self, y: usize, index: usize) -> &str {
         match self.cells.get(y).and_then(|row| row.get(index)) {
-            Some(cell) => &cell.text,
+            Some(cell) => cell.text(),
             None => " ",
         }
     }
@@ -752,7 +752,7 @@ impl<'a> Screen<'a> {
         let marked = |y: usize, mark: &str| {
             self.row(y)
                 .last()
-                .is_some_and(|cell| cell.column + 1 == self.cols && cell.dim && cell.text == mark)
+                .is_some_and(|cell| cell.column + 1 == self.cols && cell.dim && cell.text() == mark)
         };
         let (above, below) = match &rule.scrolled {
             Scrolled::LastColumn { above, below } if model.is_none() => {

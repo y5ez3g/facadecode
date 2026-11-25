@@ -45,14 +45,14 @@ pub fn view_of(screen: &Value) -> ScreenView {
             while index < chars.len() || column < cols {
                 let text = chars.get(index).cloned().unwrap_or_else(|| " ".into());
                 let width = UnicodeWidthStr::width(text.as_str()).max(1);
-                cells.push(VisibleCell {
+                cells.push(VisibleCell::new(
+                    &text,
                     column,
-                    bold: within(&row["bold"], index),
-                    dim: within(&row["dim"], index),
-                    inverse: within(&row["inverse"], index),
-                    colored: within(&row["colored"], index),
-                    text,
-                });
+                    within(&row["bold"], index),
+                    within(&row["dim"], index),
+                    within(&row["inverse"], index),
+                    within(&row["colored"], index),
+                ));
                 column += width;
                 index += 1;
             }

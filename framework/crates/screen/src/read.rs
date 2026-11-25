@@ -8,6 +8,7 @@ use alacritty_terminal::grid::{Dimensions, Grid, Row};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
+use arrayvec::ArrayString;
 
 use crate::Screen;
 use crate::compact::{SHOWS, WRAPPED, shows};
@@ -32,7 +33,7 @@ pub struct Reading {
 
 /// What a reader is shown of a cell.
 struct Glyph {
-    text: String,
+    text: CellText,
     inverse: bool,
     dim: bool,
 }
@@ -40,7 +41,7 @@ struct Glyph {
 impl Glyph {
     /// Whether nothing shows: whitespace, not inverse.
     fn is_blank(&self) -> bool {
-        self.text.trim().is_empty() && !self.inverse
+        self.text.as_str().trim().is_empty() && !self.inverse
     }
 }
 
@@ -53,12 +54,45 @@ fn drawn(cell: &Cell) -> char {
     }
 }
 
+/// A single character fits inline. A long combining sequence keeps all its bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CellText {
+    Inline(ArrayString<4>),
+    Long(Box<str>),
+}
+
+impl CellText {
+    pub(crate) fn of(text: &str) -> Self {
+        match ArrayString::from(text) {
+            Ok(inline) => Self::Inline(inline),
+            Err(_) => Self::Long(text.into()),
+        }
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        match self {
+            Self::Inline(text) => text.as_str(),
+            Self::Long(text) => text,
+        }
+    }
+}
+
 /// The text a cell draws: its character and any combining ones.
-pub(crate) fn cell_text(cell: &Cell) -> String {
+pub(crate) fn cell_text(cell: &Cell) -> CellText {
+    let first = drawn(cell);
     let combining = cell.zerowidth().unwrap_or_default();
-    std::iter::once(drawn(cell))
-        .chain(combining.iter().copied())
-        .collect()
+    let mut inline = ArrayString::new();
+    inline.push(first);
+    for &ch in combining {
+        if inline.try_push(ch).is_err() {
+            return CellText::Long(
+                std::iter::once(first)
+                    .chain(combining.iter().copied())
+                    .collect(),
+            );
+        }
+    }
+    CellText::Inline(inline)
 }
 
 /// Whether `cell` only holds room for the wide character before or after it.
@@ -102,7 +136,7 @@ fn write_marked(text: &mut String, glyphs: &[Glyph]) {
             (false, false) => ("", ""),
         };
         text.push_str(open);
-        for c in run.iter().flat_map(|glyph| glyph.text.chars()) {
+        for c in run.iter().flat_map(|glyph| glyph.text.as_str().chars()) {
             if "\\[]{}".contains(c) {
                 text.push('\\');
             }

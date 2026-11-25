@@ -1624,7 +1624,7 @@ impl Display {
                 .rows
                 .iter()
                 .flatten()
-                .all(|cell| cell.text.trim().is_empty() && !cell.inverse);
+                .all(|cell| cell.text().trim().is_empty() && !cell.inverse);
         let grid_fits = fits(shared.grid(), shared.capacity);
         if let Some(output) = output {
             if waiting_for_view || !grid_fits {

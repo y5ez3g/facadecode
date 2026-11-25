@@ -7,13 +7,12 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
 use crate::Screen;
-use crate::read::{cell_text, is_spacer, wraps};
+use crate::read::{CellText, cell_text, is_spacer, wraps};
 
 /// A cell as drawn. A wide character spans two columns, and its spacer is not listed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VisibleCell {
-    /// What the cell draws, combining characters included; a space when empty.
-    pub text: String,
+    text: CellText,
     /// The cell's first column.
     pub column: usize,
     pub bold: bool,
@@ -21,6 +20,32 @@ pub struct VisibleCell {
     pub inverse: bool,
     /// The foreground is not the default one.
     pub colored: bool,
+}
+
+impl VisibleCell {
+    /// Builds a cell with the supplied text and attributes.
+    pub fn new(
+        text: &str,
+        column: usize,
+        bold: bool,
+        dim: bool,
+        inverse: bool,
+        colored: bool,
+    ) -> Self {
+        Self {
+            text: CellText::of(text),
+            column,
+            bold,
+            dim,
+            inverse,
+            colored,
+        }
+    }
+
+    /// What the cell draws, combining characters included; a space when empty.
+    pub fn text(&self) -> &str {
+        self.text.as_str()
+    }
 }
 
 /// The screen as drawn, with the cursor.
@@ -67,8 +92,8 @@ impl Screen {
         let grid = self.terminal.grid();
         let (cols, height) = (grid.columns(), grid.screen_lines() as i32);
         let oldest = -(grid.history_size() as i32);
-        let mut rows = Vec::new();
-        let mut continues = Vec::new();
+        let mut rows = Vec::with_capacity(height as usize);
+        let mut continues = Vec::with_capacity(height as usize);
         for line in 0..height {
             rows.push(visible_cells(&grid[Line(line)], cols));
             continues.push(line > oldest && wraps(&grid[Line(line - 1)], cols));
@@ -99,7 +124,7 @@ mod tests {
             .take(6)
             .map(|cell| {
                 (
-                    cell.text.as_str(),
+                    cell.text(),
                     cell.column,
                     cell.dim,
                     cell.inverse,
@@ -129,9 +154,19 @@ mod tests {
         let view = screen.view();
         assert!(view.cursor_visible && view.synchronized_update);
         assert!(
-            view.rows[1].iter().all(|cell| cell.text == " "),
+            view.rows[1].iter().all(|cell| cell.text() == " "),
             "an open synchronized update shows the frame before it"
         );
+    }
+
+    #[test]
+    fn a_view_keeps_every_combining_character_and_the_next_column() {
+        let mut screen = Screen::new(10, 2, 0);
+        let combined = "é\u{323}\u{30a}";
+        screen.feed(format!("{combined}x").as_bytes());
+        let view = screen.view();
+        assert_eq!(view.rows[0][0].text(), combined);
+        assert_eq!((view.rows[0][1].column, view.rows[0][1].text()), (1, "x"));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::cell::Cell as Count;
 
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::vte::ansi::{Handler, Processor};
-use facade_screen::Screen;
+use facade_screen::{Screen, VisibleCell};
 
 thread_local! {
     /// The bytes this thread allocated and has not freed, so that tests side by side count apart.
@@ -70,6 +70,18 @@ fn a_new_screen_takes_its_cells_and_little_more() {
 fn the_smallest_screen_takes_almost_nothing() {
     let (_screen, bytes) = kept(|| Screen::new(2, 1, 0));
     assert!(bytes < BESIDES, "{bytes} bytes");
+}
+
+#[test]
+fn a_view_keeps_single_characters_inside_its_cells() {
+    let mut screen = Screen::new(COLS, ROWS, 0);
+    screen.feed("a界🤖".as_bytes());
+    let (_view, bytes) = kept(|| screen.view());
+    let cells = COLS as usize * ROWS as usize * size_of::<VisibleCell>();
+    assert!(
+        bytes <= cells + 1024,
+        "{bytes} bytes for {cells} bytes of cells"
+    );
 }
 
 /// The output a synchronized update holds back takes memory until the update ends, however it ends.

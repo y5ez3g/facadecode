@@ -990,7 +990,7 @@ fn attach_wheel_browses_main_screen_history_without_typing_into_the_cli() {
                 row.first().is_some_and(|cell| cell.colored)
                     && row
                         .iter()
-                        .map(|cell| cell.text.as_str())
+                        .map(|cell| cell.text())
                         .collect::<String>()
                         .starts_with("WHEEL-HISTORY-")
             })
@@ -1094,12 +1094,12 @@ struct SelectionSpan {
 impl SelectionSpan {
     fn visible(term: &TestTerminal, prefix: &str) -> Self {
         for (number, row) in term.view().rows.into_iter().enumerate() {
-            let text: String = row.iter().map(|cell| cell.text.as_str()).collect();
+            let text: String = row.iter().map(|cell| cell.text()).collect();
             if text.starts_with(prefix)
                 && let Some(cells) = row.windows(4).find(|cells| {
                     cells
                         .iter()
-                        .map(|cell| cell.text.as_str())
+                        .map(|cell| cell.text())
                         .eq(["A", "é", "界", "Z"])
                 })
             {
@@ -1701,12 +1701,12 @@ fn attach_views_share_the_smallest_grid_and_resize_only_owned_watches() {
     let wraps_at_80 = |viewer: &TestTerminal| {
         let view = viewer.view();
         view.rows.windows(2).any(|rows| {
-            rows[0][0].text == ">"
-                && rows[0][2..80].iter().all(|cell| cell.text == "v")
-                && rows[0][80..].iter().all(|cell| cell.text == " ")
-                && rows[1][0].text == "v"
-                && rows[1][1].text == "v"
-                && rows[1][2].text == "Z"
+            rows[0][0].text() == ">"
+                && rows[0][2..80].iter().all(|cell| cell.text() == "v")
+                && rows[0][80..].iter().all(|cell| cell.text() == " ")
+                && rows[1][0].text() == "v"
+                && rows[1][1].text() == "v"
+                && rows[1][2].text() == "Z"
         })
     };
     for viewer in [&small, &large] {
