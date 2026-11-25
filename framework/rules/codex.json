@@ -12,7 +12,16 @@
 		"model_line": "^ {2}\\S.*? · (?:[~/]|[A-Za-z]:\\\\|…\\s*$)",
 		"wrapped_footer_hint": "^(?: {2}(?:(?:← for agents · )?\\? for shortcuts(?: {2,}\\S.*)?|tab to queue message)| {20,}⚠ (?:1 warning|(?:[2-9]|[1-9][0-9]+) warnings) · f2 to view)$",
 		"scrolled": { "position": "last_column", "above": "↑", "below": "↓" },
-		"menus": [{ "selected": "^› \\d+\\. \\S", "next": "^ {2}\\d+\\. \\S", "hint": { "pattern": "^ {2}(?:Press )?[Ee]nter\\b", "within": 10 } }]
+		"menus": [
+			{ "selected": "^› \\d+\\. \\S", "next": "^ {2}\\d+\\. \\S", "hint": { "pattern": "^ {2}(?:Press )?[Ee]nter\\b", "within": 10 } },
+			{
+				"selected": { "prefix": "^ {2}", "text": "Giving this request a little extra thought", "indent": 2, "stop_at_dim": true },
+				"hint": {
+					"pattern": { "prefix": "^(?:› | {2})[12]\\. ", "text": "Dismiss and keep waiting", "indent": 5 },
+					"within": 30
+				}
+			}
+		]
 	},
 	"paste": {
 		"bracketed": true,

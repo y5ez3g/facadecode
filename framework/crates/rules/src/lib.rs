@@ -539,17 +539,17 @@ pub struct ModePlaceholder {
     pub footer: Pattern,
 }
 
-/// A menu or question the CLI draws in place of its input: its selected row and the row under it,
-/// or a hint row that only its questions have within so many rows.
+/// A menu or question drawn in place of the CLI's input, identified by an anchor line and any
+/// required lines below it.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Menu {
-    pub selected: Pattern,
-    /// A selected row never matches this.
+    pub selected: MenuLinePattern,
+    /// The anchor's first logical line never matches this.
     #[serde(default)]
     pub not_selected: Option<Pattern>,
     #[serde(default)]
-    pub next: Option<Pattern>,
+    pub next: Option<MenuLinePattern>,
     #[serde(default)]
     pub hint: Option<Hint>,
 }
@@ -557,8 +557,30 @@ pub struct Menu {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hint {
-    pub pattern: Pattern,
+    pub pattern: MenuLinePattern,
+    /// How many logical lines after the anchor may start the hint.
     pub within: usize,
+}
+
+/// Match a terminal's logical line, or exact text a CLI lays out on successive lines itself.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum MenuLinePattern {
+    Regex(Pattern),
+    Wrapped(WrappedMenuText),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WrappedMenuText {
+    /// The prefix at the start of the first line, including indentation and any option marker.
+    pub prefix: Pattern,
+    pub text: String,
+    /// The number of spaces the CLI adds to each manually continued line.
+    pub indent: usize,
+    /// The CLI starts a separate hint or explanation with dim text at the same indentation.
+    #[serde(default)]
+    pub stop_at_dim: bool,
 }
 
 /// A regular expression of a rule file, compiled as the file is read.

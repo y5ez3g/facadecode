@@ -958,6 +958,26 @@ fn screen_after(output: &[u8]) -> ScreenView {
 }
 
 #[test]
+fn menus_match_logical_lines_after_terminal_wrapping() {
+    let claude = find("claude").unwrap().unwrap();
+    let codex = find("codex").unwrap().unwrap();
+    let first_row = format!(" ❯ {}", "a".repeat(37));
+    let menu = format!("\x1b[?25l{first_row}continued choice\r\n   Another choice\r\n");
+    let view = screen_after(menu.as_bytes());
+    assert!(view.continues[1]);
+    let read = read_input(&claude.input, &view);
+    assert_eq!(read.state, InputState::Interaction, "{}", read.evidence);
+    let read = read_input(&codex.input, &view);
+    assert_eq!(read.state, InputState::Unknown, "{}", read.evidence);
+
+    let line = format!("\x1b[?25l{first_row}   Only a continuation\r\n");
+    let view = screen_after(line.as_bytes());
+    assert!(view.continues[1]);
+    let read = read_input(&claude.input, &view);
+    assert_eq!(read.state, InputState::Unknown, "{}", read.evidence);
+}
+
+#[test]
 fn claude_plain_hint_and_same_text_draft_need_the_probe() {
     let claude = &find("claude").unwrap().unwrap().input;
     let text = r#"Try "refactor <filepath>""#;

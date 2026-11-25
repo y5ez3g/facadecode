@@ -6,11 +6,16 @@
 mod paste;
 mod probe;
 
+use std::borrow::Cow;
+
 use facade_base::model::terminal::{HiddenRows, InputInfo, InputState};
 use facade_screen::{ScreenView, VisibleCell};
 use regex::Regex;
 
-use crate::{BoxInput, CountedScroll, Editor, Frame, InputRule, Menu, Prompt, Question, Scrolled};
+use crate::{
+    BoxInput, CountedScroll, Editor, Frame, InputRule, Menu, MenuLinePattern, Prompt, Question,
+    Scrolled,
+};
 
 pub use paste::{is_legacy_split_paste, is_own_draft, is_same_draft, settle_time, with_paste_text};
 pub use probe::{ProbeVerdict, restored, shape_of, space_taken, verdict_of};
@@ -278,12 +283,19 @@ fn counted(pattern: &Regex, line: &str) -> Option<u32> {
         .map_or(Some(1), |number| number.as_str().parse().ok())
 }
 
+/// A complete terminal line and the screen row it starts on.
+struct LogicalLine<'a> {
+    row: usize,
+    text: Cow<'a, str>,
+}
+
 /// The screen as the readers look at it.
 struct Screen<'a> {
     cells: &'a [Vec<VisibleCell>],
     cols: usize,
     /// Each row's text.
     lines: Vec<String>,
+    continues: &'a [bool],
     /// Column and row.
     cursor: (usize, usize),
     menus: &'a [Menu],
@@ -295,6 +307,7 @@ impl<'a> Screen<'a> {
             cells: &view.rows,
             cols: view.cols,
             lines: view.rows.iter().map(|row| joined(row)).collect(),
+            continues: &view.continues,
             cursor: view.cursor,
             menus,
         }
@@ -365,35 +378,101 @@ impl<'a> Screen<'a> {
         self.cursor == (column, row)
     }
 
-    /// The row a menu or question of the CLI's shows its selected item or question on.
-    fn menu_row(&self, menu: &Menu) -> Option<usize> {
-        let below_matches = |y: usize, pattern: &Regex| {
-            self.lines
-                .get(y + 1)
-                .is_some_and(|line| pattern.is_match(line))
-        };
-        let hinted = |y: usize, pattern: &Regex, within: usize| {
-            self.lines[y + 1..]
-                .iter()
-                .take(within)
-                .any(|line| pattern.is_match(line))
-        };
-        (0..self.lines.len()).find(|&y| {
-            let line = &self.lines[y];
-            if !menu.selected.is_match(line) {
-                return false;
+    fn logical_lines(&self) -> Vec<LogicalLine<'_>> {
+        let mut lines: Vec<LogicalLine<'_>> = Vec::with_capacity(self.lines.len());
+        for (row, text) in self.lines.iter().enumerate() {
+            if self.continues.get(row) == Some(&true) {
+                // A continuation at the top begins outside the visible screen.
+                if let Some(line) = lines.last_mut() {
+                    line.text.to_mut().push_str(text);
+                }
+            } else {
+                lines.push(LogicalLine {
+                    row,
+                    text: Cow::Borrowed(text),
+                });
             }
-            if let Some(not) = &menu.not_selected
-                && not.is_match(line)
+        }
+        lines
+    }
+
+    /// The last logical line consumed by a menu pattern starting at `start`.
+    fn menu_line_end(
+        &self,
+        pattern: &MenuLinePattern,
+        lines: &[LogicalLine<'_>],
+        start: usize,
+    ) -> Option<usize> {
+        let first = lines.get(start)?.text.as_ref();
+        let wrapped = match pattern {
+            MenuLinePattern::Regex(regex) => return regex.is_match(first).then_some(start),
+            MenuLinePattern::Wrapped(wrapped) => wrapped,
+        };
+        let prefix = wrapped
+            .prefix
+            .find(first)
+            .filter(|prefix| prefix.start() == 0)?;
+        let first_text = first[prefix.end()..].trim_end_matches(' ');
+        if first_text.is_empty() && prefix.as_str().trim().is_empty() {
+            return None;
+        }
+        let mut expected = wrapped.text.strip_prefix(first_text)?;
+        let mut end = start;
+        // The display boundary determines the end, even after consuming the expected text.
+        for (index, line) in lines.iter().enumerate().skip(start + 1) {
+            let Some((indent, fragment)) = line.text.split_at_checked(wrapped.indent) else {
+                break;
+            };
+            let fragment = fragment.trim_end_matches(' ');
+            if fragment.is_empty()
+                || indent.bytes().any(|byte| byte != b' ')
+                || wrapped.stop_at_dim && self.dim_line(lines, index)
             {
-                return false;
+                break;
             }
-            let next_fits = menu.next.as_ref().is_none_or(|next| below_matches(y, next));
-            let hint_fits = menu
-                .hint
+            // Word wrapping omits the space at a word boundary and can also split a word.
+            expected = expected
+                .strip_prefix(' ')
+                .unwrap_or(expected)
+                .strip_prefix(fragment)?;
+            end = index;
+        }
+        expected.is_empty().then_some(end)
+    }
+
+    /// Every drawn cell of this logical line is dim, including its terminal continuations.
+    fn dim_line(&self, lines: &[LogicalLine<'_>], index: usize) -> bool {
+        let start = lines[index].row;
+        let end = lines
+            .get(index + 1)
+            .map_or(self.cells.len(), |line| line.row);
+        self.cells[start..end]
+            .iter()
+            .flatten()
+            .filter(|cell| draws(cell))
+            .all(|cell| cell.dim)
+    }
+
+    /// The first screen row of a menu or question's anchor.
+    fn menu_row(&self, menu: &Menu, lines: &[LogicalLine<'_>]) -> Option<usize> {
+        lines.iter().enumerate().find_map(|(start, line)| {
+            let end = self.menu_line_end(&menu.selected, lines, start)?;
+            if let Some(not) = &menu.not_selected
+                && not.is_match(&line.text)
+            {
+                return None;
+            }
+            let after = end + 1;
+            let next_fits = menu
+                .next
                 .as_ref()
-                .is_none_or(|hint| hinted(y, &hint.pattern, hint.within));
-            next_fits && hint_fits
+                .is_none_or(|next| self.menu_line_end(next, lines, after).is_some());
+            let hint_fits = menu.hint.as_ref().is_none_or(|hint| {
+                (after..lines.len())
+                    .take(hint.within)
+                    .any(|start| self.menu_line_end(&hint.pattern, lines, start).is_some())
+            });
+            (next_fits && hint_fits).then_some(line.row)
         })
     }
 
@@ -401,13 +480,18 @@ impl<'a> Screen<'a> {
     /// of the CLI's own shows, otherwise `unknown`.
     fn elsewhere(&self, why: impl Into<String>) -> Reading {
         let why = why.into();
+        if self.menus.is_empty() {
+            return unknown(why);
+        }
+        let lines = self.logical_lines();
         for menu in self.menus {
-            let Some(y) = self.menu_row(menu) else {
+            let Some(y) = self.menu_row(menu, &lines) else {
                 continue;
             };
-            let what = match menu.next {
-                Some(_) => "a menu's selected item",
-                None => "a question",
+            let what = match (&menu.selected, &menu.next) {
+                (MenuLinePattern::Wrapped(_), _) => "a menu",
+                (_, Some(_)) => "a menu's selected item",
+                (_, None) => "a question",
             };
             return reading(
                 InputState::Interaction,
