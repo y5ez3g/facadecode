@@ -111,6 +111,17 @@ fn write_marked(text: &mut String, glyphs: &[Glyph]) {
 }
 
 impl Screen {
+    /// The one-based last physical row with content in the active viewport, or zero if blank.
+    pub fn occupied_rows(&self) -> u16 {
+        let grid = self.terminal.grid();
+        (1..=self.rows())
+            .rfind(|&row| {
+                let line = Line(i32::from(row) - 1);
+                (&grid[line]).into_iter().any(|cell| !is_blank(cell))
+            })
+            .unwrap_or(0)
+    }
+
     /// The active grid's readable scrollback positions, ending at the top of the live viewport.
     /// The compact store counts the rows dropped at its front, keeping positions usable across
     /// feeds at the same size until history is cleared. The alternate grid has an empty range.

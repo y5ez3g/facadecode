@@ -129,6 +129,9 @@ which replays at most `REDRAW_SCROLLBACK_ROWS` (1,000) scrollback rows. A redraw
   `offset` rows above the live view. It clamps the offset to the active grid's readable scrollback.
   The application alternate grid has no scrollback. The draw clears unused host margins, hides
   the cursor and preserves input modes. The host must be at least as large as the shared grid.
+- `occupied_rows() -> u16` gives the one-based last occupied physical row in the active
+  viewport, or zero if it is blank. Cells that draw a style or link count as occupied. Shell uses
+  this position to place the exit receipt below the shown content.
 - `scrollback_range()` gives the active grid's readable row positions, ending at the top of
   the live viewport. It excludes the extra retained row used to detect trimmed reads. The compact
   store counts dropped rows so Shell can keep a row selected across feeds at the same size. Shell
