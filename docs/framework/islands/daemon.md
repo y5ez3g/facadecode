@@ -61,6 +61,9 @@ public `run()` entry point.
   client kind. MCP calls use a typed asynchronous dispatch with the same operation registry and
   the actor proved by the relay connection. The caller's permissions come from the installed run
   record verified for that call.
+- On Windows, the daemon keeps two Tokio workers for asynchronous work. The blocking pool has
+  up to ten threads and returns idle threads after 150 ms. Its SQLite connection uses a 128 KiB
+  page cache target with WAL and FULL synchronization.
 - A terminal can request takeover by a newer build. The daemon checks the target daemon's
   supported API separately from the version negotiated with the keeper holding its CLIs.
   A compatible takeover hands each PTY back to the new daemon through `agent.sync`.

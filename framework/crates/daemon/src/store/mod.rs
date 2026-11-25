@@ -271,6 +271,10 @@ impl Store {
         connection
             .pragma_update(None, "synchronous", "FULL")
             .map_err(unreadable)?;
+        #[cfg(windows)]
+        connection
+            .pragma_update(None, "cache_size", -128)
+            .map_err(unreadable)?;
         if !has_tables {
             initialize(&mut connection, held)
                 .map_err(|err| anyhow::anyhow!("could not initialize {}: {err}", path.display()))?;
