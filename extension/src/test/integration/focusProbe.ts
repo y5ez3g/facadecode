@@ -229,7 +229,7 @@ export async function focusProbe(ctx: FocusProbeContext): Promise<void> {
 		}
 	}
 	// Which build this measured: the file the marks are in, by its digest
-	const source = path.resolve(__dirname, '..', '..', '..', '..', 'src', 'host', 'execution', 'agentTerminals.ts');
+	const source = path.resolve(__dirname, '..', '..', '..', '..', 'src', 'host', 'terminal', 'agentTerminals.ts');
 	const snapshot = { agentTerminals: fs.existsSync(source) ? crypto.createHash('sha1').update(fs.readFileSync(source)).digest('hex') : 'not found', source };
 	const evidence = {
 		generatedAt: new Date().toISOString(),

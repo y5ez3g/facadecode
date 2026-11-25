@@ -1,4 +1,5 @@
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -6,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from catalog import AcceptanceError, Case
+from evidence import PRIOR_VSIX
 from github_main_health import first_attempt_state
 from merge_review import (
     ACTIONS_APP, REMOTE, REQUIRED, RUNNERS, current_candidate, current_runs, listed, require_catalog_minimum, require_jobs,
@@ -155,6 +157,17 @@ class ExpandedReview(unittest.TestCase):
     def test_cutover_requires_each_published_upgrade_and_cleanup(self):
         with TemporaryDirectory() as directory:
             folder = Path(directory)
+            candidate = folder / 'vsix'
+            candidate.mkdir()
+            candidate_sha = {}
+            for name in ('editor.vsix', 'window.vsix'):
+                contents = name.encode()
+                (candidate / name).write_bytes(contents)
+                candidate_sha[name] = hashlib.sha256(contents).hexdigest()
+            (folder / 'packages.json').write_text(json.dumps({
+                'prior': {name: sha for name, (_, sha) in PRIOR_VSIX.items()},
+                'candidate': candidate_sha,
+            }))
             for variant in RELEASED_CUTOVER_CASES:
                 serving = 'none' if variant == 'uncertain' else 'framework'
                 report = json.dumps({'name': f'cutover-{variant}', 'implementation': serving})
@@ -162,8 +175,14 @@ class ExpandedReview(unittest.TestCase):
                     f'✔ legacy cutover ({variant}) from 0.1.5 to 0.1.6: {{}}\n'
                     f'Facade acceptance test {report}\nIsolated editor profile cleanup finished.\n'
                 )
-            self.assertEqual(check_published_cutover(folder), CUTOVER_TYPED_CASES)
+            self.assertEqual(check_published_cutover(folder, '0.1.6', candidate), CUTOVER_TYPED_CASES)
+            changed = candidate / 'editor.vsix'
+            original = changed.read_bytes()
+            changed.write_bytes(b'other package')
+            with self.assertRaisesRegex(AcceptanceError, 'different prior or candidate pair'):
+                check_published_cutover(folder, '0.1.6', candidate)
+            changed.write_bytes(original)
             path = folder / 'uncertain.log'
             path.write_text(path.read_text().replace('"none"', '"framework"'))
             with self.assertRaises(AcceptanceError):
-                check_published_cutover(folder)
+                check_published_cutover(folder, '0.1.6', candidate)

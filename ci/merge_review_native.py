@@ -14,6 +14,7 @@ from catalog import (
 from check_keeper_recovery import ARTIFACT as KEEPER_ARTIFACT, CASE as KEEPER_CASE, verify_keeper
 from check_native_install import SHA256, verified_install
 import check_real_ssh_route as ssh
+from evidence import PRIOR_VSIX
 from github_evidence import download_artifact
 from native_framework import hash_file, read_markers, verify_native_cleanup
 import remote_editor_evidence as remote
@@ -66,14 +67,20 @@ def editor_passes(path):
     return sum(counts)
 
 
-def check_published_cutover(folder):
+def check_published_cutover(folder, version, candidate):
+    expected = {
+        'prior': {name: sha for name, (_, sha) in PRIOR_VSIX.items()},
+        'candidate': {p.name: hash_file(p) for p in sorted(candidate.glob('*.vsix'))},
+    }
+    if len(expected['candidate']) != 2 or read_json(folder / 'packages.json') != expected:
+        raise AcceptanceError('the cutover used a different prior or candidate pair')
     for variant in RELEASED_CUTOVER_CASES:
         path = folder / f'{variant}.log'
         lines = path.read_text().splitlines()
         serving = 'none' if variant == 'uncertain' else 'framework'
         reports = [json.loads(line.removeprefix('Facade acceptance test '))
                    for line in lines if line.startswith('Facade acceptance test ')]
-        passed = any(line.strip().startswith(f'✔ legacy cutover ({variant}) from 0.1.5 to 0.1.6: ') for line in lines)
+        passed = any(line.strip().startswith(f'✔ legacy cutover ({variant}) from 0.1.5 to {version}: ') for line in lines)
         if (not passed or reports != [{'name': f'cutover-{variant}', 'implementation': serving}]
                 or lines.count('Isolated editor profile cleanup finished.') != 1):
             raise AcceptanceError(f'{path}: absent, failed or incomplete published cutover evidence')
@@ -140,7 +147,8 @@ def replay_native(root, repo, candidate, records, output):
                      install / 'output.log', installed_source['run'], source=installed_source,
                      producer_checkout=Path('/home/runner/work') / project / project)
     observed.extend(NATIVE_INSTALL_CASES)
-    observed.extend(check_published_cutover(paths['published-cutover-linux-x64']))
+    observed.extend(check_published_cutover(paths['published-cutover-linux-x64'], version,
+                                           packages / 'extension-linux-x64/vsix'))
 
     return {
         'typed_cases': sorted(observed),
