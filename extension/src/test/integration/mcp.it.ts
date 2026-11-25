@@ -12,7 +12,7 @@ import { lineReader } from '../../base/lines';
 import { unspun } from '../../base/tabSpinner';
 import { linesOf as cardLines } from '../detailLines';
 import { frameworkCall, frameworkSocket, normalizeDriveLetter } from './editors';
-import { BUILT_IN_NAMES } from '../../base/names';
+import { BUILT_INS } from './builtinFixtures';
 import type { Card, PanelState } from '../../webview/protocol';
 import { observeAcceptanceImplementation } from './acceptanceImplementation';
 
@@ -301,7 +301,7 @@ const childOf = (started: { data: { id?: string; agent_id?: string } }): string 
 const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'];
 
 // A custom CLI starts exactly as configured and has no MCP injection; its launch is checked by journey.it.ts.
-(!PEER && BUILT_IN_NAMES.some(builtIn => builtIn === CLI) ? suite : suite.skip)(`Journey: ${CLI} uses its Facade tools in this window (J10, M02, M03, M07, M15, M17)`, () => {
+(!PEER && BUILT_INS.some(builtIn => builtIn.id === CLI) ? suite : suite.skip)(`Journey: ${CLI} uses its Facade tools in this window (J10, M02, M03, M07, M15, M17)`, () => {
 	suiteSetup(async () => {
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();
 		await until('the panel state', async () => (await state())?.loading === false ? true : undefined);

@@ -563,7 +563,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			void vscode.commands.executeCommand('facade.filter');
 			await new Promise(resolve => setTimeout(resolve, 2_500));
 			await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
-			if (FRAMEWORK) { await vscode.commands.executeCommand('quickInput.toggleCheckbox'); }
+			if (FRAMEWORK) { await vscode.commands.executeCommand('workbench.action.quickPickManyToggle'); }
 			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 			await new Promise(resolve => setTimeout(resolve, 500));
 			return (await state()).filter ? await state() : undefined;

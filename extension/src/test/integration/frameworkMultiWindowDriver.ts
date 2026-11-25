@@ -21,11 +21,9 @@ import type { OwnerClaim } from '../../base/ownership';
 
 type Action =
 	| { readonly kind: 'snapshot' | 'filter' | 'window-component' | 'terminal-owner' | 'show-notifications' | 'show-failure-panel' | 'request-refused-agent' }
-	| { readonly kind: 'start-fallback' }
 	| { readonly kind: 'pin-owned'; readonly run: string }
 	| { readonly kind: 'panel-generation' }
 	| { readonly kind: 'stale-owner'; readonly previous: OwnerClaim; readonly current: OwnerClaim; readonly page: string; readonly runs: readonly [string, string] }
-	| { readonly kind: 'stop-fallback'; readonly runId: string }
 	| { readonly kind: 'open-shell-agent'; readonly name: string; readonly address: string; readonly text: string }
 	| { readonly kind: 'shell-attach-view'; readonly grid?: vscode.TerminalDimensions; readonly text?: string; readonly resize?: boolean }
 	| { readonly kind: 'settings-path'; readonly file: string }
@@ -124,7 +122,7 @@ async function filterByLocation(): Promise<void> {
 		void vscode.commands.executeCommand('facade.filter');
 		await new Promise(resolve => setTimeout(resolve, 2_500));
 		await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
-		await vscode.commands.executeCommand('quickInput.toggleCheckbox');
+		await vscode.commands.executeCommand('workbench.action.quickPickManyToggle');
 		await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 		return (await state()).filter;
 	}, 60_000);
@@ -171,22 +169,6 @@ async function perform(action: Action): Promise<unknown> {
 			assert.strictEqual(await vscode.commands.executeCommand('facade.newAgent'), undefined);
 			assert.strictEqual(vscode.window.terminals.length, 0);
 			return true;
-		case 'start-fallback': {
-			const before = new Set((await state()).cards.map(card => card.runId));
-			const picker = vscode.commands.executeCommand('facade.newAgent');
-			void picker.then(undefined, () => undefined);
-			const card = await until('the legacy implementation card and terminal', async () => {
-				const panel = await state();
-				const first = panel.cards.find(card => !before.has(card.runId));
-				if (first && agentTab(first)) { return first; }
-				await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
-				return undefined;
-			});
-			await picker;
-			assert.equal(card.orchestrator, undefined);
-			assert.match(card.alias, /^#a\d+$/u);
-			return { runId: card.runId, alias: card.alias, name: card.name };
-		}
 		case 'pin-owned': {
 			const card = (await state()).cards.find(each => each.runId === action.run);
 			assert.ok(card);
@@ -246,9 +228,6 @@ async function perform(action: Action): Promise<unknown> {
 			assert.ok(terminals.every(terminal => vscode.window.terminals.includes(terminal)));
 			return { page, refusedActions: replay.length };
 		}
-		case 'stop-fallback':
-			await vscode.commands.executeCommand('facade.stopAgent', { run_id: action.runId });
-			return true;
 		case 'window-component':
 			return vscode.extensions.getExtension('facade.facadecode-window') !== undefined;
 		case 'terminal-owner': {
@@ -549,29 +528,24 @@ export async function activate(): Promise<void> {
 		assert.ok(folder, 'the test window has a workspace folder');
 		const extension = vscode.extensions.getExtension('facade.facadecode')!;
 		const incompatible = process.env.FACADE_IT_WINDOW_INCOMPATIBLE === '1';
-		if (incompatible) {
-			assert.strictEqual(vscode.workspace.getConfiguration('facade').get('framework'), 'auto');
-			assert.ok(vscode.extensions.getExtension('facade.facadecode-window'), 'the legacy implementation has its Window Component available');
-			await assert.rejects(async () => extension.activate(), /Facade Code Framework did not select an offered daemon API version\./u);
+		const failedStart = process.env.FACADE_IT_WINDOW_STARTUP_FAILURE === '1';
+		const expectedError = incompatible ? /Facade Code Framework did not select an offered daemon API version\./u
+			: failedStart ? /Could not run .*facade/u : undefined;
+		let machineId: string | null = null;
+		if (expectedError) {
+			assert.ok(vscode.extensions.getExtension('facade.facadecode-window'), 'the Window Component is available during the failure');
+			await assert.rejects(async () => extension.activate(), expectedError);
 		} else {
 			await extension.activate();
 			await until('the panel snapshot', async () => (await state())?.loading === false || undefined, 90_000);
-		}
-		if (process.env.FACADE_IT_WINDOW_NO_COMPONENT === '1') {
-			assert.strictEqual(vscode.extensions.getExtension('facade.facadecode-window'), undefined);
-		}
-		const legacyImplementation = vscode.workspace.getConfiguration('facade').get('framework') === 'off';
-		const fallback = process.env.FACADE_IT_WINDOW_FALLBACK === '1';
-		let machineId: string | null = null;
-		if (legacyImplementation || fallback) {
-			assert.ok(vscode.extensions.getExtension('facade.facadecode-window'));
-			if (fallback) { assert.strictEqual(vscode.workspace.getConfiguration('facade').get('framework'), 'auto'); }
-		} else if (!incompatible) {
 			const hello = await helloInFramework(home);
 			assert.ok('result' in hello, JSON.stringify(hello));
 			const framework = hello.result as HelloResult;
 			assert.ok(framework.api_version === 1 && framework.machine_id, JSON.stringify(hello));
 			machineId = framework.machine_id;
+		}
+		if (process.env.FACADE_IT_WINDOW_NO_COMPONENT === '1') {
+			assert.strictEqual(vscode.extensions.getExtension('facade.facadecode-window'), undefined);
 		}
 		answer(`${control}.ready`, { result: {
 			folder, remote: vscode.env.remoteName ?? null, home, machineId, platform: process.platform, hostPid: process.pid

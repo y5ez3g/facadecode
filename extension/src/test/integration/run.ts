@@ -13,6 +13,7 @@ import { execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { BUILT_INS } from './builtinFixtures';
 import { frameworkCall, frameworkListens, frameworkProgram, EDITOR_FLAGS, editorProfile, endFramework, endEditors, fakeClis, newRepository, officialEditor, sanitizedEnvironment, testProcessCleanup } from './editors';
 import { focusProbe } from './focusProbe';
 import { runRemoteWorktree } from './remoteWorktree';
@@ -24,19 +25,6 @@ import { activationFailure, incompatibleActivation, missingSessionUnpin, multiWi
 
 /** An entry of Facade's settings file, by its fields (CONFIGURATION-2.2). */
 type Entry = { readonly [field: string]: unknown };
-
-/**
- * The built-ins in their catalog order (CLIS-1.1), each with its earlier editor settings' segment, which a released build reads
- * (CONFIGURATION-6.1), and the avatar file its card shows (PANEL-1.3).
- */
-const BUILT_INS: readonly { readonly id: string; readonly segment: string; readonly avatar: string }[] = [
-	{ id: 'claude', segment: 'claude', avatar: 'avatar-claude.png' },
-	{ id: 'codex', segment: 'codex', avatar: 'avatar-codex.png' },
-	{ id: 'agy', segment: 'antigravity', avatar: 'avatar-antigravity.png' },
-	{ id: 'muse', segment: 'muse', avatar: 'avatar-muse.png' },
-	{ id: 'opencode', segment: 'opencode', avatar: 'avatar-opencode.png' },
-	{ id: 'pi', segment: 'pi', avatar: 'avatar-pi.png' }
-];
 
 const ACCEPTANCE_DRIVERS = new Map([
 	['activation-failure', { implementation: 'framework', cli: 'claude' }],
@@ -768,19 +756,19 @@ async function main(): Promise<void> {
 		};
 		// Each journey has its own Facade home and can start an a1.
 		const env = { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: path.join(root, `${runName}-cli`), CLAUDE_CONFIG_DIR: claudeConfig };
-		const fallback = runName === 'activation-failure';
+		const failedStart = runName === 'activation-failure';
 		const incompatible = runName === 'incompatible-activation';
 		const faultStage = path.join(root, 'extension-with-fault');
 		const faultProgram = frameworkProgram(path.join(faultStage, 'bin'));
-		if (fallback) {
+		if (failedStart) {
 			assert.ok(fs.statSync(frameworkPrograms).isFile(), 'the original stage has the bundled native program');
 			fs.cpSync(extension, faultStage, { recursive: true, dereference: true });
-			// The native program path still exists, so auto selects Framework and actually attempts the spawn.
+			// Keep the native program path present so activation exercises the failed spawn.
 			fs.unlinkSync(faultProgram);
 			fs.mkdirSync(faultProgram);
 		}
 		const start = (folder: string, name: string, control: string, port: number) => {
-			const withComponent = runName === 'multi' || fallback || incompatible;
+			const withComponent = runName === 'multi' || failedStart || incompatible;
 			const profile = editorProfile(root, `${runName[0]}-${name}`);
 			const userSettings = path.join(profile.user, 'User', 'settings.json');
 			if (!fs.existsSync(userSettings)) {
@@ -790,12 +778,12 @@ async function main(): Promise<void> {
 				}));
 			}
 			return spawn(executable, [folder, '--new-window', '--disable-extensions', ...profile.args,
-				`--extensionDevelopmentPath=${fallback ? faultStage : extension}`,
+				`--extensionDevelopmentPath=${failedStart ? faultStage : extension}`,
 				...withComponent ? [`--extensionDevelopmentPath=${windowComponent}`] : [],
 				`--extensionDevelopmentPath=${driver}`, `--remote-debugging-port=${port}`, '--locale=en', ...EDITOR_FLAGS],
 				{ env: { ...env, ...profile.env, FACADE_IT_WINDOW_CONTROL: control,
 					...withComponent ? {} : { FACADE_IT_WINDOW_NO_COMPONENT: '1' },
-					...fallback ? { FACADE_IT_WINDOW_FALLBACK: '1' } : {},
+					...failedStart ? { FACADE_IT_WINDOW_STARTUP_FAILURE: '1' } : {},
 					...incompatible ? { FACADE_IT_WINDOW_INCOMPATIBLE: '1' } : {} }, stdio: ['ignore', 'pipe', 'pipe'] });
 		};
 		try {
@@ -805,7 +793,7 @@ async function main(): Promise<void> {
 				}
 				if (runName === 'missing-session-unpin') { return missingSessionUnpin(open, repo, env); }
 
-				if (fallback) { return activationFailure(open, repo, env, faultProgram); }
+				if (failedStart) { return activationFailure(open, repo, env, faultProgram); }
 				if (incompatible) { return incompatibleActivation(open, repo, env); }
 				const shellEnv = {
 					...env, ...isolatedStorage, HOME: agentsHome, USERPROFILE: agentsHome,
@@ -819,7 +807,7 @@ async function main(): Promise<void> {
 			if (runName === 'multi') { driverPassed('multi-window', 'framework'); }
 			if (runName === 'handoff') { driverPassed('shell-handoff', 'framework'); }
 			if (runName === 'missing-session-unpin') { driverPassed('missing-session-unpin', 'framework'); }
-			if (fallback) { driverPassed('activation-failure', 'none'); }
+			if (failedStart) { driverPassed('activation-failure', 'none'); }
 			if (incompatible) { driverPassed('incompatible-activation', 'none'); }
 
 		} finally {
@@ -827,7 +815,7 @@ async function main(): Promise<void> {
 			if (runName === 'attach') {
 				endMatching(facade);
 			}
-			if (fallback || incompatible) { endMatching(path.join(facade, 'extension', 'ptyd')); }
+			if (failedStart || incompatible) { endMatching(path.join(facade, 'extension', 'ptyd')); }
 		}
 	};
 	let suiteFailure: unknown;

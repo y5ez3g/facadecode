@@ -29,6 +29,7 @@ HARNESS_FILES = (
     'extension/src/test/integration/index.ts',
     'extension/src/test/integration/journey.it.ts',
     'extension/src/test/integration/run.ts',
+    'extension/src/test/integration/builtinFixtures.ts',
     'extension/src/test/integration/cutover.ts',
     'extension/src/test/integration/cutoverDriver.ts',
 )
