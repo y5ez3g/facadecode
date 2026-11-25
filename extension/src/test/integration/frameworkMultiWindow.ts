@@ -470,23 +470,27 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 }
 
 /** Exercise simultaneous product viewers on the same native fake CLI. */
-export async function sharedAttachJourney(open: OpenWindow, folder: string, facade: string, env: NodeJS.ProcessEnv, replacement?: string): Promise<void> {
+export async function sharedAttachJourney(open: OpenWindow, folder: string, facade: string, env: NodeJS.ProcessEnv, replacement?: string,
+	expectedSession?: string): Promise<void> {
 	const run = (program: string, ...args: string[]) =>
 		execFileSync(program, args, { cwd: folder, env, encoding: 'utf8', timeout: 30_000 });
 	const home = env.FACADE_HOME!;
 	const name = 'shell-attach';
 	const address = detachedStartReference(run(facade, 'start', '-d', '--name', name, 'qa-fake'), name);
 	const inspect = async () => (await frameworkCall(home, 'agent.inspect', { target: address })).agent;
-	const before = await inspect();
+	const before = expectedSession ? await until('the original Framework to report the exact CLI session', async () => {
+		const agent = await inspect();
+		return agent.session === expectedSession ? agent : undefined;
+	}) : await inspect();
 	assert.ok(before.pid && before.process === 'running', JSON.stringify(before));
 	const window = await open(folder, 'attach');
 	const marker = 'typed in the editor';
 	await window.act({ kind: 'open-shell-agent', name, address, text: marker });
 	if (replacement) {
-		const version = (program: string) => /^facade (\d+\.\d+\.\d+)(?:\+\S+)?$/u.exec(run(program, '--version').trim())?.[1];
+		const version = (program: string) => /^facade (\d+\.\d+\.\d+(?:\+\d+\.[a-f0-9]{40})?)$/u.exec(run(program, '--version').trim())?.[1];
 		const old = version(facade);
 		const next = version(replacement);
-		assert.ok(old && next && old !== next, 'Select two different numeric package versions.');
+		assert.ok(old && next && old !== next, 'Select two distinct Framework builds.');
 		const lock = (service: 'daemon' | 'keeper') =>
 			JSON.parse(fs.readFileSync(path.join(home, 'framework', `${service}.lock`), 'utf8')) as { pid: number; birth: string };
 		const accepted = async () => {
@@ -498,17 +502,18 @@ export async function sharedAttachJourney(open: OpenWindow, folder: string, faca
 		};
 		const daemon = lock('daemon');
 		const keeper = lock('keeper');
-		assert.strictEqual((await accepted()).build.split('+')[0], old);
+		assert.strictEqual((await accepted()).build, old);
 		const retained = 'input after v1 daemon takeover';
 		run(replacement, 'type', address, retained, '--enter');
-		assert.strictEqual((await accepted()).build.split('+')[0], next);
+		assert.strictEqual((await accepted()).build, next);
 		const changed = lock('daemon');
 		assert.notStrictEqual(changed.pid, daemon.pid);
 		assert.notStrictEqual(changed.birth, daemon.birth);
 		assert.deepStrictEqual(lock('keeper'), keeper);
-		assert.strictEqual((await inspect()).pid, before.pid);
+		const resumed = await inspect();
+		assert.deepStrictEqual([resumed.reference, resumed.session, resumed.pid], [before.reference, before.session, before.pid]);
 		await window.act<AttachView>({ kind: 'shell-attach-view', text: retained });
-		console.log(`  ✔ The existing VS Code Attach recovered across v1 builds ${old} → ${next}. Daemon ${JSON.stringify(daemon)} → ${JSON.stringify(changed)}, keeper ${JSON.stringify(keeper)}, CLI PID ${before.pid}`);
+		console.log(`  ✔ The existing VS Code Attach recovered across v1 builds ${old} → ${next}. Daemon ${JSON.stringify(daemon)} → ${JSON.stringify(changed)}, keeper ${JSON.stringify(keeper)}, CLI PID ${before.pid}, session ${before.session ?? 'unreported'}`);
 	}
 	await sharedShellAttach(window, folder, replacement ?? facade, env, address, marker);
 	await window.close();

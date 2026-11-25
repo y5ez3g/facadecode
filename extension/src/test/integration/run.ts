@@ -734,13 +734,25 @@ async function main(): Promise<void> {
 		for (const [name, contents] of Object.entries(multiWindowDriverFiles())) {
 			fs.writeFileSync(path.join(driver, name), contents);
 		}
+		const session = runName === 'attach' && attachUpgrade ? '065e033f-12fe-4bac-9870-dc4e3d4971af' : undefined;
 		if (runName === 'attach') {
 			assert.ok(attachFake && path.isAbsolute(attachFake) && fs.statSync(attachFake, { throwIfNoEntry: false })?.isFile(),
 				'Set FACADE_IT_FAKECLI to the absolute path of the test build of facade-fakecli.');
 			assert.ok(!attachUpgrade || (path.isAbsolute(attachUpgrade) && fs.statSync(attachUpgrade, { throwIfNoEntry: false })?.isFile()),
 				'Use an absolute, isolated program for FACADE_IT_ATTACH_UPGRADE.');
 			fs.mkdirSync(facade, { recursive: true });
-			const clis = { ...alone('qa-fake'), 'qa-fake': { type: 'custom', program: attachFake } };
+			const transcripts = path.join(claudeConfig, 'projects', repo.replace(/[^A-Za-z0-9]/g, '-'));
+			if (session) {
+				fs.mkdirSync(transcripts, { recursive: true });
+				fs.writeFileSync(path.join(transcripts, `${session}.jsonl`), JSON.stringify({
+					type: 'user', sessionId: session, cwd: repo, message: { role: 'user', content: 'Saved compatible Attach fixture' },
+				}) + '\n');
+			}
+			const clis = { ...alone('qa-fake'), 'qa-fake': session ? {
+				type: 'claude', command: attachFake, env: {
+					FAKECLI_LOOK: 'claude', FAKECLI_SESSION: session, FAKECLI_TRANSCRIPTS: transcripts, CLAUDE_CONFIG_DIR: claudeConfig,
+				},
+			} : { type: 'custom', program: attachFake } };
 			fs.writeFileSync(path.join(facade, 'facade.json'), JSON.stringify({ clis }));
 		} else {
 			facadeSettings(facade, alone(runName === 'handoff' ? 'codex' : 'claude'));
@@ -800,8 +812,8 @@ async function main(): Promise<void> {
 					APPDATA: path.join(agentsHome, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(agentsHome, 'AppData', 'Local')
 				};
 				return runName === 'attach'
-					? sharedAttachJourney(open, repo, frameworkPrograms, shellEnv, attachUpgrade)
 					: shellHandoff(open, repo, frameworkPrograms, { ...shellEnv, FACADE_IT_AS: 'codex' });
+					? sharedAttachJourney(open, repo, frameworkPrograms, shellEnv, attachUpgrade, session)
 			});
 			// Both journeys observe the live Framework daemon and an editor view of the same machine-qualified agent.
 			if (runName === 'multi') { driverPassed('multi-window', 'framework'); }
