@@ -823,7 +823,7 @@ fn no_reconnect_note_follows_the_note_of_a_signal() {
     );
 }
 
-/// Attach follows a combined alternate-screen sequence, and detach returns the shell page.
+/// Attach follows a combined alternate-screen sequence and leaves the primary transcript on detach.
 #[test]
 fn detach_leaves_alternate_screen_set_with_other_modes() {
     let home = TestHome::new("detachmixed");
@@ -869,21 +869,15 @@ fn detach_leaves_alternate_screen_set_with_other_modes() {
     let address = address(&home, &agent);
     assert_detach_receipt(&term, "mixed", &address);
     assert!(!term.on_alternate_screen(), "left on the alternate screen");
-    // The agent's screens leave with the view: the receipt follows the opening line.
-    let rows = term.rows();
+    let text = term.text_with_scrollback();
     assert!(
-        rows.windows(2).any(|lines| {
-            lines[0].ends_with("Press Ctrl+] to detach.")
-                && lines[1].starts_with("Detached from mixed (")
-        }),
-        "the receipt should follow the opening line: {rows:?}"
+        text.split_once("Press Ctrl+] to detach.")
+            .and_then(|(_, transcript)| transcript.split_once("Detached from mixed ("))
+            .is_some_and(|(transcript, _)| transcript.contains("SAVED-MAIN-CONTEXT")),
+        "the primary context should stay between opening and detach: {text}"
     );
-    for shown in ["SAVED-MAIN-CONTEXT", "ALT-READY"] {
-        assert!(
-            !rows.iter().any(|row| row.contains(shown)),
-            "{shown}: {rows:?}"
-        );
-    }
+    assert_eq!(text.matches("SAVED-MAIN-CONTEXT").count(), 1, "{text}");
+    assert!(!text.contains("ALT-READY"), "{text}");
 }
 
 /// Termination during the initial redraw must restore a terminal whose reader is slow.

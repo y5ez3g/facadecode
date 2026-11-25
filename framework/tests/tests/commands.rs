@@ -192,21 +192,38 @@ fn interactive_start_propagates_process_exit_status() {
             term.text()
         );
         assert_eq!(term.output_count(&said), 1);
-        // The agent's text, including the hint it prints on its way out, leaves with its view:
-        // the restored text ends with the opening line and the receipt.
         let text = term.text_with_scrollback();
-        for shown in [
-            "INTERACTIVE-FRAME",
-            "To continue this session",
-            "demo resume",
-        ] {
-            assert!(!text.contains(shown), "{script}: {text}");
-        }
         let opening = format!("Started {name} ({reference}). Press Ctrl+] to detach.");
-        assert!(
-            text.trim_end().ends_with(&format!("{opening}\n{said}")),
-            "{script}: {text}"
-        );
+        if id == "a1" {
+            // The primary transcript and native resume hint stay between opening and handback.
+            let mut remaining = text.as_str();
+            for line in [
+                opening.as_str(),
+                "INTERACTIVE-FRAME",
+                "To continue this session, run:",
+                "demo resume stored-session",
+                said.as_str(),
+            ] {
+                assert_eq!(text.matches(line).count(), 1, "{script}: {line}: {text}");
+                let (_, rest) = remaining
+                    .split_once(line)
+                    .unwrap_or_else(|| panic!("{script}: {line} out of order: {text}"));
+                remaining = rest;
+            }
+            assert!(remaining.trim().is_empty(), "{script}: {text}");
+        } else {
+            for shown in [
+                "INTERACTIVE-FRAME",
+                "To continue this session",
+                "demo resume",
+            ] {
+                assert!(!text.contains(shown), "{script}: {text}");
+            }
+            assert!(
+                text.trim_end().ends_with(&format!("{opening}\n{said}")),
+                "{script}: {text}"
+            );
+        }
         // The ended agent's status says how it ended.
         let inspected = home.run_facade_ok(&["status", reference]);
         assert!(
