@@ -427,6 +427,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 			if (this.disposed) { break; }
 			if (background && !this.deferredLegacyPins.has(pin.id)) { continue; }
 			let reconcileAttempt = false;
+			let checkingReference = false;
 			try {
 				let launchedFromSession = false;
 				let confirmed: AgentInfo | undefined;
@@ -476,10 +477,15 @@ export class OrchestratorAgents implements vscode.Disposable {
 					this.deferredLegacyPins.add(pin.id);
 					continue;
 				}
-				this.deferredLegacyPins.delete(pin.id);
-				if (outcome.kind === 'unconfirmed' || this.disposed) { continue; }
+				if (outcome.kind === 'unconfirmed' || this.disposed) {
+					this.deferredLegacyPins.delete(pin.id);
+					continue;
+				}
 				const { reference } = outcome;
+				checkingReference = true;
 				const record = confirmed ?? await this.inspect(reference);
+				checkingReference = false;
+				this.deferredLegacyPins.delete(pin.id);
 				if (agentKey(record.reference) !== agentKey(reference) || !matchesLegacyPin(pin, link.machineId, record)) { continue; }
 				this.remember(record);
 				const recovered = this.pinFor(record, pin);
@@ -487,7 +493,8 @@ export class OrchestratorAgents implements vscode.Disposable {
 				if (launchedFromSession) { await this.restoreLegacyPinName(recovered, pin.name); }
 				if (background && this.currentPin(recovered) && record.process === 'running') { await this.attach(record, true); }
 			} catch (error) {
-				if (reconcileAttempt) { this.deferredLegacyPins.add(pin.id); }
+				const retryInspect = checkingReference && !(error instanceof DaemonError && error.reason === 'not_found');
+				if (reconcileAttempt || retryInspect) { this.deferredLegacyPins.add(pin.id); }
 				else { this.deferredLegacyPins.delete(pin.id); }
 				if (!this.disposed) {
 					const reason = vscode.l10n.t('Could not recover the legacy Pin for {0}: {1}', pin.name || pin.conversation.cli, messageOf(error));

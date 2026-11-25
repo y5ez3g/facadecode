@@ -250,11 +250,11 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		editors.push(editor);
 	};
 	const lines = (): Line[] => fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as Line) : [];
-	const phase = (name: string, win: TestWindow, beforeReload?: Line) => until(`cutover ${win.role} ${name}`, () => {
+	const phase = (name: string, win: TestWindow, after = 0) => until(`cutover ${win.role} ${name}`, () => {
 		const seen = lines();
 		const failed = seen.find(line => line.phase === 'error');
 		if (failed) { throw new Error(`The cutover driver failed: ${String(failed.message)} (${failed.role})`); }
-		return seen.find(each => each.phase === name && each.role === win.role && (!beforeReload || each.hostPid !== beforeReload.hostPid));
+		return seen.slice(after).find(each => each.phase === name && each.role === win.role);
 	}, 90_000);
 	const launches = (): Launch[] => fs.existsSync(`${record}.launches`)
 		? fs.readFileSync(`${record}.launches`, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as Launch)
@@ -303,9 +303,16 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 	};
 	const waitExited = (workspace: LegacyWorkspace) =>
 		until(`the original PIDs ${workspace.pids.join(', ')} to exit`, () => workspace.pids.every(pid => !alive(pid)) || undefined, 60_000);
-	const candidateLoaded = async (win: TestWindow, beforeReload?: Line) => {
-		const loaded = await phase('candidate-loaded', win, beforeReload);
+	const candidateLoaded = async (win: TestWindow, after?: number) => {
+		const loaded = await phase('candidate-loaded', win, after);
 		assertInstalledPair(win, loaded, candidate.version);
+		return loaded;
+	};
+	const reloadCandidate = async (win: TestWindow, previous: Line) => {
+		const before = lines().length;
+		request(win, 'reload');
+		const loaded = await candidateLoaded(win, before);
+		assert.notStrictEqual(loaded.hostPid, previous.hostPid, 'the reload started a new candidate extension host');
 		return loaded;
 	};
 	const verifySettings = async (win: TestWindow, mode: 'framework' | 'pending') => {
@@ -418,15 +425,13 @@ export async function legacyCutover(context: CutoverContext): Promise<void> {
 		};
 		readHandoff(initial);
 		await shownOffer(win);
-		request(win, 'reload');
-		const beforeConsent = await candidateLoaded(win, initial);
+		const beforeConsent = await reloadCandidate(win, initial);
 		readHandoff(beforeConsent);
 		return withLongFileLock(claimFile, async () => {
 			await consent(win, workspace, since);
 			assert.ok(scoped(workspace).every(row => row.approved && !row.stop), 'approval is durable while the generation lock holds dispatch');
 			const approved = journal(facade);
-			request(win, 'reload');
-			const afterApproval = await candidateLoaded(win, beforeConsent);
+			const afterApproval = await reloadCandidate(win, beforeConsent);
 			readHandoff(afterApproval);
 			assertExactRows(workspace, scoped(workspace), true);
 			assert.ok(workspace.pids.every(alive), 'the same released processes survive the pre-dispatch reload');

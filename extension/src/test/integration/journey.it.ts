@@ -125,10 +125,10 @@ async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = 
 /** New Agent with the preselected CLI, accepted as soon as its picker shows: the card it creates. */
 async function newCard(): Promise<PanelState['cards'][number]> {
 	const before = new Set((await state()).cards.map(card => card.runId));
-	void vscode.commands.executeCommand('facade.newAgent');
+	const launch = vscode.commands.executeCommand('facade.newAgent');
 	// The picker shows once its CLIs are found: accepted as soon as it is there, however long that takes. A new card goes last
 	// (PANEL-2.1): it is the one not there before.
-	return until('a new card', async () => {
+	const card = until('a new card', async () => {
 		const now = await state();
 		const added = now.cards.find(card => !before.has(card.runId));
 		// On the Framework its short ID comes with framework's answer to the start (RULES-2.2): the card is the test's once it has it
@@ -140,6 +140,9 @@ async function newCard(): Promise<PanelState['cards'][number]> {
 		}
 		return undefined;
 	});
+	// The watch can show a managed card before the launch command finishes opening its terminal.
+	const [added] = await Promise.all([card, launch]);
+	return added;
 }
 
 /** Clear the stopped fixture after checking its lifecycle. */
@@ -185,8 +188,8 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		const card = await newCard();
 		firstRun = card.runId;
 		observeAcceptanceImplementation(this, card);
-		const terminal = vscode.window.terminals.find(each => unspun(each.name) === card.name);
-		assert.ok(terminal, 'its editor terminal shows only the agent name');
+		const terminal = await until('the editor terminal to show only the agent name', async () =>
+			vscode.window.terminals.find(each => unspun(each.name) === card.name), 10_000);
 		const alias = fixtureAlias(card);
 		assert.ok(alias, 'the card shows its short ID');
 		const pidFile = `${RECORD}.${alias}`;

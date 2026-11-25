@@ -11,7 +11,7 @@ import type { AgentInfo, AgentRef } from '../base/frameworkProtocol';
 import { withLongFileLock } from '../base/lock';
 import { WINDOW_LEGACY_INSTANCE_COMMAND } from '../base/windowIdentity';
 import { createHash } from 'crypto';
-import { keepWindowKey, keepWorkspaceUri, workspaceRecord } from '../record/workspace';
+import { keepWindowKey, keepWorkspaceUri, resolveWorkspaceRecord, workspaceRecord } from '../record/workspace';
 import { tempDir } from './util';
 import { TestEmitter, withModules } from './withModules';
 
@@ -207,16 +207,24 @@ suite('Orchestrator workspace roster (RULES-6.1)', () => {
 			const saved = 'file:///empty.code-workspace';
 			const remote = 'vscode-remote://ssh-remote+dev/work/empty.code-workspace';
 			const moved = 'file:///moved.code-workspace';
+			const missingIdentity = 'file:///missing-identity.code-workspace';
 			const localRecord = workspaceRecord(saved, temp.dir, '0123456789abcdef');
 			const remoteRecord = workspaceRecord(remote, temp.dir);
 			const movedRecord = workspaceRecord(moved, temp.dir, '1123456789abcdef');
-			for (const record of [localRecord, remoteRecord, movedRecord]) {
+			const unknown = resolveWorkspaceRecord(missingIdentity, temp.dir);
+			assert.ok(!fs.existsSync(unknown.dir), 'predecessor lookup creates no workspace directory');
+			fs.mkdirSync(unknown.dir);
+			for (const record of [localRecord, remoteRecord, movedRecord, unknown]) {
 				fs.writeFileSync(path.join(record.dir, 'workspace-state.json'), JSON.stringify({ 'facade.pins': [pin] }));
 			}
 			const destination = 'file:///destination.code-workspace';
 			keepWorkspaceUri(destination, workspaceRecord(destination, temp.dir, movedRecord.key), temp.dir);
 			await check(undefined, localRecord.key, false);
 			await check(moved, movedRecord.key, false);
+			const interrupted = open(missingIdentity, unknown.key);
+			interrupted.dispose();
+			await check(missingIdentity, unknown.key, false);
+			assert.ok(!fs.existsSync(path.join(unknown.dir, 'identity.json')), 'the opening does not give the unknown Pins a new proof');
 			await check(saved, localRecord.key, true);
 			await check(remote, undefined, true);
 			assert.deepStrictEqual(sources, [localRecord.key, remoteRecord.key]);

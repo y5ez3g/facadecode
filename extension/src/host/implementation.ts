@@ -11,7 +11,7 @@ import { withLongFileLock } from '../base/lock';
 import { isJsonObject } from '../base/json';
 import { isOwnerClaim } from '../base/ownership';
 import { isWindowIdentity, WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_HANDOFF_COMMAND } from '../base/windowIdentity';
-import { workspaceRecord } from '../record/workspace';
+import { resolveWorkspaceRecord } from '../record/workspace';
 import { COMMANDS, PANEL_VIEW } from '../ui/catalog';
 import { FACADE_PROGRAM } from './framework/daemonTypes';
 import { approveLegacyCutover, checkLegacyCutover, cutoverPlanIdentity, type CutoverState, type LegacyCutoverScope } from './legacyCutover';
@@ -31,7 +31,7 @@ async function resolvePredecessor(home: string): Promise<
 	};
 	const reply = await identify(WINDOW_IDENTITY_COMMAND);
 	const window = isWindowIdentity(reply, session) ? reply : undefined;
-	const record = workspaceRecord(uri, home, undefined,
+	const record = resolveWorkspaceRecord(uri, home, undefined,
 		window ? { token: window.token, folders } : undefined);
 	const owner = record.handedOver ?? record.binding.key ?? (window && !folders.length
 		? folderlessOwner(home, window.token, uri) : undefined);

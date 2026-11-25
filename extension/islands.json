@@ -271,7 +271,7 @@
 			"Window identity": ["FACADE_HOME_VARIABLE", "isFullyQualified"]
 		},
 		"record/workspace.ts": {
-			"Legacy migration": ["workspaceRecord"]
+			"Legacy migration": ["resolveWorkspaceRecord"]
 		},
 		"ui/cardView.ts": {
 			"Agent pickers": ["isAgentRunning"],

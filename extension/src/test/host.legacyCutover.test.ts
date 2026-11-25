@@ -10,6 +10,7 @@ import * as os from 'os';
 import * as path from 'path';
 import type { AgentInfo } from '../base/frameworkProtocol';
 import { processStartTimeAsync } from '../base/system';
+import type { FrameworkPin } from '../core/ports';
 import { approveLegacyCutover, checkLegacyCutover, legacyPinMigration } from '../host/legacyCutover';
 import type { LegacySessionPin } from '../host/legacyPins';
 import { PTYD_PROTOCOL, ptydSocketPath } from '../host/migration/supervisor';
@@ -116,6 +117,69 @@ async function fixture(published = true) {
 }
 
 suite('Scoped legacy cutover', () => {
+	test('a previously confirmed shared Pin retries exact inspection after a disconnect (RULES-6.4)', async () => {
+		const wanted = pin('second-workspace-pin');
+		const agent: AgentInfo = {
+			reference: REFERENCE, address: 'a7@this-machine', type: 'managed', name: 'Fixture',
+			cli: 'codex', args: [], cwd: wanted.cwd, process: 'ended', state: 'ended',
+			created_at: new Date(0).toISOString(), started_at: new Date(0).toISOString(),
+			root: REFERENCE, yolo: true, tools_state: 'available', session: wanted.conversation.sessionId,
+		};
+		let retry: (() => void) | undefined;
+		const timer = { unref: () => undefined };
+		const { OrchestratorAgents } = withModules({
+			vscode: { env: {}, workspace: {}, EventEmitter: TestEmitter, l10n: { t: (text: string) => text } },
+		}, {
+			setTimeout: (callback: () => void) => { retry = callback; return timer; },
+			clearTimeout: () => undefined,
+		})<typeof import('../host/framework/agents')>(require.resolve('../host/framework/agents'));
+		const disposal = () => ({ dispose: () => undefined });
+		const saved: FrameworkPin[] = [];
+		const inspected: unknown[] = [];
+		const agents = new OrchestratorAgents({
+			link: {
+				machineId: REFERENCE.machine_id, onDidConnect: disposal, watch: disposal,
+				call: async (operation: string, { target }: { readonly target: unknown }) => {
+					assert.strictEqual(operation, 'agent.inspect', 'only a read is made for the confirmed record');
+					inspected.push(target);
+					if (inspected.length === 1) { throw new Error('Lost connection'); }
+					return { agent };
+				},
+			},
+			workspace: {
+				onDidChange: disposal, snapshot: () => ({ members: [], pins: [...saved] }),
+				pendingLegacyPins: () => saved.length ? [] : [wanted],
+				legacyPinMigration: () => ({
+					recover: async () => ({ kind: 'confirmed', reference: REFERENCE }),
+				}),
+				restorePinsOnce: async (restore: () => Promise<unknown>) => ({ performed: true, failures: await restore() }),
+				importLegacyPin: (previous: LegacySessionPin, confirmed: FrameworkPin) => {
+					assert.strictEqual(previous.id, wanted.id);
+					saved.push(confirmed);
+					return true;
+				},
+				reportLegacyPinFailure: () => false,
+			},
+			locations: { onDidChange: disposal, snapshot: () => ({ locations: [] }) },
+			onDidChangeMachineNames: disposal, machineName: () => undefined,
+			notifyError: assert.fail, log: { event: assert.fail },
+		} as never);
+		try {
+			await agents.restorePins();
+			assert.deepStrictEqual(inspected, [REFERENCE]);
+			assert.strictEqual(saved.length, 0);
+			agents.recheckLegacyPins();
+			assert.ok(retry, 'a failed read keeps this Pin queued for another inspection');
+			retry();
+			await agents.pendingPinRecovery();
+			assert.deepStrictEqual(inspected, [REFERENCE, REFERENCE]);
+			assert.deepStrictEqual(saved.map(pinned => [pinned.id, pinned.machine_id, pinned.agent]),
+				[[wanted.id, REFERENCE.machine_id, REFERENCE.agent_id]]);
+		} finally {
+			agents.dispose();
+		}
+	});
+
 	test('discovers the released home-suffixed supervisor without any registry (ARCHITECTURE-1.4)', async () => {
 		const f = await fixture(false);
 		const other = await fixture(false);

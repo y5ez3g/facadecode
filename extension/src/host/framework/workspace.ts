@@ -110,6 +110,8 @@ export function openFrameworkWorkspace(context: vscode.ExtensionContext, options
 		const saved = readRoster(rosterFile);
 		if (saved) {
 			if (saved.legacyWorkspaceKey || !verified || saved.importedPins) { return saved.legacyWorkspaceKey; }
+			// An earlier Framework opening may have registered this saved empty URI before it imported Pins.
+			if (savedEmpty && !folderlessPinsForUri(home, uri, verified)) { return undefined; }
 			replaceFile(rosterFile, `${JSON.stringify({ ...saved, legacyWorkspaceKey: verified })}\n`);
 			return verified;
 		}

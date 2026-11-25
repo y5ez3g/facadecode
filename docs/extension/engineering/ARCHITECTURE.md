@@ -104,6 +104,7 @@ and its confirmed process identity.
 
 A full list from the same verified supervisor can settle a queued run that failed before receiving a PID.
 A committed shared reference can be inspected and adopted while an unrelated supervisor is unavailable.
+Retry that same reference after a transient inspection failure.
 Any new start still requires current evidence that the saved session is free.
 
 ## 2 Ownership and recovery
@@ -531,7 +532,8 @@ Read local `facade.pins` from a verified legacy workspace file or from the snaps
 For a folderless window, the persisted native
 window token can identify its original workspace key in `extension/windows/`. That key locates the local Pins even
 when the workspace sidecar is absent. An empty saved workspace that predates its URI ledger entry can also recover Pins
-when its stored identity matches the exact saved workspace URI and the ledger has not assigned the key elsewhere.
+when its existing identity matches the exact saved workspace URI and the ledger has not assigned the key elsewhere.
+Predecessor lookup is read-only. Only the creation of a new workspace directory writes its identity.
 Merge the confirmed Pins under the roster lock, retaining a person's current
 Pins and hidden entries. A new empty window stores its roster key in VS Code workspace state. Share the existing
 Pin restore round across windows and use the full persisted agent or session identity for recovery. Keep unfinished
