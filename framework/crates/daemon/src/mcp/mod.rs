@@ -1,8 +1,7 @@
 //! The MCP server the daemon runs behind each relay. A relay, `facade-mcp`, opens with a hello that
 //! says what its MCP client gave its process: its words, its environment and its folder. After it,
 //! every line is an MCP JSON-RPC message, answered here. Each tool call acts for the actor the daemon
-//! verified for the relay's connection, and its daemon calls go over a connection bound to that
-//! actor.
+//! verified for the relay's connection, using the daemon's operation admission and dispatch.
 
 mod addresses;
 mod agent_tools;
@@ -22,7 +21,7 @@ mod verified_tools;
 use std::collections::BTreeMap;
 use std::future::poll_fn;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
 use std::task::Poll;
 use std::time::Instant;
 
@@ -33,15 +32,12 @@ use facade_base::jsonrpc::decode_arguments;
 use facade_base::model::error::{ErrorBody, Reason};
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use tokio::sync::Mutex;
 
 pub(crate) use inbox_page::project_inbox;
 pub(crate) use replies::{InboxAnswer, InboxOutput};
 pub(crate) use result_files::{clean_results, results_folder};
 pub(crate) use verified::{ActorIdentity, ActorServices, DiscoverClis, ReadReply, ToolsPresence};
-
-/// The instructions for the managed run that the daemon can verify during initialization.
-pub(crate) type ManagedInstructions =
-    Box<dyn Fn(Option<&str>) -> Result<Option<String>, ErrorBody> + Send + Sync>;
 
 /// The version of the relay contract this daemon speaks, as a relay's hello names it.
 pub(crate) const RELAY_CONTRACT: u32 = 1;
@@ -198,8 +194,8 @@ impl Relay {
 
     /// Shows the daemon that the verified run's tools are there, from now until the relay's
     /// connection ends.
-    pub(crate) fn hold_verified_presence(&self) {
-        self.verified.hold_presence(self);
+    pub(crate) async fn hold_verified_presence(&self) {
+        self.verified.hold_presence(self).await;
     }
 }
 
@@ -385,8 +381,8 @@ impl Relay {
             read_inbox: Box::new(|_, _, _, _| {
                 Box::pin(async { Err(ErrorBody::internal("unit tests have no daemon")) })
             }),
-            managed_instructions: Box::new(|_| Ok(None)),
-            ready: Box::new(|_| anyhow::bail!("unit tests have no daemon")),
+            managed_instructions: Box::new(|_| Box::pin(async { Ok(None) })),
+            ready: Box::new(|_| Box::pin(async { anyhow::bail!("unit tests have no daemon") })),
         };
         Relay {
             hello,

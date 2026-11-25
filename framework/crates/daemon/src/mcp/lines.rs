@@ -277,7 +277,7 @@ pub(super) async fn respond(
     let answer = match method.as_str() {
         "initialize" => initialize(relay, &params).await,
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(list_tools(relay)),
+        "tools/list" => Ok(list_tools(relay).await),
         "tools/call" => {
             call.output = output.map(|(outbox, link)| ReplyTarget::new(outbox, link, id.clone()));
             call_tool(relay, params, &call, send_turn).await?
@@ -314,9 +314,9 @@ async fn initialize(relay: &Relay, params: &Value) -> Result<Value, Refused> {
     }))
 }
 
-fn list_tools(relay: &Relay) -> Value {
+async fn list_tools(relay: &Relay) -> Value {
     crate::gate_for_test("mcp-before-tools-list");
-    relay.hold_verified_presence();
+    relay.hold_verified_presence().await;
     let tools: Vec<&Value> = TOOLS.iter().map(|entry| &entry.definition).collect();
     json!({ "tools": tools })
 }
