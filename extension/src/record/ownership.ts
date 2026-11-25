@@ -56,13 +56,12 @@ function holds(claim: OwnerClaim, home: string): boolean {
 		throw err;
 	}
 	const current = JSON.parse(text) as Partial<OwnerClaim>;
-	return current.generation === claim.generation && current.token === claim.token;
+	return current.owner === claim.owner && current.generation === claim.generation && current.token === claim.token;
 }
 
 /**
- * The ownership check and final file replacement share the same lock as successor-generation allocation. Answers whether it wrote:
- * false where a successor activation owns the record now. Throws where the record cannot be read: a write is never skipped silently
- * for a failure that is not another owner's claim.
+ * The ownership check and write share the generation allocation lock. Returns true when it writes.
+ * A missing or different persisted claim prevents the write. Read errors propagate.
  */
 export function writeAsOwner(claim: OwnerClaim, home: string, write: () => void): boolean {
 	return withFileLock(claimFile(claim.owner, home), () => {

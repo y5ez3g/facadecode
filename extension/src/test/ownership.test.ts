@@ -73,6 +73,9 @@ suite('Workspace ownership: durable activation fencing', () => {
 			assert.strictEqual(writeAsOwner(first, temp.dir, () => writes++), false, 'a successor owns it: nothing written, and said so');
 			const other = nextOwnerClaim('other', temp.dir);
 			const record = fs.readdirSync(path.join(temp.dir, 'claims')).map(name => path.join(temp.dir, 'claims', name)).find(file => file.endsWith('.json') && fs.readFileSync(file, 'utf8').includes('"other"'))!;
+			fs.writeFileSync(record, JSON.stringify({ ...other, owner: first.owner }));
+			assert.strictEqual(isCurrentOwner(other, temp.dir), false, 'the persisted owner must also match');
+			assert.strictEqual(writeAsOwner(other, temp.dir, () => writes++), false);
 			fs.rmSync(record);
 			fs.mkdirSync(record);
 			assert.throws(() => writeAsOwner(other, temp.dir, () => writes++));
