@@ -190,7 +190,7 @@ suite('The window component as the workspace extension waits for it (ARCHITECTUR
 		const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'package.json'), 'utf8')) as { contributes: { commands: { command: string }[] } };
 		const contributed = manifest.contributes.commands.map(each => each.command);
 		assert.deepStrictEqual(contributed.filter(id => !editor.handlers.has(id)), [], 'every contributed command answers');
-		for (const id of ['facade.newAgent', 'facade.goToAgent']) {
+		for (const id of ['facade.newAgent', 'facade.resumeAgent']) {
 			await (editor.handlers.get(id) as () => unknown)();
 		}
 		assert.deepStrictEqual(editor.notices.map(notice => [notice.kind, notice.text, notice.actions]), Array(3).fill(['warning', editor.notices[0].text, ['Show Window Component']]));

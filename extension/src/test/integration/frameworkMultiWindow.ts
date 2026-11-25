@@ -199,6 +199,13 @@ export async function staleOwner(open: OpenWindow, folder: string, env: NodeJS.P
 	} finally { ptyd.dispose(); }
 }
 
+async function expectListed(window: DrivenWindow, id: string): Promise<void> {
+	await until(`${id}'s running card with no terminal in ${window.ready.folder}`, async () => {
+		const { cards, terminals } = await window.act<WindowView>({ kind: 'snapshot' });
+		return terminals === 0 && cards.some(card => card.id === id && card.running && !card.pinned && card.column === null) || undefined;
+	});
+}
+
 async function expectAgent(window: DrivenWindow, id: string, pinned: boolean): Promise<void> {
 	let last: WindowView | undefined;
 	try {
@@ -433,7 +440,7 @@ export async function incompatibleActivation(open: OpenWindow, folder: string, e
 	assert.ok(!frameworkListens(home), 'the private endpoint was removed');
 }
 
-/** Go to Agent attaches to a Shell run that survives closing the VS Code window. */
+/** A Shell run appears in the open VS Code window and survives closing it. */
 export async function shellHandoff(open: OpenWindow, folder: string, facade: string, env: NodeJS.ProcessEnv): Promise<void> {
 	const run = (...args: string[]) => execFileSync(facade, args, { cwd: folder, env, encoding: 'utf8', timeout: 20_000 });
 	const home = env.FACADE_HOME!;
@@ -441,6 +448,8 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	const prompt = 'Review the isolated Shell handoff';
 	const branch = 'shell-handoff-worktree';
 	const worktree = path.join(`${folder}.worktrees`, branch);
+	const window = await open(folder, 'sh');
+	assert.deepStrictEqual((await window.act<WindowView>({ kind: 'snapshot' })).cards, []);
 	const [started, location, ...extra] = run('start', '-d', '--name', name, '--worktree', branch, 'codex', '--', prompt).trimEnd().split(/\r?\n/u);
 	const address = detachedStartReference(started, name);
 	assert.ok(location?.startsWith('Worktree: '));
@@ -458,7 +467,7 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	assert.strictEqual(normalizeDriveLetter(fs.realpathSync(launch.cwd)), normalizeDriveLetter(fs.realpathSync(worktree)));
 	assert.deepStrictEqual(launch.args.filter(arg => arg === '--' || arg === prompt), ['--', prompt], 'the two Shell arguments each arrive once');
 	assert.deepStrictEqual(launch.args.slice(-2), ['--', prompt], 'the prompt follows its separator at the end of argv');
-	const window = await open(folder, 'sh');
+	await expectListed(window, before.reference.agent_id);
 	assert.strictEqual(await window.act<boolean>({ kind: 'window-component' }), false);
 	const status = run('status');
 	const settingsFile = /^Settings {2,}([^\r\n]+)$/mu.exec(status)?.[1];
@@ -478,7 +487,7 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 
 	execFileSync(process.execPath, [path.join(__dirname, 'shellAttachFixture.js'), facade, address, marker], { cwd: folder, env, timeout: 65_000 });
 	assert.strictEqual((await inspect()).pid, before.pid);
-	console.log('  ✔ Shell start, Go to Agent and Shell Attach used the same terminal after closing VS Code');
+	console.log('  ✔ Shell start appeared automatically and the card and Shell opened the same live terminal');
 
 	const session = await until('the fake CLI to report its session', async () => (await inspect()).session);
 	const startLog = `${env.FACADE_IT_RECORD}.starts.#${before.reference.agent_id}`;
@@ -536,19 +545,16 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	assert.strictEqual(restored.session, session);
 	assert.notStrictEqual(restored.pid, before.pid);
 	assert.deepStrictEqual(starts().slice(priorStarts), [restored.pid], 'reopening started the saved Pin once');
-	await restoredPeer.act({ kind: 'hide-shell-agent', name });
-	await until('the hidden card, tab, workspace member and Pin to go', async () => {
-		const views = await Promise.all([restoredWindow, restoredPeer].map(window => window.act<WindowView>({ kind: 'snapshot' })));
-		const saved = roster();
-		return views.every(view => !view.cards.some(card => card.name === name) && view.terminals === 0)
-			&& saved.members.length === 0 && saved.pins.length === 0 || undefined;
+	await restoredPeer.act({ kind: 'close-shell-view', name });
+	await until('closing the view to keep the card and Pin', async () => {
+		const peer = await restoredPeer.act<WindowView>({ kind: 'snapshot' });
+		return peer.terminals === 0 && peer.cards.some(card => card.name === name && card.pinned && card.running) || undefined;
 	});
-	assert.strictEqual((await inspect()).pid, restored.pid, 'Hide leaves the resumed agent running');
-	await restoredWindow.act({ kind: 'open-shell-agent', name, address, text: 'reopened before removal' });
-	await restoredWindow.act({ kind: 'shell-pin', name, set: true });
 	checkSavedPin();
+	assert.strictEqual((await inspect()).pid, restored.pid, 'closing the view leaves the resumed agent running');
+	await restoredPeer.act({ kind: 'open-shell-agent', name, address, text: 'reopened before removal' });
 	await Promise.all([restoredWindow.close(), restoredPeer.close()]);
-	console.log('  ✔ Both windows shared the Pin, reopened one original session, and hid the card while it kept running');
+	console.log('  ✔ Both windows shared the Pin, reopened one original session, and closing its tab kept the card and Pin');
 
 	const reference = before.reference;
 	assert.deepStrictEqual(await frameworkCall(home, 'agent.remove', { target: reference }), { reference, address });
@@ -577,7 +583,7 @@ export async function sharedAttachJourney(open: OpenWindow, folder: string, faca
 	const marker = 'typed in the editor';
 	await window.act({ kind: 'open-shell-agent', name, address, text: marker });
 	if (replacement) {
-		const version = (program: string) => /^facade (\d+\.\d+\.\d+)$/u.exec(run(program, '--version').trim())?.[1];
+		const version = (program: string) => /^facade (\d+\.\d+\.\d+)(?:\+\S+)?$/u.exec(run(program, '--version').trim())?.[1];
 		const old = version(facade);
 		const next = version(replacement);
 		assert.ok(old && next && old !== next, 'Select two different numeric package versions.');
@@ -605,13 +611,6 @@ export async function sharedAttachJourney(open: OpenWindow, folder: string, faca
 		console.log(`  ✔ The existing VS Code Attach recovered across v1 builds ${old} → ${next}. Daemon ${JSON.stringify(daemon)} → ${JSON.stringify(changed)}, keeper ${JSON.stringify(keeper)}, CLI PID ${before.pid}`);
 	}
 	await sharedShellAttach(window, folder, replacement ?? facade, env, address, marker);
-	const old = await open(folder, 'legacy');
-	assert.strictEqual(old.ready.machineId, null);
-	const view = await old.act<WindowView>({ kind: 'snapshot' });
-	assert.ok(!view.cards.some(card => card.name === name), JSON.stringify(view));
-	assert.strictEqual(view.terminals, 0);
-	await old.close();
-	console.log('  ✔ The separately profiled legacy implementation left the Framework agent and terminal alone');
 	await window.close();
 	const after = await inspect();
 	assert.strictEqual(after.pid, before.pid);
@@ -673,7 +672,7 @@ async function expectViews(window: DrivenWindow, agent: string, count: number): 
 		(await window.act<InspectResult>({ kind: 'inspect', agent })).viewers.length === count || undefined);
 }
 
-/** Go to Agent shares the same run. Both workspaces keep their Pin when it stops and restore one process. */
+/** Both workspaces list the same run, open their own views and restore one process from their Pins. */
 export async function frameworkMultiWindow(open: OpenWindow, journey: WindowJourney): Promise<void> {
 	const { folder, peer, home, remote } = journey;
 	let machineId: string | undefined;
@@ -696,7 +695,7 @@ export async function frameworkMultiWindow(open: OpenWindow, journey: WindowJour
 	const before = await first.act<RunningAgent>({ kind: 'start', screen });
 	await expectAgent(first, before.id, false);
 	const other = await start(peer, 'b');
-	assert.deepStrictEqual((await other.act<WindowView>({ kind: 'snapshot' })).cards, [], 'an independent workspace starts without the agent');
+	await expectListed(other, before.id);
 	assertSameRun(await other.act<RunningAgent>({ kind: 'adopt', agent: before.id }), before);
 	await expectAgent(other, before.id, false);
 	await expectViews(first, before.id, 2);
@@ -714,7 +713,7 @@ export async function frameworkMultiWindow(open: OpenWindow, journey: WindowJour
 	await expectAgent(firstBack, before.id, true);
 	await expectViews(other, before.id, 2);
 	assertSameRun(await firstBack.act<RunningAgent>({ kind: 'running', agent: before.id, screen }), before);
-	console.log('  ✔ Go to Agent shares the process and screen. Each workspace attaches and detaches its own view');
+	console.log('  ✔ Both windows list the same agent and open their own views of its process and screen');
 
 	await firstBack.act({ kind: 'stop', agent: before.id });
 	await other.act({ kind: 'wait-for-exit', pid: before.pid });
@@ -800,7 +799,7 @@ async function worktreeLifetime(source: DrivenWindow, peer: DrivenWindow): Promi
 	const agent = await source.act<AgentInfo>({ kind: 'worktree', branch });
 	const parts = agent.cwd.split(/[\\/]/u);
 	assert.deepStrictEqual(parts.slice(-2), [source.ready.folder.split(/[\\/]/u).at(-1) + '.worktrees', branch]);
-	assert.deepStrictEqual((await source.act<WindowView>({ kind: 'snapshot' })).cards, [], 'a Shell start leaves the workspace unchanged');
+	await expectListed(source, agent.reference.agent_id);
 
 	const adopted = await peer.act<RunningAgent>({ kind: 'adopt', agent: agent.reference.agent_id });
 	assert.strictEqual(adopted.pid, agent.pid);
@@ -845,7 +844,7 @@ async function sameWorkspace(open: OpenWindow, journey: WindowJourney): Promise<
 		return { column: snapshot.cards.find(each => each.id === id)?.column, filter: snapshot.filter };
 	};
 	const before = await Promise.all([presentation(left, agentLeft.id), presentation(right, agentRight.id)]);
-	assert.strictEqual(before[0].filter?.kind, 'location');
+	assert.strictEqual(before[0].filter?.kind, 'agents');
 	assert.strictEqual(before[1].filter, undefined);
 	assert.deepStrictEqual(before.map(each => each.column), [2, 1]);
 

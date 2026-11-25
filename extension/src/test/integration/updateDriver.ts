@@ -76,6 +76,25 @@ async function newAgent(): Promise<string> {
 	return pick('a new agent in this profile', 'facade.newAgent', () => started().find(item => !existing.has(item)));
 }
 
+async function installCandidate(): Promise<void> {
+	await activated();
+	const alias = await newAgent();
+	const installed = await until('both components of the installed pair', async () => {
+		const main = vscode.extensions.getExtension('facade.facadecode');
+		const component = vscode.extensions.getExtension('facade.facadecode-window');
+		if (!main?.isActive || !component?.isActive) { return undefined; }
+		const session = vscode.env.sessionId;
+		const identity = await vscode.commands.executeCommand<WindowIdentity>('facade.window.identity', session);
+		if (!identity || identity.session !== session || !identity.token) { return undefined; }
+		return {
+			version: version(), mainPath: main.extensionPath,
+			component: identity.component, componentPath: component.extensionPath, token: identity.token
+		};
+	});
+	await until('one installed agent terminal', async () => tabs().flat().length === 1 || undefined);
+	write({ phase: 'started', alias, tabs: tabs(), ...installed });
+}
+
 /** The actual installed component and the running agents it publishes. */
 async function published(aliases: readonly string[]) {
 	return until('the installed Window Component to publish the exact live agents', async () => {
@@ -109,76 +128,9 @@ async function replacement(): Promise<void> {
 	}
 }
 
-/** Real Pins and their exact workspace and conversation records across an installed update. */
-async function upgradePair(): Promise<void> {
-	const first = said().find(line => line.phase === 'started') as { phase: string; aliases: string[] } | undefined;
-	await activated();
-	const aliases = first?.aliases ?? [await newAgent(), await newAgent(), await newAgent()];
-	const pinned = aliases.slice(0, 2);
-	const { agents: publishedAgents, ...identity } = await published(aliases);
-	const home = path.join(process.env.FACADE_HOME!, 'extension');
-	const agents = await Promise.all(aliases.map(async alias => {
-		const agent = publishedAgents.find(each => each.alias === alias)!;
-		const session = await until('the running conversation', async () => {
-			const file = path.join(home, 'runs', agent.run + '.session.json');
-			const id: unknown = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).session_id : undefined;
-			return typeof id === 'string' && id ? id : undefined;
-		});
-		return { ...agent, session };
-	}));
-	const terminalTabs = () => vscode.window.tabGroups.all.flatMap(group => group.tabs)
-		.filter(tab => tab.input instanceof vscode.TabInputTerminal)
-		.map(tab => ({ alias: agents.find(agent => tab.label.replace(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] /u, '') === agent.name)?.alias, pinned: tab.isPinned }));
-	if (!first) {
-		await until('all newly started agent tabs unpinned', async () => {
-			const observed = terminalTabs();
-			return observed.length === aliases.length &&
-				aliases.every(alias => observed.some(tab => tab.alias === alias && !tab.pinned)) || undefined;
-		});
-		for (const agent of agents.slice(0, pinned.length)) {
-			await vscode.commands.executeCommand('facade.pinAgent', { run_id: agent.run });
-			await until('the deliberately pinned terminal', async () => terminalTabs().some(tab => tab.alias === agent.alias && tab.pinned) || undefined);
-		}
-	}
-	type Pin = { id: string; name: string; cwd: string; conversation?: { sessionId?: string } };
-	const workspaces = path.join(home, 'workspaces');
-	const sessions = agents.slice(0, pinned.length).map(agent => agent.session);
-	const saved = await until('the real Pins in a single workspace', async () => {
-		for (const dir of fs.readdirSync(workspaces)) {
-			const file = path.join(workspaces, dir, 'workspace-state.json');
-			if (!fs.existsSync(file)) { continue; }
-			const value = JSON.parse(fs.readFileSync(file, 'utf8')) as { 'facade.workspaceKey'?: string; 'facade.pins'?: Pin[] };
-			const pins = value['facade.pins'];
-			if (value['facade.workspaceKey'] === dir && pins?.length === pinned.length &&
-				pins.every((pin, index) => pin.conversation?.sessionId === sessions[index])) {
-				const workspace = JSON.parse(fs.readFileSync(path.join(workspaces, dir, 'identity.json'), 'utf8')).workspace as string;
-				return { key: dir, workspace, pins };
-			}
-		}
-		return undefined;
-	});
-	const marked = await until('the expected native terminal tabs and Pin marks', async () => {
-		const expectedTabs = first ? pinned : aliases;
-		const observed = terminalTabs();
-		return observed.length === expectedTabs.length &&
-			expectedTabs.every(alias => observed.some(tab => tab.alias === alias && tab.pinned === pinned.includes(alias))) ? observed : undefined;
-	}, 30_000).catch((error: unknown) => {
-		const groups = vscode.window.tabGroups.all.map(group => group.tabs.filter(tab => tab.input instanceof vscode.TabInputTerminal)
-			.map(tab => ({ label: tab.label, pinned: tab.isPinned })));
-		write({ phase: 'pin-restore-observation', ...identity, aliases, agents, saved, groups });
-		throw error;
-	});
-	write({ phase: first ? 'updated' : 'started', ...identity, aliases, agents, saved, marked });
-	if (!first) {
-		await until('the candidate pair to be installed', async () => fs.existsSync(OUT + '.reload') || undefined, 120_000);
-		write({ phase: 'reloading' });
-		void vscode.commands.executeCommand('workbench.action.reloadWindow').then(undefined, () => undefined);
-	}
-}
-
 export async function activate(): Promise<void> {
 	try {
-		if (process.env.FACADE_IT_UPDATE_ROLE === 'upgrade') { return await upgradePair(); }
+		if (process.env.FACADE_IT_UPDATE_ROLE === 'install') { return await installCandidate(); }
 		if (process.env.FACADE_IT_UPDATE_ROLE) { return await replacement(); }
 		if (!said().some(line => line.phase === 'reloading')) {
 			// The released build: one agent, started as a person starts one, its tab open

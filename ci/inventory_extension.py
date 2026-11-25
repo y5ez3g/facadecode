@@ -159,11 +159,12 @@ def _commands(root: Path, rows: dict[str, str]) -> None:
             ("extension/src/ui/commands/worktree.ts", _read(root, "extension/src/ui/commands/worktree.ts")),
             ("extension/src/host/showLaunch.ts", _read(root, "extension/src/host/showLaunch.ts")),
             ("extension/src/host/agentsLog.ts", _read(root, "extension/src/host/agentsLog.ts")),
-            ("extension/src/host/service.ts", _function(root, "extension/src/host/service.ts", "registerOpenSettingsFile")),
+            ("extension/src/host/framework/settings.ts", _read(root, "extension/src/host/framework/settings.ts")),
         ],
         "framework": [
             (UI, _function(root, UI, "registerOrchestratorUi")),
             (AGENT_UI, _function(root, AGENT_UI, "registerFrameworkAgentCommands")),
+            ("extension/src/ui/commands/worktree.ts", _read(root, "extension/src/ui/commands/worktree.ts")),
             ("extension/src/host/framework/settings.ts", _read(root, "extension/src/host/framework/settings.ts")),
             ("extension/src/host/framework/index.ts", _read(root, "extension/src/host/framework/index.ts")),
         ],
@@ -287,13 +288,11 @@ def _panel(root: Path, rows: dict[str, str]) -> None:
     actions = _section(_read(root, PANEL_HOST), r"^const ACTS: [^\n]+ = {\n", r"^};", PANEL_HOST)
     actions = _keys(actions, PANEL_HOST, "Webview actions")
     protocol = "extension/src/webview/protocol.ts"
-    command_source = _read(root, protocol)
-    shared = set(_literals(_section(command_source, r"^export type Act = ", r";", protocol)))
-    direct = set(_literals(_section(command_source, r"^export type PageAct = Act \| ", r";", protocol)))
-    if actions != shared | direct:
+    declared = set(_literals(_section(_read(root, protocol), r"^export type Act = ", r";", protocol)))
+    if actions != declared:
         raise ValueError(f"{PANEL_HOST}: Webview dispatch differs from {protocol}")
-    _add(rows, "webview-legacy", "action", shared, PANEL_HOST)
-    _add(rows, "webview-framework", "action", actions, PANEL_HOST)
+    for implementation in ("legacy", "framework"):
+        _add(rows, f"webview-{implementation}", "action", actions, PANEL_HOST)
 
 
 def _mcp(root: Path, rows: dict[str, str]) -> None:
@@ -333,10 +332,11 @@ def _settings(root: Path, rows: dict[str, str]) -> None:
     settings = _names(
         (key for section in contributions["configuration"] for key in section["properties"]), MANIFEST, "VS Code settings",
     )
-    # Facade: Home is applied by the legacy implementation. The selector is read before the
-    # implementation branches. Keep other manifest settings visible for catalog review.
+    # Facade: Home identifies the legacy state during cutover.
     _add(rows, "configuration-legacy", "vscode", settings & {"facade.home"}, MANIFEST)
-    _add(rows, "configuration", "vscode", settings - {"facade.home"}, MANIFEST)
+    current = settings - {"facade.home"}
+    if current:
+        _add(rows, "configuration", "vscode", current, MANIFEST)
     schema = _json(root, SETTINGS_SCHEMA)
     properties = schema["properties"]
     framework = _section(_read(root, FRAMEWORK_SETTINGS), r"^const SETTINGS: [^\n]+ = \[\n", r"^\];", FRAMEWORK_SETTINGS)

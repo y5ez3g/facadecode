@@ -115,7 +115,7 @@ async function observeWorktree(args: readonly string[]): Promise<void> {
 		assert.deepStrictEqual([window.ready.folder, window.ready.home, window.ready.remote, window.ready.machineId], [folder, home, null, origin]);
 		assert.notStrictEqual(origin, expected.reference.machine_id);
 		assert.strictEqual(await window.act({ kind: 'open-shell-agent', name: 'worker', address, text: marker }), address);
-		assert.strictEqual(await window.act({ kind: 'remote-card', agent: address, machine: 'devbox' }), address);
+		assert.strictEqual(await window.act({ kind: 'remote-card', agent: address }), address);
 		const alongside = await inspect();
 		assert.strictEqual(alongside.length, 3);
 		for (const viewer of before) { assert.ok(alongside.includes(viewer), 'both original Shell views remain attached'); }

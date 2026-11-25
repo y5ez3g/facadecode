@@ -14,7 +14,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { parse as parseJsonc, ParseError } from 'jsonc-parser';
-import { pathToFileURL } from 'url';
 import { isDeepStrictEqual } from 'util';
 import { frameworkCall, frameworkListens, frameworkProgram, EDITOR_FLAGS, editorProfile, endFramework, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
 import { BUILT_IN_NAMES } from '../../base/names';
@@ -24,6 +23,7 @@ import { assertTemporaryState, probeEnvironment } from './probeState';
 import { replacementInFlight } from './replacementInFlight';
 import { installLocalVsixes, runEditorCli } from './vsixInstall';
 import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
+import { CUTOVER_VARIANTS, legacyCutover, type CutoverVariant } from './cutover';
 import { activationFailure, incompatibleActivation, missingSessionUnpin, multiWindowDriverFiles, frameworkMultiWindow, sharedAttachJourney, shellHandoff, staleOwner, withFrameworkWindows } from './frameworkMultiWindow';
 
 /** An entry of Facade's settings file, by its fields (CONFIGURATION-2.2). */
@@ -45,9 +45,14 @@ const BUILT_INS: readonly { readonly id: string; readonly segment: string; reado
 const ACCEPTANCE_DRIVERS = new Map([
 	['activation-failure', { implementation: 'framework', cli: 'claude' }],
 	['conversion', { implementation: 'legacy', cli: 'claude' }],
+	['cutover-exited', { implementation: 'framework', cli: 'claude' }],
+	['cutover-live', { implementation: 'framework', cli: 'claude' }],
+	['cutover-prior-owner', { implementation: 'framework', cli: 'claude' }],
+	['cutover-two-windows', { implementation: 'framework', cli: 'claude' }],
+	['cutover-uncertain', { implementation: 'framework', cli: 'claude' }],
 	['expiry', { implementation: 'legacy', cli: 'claude' }],
 	['incompatible-activation', { implementation: 'framework', cli: 'claude' }],
-	['install-pair', { implementation: 'legacy', cli: 'claude' }],
+	['install-pair', { implementation: 'framework', cli: 'claude' }],
 	['lifetime', { implementation: 'framework', cli: 'claude' }],
 	['missing-session-unpin', { implementation: 'framework', cli: 'claude' }],
 	['multi-window', { implementation: 'framework', cli: 'claude' }],
@@ -55,8 +60,7 @@ const ACCEPTANCE_DRIVERS = new Map([
 	['replacement-in-flight', { implementation: 'legacy', cli: 'claude' }],
 	['shell-handoff', { implementation: 'framework', cli: 'codex' }],
 	['stale-owner', { implementation: 'legacy', cli: 'claude' }],
-	['switch', { implementation: 'framework', cli: 'claude' }],
-	['upgrade-pair', { implementation: 'legacy', cli: 'claude' }]
+	['upgrade-pair', { implementation: 'framework', cli: 'claude' }]
 ] as const);
 type AcceptanceDriver = typeof ACCEPTANCE_DRIVERS extends ReadonlyMap<infer Name, unknown> ? Name : never;
 
@@ -108,9 +112,8 @@ async function main(): Promise<void> {
 	const only = process.env.FACADE_IT_ONLY;
 	const attachFake = process.env.FACADE_IT_FAKECLI;
 	const attachUpgrade = process.env.FACADE_IT_ATTACH_UPGRADE;
-	// The implementation the windows run on: `legacy`, the default, writes `facade.framework: off` into each profile; `framework` writes `auto`, which the
-	// package with framework's programs takes to the Framework (the setting's own default is `auto`, so the suite always says it)
-	const implementation = process.env.FACADE_IT_IMPLEMENTATION ?? 'legacy';
+	// Current builds activate Framework. The legacy selector is only for fixtures using earlier packages.
+	const implementation = process.env.FACADE_IT_IMPLEMENTATION ?? 'framework';
 	if (implementation !== 'legacy' && implementation !== 'framework') {
 		throw new Error('FACADE_IT_IMPLEMENTATION is legacy or framework.');
 	}
@@ -162,7 +165,8 @@ async function main(): Promise<void> {
 	let observedDriver: { name: AcceptanceDriver; implementation: ServingImplementation } | undefined;
 	const driverPassed = (name: AcceptanceDriver, actual: ServingImplementation) => {
 		if (expectedDriver === name) {
-			const serving = name === 'activation-failure' ? 'legacy' : name === 'incompatible-activation' ? 'none' : implementation;
+			const serving = name === 'activation-failure' ? 'legacy'
+				: name === 'incompatible-activation' || name === 'cutover-uncertain' ? 'none' : implementation;
 			assert.strictEqual(actual, serving, 'the completed driver exercised its expected serving implementation');
 			assert.ok(!observedDriver, 'the exact driver runs once');
 			observedDriver = { name, implementation: actual };
@@ -223,7 +227,7 @@ async function main(): Promise<void> {
 		'update.mode': 'none',
 		'extensions.autoUpdate': false,
 		'extensions.autoCheckUpdates': false,
-		'facade.framework': implementation === 'framework' ? 'auto' : 'off'
+		...(implementation === 'legacy' ? { 'facade.framework': 'off' } : {})
 	};
 	/**
 	 * Facade's settings file in the Facade root `facade` (CONFIGURATION-1.1): every built-in's command a fake - the suite never starts
@@ -595,11 +599,10 @@ async function main(): Promise<void> {
 	 * once: with its tab open by the editor, the window passing the answer on; hidden, by the window's headless terminal; open again,
 	 * by the editor once more (ARCHITECTURE-2.3, LIFECYCLE-3.5). It needs the released packages and runs only when asked.
 	 */
-	const update = async (mode: 'update' | 'replacement-in-flight' | 'install-pair' | 'upgrade-pair' = 'update') => {
+	const update = async (mode: 'update' | 'replacement-in-flight' | 'install-pair' = 'update') => {
 		const replacement = mode === 'replacement-in-flight';
 		const installPair = mode === 'install-pair';
-		const upgradePair = mode === 'upgrade-pair';
-		if ((installPair || upgradePair) && !current) {
+		if (installPair && !current) {
 			throw new Error(mode + ' requires a candidate pair directory in FACADE_IT_CURRENT.');
 		}
 		if (!installPair && !released) {
@@ -607,7 +610,7 @@ async function main(): Promise<void> {
 		}
 		const packages = (dir: string) => {
 			const files = fs.readdirSync(dir, { withFileTypes: true }).filter(file => file.name.endsWith('.vsix'));
-			if ((replacement || installPair || upgradePair) && (files.length !== 2 || files.some(file => !file.isFile()))) {
+			if ((replacement || installPair) && (files.length !== 2 || files.some(file => !file.isFile()))) {
 				throw new Error(`${dir} must contain exactly two regular VSIX files.`);
 			}
 			const component = files.find(file => file.name.includes('-window-'));
@@ -638,7 +641,7 @@ async function main(): Promise<void> {
 			fs.rmSync(path.join(root, file));
 		}
 		const env = { ...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_UPDATE: out, CLAUDE_CONFIG_DIR: claudeConfig,
-			...(installPair || upgradePair ? { FACADE_IT_UPDATE_ROLE: installPair ? 'install' : 'upgrade' } : {}) };
+			...(installPair ? { FACADE_IT_UPDATE_ROLE: 'install' } : {}) };
 		if (replacement) {
 			await replacementInFlight({ root, facade, folder, record, executable, driver, from, to, receiver: profile, env, endMatching });
 			driverPassed('replacement-in-flight', 'legacy');
@@ -651,16 +654,9 @@ async function main(): Promise<void> {
 			assert.ok(version && files[1] === ['facadecode', process.platform, process.arch, version].join('-') + '.vsix', 'the package names are a matching native pair');
 			return version;
 		};
-		const candidateVersion = installPair || upgradePair ? pairVersion(to) : undefined;
-		const priorVersion = upgradePair ? pairVersion(from) : undefined;
-		if (installPair || upgradePair) {
-			assert.strictEqual((await runEditorCli(executable, profile, ['--list-extensions'], env, 30_000)).trim(), '', 'the editor profile has no installed extensions');
-		}
-		if (upgradePair) {
-			assert.strictEqual(priorVersion, '0.1.5', 'the supported prior pair');
-			assert.notStrictEqual(priorVersion, candidateVersion, 'the candidate updates the prior pair');
-		}
+		const candidateVersion = installPair ? pairVersion(to) : undefined;
 		if (installPair) {
+			assert.strictEqual((await runEditorCli(executable, profile, ['--list-extensions'], env, 30_000)).trim(), '', 'the editor profile has no installed extensions');
 			facadeSettings(facade, alone('claude'));
 		}
 		await install(installPair ? to : from);
@@ -709,63 +705,26 @@ async function main(): Promise<void> {
 		};
 		const once = { cursor: 1, attributes: 1, colour: 1 };
 		try {
-			if (upgradePair) {
-				type InstalledUpgrade = { version: string; component: string; componentPath: string; mainPath: string; window: string; token: string;
-					hostPid: number; aliases: string[]; saved: { key: string; workspace: string; pins: unknown[] }; agents: { root: string; session: string }[];
-					marked: { alias: string; pinned: boolean }[] };
-				const observed = (name: string) => phase(name) as unknown as Promise<InstalledUpgrade>;
-				const verifyInstall = (snapshot: InstalledUpgrade, version: string | undefined) => {
-					assert.strictEqual(snapshot.version, version);
-					assert.strictEqual(snapshot.component, version);
-					const dir = path.join(profile.env.VSCODE_PORTABLE, 'extensions');
-					assert.strictEqual(snapshot.mainPath, path.join(dir, 'facade.facadecode-' + version));
-					assert.strictEqual(snapshot.componentPath, path.join(dir, 'facade.facadecode-window-' + version));
-				};
-				const original = await observed('started');
-				verifyInstall(original, priorVersion);
-				assert.strictEqual(new Set(original.agents.map(agent => agent.session)).size, 3);
-				for (const alias of original.aliases) {
-					const launch = JSON.parse(fs.readFileSync(record + '.args.' + alias, 'utf8')) as { cwd: string };
-					assert.strictEqual(launch.cwd, folder, 'the launch ran in the observed workspace');
-				}
-				assert.strictEqual(original.saved.workspace, pathToFileURL(folder).href);
-				assert.strictEqual(original.saved.pins.length, 2);
-				assert.strictEqual(original.marked.length, 3);
-				const pids = original.aliases.map(alias => Number(fs.readFileSync(record + '.' + alias, 'utf8').trim()));
-				assert.ok(pids.every(pid => Number.isSafeInteger(pid) && pid > 0 && alive(pid)));
-				await install(to);
-				fs.writeFileSync(out + '.reload', '');
-				const successor = await observed('updated');
-				verifyInstall(successor, candidateVersion);
-				assert.notStrictEqual(successor.hostPid, original.hostPid);
-				assert.deepStrictEqual([successor.window, successor.token], [original.window, original.token]);
-				assert.deepStrictEqual(successor.saved, original.saved);
-				assert.deepStrictEqual(successor.agents, original.agents);
-				assert.deepStrictEqual(successor.marked, original.aliases.slice(0, 2).map(alias => ({ alias, pinned: true })));
-				assert.ok(pids.every(pid => alive(pid)), 'the original fake CLI processes remain live');
-				for (const [index, alias] of original.aliases.entries()) {
-					assert.deepStrictEqual(fs.readFileSync(record + '.starts.' + alias, 'utf8').trim().split(/\r?\n/u).map(Number), [pids[index]]);
-				}
-				console.log('  ✔ candidate update preserves the workspace, two ordered Pins and the live Window Component publication ' + JSON.stringify({ original, successor, pids }));
-				driverPassed('upgrade-pair', 'legacy');
-				return;
-			}
 			const started = await phase('started') as { phase: string; version: string; alias: string; tabs: string[][] };
 			const pid = Number(fs.readFileSync(`${record}.${started.alias}`, 'utf8').trim());
 			if (installPair) {
-				const observed = started as typeof started & { component: string; componentPath: string; mainPath: string; window: string; run: string };
+				const observed = started as typeof started & { component: string; componentPath: string; mainPath: string; token: string };
 				assert.strictEqual(observed.version, candidateVersion);
 				assert.strictEqual(observed.component, candidateVersion);
 				const extensions = path.join(profile.env.VSCODE_PORTABLE, 'extensions');
 				for (const installed of [observed.mainPath, observed.componentPath]) {
 					assert.strictEqual(path.dirname(installed), extensions, 'activation came from the isolated install');
 				}
-				assert.ok(observed.window && observed.run && Number.isSafeInteger(pid) && pid > 0 && alive(pid), 'New Agent has a live fake CLI and Window Component publication');
+				assert.ok(observed.token && Number.isSafeInteger(pid) && pid > 0 && alive(pid), 'New Agent has a live fake CLI and a native Window Component');
+				const { agents } = await frameworkCall(facade, 'agent.list', {});
+				assert.strictEqual(agents.length, 1, 'only one Framework agent started');
+				const { agent } = await frameworkCall(facade, 'agent.inspect', { target: agents[0].reference });
+				assert.deepStrictEqual([agent.process, agent.pid, agent.reference.agent_id], ['running', pid, observed.alias.slice(1)]);
 				const launches = fs.readdirSync(path.dirname(record)).filter(file => file.startsWith(`${path.basename(record)}.starts.`));
 				assert.deepStrictEqual(launches, [`${path.basename(record)}.starts.${observed.alias}`]);
 				assert.deepStrictEqual(fs.readFileSync(path.join(path.dirname(record), launches[0]), 'utf8').trim().split(/\r?\n/u).map(Number), [pid]);
 				console.log(`  ✔ clean candidate pair activation and one New Agent effect: ${JSON.stringify({ ...observed, pid })}`);
-				driverPassed('install-pair', 'legacy');
+				driverPassed('install-pair', 'framework');
 				return;
 			}
 			// What it got before it first asked - the released build's terminal opening - is not this journey's
@@ -961,7 +920,7 @@ async function main(): Promise<void> {
 			fs.mkdirSync(faultProgram);
 		}
 		const start = (folder: string, name: string, control: string, port: number) => {
-			const legacyImplementation = runName === 'stale-owner' || runName === 'attach' && name === 'legacy';
+			const legacyImplementation = runName === 'stale-owner';
 			const withComponent = runName === 'multi' || legacyImplementation || fallback || incompatible;
 			const profile = editorProfile(root, `${runName[0]}-${name}`);
 			const userSettings = path.join(profile.user, 'User', 'settings.json');
@@ -1008,95 +967,8 @@ async function main(): Promise<void> {
 			await cleanUpFramework(facade);
 			if (runName === 'attach') {
 				endMatching(facade);
-				endMatching(path.join(root, 'a-legacy'));
 			}
 			if (fallback || incompatible || runName === 'stale-owner') { endMatching(path.join(facade, 'extension', 'ptyd')); }
-		}
-	};
-	/**
-	 * Switching implementations (spec 验收): two agents under `off`; the setting `auto` and a reload: both go on, on the legacy implementation; both ended,
-	 * a new agent is not started there; reload: the window is on the Framework, and Resume Agent continues both saved sessions. The
-	 * reloads end a test run's extension host, so a driver beside Facade Code (implementationDriver.ts) does the steps and this judges them.
-	 */
-	const implementationSwitch = async () => {
-		const solo = path.join(root, 'switch-app');
-		const profile = editorProfile(root, 'sw');
-		const { user } = profile;
-		const facade = path.join(home, 'switch');
-		const out = path.join(root, 'switch.jsonl');
-		const driver = path.join(root, 'driver-switch');
-		for (const dir of [solo, path.join(user, 'User'), driver]) {
-			fs.mkdirSync(dir, { recursive: true });
-		}
-		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, 'facade.framework': 'off' }));
-		facadeSettings(facade, alone('claude'));
-		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'switch-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
-		fs.copyFileSync(path.join(__dirname, 'implementationDriver.js'), path.join(driver, 'extension.js'));
-		fs.copyFileSync(path.join(__dirname, 'resumePickerFixture.js'), path.join(driver, 'resumePickerFixture.js'));
-		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
-			fs.rmSync(path.join(root, file));
-		}
-		let editorOutput = '';
-		const editors: ReturnType<typeof spawn>[] = [];
-		const editor = spawn(executable, [solo, '--new-window', '--disable-extensions', ...profile.args,
-			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
-			stdio: ['ignore', 'pipe', 'pipe'],
-			env: { ...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_SWITCH: out, FACADE_IT_AGENTS_HOME: agentsHome, CLAUDE_CONFIG_DIR: claudeConfig }
-		});
-		editors.push(editor);
-		const append = (chunk: unknown) => { editorOutput = (editorOutput + String(chunk)).slice(-16_000); };
-		editor.stdout?.on('data', append);
-		editor.stderr?.on('data', append);
-		const lines = () => fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { phase: string; [key: string]: unknown }) : [];
-		try {
-			const end = Date.now() + 240_000;
-			while (Date.now() < end && !lines().some(line => line.phase === 'framework' || line.phase === 'error')) {
-				await new Promise(resolve => setTimeout(resolve, 500));
-			}
-			const said = lines();
-			console.log(`  Journey: switching implementations (spec 验收)\n    ${JSON.stringify(said)}`);
-			const phase = (name: string) => said.find(line => line.phase === name);
-			const two = phase('two') as { before: string; defaultSetting: string; agents: { runId: string; alias: string; session: string }[]; framework: boolean } | undefined;
-			const still = phase('legacy-still') as { cards: string[]; alive: boolean[]; framework: boolean; setting: string } | undefined;
-			const refused = phase('refused') as { cards: number; newCli: string[]; framework: boolean } | undefined;
-			const framework = phase('framework') as { framework: boolean; resumed: { runId: string; session: string }[] } | undefined;
-			const problems = [
-				...!two || two.agents.length !== 2 || two.framework ? ['two agents did not start on the legacy implementation, with no framework running'] : [],
-				...!still || still.setting !== 'auto' || still.framework || still.alive.some(each => !each) || !two || !isDeepStrictEqual([...still.cards].sort(), two.agents.map(agent => agent.runId).sort())
-					? ['after `auto` and a reload the two agents did not go on, on the legacy implementation'] : [],
-				...!refused || refused.cards !== 0 || refused.newCli.length || refused.framework ? ['with both ended, a new agent was started or framework was started where the window says to reload'] : [],
-				...!framework || !framework.framework ? ['the window did not come up on the Framework after the second reload'] : [],
-				...framework && two && !isDeepStrictEqual(framework.resumed.map(each => each.session).sort(), two.agents.map(agent => agent.session).sort()) ? ['Resume Agent did not continue both saved sessions'] : [],
-				...framework && framework.resumed.some(each => !/^[^/]+\/a\d+$/u.test(each.runId)) ? ['one of the sessions has no Orchestrator agent identity'] : [],
-				...phase('error') ? [`the driver failed: ${JSON.stringify(phase('error'))}`] : []
-			];
-			if (problems.length) {
-				throw new Error(`Switching implementations failed: ${problems.join('; ')}`);
-			}
-			console.log('    ✔ off → auto keeps the live old agents through one reload. After they end, the next reload starts framework and Resume Agent continues both saved sessions');
-			if (expectedDriver === 'switch') {
-				assert.ok(two);
-				assert.deepStrictEqual([two.defaultSetting, two.before], ['auto', 'off']);
-				assert.ok(two.agents.every(agent => /^#a\d+$/u.test(agent.alias)), 'the first two agents are legacy implementation runs');
-				driverPassed('switch', 'framework');
-			}
-		} catch (error) {
-			console.error(`Editor output for the implementation switch (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
-			throw error;
-		} finally {
-			try {
-				await endEditors(editors);
-			} finally {
-				try {
-					console.log('    Ending the implementation switch editor and terminal helpers.');
-					endMatching(user);
-					endMatching(path.join(facade, 'extension', 'ptyd'));
-				} finally {
-					console.log('    Ending the implementation switch Orchestrator.');
-					await cleanUpFramework(facade);
-				}
-				console.log('    Implementation switch cleanup finished.');
-			}
 		}
 	};
 	let suiteFailure: unknown;
@@ -1139,7 +1011,7 @@ async function main(): Promise<void> {
 			await conversion(BUILT_INS[0], true, true);
 		}
 		// The Framework's acceptance on the extension's side: with the implementation on, a run of the whole suite has it, and each is asked for alone
-		if (['activation-failure', 'framework', 'incompatible-activation', 'switch', 'lifetime', 'multi-window', 'missing-session-unpin', 'remote-worktree', 'shell-handoff', 'shared-attach'].includes(only ?? '') && implementation !== 'framework') {
+		if (['activation-failure', 'framework', 'incompatible-activation', 'lifetime', 'multi-window', 'missing-session-unpin', 'remote-worktree', 'shell-handoff', 'shared-attach'].includes(only ?? '') && implementation !== 'framework') {
 			throw new Error(`FACADE_IT_ONLY=${only} runs on the Framework: set FACADE_IT_IMPLEMENTATION=framework.`);
 		}
 		if (only === 'framework' || (!only && implementation === 'framework')) {
@@ -1173,9 +1045,6 @@ async function main(): Promise<void> {
 		if (implementation === 'framework' && (only === 'shared-attach' || (!only && attachFake))) {
 			await frameworkWindows('attach');
 		}
-		if (only === 'switch' || (!only && implementation === 'framework')) {
-			await implementationSwitch();
-		}
 		// Asked for alone, as its three reloads of a window of twelve agents or more take minutes
 		if (only === 'pins') {
 			await pins();
@@ -1189,8 +1058,27 @@ async function main(): Promise<void> {
 		if (only === 'update') {
 			await update();
 		}
-		if (only === 'replacement-in-flight' || only === 'install-pair' || only === 'upgrade-pair') {
-			assert.strictEqual(implementation, 'legacy');
+		// Never unasked: the released legacy pair to the candidate across the cutover (ARCHITECTURE-1.4, VERIFICATION-5.2)
+		const cutover = only === 'upgrade-pair' ? 'exited' : CUTOVER_VARIANTS.find(variant => only === `cutover-${variant}`);
+		if (cutover) {
+			assert.strictEqual(implementation, 'framework', 'the cutover journeys run the candidate on Framework');
+			await legacyCutover({
+				variant: cutover, root, home, executable, record, claudeConfig, released, current, settings, endMatching,
+				legacyCliSettings: {
+					...Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.path`, launchers[cli.id] ?? fake])),
+					...Object.fromEntries(BUILT_INS.filter(each => each.id !== 'claude').map(each => [`facade.${each.segment}.enabled`, false]))
+				},
+				// Framework resolves a session from the daemon's environment and the entry's: Claude Code's session store is named there
+				facadeSettings: facade => facadeSettings(facade, { ...alone('claude'), claude: { env: {
+					HOME: agentsHome, USERPROFILE: agentsHome, ...isolatedStorage, CLAUDE_CONFIG_DIR: claudeConfig
+				} } }),
+				cleanUpFramework: facade => cleanUpFramework(facade)
+			});
+			driverPassed(only === 'upgrade-pair' ? 'upgrade-pair' : `cutover-${cutover}` as `cutover-${CutoverVariant}`,
+				cutover === 'uncertain' ? 'none' : 'framework');
+		}
+		if (only === 'replacement-in-flight' || only === 'install-pair') {
+			assert.strictEqual(implementation, only === 'install-pair' ? 'framework' : 'legacy');
 			await update(only);
 		}
 		// Never unasked: it signs in and uses an account's usage

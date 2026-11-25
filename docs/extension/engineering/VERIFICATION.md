@@ -59,8 +59,8 @@ size comparison.
 Use ARCHITECTURE-5.1's type checks, unit suite, bundle, package checks and isolated integration suite, together with the
 translation check `node scripts/l10n.mjs check` and the specification audit (audit/REPORT.md); the extension's
 pull-request checks run all of them on Linux, Windows and macOS, each on x64 and arm64. The integration suite runs on
-each implementation (ARCHITECTURE-1.4): `FACADE_IT_IMPLEMENTATION=legacy`, the default, sets `facade.framework` to `off`; `framework` runs the
-Orchestrator-backed editor journeys in group 5 against the packaged programs. Add failure-injection tests where behavior involves changed input, lifecycle or result handling; a test
+Framework (ARCHITECTURE-1.4): `FACADE_IT_IMPLEMENTATION=framework` runs the editor journeys in group 5 against
+the packaged programs. Use the previous extension build for legacy-only execution evidence and cutover input. Add failure-injection tests where behavior involves changed input, lifecycle or result handling; a test
 that repeats implementation logic is insufficient. A fix to a test tool keeps every product assertion. A docs-only
 amendment needs the specification audit; nobody needs to rerun the code suites for it, while the pull-request checks run
 their own. Re-run relevant checks when an amendment changes behavior, and full gates at final code handoff. List unrun
@@ -382,9 +382,9 @@ covers that island's scope; cross-entry and multi-machine behavior require integ
 
 | Journey | Observe |
 | --- | --- |
-| Shell to VS Code | Go to Agent selects a running managed agent from `facade list`, Attach shows the same terminal, and closing VS Code leaves the same process, agent address and screen available on reopen. |
+| Shell to VS Code | Start a Managed Agent from Shell with the Panel open and see its card appear. Opening the card shows the same terminal. Closing the view keeps its card and process. Open Settings shows the Facade Code settings section and Edit in facade.json opens the machine's file. |
 | SSH and worktree | Register a remote machine. Start there in a new worktree from Shell and exercise New Worktree as part of a VS Code start on that machine. Check the target's CLI choices and open the same terminal in Shell and VS Code. A Remote-SSH editor connects to its own host's Orchestrator. |
-| Agent team | Helpers appear after a start from the workspace or Go to Agent, including earlier descendants; their cards open terminals on request. |
+| Agent team | Running helpers appear in the panel as the Orchestrator reports them. Their cards open terminals on request. |
 | External application | A Guest joins with `facade-mcp`, sends a message, and takes the first linked reply with an explicit result wait or an inbox read filtered by the original message ID. YOLO off limits its reach. |
 | Resume and Pin | Compare Shell and VS Code with the same local and folder scope. Stop retains the card and Pin, and reopening restores the Pin. Observe one recovery per workspace and distinguish prior expiry, explicit removal and temporary unreachability under RULES-6.4. |
 
@@ -401,6 +401,11 @@ process and screen survive and the editor draws a fresh snapshot from the new co
 verify that replies, events and callbacks from the retired connection leave the new view intact. Open a second
 window of the same workspace and check the shared list. Check stale tab cleanup and startup without the Window
 Component. Use isolated profiles for the supporting legacy implementation checks. Record the builds exercised by each result.
+
+For ARCHITECTURE-1.4, start from a previous legacy build and save two distinct sessions, one pinned. Verify
+automatic recovery of the Pin after confirmed prior exit, the one acknowledged cutover when legacy processes
+are live, and that an uncertain stop defers recovery. Verify exact session IDs, original process exits, and one
+recovery across two windows. An ordinary compatible restart keeps the original agent reference, process and screen.
 
 Run `npm run test:integration` from `extension/` with `FACADE_IT_IMPLEMENTATION=framework` and the
 selector below. Give the runner absolute paths and record the two build revisions and native program hashes.

@@ -109,7 +109,7 @@ export class WorkspacePins implements FrameworkPinStore {
 	}
 }
 
-function isPin(value: unknown): value is Pin {
+export function isPin(value: unknown): value is Pin {
 	const pin = value as Partial<Pin> | null;
 	const identity = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && !value.includes('\0');
 	return !!pin && identity(pin.id) && typeof pin.name === 'string' && identity(pin.cwd) && identity(pin.location)

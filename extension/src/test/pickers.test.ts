@@ -185,7 +185,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				onDidChange: unexpected, onDidRemove: unexpected
 			},
 			hostMachineId: () => 'local-id', machines: () => [], listAgents: unexpected, listLocations: unexpected,
-			listClis: unexpected, listResumes: unexpected, start: unexpected, open: unexpected, resume: unexpected,
+			listClis: unexpected, listResumes: unexpected, start: unexpected, stop: unexpected, resume: unexpected,
 			select: unexpected, notifyError: unexpected, icons: cli => cli,
 			...overrides
 		});
@@ -488,6 +488,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				assert.strictEqual(ui.current!.busy, true);
 				await settle();
 				assert.strictEqual(ui.current!.title, 'New Agent · login-fix');
+				assert.strictEqual(ui.current!.item('Change Name...').description, 'Auto-assign');
 				assert.deepStrictEqual(locations.resolve(LOGIN.id)?.folders, [SHOP, DOCS]);
 				assert.deepStrictEqual(calls, [['local locations', { folders: [SHOP.path, DOCS.path] }], ['clis', { folder: LOGIN.path, scope: undefined }]]);
 				ui.current!.accept('Change Name...');
@@ -495,14 +496,18 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				ui.current!.type('  Chosen Name  ');
 				ui.current!.accept();
 				await settle();
-				ui.current!.accept('Change Working Location...');
+				ui.current!.accept('Change Location...');
+				await settle();
+				assert.strictEqual(ui.current!.title, 'New Agent · Working Location');
+				ui.current!.accept('Change Machine...');
 				await settle();
 				assert.strictEqual(ui.current!.title, 'New Agent · Machine');
 				assert.deepStrictEqual(ui.current!.activeItems.map(item => [item.label, item.description]), [['This machine', 'mbp']]);
 				ui.current!.accept('gpu');
 				await settle();
 				assert.deepStrictEqual(ui.current!.items.map(item => [item.label, item.description]), [
-					['dev', '/home/dev'], ['GPU workspace', '/server/app'], ['Enter Path...', undefined]
+					['dev', '/home/dev'], ['GPU workspace', '/server/app'], ['', undefined],
+					['Change Machine...', undefined], ['Enter Path...', undefined]
 				]);
 				assert.deepStrictEqual(buttonsOf(ui.current!), [['GPU workspace', 'git-branch: New Worktree...']]);
 				const remoteList = ['remote locations', { scope: remoteScope, folders: [] }];
@@ -514,8 +519,9 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				ui.current!.accept();
 				await settle();
 				assert.deepStrictEqual(calls.slice(2), [remoteList, enteredPath]);
-				assert.deepStrictEqual(ui.current!.labels(), ['/another/work path', 'New Worktree...']);
-				ui.current!.accept('New Worktree...');
+				assert.strictEqual(ui.current!.activeItems[0]?.label, '/another/work path');
+				const entered = ui.current!.item('/another/work path');
+				ui.current!.press(ui.current!.items.indexOf(entered), entered.buttons![0]);
 				await settle();
 				assert.strictEqual(ui.current!.title, 'New Agent · New Worktree');
 				assert.deepStrictEqual(calls.slice(2), [remoteList, enteredPath]);
@@ -523,9 +529,9 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				ui.current!.accept();
 				await settle();
 				assert.strictEqual(ui.current!.title, 'New Agent · Chosen Name · feat/ui (new)');
-				assert.deepStrictEqual(ui.current!.labels(), ['Muse Code', 'Unavailable', 'Codex', 'Claude Code', 'Options', 'Change Working Location...', 'Change Name...']);
+				assert.deepStrictEqual(ui.current!.labels(), ['Muse Code', 'Unavailable', 'Codex', 'Claude Code', 'Options', 'Change Location...', 'Change Name...']);
 				assert.deepStrictEqual([ui.current!.item('Codex').detail, ui.current!.item('Claude Code').detail], ['Not installed', 'Disabled in facade.json']);
-				assert.strictEqual(ui.current!.item('Change Working Location...').description, 'New worktree feat/ui from gpu · /another/work path');
+				assert.strictEqual(ui.current!.item('Change Location...').description, 'New worktree feat/ui from gpu · /another/work path');
 				assert.deepStrictEqual(starts, []);
 				ui.current!.accept('Muse Code');
 				await done;
@@ -590,7 +596,9 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 					const done = newAgent();
 					await settle();
 					assert.strictEqual(ui.current!.labels()[0], folders.length ? 'Claude Code' : 'Open Folder...');
-					ui.current!.accept('Change Working Location...');
+					ui.current!.accept('Change Location...');
+					await settle();
+					ui.current!.accept('Change Machine...');
 					await settle();
 					const picker = ui.current!;
 					assert.deepStrictEqual(picker.items.map(item => [item.label, item.description]), [
@@ -599,13 +607,15 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 					picker.activate(index + 1);
 					picker.accept();
 					await settle();
-					assert.strictEqual(ui.current!.title, 'New Agent · Working Location');
+					assert.strictEqual(ui.current!.title, 'New Agent · Working Location · buildbox');
 					assert.strictEqual(ui.current!.item('Login home').description, home);
 					ui.current!.accept('Login home');
 					await settle();
-					assert.deepStrictEqual(ui.current!.labels(), ['Remote Claude', 'Options', 'Change Working Location...', 'Change Name...']);
+					assert.deepStrictEqual(ui.current!.labels(), ['Remote Claude', 'Options', 'Change Location...', 'Change Name...']);
 					if (folders.length) {
-						ui.current!.accept('Change Working Location...');
+						ui.current!.accept('Change Location...');
+						await settle();
+						ui.current!.accept('Change Machine...');
 						await settle();
 						assert.strictEqual(ui.current!.activeItems[0]?.description, machine.selector);
 						ui.current!.accept('This machine');
@@ -613,7 +623,9 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 						ui.current!.accept('docs');
 						await settle();
 						assert.strictEqual(ui.current!.labels()[0], 'Claude Code');
-						ui.current!.accept('Change Working Location...');
+						ui.current!.accept('Change Location...');
+						await settle();
+						ui.current!.accept('Change Machine...');
 						await settle();
 						assert.strictEqual(ui.current!.activeItems[0]?.label, 'This machine');
 						ui.current!.activate(index + 1);
@@ -629,6 +641,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 					['location.list', { scope: scope(first.selector), folders: [] }], ['cli.list', { scope: scope(first.selector), folder: targets[0].home }],
 					['cli.list', { folder: DOCS.path, scope: undefined }],
 					['location.list', { scope: scope(second.selector), folders: [] }], ['cli.list', { scope: scope(second.selector), folder: targets[1].home }],
+					['location.list', { scope: scope(second.selector), folders: [] }],
 					['cli.list', { folder: DOCS.path, scope: undefined }],
 					['location.list', { scope: scope(second.selector), folders: [] }], ['cli.list', { scope: scope(second.selector), folder: targets[1].home }]
 				]);
@@ -2013,7 +2026,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			activity: 'working', reporting: true, root: `run-${String(n).padStart(32, '0')}`, origin: 'human', tools: 'not_injected', ...more
 		});
 
-		test('LIFECYCLE-5.2: Go to Agent lists managed rows in roster order and opens the exact matching record', async () => {
+		test('LIFECYCLE-5.3: Stop lists managed rows in roster order and uses the exact selected reference', async () => {
 			const local: AgentListEntry = {
 				reference: { machine_id: 'local-id', agent_id: 'a1' }, address: 'a1@mbp', name: 'Ada', type: 'managed',
 				state: 'working', cli: 'claude', folder: MAIN.path, started_at: '2026-11-19T01:00:00Z'
@@ -2023,30 +2036,27 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				title: 'Fix\nlogin', folder: '/server/app', started_at: '2026-11-19T01:01:00Z'
 			};
 			const guest: AgentListEntry = { ...local, reference: { machine_id: 'local-id', agent_id: 'a2' }, address: 'a2@mbp', type: 'guest', state: 'online' };
-			const opened: AgentListEntry[] = [];
-			const selected: string[] = [];
+			const stopped: AgentListEntry[] = [];
 			let queries = 0;
-			const { goToAgent } = frameworkPickers({
+			const { stopAgent } = frameworkPickers({
 				listAgents: async () => { queries++; return { agents: [remote, guest, local], machines: [] }; },
-				open: async entry => { opened.push(entry); return entry.address; },
-				select: run => selected.push(run)
+				stop: async entry => { stopped.push(entry); }
 			});
 			assert.strictEqual(queries, 0);
-			const done = goToAgent();
+			const done = stopAgent();
 			const picker = ui.current!;
 			assert.strictEqual(picker.busy, true);
 			await settle();
 			assert.strictEqual(queries, 1);
 			assert.deepStrictEqual(picker.items.map(item => [item.label, item.description, item.buttons]), [
-				['Remote Ada', 'a1@1234abcd · claude · /server/app · Fix login', undefined],
-				['Ada', `a1@mbp · claude · ${MAIN.path}`, undefined]
+				['Remote Ada', 'a1@1234abcd · /server/app', undefined],
+				['Ada', `a1@mbp · ${MAIN.path}`, undefined]
 			]);
 			assert.strictEqual(picker.matchOnDescription, true);
 			picker.accept('Remote Ada');
 			await done;
-			assert.deepStrictEqual(opened, [remote]);
-			assert.strictEqual(opened[0], remote);
-			assert.deepStrictEqual(selected, ['a1@1234abcd']);
+			assert.deepStrictEqual(stopped, [remote]);
+			assert.strictEqual(stopped[0], remote);
 		});
 
 		test('LIFECYCLE-2.3: a confirmed stop removes only the matching network candidate', async () => {

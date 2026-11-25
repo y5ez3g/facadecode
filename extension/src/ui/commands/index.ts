@@ -7,10 +7,9 @@ import type { Agents, ConversationDiscoveryPort, ConversationEntry, Conversation
 import type { Act, Outcome } from '../../webview/protocol';
 import { CardWords } from '../cardView';
 import { COMMANDS, PANEL_VIEW, TEST_COMMANDS } from '../catalog';
-import { locationOfFilter, PanelModel } from '../model';
+import { directoryOfFilter, locationOfFilter, PanelModel } from '../model';
 import { PanelView } from '../panel';
 import { pickFilter } from '../pickers/filter';
-import { goToAgent } from '../pickers/goToAgent';
 import { environmentLabel } from '../pickers/location';
 import { pickSession } from '../pickers/resume';
 import { messageOf } from '../../base/errors';
@@ -57,7 +56,7 @@ export interface UiDeps {
 }
 
 export interface OrchestratorUiDeps {
-	readonly agents: Pick<Agents, 'list' | 'get' | 'onDidChange' | 'pins'> & FrameworkCardActions;
+	readonly agents: Pick<Agents, 'list' | 'get' | 'onDidChange' | 'pins' | 'reorderPins'> & FrameworkCardActions;
 	readonly pickers: Omit<FrameworkPickerDeps, 'select' | 'locations' | 'media'>;
 	readonly locations: LocationPort;
 	readonly workspaceState: ConstructorParameters<typeof PanelPrefs>[0];
@@ -79,8 +78,10 @@ function cardWords(orchestrator = false): CardWords {
 			ended: vscode.l10n.t('Ended'),
 			unknown: vscode.l10n.t('Unknown'),
 			stateError: vscode.l10n.t('Error'),
-			machine: (value: string) => vscode.l10n.t('Machine: {0}', value),
-			address: (value: string) => vscode.l10n.t('Address: {0}', value)
+			toolsError: vscode.l10n.t('Facade tools unavailable'),
+			address: (value: string) => vscode.l10n.t('Agent reference: {0}', value),
+			session: (value: string) => vscode.l10n.t('Session: {0}', value),
+			name: (value: string) => vscode.l10n.t('Name: {0}', value)
 		} } : {}),
 		title: value => vscode.l10n.t("Title: {0}", value),
 		// The details' first row where a run has no title: its CLI has not saved one yet; or Facade has no history reader for its CLI
@@ -166,7 +167,6 @@ export function registerOrchestratorUi(deps: OrchestratorUiDeps): vscode.Disposa
 			if (opened) { model.select(run); }
 			return opened;
 		},
-		hide: run => agents.hide(run),
 		stop: run => agents.stop(run),
 		remove: run => agents.remove(run),
 		setPinned: (run, pinned) => agents.setPinned(run, pinned),
@@ -179,7 +179,8 @@ export function registerOrchestratorUi(deps: OrchestratorUiDeps): vscode.Disposa
 					if (run === undefined || !agents.get(run)) { return 'gone'; }
 					return await actions.open(run) ? undefined : 'failed';
 				case 'new':
-					await pickers.newAgent(locationOfFilter(model.currentFilter(), locations.snapshot().locations));
+					await pickers.newAgent(locationOfFilter(model.currentFilter(), locations.snapshot().locations)
+						?? directoryOfFilter(model.currentFilter()));
 					return undefined;
 				case 'continueSession':
 					await pickers.resumeAgent();
@@ -220,7 +221,9 @@ export function registerOrchestratorUi(deps: OrchestratorUiDeps): vscode.Disposa
 			const run = targetOf(arg, model, agents, true);
 			return run === undefined ? undefined : view.showDetails(run);
 		}),
-		...registerFrameworkAgentCommands({ model, agents, actions, notifyError: deps.notifyError, goToAgent: pickers.goToAgent }),
+		...registerFrameworkAgentCommands({
+			model, agents, actions, notifyError: deps.notifyError, stopAgent: pickers.stopAgent
+		}),
 		...registerTestUi(model, view, agents)
 	];
 }
@@ -274,18 +277,11 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 				...deps.clis.problems ? { settingsProblems: () => deps.clis.problems?.() ?? [] } : {} });
 		} catch (err) { deps.notifyError(vscode.l10n.t("Could not read the saved sessions: {0}", messageOf(err)), {}); }
 	};
-	const flows = {
-		newAgent: (startAt?: LocationId) => newAgent({
-			agents: deps.agents, locations: deps.locations, clis: deps.clis, worktrees: deps.worktrees, history: deps.history,
-			select: run => model.select(run), notifyError: deps.notifyError, log: deps.log, media,
-			...deps.names ? { names: deps.names } : {}, ...deps.remote ? { remote: deps.remote } : {}
-		}, startAt),
-		goToAgent: () => goToAgent({
-			model, agents: deps.agents, media, reveal: run => agent.reveal(run),
-			copyReference: run => agent.copyReference(run), stop: run => agent.stop(run), dismiss: run => agent.dismiss(run),
-			...deps.icons ? { icons: deps.icons } : {}
-		})
-	};
+	const pickNewAgent = (startAt?: LocationId) => newAgent({
+		agents: deps.agents, locations: deps.locations, clis: deps.clis, worktrees: deps.worktrees, history: deps.history,
+		select: run => model.select(run), notifyError: deps.notifyError, log: deps.log, media,
+		...deps.names ? { names: deps.names } : {}, ...deps.remote ? { remote: deps.remote } : {}
+	}, startAt);
 	/** What the page's actions do, their targets revalidated by run ID (PANEL-3.1). */
 	const act = async (what: Act, target: string | undefined): Promise<Outcome['reason'] | undefined> => {
 		switch (what) {
@@ -296,7 +292,7 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 				return undefined;
 			case 'new':
 				// From the filtered empty panel, at the filtered location; from the other empty panel, where New Agent would (PANEL-1.2, LIFECYCLE-1.2)
-				await flows.newAgent(locationOfFilter(model.currentFilter(), deps.locations.snapshot().locations));
+				await pickNewAgent(locationOfFilter(model.currentFilter(), deps.locations.snapshot().locations));
 				return undefined;
 			case 'clearFilter':
 				model.setFilter(undefined);
@@ -330,7 +326,7 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 		vscode.window.registerWebviewViewProvider(PANEL_VIEW, view),
 		deps.execution.onDidActivate(run => model.activated(run)),
 		vscode.commands.registerCommand(COMMANDS.continueSession, sessions),
-		vscode.commands.registerCommand(COMMANDS.newAgent, () => flows.newAgent()),
+		vscode.commands.registerCommand(COMMANDS.newAgent, () => pickNewAgent()),
 		vscode.commands.registerCommand(COMMANDS.filter, () => pickFilter(model, deps.locations, deps.log)),
 		// The same, its title button filled while a filter is on (UX-3.2)
 		vscode.commands.registerCommand(COMMANDS.filterOn, () => pickFilter(model, deps.locations, deps.log)),
@@ -339,7 +335,7 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 			const run = targetOf(arg, model, deps.agents, true);
 			return run === undefined ? undefined : view.showDetails(run);
 		}),
-		...registerAgentCommands({ agents: deps.agents, model, execution: deps.execution, notifyError: deps.notifyError }, agent, flows),
+		...registerAgentCommands({ agents: deps.agents, model, execution: deps.execution, notifyError: deps.notifyError }, agent),
 		// Open Settings: the editor's Settings at Facade Code's section, whose Edit in facade.json link opens the file (CONFIGURATION-1.2)
 		vscode.commands.registerCommand(COMMANDS.openSettings, () => deps.openSettings()),
 		...registerTestUi(model, view, deps.agents)

@@ -2512,7 +2512,7 @@
     {
       "id": "extension/configuration-legacy/built-in/claude",
       "assertion": "With no added entry, discover the built-in Claude Code under its canonical ID claude. Override its executable to the fake CLI in facade.json and observe that entry’s identity and expected native adapter launch.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
         "extension/src/test/configuration.test.ts:121",
@@ -2969,22 +2969,6 @@
       ]
     },
     {
-      "id": "extension/configuration/vscode/facade.framework",
-      "assertion": "Verify auto is the default and off serves the window with the legacy implementation. Switch off to auto while old agents run, observe both persist on the legacy implementation, then stop them and reload to confirm the Framework Orchestrator and original resumable sessions.",
-      "stage": "pr",
-      "existing_tests": [
-        "extension/src/test/integration/implementationDriver.ts",
-        "extension/src/test/integration/run.ts:958"
-      ],
-      "test": {
-        "runner": "extension-editor",
-        "implementation": "framework",
-        "journey": "switch",
-        "built_in": "claude",
-        "name": "switch"
-      }
-    },
-    {
       "id": "extension/mcp-legacy/notification/notifications.initialized",
       "assertion": "Send the id-less notification, then a request, and verify only the request receives a response. An legacy cancellation notification produces no reply or cancellation dispatch.",
       "stage": "pr",
@@ -3055,7 +3039,7 @@
     {
       "id": "extension/mcp-legacy/tool/list_agents",
       "assertion": "List the expected agent or window using the allowed caller and verify scope and identity.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/mcp.it.ts:349",
@@ -3084,7 +3068,7 @@
     {
       "id": "extension/mcp-legacy/tool/read_messages",
       "assertion": "Read full expected messages with their IDs and verify unread or cursor state after fetching.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/mcp.it.ts:357",
@@ -3103,7 +3087,7 @@
     {
       "id": "extension/mcp-legacy/tool/read_screen",
       "assertion": "Assert known terminal lines and the result shape advertised by this implementation.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/mcp.it.ts:357",
@@ -3121,7 +3105,7 @@
     {
       "id": "extension/mcp-legacy/tool/send_message",
       "assertion": "Correlate the tool result with one complete delivered message to the intended recipient.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/mcp.it.ts:357",
@@ -3140,7 +3124,7 @@
     {
       "id": "extension/mcp-legacy/tool/start_agent",
       "assertion": "Verify the tool creates exactly one child in the expected context and correlates its result with that run.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/mcp.it.ts:352",
@@ -3170,7 +3154,7 @@
     {
       "id": "extension/mcp-legacy/tool/type_text",
       "assertion": "Observe exactly the requested terminal text and Enter behavior in the target CLI.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/mcp.it.ts:357",
@@ -3375,7 +3359,7 @@
     {
       "id": "extension/p0/activation-shell/legacy-supervisor",
       "assertion": "With the legacy implementation serving the panel, perform start, MCP, terminal and worktree actions and verify effects in the legacy supervisor.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/journey.it.ts"
@@ -3406,7 +3390,7 @@
     {
       "id": "extension/p0/activation-shell/startup-fallback",
       "assertion": "With auto selecting Framework and the staged Orchestrator unable to start, verify the visible fallback warning names the machine, the failed startup step and recovery. The ready legacy panel starts nothing on activation and serves one deliberate New Agent with exactly one CLI process.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/run.ts",
         "extension/src/test/integration/frameworkMultiWindow.ts",
@@ -3469,7 +3453,7 @@
     {
       "id": "extension/p0/pin-reload/legacy-last-window-grace",
       "assertion": "With the natural legacy grace, resume before expiry and verify cleanup after the last window stays closed.",
-      "stage": "scheduled",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/run.ts"
       ],
@@ -3500,7 +3484,7 @@
     {
       "id": "extension/p0/pin-reload/resume-legacy",
       "assertion": "Continue Session opens the saved cwd and exact session ID. Facade Pin and native tab Pin stay synchronized in the legacy implementation.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts"
       ],
@@ -3584,6 +3568,38 @@
       ]
     },
     {
+      "id": "extension/p0/vsix-upgrade/cutover-live",
+      "assertion": "Upgrade the pinned prior pair with two live legacy processes. Confirm both survive until consent, then verify both exits and exactly one restored Pin.",
+      "stage": "pr",
+      "existing_tests": [
+        "extension/src/test/integration/cutover.ts",
+        "extension/src/test/integration/cutoverDriver.ts"
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "implementation": "framework",
+        "journey": "cutover-live",
+        "built_in": "claude",
+        "name": "cutover-live"
+      }
+    },
+    {
+      "id": "extension/p0/vsix-upgrade/cutover-uncertain",
+      "assertion": "Withhold confirmation after an approved legacy stop. Verify the candidate stays pending and does not start a replacement while a recorded legacy process is still alive.",
+      "stage": "pr",
+      "existing_tests": [
+        "extension/src/test/integration/cutover.ts",
+        "extension/src/test/integration/cutoverDriver.ts"
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "implementation": "none",
+        "journey": "cutover-uncertain",
+        "built_in": "claude",
+        "name": "cutover-uncertain"
+      }
+    },
+    {
       "id": "extension/p0/vsix-upgrade/install-pair",
       "assertion": "Install the candidate main and Window Component VSIX in clean editor profiles and observe activation and a real command effect.",
       "stage": "release",
@@ -3594,7 +3610,7 @@
       ],
       "test": {
         "runner": "extension-editor",
-        "implementation": "legacy",
+        "implementation": "framework",
         "journey": "install-pair",
         "built_in": "claude",
         "name": "install-pair"
@@ -3602,15 +3618,15 @@
     },
     {
       "id": "extension/p0/vsix-upgrade/upgrade-pair",
-      "assertion": "Upgrade from the supported prior VSIX pair and verify persisted workspace state, Pins and Window Component operation.",
+      "assertion": "Install the pinned prior pair, save a Pin, confirm both prior agents are gone and update to the candidate. Verify Framework restores exactly the saved session once and records its new reference.",
       "stage": "release",
       "existing_tests": [
-        "extension/src/test/integration/run.ts",
-        "extension/src/test/integration/updateDriver.ts"
+        "extension/src/test/integration/cutover.ts",
+        "extension/src/test/integration/cutoverDriver.ts"
       ],
       "test": {
         "runner": "extension-editor",
-        "implementation": "legacy",
+        "implementation": "framework",
         "journey": "upgrade-pair",
         "built_in": "claude",
         "name": "upgrade-pair"
@@ -3619,7 +3635,7 @@
     {
       "id": "extension/p0/window-replacement/replacement-in-flight",
       "assertion": "Replace the window with a message in flight and check the documented settlement and one observed effect.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/run.ts",
         "extension/src/test/integration/updateDriver.ts",
@@ -3636,7 +3652,7 @@
     {
       "id": "extension/p0/window-replacement/stale-owner",
       "assertion": "A stale claim or Webview generation cannot affect the current window owner or a different agent.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/commands.test.ts",
         "extension/src/test/integration/frameworkMultiWindow.ts",
@@ -3653,7 +3669,7 @@
     {
       "id": "extension/p0/window-replacement/window-activation-legacy",
       "assertion": "The Window Component activates with the legacy implementation and claims the matching local window.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/integration/run.ts"
@@ -3936,7 +3952,7 @@
     {
       "id": "extension/ptyd-legacy/request/input",
       "assertion": "Observe exact direct input bytes at the intended CLI.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
         "extension/src/test/ptyd.test.ts:180",
@@ -4123,7 +4139,7 @@
     {
       "id": "extension/vscode-legacy/command/facade.continueSession",
       "assertion": "Choose the saved session in Continue Session and verify the legacy CLI launch uses the exact saved directory and session ID.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts:426",
         "extension/src/test/integration/journey.it.ts:435",
@@ -4150,7 +4166,7 @@
     {
       "id": "extension/vscode-legacy/command/facade.filter",
       "assertion": "Apply an intended location filter and verify card membership and counts.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/journey.it.ts:530",
@@ -4174,17 +4190,6 @@
       ]
     },
     {
-      "id": "extension/vscode-legacy/command/facade.goToAgent",
-      "assertion": "Choose the exact agent among matching picker rows and verify the existing terminal is shown. From another reachable window, select a running agent and verify the same agent is adopted or revealed without a new process.",
-      "stage": "pr",
-      "existing_tests": [
-        "extension/src/test/integration/conversionDriver.ts:224",
-        "extension/src/test/integration/frameworkMultiWindowDriver.ts:103",
-        "extension/src/test/integration/updateDriver.ts:116",
-        "extension/src/test/catalog.test.ts:29"
-      ]
-    },
-    {
       "id": "extension/vscode-legacy/command/facade.moveDown",
       "assertion": "Move the selected card down by one position and preserve the correct order of other cards.",
       "stage": "pr",
@@ -4204,7 +4209,7 @@
     {
       "id": "extension/vscode-legacy/command/facade.newAgent",
       "assertion": "Execute the contributed command and assert the chosen CLI starts in the chosen location and opens its card and terminal.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/journey.it.ts:171",
@@ -4254,7 +4259,7 @@
     {
       "id": "extension/vscode-legacy/command/facade.pinAgent",
       "assertion": "Invoke Pin Agent for a specific resumable run. Verify its card is marked and its native terminal tab is pinned for that same run.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts:426",
         "extension/src/test/integration/journey.it.ts:464",
@@ -4300,7 +4305,7 @@
     {
       "id": "extension/vscode-legacy/command/facade.showAgentLaunch",
       "assertion": "Open Show Agent Command Line for a configured CLI and folder. Verify the rendered executable and current launch arguments and observe zero new agent processes.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/journey.it.ts:558",
@@ -4317,7 +4322,7 @@
     {
       "id": "extension/vscode-legacy/command/facade.showAgentsLog",
       "assertion": "Open Agents Log via the command and verify the active workspace log document contains a known event from that workspace.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/journey.it.ts:582",
@@ -4334,7 +4339,7 @@
     {
       "id": "extension/vscode-legacy/command/facade.stopAgent",
       "assertion": "Observe that the selected process stops and unaffected runs keep running.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts",
         "extension/src/test/integration/framework.it.ts:141",
@@ -4353,7 +4358,7 @@
     {
       "id": "extension/vscode-legacy/command/facade.unpinAgent",
       "assertion": "Invoke Unpin Agent for a specific pinned run. Verify the same card is unmarked and its native tab is unpinned.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts:426",
         "extension/src/test/integration/journey.it.ts:470",
@@ -4428,40 +4433,45 @@
       ]
     },
     {
-      "id": "extension/vscode-framework/command/facade.goToAgent",
-      "assertion": "Choose the exact machine-qualified entry. Confirm the existing process appears under that address in the workspace and opens its terminal.",
+      "id": "extension/vscode-framework/command/facade.moveDown",
+      "assertion": "Move the exact selected visible card down within its Pin group and save the order.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/frameworkMultiWindow.ts",
-        "extension/src/test/integration/conversionDriver.ts:224",
-        "extension/src/test/integration/frameworkMultiWindowDriver.ts:103",
-        "extension/src/test/integration/updateDriver.ts:116",
-        "extension/src/test/catalog.test.ts:29"
+        "extension/src/test/commands.test.ts",
+        "extension/src/test/panel.view.test.ts"
       ],
       "test": {
-        "runner": "extension-editor",
-        "implementation": "framework",
-        "journey": "shell-handoff",
-        "built_in": "codex",
-        "name": "shell-handoff"
+        "runner": "extension-unit",
+        "target": "commands.test",
+        "name": "Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1) PANEL-2.2, 4.2: a card's menu names its exact run, including same-numbered agents on two machines"
       }
     },
     {
-      "id": "extension/vscode-framework/command/facade.hideAgent",
-      "assertion": "Hide the exact target card and terminal tab. Verify its workspace membership and Pin are removed and the same Framework process is still running.",
+      "id": "extension/vscode-framework/command/facade.moveUp",
+      "assertion": "Move the exact selected visible card up within its Pin group and save the order.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/frameworkMultiWindow.ts",
-        "extension/src/test/integration/journey.it.ts:141",
-        "extension/src/test/integration/frameworkMultiWindowDriver.ts:343",
-        "extension/src/test/catalog.test.ts:31"
+        "extension/src/test/commands.test.ts",
+        "extension/src/test/panel.view.test.ts"
       ],
       "test": {
-        "runner": "extension-editor",
-        "implementation": "framework",
-        "journey": "shell-handoff",
-        "built_in": "codex",
-        "name": "shell-handoff"
+        "runner": "extension-unit",
+        "target": "commands.test",
+        "name": "Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1) PANEL-2.2, 4.2: a card's menu names its exact run, including same-numbered agents on two machines"
+      }
+    },
+    {
+      "id": "extension/vscode-framework/command/facade.newWorktree",
+      "assertion": "Create the standalone worktree through native Git, refresh the location catalog and start no agent.",
+      "stage": "pr",
+      "existing_tests": [
+        "extension/src/test/worktrees.editor.test.ts",
+        "extension/src/test/worktrees.test.ts"
+      ],
+      "test": {
+        "runner": "extension-unit",
+        "target": "worktrees.test",
+        "name": "Worktrees: native creation from a selected checkout (WORKTREES-2, 4.1-4.3; VERIFICATION W01-W03) create makes it through the editor's API at the planned path from the planned commit, Git confirms it, and it becomes a location - no window, no workspace folder (W01, W03)"
       }
     },
     {
@@ -4483,12 +4493,19 @@
     },
     {
       "id": "extension/vscode-framework/command/facade.openSettings",
-      "assertion": "Open the live daemon status settings_file in the editor, create an empty document only if missing and preserve any saved edits.",
+      "assertion": "Open the native Settings UI in a local Framework window whose editor settings preference is JSON. The separate Edit in facade.json command opens the file returned by daemon status.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/configuration.test.ts:985",
-        "extension/src/test/integration/frameworkMultiWindowDriver.ts:271"
-      ]
+        "extension/src/test/host.activation.test.ts",
+        "extension/src/test/integration/frameworkMultiWindowDriver.ts"
+      ],
+      "test": {
+        "runner": "extension-editor",
+        "implementation": "framework",
+        "journey": "shell-handoff",
+        "built_in": "codex",
+        "name": "shell-handoff"
+      }
     },
     {
       "id": "extension/vscode-framework/command/facade.openSettingsFile",
@@ -4507,11 +4524,11 @@
     },
     {
       "id": "extension/vscode-framework/command/facade.openTerminal",
-      "assertion": "Open a tab for the exact existing agent and verify the underlying process stays the same.",
+      "assertion": "Start a Managed Agent from Shell with VS Code open. See its card appear before an editor terminal opens. Open that card and verify the underlying process stays the same.",
       "stage": "pr",
       "existing_tests": [
-        "extension/src/test/integration/frameworkMultiWindowDriver.ts:324",
-        "extension/src/test/catalog.test.ts:30"
+        "extension/src/test/integration/frameworkMultiWindow.ts",
+        "extension/src/test/integration/frameworkMultiWindowDriver.ts"
       ],
       "test": {
         "runner": "extension-editor",
@@ -4677,7 +4694,7 @@
     {
       "id": "extension/webview-legacy/action/pin",
       "assertion": "Use the panel Pin button for an exact run and verify the next state contains the corresponding saved Pin.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts:552",
         "extension/src/test/panel.view.test.ts:190",
@@ -4703,7 +4720,7 @@
     {
       "id": "extension/webview-legacy/action/unpin",
       "assertion": "Use the panel Unpin button for an exact run and verify the returned state clears its Pin while other cards retain theirs.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/journey.it.ts:552",
         "extension/src/test/panel.view.test.ts:191",
@@ -4801,15 +4818,6 @@
       "stage": "pr",
       "existing_tests": [
         "extension/src/test/panel.view.test.ts:301"
-      ]
-    },
-    {
-      "id": "extension/webview-framework/action/copyReference",
-      "assertion": "Copy the canonical reference of the selected card.",
-      "stage": "pr",
-      "existing_tests": [
-        "extension/src/test/panel.view.test.ts:192",
-        "extension/src/test/webview.test.ts:182"
       ]
     },
     {
@@ -4967,7 +4975,7 @@
     {
       "id": "extension/window-component-legacy/command/facade.agents.route",
       "assertion": "Invoke the workspace-side command with a valid routed operation and observe the exact target effect. Refuse an incomplete request before dispatch.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts:894",
         "extension/src/test/host.client.test.ts:8",
@@ -5043,7 +5051,7 @@
     {
       "id": "extension/window-component-legacy/command/facade.window.route",
       "assertion": "From the current editor session, send a request to the exact peer and observe its correlated response. A stale session or invalid request dispatches nothing.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts:894",
         "extension/src/test/host.client.test.ts:8",
@@ -5310,7 +5318,7 @@
     {
       "id": "extension/window-socket-legacy/operation/agents",
       "assertion": "Route an agent list query and verify the receiving window returns its own locations, CLI availability and caller-visible agent identities.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts",
         "extension/src/test/windowNetwork.test.ts:139",
@@ -5328,7 +5336,7 @@
     {
       "id": "extension/window-socket-legacy/operation/call",
       "assertion": "Route a tool call between legacy windows. Verify the receiving window evaluates reach, acts on its own exact target and returns the correlated result for the originating caller.",
-      "stage": "pr",
+      "stage": "historical",
       "existing_tests": [
         "extension/src/test/integration/mcp.it.ts:894",
         "extension/src/test/windowNetwork.test.ts:160",

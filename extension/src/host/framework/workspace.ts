@@ -14,6 +14,10 @@ import { isProcessRunning, isSameStart, processStartedAt, processStartTime, proc
 import type { AgentRef, DaemonTopics } from '../../base/frameworkProtocol';
 import type { Disposable, Event, LogPort, FrameworkPin } from '../../core/ports';
 import { keepWorkspaceUri, workspaceRecord } from '../../record/workspace';
+import {
+	isFrameworkPin, isLegacySessionPin, isLegacyWorkspaceKey as isWorkspaceKey, LEGACY_STATE_FILE as OLD_STATE,
+	readLegacyPins, type LegacyPinSnapshot, type LegacySessionPin,
+} from '../legacyPins';
 import { legacyWindowInstance } from '../windowComponent';
 
 export interface WorkspaceRoster {
@@ -40,7 +44,21 @@ interface SavedRoster extends WorkspaceRoster {
 	readonly legacyWorkspaceKey?: string;
 }
 
+interface LegacyPinRecovery {
+	readonly version: 1;
+	readonly pending: readonly LegacySessionPin[];
+	readonly attempts: readonly string[];
+	readonly unrecognized: readonly unknown[];
+	readonly reports?: readonly LegacyPinReport[];
+}
+
+interface LegacyPinReport {
+	readonly id: string;
+	readonly reason: string;
+}
+
 interface LegacySource {
+	readonly snapshot?: LegacyPinSnapshot;
 	readonly key?: string;
 	readonly file?: string;
 	readonly folderless?: { readonly home: string; readonly uri: string; readonly kept?: string };
@@ -51,10 +69,8 @@ type AgentInfo = DaemonTopics['agents']['snapshot']['agents'][number];
 
 const WORKSPACE_KEY = 'facade.workspaceKey';
 const EMPTY_WORKSPACE_KEY = 'facade.orchestratorEmptyWorkspaceKey';
-const PINS = 'facade.pins';
-const OLD_STATE = 'workspace-state.json';
 const ROSTER = 'orchestrator-workspace.json';
-const WORKSPACE_KEY_FORMAT = /^[0-9a-f]{16}$/;
+const LEGACY_PIN_RECOVERY = 'orchestrator-legacy-pins.json';
 const WINDOW_FILE_FORMAT = /^[0-9a-f]{16}\.json$/;
 const EMPTY: SavedRoster = { version: 1, members: [], pins: [], hidden: [], imported: false, importedPins: false };
 
@@ -62,6 +78,7 @@ const EMPTY: SavedRoster = { version: 1, members: [], pins: [], hidden: [], impo
 export function openFrameworkWorkspace(context: vscode.ExtensionContext, options: {
 	readonly home: string;
 	readonly log: LogPort;
+	readonly legacyPins?: LegacyPinSnapshot;
 }): FrameworkWorkspace {
 	const { home, log } = options;
 	const folders = vscode.workspace.workspaceFolders;
@@ -90,6 +107,7 @@ export function openFrameworkWorkspace(context: vscode.ExtensionContext, options
 		: undefined;
 	keepWorkspaceUri(uri, workspace ? record : { ...record, folderless: true }, home);
 	return new FrameworkWorkspace(record.dir, {
+		snapshot: options.legacyPins,
 		key,
 		file: oldFile,
 		folderless,
@@ -97,10 +115,6 @@ export function openFrameworkWorkspace(context: vscode.ExtensionContext, options
 			? () => context.workspaceState.update(EMPTY_WORKSPACE_KEY, record.key)
 			: undefined,
 	}, log);
-}
-
-function isWorkspaceKey(value: unknown): value is string {
-	return typeof value === 'string' && WORKSPACE_KEY_FORMAT.test(value);
 }
 
 function normalizedWorkspaceUri(uri: string): string {
@@ -165,14 +179,6 @@ function isRef(value: unknown): value is AgentRef {
 	return isJsonObject(value) && isIdentity(value.machine_id) && isIdentity(value.agent_id);
 }
 
-function isFrameworkPin(value: unknown): value is FrameworkPin {
-	return isJsonObject(value) && isIdentity(value.id) && isIdentity(value.machine_id) && isIdentity(value.agent)
-		&& typeof value.name === 'string' && isIdentity(value.cwd) && isIdentity(value.location)
-		&& isJsonObject(value.conversation) && isIdentity(value.conversation.environment) && isIdentity(value.conversation.cli)
-		&& (value.conversation.sessionId === undefined || isIdentity(value.conversation.sessionId))
-		&& (value.conversation.builtIn === undefined || isIdentity(value.conversation.builtIn));
-}
-
 function refOf(pin: FrameworkPin): AgentRef {
 	return { machine_id: pin.machine_id, agent_id: pin.agent };
 }
@@ -218,15 +224,22 @@ function readRoster(file: string): SavedRoster | undefined {
 	};
 }
 
-function readLegacyPins(file: string | undefined): readonly FrameworkPin[] | undefined {
-	if (!file) { return undefined; }
-	const value = readJson(file);
-	if (value === undefined) { return undefined; }
-	if (!isJsonObject(value)) {
-		throw new Error(vscode.l10n.t('Invalid Facade workspace state: {0}', file));
+function readLegacyPinRecovery(file: string): LegacyPinRecovery | undefined {
+	const invalid = (cause?: unknown) => new Error(vscode.l10n.t('Invalid Facade legacy Pin recovery record: {0}', file), { cause });
+	let value: unknown;
+	try {
+		value = readJson(file);
+	} catch (error) {
+		throw invalid(error);
 	}
-	const pins = value[PINS];
-	return Array.isArray(pins) ? pins.filter(isFrameworkPin) : [];
+	if (value === undefined) { return undefined; }
+	if (!isJsonObject(value) || value.version !== 1 || !Array.isArray(value.pending) || !value.pending.every(isLegacySessionPin)
+		|| !Array.isArray(value.attempts) || !value.attempts.every(isIdentity) || !Array.isArray(value.unrecognized)
+		|| value.reports !== undefined && (!Array.isArray(value.reports) || !value.reports.every(report =>
+			isJsonObject(report) && isIdentity(report.id) && typeof report.reason === 'string'))) {
+		throw invalid();
+	}
+	return { version: 1, pending: value.pending, attempts: value.attempts, unrecognized: value.unrecognized, reports: value.reports };
 }
 
 interface Activation {
@@ -326,15 +339,18 @@ class PinRestoreRound implements Disposable {
 /** Shared card visibility, Pins and import progress, updated together from the latest durable state. */
 export class FrameworkWorkspace implements Disposable {
 	private readonly file: string;
+	private readonly legacyRecoveryFile: string;
 	private readonly changed = new vscode.EventEmitter<void>();
 	readonly onDidChange: Event<void> = this.changed.event;
 	private readonly watcher: fs.FSWatcher;
 	private readonly restoration: PinRestoreRound;
 	private current: SavedRoster;
 	private disposed = false;
+	private reportedLegacyReadError = false;
 
 	constructor(directory: string, private readonly legacy: LegacySource, private readonly log: LogPort) {
 		this.file = path.join(directory, ROSTER);
+		this.legacyRecoveryFile = path.join(directory, LEGACY_PIN_RECOVERY);
 		this.current = readRoster(this.file) ?? EMPTY;
 		this.watcher = fs.watch(directory, { persistent: false }, (_event, name) => {
 			if (name !== null && name !== ROSTER) { return; }
@@ -362,6 +378,46 @@ export class FrameworkWorkspace implements Disposable {
 		return { members: this.current.members, pins: this.current.pins };
 	}
 
+	pendingLegacyPins(): readonly LegacySessionPin[] {
+		const saved = new Set(this.current.pins.map(pin => pin.id));
+		return this.readLegacyRecovery()?.pending.filter(pin => !saved.has(pin.id)) ?? [];
+	}
+
+	/** A lost session-resume reply may have started a process. Fence any replay before calling Framework. */
+	beginLegacyPinResume(pin: LegacySessionPin): boolean {
+		return withFileLock(this.file, () => {
+			const roster = readRoster(this.file) ?? EMPTY;
+			const recovery = this.readLegacyRecovery();
+			if (!recovery?.pending.some(each => each.id === pin.id) || roster.pins.some(each => each.id === pin.id)
+				|| recovery.attempts.includes(pin.id)) {
+				return false;
+			}
+			this.writeLegacyRecovery({ ...recovery, attempts: [...recovery.attempts, pin.id] });
+			return true;
+		}, { keepLive: true });
+	}
+
+	clearLegacyPinAttempt(pin: LegacySessionPin): void {
+		withFileLock(this.file, () => {
+			const recovery = this.readLegacyRecovery();
+			if (recovery?.attempts.includes(pin.id)) {
+				this.writeLegacyRecovery({ ...recovery, attempts: recovery.attempts.filter(id => id !== pin.id) });
+			}
+		}, { keepLive: true });
+	}
+
+	/** All windows share the same failure report. A later opening can still retry the saved Pin. */
+	reportLegacyPinFailure(pin: LegacySessionPin, reason: string): boolean {
+		return withFileLock(this.file, () => {
+			const recovery = this.readLegacyRecovery();
+			if (!recovery?.pending.some(each => each.id === pin.id) || recovery.reports?.some(report => report.id === pin.id)) {
+				return false;
+			}
+			this.writeLegacyRecovery({ ...recovery, reports: [...recovery.reports ?? [], { id: pin.id, reason }] });
+			return true;
+		}, { keepLive: true });
+	}
+
 	dispose(): void {
 		if (this.disposed) { return; }
 		this.disposed = true;
@@ -386,9 +442,18 @@ export class FrameworkWorkspace implements Disposable {
 		await this.legacy.keepNativeKey?.();
 		if (this.disposed) { return false; }
 		const before = readRoster(this.file) ?? EMPTY;
-		if (before.imported || before.importedPins) {
+		const recovery = this.readLegacyRecovery();
+		if (recovery === null) {
 			this.publish(before);
 			return before.imported;
+		}
+		if ((before.imported || before.importedPins) && recovery) {
+			// A host can stop between committing an exact Pin and consuming migration progress.
+			// On reload, finish consumption from the current durable roster before considering a resume.
+			return this.edit(latest => {
+				this.consumeLegacyPins(new Set(latest.pins.map(pin => pin.id)));
+				return latest;
+			}).imported;
 		}
 		let pinFile = this.legacy.file;
 		let pending = !!(this.legacy.key || pinFile);
@@ -411,13 +476,20 @@ export class FrameworkWorkspace implements Disposable {
 			}
 		}
 		if (this.disposed) { return false; }
-		const pins = readLegacyPins(pinFile);
+		const previousKey = pinFile ? path.basename(path.dirname(pinFile)) : this.legacy.key;
+		const pinnedBeforeStop = isWorkspaceKey(previousKey) ? this.legacy.snapshot?.(previousKey) : undefined;
+		const source = pinnedBeforeStop ?? readLegacyPins(pinFile);
+		let unrecognized = 0;
 		const final = this.edit(latest => {
-			if (latest.imported || latest.importedPins || pending && pins === undefined) { return latest; }
+			const recovery = this.readLegacyRecovery();
+			if (recovery === null) { return latest; }
+			if (!source && (pending || latest.imported || latest.importedPins)) { return latest; }
+			const pins = source?.pins ?? [];
+			const importReferences = !latest.imported && !latest.importedPins;
 			const hidden = new Set(latest.hidden.map(refKey));
 			const visiblePins = new Map(latest.pins.map(pin => [refKey(refOf(pin)), pin]));
 			const ids = new Set(latest.pins.map(pin => pin.id));
-			for (const pin of pins ?? []) {
+			for (const pin of importReferences ? pins.filter(isFrameworkPin) : []) {
 				const ref = refKey(refOf(pin));
 				if (!hidden.has(ref) && !visiblePins.has(ref) && !ids.has(pin.id)) {
 					visiblePins.set(ref, pin);
@@ -430,9 +502,39 @@ export class FrameworkWorkspace implements Disposable {
 				const key = refKey(ref);
 				if (!hidden.has(key)) { members.set(key, ref); }
 			}
-			return { ...latest, members: [...members.values()], pins: [...visiblePins.values()], imported: !pending, importedPins: true };
+			if (source && !recovery) {
+				this.writeLegacyRecovery({
+					version: 1, pending: pins.filter(isLegacySessionPin).filter(pin => !ids.has(pin.id)),
+					attempts: [], unrecognized: source.unrecognized,
+				});
+				unrecognized = source.unrecognized.length;
+			}
+			return {
+				...latest, members: [...members.values()], pins: [...visiblePins.values()],
+				imported: latest.imported || !pending, importedPins: true,
+			};
 		});
+		if (unrecognized) {
+			const notice = vscode.l10n.t('Could not recognize {0} saved legacy Pin entries. Their original data is in {1}.',
+				unrecognized, this.legacyRecoveryFile);
+			this.log.event(notice);
+			void vscode.window.showWarningMessage(notice);
+		}
 		return final.imported;
+	}
+
+	/** Commit the real Framework identity and consume the saved session in one roster edit. */
+	importLegacyPin(previous: LegacySessionPin, pin: FrameworkPin): void {
+		this.edit(latest => {
+			const recovery = this.readLegacyRecovery();
+			if (!recovery?.pending.some(each => each.id === previous.id)) { return latest; }
+			const reference = refOf(pin);
+			if (latest.hidden.some(ref => sameRef(ref, reference)) ||
+				latest.pins.some(each => each.id === pin.id || sameRef(refOf(each), reference))) {
+				return latest;
+			}
+			return { ...latest, pins: [...latest.pins, pin], members: addRef(latest.members, reference) };
+		}, () => this.consumeLegacyPins(new Set([previous.id])));
 	}
 
 	show(ref: AgentRef): void {
@@ -441,27 +543,23 @@ export class FrameworkWorkspace implements Disposable {
 		}));
 	}
 
-	hide(ref: AgentRef): void {
-		this.remove(ref, true);
-	}
-
 	forget(ref: AgentRef): void {
-		this.remove(ref, false);
-	}
-
-	private remove(ref: AgentRef, hide: boolean): void {
 		this.edit(latest => ({
 			...latest,
 			members: latest.members.filter(each => !sameRef(each, ref)),
 			pins: latest.pins.filter(pin => !sameRef(refOf(pin), ref)),
-			hidden: hide ? addRef(latest.hidden, ref) : latest.hidden.filter(each => !sameRef(each, ref)),
+			hidden: latest.hidden.filter(each => !sameRef(each, ref)),
 		}));
 	}
 
 	reconcile(records: readonly AgentInfo[], absent: readonly AgentRef[]): void {
 		const missing = new Set(absent.map(refKey));
 		const children = new Map<string, AgentRef[]>();
+		const observed = new Map<string, AgentInfo>();
 		for (const record of records) {
+			if (record.type === 'managed' && !record.unreachable) {
+				observed.set(refKey(record.reference), record);
+			}
 			if (!record.creator) { continue; }
 			const parent = refKey(record.creator);
 			const siblings = children.get(parent) ?? [];
@@ -481,9 +579,16 @@ export class FrameworkWorkspace implements Disposable {
 					ancestry.push(child);
 				}
 			}
-			const pins = new Set(latest.pins.map(pin => refKey(refOf(pin))));
+			const pinned = new Set(latest.pins.map(pin => refKey(refOf(pin))));
 			const exists = (ref: AgentRef) => !latest.imported || !missing.has(refKey(ref));
-			return { ...latest, members: members.filter(ref => pins.has(refKey(ref)) || exists(ref)), hidden: latest.hidden.filter(exists) };
+			const pins = latest.pins.map(pin => {
+				const record = observed.get(refKey(refOf(pin)));
+				if (!record) { return pin; }
+				const sessionId = record.session ?? pin.conversation.sessionId;
+				if (record.name === pin.name && sessionId === pin.conversation.sessionId) { return pin; }
+				return { ...pin, name: record.name, conversation: { ...pin.conversation, sessionId } };
+			});
+			return { ...latest, pins, members: members.filter(ref => pinned.has(refKey(ref)) || exists(ref)), hidden: latest.hidden.filter(exists) };
 		});
 	}
 
@@ -491,7 +596,10 @@ export class FrameworkWorkspace implements Disposable {
 		const ref = refOf(pin);
 		const saved = this.edit(latest => {
 			const existing = latest.pins.find(each => sameRef(refOf(each), ref));
-			const next = existing ? { ...pin, id: existing.id } : pin;
+			const next = existing ? {
+				...existing, ...pin, id: existing.id,
+				conversation: { ...existing.conversation, ...pin.conversation },
+			} : pin;
 			return {
 				...latest,
 				pins: existing ? latest.pins.map(each => each === existing ? next : each) : [...latest.pins, next],
@@ -504,6 +612,48 @@ export class FrameworkWorkspace implements Disposable {
 
 	removePin(id: string): void {
 		this.edit(latest => ({ ...latest, pins: latest.pins.filter(pin => pin.id !== id) }));
+	}
+
+	/** Reserve one sessionless start before sending it, even across a reload or another window. */
+	beginPinRestart(expected: FrameworkPin, requestId: string): boolean {
+		const saved = this.edit(latest => ({
+			...latest,
+			pins: latest.pins.map(pin => pin.id === expected.id && sameRef(refOf(pin), refOf(expected))
+				&& !pin.conversation.sessionId && !pin.restartAttempt ? { ...pin, restartAttempt: requestId } : pin)
+		}));
+		return saved.pins.some(pin => pin.id === expected.id && sameRef(refOf(pin), refOf(expected))
+			&& pin.restartAttempt === requestId);
+	}
+
+	clearPinRestart(expected: FrameworkPin, requestId: string): void {
+		this.edit(latest => ({
+			...latest,
+			pins: latest.pins.map(pin => {
+				if (pin.id !== expected.id || !sameRef(refOf(pin), refOf(expected)) || pin.restartAttempt !== requestId) { return pin; }
+				const { restartAttempt: _attempt, ...kept } = pin;
+				return kept;
+			})
+		}));
+	}
+
+	/** Reorder current Pins while keeping the slots of Pins absent from the panel's order (PANEL-4.2). */
+	reorderPins(ids: readonly string[]): void {
+		const requested = new Set(ids);
+		const before = this.current.pins.filter(pin => requested.has(pin.id)).map(pin => pin.id);
+		const present = new Set(before);
+		// Apply only changed slots so a move in one window preserves edits to other Pins in another.
+		const moved = [...requested].filter(id => present.has(id)).filter((id, index) => id !== before[index]);
+		if (moved.length < 2) { return; }
+		this.edit(latest => {
+			const byId = new Map(latest.pins.map(pin => [pin.id, pin]));
+			const ordered = moved.flatMap(id => {
+				const pin = byId.get(id);
+				return pin ? [pin] : [];
+			});
+			const reordered = new Set(moved);
+			let next = 0;
+			return { ...latest, pins: latest.pins.map(pin => reordered.has(pin.id) ? ordered[next++] : pin) };
+		});
 	}
 
 	replacePin(previous: FrameworkPin, replacement: FrameworkPin): void {
@@ -521,6 +671,8 @@ export class FrameworkWorkspace implements Disposable {
 					Object.assign(next.conversation, { [key]: replacement.conversation[key] });
 				}
 			}
+			if (replacement.launch && replacement.launch !== previous.launch) { next.launch = replacement.launch; }
+			if (!sameRef(before, after)) { delete next.restartAttempt; }
 			const duplicate = !sameRef(before, after) && latest.pins.some(pin => sameRef(refOf(pin), after));
 			const pins = duplicate ? latest.pins.filter(pin => pin !== existing)
 				: latest.pins.map(pin => pin === existing ? next : pin);
@@ -531,14 +683,49 @@ export class FrameworkWorkspace implements Disposable {
 		});
 	}
 
-	private edit(change: (latest: SavedRoster) => SavedRoster): SavedRoster {
+	private writeLegacyRecovery(recovery: LegacyPinRecovery): void {
+		replaceFile(this.legacyRecoveryFile, `${JSON.stringify(recovery)}\n`);
+	}
+
+	private readLegacyRecovery(): LegacyPinRecovery | undefined | null {
+		try {
+			return readLegacyPinRecovery(this.legacyRecoveryFile);
+		} catch (error) {
+			if (!this.reportedLegacyReadError) {
+				this.reportedLegacyReadError = true;
+				const reason = messageOf(error);
+				this.log.event(reason);
+				void vscode.window.showWarningMessage(reason);
+			}
+			return null;
+		}
+	}
+
+	private consumeLegacyPins(ids: ReadonlySet<string>): void {
+		if (!ids.size) { return; }
+		const recovery = this.readLegacyRecovery();
+		if (recovery?.pending.some(pin => ids.has(pin.id))) {
+			this.writeLegacyRecovery({
+				...recovery, pending: recovery.pending.filter(pin => !ids.has(pin.id)),
+				attempts: recovery.attempts.filter(id => !ids.has(id)),
+				reports: recovery.reports?.filter(report => !ids.has(report.id)),
+			});
+		}
+	}
+
+	private edit(change: (latest: SavedRoster) => SavedRoster, afterSave?: () => void): SavedRoster {
 		const next = withFileLock(this.file, () => {
 			const latest = readRoster(this.file) ?? EMPTY;
 			const edited = change(latest);
 			const json = JSON.stringify(edited);
 			if (json !== JSON.stringify(latest)) {
+				// A previous host may have committed the Pin before clearing migration progress.
+				// Consume such intent before a user action removes its committed Pin.
+				const retained = new Set(edited.pins.map(pin => pin.id));
+				this.consumeLegacyPins(new Set(latest.pins.filter(pin => !retained.has(pin.id)).map(pin => pin.id)));
 				replaceFile(this.file, `${json}\n`);
 			}
+			afterSave?.();
 			return edited;
 		}, { keepLive: true });
 		this.publish(next);

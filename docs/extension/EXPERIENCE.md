@@ -25,35 +25,34 @@ complete its step, show the reason. A plain folder needs only the CLI. See WORKT
 
 **Explain missing startup prerequisites where the person can correct them.**
 
-If the chosen machine has no usable CLI, explain what is needed. The local Open Settings action opens the settings
-file under CONFIGURATION-7.1. A start on another machine uses that machine's settings. Return an actionable
+If the chosen machine has no usable CLI, explain what is needed. The local Open Settings action opens the Facade Code settings section under CONFIGURATION-1.2. A start on another machine uses that machine's settings. Return an actionable
 error when the machine or working folder is unavailable.
 
 ## 2 Follow an agent
 
-### 2.1 Find and attach
+### 2.1 Find and open
 
-**Go to Agent opens a running managed agent that the Orchestrator can reach.**
+**Running Managed Agents visible to the Orchestrator appear in the panel.**
 
-Start an agent from Shell, then select it in VS Code. Its terminal opens with the same screen and input as a Shell
+Start an agent from Shell, then click its card in VS Code. Its terminal opens with the same screen and input as a Shell
 Attach. Closing either view leaves the agent running. Read terminal output directly or use the card's state and
-TITLE. The information button identifies its machine. See LIFECYCLE-5.2 and PANEL-4.
+recent input. Open the details for the saved session, full reference, start time and folder. See LIFECYCLE-5.2 and PANEL-4.
 
 ### 2.2 Follow a team
 
-**When an agent starts helpers, their cards appear in its workspace list.**
+**Running helpers appear in the panel with the other running Managed Agents.**
 
 Their terminals open when selected. The person can monitor or intervene from the terminals while the agents
 coordinate using MCP. See COLLABORATION-5. Use Shell to configure connections between machines.
 
 ## 3 Continue or finish
 
-### 3.1 Stop, Hide and Remove
+### 3.1 Close and Stop
 
 **Choose the action that matches the intended effect.**
 
-Stop leaves the card and saved work available. Hide removes the workspace's card and its Pin; the agent continues.
-Remove also removes the agent's record. Closing its terminal tab only detaches. See RULES-6.3.
+Stop Agent ends the process. Saved work remains available to Resume. Closing the terminal tab closes its view
+and leaves the process running. See RULES-6.3.
 
 ### 3.2 Resume and Pin
 

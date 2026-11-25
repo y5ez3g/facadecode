@@ -26,16 +26,14 @@ const PUBLIC: readonly [string, string, string?][] = [
 	['facade.continueSession', 'Continue Session...', '$(history)'],
 	['facade.pinAgent', 'Pin Agent'],
 	['facade.unpinAgent', 'Unpin Agent'],
-	['facade.goToAgent', 'Go to Agent...', '$(go-to-file)'],
 	['facade.openTerminal', 'Open Terminal'],
-	['facade.hideAgent', 'Hide'],
 	['facade.renameAgent', 'Rename Agent...'],
-	['facade.stopAgent', 'Stop Agent'],
+	['facade.stopAgent', 'Stop Agent...'],
 	['facade.deleteAgent', 'Remove'],
 	['facade.copyAgentReference', 'Copy Agent Reference'],
 	['facade.dismissAgent', 'Dismiss Agent'],
 	['facade.showAgentDetails', 'Show Agent Details'],
-	['facade.filter', 'Filter by Working Location...', '$(filter)'],
+	['facade.filter', 'Filter Agents...', '$(filter)'],
 	['facade.openSettings', 'Open Settings'],
 	['facade.showAgentLaunch', 'Show Agent Command Line...'],
 	['facade.showAgentsLog', 'Show Agents Log']
@@ -44,8 +42,8 @@ const HIDDEN: readonly [string, string, string?][] = [
 	['facade.newWorktree', 'New Worktree...'],
 	['facade.moveUp', 'Move Up'],
 	['facade.moveDown', 'Move Down'],
-	// Filter by Working Location as its title button shows it while a filter is on (UX-3.2)
-	['facade.filterOn', 'Filter by Working Location...', '$(filter-filled)'],
+	// Filter Agents as its title button shows it while a filter is on (UX-3.2)
+	['facade.filterOn', 'Filter Agents...', '$(filter-filled)'],
 	['facade.revealAgent', 'Show Agent'],
 	['facade.openSettingsFile', 'Edit in facade.json']
 ];
@@ -54,7 +52,7 @@ const HIDDEN: readonly [string, string, string?][] = [
  * and Open Settings File beside the settings file.
  */
 const HOST_COMMANDS = ['facade.newWorktree', 'facade.showAgentLaunch', 'facade.showAgentsLog', 'facade.openSettingsFile'];
-const RUST_ONLY = ['facade.resumeAgent', 'facade.openTerminal', 'facade.hideAgent', 'facade.deleteAgent', 'facade.copyAgentReference'];
+const RUST_ONLY = ['facade.resumeAgent', 'facade.openTerminal', 'facade.deleteAgent', 'facade.copyAgentReference'];
 const TEST_COMMANDS = ['facade.state', 'facade.selectRow', 'facade.probe'];
 
 suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)', () => {
@@ -80,60 +78,46 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		const text = JSON.stringify(manifest);
 		// Gone in this step too: Refresh, New Agent Here, the working-location commands and their context keys
 		for (const retired of ['facadeDots', 'facade.closeAgent', 'facade.history', 'facade.showActiveAgents', 'facade.nextAgent', 'facade.startAgent', 'ChatRoom', 'deleteWorktree', 'facade.refresh', 'facade.newAgentHere', 'webviewHere',
-			'facade.customize', 'facade.openInNewWindow', 'facade.revealIn', 'facade.openContainingFolder', 'facade.revealRemote', 'facade.copyPath', 'facade.openTerminalHere', 'canManageWorktrees', 'facade.remote']) {
+			'facade.goToAgent', 'facade.hideAgent', 'facade.customize', 'facade.openInNewWindow', 'facade.revealIn', 'facade.openContainingFolder', 'facade.revealRemote', 'facade.copyPath', 'facade.openTerminalHere', 'canManageWorktrees', 'facade.remote']) {
 			assert.ok(!text.includes(retired), retired);
 		}
 	});
 
-	test('menus preserve the legacy implementation actions and expose the workspace actions under their own conditions (PANEL-2.2, PANEL-4.2)', () => {
+	test('menus expose Framework actions and hide retired legacy actions (PANEL-2.2, PANEL-4.2)', () => {
 		const card = "webviewId == 'facade.agents' && webviewSection == 'agent'";
-		const oldCard = `${card} && facade.implementation != framework`;
-		const frameworkCard = `${card} && facade.implementation == framework`;
 		const running = CONTEXT.agentSelectedRunning;
 		assert.deepStrictEqual(contributes.menus, {
 			'view/title': [
-				// Not offered where every agent works in the window's one place to work, unless a filter is on (PANEL-2.3)
-				{ command: 'facade.filter', when: 'view == facade.agents && !facade.filtered && !facade.onePlace', group: 'navigation@1' },
-				{ command: 'facade.filterOn', when: 'view == facade.agents && facade.filtered', group: 'navigation@1' },
+				// A Framework window can always filter its cards (PANEL-4.3)
+				{ command: 'facade.filter', when: 'view == facade.agents && !facade.filtered && facade.implementation == framework', group: 'navigation@1' },
+				{ command: 'facade.filterOn', when: 'view == facade.agents && facade.filtered && facade.implementation == framework', group: 'navigation@1' },
 				{ command: 'facade.resumeAgent', when: 'view == facade.agents && facade.implementation == framework', group: 'navigation@2' },
-				{ command: 'facade.continueSession', when: 'view == facade.agents && facade.implementation != framework', group: 'navigation@2' },
-				{ command: 'facade.goToAgent', when: 'view == facade.agents && facade.implementation == framework', group: 'navigation@3' },
-				{ command: 'facade.newAgent', when: 'view == facade.agents', group: 'navigation@4' },
+				{ command: 'facade.newAgent', when: 'view == facade.agents', group: 'navigation@3' },
 				// The More Actions menu (PANEL-1.1): the editor's own Add Folder to Workspace..., not declared here, keeps its own title
 				{ command: 'workbench.action.addRootFolder', when: 'view == facade.agents', group: '1_locations@1' },
-				{ command: 'facade.newWorktree', when: 'view == facade.agents && workspaceFolderCount != 0 && facade.implementation != framework', group: '1_locations@2' },
+				{ command: 'facade.newWorktree', when: 'view == facade.agents && workspaceFolderCount != 0', group: '1_locations@2' },
 				{ command: 'facade.openSettings', when: 'view == facade.agents', group: '9_configure@1' }
 			],
 			'webview/context': [
-				{ command: 'facade.renameAgent', when: oldCard, group: '1_agent@1' },
-				{ command: 'facade.moveUp', when: `${card} && webviewMoveUp && facade.implementation != framework`, group: '2_move@1' },
-				{ command: 'facade.moveDown', when: `${card} && webviewMoveDown && facade.implementation != framework`, group: '2_move@2' },
-				{ command: 'facade.stopAgent', when: `${card} && !webviewAgentEnded && facade.implementation != framework`, group: '4_close@1' },
-				{ command: 'facade.dismissAgent', when: `${card} && webviewAgentEnded && facade.implementation != framework`, group: '4_close@1' },
-				{ command: 'facade.openTerminal', when: `${frameworkCard} && webviewAgentRunning`, group: '1_agent@1' },
-				{ command: 'facade.hideAgent', when: frameworkCard, group: '1_agent@2' },
-				{ command: 'facade.stopAgent', when: `${frameworkCard} && webviewAgentRunning`, group: '1_agent@3' },
-				{ command: 'facade.deleteAgent', when: frameworkCard, group: '1_agent@4' },
-				{ command: 'facade.pinAgent', when: `${frameworkCard} && webviewAgentPinnable && !webviewAgentPinned`, group: '1_agent@5' },
-				{ command: 'facade.unpinAgent', when: `${frameworkCard} && webviewAgentPinned`, group: '1_agent@6' },
-				{ command: 'facade.renameAgent', when: frameworkCard, group: '1_agent@7' }
+				{ command: 'facade.renameAgent', when: card, group: '1_agent@1' },
+				{ command: 'facade.moveUp', when: `${card} && webviewMoveUp`, group: '2_move@1' },
+				{ command: 'facade.moveDown', when: `${card} && webviewMoveDown`, group: '2_move@2' }
 			],
 			commandPalette: [
 				{ command: 'facade.resumeAgent', when: 'facade.implementation == framework' },
-				{ command: 'facade.continueSession', when: 'facade.implementation != framework' },
-				{ command: 'facade.showAgentLaunch', when: 'facade.implementation != framework' },
+				{ command: 'facade.continueSession', when: 'false' },
+				{ command: 'facade.showAgentLaunch', when: 'false' },
 				{ command: 'facade.renameAgent', when: 'facade.agentSelected' },
 				{ command: 'facade.openTerminal', when: `facade.implementation == framework && facade.agentSelected && ${running}` },
-				{ command: 'facade.hideAgent', when: 'facade.implementation == framework && facade.agentSelected' },
-				{ command: 'facade.stopAgent', when: `facade.agentSelected && ((facade.implementation == framework && ${running}) || (facade.implementation != framework && !facade.agentSelectedEnded))` },
+				{ command: 'facade.stopAgent', when: 'facade.implementation == framework' },
 				{ command: 'facade.deleteAgent', when: 'facade.implementation == framework && facade.agentSelected' },
 				{ command: 'facade.copyAgentReference', when: 'facade.implementation == framework && facade.agentSelected' },
-				{ command: 'facade.dismissAgent', when: 'facade.agentSelected && facade.agentSelectedEnded && facade.implementation != framework' },
+				{ command: 'facade.dismissAgent', when: 'false' },
 				{ command: 'facade.showAgentDetails', when: 'facade.agentSelected && facade.agentSelectedVisible' },
 				...HIDDEN.map(([command]) => ({ command, when: 'false' })),
 				{ command: 'facade.pinAgent', when: 'facade.agentSelected && facade.agentSelectedPinnable && !facade.agentSelectedPinned' },
 				{ command: 'facade.unpinAgent', when: 'facade.agentSelectedPinned' },
-				{ command: 'facade.filter', when: '!facade.onePlace || facade.filtered' }
+				{ command: 'facade.filter', when: 'facade.implementation == framework' }
 			]
 		});
 	});
@@ -145,14 +129,14 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			.sort((a, b) => a.group.localeCompare(b.group) || a.order - b.order);
 		const shown = placed.flatMap((each, at) => at > 0 && placed[at - 1].group !== each.group ? ['──', each.command] : [each.command]);
 		assert.deepStrictEqual(shown, ['workbench.action.addRootFolder', 'facade.newWorktree', '──', 'facade.openSettings']);
-		// These commands stay out of More Actions. Go to Agent also has a Framework toolbar button.
-		const palette = ['facade.goToAgent', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
+		// These commands stay out of More Actions.
+		const palette = ['facade.showAgentLaunch', 'facade.showAgentsLog'];
 		assert.ok(!more.some(each => palette.includes(each.command)));
-		// Show Agent Command Line is hidden from the palette only on the Framework, which has no launch view
+		// Show Agent Command Line has been retired.
 		assert.ok(!contributes.menus.commandPalette.some((each: { command: string }) => [...palette.filter(command => command !== 'facade.showAgentLaunch'), 'facade.openSettings'].includes(each.command)));
 	});
 
-	test('settings expose implementation selection and the legacy implementation home, link to facade.json, and keep its schema (CONFIGURATION-7.1, UX-6.2)', () => {
+	test('settings retain Facade Home, link to facade.json, and keep its schema (CONFIGURATION-7.1, UX-6.2)', () => {
 		assert.deepStrictEqual(contributes.configuration.map((section: { id: string; title: string; order: number }) => [section.id, english(section.title), section.order]), [['facade.agents', 'Facade Code', 2]]);
 		const settings: Record<string, { type: string; default: unknown; scope: string; order?: number; pattern?: string; patternErrorMessage?: string; markdownDescription: string }> = contributes.configuration[0].properties;
 		// A real setting, a path: the box VS Code draws for it has no Edit in settings.json button; a workspace cannot set it
@@ -160,12 +144,11 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		const usable = new RegExp(settings['facade.home'].pattern!);
 		assert.deepStrictEqual(['', '~/.facade', '/Volumes/Data/facade', 'D:\\Facade', 'D:/Facade', '\\\\server\\share', 'facade', './facade', '~', 'D:Facade'].map(value => usable.test(value)),
 			[true, true, true, true, true, true, false, false, false, false]);
-		assert.strictEqual(english(settings['facade.home'].markdownDescription), 'Legacy implementation only. This folder holds its settings, agent history, and messages. '
+		assert.strictEqual(english(settings['facade.home'].markdownDescription), 'The Facade home this window uses for settings, agent records, and legacy migration. '
 			+ 'A path here takes precedence over `FACADE_HOME` and the `~/.facade` default.\n\n'
 			+ '[Edit in facade.json](command:facade.openSettingsFile) to change YOLO, suggested names, and how CLIs start.');
 		assert.strictEqual(english('%config.home.pattern%'), 'The path must start with ~/ or be absolute.');
-		assert.deepStrictEqual(settings['facade.framework'], { type: 'string', enum: ['auto', 'off'], default: 'auto', scope: 'machine', order: 1, markdownDescription: '%config.framework%' });
-		assert.deepStrictEqual(Object.keys(settings), ['facade.home', 'facade.framework']);
+		assert.deepStrictEqual(Object.keys(settings), ['facade.home']);
 		assert.deepStrictEqual(LEGACY_SETTINGS.filter(key => key in settings), []);
 		// facade.json is checked against its schema wherever the Facade home is: the file's name is Facade's own
 		assert.deepStrictEqual(contributes.jsonValidation, [{ fileMatch: ['**/facade.json'], url: './media/settings.schema.json' }]);
@@ -222,12 +205,14 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 
 		test('the legacy implementation registers exactly its UI commands from the manifest (UX-3.2, E03)', () => {
 			const manifested = contributes.commands.map((each: { command: string }) => each.command).filter((id: string) => !HOST_COMMANDS.includes(id) && !RUST_ONLY.includes(id));
-			assert.deepStrictEqual(registered(false).sort(), [...manifested].sort());
+			assert.deepStrictEqual(registered(false).sort(), manifested.sort());
 		});
 
 		test('the integration build adds only state, selectRow and probe, which no manifest lists (UX-3.2)', () => {
-			const extra = registered(true).filter(id => !contributes.commands.some((each: { command: string }) => each.command === id));
+			const shipping = new Set(registered(false));
+			const extra = registered(true).filter(id => !shipping.has(id));
 			assert.deepStrictEqual(extra.sort(), [...TEST_COMMANDS].sort());
+			assert.ok(extra.every(id => !contributes.commands.some((each: { command: string }) => each.command === id)));
 		});
 	});
 });

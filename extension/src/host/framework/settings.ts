@@ -12,6 +12,21 @@ import { reasonOf, reasonText } from '../../ui/presentation';
 import { createExclusively, shownFile } from '../facadeSettings';
 import { notificationText } from '../notify';
 
+/** Open VS Code's Facade section or the configured setting itself (CONFIGURATION-1.2). */
+export function openFacadeSettings(query: string): Thenable<unknown> {
+	return vscode.env.remoteName !== undefined
+		? vscode.commands.executeCommand('workbench.action.openRemoteSettings', { query })
+		: vscode.commands.executeCommand('workbench.action.openSettings2', { query });
+}
+
+export async function openSettingsOf(extensionId: string): Promise<void> {
+	if (vscode.env.remoteName !== undefined && vscode.workspace.getConfiguration('workbench.settings').get('editor') === 'json') {
+		await vscode.commands.executeCommand(COMMANDS.openSettingsFile);
+		return;
+	}
+	await openFacadeSettings(`@ext:${extensionId}`);
+}
+
 /** Open the execution host's actual settings file on demand (CONFIGURATION-7.1, UX-6.2). */
 export function frameworkSettings(options: { readonly status: () => Promise<{ readonly settings_file: string }>; readonly log: LogPort }): {
 	readonly open: () => Promise<void>;

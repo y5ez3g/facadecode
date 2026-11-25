@@ -248,7 +248,9 @@ with the mouse - it opens 2.1's native picker flow. Its structured arguments are
 `{location_id: string, branch: string, base_ref?: string}`; invalid arguments fail without guessing. The result identifies
 the created location, destination and branch; failures report actual retained effects without claiming subsequent
 environment setup completed. New Agent's contextual creation keeps its launch service under LIFECYCLE-1.3 and 4.1.
-There is no delete command. Existing locations remain usable without requesting a new worktree.
+The Framework-backed extension uses the editor's Git creation service for this standalone command. Refresh the
+location catalog after success so the worktree is selectable without reopening the workspace. The command
+does not start an agent. Existing locations remain usable without requesting a new worktree.
 
 Both human creation entries use the same branch input in `ui/pickers/location.ts`: branch-prefix lookup, required-value
 messages, asynchronous HEAD planning, validated-plan reuse and Back/Escape handling. The preview formatter and Copy Path

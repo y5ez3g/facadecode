@@ -22,6 +22,7 @@ first.
 The [specification index](../docs/extension/README.md) lists its layers and each document's responsibility. Product constrains
 experience and shared rules; those constrain features and UX; engineering implements their contracts.
 Verification results accompany the tested build or handoff.
+For island ownership and horizontal roles, use [ISLANDS](../docs/extension/engineering/ISLANDS.md).
 
 ## 3 Write and change a rule
 

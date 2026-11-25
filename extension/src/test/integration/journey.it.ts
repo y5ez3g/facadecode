@@ -257,18 +257,12 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		assert.ok(!dots.has('error'), `never red as it started: ${[...dots].join(', ')}`);
 		for (const title of ['✳ Checking responsive layout', '⠐ Checking responsive layout', '● 检查标题更新 | workspace']) {
 			fs.writeFileSync(`${RECORD}.quirks.${alias}`, JSON.stringify({ title, reportedTitle: 'Plain activity title' }));
-			if (FRAMEWORK) {
-				// RULES-6.2 shows the Orchestrator's terminal title in the card and its details.
-				const shown = await until(`the card title ${title}`, async () => (await state()).cards.find(each => each.runId === card.runId && each.line === title));
-				assert.ok(linesOf(shown).includes(`Title: ${title}`), JSON.stringify(shown));
-				assert.ok(!linesOf(shown).some(line => line.includes('Plain activity title')), JSON.stringify(shown));
-			} else {
-				// CLIS-2.4 gives the legacy implementation a title from history. Let the fixture publish both other titles before checking.
-				await new Promise(resolve => setTimeout(resolve, 1_000));
-				const shown = (await state()).cards.find(each => each.runId === card.runId);
-				const said = shown ? [shown.line, ...linesOf(shown)] : [];
-				assert.deepStrictEqual([!!shown && !/^(?:\u{1F9D1}|\u{1F4E8}|\u{1F514})/u.test(shown.line), said.filter(line => /Checking responsive layout|检查标题更新|Plain activity title/.test(line))], [true, []], JSON.stringify(shown));
-			}
+			await new Promise(resolve => setTimeout(resolve, 1_000));
+			const shown = (await state()).cards.find(each => each.runId === card.runId);
+			assert.ok(shown);
+			const said = [shown.line, ...linesOf(shown)];
+			assert.deepStrictEqual(said.filter(line => /Checking responsive layout|检查标题更新|Plain activity title/.test(line)), [], JSON.stringify(shown));
+			if (FRAMEWORK) { assert.strictEqual(shown.details.summary?.id, 'session'); }
 			assert.strictEqual(unspun(terminal.name), card.name, 'CLI titles never change the native terminal name');
 			await until('the name-only editor tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs)
 				.some(tab => tab.input instanceof vscode.TabInputTerminal && unspun(tab.label) === card.name) ? true : undefined);
@@ -560,6 +554,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			void vscode.commands.executeCommand('facade.filter');
 			await new Promise(resolve => setTimeout(resolve, 2_500));
 			await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
+			if (FRAMEWORK) { await vscode.commands.executeCommand('quickInput.toggleCheckbox'); }
 			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 			await new Promise(resolve => setTimeout(resolve, 500));
 			return (await state()).filter ? await state() : undefined;
@@ -573,7 +568,8 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		assert.strictEqual(await vscode.commands.executeCommand('facade.probe', { op: 'click', selector: '#empty button', index: 0 }), true);
 		const cleared = await until('Clear Filter', async () => { const now = await state(); return now.filter === undefined ? now : undefined; });
 		assert.deepStrictEqual([filtered.filter?.kind, filtered.cards.map(each => each.runId), filtered.cardCount, left.cardCount, said, cleared.empty], [
-			'location', [card.runId], 1, 0, [`No agents found in "${filtered.filter?.label}".`], 'noAgents'
+			FRAMEWORK ? 'agents' : 'location', [card.runId], 1, 0,
+			[FRAMEWORK ? 'No agents match the selected filters.' : `No agents found in "${filtered.filter?.label}".`], 'noAgents'
 		]);
 	});
 

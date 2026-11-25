@@ -6,12 +6,14 @@ import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
+import { isSameFolder } from '../../base/files';
 import { disposeAll } from '../../base/lifecycle';
 import type { AgentRef, DaemonOperations, DaemonTopics } from '../../base/frameworkProtocol';
-import type { LocationPort, LogPort, RunChange, RunError, RunFacts, RunId, FrameworkPin } from '../../core/ports';
+import type { LocationPort, LogPort, RunChange, RunError, RunFacts, RunId, FrameworkPin, Pin, PinLaunch } from '../../core/ports';
 import { errorOf, unavailable } from './rpc';
 import { agentFacts, agentKey, failedPinFacts, referenceOf, referenceOfPin } from './agentFacts';
 import { restoreFrameworkPins } from './pinRestore';
+import { recoverLegacyPin } from './legacyRecovery';
 import type { OrchestratorTerminals } from './terminals';
 import { DaemonError, type OrchestratorLink } from './types';
 import type { FrameworkWorkspace, WorkspacePinFailure } from './workspace';
@@ -27,6 +29,10 @@ type AgentMachineState = AgentsSnapshot['machines'][number];
 
 const INITIAL_TERMINAL_SIZE = { cols: 80, rows: 24 };
 declare const FACADE_TEST_MODE: boolean;
+
+function unconfirmedPinStart(pin: Pin): Error {
+	return new Error(vscode.l10n.t('Could not confirm the previous start of {0}.', pin.name || pin.conversation.cli));
+}
 
 function tracePinRestore(phase: string, detail: unknown): void {
 	if (typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE && process.env.FACADE_IT_WINDOW_CONTROL) {
@@ -49,6 +55,7 @@ interface AgentDeps {
 /** Joins the Orchestrator's records with the workspace's presentation (RULES-6.1). */
 export class OrchestratorAgents implements vscode.Disposable {
 	private readonly records = new Map<RunId, AgentInfo>();
+	private readonly launches = new Map<RunId, PinLaunch>();
 	private readonly watchReferences = new Map<RunId, AgentRef>();
 	private readonly absent = new Map<RunId, AgentRef>();
 	private readonly changed = new vscode.EventEmitter<RunChange>();
@@ -57,6 +64,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 	private readonly attached = new Map<RunId, string>();
 	private readonly failures = new Map<RunId, RunError>();
 	private cards = new Map<RunId, RunFacts>();
+	private pinPositions = new Map<string, number>();
 	private pinRecovery?: Promise<unknown>;
 	private recoveringHere = false;
 	private pruning = false;
@@ -117,22 +125,35 @@ export class OrchestratorAgents implements vscode.Disposable {
 		return this.deps.workspace.snapshot().pins;
 	}
 
-	async start(input: StartArgs): Promise<RunId> {
+	reorderPins(ids: readonly string[]): void {
+		this.deps.workspace.reorderPins(ids);
+	}
+
+	async start(input: StartArgs, onStarted: (agent: Pick<AgentInfo, 'reference' | 'cwd'>) => void): Promise<RunId> {
+		const record = await this.startRecord(input, `start-${randomBytes(16).toString('hex')}`);
+		const model = record.model ?? input.model;
+		const effort = record.effort ?? input.effort;
+		const run = agentKey(record.reference);
+		const launch = {
+			args: input.args ?? [],
+			...(model !== undefined ? { model } : {}),
+			...(effort !== undefined ? { effort } : {})
+		};
+		this.launches.set(run, launch);
+		// The watch can publish the running card before the start receipt arrives.
+		const pin = this.pins().find(each => agentKey(referenceOfPin(each)) === run);
+		if (pin) { this.deps.workspace.replacePin(pin, { ...pin, launch }); }
+		onStarted(record);
+		return this.show(record);
+	}
+
+	private async startRecord(input: StartArgs, requestId: string): Promise<AgentInfo> {
 		const args: StartArgs = {
 			...input,
 			env: input.scope?.kind === 'machine' ? undefined : this.deps.environment(input.folder),
-			request_id: `start-${randomBytes(16).toString('hex')}`
+			request_id: requestId
 		};
-		const result = await this.deps.link.call('agent.start', args);
-		return this.show(result.agent);
-	}
-
-	async goTo(entry: AgentListEntry): Promise<RunId> {
-		const record = await this.inspect(entry.reference);
-		if (record.process !== 'running') {
-			throw new Error(vscode.l10n.t('{0} has ended. Use Resume Agent to continue it.', record.address));
-		}
-		return this.show(record);
+		return (await this.deps.link.call('agent.start', args)).agent;
 	}
 
 	async resume({ target, machine_id }: ResumeCandidate): Promise<RunId> {
@@ -144,22 +165,25 @@ export class OrchestratorAgents implements vscode.Disposable {
 		const card = this.cards.get(run);
 		if (!card?.orchestrator || card.lifecycle === 'ended') { return false; }
 		const record = await this.inspect(card.orchestrator.reference);
-		this.render();
-		await this.attach(record);
+		await this.show(record);
 		return true;
-	}
-
-	async hide(run: RunId): Promise<void> {
-		const card = this.cards.get(run);
-		if (!card?.orchestrator) { return; }
-		this.deps.workspace.hide(card.orchestrator.reference);
-		this.closeView(run);
 	}
 
 	async stop(run: RunId): Promise<void> {
 		const reference = this.cards.get(run)?.orchestrator?.reference;
-		if (!reference) { return; }
+		if (reference) { await this.stopReference(reference); }
+	}
+
+	async stopListedAgent(entry: AgentListEntry): Promise<void> {
+		if (entry.type === 'managed') { await this.stopReference(entry.reference); }
+	}
+
+	private async stopReference(reference: AgentRef): Promise<void> {
 		const { items: [item] } = await this.deps.link.call('agent.stop', { selection: { kind: 'targets', targets: [reference] } });
+		if (item?.status === 'failed' && item.error.data.reason === 'ended') {
+			await this.inspect(reference).then(() => this.render(), () => undefined);
+			return;
+		}
 		if (item?.status === 'failed') { throw errorOf(item.error); }
 		if (item?.status !== 'stopped') { throw unavailable('Facade Code Framework did not confirm that the agent stopped.'); }
 	}
@@ -187,9 +211,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 			return;
 		}
 		const record = this.records.get(run);
-		if (!record?.session) {
-			throw new Error(vscode.l10n.t('A Pin needs a saved session.'));
-		}
+		if (record?.type !== 'managed' || card.pin) { return; }
 		this.deps.workspace.savePin(this.pinFor(record));
 	}
 
@@ -334,6 +356,10 @@ export class OrchestratorAgents implements vscode.Disposable {
 					kind: 'session', machine_id: pin.machine_id, cli: pin.conversation.cli, session: pin.conversation.sessionId, folder: pin.cwd
 				}, pin.cwd);
 			},
+			restart: pin => this.startPinned(pin, pin.machine_id, pin.launch,
+				requestId => this.deps.workspace.beginPinRestart(pin, requestId),
+				requestId => this.deps.workspace.clearPinRestart(pin, requestId)),
+			unconfirmedStart: unconfirmedPinStart,
 			opened: async (pin, agent) => {
 				if (!this.currentPin(pin)) { return; }
 				this.remember(agent);
@@ -360,23 +386,102 @@ export class OrchestratorAgents implements vscode.Disposable {
 			},
 			isMissingSession: error => error instanceof DaemonError && error.reason === 'session_not_found'
 		});
+		for (const pin of this.deps.workspace.pendingLegacyPins()) {
+			if (this.disposed) { break; }
+			try {
+				let launchedFromSession = false;
+				const record = await recoverLegacyPin(pin, {
+					link: this.deps.link,
+					inspect: reference => this.inspect(reference),
+					resume: async (machine, target, folder) => {
+						const result = await this.requestResume(machine, target, folder);
+						launchedFromSession = target.kind === 'session' && result.from_saved_session === true;
+						return result.agent;
+					},
+					restart: () => this.startPinned(pin, this.deps.link.machineId, undefined,
+						() => this.deps.workspace.beginLegacyPinResume(pin),
+						() => this.deps.workspace.clearLegacyPinAttempt(pin)),
+					begin: () => !this.disposed && this.deps.workspace.beginLegacyPinResume(pin),
+					confirmedNoStart: () => this.deps.workspace.clearLegacyPinAttempt(pin),
+				});
+				this.remember(record);
+				const recovered = this.pinFor(record, pin);
+				this.deps.workspace.importLegacyPin(pin, recovered);
+				if (launchedFromSession) { await this.restoreLegacyPinName(recovered, pin.name); }
+			} catch (error) {
+				if (!this.disposed) {
+					const reason = vscode.l10n.t('Could not recover the legacy Pin for {0}: {1}', pin.name || pin.conversation.cli, messageOf(error));
+					if (this.deps.workspace.reportLegacyPinFailure(pin, reason)) {
+						this.deps.log.event(reason);
+						this.deps.notifyError(new Error(reason));
+					}
+				}
+			}
+		}
 		return failed;
 	}
 
+	private async restoreLegacyPinName(recovered: FrameworkPin, savedName: string): Promise<void> {
+		const name = savedName.trim();
+		if (this.disposed || !name || name === recovered.name || !this.currentPin(recovered)) { return; }
+		const target = referenceOfPin(recovered);
+		try {
+			const { agent } = await this.deps.link.call('agent.rename', { target, name });
+			if (agentKey(agent.reference) !== agentKey(target)) { throw new Error('Framework returned a different agent.'); }
+			if (!this.disposed) { this.remember(agent); }
+			this.deps.workspace.replacePin(recovered, { ...recovered, name: agent.name });
+		} catch (error) {
+			// The exact Pin was already saved. The optional name change cannot invalidate recovery.
+			this.deps.log.event(`Could not restore the saved legacy Pin name ${JSON.stringify(name)}. ${messageOf(error)}`);
+		}
+	}
+
 	private async resumeOn(machineId: string, target: ResumeTarget, folder?: string): Promise<AgentInfo> {
-		const { agent } = await this.deps.link.call('agent.resume', {
+		return (await this.requestResume(machineId, target, folder)).agent;
+	}
+
+	private requestResume(machineId: string, target: ResumeTarget, folder?: string): Promise<DaemonOperations['agent.resume']['result']> {
+		return this.deps.link.call('agent.resume', {
 			target, size: INITIAL_TERMINAL_SIZE,
 			...(machineId === this.deps.link.machineId ? { env: this.deps.environment(folder) } : {})
 		});
-		return agent;
 	}
 
 	private currentPin(pin: FrameworkPin): boolean {
 		return this.pins().some(current => current.id === pin.id && current.machine_id === pin.machine_id && current.agent === pin.agent);
 	}
 
-	private pinFor(record: AgentInfo, previous?: FrameworkPin): FrameworkPin {
+	private async startPinned(pin: Pin, machineId: string, launch: PinLaunch | undefined,
+		begin: (requestId: string) => boolean, clear: (requestId: string) => void): Promise<AgentInfo> {
+		const requestId = `start-${randomBytes(16).toString('hex')}`;
+		if (this.disposed || !begin(requestId)) { throw unconfirmedPinStart(pin); }
+		const local = machineId === this.deps.link.machineId;
+		const args = launch?.args;
+		try {
+			const agent = await this.startRecord({
+				cli: pin.conversation.cli, folder: pin.cwd, name: pin.name.trim() || undefined, size: INITIAL_TERMINAL_SIZE,
+				...(local ? {} : { scope: { kind: 'machine', machine: `id:${machineId.replaceAll('-', '')}` } }),
+				...(Array.isArray(args) && args.every(value => typeof value === 'string' && !value.includes('\0')) ? { args } : {}),
+				...(typeof launch?.model === 'string' ? { model: launch.model } : {}),
+				...(typeof launch?.effort === 'string' ? { effort: launch.effort } : {})
+			}, requestId);
+			if (agent.type !== 'managed' || agent.reference.machine_id !== machineId
+				|| agent.cli !== pin.conversation.cli || !isSameFolder(agent.cwd, pin.cwd)) {
+				throw unconfirmedPinStart(pin);
+			}
+			return agent;
+		} catch (error) {
+			// Definite argument or settings refusals precede launch. Other outcomes can have started an agent.
+			if (error instanceof DaemonError && ['invalid_argument', 'invalid_settings', 'configuration_invalid'].includes(error.reason)) {
+				clear(requestId);
+			}
+			throw error;
+		}
+	}
+
+	private pinFor(record: AgentInfo, previous?: Pin & Partial<Pick<FrameworkPin, 'launch'>>): FrameworkPin {
 		const { machine_id, agent_id } = record.reference;
+		const launch = this.launches.get(agentKey(record.reference)) ?? previous?.launch;
 		return {
 			id: previous?.id ?? `pin-${randomBytes(16).toString('hex')}`,
 			machine_id,
@@ -384,6 +489,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 			location: this.cards.get(agentKey(record.reference))?.location ?? previous?.location ?? record.cwd,
 			cwd: record.cwd,
 			name: record.name,
+			...(launch ? { launch } : {}),
 			conversation: {
 				...previous?.conversation,
 				environment: `machine:${machine_id}`,
@@ -419,6 +525,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 				const reference = referenceOf(change);
 				const run = agentKey(reference);
 				this.records.delete(run);
+				this.launches.delete(run);
 				this.watchReferences.delete(run);
 				if (change.cause === 'removed') {
 					this.absent.delete(run);
@@ -496,9 +603,12 @@ export class OrchestratorAgents implements vscode.Disposable {
 		const { members, pins } = this.deps.workspace.snapshot();
 		const byRef = new Map(pins.map(pin => [agentKey(referenceOfPin(pin)), pin]));
 		const locations = this.deps.locations.snapshot().locations;
+		const visible = new Map(members.map(reference => [agentKey(reference), reference]));
+		for (const [run, record] of this.records) {
+			if (record.type === 'managed' && record.process === 'running') { visible.set(run, record.reference); }
+		}
 		const next = new Map<RunId, RunFacts>();
-		for (const reference of members) {
-			const run = agentKey(reference);
+		for (const [run, reference] of visible) {
 			const record = this.records.get(run);
 			const pin = byRef.get(run);
 			const failure = pin && (!record || record.process === 'ended' || this.unreachable(record)) ? this.failures.get(run) : undefined;
@@ -516,7 +626,9 @@ export class OrchestratorAgents implements vscode.Disposable {
 			}
 		}
 		const previous = this.cards;
+		const previousPinPositions = this.pinPositions;
 		this.cards = next;
+		this.pinPositions = new Map(pins.map((pin, index) => [pin.id, index]));
 		for (const [run, startedAt] of this.attached) {
 			const card = next.get(run);
 			const record = this.records.get(run);
@@ -533,8 +645,9 @@ export class OrchestratorAgents implements vscode.Disposable {
 		}
 		for (const [run, card] of next) {
 			const before = previous.get(run);
+			const pinMoved = card.pin !== undefined && previousPinPositions.get(card.pin) !== this.pinPositions.get(card.pin);
 			if (!before) { this.changed.fire({ run, kind: 'added' }); }
-			else if (before.lifecycle !== card.lifecycle || before.pin !== card.pin) { this.changed.fire({ run, kind: 'lifecycle' }); }
+			else if (before.lifecycle !== card.lifecycle || before.pin !== card.pin || pinMoved) { this.changed.fire({ run, kind: 'lifecycle' }); }
 			else if (before.name !== card.name) { this.changed.fire({ run, kind: 'renamed' }); }
 			else if (JSON.stringify(before) !== JSON.stringify(card)) { this.changed.fire({ run, kind: 'reported' }); }
 		}

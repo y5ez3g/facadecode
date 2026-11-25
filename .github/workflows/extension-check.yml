@@ -54,8 +54,8 @@ jobs:
     name: Extension on ${{ matrix.target }}, ${{ matrix.implementation }} implementation
     outputs:
       package_attempt: ${{ steps.native-package-evidence.outputs.attempt }}
-    # Every target runs the editor journeys on the legacy implementation (`facade.framework` off) and runs them
-    # again on the Framework implementation in a job of its own, which builds and tests nothing else.
+    # The package lane retains its legacy matrix key for artifact consumers. Current editor journeys
+    # execute on Framework. Legacy execution is exercised by a previous build in cutover tests.
     # A signing run's Windows packages are signed (ARCHITECTURE-4.3) in the environment Azure trusts with the signing identity.
     environment: ${{ inputs.sign && startsWith(matrix.target, 'win32-') && matrix.implementation == 'legacy' && 'extension-signing' || '' }}
     strategy:
@@ -248,10 +248,10 @@ jobs:
       - run: npm run bundle
         if: matrix.implementation == 'framework'
       - name: Build the isolated editor fixtures
-        if: "!inputs.package_only"
+        if: "!inputs.package_only && matrix.implementation == 'framework'"
         run: node scripts/build-it.mjs
       - name: Isolated editor journeys on Linux
-        if: "!inputs.package_only && runner.os == 'Linux'"
+        if: "!inputs.package_only && runner.os == 'Linux' && matrix.implementation == 'framework'"
         env:
           FACADE_IT_IMPLEMENTATION: ${{ matrix.implementation }}
         run: |
@@ -261,7 +261,7 @@ jobs:
             xvfb-run -a node build/out/test/integration/run.js 2>&1 | tee build/integration.log
           fi
       - name: Isolated editor journeys on Windows
-        if: "!inputs.package_only && runner.os == 'Windows'"
+        if: "!inputs.package_only && runner.os == 'Windows' && matrix.implementation == 'framework'"
         env:
           FACADE_IT_IMPLEMENTATION: ${{ matrix.implementation }}
         run: |
@@ -271,12 +271,12 @@ jobs:
           cat build/integration.log
           exit "$status"
       - name: Isolated editor journeys on macOS
-        if: "!inputs.package_only && runner.os == 'macOS'"
+        if: "!inputs.package_only && runner.os == 'macOS' && matrix.implementation == 'framework'"
         env:
           FACADE_IT_IMPLEMENTATION: ${{ matrix.implementation }}
         run: node build/out/test/integration/run.js 2>&1 | tee build/integration.log
       - name: Keep editor test output
-        if: always() && !inputs.package_only
+        if: always() && !inputs.package_only && matrix.implementation == 'framework'
         uses: actions/upload-artifact@v4
         with:
           name: editor-tests-${{ matrix.target }}-${{ matrix.implementation }}

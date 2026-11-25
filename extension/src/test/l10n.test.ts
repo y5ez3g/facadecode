@@ -120,7 +120,6 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 			'{0} is no longer in clis of {1}, so this session cannot be resumed with it.',
 			'Its CLI cannot resume this exact session, so it cannot be pinned.',
 			'No agents or saved sessions to resume',
-			'A Pin needs a saved session.',
 			'This Pin has no saved session.',
 			'Removed the Pin for {0} because its saved session is gone.',
 		]);

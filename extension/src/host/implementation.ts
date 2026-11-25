@@ -2,177 +2,188 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// Which implementation a window runs its agents on: the Framework, or the old one (ARCHITECTURE-1.1). It is chosen once, as the window
-// opens or reloads; a legacy implementation window that has no legacy run left says to reload and starts nothing new until it does.
-
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { timeout } from '../base/async';
 import { messageOf } from '../base/errors';
-import { FacadeError } from '../core/errors';
-import type { Agents, LogPort } from '../core/ports';
-import { otherPtyds, PtydClient } from './execution/ptydClient';
+import { withLongFileLock } from '../base/lock';
+import { isWindowIdentity, WINDOW_IDENTITY_COMMAND } from '../base/windowIdentity';
+import { workspaceRecord } from '../record/workspace';
+import { COMMANDS, PANEL_VIEW } from '../ui/catalog';
 import { FACADE_PROGRAM } from './framework/daemonTypes';
+import { approveLegacyCutover, checkLegacyCutover, LegacyCustody, type CutoverPlan, type CutoverState } from './legacyCutover';
 
-export type Implementation = 'framework' | 'legacy';
+const CHECK_MS = 2_000;
 
-/** How long one ptyd has to list its runs. */
-const LIST_WAIT_MS = 2_000;
-/** How often a legacy implementation window asks whether legacy runs still run, while they do. */
-const CHECK_MS = 10_000;
-
-/** The setting `facade.framework`, by its section and key. */
-const SECTION = 'facade';
-const KEY = 'framework';
-
-/** `facade.framework`: `auto` where it is anything but `off`. */
-export function frameworkSetting(): 'auto' | 'off' {
-	return vscode.workspace.getConfiguration(SECTION).get<string>(KEY) === 'off' ? 'off' : 'auto';
+interface CustodyLease {
+	readonly owner: string;
+	readonly controller: AbortController;
+	custody?: LegacyCustody;
 }
 
-/**
- * Whether a ptyd of this environment's `home` lists a run that has not exited, of any owner. A ptyd that does not respond holds none
- * that can be asked about; none is started to ask.
- */
-export async function oldRunsRunning(home: string): Promise<boolean> {
-	const asked = await Promise.all(otherPtyds(home, '').map(async ({ socket, protocol }) => {
-		let client: PtydClient | undefined;
-		try {
-			client = await PtydClient.join(socket, protocol);
-			if (!client) {
-				return false;
-			}
-			const runs = await Promise.race([client.request('list', {}), timeout(LIST_WAIT_MS).then(() => { throw new Error('ptyd did not list its runs in time.'); })]);
-			return runs.some(run => run.exited === undefined);
-		} catch {
-			return false;
-		} finally {
-			client?.dispose();
-		}
-	}));
-	return asked.some(running => running);
+function planIdentity(plan: CutoverPlan): string {
+	return JSON.stringify(plan.runs.map(run => [run.socket, run.owner, run.run]));
 }
 
-/**
- * The implementation this window runs on: `legacy` for `off`, for legacy runs still running, and for a package without the Framework program; else
- * `framework`. Sets the context key `facade.implementation` to it, which hides Show Agent Launch on `framework`.
- */
-export async function chooseImplementation(context: vscode.ExtensionContext, home: string): Promise<Implementation> {
-	let implementation: Implementation = 'legacy';
-	if (frameworkSetting() === 'auto' && fs.existsSync(path.join(context.extensionPath, FACADE_PROGRAM)) && !await oldRunsRunning(home)) {
-		implementation = 'framework';
+async function legacyOwner(context: vscode.ExtensionContext, home: string): Promise<string | undefined> {
+	const folders = vscode.workspace.workspaceFolders ?? [];
+	const uri = (vscode.workspace.workspaceFile ?? folders[0]?.uri)?.toString();
+	if (!uri) { return undefined; }
+	const session = vscode.env.sessionId;
+	const identity: unknown = await Promise.resolve(vscode.commands.executeCommand(WINDOW_IDENTITY_COMMAND, session)).catch(() => undefined);
+	const record = workspaceRecord(uri, home, context.workspaceState.get('facade.workspaceKey'),
+		isWindowIdentity(identity, session) ? { token: identity.token, folders: folders.map(folder => folder.uri.toString()) } : undefined);
+	return record.key === record.binding.key || record.key === record.handedOver ? record.key : undefined;
+}
+
+function status(state: CutoverState): string {
+	if (state.unavailable.length) {
+		return vscode.l10n.t('Could not verify legacy agent processes. Facade Code will check again. {0}', state.unavailable.join('; '));
 	}
-	await vscode.commands.executeCommand('setContext', 'facade.implementation', implementation);
-	return implementation;
+	// Ask for consent before suggesting a stop in another window. That stop can remove the source Pin.
+	if (state.plan) {
+		return vscode.l10n.t('Switch to Facade Code Framework to recover the saved Pins.');
+	}
+	if (state.waitingForOwner > 0) {
+		return vscode.l10n.t('Waiting for {0} legacy agents in their owning workspaces to exit. You can stop them in those windows.', state.waitingForOwner);
+	}
+	const waiting = vscode.l10n.t('Waiting to confirm that {0} legacy agent processes have exited.', state.unconfirmed);
+	return [waiting, ...state.pendingExits ?? []].join(' ');
 }
 
-/** Offers the reload that applies a changed Facade: Framework, as `facade.home` does (`host/home.ts`). */
-export function watchFrameworkSetting(): vscode.Disposable {
-	let seen = frameworkSetting();
-	return vscode.workspace.onDidChangeConfiguration(event => {
-		const now = frameworkSetting();
-		if (!event.affectsConfiguration(`${SECTION}.${KEY}`) || now === seen) {
-			return;
-		}
-		seen = now;
-		offerReload(vscode.l10n.t("The implementation changes only after you reload the window."));
-	});
-}
+/** ARCHITECTURE-1.4. A pending cutover owns only its notice and observation. Framework starts after a fresh exit check. */
+export async function prepareFramework(context: vscode.ExtensionContext, home: string): Promise<vscode.Disposable | undefined> {
+	if (!fs.existsSync(path.join(context.extensionPath, FACADE_PROGRAM))) {
+		throw new Error(vscode.l10n.t('The Facade Code Framework program is missing from this extension.'));
+	}
 
-/**
- * The one place that tells the person this window can switch to the Framework: a notification with Reload Window, nothing on the
- * panel.
- */
-export function sayReloadToSwitch(): void {
-	offerReload(reloadToSwitchText());
-}
+	const local = vscode.env.remoteName === undefined;
+	const initial = await checkLegacyCutover(home).catch((error): CutoverState => ({
+		ready: false, unavailable: [messageOf(error)], unconfirmed: 0, waitingForOwner: 0
+	}));
+	if (initial.ready) { return undefined; }
 
-function reloadToSwitchText(): string {
-	return vscode.l10n.t("All agents on the legacy implementation have ended. Reload this window to switch.");
-}
-
-function offerReload(text: string): void {
-	const reload = vscode.l10n.t("Reload Window");
-	void vscode.window.showInformationMessage(text, reload).then(choice => {
-		if (choice === reload) {
-			void vscode.commands.executeCommand('workbench.action.reloadWindow');
-		}
-	});
-}
-
-/**
- * `agents` of a legacy implementation window under `auto`, which starts nothing once no legacy run runs on this machine (`running()`, one ptyd
- * `list`, is asked after each `removed` or `lifecycle` change, every ten seconds while it is true, and before each `restorePins`):
- * it says so once, and from then on `launch`, `resume` and `restorePins` refuse with the same sentence. `launch` and `resume`
- * return at once, so they go by the last answer. Every other method passes through.
- */
-export function retireWhenDone(agents: Agents, running: () => Promise<boolean>, log: LogPort): { readonly agents: Agents; dispose(): void } {
-	let retired = false;
 	let disposed = false;
-	let asking: Promise<void> | undefined;
-	let again = false;
-
-	const ask = (): Promise<void> => {
-		if (asking) {
-			again = true;
-			return asking;
-		}
-		asking = (async () => {
-			do {
-				again = false;
-				let still = true;
-				try {
-					still = await running();
-				} catch (err) {
-					log.event(`Could not ask whether the legacy implementation still has runs: ${messageOf(err)}`);
-				}
-				if (!still && !retired && !disposed) {
-					retired = true;
-					clearInterval(timer);
-					log.event('Every agent of the legacy implementation has ended: this window starts none until it reloads.');
-					sayReloadToSwitch();
-				}
-			} while (again && !retired && !disposed);
-		})().finally(() => { asking = undefined; });
-		return asking;
-	};
-	// The caller shows the thrown sentence; the one with Reload Window was shown when the legacy implementation's last run ended.
-	const refuse = (): never => {
-		throw new FacadeError('REFUSED', 'reload_to_switch', reloadToSwitchText());
-	};
-
-	const timer = setInterval(() => void ask(), CHECK_MS);
-	timer.unref?.();
-	const changes = agents.onDidChange(change => {
-		if (change.kind === 'removed' || change.kind === 'lifecycle') {
-			void ask();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let checking = false;
+	let prompting = false;
+	let offered: string | undefined;
+	let view: vscode.WebviewView | undefined;
+	let current = initial;
+	let description = status(current);
+	let cancelNotice: (() => void) | undefined;
+	let lease: CustodyLease | undefined;
+	const panel = vscode.window.registerWebviewViewProvider(PANEL_VIEW, {
+		resolveWebviewView: opened => {
+			view = opened;
+			render();
 		}
 	});
+	const commands = Object.values(COMMANDS).map(id => vscode.commands.registerCommand(id, () => {
+		offered = undefined;
+		if (current.plan && !prompting) { offer(); }
+		else { void vscode.window.showInformationMessage(description); }
+	}));
+	const pending = vscode.Disposable.from(panel, ...commands, { dispose() {
+		disposed = true;
+		clearTimeout(timer);
+		cancelNotice?.();
+		lease?.controller.abort();
+	} });
+	context.subscriptions.push(pending);
 
-	const guarded: Partial<Agents> = {
-		launch: request => retired ? refuse() : agents.launch(request),
-		resume: (entry, options) => retired ? refuse() : agents.resume(entry, options),
-		restorePins: async () => {
-			await ask();
-			return retired ? refuse() : agents.restorePins();
-		}
-	};
-	const through = new Proxy(agents, {
-		get(target, name) {
-			if (name in guarded) {
-				return guarded[name as keyof Agents];
+	function render(): void {
+		if (!view || disposed) { return; }
+		view.webview.options = { enableScripts: false };
+		const escaped = description.replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`);
+		view.webview.html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"></head><body><p style="padding: 0 8px; overflow-wrap: anywhere">${escaped}</p></body></html>`;
+	}
+
+	function offer(): void {
+		const plan = current.plan;
+		if (prompting || !plan || disposed) { return; }
+		if (offered === planIdentity(plan)) { return; }
+		prompting = true;
+		// Only one window presents consent for this execution home while the notice is open.
+		void withLongFileLock(path.join(home, 'legacy-cutover-notice'), async () => {
+			if (disposed || !current.plan) { return; }
+			const latest = await checkLegacyCutover(home);
+			if (!latest.plan || disposed) { return; }
+			offered = planIdentity(latest.plan);
+			const pins = Object.values(latest.plan.snapshots).reduce((sum, each) => sum + each.pins.length + each.unrecognized.length, 0);
+			const action = vscode.l10n.t('Switch and Resume Pins');
+			const cancel = new Promise<undefined>(resolve => { cancelNotice = () => resolve(undefined); });
+			const chosen = await Promise.race([vscode.window.showWarningMessage(vscode.l10n.t(
+				'Switch to Facade Code Framework? This authorizes stopping {0} legacy agents and recovering {1} saved Pins. Agents claimed by another window must exit there.',
+				latest.plan.runs.length, pins
+			), action), cancel]);
+			cancelNotice = undefined;
+			if (chosen !== action || disposed) { return; }
+			if (!await approveLegacyCutover(home, latest.plan)) {
+				offered = undefined;
 			}
-			const value: unknown = Reflect.get(target, name, target);
-			return typeof value === 'function' ? value.bind(target) : value;
+		}, 0).catch(error => {
+			// Another open window may be presenting the notice. Recheck its result on the next poll.
+			if (offered && !disposed) {
+				description = vscode.l10n.t('Could not prepare the legacy cutover. {0}', messageOf(error));
+				render();
+			}
+		}).finally(() => { prompting = false; });
+	}
+
+	function keepCustody(owner: string | undefined): LegacyCustody | undefined {
+		if (!owner || lease?.owner !== owner) {
+			lease?.controller.abort();
+			lease = undefined;
 		}
-	});
-	return {
-		agents: through,
-		dispose() {
-			disposed = true;
-			clearInterval(timer);
-			changes.dispose();
+		if (!owner || lease) { return lease?.custody; }
+		const attempt: CustodyLease = { owner, controller: new AbortController() };
+		lease = attempt;
+		void withLongFileLock(path.join(home, 'claims', `legacy-cutover-${owner}`), async () => {
+			const { signal } = attempt.controller;
+			if (signal.aborted) { return; }
+			attempt.custody = new LegacyCustody(home, owner, local);
+			await new Promise<void>(resolve => signal.addEventListener('abort', () => {
+				attempt.custody?.dispose();
+				resolve();
+			}, { once: true }));
+		}, 0).catch(() => {
+			// Another activation of the workspace holds temporary custody or the lock is presently unavailable.
+		}).finally(() => {
+			if (lease === attempt) { lease = undefined; }
+		});
+		return attempt.custody;
+	}
+
+	async function poll(): Promise<void> {
+		if (disposed || checking) { return; }
+		checking = true;
+		try {
+			const owner = await legacyOwner(context, home);
+			if (disposed) { return; }
+			current = await checkLegacyCutover(home, keepCustody(owner));
+			if (disposed) { return; }
+			if (current.ready) {
+				lease?.controller.abort();
+				await vscode.commands.executeCommand('workbench.action.reloadWindow');
+				return;
+			}
+			description = status(current);
+			render();
+			offer();
+		} catch (error) {
+			description = vscode.l10n.t('Could not verify legacy agent processes. Facade Code will check again. {0}', messageOf(error));
+			render();
+		} finally {
+			checking = false;
+			if (!disposed && !current.ready) {
+				timer = setTimeout(() => void poll(), CHECK_MS);
+				timer.unref?.();
+			}
 		}
-	};
+	}
+
+	offer();
+	void poll();
+	return pending;
 }

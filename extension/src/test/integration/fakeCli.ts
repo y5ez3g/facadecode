@@ -46,6 +46,8 @@ fs.writeFileSync(nextLaunch, JSON.stringify({ cwd: process.cwd(), args: recorded
 fs.renameSync(nextLaunch, launchRecord);
 fs.writeFileSync(`${record}.${agent}`, `${process.pid}\n`);
 fs.appendFileSync(`${record}.starts.${agent}`, `${process.pid}\n`, { mode: 0o600 });
+// Every launch of the run in one append-only file: implementations number their agents alike, and a later `#a1` replaces the files above
+fs.appendFileSync(`${record}.launches`, `${JSON.stringify({ at: Date.now(), agent, pid: process.pid, args: recordedArgs })}\n`, { mode: 0o600 });
 // Simulate the vendor's identity report explicitly; a launch argument alone no longer enables Pin.
 const sessionFile = process.env.FACADE_CODE_SESSION_FILE;
 if (sessionFile) {
@@ -70,6 +72,15 @@ if (sessionFile) {
 		db.close();
 	}
 	fs.writeFileSync(sessionFile, JSON.stringify({ session_id: session, cwd: process.cwd(), source: 'startup' }));
+	// Claude Code keeps its conversation where it always does, whoever learns its session: a journey that resumes a legacy session on
+	// Framework (the legacy cutover) asks for it, others keep their Resume lists as they were
+	if (process.env.FACADE_IT_CLAUDE_TRANSCRIPT === '1' && (process.env.FACADE_IT_AS ?? 'claude') === 'claude') {
+		const transcript = path.join(process.env.CLAUDE_CONFIG_DIR ?? process.cwd(), 'projects', process.cwd().replace(/[^A-Za-z0-9]/g, '-'), `${session}.jsonl`);
+		fs.mkdirSync(path.dirname(transcript), { recursive: true });
+		if (!fs.existsSync(transcript)) {
+			fs.writeFileSync(transcript, `${JSON.stringify({ type: 'user', sessionId: session, cwd: process.cwd(), parentUuid: null, message: { role: 'user', content: 'Fake conversation' } })}\n`);
+		}
+	}
 }
 // Claude Code names its conversation to Facade's SessionStart hook, from the settings it was started with, as it starts (CLIS-2.2): the
 // Framework learns the session so, where the legacy implementation's file above says it. A resumed conversation keeps its ID; a new one has one.
@@ -194,6 +205,8 @@ interface Quirks {
 	readonly reportedTitle?: string;
 	/** Questions to its terminal - its cursor, the device attributes, its colours - written once, as the quirk is given (ARCHITECTURE-2.3). */
 	readonly ask?: string;
+	/** Keeps running on a hangup, as a CLI that ignores it does: only a stronger signal ends it. */
+	readonly keepOnHangup?: boolean;
 }
 const QUIRKS = `${record}.quirks.${agent}`;
 function quirks(): Quirks {
@@ -203,6 +216,14 @@ function quirks(): Quirks {
 		return {};
 	}
 }
+// A hangup ends it as it ends a process with no handler, unless its quirk keeps it
+process.on('SIGHUP', () => {
+	if (quirks().keepOnHangup) {
+		fs.appendFileSync(`${record}.hangups.${agent}`, `${Date.now()}\n`);
+		return;
+	}
+	process.exit(129);
+});
 
 /** Redraws the whole screen in one synchronized update, so that no reading ever sees half of it. */
 function draw(): void {

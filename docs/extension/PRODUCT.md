@@ -25,20 +25,20 @@ They can use the editor with Shell and MCP against the same Orchestrator.
 
 **Starting one agent can grow into a team.**
 
-The workspace shows agents the person starts or opens there, and their helpers. The CLI and the person's instructions
+The panel shows reachable running Managed Agents, including their helpers. The CLI and the person's instructions
 decide how a team divides and reports work.
 
 ### 2.2 Reaching running agents
 
-**Go to Agent opens reachable running managed agents.**
+**Open a running Managed Agent's terminal from its card.**
 
-Attach provides the live terminal. The Shell and the editor can view the same terminal at the same time.
+The Shell and the editor can view the same terminal at the same time.
 
 ## 3 Responsibility
 
 ### 3.1 Editor work
 
-**The workspace remembers its card list and Pins.**
+**The workspace remembers agents opened or started there and its Pins.**
 
 Machine connections and sending messages use Shell. Agent collaboration uses MCP.
 
@@ -54,7 +54,7 @@ Each extension host connects to its machine's Orchestrator. The CLI owns its mod
 
 **Use familiar VS Code surfaces and terminology.**
 
-The shared [glossary](../framework/GLOSSARY.md) supplies terms. Pin, Resume, Go to Agent, Attach, YOLO and Guest keep these
+The shared [glossary](../framework/GLOSSARY.md) supplies terms. Pin, Resume, Attach, Detach, YOLO and Guest keep these
 names across languages.
 
 ### 4.2 Simple feedback
@@ -105,6 +105,6 @@ See RULES-6.1 for the first-open upgrade behavior.
 
 ### 5.7 Transition
 
-**The legacy implementation remains selectable during the transition.**
+**New agents use Framework. A planned transition from the legacy implementation restores saved Pins.**
 
-The editor behaviors here describe the Orchestrator-backed entry point. The legacy implementation keeps its existing rules.
+ARCHITECTURE-1.4 owns the cutover. Compatible upgrades reconnect to the running agents.

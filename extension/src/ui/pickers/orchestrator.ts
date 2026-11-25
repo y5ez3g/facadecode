@@ -3,13 +3,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type { DaemonOperations, DaemonTopics } from '../../base/frameworkProtocol';
+import { messageOf } from '../../base/errors';
+import { isEqualPath } from '../../base/files';
+import type { AgentRef, DaemonOperations, DaemonTopics } from '../../base/frameworkProtocol';
 import { normalizeName } from '../../core/names';
-import type { Location, LocationId, LocationPort, RunId } from '../../core/ports';
+import type { LocationId, LocationPort, RunId } from '../../core/ports';
 import { COMMANDS } from '../catalog';
-import { cliIcon, openSettingsLabel, plainText } from '../presentation';
-import { askLaunchBranch, chooseWorkspaceLocation, launchWorktreeButton } from './launchLocation';
-import { changeLocationItem, changeNameItem, defaultLocation } from './newAgent';
+import { cliDisplayName, cliIcon, openSettingsLabel, plainText, reasonOf } from '../presentation';
+import { checkedPlace, chooseWorkingLocation, machineScope, workspacePlace, type LaunchPlace } from './launchLocation';
+import { changeNameItem, defaultLocation } from './newAgent';
+import { matchesCliSearch } from './search';
 import { BACK, Flow } from './stepping';
 
 type AgentListResult = DaemonOperations['agent.list']['result'];
@@ -24,6 +27,7 @@ type ResumeListResult = DaemonOperations['agent.resume_list']['result'];
 type ResumeCandidate = ResumeListResult['items'][number];
 type MachineInfo = DaemonTopics['machines']['snapshot'][number];
 type StartArgs = DaemonOperations['agent.start']['args'];
+type LaunchStart = LocationId | { readonly machineId: string; readonly folder: string };
 
 export interface FrameworkPickerDeps {
 	readonly media: vscode.Uri;
@@ -32,10 +36,11 @@ export interface FrameworkPickerDeps {
 	readonly machines: () => readonly MachineInfo[];
 	readonly listAgents: () => Promise<AgentListResult>;
 	readonly listLocations: (args: LocationListArgs) => Promise<LocationListResult>;
+	readonly recentLocations?: (machineId: string) => readonly string[];
 	readonly listClis: (args: CliListArgs) => Promise<CliListResult>;
 	readonly listResumes: (args: ResumeListArgs) => Promise<ResumeListResult>;
 	readonly start: (args: StartArgs) => Promise<RunId>;
-	readonly open: (entry: AgentListEntry) => Promise<RunId>;
+	readonly stop: (entry: AgentListEntry) => Promise<void>;
 	readonly resume: (candidate: ResumeCandidate) => Promise<RunId>;
 	readonly select: (run: RunId) => void;
 	readonly notifyError: (error: unknown) => void;
@@ -44,8 +49,8 @@ export interface FrameworkPickerDeps {
 
 /** Orchestrator-backed commands use the same public candidates as Shell (RULES-6.2, 6.5). */
 export function createFrameworkPickers(deps: FrameworkPickerDeps): {
-	readonly newAgent: (startAt?: LocationId) => Promise<void>;
-	readonly goToAgent: () => Promise<void>;
+	readonly newAgent: (startAt?: LaunchStart) => Promise<void>;
+	readonly stopAgent: () => Promise<void>;
 	readonly resumeAgent: () => Promise<void>;
 } {
 	const run = async (command: (flow: Flow) => Promise<void>) => {
@@ -60,7 +65,17 @@ export function createFrameworkPickers(deps: FrameworkPickerDeps): {
 	};
 	return {
 		newAgent: startAt => run(flow => newAgent(deps, flow, startAt)),
-		goToAgent: () => run(flow => goToAgent(deps, flow)),
+		stopAgent: () => run(flow => pickRunningAgent(deps, flow, {
+			title: vscode.l10n.t("Stop Agent"),
+			empty: vscode.l10n.t("No running agents to stop"),
+			act: async entry => {
+				try {
+					await deps.stop(entry);
+				} catch (error) {
+					throw new Error(vscode.l10n.t("Could not stop {0}: {1}", entry.address, reasonOf(error)));
+				}
+			}
+		})),
 		resumeAgent: () => run(flow => resumeAgent(deps, flow))
 	};
 }
@@ -79,15 +94,23 @@ function pickLoaded<T extends vscode.QuickPickItem>(flow: Flow, deps: FrameworkP
 	readonly load: () => Promise<LoadedRows<T>>;
 	readonly accepts?: (row: T) => boolean;
 	readonly back?: boolean;
+	readonly matchesHidden?: (row: T, query: string) => boolean;
 }) {
 	return flow.pick<T>({
 		title: options.title, placeholder: options.placeholder, items: [], busy: true,
 		matchOnDescription: true, accepts: options.accepts, back: options.back,
 		live: picker => {
 			let open = true;
+			let rows: readonly T[] = [];
+			const matchesHidden = options.matchesHidden;
+			const showRows = (query: string) => {
+				picker.items = matchesHidden ? rows.map(row => matchesHidden(row, query) ? { ...row, alwaysShow: true } : row) : rows;
+			};
+			const search = matchesHidden && picker.onDidChangeValue(showRows);
 			void Promise.resolve().then(() => open ? options.load() : undefined).then(found => {
 				if (!open || !found) { return; }
-				picker.items = found.items;
+				rows = found.items;
+				showRows(picker.value);
 				if (found.active) { picker.activeItems = [found.active]; }
 				picker.title = found.title ?? options.title;
 				picker.placeholder = found.placeholder ?? options.placeholder;
@@ -98,7 +121,7 @@ function pickLoaded<T extends vscode.QuickPickItem>(flow: Flow, deps: FrameworkP
 					deps.notifyError(error);
 				}
 			});
-			return { dispose: () => { open = false; } };
+			return { dispose: () => { open = false; search?.dispose(); } };
 		}
 	});
 }
@@ -107,23 +130,44 @@ function rowText(...parts: readonly (string | undefined)[]): string {
 	return plainText(parts.filter(Boolean).join(' · ').replace(/\r?\n/g, ' '));
 }
 
-async function goToAgent(deps: FrameworkPickerDeps, flow: Flow): Promise<void> {
+function exactReferenceSearch(ref: AgentRef): string {
+	const machine = ref.machine_id.replace(/-/gu, '');
+	return `${ref.agent_id}@${ref.machine_id} #${ref.agent_id}@id:${machine}`;
+}
+
+function matchesAgentRow(row: vscode.QuickPickItem & { readonly cli: string; readonly searchText: string }, query: string): boolean {
+	return matchesCliSearch(query, row.cli, cliDisplayName(row.cli), row, row.searchText);
+}
+
+/** Stop selects a running Managed Agent by its original Framework reference (LIFECYCLE-5.3). */
+async function pickRunningAgent(deps: FrameworkPickerDeps, flow: Flow, action: {
+	readonly title: string;
+	readonly empty: string;
+	readonly act: (entry: AgentListEntry) => Promise<void>;
+}): Promise<void> {
 	const picked = await pickLoaded(flow, deps, {
-		title: vscode.l10n.t("Go to Agent"),
+		title: action.title,
 		placeholder: vscode.l10n.t("Search by name, CLI, title, location, or ID"),
+		matchesHidden: matchesAgentRow,
 		load: async () => {
 			const { agents } = await deps.listAgents();
-			const items = agents.filter(agent => agent.type === 'managed').map(agent => ({
-				label: rowText(agent.name || agent.address),
-				description: rowText(agent.name ? agent.address : undefined, agent.cli, agent.folder, agent.title),
-				iconPath: cliIcon(deps.media, deps.icons(agent.cli)), agent
-			}));
-			return { items, placeholder: items.length ? undefined : vscode.l10n.t("No running agents to attach to") };
+			const items = agents.filter(agent => agent.type === 'managed').map(agent => {
+				const name = agent.name.trim();
+				return {
+					label: rowText(name || agent.address),
+					description: rowText(name ? agent.address : undefined, agent.folder),
+					iconPath: cliIcon(deps.media, deps.icons(agent.cli)),
+					cli: agent.cli,
+					searchText: [exactReferenceSearch(agent.reference), agent.title, agent.session_name].join(' '),
+					agent
+				};
+			});
+			return { items, placeholder: items.length ? undefined : action.empty };
 		}
 	});
 	if (picked && picked !== BACK) {
 		flow.close();
-		deps.select(await deps.open(picked.item.agent));
+		await action.act(picked.item.agent);
 	}
 }
 
@@ -135,7 +179,8 @@ function resumeKey(candidate: ResumeCandidate): string {
 async function resumeAgent(deps: FrameworkPickerDeps, flow: Flow): Promise<void> {
 	const picked = await pickLoaded(flow, deps, {
 		title: vscode.l10n.t("Resume Agent"),
-		placeholder: vscode.l10n.t("Search by title, name, CLI, or location"),
+		placeholder: vscode.l10n.t("Search by name, CLI, title, location, or ID"),
+		matchesHidden: matchesAgentRow,
 		load: async () => {
 			const folders = deps.locations.snapshot().folders;
 			// With no workspace folder, the host resolves its default directory.
@@ -152,13 +197,19 @@ async function resumeAgent(deps: FrameworkPickerDeps, flow: Flow): Promise<void>
 				const key = resumeKey(candidate);
 				if (seen.has(key)) { return []; }
 				seen.add(key);
+				const name = candidate.name?.trim();
+				const title = candidate.title?.trim();
 				const reference = target.kind === 'agent'
-					? [target.reference.agent_id, selector].filter(Boolean).join('@')
-					: `${target.cli}:${target.session}`;
+					? `${target.reference.agent_id}@${selector ?? target.reference.machine_id.slice(0, 8)}`
+					: `${target.cli}:${candidate.session_selector ?? target.session.slice(0, 8)}`;
+				const exact = target.kind === 'agent' ? exactReferenceSearch(target.reference) : `${target.cli}:${target.session}`;
 				return [{
-					label: rowText(candidate.title?.trim() || vscode.l10n.t("Untitled session")),
-					description: rowText(candidate.cli, candidate.folder, reference),
-					iconPath: cliIcon(deps.media, deps.icons(candidate.cli)), candidate
+					label: rowText(name || title || vscode.l10n.t("Untitled session")),
+					description: rowText(name && title !== name ? title : undefined, candidate.folder, reference),
+					iconPath: cliIcon(deps.media, deps.icons(candidate.cli)),
+					cli: candidate.cli,
+					searchText: [exact, candidate.session, candidate.session_name].join(' '),
+					candidate
 				}];
 			});
 			return { items, placeholder: items.length ? undefined : vscode.l10n.t("No agents or saved sessions to resume") };
@@ -170,39 +221,67 @@ async function resumeAgent(deps: FrameworkPickerDeps, flow: Flow): Promise<void>
 	}
 }
 
-interface LaunchPlace {
-	readonly folder: string;
-	readonly label: string;
-	readonly machine?: MachineInfo;
-	readonly local?: Location;
-	readonly worktree?: string;
-}
-
-function localPlace(location: Location, worktree?: string): LaunchPlace {
-	return { folder: location.path, label: location.label, local: location, worktree };
-}
-
-function initialLocation(locations: LocationPort, startAt: LocationId | undefined): Location | undefined {
-	const catalog = locations.snapshot();
-	return catalog.locations.find(location => location.id === startAt)
-		?? catalog.locations.find(location => location.uri === catalog.folders[0]?.uri)
-		?? defaultLocation(catalog, undefined);
+async function initialPlace(deps: FrameworkPickerDeps, startAt: LaunchStart | undefined): Promise<LaunchPlace | undefined> {
+	if (typeof startAt === 'object') {
+		if (startAt.machineId === deps.hostMachineId()) {
+			return checkedPlace(deps, startAt.folder);
+		}
+		const machine = deps.machines().find(row => row.machine_id === startAt.machineId);
+		if (!machine) {
+			throw new Error(vscode.l10n.t("The working location {0} is not available in this window.", startAt.folder));
+		}
+		return checkedPlace(deps, startAt.folder, machine);
+	}
+	try {
+		await deps.locations.refresh();
+	} catch (error) {
+		deps.notifyError(error);
+	}
+	const catalog = deps.locations.snapshot();
+	const requested = catalog.locations.find(location => location.id === startAt);
+	if (requested) { return workspacePlace(requested, catalog); }
+	const last = deps.recentLocations?.(deps.hostMachineId())[0];
+	if (last !== undefined) {
+		const remembered = catalog.locations.find(location => isEqualPath(location.path, last));
+		if (remembered) { return workspacePlace(remembered, catalog); }
+		try {
+			return await checkedPlace(deps, last);
+		} catch {
+			// A previous successful directory may have moved or been removed.
+		}
+	}
+	const fallback = catalog.locations.find(location => location.uri === catalog.folders[0]?.uri) ?? defaultLocation(catalog, undefined);
+	return fallback && workspacePlace(fallback, catalog);
 }
 
 type CliRow = vscode.QuickPickItem & { readonly does?: 'start' | 'location' | 'name' | 'openFolder' | 'settings'; readonly cli?: CliInfo };
 
-function cliRows(deps: FrameworkPickerDeps, place: LaunchPlace | undefined, name: string, result?: CliListResult): LoadedRows<CliRow> {
+function cliRows(deps: FrameworkPickerDeps, place: LaunchPlace | undefined, name: string, result?: CliListResult, problem?: string): LoadedRows<CliRow> {
 	const title = vscode.l10n.t("New Agent");
 	const options: CliRow = { label: vscode.l10n.t("Options"), kind: vscode.QuickPickItemKind.Separator };
-	if (!place || !result) {
-		return { placeholder: vscode.l10n.t("Open a folder to continue"), items: [
-			{ label: vscode.l10n.t("Open Folder..."), detail: vscode.l10n.t("A workspace folder is required to run agents."), iconPath: new vscode.ThemeIcon('folder-opened'), does: 'openFolder' },
-			options, changeLocationItem()
+	const changeLocation = (where?: string): CliRow => ({
+		label: vscode.l10n.t("Change Location..."), description: where === undefined ? undefined : plainText(where),
+		iconPath: new vscode.ThemeIcon('folder'), alwaysShow: true, does: 'location'
+	});
+	const changeName = changeNameItem(name || vscode.l10n.t("Auto-assign"));
+	if (!place) {
+		return { placeholder: vscode.l10n.t("Select a working location"), items: [
+			problem === undefined
+				? { label: vscode.l10n.t("Open Folder..."), iconPath: new vscode.ThemeIcon('folder-opened'), does: 'openFolder' }
+				: { label: vscode.l10n.t("Unavailable"), detail: plainText(problem) },
+			options, changeLocation(), changeName
 		] };
 	}
 	const where = place.machine ? `${place.machine.name} · ${place.label}` : place.label;
 	const { worktree } = place;
 	const destination = worktree ? vscode.l10n.t("New worktree {0} from {1}", worktree, where) : where;
+	const heading = [title, name, worktree ? vscode.l10n.t("{0} (new)", worktree) : where].filter(Boolean).join(' · ');
+	if (!result) {
+		return { title: heading, items: [
+			{ label: vscode.l10n.t("Unavailable"), detail: problem === undefined ? undefined : plainText(problem) },
+			options, changeLocation(destination), changeName
+		] };
+	}
 	const available = result.clis.filter(cli => cli.available);
 	const unavailable = result.clis.filter(cli => !cli.available);
 	const settings: CliRow = {
@@ -212,7 +291,7 @@ function cliRows(deps: FrameworkPickerDeps, place: LaunchPlace | undefined, name
 		does: place.machine ? undefined : 'settings'
 	};
 	return {
-		title: [title, name, worktree ? vscode.l10n.t("{0} (new)", worktree) : where].filter(Boolean).join(' · '),
+		title: heading,
 		items: [
 			...available.map((cli): CliRow => ({ label: plainText(cli.display_name), iconPath: cliIcon(deps.media, deps.icons(cli.cli)), does: 'start', cli })),
 			...(!available.length || result.settings_problem ? [settings] : []),
@@ -220,13 +299,14 @@ function cliRows(deps: FrameworkPickerDeps, place: LaunchPlace | undefined, name
 			...unavailable.map((cli): CliRow => ({ label: plainText(cli.display_name),
 				detail: plainText(cli.problem ?? (cli.not_installed ? vscode.l10n.t("Not installed") : vscode.l10n.t("Unavailable"))),
 				iconPath: cliIcon(deps.media, deps.icons(cli.cli)), does: place.machine ? undefined : 'settings' })),
-			options, changeLocationItem(destination), changeNameItem(name)
+			options, changeLocation(destination), changeName
 		]
 	};
 }
 
-async function newAgent(deps: FrameworkPickerDeps, flow: Flow, startAt?: LocationId): Promise<void> {
+async function newAgent(deps: FrameworkPickerDeps, flow: Flow, startAt?: LaunchStart): Promise<void> {
 	let place: LaunchPlace | undefined;
+	let locationProblem: string | undefined;
 	let name = '';
 	let loaded = false;
 	let clis: { readonly machine?: string; readonly folder: string; readonly result: CliListResult } | undefined;
@@ -235,17 +315,23 @@ async function newAgent(deps: FrameworkPickerDeps, flow: Flow, startAt?: Locatio
 			title: vscode.l10n.t("New Agent"), placeholder: vscode.l10n.t("Select a CLI"), accepts: row => row.does !== undefined,
 			load: async () => {
 				if (!loaded) {
-					await deps.locations.refresh();
-					const local = initialLocation(deps.locations, startAt);
-					place = local && localPlace(local);
+					try {
+						place = await initialPlace(deps, startAt);
+					} catch (error) {
+						locationProblem = messageOf(error);
+					}
 					loaded = true;
 				}
 				const machine = place?.machine?.selector;
 				if (place && (!clis || clis.machine !== machine || clis.folder !== place.folder)) {
 					const folder = place.folder;
-					clis = { machine, folder, result: await deps.listClis({ folder, scope: machine ? { kind: 'machine', machine } : undefined }) };
+					try {
+						clis = { machine, folder, result: await deps.listClis({ folder, scope: machineScope(place.machine) }) };
+					} catch (error) {
+						return cliRows(deps, place, name, undefined, messageOf(error));
+					}
 				}
-				return cliRows(deps, place, name, clis?.result);
+				return cliRows(deps, place, name, clis?.result, locationProblem);
 			}
 		});
 		if (!choice || choice === BACK) { return; }
@@ -254,7 +340,7 @@ async function newAgent(deps: FrameworkPickerDeps, flow: Flow, startAt?: Locatio
 			flow.close();
 			deps.select(await deps.start({
 				cli: picked.cli.cli, folder: place.folder, size: { cols: 80, rows: 24 },
-				...(place.machine ? { scope: { kind: 'machine', machine: place.machine.selector } } : {}),
+				...(place.machine ? { scope: machineScope(place.machine) } : {}),
 				...(name ? { name } : {}), ...(place.worktree ? { worktree: place.worktree } : {})
 			}));
 			return;
@@ -269,105 +355,13 @@ async function newAgent(deps: FrameworkPickerDeps, flow: Flow, startAt?: Locatio
 			if (chosen === undefined) { return; }
 			if (chosen !== BACK) {
 				place = chosen;
+				locationProblem = undefined;
 			}
 		} else if (picked.does === 'name') {
 			const typed = await flow.text({ title: vscode.l10n.t("New Agent · Change Name"), value: name,
-				placeholder: vscode.l10n.t("Leave blank to choose a name automatically"), back: true });
+				placeholder: vscode.l10n.t("Auto-assign"), back: true });
 			if (typed === undefined) { return; }
 			if (typed !== BACK) { name = normalizeName(typed); }
 		}
 	}
-}
-
-async function chooseWorkingLocation(deps: FrameworkPickerDeps, flow: Flow, current?: LaunchPlace): Promise<LaunchPlace | typeof BACK | undefined> {
-	const host = deps.hostMachineId();
-	const machines = deps.machines();
-	const local = machines.find(machine => machine.machine_id === host);
-	const remotes = machines.filter(machine => machine.machine_id !== host);
-	const chooseLocal = async (): Promise<LaunchPlace | typeof BACK | undefined> => {
-		const location = current?.local ?? initialLocation(deps.locations, undefined);
-		const picked = await chooseWorkspaceLocation(flow, deps.locations, location && { location, worktree: current?.worktree });
-		return picked && picked !== BACK ? localPlace(picked.location, picked.worktree) : picked;
-	};
-	if (!remotes.length) { return chooseLocal(); }
-	let active = current?.machine?.machine_id ?? host;
-	const items = [
-		{ label: vscode.l10n.t("This machine"), description: local && plainText(local.name), iconPath: new vscode.ThemeIcon('device-desktop'), id: host, machine: undefined },
-		...remotes.map(machine => ({ label: plainText(machine.name), id: machine.machine_id, machine, iconPath: new vscode.ThemeIcon('globe'),
-			description: machine.selector === machine.name ? undefined : plainText(machine.selector),
-			detail: machine.state === 'ssh_interaction_required' ? vscode.l10n.t("Needs SSH login") : machine.state === 'unreachable' ? vscode.l10n.t("Unavailable") : undefined }))
-	];
-	for (;;) {
-		const picked = await flow.pick({ title: vscode.l10n.t("{0} · {1}", vscode.l10n.t("New Agent"), vscode.l10n.t("Machine")),
-			items, active: items.find(item => item.id === active), back: true, matchOnDescription: true });
-		if (!picked || picked === BACK) { return picked; }
-		const { id, machine } = picked.item;
-		active = id;
-		const chosen = machine ? await chooseRemoteLocation(deps, flow, machine, current?.machine?.machine_id === id ? current : undefined) : await chooseLocal();
-		if (chosen !== BACK) { return chosen; }
-	}
-}
-
-async function chooseRemoteLocation(deps: FrameworkPickerDeps, flow: Flow, machine: MachineInfo, current?: LaunchPlace): Promise<LaunchPlace | typeof BACK | undefined> {
-	type Row = vscode.QuickPickItem & { readonly place?: LaunchPlace };
-	const title = vscode.l10n.t("New Agent · Working Location");
-	const worktree = launchWorktreeButton();
-	const direct: Row = { label: vscode.l10n.t("Enter Path..."), iconPath: new vscode.ThemeIcon('edit') };
-	let catalog: Promise<LocationListResult> | undefined;
-	let focused = current?.folder;
-	let directPath = current?.folder ?? '';
-	for (;;) {
-		const picked = await pickLoaded<Row>(flow, deps, {
-			title, placeholder: vscode.l10n.t("Select a working location"), back: true,
-			load: async () => {
-				const result = await (catalog ??= deps.listLocations({ scope: { kind: 'machine', machine: machine.selector }, folders: [] }));
-				const items: Row[] = result.locations.map(row => ({
-					label: plainText(row.label), description: plainText(row.path),
-					iconPath: new vscode.ThemeIcon(row.kind === 'main' ? 'repo' : row.kind === 'worktree' ? 'worktree' : 'folder'),
-					place: { folder: row.path, label: row.label, machine }, buttons: row.kind === 'folder' ? [] : [worktree]
-				}));
-				const active = focused === undefined ? items[0] ?? direct : items.find(item => item.place?.folder === focused) ?? direct;
-				return { items: [...items, direct], active };
-			}
-		});
-		if (!picked || picked === BACK) { return picked; }
-		let place = picked.item.place;
-		let createWorktree = picked.button === worktree;
-		if (!place) {
-			focused = '';
-			const typed = await flow.text({ title, value: directPath, placeholder: vscode.l10n.t("Enter a path."), back: true,
-				validate: value => value.trim() ? undefined : vscode.l10n.t("Enter a path.") });
-			if (typed === undefined) { return undefined; }
-			if (typed === BACK) { continue; }
-			directPath = typed.trim();
-			place = { folder: directPath, label: directPath, machine };
-			const choice = await chooseEnteredPath(deps, flow, title, machine.selector, directPath);
-			if (choice === undefined) { return undefined; }
-			if (choice === BACK) { continue; }
-			createWorktree = choice;
-		} else {
-			focused = place.folder;
-		}
-		if (!createWorktree) { return place; }
-		const branch = await askLaunchBranch(flow, current?.folder === place.folder ? current.worktree : undefined);
-		if (branch === BACK) { continue; }
-		return branch === undefined ? undefined : { ...place, worktree: branch };
-	}
-}
-
-/** Ask the same machine about the entered directory before offering a new worktree (WORKTREES-5.1). */
-async function chooseEnteredPath(deps: FrameworkPickerDeps, flow: Flow, title: string, machine: string, folder: string): Promise<boolean | typeof BACK | undefined> {
-	const picked = await pickLoaded<vscode.QuickPickItem & { readonly worktree: boolean }>(flow, deps, {
-		title, placeholder: vscode.l10n.t("Select a working location"), back: true,
-		load: async () => {
-			const { locations } = await deps.listLocations({ scope: { kind: 'machine', machine }, folders: [folder] });
-			const current = { label: plainText(folder), iconPath: new vscode.ThemeIcon('folder'), worktree: false };
-			const items = [current];
-			if (locations.some(location => location.kind !== 'folder')) {
-				items.push({ label: vscode.l10n.t("New Worktree..."), iconPath: new vscode.ThemeIcon('git-branch'), worktree: true });
-			}
-			return { items, active: current };
-		}
-	});
-	return picked && picked !== BACK ? picked.item.worktree : picked;
 }

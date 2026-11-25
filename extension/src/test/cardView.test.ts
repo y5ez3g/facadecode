@@ -18,7 +18,7 @@ import type { Card } from '../webview/protocol';
 
 const WORDS: CardWords = {
 	orchestrator: { justDone: 'Just done', waitingForYou: 'Waiting for you', ended: 'Ended', unknown: 'Unknown', stateError: 'Error',
-		machine: value => `Machine: ${value}`, address: value => `Address: ${value}` },
+		session: value => `Session: ${value}`, name: value => `Name: ${value}`, address: value => `Agent reference: ${value}` },
 	title: value => `Title: ${value}`,
 	location: value => `Location: ${value}`,
 	path: value => `Path: ${value}`,
@@ -66,7 +66,7 @@ const reference = { machine_id: 'machine-id', agent_id: 'a1' };
 
 suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', () => {
 
-	test('PANEL-1.3, PANEL-4.1: the old remote icon exposes its machine; workspace details expose the machine and exact address', () => {
+	test('PANEL-1.3, PANEL-4.1: workspace details expose the saved session, exact agent reference and working directory', () => {
 		const card = cardOf(run({ alias: '#a1@gpu', remoteMachine: 'gpu (3f9a2c1d)' }), { place, selected: false, menu, words: WORDS });
 		assert.strictEqual(card.runningOn, 'Running on gpu (3f9a2c1d)');
 		assert.ok(card.label.includes(card.runningOn));
@@ -80,14 +80,14 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		const title = '  The daemon TITLE  ';
 		const address = 'a1@3f9a2c1d';
 		const workspaceCard = cardOf(run({ remoteMachine: 'gpu (3f9a2c1d)', orchestrator: { reference, state: 'idle', machine: 'gpu' },
-			title, address, pin: 'pin-1', said: 'Private terminal text' }), { place, selected: false, menu, words: WORDS });
+			title, address, sessionId: 'saved-session', pin: 'pin-1', said: 'Last submission' }), { place, selected: false, menu, words: WORDS });
 		assert.deepStrictEqual([workspaceCard.alias, workspaceCard.runningOn, workspaceCard.pinned, workspaceCard.line,
-			workspaceCard.details.summary?.value, workspaceCard.details.machine, workspaceCard.details.address, workspaceCard.label], [
-			'a1', undefined, true, title, title,
-			{ id: 'machine', label: 'Machine: ', value: 'gpu' }, { id: 'address', label: 'Address: ', value: address },
-			'Ada, a1, Claude Code, Idle'
+			workspaceCard.details.summary, workspaceCard.details.nameLabel, workspaceCard.details.address, workspaceCard.label], [
+			'a1', undefined, true, 'Last submission', { id: 'session', label: 'Session: ', value: 'saved-session' },
+			'Name: ', { id: 'address', label: 'Agent reference: ', value: address },
+			'Ada, a1, Claude Code, Idle, Last submission'
 		]);
-		assert.strictEqual(workspaceCard.details.description.place, 'Machine: gpu, Address: a1@3f9a2c1d, Location: shop · main, Path: /app');
+		assert.strictEqual(workspaceCard.details.description.place, 'Path: /app');
 	});
 
 	test('all CLIs retain a blocker without a recognized kind, its full reason on its second line and in its label', () => {
@@ -105,7 +105,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		}
 	});
 
-	test('RULES-3.2, RULES-6.2: both implementations expose their state in color and in words; workspace cards use the daemon state and TITLE', () => {
+	test('RULES-3.2, RULES-6.2: both implementations expose state in color and in words; Framework details prioritize errors and blockers', () => {
 		const shown = (facts: RunFacts) => {
 			const card = cardOf(facts, { place, selected: false, menu, words: WORDS });
 			return [card.dot, card.stateText, card.line, card.label.split(', ').includes(card.stateText)];
@@ -134,15 +134,17 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 			['error', 'Error · Failed', 'Failed', true]
 		]);
 		const expected = {
-			starting: ['working', 'Starting'], working: ['working', 'Working'], waiting_for_you: ['none', 'Waiting for you'],
-			just_done: ['none', 'Just done'], idle: ['none', 'Idle'], ended: ['none', 'Ended'], unknown: ['none', 'Unknown'], error: ['error', 'Error']
+			starting: ['none', 'Starting'], working: ['working', 'Working'], waiting_for_you: ['none', 'Waiting for you', 'Waiting for you'],
+			just_done: ['just_done', 'Just done'], idle: ['none', 'Idle'], ended: ['none', 'Ended'], unknown: ['none', 'Unknown'], error: ['error', 'Error']
 		} satisfies Record<NonNullable<RunFacts['orchestrator']>['state'], string[]>;
-		for (const [state, [dot, label]] of Object.entries(expected) as [keyof typeof expected, string[]][]) {
+		for (const [state, [dot, label, line = 'Terminal text']] of Object.entries(expected) as [keyof typeof expected, string[]][]) {
 			assert.deepStrictEqual(shown(run({ orchestrator: { reference, state }, title: 'Daemon TITLE', said: 'Terminal text' })),
-				[dot, label, 'Daemon TITLE', true], state);
+				[dot, label, line, true], state);
 		}
 		assert.deepStrictEqual(shown(run({ orchestrator: { reference, state: 'ended' }, lifecycle: 'ended', title: 'Daemon TITLE',
-			error: { source: 'resume', reason: 'Session is in use', at: 1 } })), ['error', 'Error · Session is in use', 'Daemon TITLE', true]);
+			error: { source: 'resume', reason: 'Session is in use', at: 1 } })), ['error', 'Error', 'Session is in use', true]);
+		assert.deepStrictEqual(shown(run({ orchestrator: { reference, state: 'waiting_for_you' }, said: 'Terminal text',
+			blocker: { kind: 'permission', text: 'Run npm test?' } })), ['none', 'Waiting for you', 'Permission needed · Run npm test?', true]);
 	});
 
 	test('PANEL-1.4: the second line says the last message sent to it - the task it was started with being the first - and before any, how its run began: never its title', () => {

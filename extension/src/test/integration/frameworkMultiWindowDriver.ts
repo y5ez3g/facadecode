@@ -30,11 +30,11 @@ type Action =
 	| { readonly kind: 'shell-attach-view'; readonly grid?: vscode.TerminalDimensions; readonly text?: string; readonly resize?: boolean }
 	| { readonly kind: 'settings-path'; readonly file: string }
 	| { readonly kind: 'shell-pin'; readonly name: string; readonly set?: boolean; readonly verifyOpen?: string }
-	| { readonly kind: 'hide-shell-agent'; readonly name: string }
+	| { readonly kind: 'close-shell-view'; readonly name: string }
 	| { readonly kind: 'start'; readonly screen?: string; readonly secondGroup?: boolean }
 	| { readonly kind: 'adopt' | 'resume' | 'pin' | 'unpin' | 'stop' | 'remove' | 'inspect' | 'saved-pin'; readonly agent: string }
 	| { readonly kind: 'resume-saved'; readonly session: string; readonly cli: string }
-	| { readonly kind: 'remote-card'; readonly agent: string; readonly machine: string }
+	| { readonly kind: 'remote-card'; readonly agent: string }
 	| { readonly kind: 'running'; readonly agent: string; readonly screen?: string }
 	| { readonly kind: 'send'; readonly to: string; readonly text: string }
 	| { readonly kind: 'wait-for-exit'; readonly pid: number }
@@ -98,32 +98,13 @@ async function view(): Promise<WindowView> {
 	};
 }
 
-async function goToCard(reference: string): Promise<PanelState['cards'][number]> {
+async function openCard(reference: string): Promise<PanelState['cards'][number]> {
 	const { agent } = await inspect(reference);
-	assert.strictEqual(agent.process, 'running', `${agent.address} can be attached. Exit ${JSON.stringify(agent.exit)}`);
-	const picker = vscode.commands.executeCommand('facade.goToAgent');
-	let closed = false;
-	void picker.then(() => { closed = true; }, () => { closed = true; });
-	let observed: ResumePickerState | undefined;
-	await until(`Go to Agent to select ${agent.address}`, async () => {
-		if (closed) {
-			await picker;
-			throw new Error(`Go to Agent closed before selecting ${agent.address}`);
-		}
-		observed = await vscode.commands.executeCommand<ResumePickerState>(RESUME_PICKER_STATE).then(value => value, () => undefined);
-		if (!observed || observed.busy) { return undefined; }
-		const current = observed;
-		const target = current.descriptions.findIndex((description, index) =>
-			current.labels[index] === agent.name && description?.startsWith(`${agent.address} · `));
-		if (target < 0) { return undefined; }
-		if (target === current.active) { return true; }
-		await vscode.commands.executeCommand(target < current.active ? 'workbench.action.quickOpenSelectPrevious' : 'workbench.action.quickOpenSelectNext');
-		return undefined;
-	}).catch(error => { throw new Error(`${(error as Error).message}; picker: ${JSON.stringify(observed)}`); });
-	await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
-	const card = await until(`${agent.address}'s attached card`, async () => (await state()).cards.find(card =>
-		card.runId === `${agent.reference.machine_id}/${agent.reference.agent_id}` && card.orchestrator?.running));
-	await picker;
+	assert.strictEqual(agent.process, 'running', `${agent.address} is running`);
+	const run = `${agent.reference.machine_id}/${agent.reference.agent_id}`;
+	const card = await until(`${agent.address}'s automatically listed card`, async () =>
+		(await state()).cards.find(each => each.runId === run && each.orchestrator?.running));
+	assert.strictEqual(await vscode.commands.executeCommand('facade.openTerminal', { run_id: run }), true);
 	return card;
 }
 
@@ -143,6 +124,7 @@ async function filterByLocation(): Promise<void> {
 		void vscode.commands.executeCommand('facade.filter');
 		await new Promise(resolve => setTimeout(resolve, 2_500));
 		await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
+		await vscode.commands.executeCommand('quickInput.toggleCheckbox');
 		await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 		return (await state()).filter;
 	}, 60_000);
@@ -282,20 +264,30 @@ async function perform(action: Action): Promise<unknown> {
 			assert.strictEqual(await vscode.commands.executeCommand(command, `${session}-stale`), undefined);
 			return true;
 		}
-		case 'settings-path':
-			for (const command of ['facade.openSettings', 'facade.openSettingsFile']) {
-				await vscode.commands.executeCommand(command);
-				await until(`${command} to open the Orchestrator settings file`, () => {
+		case 'settings-path': {
+			const editor = vscode.workspace.getConfiguration('workbench.settings');
+			const previous = editor.inspect<string>('editor')?.globalValue;
+			try {
+				await editor.update('editor', 'json', vscode.ConfigurationTarget.Global);
+				await vscode.commands.executeCommand('facade.openSettings');
+				await until('Open Settings to display the local Settings UI', () =>
+					vscode.window.tabGroups.activeTabGroup.activeTab?.label === 'Settings' || undefined);
+				await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+				await vscode.commands.executeCommand('facade.openSettingsFile');
+				await until('Edit in facade.json to open the Orchestrator settings file', () => {
 					const file = vscode.window.activeTextEditor?.document.uri.fsPath;
 					return file && normalizeDriveLetter(file) === normalizeDriveLetter(action.file) || undefined;
 				});
 				await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+			} finally {
+				await editor.update('editor', previous, vscode.ConfigurationTarget.Global);
 			}
 			return true;
+		}
 		case 'open-shell-agent': {
-			const card = await goToCard(action.address);
+			const card = await openCard(action.address);
 			assert.strictEqual(card.name, action.name);
-			const terminal = await until('Go to Agent to select the attached terminal', () => {
+			const terminal = await until('the card to open its terminal', () => {
 				const tab = agentTab(card);
 				if (!tab?.isActive || !tab.group.isActive) { return undefined; }
 				return vscode.window.terminals.find(each =>
@@ -372,10 +364,12 @@ async function perform(action: Action): Promise<unknown> {
 			});
 			return true;
 		}
-		case 'hide-shell-agent': {
+		case 'close-shell-view': {
 			const card = await until(`${action.name}'s card`, async () =>
 				(await state()).cards.find(each => each.name === action.name));
-			await vscode.commands.executeCommand('facade.hideAgent', { run_id: card.runId });
+			const tab = agentTab(card);
+			assert.ok(tab);
+			assert.strictEqual(await vscode.window.tabGroups.close(tab, true), true);
 			return true;
 		}
 		case 'start': {
@@ -428,7 +422,7 @@ async function perform(action: Action): Promise<unknown> {
 		}
 		case 'adopt':
 		case 'resume': {
-			const card = await (action.kind === 'resume' ? resumeCard(action.agent) : goToCard(action.agent));
+			const card = await (action.kind === 'resume' ? resumeCard(action.agent) : openCard(action.agent));
 			assert.strictEqual(card.alias, action.agent, 'the picker opens the requested agent by its original number');
 			await until(`#${action.agent}'s terminal tab`, () => hasAgentTab(card) || undefined);
 			return running(action.agent);
@@ -436,7 +430,7 @@ async function perform(action: Action): Promise<unknown> {
 		case 'remote-card': {
 			const { agent } = await inspect(action.agent);
 			const card = await until(`${agent.address}'s card and details`, async () => (await state()).cards.find(card =>
-				card.runId === `${agent.reference.machine_id}/${agent.reference.agent_id}` && card.details.machine?.value === action.machine));
+				card.runId === `${agent.reference.machine_id}/${agent.reference.agent_id}`));
 			assert.strictEqual(card.details.address?.value, agent.address);
 			assert.ok(!card.pinned, JSON.stringify(card));
 			await until(`${card.alias}'s terminal tab`, () => hasAgentTab(card) || undefined);

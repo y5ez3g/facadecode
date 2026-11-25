@@ -97,19 +97,8 @@
 				"category": "%command.category%"
 			},
 			{
-				"command": "facade.goToAgent",
-				"title": "%command.goToAgent%",
-				"category": "%command.category%",
-				"icon": "$(go-to-file)"
-			},
-			{
 				"command": "facade.openTerminal",
 				"title": "%command.openTerminal%",
-				"category": "%command.category%"
-			},
-			{
-				"command": "facade.hideAgent",
-				"title": "%command.hideAgent%",
 				"category": "%command.category%"
 			},
 			{
@@ -199,12 +188,12 @@
 			"view/title": [
 				{
 					"command": "facade.filter",
-					"when": "view == facade.agents && !facade.filtered && !facade.onePlace",
+					"when": "view == facade.agents && !facade.filtered && facade.implementation == framework",
 					"group": "navigation@1"
 				},
 				{
 					"command": "facade.filterOn",
-					"when": "view == facade.agents && facade.filtered",
+					"when": "view == facade.agents && facade.filtered && facade.implementation == framework",
 					"group": "navigation@1"
 				},
 				{
@@ -213,19 +202,9 @@
 					"group": "navigation@2"
 				},
 				{
-					"command": "facade.continueSession",
-					"when": "view == facade.agents && facade.implementation != framework",
-					"group": "navigation@2"
-				},
-				{
-					"command": "facade.goToAgent",
-					"when": "view == facade.agents && facade.implementation == framework",
-					"group": "navigation@3"
-				},
-				{
 					"command": "facade.newAgent",
 					"when": "view == facade.agents",
-					"group": "navigation@4"
+					"group": "navigation@3"
 				},
 				{
 					"command": "workbench.action.addRootFolder",
@@ -234,7 +213,7 @@
 				},
 				{
 					"command": "facade.newWorktree",
-					"when": "view == facade.agents && workspaceFolderCount != 0 && facade.implementation != framework",
+					"when": "view == facade.agents && workspaceFolderCount != 0",
 					"group": "1_locations@2"
 				},
 				{
@@ -246,63 +225,18 @@
 			"webview/context": [
 				{
 					"command": "facade.renameAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation != framework",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent'",
 					"group": "1_agent@1"
 				},
 				{
 					"command": "facade.moveUp",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveUp && facade.implementation != framework",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveUp",
 					"group": "2_move@1"
 				},
 				{
 					"command": "facade.moveDown",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveDown && facade.implementation != framework",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveDown",
 					"group": "2_move@2"
-				},
-				{
-					"command": "facade.stopAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && !webviewAgentEnded && facade.implementation != framework",
-					"group": "4_close@1"
-				},
-				{
-					"command": "facade.dismissAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewAgentEnded && facade.implementation != framework",
-					"group": "4_close@1"
-				},
-				{
-					"command": "facade.openTerminal",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation == framework && webviewAgentRunning",
-					"group": "1_agent@1"
-				},
-				{
-					"command": "facade.hideAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation == framework",
-					"group": "1_agent@2"
-				},
-				{
-					"command": "facade.stopAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation == framework && webviewAgentRunning",
-					"group": "1_agent@3"
-				},
-				{
-					"command": "facade.deleteAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation == framework",
-					"group": "1_agent@4"
-				},
-				{
-					"command": "facade.pinAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation == framework && webviewAgentPinnable && !webviewAgentPinned",
-					"group": "1_agent@5"
-				},
-				{
-					"command": "facade.unpinAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation == framework && webviewAgentPinned",
-					"group": "1_agent@6"
-				},
-				{
-					"command": "facade.renameAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.implementation == framework",
-					"group": "1_agent@7"
 				}
 			],
 			"commandPalette": [
@@ -312,11 +246,11 @@
 				},
 				{
 					"command": "facade.continueSession",
-					"when": "facade.implementation != framework"
+					"when": "false"
 				},
 				{
 					"command": "facade.showAgentLaunch",
-					"when": "facade.implementation != framework"
+					"when": "false"
 				},
 				{
 					"command": "facade.renameAgent",
@@ -327,12 +261,8 @@
 					"when": "facade.implementation == framework && facade.agentSelected && facade.agentSelectedRunning"
 				},
 				{
-					"command": "facade.hideAgent",
-					"when": "facade.implementation == framework && facade.agentSelected"
-				},
-				{
 					"command": "facade.stopAgent",
-					"when": "facade.agentSelected && ((facade.implementation == framework && facade.agentSelectedRunning) || (facade.implementation != framework && !facade.agentSelectedEnded))"
+					"when": "facade.implementation == framework"
 				},
 				{
 					"command": "facade.deleteAgent",
@@ -344,7 +274,7 @@
 				},
 				{
 					"command": "facade.dismissAgent",
-					"when": "facade.agentSelected && facade.agentSelectedEnded && facade.implementation != framework"
+					"when": "false"
 				},
 				{
 					"command": "facade.showAgentDetails",
@@ -384,7 +314,7 @@
 				},
 				{
 					"command": "facade.filter",
-					"when": "!facade.onePlace || facade.filtered"
+					"when": "facade.implementation == framework"
 				}
 			]
 		},
@@ -565,17 +495,6 @@
 						"pattern": "^$|^(~[\\\\/]|/|[A-Za-z]:[\\\\/]|\\\\\\\\)",
 						"patternErrorMessage": "%config.home.pattern%",
 						"markdownDescription": "%config.home%"
-					},
-					"facade.framework": {
-						"type": "string",
-						"enum": [
-							"auto",
-							"off"
-						],
-						"default": "auto",
-						"scope": "machine",
-						"order": 1,
-						"markdownDescription": "%config.framework%"
 					}
 				}
 			}

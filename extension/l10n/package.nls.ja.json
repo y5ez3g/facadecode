@@ -4,11 +4,9 @@
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "新しいエージェント...",
-	"command.goToAgent": "Go to Agent...",
 	"command.openTerminal": "ターミナルを開く",
-	"command.hideAgent": "非表示",
 	"command.renameAgent": "エージェントの名前を変更...",
-	"command.stopAgent": "エージェントを停止",
+	"command.stopAgent": "エージェントを停止...",
 	"command.deleteAgent": "削除",
 	"command.copyAgentReference": "エージェントの参照をコピー",
 	"command.dismissAgent": "エージェントを閉じる",
@@ -28,7 +26,7 @@
 	"config.pi.title": "Pi",
 	"windowDisplayName": "Facade Code ウィンドウ コンポーネント",
 	"windowDescription": "リモートウィンドウの再接続時や拡張機能の再起動時に、残っている古い Facade Code ターミナルタブを閉じます。",
-	"command.filter": "作業場所でフィルター...",
+	"command.filter": "エージェントをフィルター...",
 	"command.showAgentLaunch": "エージェントのコマンド ラインを表示...",
 	"command.showAgentsLog": "Agent のログを表示",
 	"icon.newAgent": "新しいエージェントのアイコン",
@@ -37,7 +35,6 @@
 	"command.continueSession": "セッションを続行...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "従来の実装専用です。このフォルダーには従来の実装の設定、エージェントの履歴、メッセージが保存されます。ここで指定したパスは `FACADE_HOME` や既定の `~/.facade` より優先されます。\n\n[facade.json で編集](command:facade.openSettingsFile)で YOLO、候補の名前、CLI の起動方法を変更できます。",
-	"config.home.pattern": "パスは ~/ で始まるか、絶対パスである必要があります。",
-	"config.framework": "エージェントを動かす実装を選びます。\n\n- `auto`: Facade Code Frameworkを使います。このコンピューターで従来の実装のエージェントがすべて終了すると、ウィンドウが切り替わります。実行中のエージェントが中断されることはなく、切り替え可能になるとすぐに Facade がウィンドウの再読み込みを促します。\n- `off`: 従来の実装を使います。Facade Code Frameworkで問題が起きた場合は、`off` を選んでウィンドウを再読み込みし、[GitHub の issue](https://github.com/y5ez3g/facadecode/issues) でお知らせください。\n\nリモート ウィンドウでは、リモート マシン側の設定が使われます。"
+	"config.home": "このウィンドウで設定、エージェントの記録、旧バージョンからの移行に使う Facade のホームフォルダーです。ここで指定したパスは `FACADE_HOME` や既定の `~/.facade` より優先されます。\n\n[facade.json で編集](command:facade.openSettingsFile)で YOLO、候補の名前、CLI の起動方法を変更できます。",
+	"config.home.pattern": "パスは ~/ で始まるか、絶対パスである必要があります。"
 }

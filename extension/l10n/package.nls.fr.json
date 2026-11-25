@@ -4,11 +4,9 @@
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "Nouvel agent...",
-	"command.goToAgent": "Go to Agent...",
 	"command.openTerminal": "Ouvrir le terminal",
-	"command.hideAgent": "Masquer",
 	"command.renameAgent": "Renommer l'agent...",
-	"command.stopAgent": "Arrêter l'agent",
+	"command.stopAgent": "Arrêter l'agent...",
 	"command.deleteAgent": "Retirer",
 	"command.copyAgentReference": "Copier la référence de l’agent",
 	"command.dismissAgent": "Masquer l'agent",
@@ -28,7 +26,7 @@
 	"config.pi.title": "Pi",
 	"windowDisplayName": "Composant de fenêtre Facade Code",
 	"windowDescription": "Ferme les onglets de terminal Facade Code restés ouverts après la reconnexion d’une fenêtre distante ou le redémarrage de l’extension.",
-	"command.filter": "Filtrer par emplacement de travail...",
+	"command.filter": "Filtrer les agents...",
 	"command.showAgentLaunch": "Afficher la ligne de commande de l'agent...",
 	"command.showAgentsLog": "Afficher le journal des agents",
 	"icon.newAgent": "Icône de Nouvel agent",
@@ -37,7 +35,6 @@
 	"command.continueSession": "Continuer une session...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "Réservé à l’ancienne implémentation. Ce dossier contient ses paramètres, l’historique des agents et les messages. Le chemin indiqué ici est prioritaire sur `FACADE_HOME` et sur le chemin par défaut `~/.facade`.\n\n[Modifier dans facade.json](command:facade.openSettingsFile) pour modifier YOLO, les noms proposés et le démarrage des CLI.",
-	"config.home.pattern": "Le chemin doit commencer par ~/ ou être absolu.",
-	"config.framework": "Contrôle l'implémentation qui exécute vos agents.\n\n- `auto` : utiliser Facade Code Framework. Une fenêtre bascule vers celui-ci dès qu'aucun agent de l'ancienne implémentation ne s'exécute plus sur cet ordinateur. Les agents en cours ne sont jamais interrompus, et Facade propose de recharger la fenêtre dès que la bascule est possible.\n- `off` : utiliser l'ancienne implémentation. Si Facade Code Framework pose problème, sélectionnez `off`, rechargez la fenêtre et [signalez-le sur GitHub](https://github.com/y5ez3g/facadecode/issues).\n\nDans une fenêtre distante, c'est le paramètre de la machine distante qui s'applique."
+	"config.home": "Le dossier Facade utilisé dans cette fenêtre pour les paramètres, les données des agents et la migration depuis les versions précédentes. Le chemin indiqué ici est prioritaire sur `FACADE_HOME` et sur le chemin par défaut `~/.facade`.\n\n[Modifier dans facade.json](command:facade.openSettingsFile) pour modifier YOLO, les noms proposés et le démarrage des CLI.",
+	"config.home.pattern": "Le chemin doit commencer par ~/ ou être absolu."
 }

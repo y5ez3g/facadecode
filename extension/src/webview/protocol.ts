@@ -15,7 +15,7 @@ export interface CardMenu {
 }
 
 /** Which fact a field of a card's details is (PANEL-1.5): stable whatever its words say, in every language. */
-export type DetailId = 'title' | 'location' | 'path' | 'machine' | 'address';
+export type DetailId = 'title' | 'session' | 'location' | 'path' | 'machine' | 'address';
 
 /**
  * One fact of a card's details: its value, and what a screen reader says before it - its label as the window's language says it,
@@ -46,6 +46,8 @@ export interface CardDetails {
 	readonly untitled?: string;
 	/** The agent that started it, where an agent did: `name #aN`. */
 	readonly startedBy?: string;
+	/** The Framework name row's accessible label. */
+	readonly nameLabel?: string;
 	readonly machine?: DetailField;
 	readonly address?: DetailField;
 	/** Where it works, always: its main checkout, worktree or folder, its icon saying which - then, always, its path. */
@@ -75,8 +77,8 @@ export interface Card {
 	readonly avatar?: { readonly file: string; readonly eyes?: string };
 	/** Its short ID shows beside its name: another card of this window has that name too (PANEL-1.3). */
 	readonly repeated?: true;
-	/** Green for work, red for an error, none for anything else (RULES-3.2). */
-	readonly dot: 'working' | 'error' | 'none';
+	/** Green for work, red for an error, yellow for just done (PANEL-4.1). */
+	readonly dot: 'working' | 'error' | 'just_done' | 'none';
 	/** The state in words, dot or none: startup, work, idle, the native blocker's kind, an error or unavailable activity. */
 	readonly stateText: string;
 	/** The second line (PANEL-1.4). */
@@ -101,6 +103,27 @@ export interface PanelFilter {
 	readonly label: string;
 }
 
+/** Exact working directory for a Framework card outside the window's location catalog. */
+export interface DirectoryFilter {
+	readonly kind: 'directory';
+	readonly machineId: string;
+	readonly folder: string;
+	readonly label: string;
+}
+
+export type FilterChoice = PanelFilter | DirectoryFilter | {
+	readonly kind: 'machine' | 'cli' | 'state' | 'pin';
+	readonly id: string;
+	readonly label: string;
+};
+
+export interface AgentFilter {
+	readonly kind: 'agents';
+	readonly choices: readonly FilterChoice[];
+}
+
+export type DisplayFilter = PanelFilter | AgentFilter;
+
 export interface PanelState {
 	/** Execution-clock reference sent with this snapshot; relative ages never subtract clocks from different machines. */
 	readonly clockAt?: number;
@@ -112,7 +135,8 @@ export interface PanelState {
 	readonly cards: readonly Card[];
 	/** Every card of this window, whatever the filter shows (PANEL-1.1). */
 	readonly cardCount: number;
-	readonly filter?: PanelFilter;
+	/** Visibility and label for the page. The host owns the filter conditions. */
+	readonly filter?: PanelFilter | { readonly kind: 'agents'; readonly id: string; readonly label: string };
 	/** Why no card is shown (PANEL-1.2): no folder, no agent, or none the filter shows. */
 	readonly empty?: 'noFolder' | 'noAgents' | 'noMatch';
 	/** `remote`: whether the window's workspace runs in a remote environment. */
@@ -123,8 +147,6 @@ export interface PanelState {
 
 /** What the page asks the host to do, with the card's run ID where it is a card's (PANEL-3.1; PANEL-1.2's buttons; PANEL-1.3's Pin). */
 export type Act = 'open' | 'new' | 'continueSession' | 'clearFilter' | 'openFolder' | 'rename' | 'pin' | 'unpin';
-
-export type PageAct = Act | 'copyReference';
 
 /** The host's answer to one action of the page that asked: `gone` (its card's run is gone) or `failed`. */
 export interface Outcome {
@@ -172,12 +194,12 @@ export interface Strings {
 	readonly agents: string;
 	readonly newAgent: string;
 	readonly continueSession?: string;
-	readonly copyReference?: string;
 	readonly clearFilter: string;
 	/** The empty panel's words (PANEL-1.2): why it is empty. */
 	readonly noAgents: string;
 	/** `No agents found in "{0}".`, {0} the filter's location. */
 	readonly noAgentsIn: string;
+	readonly noAgentsMatching?: string;
 	/** `{0} other agents are in this workspace.`, {0} how many cards the filter hides; and its form for one. */
 	readonly otherAgents: string;
 	readonly otherAgent: string;
@@ -185,6 +207,7 @@ export interface Strings {
 	readonly openFolder: string;
 	/** `Started {0}`, {0} how long ago as {@link ago} says it (PANEL-1.5). */
 	readonly started: string;
+	readonly startTime?: string;
 	/** `Started {0} by {1}`, {0} as in `started`, {1} the agent that started it. */
 	readonly startedBy: string;
 	/** How long ago, in Resume Agent's words: `now`, `{0} secs ago`, `{0} min ago` and the rest, each `{0}` the count (LIFECYCLE-3.2). */

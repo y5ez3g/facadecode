@@ -163,8 +163,11 @@ export class OrchestratorTerminals implements vscode.Disposable {
 		this.terminals.turnsOver();
 	}
 
-	async pinnedSequenceOver(knownRuns?: readonly RunId[]): Promise<void> {
-		await this.terminals.retirePredecessor(knownRuns);
+	async pinnedSequenceOver(knownRuns?: readonly { readonly run: RunId; readonly reference: AgentRef }[]): Promise<void> {
+		const registrations = knownRuns?.flatMap(({ run, reference }) => [
+			run, `#${reference.agent_id}@id:${reference.machine_id.replaceAll('-', '')}`
+		]);
+		await this.terminals.retirePredecessor(registrations);
 	}
 
 	systemMotion(reduced: boolean): void {

@@ -11,16 +11,19 @@ import type { LogPort, WorkspaceFolderInfo } from '../../core/ports';
 import { FACADE_HOME_VARIABLE } from '../../record/paths';
 import { COMMANDS } from '../../ui/catalog';
 import { registerOrchestratorUi, type OrchestratorUiDeps } from '../../ui/commands/index';
+import { registerWorktreeCommands } from '../../ui/commands/worktree';
 import { WindowColours } from '../execution/terminalColours';
 import { WindowHuman } from '../human';
+import type { LegacyPinSnapshot } from '../legacyPins';
+import { createWorktreeService } from '../locations/index';
 import { facadeInTerminals, startEnvironment } from './environment';
 import { startDaemon } from './rpc';
-import { frameworkSettings } from './settings';
+import { frameworkSettings, openSettingsOf } from './settings';
 import { FACADE_PROGRAM } from './daemonTypes';
 import { optionalTerminalOwner } from '../windowComponent';
 import { agentKey } from './agentFacts';
 import { OrchestratorAgents } from './agents';
-import { OrchestratorLocations } from './catalog';
+import { LaunchLocationHistory, OrchestratorLocations } from './catalog';
 import { connectOrchestrator } from './connection';
 import { OrchestratorTerminals } from './terminals';
 import { DaemonError, type OrchestratorLink } from './types';
@@ -33,6 +36,7 @@ type MachineInfo = DaemonTopics['machines']['snapshot'][number];
 interface OrchestratorDeps {
 	readonly root: string;
 	readonly home: string;
+	readonly legacyPins?: LegacyPinSnapshot;
 }
 
 class HostSettingsError extends Error {}
@@ -98,7 +102,8 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 		step = vscode.l10n.t('open the workspace state');
 		const workspace = openFrameworkWorkspace(context, {
 			home: deps.home,
-			log
+			log,
+			legacyPins: deps.legacyPins
 		});
 		disposables.push(workspace);
 		step = vscode.l10n.t('set up the terminals');
@@ -122,6 +127,7 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 			log
 		});
 		disposables.push(locations);
+		const launchHistory = new LaunchLocationHistory(context.workspaceState, log);
 
 		const machines = new Map<string, MachineInfo>();
 		const machineNames = new vscode.EventEmitter<void>();
@@ -177,14 +183,17 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 		void ready.then(async imported => {
 			// Capture the registered predecessor keys before Pin recovery can replace an expired Agent.
 			const { members, pins } = workspace.snapshot();
-			const knownRuns = members.flatMap(reference => [
-				agentKey(reference), `#${reference.agent_id}@id:${reference.machine_id.replaceAll('-', '')}`
-			]);
+			const knownRuns = members.map(reference => ({ run: agentKey(reference), reference }));
 			// A pending legacy roster can already have local Pins available for recovery.
-			if (imported || pins.length) { await agents.restorePins(); }
+			if (imported || pins.length || workspace.pendingLegacyPins().length) { await agents.restorePins(); }
 			await terminals.pinnedSequenceOver(knownRuns);
 		}).catch(notifyError);
 		const settings = frameworkSettings({ status: () => link.call('daemon.status', {}), log });
+		disposables.push(...registerWorktreeCommands({
+			locations, worktrees: createWorktreeService(locations, log, deps.home), notifyError: reportError, log,
+			// No Framework agent stops when the picker removes a folder from the workspace.
+			agents: { list: () => [] }
+		}));
 		disposables.push(...registerOrchestratorUi({
 			agents, locations, ready, log,
 			pickers: {
@@ -192,19 +201,25 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 				machines: () => [...machines.values()],
 				listAgents: () => link.call('agent.list', {}),
 				listLocations: args => link.call('location.list', args),
+				recentLocations: machineId => launchHistory.recent(machineId),
 				listClis: args => {
 					const local = args.scope?.kind !== 'machine';
 					return withSettingsError(local, () => link.call('cli.list', { ...args, env: local ? environmentAt(args.folder) : undefined }));
 				},
 				listResumes: args => link.call('agent.resume_list', args),
-				start: args => withSettingsError(args.scope?.kind !== 'machine', () => agents.start(args)),
-				open: entry => agents.goTo(entry),
+				start: args => withSettingsError(args.scope?.kind !== 'machine', () => agents.start(args, agent => {
+					launchHistory.remember(agent.reference.machine_id, agent.cwd);
+					if (args.worktree && agent.reference.machine_id === link.machineId) {
+						void locations.refresh().catch(notifyError);
+					}
+				})),
+				stop: entry => agents.stopListedAgent(entry),
 				resume: candidate => withSettingsError(candidate.machine_id === link.machineId, () => agents.resume(candidate)),
 				notifyError,
 				icons: cli => cli
 			},
 			onDidActivate: terminals.onDidActivate,
-			openSettings: () => settings.open().catch(notifyError),
+			openSettings: () => openSettingsOf(context.extension.id).catch(notifyError),
 			extensionUri: context.extensionUri,
 			workspaceState: panelPreferences(context.workspaceState),
 			notifyError: reportError,

@@ -111,6 +111,8 @@ and keeps usable existing records.
 
 **Business rules depend on ports, not on VS Code, sockets or vendor screen parsers.**
 
+[ISLANDS](ISLANDS.md) assigns engineering ownership and defines interface review in this layout.
+
 `core`, `record`, `clis` and `base` remain independently testable. `ui` contains panel models, commands and pickers;
 `host` implements editor/environment ports, with terminal adaptation and the PTY client together under `host/execution`;
 `webview` has no extension or Node imports; `ptyd` owns terminal/process/effect state, including screen reading, key
@@ -150,16 +152,20 @@ pickers and terminal management, not to the New Agent picker. Execution does not
 `ui/presentation.ts` owns native CLI icons and shared launch-failure wording; name normalization is in `core/names.ts`.
 Worktree input and planning are shared under WORKTREES-4.3 rather than copied into each entry flow.
 
-### 1.4 Two implementations, one per window
+### 1.4 Framework activation and legacy cutover
 
-**The editor selects one implementation at activation or reload.**
+**Use Framework for new agents and keep legacy access for a planned cutover.**
 
-The **Facade: Framework** setting (`facade.framework`) is `auto` by default. In `auto`, use the bundled Framework on its supported
-host after existing legacy runs in that execution environment have ended. While they are still running, stay
-on the legacy implementation. The editor offers to reload once it can switch. Explicit `off` selects the legacy implementation. A failure
-to start or connect to the bundled Orchestrator can fall back to the legacy implementation and display the notice in UX-6.2. Group 6
-defines the Framework connection and the workspace state it uses. The context key `facade.implementation` is
-`framework` or `legacy` and selects the corresponding window menus.
+A compatible Framework activation reconnects to existing agents. A known legacy cutover checks for live processes
+under the resolved legacy home. When their exit is confirmed, import and recover saved Pins. When legacy agents
+still run, show the count of affected runs and saved Pins with one action to switch and resume Pins. A person
+accepting that action authorizes stopping the listed legacy runs. Keep their Pin state first, act through their
+current execution owners, and wait for confirmed exit. Only then activate Framework and restore the saved Pins.
+Leave uncertain exits pending. An older window that still owns its legacy processes can finish or stop them
+there. Its successor can complete the approved stop after acquiring ownership. When the shared exit check
+succeeds, the windows waiting for the cutover reload into Framework. An opening that already confirms exit
+can activate Framework immediately. Framework activation failure reports the error and offers a reload.
+Group 6 owns Framework connection and workspace recovery.
 
 ## 2 Ownership and recovery
 
@@ -454,14 +460,16 @@ Windows node-pty's console worker - starts no program and says that its installa
 | Client Facade directory, `<Facade home>/extension` on the client computer | Window registry in `network/` - one entry for each open window (1.1) - and the client-wide counters `client-agent-numbers.json` and `client-message-numbers.json` |
 | Execution supervisor's memory | Processes, screens, output sequences and input effects, and the details each window keeps with its runs - among them whether a run's tab is open and in which editor group, which LIFECYCLE-3.5's restoration needs - for as long as ptyd runs (2.3) |
 | Execution Facade directory, `<Facade home>/extension` in that execution environment | Per-run launch files, the injection record (CLIS-2.2), message records, long results in `results/` (at most 30 days), location metadata, Facade conversation names/locations, the workspace URI ledger `workspace-uris.json` and window records in `windows/` (30 days, 2.2), owner claims in `claims/`, the environment's own counters `agent-aliases.json` and `message-aliases.json` (1.1), ptyd's log `ptyd/ptyd.log` (3.3), each listening ptyd's record in `ptyd/sockets/` (2.4), and in `workspaces/<key>/` each workspace's agents log and structured history (3.3), the copy of its workspace state, its retained failed launches - with whether each one's tab is open and in which group (LIFECYCLE-3.5) - and request records (2.4) and its closes ptyd has not confirmed (`closing.json`, 2.3) |
-| Editor workspace storage | Workspace key (2.2) and the legacy implementation's workspace state mirror; legacy implementation pending updates coalesce within 100 ms and flush on deactivation, with synchronous Pin saves |
+| Legacy cutover record, `<Facade home>/extension/legacy-cutover.json` | The cutover owner records consent for the exact affected runs and keeps the Pin snapshots until the earlier workspaces can import them. Confirmed exits leave the active inventory. The same owner holds the transient `legacy-cutover-notice` and `claims/legacy-cutover-<owner>` locks. Retain the snapshots for the legacy compatibility period. |
+| Workspace legacy Pin recovery, `<Facade home>/extension/workspaces/<key>/orchestrator-legacy-pins.json` | Roster and Pins owns the record. It holds unresolved saved sessions and preserves unrecognized input. Accept the confirmed Pin in the roster before consuming the corresponding recovery entry. Retain the import marker for the legacy compatibility period. |
+| Editor workspace storage | Workspace key (2.2), Panel preferences and launch location history. Earlier versions mirrored legacy workspace state here. |
 | Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing original cwd, Facade name and the associated CLI entry name/type; no transcript or environment-value copy (CONFIGURATION-3.4) |
 | Vendor CLI store | Its own conversations, credentials and settings |
 | Beside the main checkout | New worktrees under WORKTREES-2.2 |
 
 The legacy implementation's workspace claim guards its state writes. A superseded claim cannot commit.
 
-For the legacy implementation, the Facade home is chosen as the window starts. An explicitly set **Facade: Home** (`facade.home`, machine scope)
+The Facade home is chosen as the window starts. An explicitly set **Facade: Home** (`facade.home`, machine scope)
 wins, then `FACADE_HOME`, then `~/.facade`. Blank strings and `null` count as unset. The setting's box shows
 `~/.facade`; that default does not override the environment variable. A setting value must be absolute or start with `~/` (`~\` on Windows). An unusable setting
 stops every start with an error and an Open Settings button at `facade.home`, on the Remote tab in a remote window
@@ -826,8 +834,8 @@ or a home switch, the extension offers its bundled program set for selection. Th
 selection. A higher bundled build installs from the extension files and can take over after normal admission.
 Commands use the selected home launcher. After hello,
 it opens the workspace state, installs the machine and agent watches and connects them to the Panel. The
-[agent view](../../../extension/src/host/framework/agents.ts#L76) reconciles confirmed roster snapshots
-with local members and Pins. Opening a terminal uses Attach (6.3). [Deactivation](../../../extension/src/host/framework/index.ts#L215)
+[agent view](../../../extension/src/host/framework/agents.ts#L76) projects observed running Managed Agents and
+reconciles confirmed records with workspace members and Pins. Opening a terminal uses Attach (6.3). [Deactivation](../../../extension/src/host/framework/index.ts#L215)
 releases the editor's subscriptions, terminal views and connection while the Orchestrator retains the agents.
 
 An incompatible hello makes Framework activation fail with a version error. During a compatible takeover the daemon
@@ -838,15 +846,22 @@ sends `closing {build}`. The editor acknowledges on that connection and verifies
 **Keep workspace agent addresses, Pins and terminal presentation on the editor side.**
 
 Windows of the same workspace consume and update the same normalized roster under RULES-6.1. Use the canonical
-workspace URI ledger and read the saved members, Pins and hidden entries from `orchestrator-workspace.json`.
+workspace URI ledger and read the saved members, Pins and earlier hidden entries from `orchestrator-workspace.json`.
+An unrelated live card from the agent watch does not add a roster entry. Earlier hidden entries apply to legacy reconciliation.
 Preserve the saved import marker when legacy membership is still pending. Reconcile stored references with
 confirmed agent records and retain entries when a remote machine has yet to supply its snapshot.
+Roster and Pins owns the optional startup settings and outstanding start request on a Pin in roster version 1.
+Older Pins can omit both. Resolve a successful start by replacing the reference and consuming the request in one
+roster write. Follow a known session and name as Framework reports them. Use the current CLI environment when
+starting from a Pin.
 
-Read local `facade.pins` from a verified legacy workspace file. For a folderless window, the persisted native
+Read local `facade.pins` from a verified legacy workspace file or from the snapshot saved before an approved cutover.
+For a folderless window, the persisted native
 window token can identify its original workspace key in `extension/windows/`. That key locates the local Pins even
 when the workspace sidecar is absent. Merge the confirmed Pins under the roster lock, retaining a person's current
 Pins and hidden entries. A new empty window stores its roster key in VS Code workspace state. Share the existing
-Pin restore round across windows and use the full persisted agent or session identity for recovery.
+Pin restore round across windows and use the full persisted agent or session identity for recovery. Keep unfinished
+session recovery in its workspace record and fence a resume with an uncertain reply.
 
 ### 6.3 Terminals and the Window Component
 
@@ -877,7 +892,7 @@ VSIX. The archives are `facade-framework-darwin-<arch>.tar.gz`, `facade-framewor
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.4 | Local/remote installation, window components and registry, public API audit, layer rules, native backend package; the journeys on each implementation (`FACADE_IT_IMPLEMENTATION`) and switching implementations |
+| 1.1–1.4 | Local and remote installation, window components and registry, public API audit, layer rules, native backend package, compatible reconnect and installed legacy cutover |
 | 2.1–2.4 | G1 routes between local and remote windows; G2 actual close/reload traces; folder-to-workspace handover; shim routing and input deadlines; color scheme reports with current and earlier supervisors (VERIFICATION E07); pressure/upgrades from every released build with agents running |
 | 3.1–3.3 | Home precedence, User/Remote Settings tabs, reload after invalid-home correction, local home record writes/removal and remote use, reload on record changes, invalid paths and wrong JSON types preserving the record, Windows homes naming a drive or share, null/blank unset, same-folder reload suppression locally/remotely including links and fallback, a record written before the watch starts, disposal and failed watches, storage ownership/retention, preserved user files, correct paths and safe text rendering without an authentication subsystem |
 | 4.1–4.4 | Build/package checks and native platform matrix, extension-pack installation in local and remote windows, development-build state ignored without migration, locale completeness |

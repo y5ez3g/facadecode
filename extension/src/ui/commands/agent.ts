@@ -22,7 +22,6 @@ export interface AgentCommandDeps {
 
 export interface FrameworkCardActions {
 	open(run: RunId): Promise<boolean>;
-	hide(run: RunId): Promise<void>;
 	stop(run: RunId): Promise<void>;
 	remove(run: RunId): Promise<void>;
 	setPinned(run: RunId, pinned: boolean): Promise<void>;
@@ -160,10 +159,10 @@ async function askName(facts: RunFacts, copy: { readonly placeholder: string; re
 }
 
 /**
- * The commands about one agent (UX-3.1, 3.2): Go to Agent, Pin, Unpin, Rename, Stop, Dismiss and the card's menu - Move Up and
+ * The commands about one agent (UX-3.1, 3.2): Pin, Unpin, Rename, Stop, Dismiss and the card's menu - Move Up and
  * Move Down among them (PANEL-2.2).
  */
-export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActions, flows: { readonly goToAgent: () => Promise<void> }): vscode.Disposable[] {
+export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActions): vscode.Disposable[] {
 	const { model, agents } = deps;
 	/** A command about one run: `palette` where the Command Palette offers it for the selected run. */
 	const on = (id: string, palette: boolean, does: (run: RunId) => unknown) => vscode.commands.registerCommand(id, (arg?: unknown) => {
@@ -171,7 +170,6 @@ export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActi
 		return run === undefined ? undefined : does(run);
 	});
 	return [
-		vscode.commands.registerCommand(COMMANDS.goToAgent, () => flows.goToAgent()),
 		on(COMMANDS.pinAgent, true, run => actions.pin(run, true)),
 		on(COMMANDS.unpinAgent, true, run => actions.pin(run, false)),
 		on(COMMANDS.renameAgent, true, run => actions.rename(run)),
@@ -194,13 +192,14 @@ export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActi
 export function registerFrameworkAgentCommands(deps: Pick<AgentCommandDeps, 'model' | 'notifyError'> & {
 	readonly agents: Pick<Agents, 'get'>;
 	readonly actions: FrameworkCardActions;
-	readonly goToAgent: () => Promise<void>;
+	readonly stopAgent: () => Promise<void>;
 }): vscode.Disposable[] {
 	const { agents, model, actions } = deps;
 	type Failure = (name: string, reason: string) => string;
 	const openFailure: Failure = (name, reason) => vscode.l10n.t("Could not open {0}: {1}", name, reason);
-	const on = (id: string, does: (facts: RunFacts) => Promise<unknown>, failure?: Failure, palette = true) =>
+	const on = (id: string, does: (facts: RunFacts) => unknown, failure?: Failure, palette = true, pick?: () => Promise<void>) =>
 		vscode.commands.registerCommand(id, async (arg?: unknown) => {
+			if (arg === undefined && pick) { return pick(); }
 			const run = targetOf(arg, model, agents, palette);
 			const facts = run === undefined ? undefined : agents.get(run);
 			if (!facts) { return undefined; }
@@ -214,13 +213,13 @@ export function registerFrameworkAgentCommands(deps: Pick<AgentCommandDeps, 'mod
 		});
 	const open = async (facts: RunFacts): Promise<boolean> => isAgentRunning(facts) && await actions.open(facts.id);
 	return [
-		vscode.commands.registerCommand(COMMANDS.goToAgent, () => deps.goToAgent()),
 		on(COMMANDS.openTerminal, open, openFailure),
-		on(COMMANDS.hideAgent, facts => actions.hide(facts.id), (name, reason) => vscode.l10n.t("Could not hide {0}: {1}", name, reason)),
 		on(COMMANDS.stopAgent, async facts => {
 			if (isAgentRunning(facts)) { await actions.stop(facts.id); }
-		}, (name, reason) => vscode.l10n.t("Could not stop {0}: {1}", name, reason)),
+		}, (name, reason) => vscode.l10n.t("Could not stop {0}: {1}", name, reason), false, deps.stopAgent),
 		on(COMMANDS.deleteAgent, facts => actions.remove(facts.id), (name, reason) => vscode.l10n.t("Could not remove {0}: {1}", name, reason)),
+		on(COMMANDS.moveUp, facts => model.move(facts.id, -1), undefined, false),
+		on(COMMANDS.moveDown, facts => model.move(facts.id, 1), undefined, false),
 		on(COMMANDS.pinAgent, async facts => {
 			if (facts.pinnable && !facts.pin) { await actions.setPinned(facts.id, true); }
 		}, (name, reason) => vscode.l10n.t("Could not pin {0}: {1}", name, reason)),

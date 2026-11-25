@@ -97,6 +97,86 @@ async function bringsBackFolderlessWorkspace(home: string, withPin: boolean): Pr
 }
 
 suite('Orchestrator workspace roster (RULES-6.1)', () => {
+	test('startup settings and the one restart attempt survive another window, and the Pin follows the new reference and session (RULES-6.4)', () => {
+		const temp = tempDir('fd-orchestrator-restart-');
+		const { FrameworkWorkspace } = withModules({ vscode: { EventEmitter: TestEmitter } })
+			<typeof import('../host/framework/workspace')>(require.resolve('../host/framework/workspace'));
+		const open = () => new FrameworkWorkspace(temp.dir, {}, { event: () => undefined });
+		const first = open();
+		const second = open();
+		try {
+			const pin = {
+				id: 'early-pin', machine_id: local, agent: 'a7', location: 'folder', cwd: '/work', name: 'First',
+				conversation: { environment: `machine:${local}`, cli: 'codex' },
+				launch: { args: ['--sandbox', 'workspace-write'], model: 'model', effort: 'low' },
+			};
+			first.savePin(pin);
+			assert.ok(first.beginPinRestart(pin, 'start-first'));
+			assert.ok(!second.beginPinRestart(pin, 'start-second'));
+			second.clearPinRestart(pin, 'start-second');
+			assert.strictEqual(second.snapshot().pins[0].restartAttempt, 'start-first');
+			const replacement = { ...pin, agent: 'a8' };
+			second.replacePin(pin, replacement);
+			assert.deepStrictEqual(second.snapshot().pins, [replacement]);
+			const reference = { machine_id: local, agent_id: replacement.agent };
+			second.reconcile([{
+				reference, address: 'a8@this-machine', type: 'managed', name: 'Renamed', cli: 'codex', args: [], cwd: '/work',
+				process: 'running', created_at: at, started_at: at, root: reference, yolo: true, state: 'idle',
+				tools_state: 'available', session: 'new-session'
+			}], []);
+			assert.deepStrictEqual(second.snapshot().pins, [{
+				...replacement, name: 'Renamed', conversation: { ...pin.conversation, sessionId: 'new-session' },
+			}]);
+			assert.ok(!first.beginPinRestart(replacement, 'start-after-session'));
+		} finally {
+			first.dispose();
+			second.dispose();
+			temp.remove();
+		}
+	});
+
+	test('an unrecognized legacy recovery file leaves ordinary Pins usable and preserves the file', async () => {
+		for (const original of ['{broken', '{"version":2,"data":"future recovery"}\n']) {
+			const temp = tempDir('fd-orchestrator-sidecar-');
+			const messages: string[] = [];
+			const { FrameworkWorkspace } = withModules({ vscode: {
+				EventEmitter: TestEmitter,
+				l10n: { t: (text: string, file: string) => text.replace('{0}', file) },
+				window: { showWarningMessage: (message: string) => { messages.push(message); } }
+			} })<typeof import('../host/framework/workspace')>(require.resolve('../host/framework/workspace'));
+			const previous = path.join(temp.dir, '0123456789abcdef');
+			fs.mkdirSync(previous);
+			const legacyFile = path.join(previous, 'workspace-state.json');
+			const legacyState = JSON.stringify({ 'facade.pins': [{
+				id: 'legacy-pin', location: 'folder', cwd: '/work', name: 'Legacy Fixture',
+				conversation: { environment: 'local', cli: 'codex', sessionId: 'old-session' }
+			}] });
+			fs.writeFileSync(legacyFile, legacyState);
+			const workspace = new FrameworkWorkspace(temp.dir, { file: legacyFile }, { event: () => undefined });
+			try {
+				const pin = {
+					id: 'current-pin', machine_id: local, agent: 'a7', location: 'folder', cwd: '/work', name: 'Fixture',
+					conversation: { environment: 'local', cli: 'codex', sessionId: 'saved-session' }
+				};
+				workspace.savePin(pin);
+				const file = path.join(temp.dir, 'orchestrator-legacy-pins.json');
+				fs.writeFileSync(file, original);
+				await workspace.loadLocalPins();
+				assert.deepStrictEqual(workspace.snapshot().pins, [pin]);
+				assert.deepStrictEqual(workspace.pendingLegacyPins(), []);
+				workspace.removePin(pin.id);
+				assert.deepStrictEqual(workspace.snapshot().pins, []);
+				assert.strictEqual(fs.readFileSync(file, 'utf8'), original);
+				assert.strictEqual(fs.readFileSync(legacyFile, 'utf8'), legacyState);
+				assert.strictEqual(messages.length, 1);
+				assert.ok(messages[0].includes(file));
+			} finally {
+				workspace.dispose();
+				temp.remove();
+			}
+		}
+	});
+
 	test('keeps equal numbers distinct and removes records only from an authoritative machine view', async () => {
 		const temp = tempDir('fd-orchestrator-roster-');
 		const uri = 'file:///workspace';

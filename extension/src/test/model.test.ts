@@ -6,14 +6,14 @@ import * as assert from 'assert';
 import type { Catalog, Pin, Location, LocationRemoval, RunChange, RunFacts, WorkspaceFolderInfo } from '../core/ports';
 import type { CardWords } from '../ui/cardView';
 import { locationOfFilter, PanelModel, placeKindOf, REPORT_COALESCE_MS, Timers } from '../ui/model';
-import { PanelPrefs, Storage } from '../ui/order';
+import { agentFilter, PanelPrefs, Storage } from '../ui/order';
 import type { PanelState } from '../webview/protocol';
 import { TestEmitter } from './withModules';
 import { placeOf } from './detailLines';
 
 const WORDS: CardWords = {
 	orchestrator: { justDone: 'Just done', waitingForYou: 'Waiting for you', ended: 'Ended', unknown: 'Unknown', stateError: 'Error',
-		machine: value => `Machine: ${value}`, address: value => `Address: ${value}` },
+		address: value => `Agent reference: ${value}`, session: value => `Session: ${value}`, name: value => `Name: ${value}` },
 	title: value => `Title: ${value}`,
 	location: value => `Location: ${value}`,
 	path: value => `Path: ${value}`,
@@ -252,10 +252,15 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		model = make(Promise.resolve(), true);
 		await tick();
 		assert.deepStrictEqual(model.state().cards.map(card => [card.runId, card.alias, card.selected, card.orchestrator?.running, card.menu]), [
-			[id(4), 'a1', true, false, { pin: true, moveUp: false, moveDown: false }],
-			[id(3), 'a1', false, true, { moveUp: false, moveDown: false }]
+			[id(4), 'a1', true, false, { pin: true, moveUp: false, moveDown: true }],
+			[id(3), 'a1', false, true, { moveUp: true, moveDown: false }]
 		]);
 		assert.deepStrictEqual(model.selectedAgent(), { run: id(4), ended: true, running: false, pinnable: true });
+		assert.ok(model.move(id(4), 1));
+		await tick();
+		assert.deepStrictEqual(model.state().cards.map(card => card.runId), [id(3), id(4)]);
+		assert.deepStrictEqual(storage.values.get('facade.panel.order'), ['machine-one/a1', 'machine-two/a1']);
+		assert.strictEqual(storage.values.get('facade.panel.selection'), 'machine-two/a1');
 	});
 
 	test('Move Up/Down trades places with the next card; the menu offers each only where it moves (PANEL-2.1, 2.2)', async () => {
@@ -271,6 +276,35 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		assert.ok(model.move(id(1), 1));
 		await tick();
 		assert.deepStrictEqual([menus, names(model.state())], [[['Agent 1', false, true], ['Agent 2', true, true], ['Agent 3', true, false]], ['Agent 3', 'Agent 2', 'Agent 1']]);
+	});
+
+	test('PANEL-4.3: alternative machines combine with CLI and Pin filters without changing the workspace roster', async () => {
+		const managed = (n: number, machine: string, cli: string, pin?: string) => run(n, {
+			cli, pin, orchestrator: { reference: { machine_id: machine, agent_id: `a${n}` }, state: 'idle' }
+		});
+		agents.add(managed(1, 'local', 'claude', 'pin-1'));
+		agents.add(managed(2, 'gpu', 'claude', 'pin-2'));
+		agents.add(managed(3, 'gpu', 'codex', 'pin-3'));
+		agents.add(managed(4, 'local', 'claude'));
+		agents.add(managed(5, 'other', 'claude', 'pin-5'));
+		const model = make(Promise.resolve(), true);
+		await tick();
+		model.setFilter(agentFilter([
+			{ kind: 'machine', id: 'local', label: 'Local' },
+			{ kind: 'machine', id: 'gpu', label: 'GPU' },
+			{ kind: 'cli', id: 'claude', label: 'Claude Code' },
+			{ kind: 'pin', id: 'pinned', label: 'Pinned' }
+		]));
+		await tick();
+		assert.deepStrictEqual(names(model.state()), ['Agent 1', 'Agent 2']);
+		assert.strictEqual(model.state().cardCount, 5);
+
+		const reopened = make(Promise.resolve(), true);
+		await tick();
+		assert.deepStrictEqual(names(reopened.state()), ['Agent 1', 'Agent 2']);
+		reopened.setFilter(undefined);
+		await tick();
+		assert.strictEqual(reopened.state().cards.length, 5);
 	});
 
 	test('with a filter, Move Up/Down passes the next shown card, hidden ones keeping their slots (PANEL-2.1, 2.3)', async () => {
