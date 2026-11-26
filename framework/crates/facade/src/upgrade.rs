@@ -1,7 +1,7 @@
 //! Selects a release, runs its standalone installer and presents the result.
 
 use std::cmp::Ordering;
-use std::io::{self, Write as _};
+use std::io::{self, IsTerminal as _, Write as _};
 use std::path::Path;
 use std::process::Stdio;
 
@@ -33,20 +33,31 @@ pub(crate) fn run(version: Option<&str>) -> anyhow::Result<()> {
                 return up_to_date(current, &launcher);
             }
         }
-        return install_version(&build, &home);
+        return install_version(&build, &home, selected.as_deref());
     }
 
-    let current = selected.unwrap_or_else(facade_base::build_id);
+    let current = selected.clone().unwrap_or_else(facade_base::build_id);
     if let Some(build) = install::latest_stable(&current)
         .context("Could not check for updates from GitHub or facadecode.com")?
     {
-        return install_version(&build, &home);
+        return install_version(&build, &home, selected.as_deref());
     }
 
     up_to_date(&current, &launcher)
 }
 
 fn up_to_date(current: &str, launcher: &Path) -> anyhow::Result<()> {
+    if io::stdout().is_terminal() {
+        present(
+            launcher,
+            &format!(
+                "Facade {} is already installed{}",
+                facade_base::build_version(current),
+                build_note(current)
+            ),
+        );
+        return Ok(());
+    }
     if let Some(bin) = launcher.parent().filter(|_| launcher.is_file()) {
         println_or_end!(
             "Facade {current} is already up to date in {}.",
@@ -66,7 +77,7 @@ fn matching_package() -> &'static str {
     }
 }
 
-fn install_version(build: &str, home: &Path) -> anyhow::Result<()> {
+fn install_version(build: &str, home: &Path, previous: Option<&str>) -> anyhow::Result<()> {
     let version = facade_base::build_version(build);
     ensure!(
         facade_base::takes_over(build, version),
@@ -135,7 +146,26 @@ fn install_version(build: &str, home: &Path) -> anyhow::Result<()> {
     if output.status.success() {
         let receipt =
             installed.context("Could not upgrade Facade. Installer reported no result.")?;
-        println_or_end!("{receipt}");
+        match receipt_parts(receipt) {
+            Some((installed, selected, bin)) if io::stdout().is_terminal() => {
+                let launcher = Path::new(bin).join(if cfg!(windows) {
+                    "facade.exe"
+                } else {
+                    "facade"
+                });
+                let headline = if installed {
+                    updated(previous, selected)
+                } else {
+                    format!(
+                        "Facade {} is already installed{}",
+                        facade_base::build_version(selected),
+                        build_note(selected)
+                    )
+                };
+                present(&launcher, &headline);
+            }
+            _ => println_or_end!("{receipt}"),
+        }
         return Ok(());
     }
     if let Some((asset, None)) = asset_error {
@@ -180,17 +210,104 @@ fn asset_http_error(version: &str, asset: &str, status: u16) -> anyhow::Error {
 }
 
 fn is_install_receipt(line: &str) -> bool {
-    let Some(line) = line.strip_suffix('.') else {
-        return false;
-    };
-    let result = line
-        .strip_prefix("Installed Facade ")
-        .and_then(|line| line.split_once(" in "))
-        .or_else(|| {
+    receipt_parts(line).is_some()
+}
+
+/// The installer's receipt: whether it installed, the BUILD the home selects and its program folder.
+fn receipt_parts(line: &str) -> Option<(bool, &str, &str)> {
+    let line = line.strip_suffix('.')?;
+    let (installed, (build, bin)) = match line.strip_prefix("Installed Facade ") {
+        Some(rest) => (true, rest.split_once(" in ")?),
+        None => (
+            false,
             line.strip_prefix("Facade ")?
-                .split_once(" is already up to date in ")
-        });
-    result.is_some_and(|(build, bin)| {
-        facade_base::compare_builds(build, build).is_some() && !bin.is_empty()
-    })
+                .split_once(" is already up to date in ")?,
+        ),
+    };
+    (facade_base::compare_builds(build, build).is_some() && !bin.is_empty())
+        .then_some((installed, build, bin))
+}
+
+/// The check mark and arrow the installer draws: plain ones in an older Windows console window.
+fn marks() -> (&'static str, &'static str) {
+    if cfg!(windows) && std::env::var_os("WT_SESSION").is_none() {
+        ("OK", "->")
+    } else {
+        ("\u{2714}", "\u{2192}")
+    }
+}
+
+/// What the installer tells a person: a check mark and its headline, then where the Shell is.
+fn present(launcher: &Path, headline: &str) {
+    println_or_end!("\n{} {headline}", marks().0);
+    if launcher.is_file() {
+        println_or_end!("  Location: {}", facade_base::settings::shown(launcher));
+    }
+}
+
+/// `Facade updated 0.1.5 → 0.1.6 (build e13e14f)`, or for the same version, its two builds.
+fn updated(previous: Option<&str>, selected: &str) -> String {
+    let version = facade_base::build_version(selected);
+    let arrow = marks().1;
+    match previous.map(|previous| (previous, facade_base::build_version(previous))) {
+        None => format!("Facade {version} installed{}", build_note(selected)),
+        Some((_, before)) if before != version => {
+            format!(
+                "Facade updated {before} {arrow} {version}{}",
+                build_note(selected)
+            )
+        }
+        Some((previous, _)) => format!(
+            "Facade {version} updated (build {} {arrow} {})",
+            short_build(previous),
+            short_build(selected)
+        ),
+    }
+}
+
+/// `e13e14f` for the BUILD 0.1.6+1795665988.e13e14faa…, or nothing for a bare version.
+fn short_build(build: &str) -> &str {
+    let Some((_, tail)) = build.split_once('+') else {
+        return "";
+    };
+    let id = tail.rsplit('.').next().unwrap_or(tail);
+    id.get(..7).unwrap_or(id)
+}
+
+/// ` (build e13e14f)`, or nothing for a bare version.
+fn build_note(build: &str) -> String {
+    match short_build(build) {
+        "" => String::new(),
+        id => format!(" (build {id})"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NEW: &str = "0.1.6+1795665988.e13e14faa8be46ae69e192c8c0a175959185aeab";
+
+    #[test]
+    fn a_person_reads_which_version_and_build_the_upgrade_selected() {
+        let arrow = marks().1;
+        assert_eq!(updated(None, NEW), "Facade 0.1.6 installed (build e13e14f)");
+        assert_eq!(
+            updated(Some("0.1.5+1795000000.aaaaaaa1111"), NEW),
+            format!("Facade updated 0.1.5 {arrow} 0.1.6 (build e13e14f)")
+        );
+        assert_eq!(
+            updated(
+                Some("0.1.6+1795524945.af9bb4b8c35ab61974e71bd9a2b515a4dc5c25bd"),
+                NEW
+            ),
+            format!("Facade 0.1.6 updated (build af9bb4b {arrow} e13e14f)")
+        );
+        assert_eq!(build_note("0.1.6"), "");
+        let receipt = format!("Installed Facade {NEW} in /home/a/.facade/framework/bin.");
+        assert_eq!(
+            receipt_parts(&receipt),
+            Some((true, NEW, "/home/a/.facade/framework/bin"))
+        );
+    }
 }

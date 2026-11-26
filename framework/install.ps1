@@ -46,6 +46,22 @@ if ($temp.StartsWith($target, [StringComparison]::OrdinalIgnoreCase)) {
 $work = Join-Path $temp ('facade-install-' + [guid]::NewGuid())
 $downloadFailure = @{ Asset = ''; Http = '-' }
 $latestBuild = $null
+# A person at a console reads what happens. A program that runs the installer, such as
+# `facade upgrade`, reads its receipt lines, which stay as they are.
+$forPerson = -not [Console]::IsOutputRedirected -and $env:FACADE_UPGRADE_REPORT -ne '1'
+# Windows Terminal and VS Code draw these marks; an older console window may not.
+$marks = $env:WT_SESSION -or $env:TERM_PROGRAM -eq 'vscode'
+$check = if ($marks) { [string][char]0x2714 } else { 'OK' }
+$arrow = if ($marks) { [string][char]0x2192 } else { '->' }
+$pathChanged = $false
+
+# ` (build e13e14f)` for the BUILD 0.1.6+1795665988.e13e14faa..., or nothing for a bare version.
+function Get-BuildNote([string] $Build) {
+    $parts = $Build -split '\+', 2
+    if ($parts.Count -lt 2) { return '' }
+    $id = ($parts[1] -split '\.')[-1]
+    return " (build $($id.Substring(0, [Math]::Min(7, $id.Length))))"
+}
 
 function Read-Build {
     param([string] $File, [string] $InvalidMessage)
@@ -150,6 +166,7 @@ function Set-FacadePath {
         if ($updated -cne $userPath) {
             $kind = if ($key.GetValueNames() -contains 'Path') { $key.GetValueKind('Path') } else { 'ExpandString' }
             $key.SetValue('Path', $updated, $kind)
+            $script:pathChanged = $true
             # Explorer reloads user environment when it receives WM_SETTINGCHANGE.
             if (-not ('FacadeInstall.Environment' -as [type])) {
                 Add-Type @'
@@ -210,6 +227,10 @@ try {
             $latestBuild = Read-Build $versionFile 'The stable release did not provide a valid BUILD.'
             $Version = ($latestBuild -split '\+', 2)[0]
         }
+        if ($forPerson) {
+            Write-Host "Installing Facade $Version for Windows ($arch)..."
+            Write-Host "Downloading $asset..."
+        }
         if (-not (Get-ReleasePackage "$releases/download/extension%2F$Version") -and
             -not (Get-ReleasePackage "$mirror/releases/$Version")) {
             Write-DownloadFailure
@@ -263,14 +284,50 @@ try {
 
     if (-not $upToDate -and -not $NoPath -and $env:FACADE_UPGRADE_REPORT -ne '1') {
         Update-StandalonePath $bin
-        Write-Output 'Open a new terminal if your shell has an older PATH.'
+        if (-not $forPerson) { Write-Output 'Open a new terminal if your shell has an older PATH.' }
     }
 } finally {
     $env:FACADE_HOME = $previousHome
     if ([IO.Directory]::Exists($work)) { [IO.Directory]::Delete($work, $true) }
 }
-if ($upToDate) {
-    Write-Output "Facade $selected is already up to date in $bin."
+$version = ($selected -split '\+', 2)[0]
+$location = Join-Path $bin 'facade.exe'
+if (-not $forPerson) {
+    if ($upToDate) {
+        Write-Output "Facade $selected is already up to date in $bin."
+    } else {
+        Write-Output "Installed Facade $selected in $bin."
+    }
+} elseif ($upToDate) {
+    Write-Host ''
+    Write-Host $check -ForegroundColor Green -NoNewline
+    Write-Host " Facade $version is already installed$(Get-BuildNote $selected)"
+    Write-Host "  Location: $location"
 } else {
-    Write-Output "Installed Facade $selected in $bin."
+    $previous = if ($before -is [string]) { $before -replace '\Afacade ', '' } else { '' }
+    $previousVersion = ($previous -split '\+', 2)[0]
+    if (-not $previous) {
+        $headline = "Facade $version installed$(Get-BuildNote $selected)"
+    } elseif ($previousVersion -cne $version) {
+        $headline = "Facade updated $previousVersion $arrow $version$(Get-BuildNote $selected)"
+    } else {
+        $old = (Get-BuildNote $previous) -replace '\A \(build |\)\z', ''
+        $new = (Get-BuildNote $selected) -replace '\A \(build |\)\z', ''
+        $headline = "Facade $version updated (build $old $arrow $new)"
+    }
+    Write-Host ''
+    Write-Host $check -ForegroundColor Green -NoNewline
+    Write-Host " $headline"
+    Write-Host ''
+    Write-Host "  Location: $location"
+    if ($NoPath) {
+        Write-Host '  PATH:     unchanged'
+        Write-Host ''
+        Write-Host "  Next: add $bin to your PATH, then: facade --help"
+    } else {
+        if ($pathChanged) { Write-Host '  PATH:     added to your user PATH' } else { Write-Host '  PATH:     already in your user PATH' }
+        Write-Host ''
+        Write-Host '  Next: facade --help'
+        Write-Host '        Terminals that were open before this one need to be reopened.'
+    }
 }

@@ -2,7 +2,15 @@
 set -eu
 umask 077
 
-fail() { printf 'facade install: %s\n' "$*" >&2; exit 1; }
+# A person at a terminal reads what happens. A program that runs the installer, such as
+# `facade upgrade`, reads its receipt lines, which stay as they are.
+if [ -t 1 ]; then for_person=true; else for_person=false; fi
+if "$for_person" && [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
+    green=$(printf '\033[32m') red=$(printf '\033[31m') bold=$(printf '\033[1m') plain=$(printf '\033[0m')
+else
+    green= red= bold= plain=
+fi
+fail() { printf '%sfacade install: %s%s\n' "$red" "$*" "$plain" >&2; exit 1; }
 
 version=
 expected_build=
@@ -36,8 +44,8 @@ profile_home=${HOME:-${USERPROFILE:-}}
 [ -n "$root" ] || root="${profile_home:?HOME or USERPROFILE is required}/.facade"
 case "$root" in /*) ;; *) fail 'The Facade home must be an absolute path.' ;; esac
 case "$(uname -s)" in
-    Linux) os=linux ;;
-    Darwin) os=darwin ;;
+    Linux) os=linux system=Linux ;;
+    Darwin) os=darwin system=macOS ;;
     *) fail 'This installer supports Linux and macOS. On Windows use install.ps1.' ;;
 esac
 case "$(uname -m)" in
@@ -65,18 +73,21 @@ read_build() {
 }
 failed_http=-
 download() {
-    if status=$(curl --disable --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 \
-        -fsL -w '%{http_code}' -o "$2" "$1"); then
-        case "$status" in 2[0-9][0-9]) return 0 ;; esac
+    # $3, show, draws curl's progress bar for a person.
+    quiet=-s
+    if [ "${3:-}" = show ] && "$for_person"; then quiet=--progress-bar; fi
+    if http_status=$(curl --disable --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 \
+        "$quiet" -fL -w '%{http_code}' -o "$2" "$1"); then
+        case "$http_status" in 2[0-9][0-9]) return 0 ;; esac
     fi
-    case "$status" in
-        [1-5][0-9][0-9]) failed_asset=${1##*/}; failed_http=$status ;;
+    case "$http_status" in
+        [1-5][0-9][0-9]) failed_asset=${1##*/}; failed_http=$http_status ;;
         *) [ "$failed_http" != - ] || failed_asset=${1##*/} ;;
     esac
     return 1
 }
 download_package() {
-    download "$1/$asset" "$work/$asset" && download "$1/SHA256SUMS" "$work/SHA256SUMS"
+    download "$1/$asset" "$work/$asset" show && download "$1/SHA256SUMS" "$work/SHA256SUMS"
 }
 fail_download() {
     if [ "${FACADE_UPGRADE_REPORT:-}" = 1 ] && [ "${FACADE_UPGRADE_ASSET_REPORT:-}" = 1 ]; then
@@ -99,6 +110,7 @@ trap 'rm -rf -- "${temp:?}/${work_name:?}"' 0
 trap 'exit 1' HUP INT TERM
 
 if [ -n "$package" ]; then
+    "$for_person" && printf 'Installing Facade from %s...\n' "$package"
     cp -- "$package" "$work/$asset"
     cp -- "$(dirname -- "$package")/SHA256SUMS" "$work/SHA256SUMS"
 else
@@ -111,6 +123,7 @@ else
             fail 'The stable release did not provide a valid BUILD.'
         version=${latest_build%%+*}
     fi
+    "$for_person" && printf 'Installing Facade %s for %s (%s)...\n' "$version" "$system" "$arch"
     if ! download_package "$releases/download/extension%2F$version" &&
         ! download_package "$mirror/releases/$version"; then
         message="Could not download $asset and its checksums for Facade $version from GitHub or facadecode.com."
@@ -159,8 +172,26 @@ selected=${reported#facade }
 [ "$reported" = "facade $selected" ] && valid_build "$selected" ||
     fail 'The home launcher did not report a valid Facade BUILD.'
 
+# `~/…` for a path in the home folder.
+shown() {
+    case "$1" in
+        "$profile_home"/*) printf '~/%s' "${1#"$profile_home"/}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+# ` (build e13e14f)` for the BUILD 0.1.6+1795665988.e13e14faa…, or nothing for a bare version.
+build_note() {
+    tail=${1#*+}
+    [ "$tail" = "$1" ] || printf ' (build %.7s)' "${tail##*.}"
+}
+
 if [ "$reported" = "$before" ] || [ "$selected" != "$build" ]; then
-    printf 'Facade %s is already up to date in %s.\n' "$selected" "$bin"
+    if "$for_person"; then
+        printf '\n%s✔%s %sFacade %s is already installed%s%s\n' "$green" "$plain" "$bold" "${selected%%+*}" "$plain" "$(build_note "$selected")"
+        printf '  Location: %s\n' "$(shown "$bin/facade")"
+    else
+        printf 'Facade %s is already up to date in %s.\n' "$selected" "$bin"
+    fi
     exit 0
 fi
 
@@ -207,7 +238,9 @@ if "$add_path" && [ "${FACADE_UPGRADE_REPORT:-}" != 1 ] && [ -n "$profile_home" 
             cat "$work/profile" > "$1"
         fi
     }
+    profiles=
     move_profile_entry() {
+        profiles="$profiles${profiles:+, }$(shown "$1")"
         if [ -f "$1" ]; then
             FACADE_PROFILE_ENTRY="$2" awk '
                 BEGIN { entry = "\n" ENVIRON["FACADE_PROFILE_ENTRY"] "\n"; profile = "\n" }
@@ -227,21 +260,25 @@ if "$add_path" && [ "${FACADE_UPGRADE_REPORT:-}" != 1 ] && [ -n "$profile_home" 
     }
     escaped=$(printf '%s\n' "$bin" | sed "s/'/'\\\\''/g")
     path_marker="# Facade PATH for '$escaped'"
-    path_lines=$(
+    # macOS's /bin/sh, bash 3.2, cannot read a here-document inside $(...), nor a case inside $(...)
+    # in a profile it reads: the lines come from a function and choose with if.
+    path_setup() {
         printf '%s\n' "$path_marker" 'export PATH="$(' "    _facade_bin='$escaped'"
         cat <<'PATH_SETUP'
     _facade_path=":${PATH-}:"
     while [ "${_facade_path#*":$_facade_bin:"}" != "$_facade_path" ]; do
         _facade_path=${_facade_path%%":$_facade_bin:"*}:${_facade_path#*":$_facade_bin:"}
     done
-    case $_facade_path in
-        :) printf '%s' "$_facade_bin" ;;
-        *) _facade_path=${_facade_path#:}
-           printf '%s:%s' "$_facade_bin" "${_facade_path%:}" ;;
-    esac
+    if [ "$_facade_path" = : ]; then
+        printf '%s' "$_facade_bin"
+    else
+        _facade_path=${_facade_path#:}
+        printf '%s:%s' "$_facade_bin" "${_facade_path%:}"
+    fi
 )"
 PATH_SETUP
-    )
+    }
+    path_lines=$(path_setup)
     old_line=$(legacy_shell_path_line "$profile_home/.local/bin")
     zsh_profile="${ZDOTDIR:-$profile_home}/.zshrc"
     for profile in "$profile_home/.profile" "$profile_home/.bash_profile" "$profile_home/.bash_login" "$profile_home/.bashrc" "$zsh_profile"; do
@@ -269,7 +306,43 @@ PATH_SETUP
     remove_legacy_programs
     case "$PATH:" in
         "$bin":*) ;;
-        *) printf 'Open a new terminal to use facade and facade-mcp.\n' ;;
+        *) "$for_person" || printf 'Open a new terminal to use facade and facade-mcp.\n' ;;
     esac
 fi
-printf 'Installed Facade %s in %s.\n' "$selected" "$bin"
+if ! "$for_person"; then
+    printf 'Installed Facade %s in %s.\n' "$selected" "$bin"
+    exit 0
+fi
+
+before=${before#facade }
+if [ -z "$before" ]; then
+    headline="Facade ${selected%%+*} installed" note=$(build_note "$selected")
+elif [ "${before%%+*}" != "${selected%%+*}" ]; then
+    headline="Facade updated ${before%%+*} → ${selected%%+*}" note=$(build_note "$selected")
+else
+    old=${before#*+}
+    new=${selected#*+}
+    headline="Facade ${selected%%+*} updated" note=$(printf ' (build %.7s → %.7s)' "${old##*.}" "${new##*.}")
+fi
+printf '\n%s✔%s %s%s%s%s\n\n' "$green" "$plain" "$bold" "$headline" "$plain" "$note"
+printf '  Location: %s\n' "$(shown "$bin/facade")"
+case "$PATH:" in
+    "$bin":*)
+        printf '\n  Next: facade --help\n' ;;
+    *)
+        if [ -n "${profiles:-}" ]; then
+            reload_command=source
+            case "${SHELL##*/}" in
+                zsh) reload="${ZDOTDIR:-$profile_home}/.zshrc" ;;
+                bash) reload="$profile_home/.bashrc" ;;
+                fish) reload="${XDG_CONFIG_HOME:-$profile_home/.config}/fish/conf.d/facade.fish" ;;
+                *) reload="$profile_home/.profile"; reload_command=. ;;
+            esac
+            printf '  PATH:     added to %s\n\n' "$profiles"
+            printf '  Next: open a new terminal, or run: %s %s\n' "$reload_command" "$(shown "$reload")"
+            printf '        then: facade --help\n'
+        else
+            printf '  PATH:     unchanged\n\n'
+            printf '  Next: add %s to your PATH, then: facade --help\n' "$(shown "$bin")"
+        fi ;;
+esac
