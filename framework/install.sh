@@ -227,21 +227,25 @@ if "$add_path" && [ "${FACADE_UPGRADE_REPORT:-}" != 1 ] && [ -n "$profile_home" 
     }
     escaped=$(printf '%s\n' "$bin" | sed "s/'/'\\\\''/g")
     path_marker="# Facade PATH for '$escaped'"
-    path_lines=$(
+    # macOS's /bin/sh, bash 3.2, cannot read a here-document inside $(...), nor a case inside $(...)
+    # in a profile it reads: the lines come from a function and choose with if.
+    path_setup() {
         printf '%s\n' "$path_marker" 'export PATH="$(' "    _facade_bin='$escaped'"
         cat <<'PATH_SETUP'
     _facade_path=":${PATH-}:"
     while [ "${_facade_path#*":$_facade_bin:"}" != "$_facade_path" ]; do
         _facade_path=${_facade_path%%":$_facade_bin:"*}:${_facade_path#*":$_facade_bin:"}
     done
-    case $_facade_path in
-        :) printf '%s' "$_facade_bin" ;;
-        *) _facade_path=${_facade_path#:}
-           printf '%s:%s' "$_facade_bin" "${_facade_path%:}" ;;
-    esac
+    if [ "$_facade_path" = : ]; then
+        printf '%s' "$_facade_bin"
+    else
+        _facade_path=${_facade_path#:}
+        printf '%s:%s' "$_facade_bin" "${_facade_path%:}"
+    fi
 )"
 PATH_SETUP
-    )
+    }
+    path_lines=$(path_setup)
     old_line=$(legacy_shell_path_line "$profile_home/.local/bin")
     zsh_profile="${ZDOTDIR:-$profile_home}/.zshrc"
     for profile in "$profile_home/.profile" "$profile_home/.bash_profile" "$profile_home/.bash_login" "$profile_home/.bashrc" "$zsh_profile"; do
