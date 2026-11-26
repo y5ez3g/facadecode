@@ -496,6 +496,22 @@ impl Bin {
         (!build.is_empty()).then_some(build)
     }
 
+    /// Pins the published launcher while checking that it is a copy of the selected image.
+    pub(super) fn matching_daemon_launcher(
+        &self,
+        build: &str,
+        image: &File,
+    ) -> Option<(PathBuf, File)> {
+        let lock = self.try_lock().ok()??;
+        if self.current().as_deref() != Some(build) {
+            return None;
+        }
+        let launcher = self.0.join(PROGRAMS[0]);
+        let pinned = super::open_held(&launcher).ok()?;
+        drop(lock);
+        same_open_contents(image, &pinned).then_some((launcher, pinned))
+    }
+
     /// Makes each launcher a copy of `build`'s program, renaming one in use aside, and then records
     /// `build` as the current one. Renamed copies that nothing runs any more are deleted first.
     pub(super) fn link_launchers(&self, build: &str) -> anyhow::Result<()> {
@@ -608,11 +624,15 @@ fn place_folder(source: &Path, target: &Path) -> io::Result<()> {
 /// Whether `a` and `b` hold the same bytes; false where either cannot be read. Compares a chunk at
 /// a time and stops at the first difference, so a program is never read whole.
 fn same_contents(a: &Path, b: &Path) -> bool {
-    let (Ok(mut a), Ok(mut b)) = (File::open(a), File::open(b)) else {
+    let (Ok(a), Ok(b)) = (File::open(a), File::open(b)) else {
         return false;
     };
+    same_open_contents(&a, &b)
+}
+
+fn same_open_contents(mut a: &File, mut b: &File) -> bool {
     let size = |file: &File| file.metadata().map(|meta| meta.len()).ok();
-    match (size(&a), size(&b)) {
+    match (size(a), size(b)) {
         (Some(a), Some(b)) if a == b => {}
         _ => return false,
     }
@@ -645,5 +665,59 @@ pub(super) fn copy_from_start(file: &File, to: &Path) -> io::Result<()> {
             written += copy.seek_write(&buffer[written..read], offset + written as u64)?;
         }
         offset += read as u64;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_folder::TestFolder;
+
+    #[test]
+    fn the_daemon_launcher_is_reused_only_for_the_selected_image() {
+        let folder = TestFolder::new("published-daemon");
+        let bin = Bin(folder.join("bin"));
+        let build = "0.1.7";
+        std::fs::create_dir_all(bin.0.join(build)).unwrap();
+        let image = bin.0.join(build).join(PROGRAMS[0]);
+        let launcher = bin.0.join(PROGRAMS[0]);
+        std::fs::write(&image, b"selected").unwrap();
+        std::fs::write(&launcher, b"selected").unwrap();
+        std::fs::write(bin.0.join(CURRENT_BUILD), build).unwrap();
+
+        let publication = bin.lock().unwrap();
+        let selected = super::super::open_held(&image).unwrap();
+        assert!(bin.matching_daemon_launcher(build, &selected).is_none());
+        drop(publication);
+
+        let (path, pinned) = bin.matching_daemon_launcher(build, &selected).unwrap();
+        assert_eq!(path, launcher);
+        assert!(OpenOptions::new().write(true).open(&launcher).is_err());
+        drop(pinned);
+
+        std::fs::write(&launcher, b"previous").unwrap();
+        let selected = super::super::open_held(&image).unwrap();
+        assert!(bin.matching_daemon_launcher(build, &selected).is_none());
+    }
+
+    #[test]
+    fn a_clean_takeover_needs_both_the_note_and_a_newer_selection() {
+        let home = TestFolder::new("published-takeover");
+        let bin = home.join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let selection = bin.join(CURRENT_BUILD);
+        let note = home.join(super::super::CLEAN_END);
+        let published = || super::super::clean_takeover_published(&home);
+
+        std::fs::write(&selection, "0.1.7").unwrap();
+        assert!(!published());
+        std::fs::write(&note, "0.1.8").unwrap();
+        assert!(!published());
+        std::fs::write(&note, "0.1.7").unwrap();
+        assert!(!published());
+        std::fs::write(&note, "0.1.6").unwrap();
+        assert!(published());
+        assert!(super::super::take_clean_end(&home));
+        assert!(!published());
     }
 }

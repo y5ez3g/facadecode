@@ -28,16 +28,13 @@ use super::relays::RelayFreeze;
 use super::{Lifecycle, LifecycleActivity};
 use crate::log;
 
-/// The note in `framework/` of a daemon that handed over cleanly: its screen logs hold every byte read.
-const CLEAN_END: &str = "clean-end";
-
 /// Whether the daemon before this one handed over cleanly, as its note said.
 static HANDED_OVER_CLEANLY: AtomicBool = AtomicBool::new(false);
 
 /// Takes the clean-end note of the daemon before, if it left one: each screen log is then whole,
 /// so recovery asks no CLI to redraw, and what the CLIs wrote meanwhile waits in their terminals.
 pub(crate) fn take_clean_end(framework: &Path) {
-    if std::fs::remove_file(framework.join(CLEAN_END)).is_ok() {
+    if facade_base::programs::take_clean_end(framework) {
         HANDED_OVER_CLEANLY.store(true, Ordering::SeqCst);
     }
 }
@@ -221,7 +218,7 @@ impl Lifecycle {
             .await
             && let Ok(framework) = facade_base::paths::framework_dir()
         {
-            let _ = std::fs::write(framework.join(CLEAN_END), facade_base::build_id());
+            let _ = facade_base::programs::mark_clean_takeover(&framework);
         }
         crate::gate_for_test("upgrade-quiet");
         self.closing_to.send_replace(Some(build));

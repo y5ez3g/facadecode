@@ -121,17 +121,12 @@ impl Supervisor {
             .is_some_and(|end| end.key == key)
     }
 
-    /// How the watched daemon ended, once its key completed.
-    pub(super) fn how_it_ended(&self) -> String {
-        let Some(end) = self.watched().and_then(|watched| watched.end.as_ref()) else {
-            return "ended".into();
-        };
+    /// The exit code of the watched daemon once its wait completed.
+    pub(super) fn exit_code(&self) -> Option<u32> {
+        let end = self.watched()?.end.as_ref()?;
         let mut code = 0u32;
         // SAFETY: the handle is open and allows reading the exit code.
-        if unsafe { GetExitCodeProcess(end.handle.as_raw_handle(), &mut code) } == 0 {
-            return "ended".into();
-        }
-        format!("ended with code {}", code as i32)
+        (unsafe { GetExitCodeProcess(end.handle.as_raw_handle(), &mut code) } != 0).then_some(code)
     }
 
     /// A proved daemon connected. If it is not the daemon being watched, it becomes the one.
@@ -286,9 +281,22 @@ impl Supervisor {
         }
     }
 
-    /// The daemon is gone. The next start waits the current backoff, which resets first if the
-    /// daemon had been up for [`RESTART_DELAY_RESET`], and doubles afterwards.
-    pub(super) fn ended(&mut self, now: Instant) {
+    /// Schedules a proved clean takeover immediately. Other ends use the crash backoff.
+    pub(super) fn ended(&mut self, now: Instant, clean_exit: bool) {
+        if clean_exit
+            && self
+                .watched()
+                .is_some_and(|watched| watched.last_ping.is_some())
+            && facade_base::programs::clean_takeover_published(&self.framework)
+        {
+            self.phase = Phase::Down(now);
+            self.backoff = MIN_RESTART_DELAY;
+            log(
+                "info",
+                "scheduled an immediate restart for the clean takeover",
+            );
+            return;
+        }
         let lasted = self
             .watched()
             .is_some_and(|watched| now.duration_since(watched.from) >= RESTART_DELAY_RESET);

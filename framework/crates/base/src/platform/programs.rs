@@ -367,20 +367,30 @@ fn launch_selected(
     lease: Option<&File>,
 ) -> anyhow::Result<(PathBuf, crate::service::Candidate)> {
     let launch = |build: &str| {
-        let image = bin.build(build)?.join(PROGRAMS[0]);
-        let _held =
-            open_held(&image).with_context(|| format!("could not open {}", image.display()))?;
-        attempt.image(service, build, &image)?;
-        let candidate =
-            crate::service::launch_with_startup(service, &image, &[], Some(attempt), lease)
+        let start = |image: &Path| {
+            attempt.image(service, build, image)?;
+            crate::service::launch_with_startup(service, image, &[], Some(attempt), lease)
                 .with_context(|| {
                     format!(
                         "could not start {} from {}",
                         service.command(),
                         image.display()
                     )
-                })?;
-        Ok((image, candidate))
+                })
+        };
+        let image = bin.build(build)?.join(PROGRAMS[0]);
+        let held =
+            open_held(&image).with_context(|| format!("could not open {}", image.display()))?;
+        #[cfg(windows)]
+        if service == crate::service::Service::Daemon
+            && let Some((launcher, _pinned)) = bin.matching_daemon_launcher(build, &held)
+            && let Ok(candidate) = start(&launcher)
+        {
+            return Ok((launcher, candidate));
+        }
+        let candidate = start(&image);
+        drop(held);
+        Ok((image, candidate?))
     };
     let build = bin.current().context("no Facade build was published")?;
     launch(&build).or_else(|error| {
@@ -411,6 +421,29 @@ pub fn select_for_takeover(program: &Path, build: &str, running: &[String]) -> a
         }
     }
     Ok(())
+}
+
+const CLEAN_END: &str = "clean-end";
+
+/// Records that this build drained its terminal output before the takeover.
+pub fn mark_clean_takeover(framework: &Path) -> io::Result<()> {
+    std::fs::write(framework.join(CLEAN_END), crate::build_id())
+}
+
+/// Takes the previous daemon's note before recovering its terminals.
+pub fn take_clean_end(framework: &Path) -> bool {
+    std::fs::remove_file(framework.join(CLEAN_END)).is_ok()
+}
+
+/// Checks that a cleanly ended daemon left a newer published build to start.
+#[cfg(windows)]
+pub fn clean_takeover_published(framework: &Path) -> bool {
+    let Ok(previous) = std::fs::read_to_string(framework.join(CLEAN_END)) else {
+        return false;
+    };
+    Bin(framework.join("bin"))
+        .current()
+        .is_some_and(|current| crate::takes_over(&current, &previous))
 }
 
 fn takeover_eligible(bin: &Bin, build: &str) -> anyhow::Result<bool> {

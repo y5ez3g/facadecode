@@ -25,6 +25,10 @@ to speak of, so every other crate can depend on it and it depends on none of the
 - `framework/bin/`: each build's `facade` and `facade-mcp` in a folder named after the build, with the
   ConPTY package in its `conpty/` on Windows, and the two launchers that point at the current
   build: symbolic links on Unix, copies on Windows.
+  Windows starts the daemon through the published launcher when it holds the selected image's
+  bytes. Base pins the launcher under the programs lock and compares the open files. Its hold
+  lasts through process creation. If the launcher is unavailable or cannot start, Base tries
+  the pinned versioned image.
 - The process-wide `FORK_LOCK`, under which children start.
 - Reading `facade.json`. Nothing in framework writes it.
 - The instructions and tool definitions a model reads.

@@ -128,8 +128,12 @@ impl Keeper {
         } else if self.link.as_ref().is_some_and(|link| link.key() == key) {
             self.read_link();
         } else if self.supervisor.is_end(key) {
-            let how = self.supervisor.how_it_ended();
-            self.daemon_gone(&how, Instant::now());
+            let code = self.supervisor.exit_code();
+            let how = code.map_or_else(
+                || "ended".into(),
+                |code| format!("ended with code {}", code as i32),
+            );
+            self.daemon_gone(&how, Instant::now(), code == Some(0));
         } else if let Some((agent, cli)) = self.clis.iter().find(|(_, cli)| cli.key() == key) {
             let (agent, exit) = (agent.clone(), cli.exit());
             self.cli_ended(&agent, exit);
@@ -270,7 +274,7 @@ impl Keeper {
                     },
                 );
                 if self.supervisor.kill() {
-                    self.daemon_gone("was ended by the watchdog", now);
+                    self.daemon_gone("was ended by the watchdog", now, false);
                 }
             }
             Due::Start => {
@@ -288,24 +292,24 @@ impl Keeper {
     fn start_daemon(&mut self, now: Instant) {
         if let Err(err) = self.supervisor.launch(&mut self.port, now) {
             log("error", &format!("could not start the daemon: {err:#}"));
-            self.supervisor.ended(now);
+            self.supervisor.ended(now, false);
         }
     }
 
     /// The daemon is gone. With no CLI to look after the keeper has nothing left to do and exits;
     /// otherwise a new daemon is scheduled.
-    fn daemon_gone(&mut self, how: &str, now: Instant) {
+    fn daemon_gone(&mut self, how: &str, now: Instant, clean_exit: bool) {
         let pid = self.supervisor.pid();
         self.supervisor.report_end(how, !self.clis.is_empty());
         if self.clis.is_empty() {
             self.exit(&format!("daemon {pid} {how} and no CLI is held"));
         }
-        self.supervisor.ended(now);
         let held = self.clis.len();
         log(
             "warn",
             &format!("daemon {pid} {how}; the keeper holds {held} CLIs and starts another"),
         );
+        self.supervisor.ended(now, clean_exit);
     }
 
     fn exit(&self, why: &str) -> ! {

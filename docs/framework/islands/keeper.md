@@ -41,8 +41,10 @@ runs as `facade keeper`.
   the CLI's. A forked CLI stays unreaped until its group is dealt with, so its IDs cannot be reused.
 - The keeper sends `changed` after the associated start, stop or sync response, and only on a link
   that completed `hello`.
-- The daemon always starts from the launcher, `framework/bin/facade daemon`, so it runs whichever build
-  the launcher points at.
+- Base starts the selected daemon build. On Windows it can use the stable launcher after
+  verifying that it holds that build's bytes.
+- On Windows the keeper can start a published takeover immediately after the ready daemon
+  exits successfully and leaves its clean-end note. Other restarts follow the usual backoff.
 - The keeper exits when no daemon runs and it holds no CLI, and never otherwise except on
   SIGTERM or SIGINT. On Windows it has no console, so nothing asks it to end; it is ended only by
   `TerminateProcess`.
