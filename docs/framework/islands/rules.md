@@ -249,6 +249,9 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     the hidden terminal cursor without an inverse cell when its position is inside the complete
     input frame, at or after the input column. Both colored hints still need the reversible
     space probe to distinguish them from a draft.
+  - Qoder's `waiting_above` matches its resume spinner, divider and mode strip on consecutive
+    physical rows immediately above the input frame. While they show, an empty or uncertain input
+    reads `unknown` without a Space probe. A recognized draft still reads `draft`.
   - Cursor sets `drawn_cursor` on its prompt-row rule. While the terminal cursor is hidden, a single
     inverse cell at or after the input start of a prompt row or one of its wrapped rows supplies the
     cursor position for the input reading and the space probe. With zero or several such cells,

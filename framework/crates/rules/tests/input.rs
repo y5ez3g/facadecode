@@ -117,6 +117,33 @@ fn pi_screens_read_as_recorded() {
 }
 
 #[test]
+fn qoder_waits_for_its_resumed_composer() {
+    let rule = find("qoder").unwrap().unwrap();
+    let frames: [serde_json::Value; 4] = recorded("qoder").try_into().unwrap();
+    let [resuming, restored, space, draft] = frames.map(|frame| view_of(&frame));
+
+    let restored_input = read_box(&rule.input, &restored);
+    assert!(restored_input.unsure);
+    let before = restored_input.line.as_ref().unwrap();
+    assert_eq!((before.row, before.cursor), (18, (3, 18)));
+    let space = read_box(&rule.input, &space);
+    assert_eq!(space.line.as_ref().unwrap().cursor, (4, 18));
+    assert!(space_taken(before, &space));
+    assert_eq!(verdict_of(before, &space), ProbeVerdict::Hint);
+    assert_eq!(read_box(&rule.input, &draft).info.state, InputState::Draft);
+
+    let mut history = restored;
+    history.rows[9] = resuming.rows[9].clone();
+    assert!(read_box(&rule.input, &history).unsure);
+
+    for untouched in [false, true] {
+        let input = read_box_for_typing(&rule.input, &resuming, untouched);
+        assert_eq!(input.info.state, InputState::Unknown);
+        assert!(!input.unsure && input.line.is_none(), "{input:?}");
+    }
+}
+
+#[test]
 fn copilot_reads_a_one_line_login_notice_above_wrapped_context() {
     let rule = find("copilot").unwrap().unwrap();
     let screen = recorded("copilot")

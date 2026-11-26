@@ -366,6 +366,9 @@ pub struct Frame {
     /// A hidden terminal cursor supplies its position inside the complete input frame.
     #[serde(default)]
     pub(crate) hidden_cursor_in_frame: bool,
+    /// Whole rows immediately above the upper rule while the CLI is preparing the input.
+    #[serde(default)]
+    pub(crate) waiting_above: Vec<Pattern>,
     pub menus: Vec<Menu>,
 }
 

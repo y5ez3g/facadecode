@@ -657,14 +657,30 @@ impl<'a> Screen<'a> {
                 };
             }
         }
-        self.after_prompt(
+        let input = self.after_prompt(
             first,
             lower,
             "the input frame",
             row_marks,
             untouched_input && frame.probe_unstyled_hint,
             column,
-        )
+        );
+        let waiting = &frame.waiting_above;
+        if (input.unsure || input.state == InputState::Usable)
+            && !waiting.is_empty()
+            && let Some(start) = upper.checked_sub(waiting.len())
+            && self
+                .continues
+                .get(start..=upper)
+                .is_some_and(|rows| rows.iter().all(|&wrapped| !wrapped))
+            && waiting
+                .iter()
+                .zip(&self.lines[start..upper])
+                .all(|(pattern, row)| pattern.is_match(row.trim_end_matches(' ')))
+        {
+            return unknown("the CLI is still preparing the input frame");
+        }
+        input
     }
 
     /// `prompt`: a prompt row above a model line, or a scrolled input without the model line.
