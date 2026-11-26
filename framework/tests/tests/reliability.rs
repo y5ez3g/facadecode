@@ -506,6 +506,10 @@ fn a_send_cut_off_by_a_restart_is_repeated_by_its_request_id_and_typed_once() {
     );
     assert_eq!(next["result"]["message"]["message_id"], "m5", "{next}");
     assert_eq!(next["result"]["message"]["to"], replacement.id, "{next}");
+    assert!(
+        wait_until(secs(30), || typed(&home, "for the replacement") > 0),
+        "the replacement CLI records its submitted message"
+    );
     assert_eq!(typed(&home, "this one expired before delivery"), 0);
     assert_eq!(typed(&home, "new request"), 1);
     assert_eq!(typed(&home, "for the replacement"), 1);
