@@ -973,7 +973,7 @@ impl<'a> Screen<'a> {
                 return false;
             };
             if prefix.is_empty() {
-                return row != bottom;
+                return true;
             }
             let Some(unmatched) = prefix.strip_suffix(' ') else {
                 return false;

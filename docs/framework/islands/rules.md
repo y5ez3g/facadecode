@@ -269,8 +269,8 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     The plain frame additionally has a `❯ ` prompt. A full viewport uses the shared editor
     guard. Its compact `[Paste #N - M lines]` marker supplies the paste's line count.
     The full styled sign-in notice two rows above a recognized editor reads `interaction`.
-    A wrapped notice also matches when the complete styled text sits directly above one to
-    three indented project rows, ending in the native `Run on:` context.
+    The same styled notice, on one or more rows, also matches directly above one to three
+    indented project rows ending in the native `Run on:` context.
     Manual `/login` stays available, and Copilot continues to report its state through OSC.
   - Pi draws startup tool download notices above its editor before the submit handler is ready.
     The editor reads `unknown` while a styled download notice is newer than that tool's

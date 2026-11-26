@@ -113,6 +113,17 @@ fn pi_screens_read_as_recorded() {
     reads_as_recorded("pi");
 }
 
+#[test]
+fn copilot_reads_a_one_line_login_notice_above_wrapped_context() {
+    let rule = find("copilot").unwrap().unwrap();
+    let screen = recorded("copilot")
+        .into_iter()
+        .find(|screen| screen["label"] == "copilot-1.0.116/login-above-wrapped-context")
+        .unwrap();
+    let read = read_input(&rule.input, &view_of(&screen));
+    assert_eq!(read.state, InputState::Interaction, "{}", read.evidence);
+}
+
 /// The live question reads as one, by its selected option and key help. Answered, it stays on the
 /// screen above a fresh input, which then reads by itself.
 #[test]
