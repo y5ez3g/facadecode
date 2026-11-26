@@ -17,7 +17,7 @@
 		"drawn_cursor": true,
 		"menus": [
 			{
-				"selected": "^ *│ +▶ \\[(?:a\\] Trust this workspace|w\\] Trust this workspace, but don't enable all MCP servers|q\\] Quit) *│ *$",
+				"selected": "^ *│ +▶ \\[(?:a\\] (?:Trust this workspace|Approve all servers)|w\\] Trust this workspace, but don't enable all MCP servers|c\\] Continue without approval|q\\] Quit) *│ *$",
 				"hint": {
 					"pattern": "^ *│ +Use arrow keys to navigate, Enter to select, or press the key shown *│ *$",
 					"within": 4

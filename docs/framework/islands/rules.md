@@ -256,6 +256,8 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - Cursor's live trust question reads `interaction` when the boxed selected option (`[a]`, `[w]`,
     or `[q]`) has the key help within four rows below it. Once answered, the box loses the
     selection marker and key help. The input box below it can then read `usable` or `draft`.
+  - Cursor's boxed `MCP Server Approval Required` question on resume reads `interaction` with
+    `[a]`, `[c]`, or `[q]` selected and the same key help within four rows below it.
   - Cursor's `Run this MCP tool?` question reads `interaction` when the selected `Run (once)`
     option and the `Allowlist MCP Tool` option follow. Its approval caption near the bottom
     reports `Blocked(Permission)` while the composer is absent.
