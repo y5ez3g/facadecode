@@ -416,8 +416,10 @@ The terminal, as a `PtyIo`, and the input waiting for it.
   - Under `background_report`, a `working` report with matching words becomes idle evidence.
   - Under `background_correction`, a `working` report is narrowed to idle evidence while the screen
     matches the rule's idle anchors. The rule applies regardless of the CLI's installed version.
-  - Under `answers_ask`, a reported question reads as done while the CLI's input, empty or with a draft, is on
-    the screen.
+  - Under `answers_ask`, a reported question reads as done once a fresh complete frame draws the
+    ordinary input, empty or with a draft. The actor supplies reports and frames in output order.
+    State uses the same evidence for the public state and the native wait. A frame already open
+    when the report arrived cannot settle it, and permission reports keep their own wait.
   - A start and the tools' connection get 30 seconds each. Time the CLI spends asking a question does not count.
   - For a CLI that defers its tool catalog, a live authenticated initializer keeps the tools `Connecting`
     without adding a startup overlay or tools timeout. Native startup keeps its own deadline. The initial
@@ -425,7 +427,7 @@ The terminal, as a `PtyIo`, and the input waiting for it.
     native startup deadline if it fails. The typist still checks whether it can write the prompt safely.
   - Only `keep` writes the state file, through a private temporary file and a rename. What the screen shows is read again, never kept.
 - **Never does:** touch the terminal; change the agent's record; publish.
-- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(asking, now)`, `shows_input(shown)`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connections(connections: ToolsConnections)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
+- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take_event(event, sync_open)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(asking, now)`, `observe_question_composer(input, drawn)`, `native_wait()`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connections(connections: ToolsConnections)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
 
 #### glyph
 
@@ -460,6 +462,7 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   - The actor holds a revocable intent for each automatic paste, submission and erase. A native
     wait or complete interaction frame pauses those writes and releases the delivery hold on
     human keys. A later ordinary composer frame reopens the input after the native wait clears.
+    Under `answers_ask`, a fresh complete ordinary frame can settle the native question itself.
     The terminal reads the finite prefix of output already available before it tries an automatic
     write. The actor uses those bytes to check the intent again.
     The typist changes the delivery phase only when the system takes the first write.
@@ -582,13 +585,14 @@ question stays available for the person.
 
 The tool startup has two parts, the same for every rule with `ReadyTools`.
 
-- **Before it owns the input** it only waits for the input box. The person's first raw key ends it for
-  that run. The tools then count as not started, and what was held is released before the key is
-  taken. The startup types nothing afterwards. The next run tries again. While the CLI shows a
-  recognized question, keys and calls are let through and the startup goes on after it. Otherwise calls and
-  messages wait and do not end it. Focus reports are not keys. Any other raw input
-  counts as one, such as the Up or Down a terminal app makes of its wheel. So an early key can skip a CLI's automatic tool
-  startup. The tools still read available once their relay connects.
+- **Before it owns the input** it watches for the composer. Person classifies complete keys,
+  focus and mouse reports, key releases and standalone modifiers, and holds incomplete sequences
+  for classification. Up or Down from a terminal app's mouse wheel arrives as a key. The actor
+  yields passive startup to the first complete key when no recognized question owns the input.
+  Calls and messages wait while startup watches the composer. A recognized question takes keys
+  and calls, and startup can go on after it. The actor releases held input in its accepted order.
+  The tools count as not started after the person takes over, and become available once the
+  relay connects. The next run tries startup again.
 - **Once it owns the input** the actor holds keys and calls through the startup strokes. The
   startup pastes its command into the complete, empty input of a CLI at rest. When the startup
   finishes or yields, the actor releases held input in its accepted order.
@@ -599,8 +603,8 @@ The tool startup has two parts, the same for every rule with `ReadyTools`.
 - **Interface:** `new(rule, id)`, `begin(started, tools, allow_auto_trust) -> Option<Instant>`, `end()`,
   `step(now, &StartView, press) -> StartStep`, `tool_write_matches(screen, input, draft, composer_allowed)`,
   `tool_write_issued()`, `tool_write_arrived(written_at)`, `holds_input(InputState)`,
-  `waiting_for_input()`, `readies_tools()` and `is_under_way()`. The actor can interrupt the
-  wait for the composer when the person's input takes priority.
+  `waiting_for_input()`, `yield_to_input(InputState)`, `readies_tools()` and `is_under_way()`.
+  The actor gives the composer to the person's complete key using Person's classification.
 
 ### messages
 

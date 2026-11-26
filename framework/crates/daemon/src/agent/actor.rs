@@ -1674,6 +1674,7 @@ impl Actor {
         let before_edit = self.terminal.delivery_frame_precedes_edit(position);
         let untouched = self.untouched_input;
         let delivery = &mut self.delivery_frames;
+        let state_changed = &mut self.state_changed;
         let (state, gate, typist, submitting, terminal) = (
             &mut self.state,
             &mut self.input_gate,
@@ -1689,7 +1690,7 @@ impl Actor {
             } => {
                 let report_start = start.and_then(|offset| read_start.checked_add_signed(offset));
                 let was_waiting = state.native_wait().is_some();
-                state.take_event(event.clone());
+                state.take_event(event.clone(), sync_open);
                 let native_wait = state.native_wait();
                 gate.report(native_wait);
                 if native_wait.is_some() {
@@ -1717,10 +1718,21 @@ impl Actor {
                     && !observes_submission
                     && !before_next
                     && !observes_delivery
+                    && !state.watches_question_composer()
                 {
                     return;
                 }
                 let (reading, menu_redrawn) = read_gate_box(rule, ended, None, screen, false);
+                let frame_closed = screen.synchronized_update_deadline().is_none();
+                let frame_follows_write = screen.frame_follows_input_boundary();
+                if frame_closed {
+                    *state_changed |= observe_question_composer(
+                        state,
+                        gate,
+                        reading.info.state,
+                        writes == CursorRowWrites::Current && frame_follows_write,
+                    );
+                }
                 observe_gate_frame(
                     gate,
                     typist,
@@ -1728,12 +1740,7 @@ impl Actor {
                     terminal,
                     state.native_wait(),
                     &reading,
-                    (
-                        writes,
-                        menu_redrawn,
-                        screen.frame_follows_input_boundary(),
-                        screen.synchronized_update_deadline().is_none(),
-                    ),
+                    (writes, menu_redrawn, frame_follows_write, frame_closed),
                 );
                 if !gate.blocks_delivery() && (observes_submission || before_next) {
                     Self::observe_submissions(
@@ -1931,13 +1938,22 @@ impl Actor {
             CursorRowWrites::None
         };
         if !self.screen().screen().has_unfinished_unit()
-            && (self.input_gate.blocks_delivery() || self.typist.reads_input())
+            && (self.input_gate.blocks_delivery()
+                || self.typist.reads_input()
+                || self.state.watches_question_composer())
         {
             let (reading, menu_redrawn) = read_gate_box(
                 self.input_rule,
                 self.ended(),
                 self.undrawn,
                 self.screen().screen(),
+                false,
+            );
+            // A timed-out update closes the earlier frame but cannot prove a new composer.
+            self.state_changed |= observe_question_composer(
+                &mut self.state,
+                &mut self.input_gate,
+                reading.info.state,
                 false,
             );
             observe_gate_frame(
@@ -3380,8 +3396,6 @@ impl Actor {
         let input = self.read_screen_input().info.state;
         self.state
             .asks(input == InputState::Interaction, Instant::now());
-        self.state
-            .shows_input(matches!(input, InputState::Usable | InputState::Draft));
         self.state_changed = true;
     }
 
@@ -3519,6 +3533,19 @@ fn interrupt_submissions(
     {
         submission.wait_observed_after_edit = true;
     }
+}
+
+fn observe_question_composer(
+    state: &mut StateTracker,
+    gate: &mut InputGate,
+    input: InputState,
+    drawn: bool,
+) -> bool {
+    let changed = state.observe_question_composer(input, drawn);
+    if changed {
+        gate.report(state.native_wait());
+    }
+    changed
 }
 
 fn observe_gate_frame(
@@ -5775,6 +5802,68 @@ mod tests {
     const MENU: &str = "\x1b[2J\x1b[H\x1b[?25l Accessing workspace:\r\n\r\n /work/probe\r\n\r\n \
                         Quick safety check: Is this a project you created or one you trust?\r\n\r\n \
                         ❯ No, exit\r\n   Yes, I trust this folder\r\n\r\n Enter to confirm · Esc to cancel";
+
+    #[tokio::test]
+    async fn an_answer_that_asks_a_question_releases_delivery_after_a_fresh_composer() {
+        let home = crate::test_folder::TestFolder::new("actor-answered-question-delivery");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = actor_with_cli(&home, messages.delivery_handle()).await;
+        let rule = facade_rules::find("muse").unwrap().unwrap();
+        actor.input_rule = Some(&rule.input);
+        actor.state = StateTracker::new(Some(rule), Instant::now(), Kept::default(), None, None);
+        actor.typist = Typist::new(&actor.id, Some(rule), None, messages.delivery_handle());
+
+        let border = "─".repeat(80);
+        let composer = format!("\x1b[2J\x1b[H{border}\r\n❯ \r\n{border}\x1b[2;3H");
+        read_output(&mut actor, &mut cli, composer.as_bytes()).await;
+        actor.read_screen_status();
+        assert_eq!(actor.read_screen_input().info.state, InputState::Usable);
+
+        // Neither a still visible old composer nor an earlier synchronized drawing answers this.
+        read_output(&mut actor, &mut cli, BLOCKED).await;
+        let _settled = queue_a_message(
+            &mut actor,
+            &messages,
+            Instant::now() + Duration::from_secs(20),
+        );
+        actor.type_next();
+        assert!(actor.input_gate.blocks_delivery() && actor.pending_delivery.is_none());
+        let report = std::str::from_utf8(BLOCKED).unwrap();
+        let earlier = synchronized(&format!("{composer}{report}"));
+        read_output(&mut actor, &mut cli, earlier.as_bytes()).await;
+        assert!(actor.input_gate.blocks_delivery() && actor.pending_delivery.is_none());
+
+        let menu = "\x1b[2J\x1b[HWhich one?\r\n⟩ 1  Yes\r\n  2  No";
+        read_output(&mut actor, &mut cli, menu.as_bytes()).await;
+        assert_eq!(
+            actor.read_screen_input().info.state,
+            InputState::Interaction
+        );
+        assert!(actor.input_gate.blocks_delivery() && actor.pending_delivery.is_none());
+
+        // A permission report waits even with a newly drawn ordinary composer.
+        read_output(&mut actor, &mut cli, PERMISSION).await;
+        let complete = synchronized(&composer);
+        read_output(&mut actor, &mut cli, complete.as_bytes()).await;
+        assert_eq!(actor.state.native_wait(), Some(WaitKind::Permission));
+        assert!(actor.input_gate.blocks_delivery() && actor.pending_delivery.is_none());
+
+        read_output(&mut actor, &mut cli, BLOCKED).await;
+        let open = format!("\x1b[?2026h{composer}");
+        read_output(&mut actor, &mut cli, open.as_bytes()).await;
+        assert!(actor.input_gate.blocks_delivery() && actor.pending_delivery.is_none());
+        read_output(&mut actor, &mut cli, b"\x1b[?2026l").await;
+        actor.read_screen_status();
+        assert_eq!(actor.read_screen_input().info.state, InputState::Usable);
+        assert!(
+            !actor.input_gate.blocks_delivery(),
+            "Muse has finished and redrawn its composer"
+        );
+        assert_eq!(actor.state.native_wait(), None);
+        assert!(actor.pending_delivery.is_some());
+        issue_delivery(&mut actor).await;
+        expect_cli_input(&mut cli, b"\x1b[200~a message \x1b[201~");
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ready_blocked_output_revokes_a_paste_while_the_composer_still_looks_empty() {
