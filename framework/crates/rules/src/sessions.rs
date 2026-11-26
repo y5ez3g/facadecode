@@ -17,7 +17,7 @@ mod history;
 mod kiro_settings;
 
 pub use history::{SavedSession, list_sessions, session_for_id};
-pub(crate) use history::{copilot_config_dir, kiro_profile, qoder_config_dir};
+pub(crate) use history::{kiro_profile, qoder_config_dir};
 pub(crate) use kiro_settings::kiro_config_root;
 
 use std::collections::BTreeMap;

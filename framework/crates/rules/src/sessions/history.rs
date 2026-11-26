@@ -30,7 +30,6 @@ use facade_base::system::{env_var, home_folder_in};
 use super::{parse_session_id, reported_path};
 use crate::Rule;
 
-pub(crate) use copilot::config_dir as copilot_config_dir;
 pub(crate) use qoder::config_dir as qoder_config_dir;
 /// A resumable session that its CLI has saved in the selected folder's history.
 #[derive(Clone, Debug, PartialEq, Eq)]

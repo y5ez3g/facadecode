@@ -1374,3 +1374,22 @@ fn antigravity_reports_its_conversation_through_its_title_command_and_runs_the_p
     );
     std::fs::remove_dir_all(&home).unwrap();
 }
+
+/// A selected plugin that is neither installed nor in a local directory marketplace is not on the
+/// machine: a Copilot run in a folder whose Claude settings select one is given the tools.
+#[test]
+fn copilot_is_given_the_tools_beside_a_selected_plugin_that_is_not_on_the_machine() {
+    let root = scratch("copilotremoteplugin");
+    let (home, cwd) = (root.join("home"), root.join("project"));
+    write(
+        cwd.join(".claude/settings.json"),
+        r#"{
+            "enabledPlugins": { "codex@openai-codex": true },
+            "extraKnownMarketplaces": {
+                "openai-codex": { "source": { "source": "github", "repo": "openai/codex-plugin-cc" } }
+            }
+        }"#,
+    );
+    let launch = launch_in(&cwd, "copilot", &[], &[("HOME", home.to_str().unwrap())]);
+    assert_eq!(launch.tools, Tools::Injected, "{:?}", launch.tools);
+}

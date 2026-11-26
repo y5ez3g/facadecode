@@ -29,10 +29,8 @@ files in `framework/rules/`. It is a library; it starts no program.
 - No `cfg` by system. What differs by system is data, chosen by `facade_base::system::SYSTEM` at
   run time: each CLI's hook form, `${folder_toml}`, console typing and the wrappers. On Unix,
   every command line, hook command, file and path is as it was before Windows.
-  For Copilot's managed settings path inside the Unix branch, the runtime OS selects
-  `/Library/Application Support/GitHubCopilot/managed-settings.json` on macOS and
-  `/etc/github-copilot/managed-settings.json` on Linux. Other Unix targets have neither path.
-  Windows uses `GitHubCopilot/managed-settings.json` under the effective `ProgramFiles`.
+- Copilot gets Facade's server through `--additional-mcp-config`, its highest-priority MCP source,
+  so Facade reads none of Copilot's other MCP sources.
 - Every read of a variable of a CLI's environment goes through `facade_base::system::env_var`
   (names without case on Windows), and the home folder the CLIs use is
   `facade_base::system::home_folder_in` (Unix `HOME`, Windows `USERPROFILE`).

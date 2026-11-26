@@ -55,7 +55,6 @@ pub use wiring::{
 };
 pub use wrappers::direct_command;
 
-pub(crate) use sessions::copilot_config_dir;
 pub(crate) use sessions::qoder_config_dir;
 pub(crate) use wiring::devin_config_dir;
 

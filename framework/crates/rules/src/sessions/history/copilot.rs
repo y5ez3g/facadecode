@@ -19,7 +19,7 @@ use super::{
 };
 use crate::Rule;
 
-pub(crate) fn config_dir(
+pub(super) fn config_dir(
     rule: &Rule,
     launch_cwd: &Path,
     environment: &BTreeMap<String, String>,
