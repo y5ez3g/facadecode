@@ -5,7 +5,7 @@
 	"arguments": {
 		"reserved": ["--resume", "--continue", "--new-session-id", "--print", "-p", "--output-format", "--force", "-f", "--yolo", "--auto-review", "--approve-mcps", "--sandbox", "--trust", "--workspace", "--worktree", "-w", "--data-dir", "--exclude-workspace-context", "--model"],
 		"required": ["--model", "--mode", "--add-dir", "--plugin-dir", "--image", "--api-key"],
-		"clusters": []
+		"clusters": ["-H", "-e"]
 	},
 	"choices": { "model": ["--model", "${value}"], "spelling": { "model": ["--model"] } },
 	"input": {

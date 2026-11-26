@@ -749,6 +749,8 @@ mod tests {
         assert!(refused("codex", &["-pwork", "-pmy-model"]).is_empty());
         assert_eq!(refused("opencode", &["-cs", "abc"]), ["0:-c"]);
         assert_eq!(refused("muse", &["-wc"]), ["0:-w"]);
+        assert!(refused("agent", &["-Hfoo: bar", "-ehttp://127.0.0.1:9"]).is_empty());
+        assert_eq!(refused("agent", &["-fHfoo: bar"]), ["0:-f"]);
         let grammar = &find("codex").unwrap().unwrap().arguments;
         let options = ["--model", "-m"].map(String::from);
         let args = [

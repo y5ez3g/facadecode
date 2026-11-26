@@ -116,6 +116,7 @@ command line together. The children never use each other. They may use the layer
   `holds` and `end_of_options` serve command_line and wiring. `problems_at` gives the setting reader
   the source index of each problem. `choice_value` finds the value of a model or effort option,
   including the short forms its CLI accepts.
+  Cursor's `-H` and `-e` take the rest of their short-option run as the header or endpoint value.
 - `formats.rs`: the CLIs' own text formats in one place: JSON with comments, shell words, TOML
   strings and inline values, and merging Facade's settings into the person's. Facade writes POSIX
   hook commands on Unix and for Claude Code on Windows, whose Git Bash takes `'C:\…'` words as
