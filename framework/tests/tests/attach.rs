@@ -1127,9 +1127,14 @@ fn attach_gives_the_mouse_to_a_cli_that_asks_for_it() {
     // Once the CLI lets the mouse go, the wheel and clicks stay with Attach.
     std::fs::write(&transcript, "\x1b[?1003l\x1b[?1006l").unwrap();
     home.run_facade_ok(&["type", &agent.id, "/fake screen", "--enter"]);
-    assert!(wait_until(LOADED_TIMEOUT, || {
-        String::from_utf8_lossy(&term.output_since(settled)).contains("\x1b[?1002h")
-    }));
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            String::from_utf8_lossy(&term.output_since(settled)).contains("\x1b[?1002h")
+        }),
+        "host received {:?}\nagent screen:\n{}",
+        String::from_utf8_lossy(&term.output_since(settled)),
+        home.screen(&agent.id)
+    );
     let before = read_keys();
     term.send(b"\x1b[<64;12;4M\x1b[<0;12;4M\x1b[<0;12;4mq");
     assert!(
