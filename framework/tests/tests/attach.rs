@@ -1145,7 +1145,10 @@ fn attach_gives_the_mouse_to_a_cli_that_asks_for_it() {
         "{:?}",
         read_keys()
     );
-    assert_eq!(read_keys(), [before, b"\x1b[A".repeat(3), b"q".to_vec()].concat());
+    assert_eq!(
+        read_keys(),
+        [before, b"\x1b[A".repeat(3), b"q".to_vec()].concat()
+    );
     term.send(b"\x1d");
     assert!(
         term.wait_exit(secs(10))
