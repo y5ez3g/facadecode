@@ -690,14 +690,10 @@ fn assert_status_starts_nothing(home: &TestHome) {
         out.starts_with(&format!("Facade {version} is not running on ")),
         "{out}"
     );
-    for label in [
-        "Active agents",
-        "Connected machines",
-        "Daemon PID",
-        "Keeper PID",
-    ] {
+    for label in ["Active agents", "Daemon PID", "Keeper PID"] {
         assert_eq!(status_field(&out, label), Some("-"), "{out}");
     }
+    assert!(out.contains("\n\nAvailable CLIs\n"), "{out}");
     for (label, path) in [
         ("Home", home.path.clone()),
         ("Settings", home.path.join("facade.json")),
@@ -735,9 +731,12 @@ fn assert_status_shows_running(home: &TestHome) {
         out.lines().next().unwrap(),
         format!("Facade {version} is running on {name}.")
     );
+    assert!(
+        out.contains(&format!("\n\nAvailable CLIs\n{name}  ")),
+        "{out}"
+    );
     for (label, value) in [
         ("Active agents", "1".into()),
-        ("Connected machines", "-".into()),
         ("Home", home.path.display().to_string()),
         (
             "Settings",

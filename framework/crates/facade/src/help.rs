@@ -36,7 +36,7 @@ const START: Page = Page {
 
 Facade options come before the CLI name. Everything after the CLI name is
 passed to that CLI unchanged. Use that CLI's own flags for model, reasoning,
-and prompts."#,
+and prompts. Run 'facade status' to see the CLIs you can start."#,
     usage: r#"Usage: facade start [OPTIONS] <CLI> [CLI_ARGS]..."#,
     examples: r#"  facade start codex
   facade start agent

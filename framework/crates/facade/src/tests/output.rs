@@ -380,7 +380,7 @@ fn inspect_describes_custom_programs_guests_and_ended_agents() {
 }
 
 #[test]
-fn status_shows_settings_services_and_connected_machines() {
+fn status_shows_settings_services_and_each_machine_s_clis() {
     let (home, settings, build) = (
         "/home/you/.facade",
         "/home/you/.facade/facade.json",
@@ -404,33 +404,34 @@ fn status_shows_settings_services_and_connected_machines() {
     }))
     .unwrap();
     let launcher = "/home/you/.facade/framework/bin/facade-mcp";
-    let text = status_text(&status, "peer-id", "0.1.6", launcher);
+    let clis = ["claude, codex".to_owned(), "claude".to_owned()];
+    let text = status_text(&status, &clis, "peer-id", "0.1.6", launcher);
     assert_eq!(
         text,
-        "Facade 0.1.6+abc is running on peer.\nCLI version         0.1.6\nActive agents       12\nConnected machines  devbox\n\n\
+        "Facade 0.1.6+abc is running on peer.\nCLI version         0.1.6\nActive agents       12\n\n\
          Home                /home/you/.facade\nSettings            /home/you/.facade/facade.json\n\
          Daemon PID          16968\nKeeper PID          16752\n\n\
-         Guest MCP           Add \"/home/you/.facade/framework/bin/facade-mcp\" as a stdio server."
+         Guest MCP           Add \"/home/you/.facade/framework/bin/facade-mcp\" as a stdio server.\n\n\
+         Available CLIs\npeer                claude, codex\ndevbox              claude"
     );
     status.build = "0.1.5".into();
     status.keeper_pid = None;
-    let text = status_text(&status, "peer-id", "0.1.6", launcher);
+    let text = status_text(&status, &clis, "peer-id", "0.1.6", launcher);
     assert_eq!(
         text.lines().next(),
         Some("Facade 0.1.5 is running on peer.")
     );
     assert_eq!(field(&text, "CLI version").as_deref(), Some("0.1.6"));
     assert_eq!(field(&text, "Keeper PID").as_deref(), Some("-"));
-    let sleeping = sleeping_text(home, settings, "0.1.6", launcher, "laptop");
+    let sleeping = sleeping_text("claude, codex", home, settings, "0.1.6", launcher, "laptop");
+    assert!(
+        sleeping.ends_with("\n\nAvailable CLIs\nlaptop              claude, codex"),
+        "{sleeping}"
+    );
     assert!(sleeping.starts_with("Facade 0.1.6 is not running on "));
     assert_eq!(field(&sleeping, "Home").as_deref(), Some(home));
     assert_eq!(field(&sleeping, "Settings").as_deref(), Some(settings));
-    for label in [
-        "Active agents",
-        "Connected machines",
-        "Daemon PID",
-        "Keeper PID",
-    ] {
+    for label in ["Active agents", "Daemon PID", "Keeper PID"] {
         assert_eq!(field(&sleeping, label).as_deref(), Some("-"), "{sleeping}");
     }
     assert_eq!(field(&sleeping, "Guest MCP"), field(&text, "Guest MCP"));

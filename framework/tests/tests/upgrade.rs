@@ -1274,11 +1274,7 @@ fn a_newer_build_s_status_reports_the_running_service_without_upgrading_it() {
         "{text}"
     );
     assert_eq!(status_field(&text, "Active agents"), Some("1"), "{text}");
-    assert_eq!(
-        status_field(&text, "Connected machines"),
-        Some("-"),
-        "{text}"
-    );
+    assert!(text.contains("\n\nAvailable CLIs\n"), "{text}");
     let after = home.hello_result().unwrap();
     assert_eq!(
         (&after["pid"], &after["build"]),

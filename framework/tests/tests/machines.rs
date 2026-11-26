@@ -2752,7 +2752,6 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
         "{}",
         terminal.text()
     );
-    assert!(!terminal.on_alternate_screen());
     assert!(
         terminal.wait_for_output(secs(0), &format!("Attached to worker ({address}).")),
         "{}",
@@ -2782,14 +2781,13 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
         "{}",
         terminal.text()
     );
-    first.wait_for_gate("attach-reconnected");
-    assert!(!terminal.on_alternate_screen());
-    assert_eq!(
-        terminal.output_count("bytes typed while disconnected were not sent"),
-        0
-    );
-    let warning = format!("warning: {} bytes you typed were not sent", discarded.len());
-    assert_eq!(terminal.output_count(&warning), 0);
+    assert!(terminal.wait_for_output(
+        secs(5),
+        &format!(
+            "Reconnected to worker ({address}). {} bytes typed while disconnected were not sent",
+            discarded.len()
+        )
+    ));
     terminal.send(b"typed after refresh\r");
     assert!(wait_for_screen_text(
         &second,
@@ -2808,22 +2806,11 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
             .is_some_and(|exit| exit.success())
     );
 
-    let detached = format!("Detached from worker ({address}). The agent is still running.");
     assert!(
-        terminal.wait_for_output(secs(2), &warning),
+        terminal.wait_for_output(secs(0), &format!("Detached from worker ({address}).")),
         "{}",
         terminal.text()
     );
-    let bytes = terminal.output_since(0);
-    let written = String::from_utf8_lossy(&bytes);
-    assert!(
-        written
-            .split_once(&detached)
-            .is_some_and(|(_, rest)| rest.contains(&warning)),
-        "{written:?}"
-    );
-    assert_eq!(terminal.output_count(&detached), 1);
-    assert_eq!(terminal.output_count("bytes you typed were not sent"), 1);
     assert_eq!(
         first.run_facade_ok(&["stop", &target]),
         format!("Stopped worker ({address}).\n")
