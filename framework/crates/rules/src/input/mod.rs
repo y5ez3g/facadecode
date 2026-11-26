@@ -790,6 +790,9 @@ impl<'a> Screen<'a> {
                 cursor_row + 1
             ));
         }
+        if self.editor_is_provisioning(rule, upper) {
+            return unknown(format!("the CLI is still provisioning tools above {place}"));
+        }
         let lines: Vec<&Cells> = (upper + 1..lower).map(|y| self.row(y)).collect();
         if limit == Some(lines.len()) {
             return self.full_editor(lower, column, lines, &place);
@@ -802,6 +805,29 @@ impl<'a> Screen<'a> {
             _ => (None, None),
         };
         self.editor_reading(upper + 1, 0, &lines, &place, marks, column <= 3)
+    }
+
+    fn editor_is_provisioning(&self, rule: &Editor, upper: usize) -> bool {
+        // The CLI keeps the notices in its transcript. The newest notice for each tool
+        // says whether it is still downloading.
+        rule.provisioning.iter().any(|tool| {
+            (0..upper).rev().find_map(|row| {
+                let text = self.lines[row].trim_end_matches(' ');
+                if self.continues[row] || !text.starts_with(' ') {
+                    return None;
+                }
+                if tool.finished.is_match(text) {
+                    return Some(false);
+                }
+                (tool.downloading.is_match(text)
+                    && self
+                        .row(row)
+                        .iter()
+                        .filter(|cell| draws(cell))
+                        .all(|cell| cell.dim || cell.colored))
+                .then_some(true)
+            }) == Some(true)
+        })
     }
 
     fn in_editor_rail(&self, rule: &Editor, rail: &EditorRail, cursor_visible: bool) -> Reading {

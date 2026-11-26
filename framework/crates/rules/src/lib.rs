@@ -394,6 +394,9 @@ pub struct Editor {
     /// An editor with a rail and a plain fallback, both identified by their interactive footer.
     #[serde(default)]
     pub(crate) rail: Option<EditorRail>,
+    /// Notices above the editor while the CLI is provisioning its startup tools.
+    #[serde(default)]
+    pub(crate) provisioning: Vec<EditorProvisioning>,
     pub upper: Pattern,
     pub lower: Pattern,
     pub scrolled: Scrolled,
@@ -401,6 +404,13 @@ pub struct Editor {
     pub most_rows: usize,
     pub most_share: f64,
     pub menus: Vec<Menu>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EditorProvisioning {
+    pub(crate) downloading: Pattern,
+    pub(crate) finished: Pattern,
 }
 
 #[derive(Debug, Deserialize)]

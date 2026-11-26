@@ -272,6 +272,9 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     A wrapped notice also matches when the complete styled text sits directly above one to
     three indented project rows, ending in the native `Run on:` context.
     Manual `/login` stays available, and Copilot continues to report its state through OSC.
+  - Pi draws startup tool download notices above its editor before the submit handler is ready.
+    The editor reads `unknown` while a styled download notice is newer than that tool's
+    installation or failure notice. Pi keeps those notices in the transcript after startup.
   - Codex's `prompt` input accepts `›` and its `alternate_prompt`, `»` at Ultra effort.
     The updater menu reads `interaction` when the selected `Update now` row has the
     `enter continue · esc skip` footer within five rows. This also covers the wrapped option

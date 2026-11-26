@@ -58,10 +58,9 @@ fn reads_as_recorded(cli: &str) {
     );
     states.sort();
     states.dedup();
-    // Codex's recordings also show its search and selection screens, which read unknown, and
-    // Muse's its drafts with the cursor where the input starts, which read unknown as unsure.
-    // Cursor's show the frame before it hides the terminal cursor and an answered question alone.
-    let shown: &[&str] = if cli == "codex" || cli == "muse" || cli == "agent" {
+    // The recordings also show Codex search and selection, Muse drafts at the input start,
+    // Cursor frames before the cursor is hidden, and Pi startup tool downloads as unknown.
+    let shown: &[&str] = if matches!(cli, "codex" | "muse" | "agent" | "pi") {
         &["draft", "interaction", "unknown", "usable"]
     } else {
         &["draft", "interaction", "usable"]
