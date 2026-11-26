@@ -219,6 +219,21 @@ fn kiro_reads_workspace_trust_without_its_heading() {
 }
 
 #[test]
+fn kiro_waits_for_the_ready_prompt_after_working() {
+    let rule = find("kiro-cli").unwrap().unwrap();
+    let working = kiro_screen("work-hint");
+    let ready = kiro_screen("ready-after-work");
+    for untouched in [false, true] {
+        let waiting = read_box_for_typing(&rule.input, &working, untouched);
+        assert_eq!(waiting.info.state, InputState::Unknown);
+        assert!(!waiting.unsure && waiting.line.is_none(), "{waiting:?}");
+
+        let ready = read_box_for_typing(&rule.input, &ready, untouched);
+        assert!(ready.unsure && ready.line.is_some(), "{ready:?}");
+    }
+}
+
+#[test]
 fn kiro_waits_for_the_composer_before_probing_its_hint() {
     let rule = find("kiro-cli").unwrap().unwrap();
     let reading = read_box_for_typing(&rule.input, &kiro_screen("initializing"), true);

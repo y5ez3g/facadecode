@@ -18,7 +18,7 @@
 		"prompt": "› ",
 		"alternate_prompt": "> ",
 		"placeholder": "^ask a question,? or describe a task(?: (?:↩|↵|Enter))?$",
-		"startup_hint": "^Initializing · type to queue a message$",
+		"unready_hint": "^(?:Initializing · type to queue a message|Kiro is working(?: · (?:(?:[0-9]+h )?[0-9]+m )?[0-9]+s)? · Type to steer · Ctrl\\+S to queue)$",
 		"menus": [
 			{ "selected": "^\\s*Trust this workspace\\?$" },
 			{

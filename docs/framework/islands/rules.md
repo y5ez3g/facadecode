@@ -244,8 +244,8 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     start on a continuation row.
   - Frames can specify an indent and a second prompt glyph. Cursor and Kiro anchor their prompt
     rows at the cursor and read wrapped rows using that prompt's margin.
-  - Kiro's colored startup hint at the composer cursor reads `unknown` without a Space probe
-    while Kiro initializes. Its ready hint and drafts use ordinary input reading.
+  - Kiro's colored initialization and working hints at the composer cursor read `unknown` without
+    a Space probe. Its ready hint and drafts use ordinary input reading.
   - Devin uses `❭` inside its two-rule frame. Qoder sets `hidden_cursor_in_frame` and can use
     the hidden terminal cursor without an inverse cell when its position is inside the complete
     input frame, at or after the input column. Both colored hints still need the reversible
