@@ -897,23 +897,13 @@ impl Terminal {
         }
     }
 
-    /// Leaves no read under way: how many bytes the read it ended brought, which `output` then
-    /// holds, or None once no read is under way and no byte is kept, or with no master. Called
-    /// until it gives None. A failure lets go of the master, as a failed read does.
-    pub(crate) async fn stop_reading(&mut self) -> Option<usize> {
-        let read_size = self.read_limit();
-        let master = self.master.as_mut()?;
-        self.buffer.resize(read_size, 0);
-        match master.stop_reading(&mut self.buffer).await {
-            Ok(0) => None,
-            Ok(n) => {
-                self.record_read(n);
-                Some(n)
-            }
-            Err(_) => {
-                self.detach();
-                None
-            }
+    /// Leaves no read under way; output not read stays for the next reader. A failure lets go of
+    /// the master, as a failed read does. Nothing with no master.
+    pub(crate) async fn stop_reading(&mut self) {
+        if let Some(master) = self.master.as_mut()
+            && master.stop_reading().await.is_err()
+        {
+            self.detach();
         }
     }
 
@@ -925,7 +915,7 @@ impl Terminal {
         }
     }
 
-    /// What the last `TerminalEvent::Read`, `read_now` or `stop_reading` brought.
+    /// What the last `TerminalEvent::Read` or `read_now` brought.
     pub(crate) fn output(&self) -> &[u8] {
         &self.buffer[..self.received]
     }

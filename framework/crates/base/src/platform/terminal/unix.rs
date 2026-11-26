@@ -141,8 +141,8 @@ impl Io {
         usize::try_from(bytes).map_err(|_| io::Error::other("invalid queued terminal byte count"))
     }
 
-    pub(super) async fn stop_reading(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
-        Ok(0)
+    pub(super) async fn stop_reading(&mut self) -> io::Result<()> {
+        Ok(())
     }
 
     pub(super) async fn write(

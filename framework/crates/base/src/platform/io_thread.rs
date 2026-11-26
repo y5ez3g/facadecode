@@ -169,13 +169,6 @@ impl Operation {
         })
     }
 
-    /// The bytes a read brought, `brought` of them. Only once it is done.
-    pub(super) fn bytes(&self, brought: usize) -> &[u8] {
-        // SAFETY: the operation is done, so the system no longer writes the buffer.
-        let buffer = unsafe { &*self.buffer.get() };
-        &buffer[..brought.min(buffer.len())]
-    }
-
     pub(super) fn overlapped(&self) -> *mut OVERLAPPED {
         self.overlapped.get()
     }

@@ -153,29 +153,28 @@ impl PtyIo {
         Ok(PtyIo { io, master })
     }
 
-    /// Waits for output and reads it; `Ok(0)` once the CLI's side closed. Cancel-safe: a read under
-    /// way stays under way. Bytes a read brought that `buf` cannot hold are kept and come with the
-    /// next `read`, `try_read` or `stop_reading`, in order.
+    /// Waits for output and reads it, at most as much as `buf` holds; `Ok(0)` once the CLI's side
+    /// closed and all its output was read. Cancel-safe: waiting takes no output.
     pub async fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.io.read(buf).await
     }
 
-    /// Output already there, kept bytes first, without waiting; `WouldBlock` when there is none.
+    /// Output already there, without waiting; `WouldBlock` when there is none.
     pub fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.io.try_read(buf)
     }
 
-    /// Counts readable output, including bytes kept from a completed read. A closed peer
-    /// can still have buffered bytes and is reported as `UnexpectedEof` when detected.
+    /// Counts the output that reached Facade's end and has not been read: none is held where this
+    /// count misses it. A closed peer can still leave bytes; `UnexpectedEof` comes once none is
+    /// left.
     pub fn queued_output_bytes(&self) -> io::Result<usize> {
         self.io.queued_output_bytes()
     }
 
-    /// Leaves no read under way. Windows cancels the read under way, waits for it, and returns what
-    /// it brought, as much as `buf` holds; Unix returns `Ok(0)` at once. Call it until it returns
-    /// `Ok(0)`: then no read is under way and no byte is kept.
-    pub async fn stop_reading(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.io.stop_reading(buf).await
+    /// Leaves no read under way. Output not read stays for the next reader. Windows cancels the
+    /// wait for output and waits for that; Unix has nothing under way.
+    pub async fn stop_reading(&mut self) -> io::Result<()> {
+        self.io.stop_reading().await
     }
 
     /// Writes `bytes`, and returns how many the terminal took, counted once they are in it.
@@ -352,6 +351,135 @@ impl TestCli {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Output that reached Facade's end of the pipe counts as ready, including bytes that a read
+    /// under way has taken but not yet reported. Windows only: the CLI's write returns once its
+    /// bytes are there, so the count can be checked right after it.
+    #[cfg(windows)]
+    #[test]
+    fn ready_output_includes_bytes_a_read_under_way_has_taken() {
+        let (master, mut cli) = test_terminal(80, 24).unwrap();
+        let pty = PtyIo::new(master).unwrap();
+        let chunk = b"earlier redraw";
+        let mut buf = [0u8; 64];
+        for round in 0..200 {
+            // Nothing is there yet, so this attempt leaves a read under way.
+            let waiting = pty.try_read(&mut buf).unwrap_err();
+            assert_eq!(waiting.kind(), io::ErrorKind::WouldBlock);
+            cli.write_output(chunk).unwrap();
+            assert_eq!(
+                pty.queued_output_bytes().unwrap(),
+                chunk.len(),
+                "round {round}"
+            );
+            let mut read = 0;
+            while read < chunk.len() {
+                match pty.try_read(&mut buf) {
+                    Ok(n) => read += n,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::yield_now()
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            }
+            assert_eq!(read, chunk.len());
+        }
+    }
+
+    /// Reads `count` bytes as they come, without waiting on a runtime.
+    #[cfg(windows)]
+    fn read_exactly(pty: &PtyIo, count: usize) -> Vec<u8> {
+        let mut read = Vec::new();
+        let mut buf = [0u8; 64];
+        while read.len() < count {
+            match pty.try_read(&mut buf) {
+                Ok(0) => panic!("the output ended after {} bytes", read.len()),
+                Ok(n) => read.extend_from_slice(&buf[..n]),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => std::thread::yield_now(),
+                Err(error) => panic!("{error}"),
+            }
+        }
+        read
+    }
+
+    /// Output the CLI wrote before its side closed is all read, and only then does the output end.
+    #[cfg(windows)]
+    #[test]
+    fn output_written_before_the_cli_closed_is_read_before_the_end() {
+        let (master, mut cli) = test_terminal(80, 24).unwrap();
+        let pty = PtyIo::new(master).unwrap();
+        let mut buf = [0u8; 4];
+        let waiting = pty.try_read(&mut buf).unwrap_err();
+        assert_eq!(waiting.kind(), io::ErrorKind::WouldBlock);
+        cli.write_output(b"last words").unwrap();
+        drop(cli);
+        assert_eq!(pty.queued_output_bytes().unwrap(), 10);
+        let mut read = Vec::new();
+        loop {
+            match pty.try_read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    read.extend_from_slice(&buf[..n]);
+                    if read.len() < 10 {
+                        assert_eq!(pty.queued_output_bytes().unwrap(), 10 - read.len());
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => std::thread::yield_now(),
+                Err(error) => panic!("{error}"),
+            }
+        }
+        assert_eq!(read, b"last words");
+        assert_eq!(
+            pty.queued_output_bytes().unwrap_err().kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+        assert_eq!(pty.try_read(&mut buf).unwrap(), 0, "the end stays the end");
+    }
+
+    /// A caller that takes fewer bytes than wait leaves the rest counted.
+    #[cfg(windows)]
+    #[test]
+    fn output_a_small_buffer_leaves_stays_counted() {
+        let (master, mut cli) = test_terminal(80, 24).unwrap();
+        let pty = PtyIo::new(master).unwrap();
+        let mut small = [0u8; 4];
+        let waiting = pty.try_read(&mut small).unwrap_err();
+        assert_eq!(waiting.kind(), io::ErrorKind::WouldBlock);
+        cli.write_output(b"earlier redraw").unwrap();
+        assert_eq!(pty.try_read(&mut small).unwrap(), 4);
+        assert_eq!(&small, b"earl");
+        assert_eq!(pty.queued_output_bytes().unwrap(), 10);
+        assert_eq!(read_exactly(&pty, 10), b"ier redraw");
+        assert_eq!(pty.queued_output_bytes().unwrap(), 0);
+    }
+
+    /// A reader that stops while it waits for output hands every later byte, once, to the next.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn output_after_a_stopped_reader_goes_to_the_next_once() {
+        let (master, mut cli) = test_terminal(80, 24).unwrap();
+        let next = master.try_clone().unwrap();
+        let mut first = PtyIo::new(master).unwrap();
+        cli.write_output(b"read ").unwrap();
+        assert_eq!(read_exactly(&first, 5), b"read ");
+        let mut buf = [0u8; 64];
+        let waiting = first.try_read(&mut buf).unwrap_err();
+        assert_eq!(waiting.kind(), io::ErrorKind::WouldBlock);
+        cli.write_output(b"handed over").unwrap();
+        first.stop_reading().await.unwrap();
+        assert_eq!(first.queued_output_bytes().unwrap(), 11);
+        drop(first);
+
+        let second = PtyIo::new(next).unwrap();
+        assert_eq!(second.queued_output_bytes().unwrap(), 11);
+        assert_eq!(read_exactly(&second, 11), b"handed over");
+        let waiting = second.try_read(&mut buf).unwrap_err();
+        assert_eq!(
+            waiting.kind(),
+            io::ErrorKind::WouldBlock,
+            "nothing comes twice"
+        );
+    }
 
     #[test]
     fn a_key_record_names_the_key_its_character_the_keys_held_and_whether_it_goes_down() {

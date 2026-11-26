@@ -359,7 +359,7 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 - **Never does:** parse output, decide what input may wait, or select a submission key.
 - **Interface**
   - Lifecycle — `new(Option<PtyMaster>)`, `install(PtyMaster)`, `detach()`,
-    `stop_reading() -> Option<usize>` (async), `let_go_before_stop()`, `is_open()`, `is_closed()`
+    `stop_reading()` (async), `let_go_before_stop()`, `is_open()`, `is_closed()`
     and `set_size(cols, rows)`.
   - `ready` and `ready_with_input` return `Read`, `Closed`, `Wrote`, `DeliveryIssued`,
     `ToolWriteIssued`, `ToolWriteExpired`, `ReadFailed` or `WriteFailed`, or request a probe check.

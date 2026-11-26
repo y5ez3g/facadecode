@@ -1011,9 +1011,7 @@ impl Actor {
                 self.release_held();
                 // No read is under way once it replies, and what the last reads brought went
                 // through the screen log, so the next daemon reads on from there.
-                while self.terminal.stop_reading().await.is_some() {
-                    self.take_output();
-                }
+                self.terminal.stop_reading().await;
                 // The last facts are written before the next daemon reads them.
                 self.stop_keeping().await;
                 self.quieting = Some(reply);
@@ -4283,6 +4281,7 @@ mod tests {
                 })
                 .await;
             }
+            let start = actor.terminal.output_position();
             cli.write_output(empty.as_bytes()).unwrap();
             if before_first_read {
                 cli.write_output(draft.as_bytes()).unwrap();
@@ -4296,8 +4295,9 @@ mod tests {
             .await
             .expect("the first PTY read returns the empty frame");
             assert!(matches!(read, TerminalEvent::Read));
-            assert_eq!(actor.terminal.output(), empty.as_bytes());
-            let end = actor.terminal.output_position() + draft.len() as u64;
+            // A read takes what waits: a draft written before it may come in the same read.
+            assert!(actor.terminal.output().starts_with(empty.as_bytes()));
+            let end = start + (empty.len() + draft.len()) as u64;
             if already_ready && !before_first_read {
                 cli.write_output(draft.as_bytes()).unwrap();
             }

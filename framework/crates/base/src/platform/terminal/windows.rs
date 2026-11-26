@@ -5,7 +5,7 @@ use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle,
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use windows_sys::Win32::Foundation::{
-    ERROR_BROKEN_PIPE, ERROR_IO_INCOMPLETE, ERROR_OPERATION_ABORTED, ERROR_PIPE_NOT_CONNECTED,
+    ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_OPERATION_ABORTED, ERROR_PIPE_NOT_CONNECTED,
     GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
@@ -24,6 +24,10 @@ use super::WriteObservation;
 
 /// The most bytes one read takes, and one write gives.
 const CHUNK_BYTES: usize = 64 * 1024;
+
+/// How long a read waits before looking again when zero-byte reads keep completing with nothing
+/// to read, which only another reader of the same pipe could cause.
+const NOTHING_AFTER_READY: std::time::Duration = std::time::Duration::from_millis(1);
 
 /// The input pipe's write end, the output pipe's read end, the signal pipe's write end until it is
 /// let go of, and the CLI's job.
@@ -93,49 +97,48 @@ impl Master {
     }
 }
 
-/// The terminal's ends, bound to the terminal I/O thread's completion port: at most one read and
-/// one write under way, and the bytes a read brought that its caller could not take yet.
+/// The terminal's ends, bound to the terminal I/O thread's completion port: at most one write
+/// under way, and on the output only a zero-byte read, which waits for output without taking
+/// any. A sized read takes output only once it waits, and completes at once, so every byte that
+/// reached Facade's end is either still in the pipe or given to the caller. This holds while this
+/// `Io` is the output pipe's only reader.
 pub(super) struct Io {
     input: OwnedHandle,
     output: OwnedHandle,
+    /// Signals this `Io`'s sized reads, which the completion port does not take.
+    read_event: OwnedHandle,
     reading: Mutex<Reading>,
     writing: Mutex<Option<Arc<Operation>>>,
 }
 
 #[derive(Default)]
 struct Reading {
-    under_way: Option<Arc<Operation>>,
-    kept: Vec<u8>,
+    /// A zero-byte read under way: it completes once output waits or the CLI's side closed.
+    ready: Option<Arc<Operation>>,
     ended: bool,
 }
 
 impl Reading {
-    /// Takes the result of a read that is done: its bytes into `kept`, or the output's end.
-    fn collect(&mut self) -> io::Result<()> {
-        let Some(result) = self.under_way.as_ref().and_then(|read| read.done.take()) else {
+    /// Lets go of a zero-byte read that is done. It only said that output may wait; the pipe
+    /// itself says whether it does, and reports the end once no bytes are left.
+    fn settle(&mut self) -> io::Result<()> {
+        let Some(result) = self.ready.as_ref().and_then(|read| read.done.take()) else {
             return Ok(());
         };
-        let Some(read) = self.under_way.take() else {
-            return Ok(());
-        };
-        match result {
-            Ok(brought) => self.kept.extend_from_slice(read.bytes(brought)),
-            Err(error) if is_end(&error) => self.ended = true,
-            Err(error) if error.raw_os_error() == Some(ERROR_OPERATION_ABORTED as i32) => {}
-            Err(error) => return Err(error),
-        }
-        Ok(())
+        self.ready = None;
+        readiness(result)
     }
+}
 
-    /// Kept bytes, as many as `buf` holds; None where none are kept.
-    fn give(&mut self, buf: &mut [u8]) -> Option<usize> {
-        if self.kept.is_empty() {
-            return None;
+/// A zero-byte read's result: it completed, the CLI's side closed, or it was cancelled.
+fn readiness(result: io::Result<usize>) -> io::Result<()> {
+    match result {
+        Err(error)
+            if !is_end(&error) && error.raw_os_error() != Some(ERROR_OPERATION_ABORTED as i32) =>
+        {
+            Err(error)
         }
-        let count = buf.len().min(self.kept.len());
-        buf[..count].copy_from_slice(&self.kept[..count]);
-        self.kept.drain(..count);
-        Some(count)
+        _ => Ok(()),
     }
 }
 
@@ -153,9 +156,16 @@ impl Io {
         let output = master.output.try_clone()?;
         io_thread::bind(input.as_handle())?;
         io_thread::bind(output.as_handle())?;
+        // SAFETY: a new manual-reset event, unsignaled, with no name or security attributes.
+        let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+        if event.is_null() {
+            return Err(io::Error::last_os_error());
+        }
         Ok(Io {
             input,
             output,
+            // SAFETY: event is a handle the call just returned and nothing else owns.
+            read_event: unsafe { OwnedHandle::from_raw_handle(event) },
             reading: Mutex::new(Reading::default()),
             writing: Mutex::new(None),
         })
@@ -163,15 +173,16 @@ impl Io {
 
     pub(super) async fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
-            let read = {
+            let ready = {
                 let mut reading = lock(&self.reading);
                 if let Some(count) = self.output_now(&mut reading, buf)? {
                     return Ok(count);
                 }
-                reading.under_way.clone()
+                reading.ready.clone()
             };
-            if let Some(read) = read {
-                read.done.done().await;
+            match ready {
+                Some(ready) => ready.done.done().await,
+                None => tokio::time::sleep(NOTHING_AFTER_READY).await,
             }
         }
     }
@@ -184,105 +195,145 @@ impl Io {
         }
     }
 
+    /// The bytes waiting in the pipe. No read holds output the pipe no longer counts, so the
+    /// count is whole when it is taken.
     pub(super) fn queued_output_bytes(&self) -> io::Result<usize> {
-        let reading = lock(&self.reading);
-        let output = self.output.as_raw_handle();
-        let completed = || {
-            let Some(read) = &reading.under_way else {
-                return Ok(Some(0));
-            };
-            let mut bytes = 0;
-            // SAFETY: this is the live operation on output. The call only samples its result.
-            if unsafe { GetOverlappedResult(output, read.overlapped(), &mut bytes, 0) } != 0 {
-                return Ok(Some(bytes as usize));
-            }
-            let error = io::Error::last_os_error();
-            match error.raw_os_error().map(|code| code as u32) {
-                Some(ERROR_IO_INCOMPLETE) => Ok(None),
-                Some(ERROR_OPERATION_ABORTED | ERROR_BROKEN_PIPE | ERROR_PIPE_NOT_CONNECTED) => {
-                    Ok(Some(0))
-                }
-                _ => Err(error),
-            }
-        };
-        let queued = || {
-            let mut bytes = 0;
-            // SAFETY: output is open, and only the count of bytes waiting is requested.
-            let peeked = unsafe {
-                PeekNamedPipe(
-                    output,
-                    std::ptr::null_mut(),
-                    0,
-                    std::ptr::null_mut(),
-                    &mut bytes,
-                    std::ptr::null_mut(),
-                )
-            };
-            if peeked == 0 {
-                let error = io::Error::last_os_error();
-                return Err(if is_end(&error) {
-                    io::ErrorKind::UnexpectedEof.into()
-                } else {
-                    error
-                });
-            }
-            Ok(bytes as usize)
-        };
-        let mut read = completed()?;
-        let mut pipe = queued()?;
-        if read.is_none() {
-            read = completed()?;
-            if read.is_some() {
-                // The outstanding read may have taken bytes counted by the first peek.
-                pipe = queued()?;
-            }
-        }
-        Ok(reading.kept.len() + read.unwrap_or(0) + pipe)
+        let _reading = lock(&self.reading);
+        self.waiting()?
+            .ok_or_else(|| io::ErrorKind::UnexpectedEof.into())
     }
 
-    /// Output there now: kept bytes, or what a read that completes at once brings, or `Some(0)`
-    /// at the output's end. Issues a read where none is under way; None while it stays under way.
+    /// The bytes waiting in the output pipe; None once the CLI's side closed and none are left.
+    fn waiting(&self) -> io::Result<Option<usize>> {
+        let mut bytes = 0;
+        // SAFETY: output is open, and only the count of bytes waiting is requested.
+        let peeked = unsafe {
+            PeekNamedPipe(
+                self.output.as_raw_handle(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                &mut bytes,
+                std::ptr::null_mut(),
+            )
+        };
+        if peeked != 0 {
+            return Ok(Some(bytes as usize));
+        }
+        let error = io::Error::last_os_error();
+        if is_end(&error) { Ok(None) } else { Err(error) }
+    }
+
+    /// Output there now: bytes waiting in the pipe, or `Some(0)` at the output's end. With nothing
+    /// there, leaves a zero-byte read under way and returns None.
     fn output_now(&self, reading: &mut Reading, buf: &mut [u8]) -> io::Result<Option<usize>> {
-        loop {
-            reading.collect()?;
-            if let Some(count) = reading.give(buf) {
-                return Ok(Some(count));
+        if reading.ended {
+            return Ok(Some(0));
+        }
+        // A zero-byte read that completes at once says output arrived after the look; this looks
+        // again. Twice with nothing to read would take another reader, so it stops there.
+        for _ in 0..2 {
+            reading.settle()?;
+            match self.waiting()? {
+                None => {
+                    reading.ended = true;
+                    return Ok(Some(0));
+                }
+                Some(0) => {}
+                Some(_) => match self.read_waiting(buf)? {
+                    Some(0) => {
+                        reading.ended = true;
+                        return Ok(Some(0));
+                    }
+                    Some(count) => return Ok(Some(count)),
+                    None => continue,
+                },
             }
-            if reading.ended {
-                return Ok(Some(0));
-            }
-            if reading.under_way.is_some() {
+            if reading.ready.is_some() {
                 return Ok(None);
             }
-            let read = Operation::new(vec![0; CHUNK_BYTES]);
+            let ready = Operation::new(vec![0; 1]);
             let output = self.output.as_raw_handle();
-            io_thread::issue(&read, |buffer, length, overlapped| {
-                // SAFETY: the handle is open and bound; buffer and overlapped live in the
-                // operation, which outlives the read.
-                unsafe { ReadFile(output, buffer, length, std::ptr::null_mut(), overlapped) }
+            let under_way = io_thread::issue(&ready, |buffer, _, overlapped| {
+                // SAFETY: the handle is open and bound; the operation outlives the read, which
+                // asks for no bytes.
+                unsafe { ReadFile(output, buffer, 0, std::ptr::null_mut(), overlapped) }
             });
-            reading.under_way = Some(read);
+            if under_way {
+                reading.ready = Some(ready);
+                return Ok(None);
+            }
+            readiness(ready.done.take().unwrap_or(Ok(0)))?;
         }
+        Ok(None)
     }
 
-    pub(super) async fn stop_reading(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let read = {
-            let mut reading = lock(&self.reading);
-            reading.collect()?;
-            if let Some(count) = reading.give(buf) {
-                return Ok(count);
+    /// Reads bytes that wait into `buf` with a read the completion port does not take: `Some` of
+    /// a count above 0, or of 0 at the output's end. The waiting bytes complete it at once. If it
+    /// stays under way all the same, which only another reader could cause, it is cancelled and
+    /// waited for, which takes no longer than the cancellation; None when it then brought nothing.
+    fn read_waiting(&self, buf: &mut [u8]) -> io::Result<Option<usize>> {
+        let output = self.output.as_raw_handle();
+        let length = u32::try_from(buf.len().min(CHUNK_BYTES)).unwrap_or(u32::MAX);
+        // SAFETY: an all-zero OVERLAPPED is valid.
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        // The low bit keeps the completion port from taking this read's completion.
+        overlapped.hEvent = self
+            .read_event
+            .as_raw_handle()
+            .map_addr(|address| address | 1);
+        // SAFETY: the handle is open; buf and overlapped outlive the read, which completes or is
+        // waited for below.
+        let started = unsafe {
+            ReadFile(
+                output,
+                buf.as_mut_ptr(),
+                length,
+                std::ptr::null_mut(),
+                &mut overlapped,
+            )
+        };
+        if started == 0 {
+            let error = io::Error::last_os_error();
+            if is_end(&error) {
+                return Ok(Some(0));
             }
-            let Some(read) = reading.under_way.clone() else {
-                return Ok(0);
+            if error.raw_os_error() != Some(ERROR_IO_PENDING as i32) {
+                return Err(error);
+            }
+            // SAFETY: the OVERLAPPED is this read's, which is under way.
+            unsafe { CancelIoEx(output, &overlapped) };
+        }
+        let mut brought = 0u32;
+        // SAFETY: the read is done or cancelled; this waits for its completion, after which the
+        // system no longer uses buf or overlapped.
+        if unsafe { GetOverlappedResult(output, &overlapped, &mut brought, 1) } == 0 {
+            let error = io::Error::last_os_error();
+            if is_end(&error) {
+                return Ok(Some(0));
+            }
+            if error.raw_os_error() != Some(ERROR_OPERATION_ABORTED as i32) {
+                return Err(error);
+            }
+        }
+        Ok((brought > 0).then_some(brought as usize))
+    }
+
+    /// Leaves no read under way: cancels the zero-byte read, which holds no bytes, and waits for
+    /// it. Output still in the pipe stays there for the next reader.
+    pub(super) async fn stop_reading(&mut self) -> io::Result<()> {
+        let ready = {
+            let mut reading = lock(&self.reading);
+            reading.settle()?;
+            let Some(ready) = reading.ready.clone() else {
+                return Ok(());
             };
             // SAFETY: the handle is open; the OVERLAPPED is the read's, alive in the operation.
-            unsafe { CancelIoEx(self.output.as_raw_handle(), read.overlapped()) };
-            read
+            unsafe { CancelIoEx(self.output.as_raw_handle(), ready.overlapped()) };
+            ready
         };
-        read.done.done().await;
-        let mut reading = lock(&self.reading);
-        reading.collect()?;
-        Ok(reading.give(buf).unwrap_or(0))
+        ready.done.done().await;
+        lock(&self.reading).settle()
     }
 
     pub(super) async fn write(
