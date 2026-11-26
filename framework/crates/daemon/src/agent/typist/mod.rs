@@ -48,6 +48,8 @@ pub(crate) struct Modes {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BoxWrites {
     Allowed,
+    /// A restored ordinary frame can be probed while delivery still needs an empty box.
+    ProbeOnly,
     /// Someone else's keys go first: receipts, readings and deadlines are still followed.
     ObserveOnly,
     /// An escape sequence in the box is unclassified. Probe writes also wait.
@@ -987,7 +989,7 @@ impl Typist {
                 return self.advance_delivery(now, queued, modes, writes, observe, pause);
             }
             BoxWrites::AwaitingEscape => {}
-            BoxWrites::Allowed | BoxWrites::ObserveOnly => {
+            BoxWrites::Allowed | BoxWrites::ProbeOnly | BoxWrites::ObserveOnly => {
                 if let Some(probe) = self.probing.take()
                     && let Some(step) = self.continue_probe(probe, now, queued, &read_screen)
                 {
@@ -1823,7 +1825,10 @@ impl Typist {
             return Step::wait(deadline.into_iter().chain(follows).min());
         }
         let may_write = may_write && paused.is_none();
-        if may_write && seen.can_probe && self.unprobed(&reading) {
+        if (may_write || (writes == BoxWrites::ProbeOnly && paused.is_none()))
+            && seen.can_probe
+            && self.unprobed(&reading)
+        {
             return self.begin_probe(&reading, now, offset);
         }
         if may_write && info.state == InputState::Usable {

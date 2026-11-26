@@ -1520,7 +1520,11 @@ impl Actor {
             &mut self.terminal,
         );
         let mut observe = |event: InputEvent<'_>| match event {
-            InputEvent::Status { event, start } => {
+            InputEvent::Status {
+                event,
+                start,
+                sync_open,
+            } => {
                 let report_start = start.and_then(|offset| read_start.checked_add_signed(offset));
                 let was_waiting = state.native_wait().is_some();
                 state.take_event(event.clone());
@@ -1535,6 +1539,9 @@ impl Actor {
                     }
                     interrupt_submissions(typist, submitting, terminal, evidence);
                 } else if was_waiting {
+                    if sync_open {
+                        gate.withdrew_in_sync();
+                    }
                     disown_unproven_erase(typist, terminal, report_start);
                 }
             }
@@ -1559,7 +1566,12 @@ impl Actor {
                     terminal,
                     state.native_wait(),
                     &reading,
-                    (writes, menu_redrawn, screen.frame_follows_input_boundary()),
+                    (
+                        writes,
+                        menu_redrawn,
+                        screen.frame_follows_input_boundary(),
+                        screen.synchronized_update_deadline().is_none(),
+                    ),
                 );
                 if !gate.blocks_delivery() && (observes_submission || before_next) {
                     Self::observe_submissions(
@@ -1768,7 +1780,7 @@ impl Actor {
                 &mut self.terminal,
                 self.state.native_wait(),
                 &reading,
-                (writes, menu_redrawn, frame_follows_write),
+                (writes, menu_redrawn, frame_follows_write, true),
             );
         }
         let before_next = self.terminal.output_between_submissions();
@@ -2107,10 +2119,22 @@ impl Actor {
                 .frame(InputState::Interaction, false, native_wait);
             self.typist.saw_interaction();
         }
+        if self.input_gate.has_post_wait_composer()
+            && !frame_incomplete
+            && native_wait.is_none()
+            && !self.typist.occupies_input()
+        {
+            let current = read_screen();
+            if current.unsure && self.typist.recall(current).info.state == InputState::Usable {
+                self.input_gate
+                    .frame(InputState::Usable, false, native_wait);
+            }
+        }
         let waits_for_frame = self.input_gate.blocks_delivery() || frame_incomplete;
+        let can_probe = self.probe_frame_ready();
         let writes = if classifying {
             BoxWrites::AwaitingEscape
-        } else if waits_for_frame
+        } else if frame_incomplete
             || self.erase_waits_for_edit()
             || screen.is_full()
             || start_first
@@ -2119,8 +2143,12 @@ impl Actor {
             || (pasting && !self.submitting.is_empty())
         {
             BoxWrites::ObserveOnly
-        } else {
+        } else if !waits_for_frame {
             BoxWrites::Allowed
+        } else if can_probe {
+            BoxWrites::ProbeOnly
+        } else {
+            BoxWrites::ObserveOnly
         };
         // The output proves the tracked Enter took the draft as soon as the frames show it.
         let submission_ready = self
@@ -2158,7 +2186,6 @@ impl Actor {
             self.delivery_frames.confirm_empty();
         }
         let empty_after_write = self.delivery_frames.confirmed_empty_at;
-        let can_probe = self.probe_frame_ready();
         let observe = || {
             let current = if cleanup_frame {
                 read_box(rule, ended, cleanup_undrawn, screen.screen(), false, true)
@@ -2241,6 +2268,9 @@ impl Actor {
         }
         if probing && !still_probing {
             self.finish_observing_probe();
+            if self.input_gate.has_post_wait_composer() {
+                self.typist_at = Some(now);
+            }
         }
     }
 
@@ -2523,9 +2553,8 @@ impl Actor {
         let screen = self.screen().screen();
         self.terminal.is_open()
             && self.state.native_wait().is_none()
-            && !self.input_gate.blocks_delivery()
-            && screen.synchronized_update_deadline().is_none()
-            && !screen.has_unfinished_unit()
+            && self.input_gate.permits_probe()
+            && screen.output_frame_complete()
     }
 
     fn erase_before_person(before: &InputLine, reading: &BoxReading) -> bool {
@@ -3169,8 +3198,11 @@ fn observe_gate_frame(
     terminal: &mut Terminal,
     native_wait: Option<WaitKind>,
     reading: &BoxReading,
-    (writes, menu_redrawn, frame_follows_write): (CursorRowWrites, bool, bool),
+    (writes, menu_redrawn, frame_follows_write, frame_closed): (CursorRowWrites, bool, bool, bool),
 ) {
+    if frame_closed {
+        gate.probe_frame(reading, writes == CursorRowWrites::Current, native_wait);
+    }
     let state = reading.info.state;
     let read_start = terminal.output_read_start();
     if state == InputState::Interaction {
@@ -6467,6 +6499,127 @@ mod tests {
         actor.typist.want_probe();
         actor.type_next();
         assert_eq!(actor.terminal.queued(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_fresh_hint_after_a_native_wait_can_be_probed() {
+        for waiting_message in [false, true] {
+            let home = crate::test_folder::TestFolder::new("actor-probe-after-native-wait");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = actor_with_cli(&home, messages.delivery_handle()).await;
+            let hint = plain_claude_frame("", "\x1b[32mTry this\x1b[0m");
+            actor.feed_own(hint.as_bytes());
+            actor.typist.want_probe();
+            actor.type_next();
+            assert_eq!(actor.terminal.queued(), 1);
+
+            cli.write_output(b"\x1b]7501;state=blocked:kind=question\x07")
+                .unwrap();
+            assert!(
+                read_queued_probe_input(&mut actor, &mut cli)
+                    .await
+                    .is_empty()
+            );
+
+            let _settled = waiting_message.then(|| {
+                queue_a_message(
+                    &mut actor,
+                    &messages,
+                    Instant::now() + Duration::from_secs(20),
+                )
+            });
+            let check = |actor: &mut Actor| {
+                if !waiting_message {
+                    actor.typist.want_probe();
+                }
+                actor.type_next();
+            };
+            let draw = synchronized(&hint);
+            read_output(&mut actor, &mut cli, draw.as_bytes()).await;
+            assert_eq!(actor.state.native_wait(), Some(WaitKind::Question));
+            check(&mut actor);
+            assert_eq!(actor.terminal.queued(), 0, "the native wait remains active");
+
+            // Even an identical frame assembled before the withdrawal is old when it closes.
+            let begun = format!("\x1b[?2026h{hint}");
+            read_output(&mut actor, &mut cli, begun.as_bytes()).await;
+            read_output(&mut actor, &mut cli, IDLE.as_bytes()).await;
+            assert_eq!(actor.state.native_wait(), None);
+            check(&mut actor);
+            assert_eq!(
+                actor.terminal.queued(),
+                0,
+                "the withdrawal alone is not a new frame"
+            );
+            read_output(&mut actor, &mut cli, b"\x1b[?2026l").await;
+            check(&mut actor);
+            assert_eq!(actor.terminal.queued(), 0, "the preceding paint stays old");
+
+            read_output(&mut actor, &mut cli, begun.as_bytes()).await;
+            check(&mut actor);
+            assert_eq!(actor.terminal.queued(), 0, "the new frame is still open");
+            read_output(&mut actor, &mut cli, b"\x1b[?2026l").await;
+            let reading = actor.read_screen_input();
+            assert!(reading.unsure && reading.line.is_some());
+            check(&mut actor);
+            assert_eq!(
+                actor.terminal.queued(),
+                1,
+                "the fresh, ordinary hint needs a probe"
+            );
+            let received = read_queued_probe_input(&mut actor, &mut cli).await;
+            assert_eq!(
+                received, b" ",
+                "the PTY takes the fresh probe, waiting_message={waiting_message}"
+            );
+            assert_eq!(
+                pending_delivery_bytes(&actor),
+                0,
+                "a possible hint is not yet proved empty"
+            );
+
+            if waiting_message {
+                let echo = synchronized(&plain_claude_frame(" ", ""));
+                read_output(&mut actor, &mut cli, echo.as_bytes()).await;
+                tokio::time::pause();
+                for _ in 0..2 {
+                    if let Some(wake) = actor.typist_at {
+                        tokio::time::advance(wake.saturating_duration_since(Instant::now())).await;
+                        actor.type_next();
+                    }
+                }
+                tokio::time::resume();
+                assert!(
+                    actor.input_gate.permits_probe(),
+                    "the echoed probe still has an ordinary box"
+                );
+                let keys = read_queued_probe_input(&mut actor, &mut cli).await;
+                assert_eq!(
+                    keys,
+                    b"\x7f",
+                    "the PTY takes the verified erase; input {:?}",
+                    actor.read_screen_input()
+                );
+                read_output(&mut actor, &mut cli, draw.as_bytes()).await;
+                tokio::time::pause();
+                for _ in 0..3 {
+                    if let Some(wake) = actor.typist_at {
+                        tokio::time::advance(wake.saturating_duration_since(Instant::now())).await;
+                        actor.type_next();
+                    }
+                }
+                tokio::time::resume();
+                assert!(!actor.typist.probing());
+                let paste = b"\x1b[200~a message \x1b[201~";
+                assert_eq!(
+                    pending_delivery_bytes(&actor),
+                    paste.len(),
+                    "the next message can use the freshly proved empty input"
+                );
+                write_input(&mut actor).await;
+                expect_cli_input(&mut cli, paste);
+            }
+        }
     }
 
     async fn read_queued_probe_input(actor: &mut Actor, cli: &mut TestCli) -> Vec<u8> {

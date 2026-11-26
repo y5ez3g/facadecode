@@ -1,6 +1,7 @@
 //! Whether delivery may write into the current run's input.
 
 use facade_base::model::{agent::WaitKind, terminal::InputState};
+use facade_rules::BoxReading;
 
 #[derive(Default)]
 pub(super) struct InputGate {
@@ -12,6 +13,17 @@ pub(super) struct InputGate {
     menu_redraw: Option<u64>,
     /// After recovery the last logged frame can precede a native report's withdrawal.
     needs_fresh_frame: bool,
+    /// Only a fresh ordinary frame after native withdrawal can authorize a probe.
+    probe_after_wait: ProbeFrame,
+}
+
+#[derive(Default, PartialEq, Eq)]
+enum ProbeFrame {
+    #[default]
+    Awaiting,
+    /// A synchronized frame that was already open at the withdrawal.
+    Earlier,
+    Composer,
 }
 
 impl InputGate {
@@ -20,7 +32,51 @@ impl InputGate {
     }
 
     pub(super) fn report(&mut self, native_wait: Option<WaitKind>) {
-        self.needs_composer |= native_wait.is_some();
+        if native_wait.is_some() {
+            self.needs_composer = true;
+            self.probe_after_wait = ProbeFrame::Awaiting;
+        }
+    }
+
+    pub(super) fn withdrew_in_sync(&mut self) {
+        self.probe_after_wait = ProbeFrame::Earlier;
+    }
+
+    /// Records a complete frame for probing. Delivery still needs its own evidence.
+    pub(super) fn probe_frame(
+        &mut self,
+        reading: &BoxReading,
+        input_written: bool,
+        native_wait: Option<WaitKind>,
+    ) {
+        if !self.needs_composer || native_wait.is_some() {
+            return;
+        }
+        if self.probe_after_wait == ProbeFrame::Earlier {
+            self.probe_after_wait = ProbeFrame::Awaiting;
+        } else if input_written
+            || reading.is_unread()
+            || reading.info.state == InputState::Interaction
+        {
+            self.probe_after_wait = if reading.line.is_some()
+                && (reading.unsure
+                    || matches!(reading.info.state, InputState::Usable | InputState::Draft)
+                    // The probe's own echoed space can make an ordinary box ambiguous again.
+                    || self.probe_after_wait == ProbeFrame::Composer)
+            {
+                ProbeFrame::Composer
+            } else {
+                ProbeFrame::Awaiting
+            };
+        }
+    }
+
+    pub(super) fn has_post_wait_composer(&self) -> bool {
+        self.needs_composer && self.probe_after_wait == ProbeFrame::Composer
+    }
+
+    pub(super) fn permits_probe(&self) -> bool {
+        !self.blocks_delivery() || self.has_post_wait_composer()
     }
 
     pub(super) fn frame(
@@ -31,12 +87,16 @@ impl InputGate {
     ) {
         if state == InputState::Interaction {
             self.menu = true;
+            if self.probe_after_wait == ProbeFrame::Composer {
+                self.probe_after_wait = ProbeFrame::Awaiting;
+            }
         } else if state == InputState::Usable || (state == InputState::Draft && own_draft) {
             self.menu = false;
             self.menu_redraw = None;
             if native_wait.is_none() {
                 self.needs_composer = false;
                 self.needs_fresh_frame = false;
+                self.probe_after_wait = ProbeFrame::Awaiting;
             }
         }
     }

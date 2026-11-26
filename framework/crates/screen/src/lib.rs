@@ -105,6 +105,8 @@ pub enum InputEvent<'a> {
     Status {
         event: &'a StatusEvent,
         start: Option<i64>,
+        /// The report arrived inside an open synchronized update.
+        sync_open: bool,
     },
     Frame(&'a Screen, CursorRowWrites),
 }
@@ -311,6 +313,7 @@ impl Screen {
                         observe(InputEvent::Status {
                             event: &StatusEvent::Reset,
                             start,
+                            sync_open: self.synchronized_update_deadline().is_some(),
                         });
                     }
                     status.push(StatusEvent::Reset);
@@ -327,6 +330,7 @@ impl Screen {
                         observe(InputEvent::Status {
                             event: &event,
                             start,
+                            sync_open: self.synchronized_update_deadline().is_some(),
                         });
                     }
                     status.push(event);

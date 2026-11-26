@@ -475,7 +475,10 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     `probe`. The probe types a space where the input starts. The first Space and both kinds of
     Backspace pass the same output check at system handoff. The actor reads the available prefix,
     compares the current complete ordinary box with the probe's input, and checks for native
-    waits. An open synchronized update cannot authorize a write. A resize clears pending
+    waits. A complete ordinary input drawn after withdrawal of a native wait can authorize
+    a probe while delivery still needs a proved empty box. A frame already open at withdrawal
+    cannot supply that probe's evidence. A confirmed hint provides the empty reading.
+    An open synchronized update cannot authorize a write. A resize clears pending
     approval so any unissued key uses the new box. An unissued Space that loses its box is
     withdrawn and reported. The row can still
     be probed when the ordinary box returns. Its echo budget runs from the write
