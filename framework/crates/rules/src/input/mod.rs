@@ -359,6 +359,7 @@ impl<'a> Screen<'a> {
                 prompt,
                 alternate_prompt,
                 placeholder,
+                startup_hint,
                 dim_draft,
                 ..
             } => match placeholder {
@@ -366,6 +367,7 @@ impl<'a> Screen<'a> {
                     prompt,
                     alternate_prompt.as_deref(),
                     placeholder,
+                    startup_hint.as_deref(),
                     dim_draft.as_deref(),
                     untouched_input,
                 ),
@@ -1288,6 +1290,7 @@ impl<'a> Screen<'a> {
         prompt: &str,
         alternate: Option<&str>,
         placeholder: &Regex,
+        startup_hint: Option<&Regex>,
         dim_draft: Option<&Regex>,
         untouched_input: bool,
     ) -> Reading {
@@ -1302,6 +1305,13 @@ impl<'a> Screen<'a> {
             })
             .unwrap_or_else(|| self.height());
         let first = self.from(y, start);
+        if y + 1 == end
+            && self.cursor_at(start, y)
+            && startup_hint.is_some_and(|pattern| pattern.is_match(joined(first).trim()))
+            && hint_like(first)
+        {
+            return unknown(format!("the prompt at row {} is still starting", y + 1));
+        }
         if y + 1 == end && dim_draft.is_some_and(|pattern| pattern.is_match(joined(first).trim())) {
             let place = format!("the prompt at row {}", y + 1);
             return drafted(&place, (None, None), &[first]).with_line(line_of(

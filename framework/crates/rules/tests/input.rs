@@ -170,6 +170,17 @@ fn kiro_recognizes_the_trust_warning_when_its_heading_scrolls_out() {
     }
 }
 
+#[test]
+fn kiro_waits_for_the_composer_before_probing_its_hint() {
+    let rule = find("kiro-cli").unwrap().unwrap();
+    let reading = read_box_for_typing(&rule.input, &kiro_screen("initializing"), true);
+    assert_eq!(reading.info.state, InputState::Unknown);
+    assert!(!reading.unsure, "{}", reading.info.evidence);
+
+    let copied = read_box_for_typing(&rule.input, &kiro_screen("initializer-copy"), true);
+    assert_eq!(copied.info.state, InputState::Draft);
+}
+
 /// Changes the cells of row `y` at columns `columns`.
 fn mark(
     view: &mut ScreenView,

@@ -18,6 +18,7 @@
 		"prompt": "› ",
 		"alternate_prompt": "> ",
 		"placeholder": "^ask a question,? or describe a task(?: (?:↩|↵|Enter))?$",
+		"startup_hint": "^Initializing · type to queue a message$",
 		"menus": [
 			{ "selected": "^\\s*Trust this workspace\\?$" },
 			{

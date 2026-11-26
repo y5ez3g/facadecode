@@ -330,6 +330,8 @@ pub enum InputRule {
         alternate_prompt: Option<String>,
         /// A native placeholder identifies a cursor-anchored, possibly wrapped composer.
         placeholder: Option<Pattern>,
+        /// A colored hint shown while the native composer is starting.
+        startup_hint: Option<Pattern>,
         /// A paste marker that the CLI draws dim, like a hint.
         dim_draft: Option<Pattern>,
         /// The CLI hides the terminal cursor and draws its own, one inverse cell in its input box.
