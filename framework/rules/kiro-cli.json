@@ -52,7 +52,7 @@
 		"work": { "args": ["--trust-all-tools"] },
 		"startup": { "args": ["--trust-workspace"] },
 		"question": {
-			"shown": "^\\s*Warning: Kiro is running in trust all tools mode$",
+			"shown": "^\\s*(?:Warning: Kiro is running in trust all tools mode|By proceeding, you confirm that you understand the risks and accept(?: responsibility\\b.*)?)$",
 			"answer": "^\\s*(?:[❯›>]\\s*)?Yes, I accept$",
 			"selected": "^\\s*[❯›>]\\s+Yes, I accept$",
 			"keys": ["Down"],

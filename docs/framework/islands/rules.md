@@ -178,6 +178,8 @@ adds, the model and effort, the session a resume names, and the `clis` entries o
     A rule can specify `off_args` to select its normal approval mode explicitly.
     Rule options interpolate `${folder}` and `${folder_toml}`. The TOML value uses the
     resolved working folder, lowercased on Windows as Codex keys a project there.
+  - Kiro's trust-all-tools question can be recognized by its consent text when the title has
+    scrolled out of view. The one-time acceptance must show as selected before confirmation.
   - The rule's agent-start updater environment applies to agent starts in either YOLO mode.
     Reusing a run's environment restores the inputs its launch controls replaced, before the destination's
     entry settings apply. Later changes in the invoking shell take precedence.

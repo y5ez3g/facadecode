@@ -8,8 +8,8 @@ mod recorded;
 
 use facade_base::model::terminal::{HiddenRows, InputState};
 use facade_rules::{
-    ProbeVerdict, find, is_own_draft, read_box, read_box_for_typing, read_draft, read_input,
-    restored, space_taken, verdict_of,
+    Pattern, ProbeVerdict, find, is_own_draft, read_box, read_box_for_typing, read_draft,
+    read_input, restored, space_taken, verdict_of,
 };
 use facade_screen::{ScreenView, VisibleCell};
 use recorded::view_of;
@@ -138,6 +138,36 @@ fn cursor_screen(label: &str) -> ScreenView {
         .find(|screen| screen["label"] == label)
         .unwrap();
     view_of(&screen)
+}
+
+fn kiro_screen(label: &str) -> ScreenView {
+    let label = format!("kiro-3.6.2/{label}");
+    let screen = recorded("kiro-cli")
+        .into_iter()
+        .find(|screen| screen["label"] == label)
+        .unwrap();
+    view_of(&screen)
+}
+
+#[test]
+fn kiro_recognizes_the_trust_warning_when_its_heading_scrolls_out() {
+    let rule = find("kiro-cli").unwrap().unwrap();
+    let question = rule.yolo.question.as_ref().unwrap();
+    for (label, accepting) in [("decline-selected", false), ("accept-selected", true)] {
+        let view = kiro_screen(label);
+        let rows: Vec<String> = view
+            .rows
+            .iter()
+            .map(|row| row.iter().map(|cell| cell.text.as_str()).collect())
+            .collect();
+        let shows = |pattern: &Pattern| rows.iter().any(|row| pattern.is_match(row.trim_end()));
+        assert!(shows(&question.shown) && shows(&question.answer), "{label}");
+        assert_eq!(shows(&question.selected), accepting, "{label}");
+        assert_eq!(
+            read_input(&rule.input, &view).state,
+            InputState::Interaction
+        );
+    }
 }
 
 /// Changes the cells of row `y` at columns `columns`.
