@@ -6695,8 +6695,33 @@ mod tests {
         assert!(actor.held_enter.is_none() && actor.submitting.is_empty());
     }
 
+    /// How long after its write a probe space's echo is due under `actor`'s rule.
+    fn probe_echo_budget(actor: &Actor) -> Duration {
+        let paste = actor.typist.paste_rule().expect("the CLI's paste rule");
+        let console = actor
+            .typist
+            .console()
+            .map_or(Duration::ZERO, |console| console.per_char);
+        console
+            + facade_rules::settle_time(paste, " ")
+            + paste
+                .submit_clear_time()
+                .expect("the rule's measured submission time")
+    }
+
+    /// An echo this long after the probe space's write arrives after its deadline.
+    fn late_probe_echo(actor: &Actor) -> Duration {
+        probe_echo_budget(actor) + Duration::from_millis(100)
+    }
+
     #[tokio::test]
-    async fn a_probe_takes_back_the_space_that_the_cli_echoes_after_750_ms() {
+    async fn a_probe_takes_back_the_space_that_the_cli_echoes_on_time_or_late() {
+        for late in [false, true] {
+            probe_takes_back_its_echoed_space(late).await;
+        }
+    }
+
+    async fn probe_takes_back_its_echoed_space(late: bool) {
         let home = crate::test_folder::TestFolder::new("actor-probe-late-echo");
         let (messages, _) = messages();
         let (mut actor, mut cli) = actor_with_cli(&home, messages.delivery_handle()).await;
@@ -6711,7 +6736,12 @@ mod tests {
         actor.take_terminal(TerminalEvent::Wrote);
 
         tokio::time::pause();
-        let echo_at = Instant::now() + Duration::from_millis(750);
+        let echo_in = if late {
+            late_probe_echo(&actor)
+        } else {
+            probe_echo_budget(&actor) / 2
+        };
+        let echo_at = Instant::now() + echo_in;
         while let Some(wake) = actor.typist_at.filter(|wake| *wake < echo_at) {
             tokio::time::advance(wake.saturating_duration_since(Instant::now())).await;
             actor.type_next();
@@ -6756,6 +6786,12 @@ mod tests {
         }
         assert!(!actor.typist.probing());
         assert_eq!(actor.terminal.queued(), 0);
+        // The row this probe tried is not probed again.
+        actor.typist.want_probe();
+        actor.type_next();
+        tokio::time::resume();
+        assert!(!actor.typist.probing(), "late={late}");
+        assert_eq!(actor.terminal.queued(), 0, "late={late}");
     }
 
     #[tokio::test]
@@ -6838,7 +6874,7 @@ mod tests {
         assert_eq!(actor.terminal.output_position(), earlier.len() as u64);
 
         tokio::time::pause();
-        tokio::time::advance(Duration::from_millis(750)).await;
+        tokio::time::advance(late_probe_echo(&actor)).await;
         actor.type_next();
         assert_eq!(actor.terminal.queued(), 0);
         tokio::time::resume();
@@ -6854,7 +6890,7 @@ mod tests {
         assert_eq!(read_one_probe_key(&mut actor, &mut cli).await, b' ');
 
         tokio::time::pause();
-        let echo_at = Instant::now() + Duration::from_millis(750);
+        let echo_at = Instant::now() + late_probe_echo(&actor);
         while let Some(wake) = actor.typist_at.filter(|wake| *wake < echo_at) {
             tokio::time::advance(wake.saturating_duration_since(Instant::now())).await;
             actor.type_next();
