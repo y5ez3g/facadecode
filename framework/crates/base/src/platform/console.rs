@@ -107,6 +107,17 @@ impl ConsoleReader {
     }
 }
 
+/// Whether this program may read the console now: a Unix shell's background job may not.
+pub fn owns_input() -> bool {
+    imp::owns_input()
+}
+
+/// Gives input a program took from the console back to the next reader. Does nothing on Windows and
+/// on a Unix system that forbids it.
+pub fn return_input(bytes: &[u8]) {
+    imp::return_input(bytes);
+}
+
 /// What the system told the console's program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConsoleSignal {

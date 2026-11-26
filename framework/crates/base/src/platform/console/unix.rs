@@ -69,6 +69,20 @@ impl ConsoleReader {
     }
 }
 
+pub(super) fn owns_input() -> bool {
+    // SAFETY: these only read the process's and the terminal's groups.
+    unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) == libc::getpgrp() }
+}
+
+pub(super) fn return_input(bytes: &[u8]) {
+    for byte in bytes {
+        // SAFETY: TIOCSTI reads the one byte it is given.
+        if unsafe { libc::ioctl(libc::STDIN_FILENO, libc::TIOCSTI as _, byte as *const u8) } != 0 {
+            return;
+        }
+    }
+}
+
 pub(super) struct ConsoleSignals(signal_hook::iterator::Signals);
 
 impl ConsoleSignals {

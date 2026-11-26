@@ -367,6 +367,12 @@ fn viewport_position(position: COORD, clamp: bool) -> Option<(u16, u16)> {
 }
 
 /// No signals reach a console program on Windows that attach follows.
+pub(super) fn owns_input() -> bool {
+    true
+}
+
+pub(super) fn return_input(_bytes: &[u8]) {}
+
 pub(super) struct ConsoleSignals;
 
 impl ConsoleSignals {
