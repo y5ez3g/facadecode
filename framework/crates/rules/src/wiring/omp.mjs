@@ -20,7 +20,18 @@ function state(value, kind) {
 	process.stdout.write('\x1b]7501;state=' + value + (kind ? ':kind=' + kind : '') + '\x07');
 }
 
+// OMP announces the servers it connects. The run's own is none of the person's, so its conversation
+// opens as it does without Facade. OMP ignores a status of a type it does not know.
+function quiet(status) {
+	if (Array.isArray(status?.serverNames)) {
+		status.serverNames = status.serverNames.filter(name => name !== server);
+	} else if (status?.serverName === server && status.type !== 'failed') {
+		status.type = 'managed';
+	}
+}
+
 export default function (omp) {
+	omp.events?.on?.('mcp:connection-status', quiet);
 	for (const event of ['session_start', 'session_switch', 'session_branch']) {
 		omp.on(event, (_event, ctx) => {
 			if (!ctx.hasUI) return;

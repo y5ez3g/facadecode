@@ -247,6 +247,22 @@ fn written(cell: &VisibleCell) -> bool {
     draws(cell) && !cell.dim
 }
 
+/// A row without what its CLI predicts the person types next: drawn from the cursor on, all in
+/// another color than the text before it.
+fn without_prediction(row: &Cells, column: usize) -> &Cells {
+    let (typed, rest) = row.split_at(row.partition_point(|cell| cell.column < column));
+    let predicted = typed
+        .iter()
+        .rev()
+        .find(|cell| draws(cell))
+        .is_some_and(|last| {
+            rest.iter()
+                .filter(|cell| draws(cell))
+                .all(|cell| cell.foreground != last.foreground)
+        });
+    if predicted { typed } else { row }
+}
+
 fn holds_writing(lines: &[&Cells]) -> bool {
     lines.iter().any(|line| line.iter().any(written))
 }
@@ -1043,7 +1059,9 @@ impl<'a> Screen<'a> {
         }
 
         let place = format!("the editor at {}", row_span(first + 1, end));
-        let lines: Vec<&Cells> = (first..end).map(|row| split_row(row).1).collect();
+        let mut lines: Vec<&Cells> = (first..end).map(|row| split_row(row).1).collect();
+        let typed = &mut lines[cursor_row - first];
+        *typed = without_prediction(typed, column);
         if lines.len() == limit {
             let at = split_row(cursor_row)
                 .1

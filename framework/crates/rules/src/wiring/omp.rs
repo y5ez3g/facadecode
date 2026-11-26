@@ -44,7 +44,9 @@ pub(super) fn tools(server: &Server<'_>, entry: &Entry<'_>) -> Wiring {
             ),
             (format!("{PLUGIN}/.mcp.json"), mcp.to_string()),
         ],
-        settings: Some(json!({ "tools": { "approval": approval } })),
+        // Without its notice about the server's tools, the conversation opens as it does without
+        // Facade.
+        settings: Some(json!({ "tools": { "approval": approval, "commandNotices": false } })),
         ..Wiring::default()
     }
 }
@@ -83,7 +85,11 @@ pub(super) fn settings(
 
 pub(super) fn hook(words: &[String], session: &SessionReport<'_>) -> Hooked {
     let file = json!(session.file.to_string_lossy());
-    let source = format!("const reportFile = {file};\n{}", include_str!("omp.mjs"));
+    let server = json!(format!("{PLUGIN_NAME}:{SERVER_NAME}"));
+    let source = format!(
+        "const reportFile = {file};\nconst server = {server};\n{}",
+        include_str!("omp.mjs")
+    );
     Hooked {
         args: vec![
             "--extension".into(),

@@ -51,6 +51,7 @@ pub fn view_of(screen: &Value) -> ScreenView {
                     dim: within(&row["dim"], index),
                     inverse: within(&row["inverse"], index),
                     colored: within(&row["colored"], index),
+                    foreground: u32::from(within(&row["colored"], index)),
                     text,
                 });
                 column += width;

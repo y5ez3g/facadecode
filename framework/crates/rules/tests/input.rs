@@ -341,6 +341,7 @@ fn an_update_prompt_no_reader_knows_reads_unknown() {
                         dim: false,
                         inverse: false,
                         colored: false,
+                        foreground: 0,
                     })
                     .collect();
                 cells.extend((line.chars().count()..80).map(|column| VisibleCell {
@@ -350,6 +351,7 @@ fn an_update_prompt_no_reader_knows_reads_unknown() {
                     dim: false,
                     inverse: false,
                     colored: false,
+                    foreground: 0,
                 }));
                 cells
             })
@@ -425,6 +427,15 @@ fn oh_my_pi_reads_the_native_band_and_guards_the_full_viewport() {
         draft.info.evidence
     );
     assert_eq!(draft.draft.as_deref(), Some("first\n\nlast"));
+
+    // Oh My Pi draws what it predicts from the cursor on, in another color.
+    let predicted = read_box(
+        rule,
+        &band(&["comm\x1b[38;5;240mands\x1b[39m"], Some((5, 8))),
+    );
+    assert_eq!(predicted.draft.as_deref(), Some("comm"));
+    let typed = read_box(rule, &band(&["commands"], Some((5, 8))));
+    assert_eq!(typed.draft.as_deref(), Some("commands"));
 
     let content: Vec<_> = (1..=11).map(|n| format!("line {n}")).collect();
     let lines: Vec<_> = content.iter().map(String::as_str).collect();
