@@ -414,6 +414,8 @@ impl TestHome {
     pub fn add_custom_cli_with(&self, name: &str, program: &Path, args: &[&str]) {
         let file = self.path.join("facade.json");
         let mut settings: Value = match std::fs::read_to_string(&file) {
+            // The commented template Facade writes where the file was missing sets nothing.
+            Ok(text) if text == facade_base::settings::TEMPLATE => json!({}),
             Ok(text) => serde_json::from_str(&text).expect("the test's facade.json is JSON"),
             Err(_) => json!({}),
         };
