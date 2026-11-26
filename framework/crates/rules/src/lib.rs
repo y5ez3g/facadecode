@@ -538,6 +538,10 @@ pub struct FrameTranscript {
     pub sign_in: Vec<Pattern>,
     /// The question whether the person trusts the workspace.
     pub trust: Pattern,
+    /// The CLI reports an answer that asks the person something as a question, though its turn has
+    /// ended and its input is there. The report then reads as `done`.
+    #[serde(default)]
+    pub answers_ask: bool,
 }
 
 #[derive(Debug, Deserialize)]
