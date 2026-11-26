@@ -976,6 +976,61 @@ fn menus_match_logical_lines_after_terminal_wrapping() {
 }
 
 #[test]
+fn claude_queue_notice_leaves_the_input_usable() {
+    let claude = &find("claude").unwrap().unwrap().input;
+    let frames: serde_json::Value =
+        serde_json::from_str(include_str!("input/claude-queued-2.1.332.json")).unwrap();
+    let border = "─".repeat(120);
+    let empty = format!("\x1b[26;1H{border}\r\n❯\u{a0}\r\n{border}\x1b[27;3H");
+    let replay = |queued: &str| {
+        let mut screen = facade_screen::Screen::new(120, 30, 0);
+        screen.feed(empty.as_bytes());
+        screen.feed(frames["draft"].as_str().unwrap().as_bytes());
+        let draft = read_box(claude, &screen.view());
+        assert_eq!(
+            draft.info.state,
+            InputState::Draft,
+            "{}",
+            draft.info.evidence
+        );
+        screen.feed(queued.as_bytes());
+        screen.view()
+    };
+
+    // Claude Code 2.1.332, a68's busy 5-to-1 run at 1905bd55, records 18 and 19.
+    let queued = frames["queued"].as_str().unwrap();
+    let typed = queued.replace("\x1b[27m\x1b[2mress", "\x1b[27mress");
+    assert_ne!(typed, queued, "remove dim from the input text");
+    let read = read_box(claude, &replay(&typed));
+    assert_eq!(read.info.state, InputState::Draft, "{}", read.info.evidence);
+    assert_eq!(
+        read.draft.as_deref(),
+        Some("Press up to edit queued messages")
+    );
+
+    let other = queued.replace("\x1b[27Gmessages", "\x1b[27Gmessages!");
+    let read = read_box(claude, &replay(&other));
+    assert_eq!(read.info.state, InputState::Draft, "{}", read.info.evidence);
+    assert_eq!(
+        read.draft.as_deref(),
+        Some("Press up to edit queued messages!")
+    );
+
+    let view = replay(queued);
+    for untouched in [false, true] {
+        let read = read_box_for_typing(claude, &view, untouched);
+        assert_eq!(
+            read.info.state,
+            InputState::Usable,
+            "{}",
+            read.info.evidence
+        );
+        assert!(read.draft.is_none());
+        assert!(!read.unsure);
+    }
+}
+
+#[test]
 fn claude_plain_hint_and_same_text_draft_need_the_probe() {
     let claude = &find("claude").unwrap().unwrap().input;
     let text = r#"Try "fix typecheck errors""#;

@@ -852,6 +852,28 @@ impl<'a> Screen<'a> {
                 false => draft(),
             };
         }
+        if let Some(hint) = &frame.dim_cursor_hint
+            && lower == first + 1
+            && self.cursor_at(2, first)
+        {
+            let cells = self.from(first, 2);
+            let dim_after_cursor = cells.split_first().is_some_and(|(cursor, rest)| {
+                cursor.column == 2
+                    && cursor.inverse
+                    && draws(cursor)
+                    && rest
+                        .iter()
+                        .all(|cell| !draws(cell) || cell.dim && !cell.inverse)
+            });
+            if dim_after_cursor && joined(cells).trim_end() == hint.as_str() {
+                let line = line_of(self.row(first), first, 2, false, self.cursor);
+                return usable(format!(
+                    "the input frame at row {} shows its dim hint",
+                    first + 1
+                ))
+                .with_line(line);
+            }
+        }
         if let Some(mode) = &frame.placeholder {
             let one_row = lower == first + 1;
             let footer = self

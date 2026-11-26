@@ -8,6 +8,7 @@
 	"input": {
 		"mechanism": "frame",
 		"probe_unstyled_hint": true,
+		"dim_cursor_hint": "Press up to edit queued messages",
 		"prompt": "❯",
 		"gap": "\u00a0",
 		"upper": "^(?:─+|─{3} [^─]+ ─+)$",

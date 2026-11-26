@@ -369,6 +369,9 @@ pub struct Frame {
     /// A mode's text drawn in an empty input, known by the footer under the frame.
     #[serde(default)]
     pub placeholder: Option<ModePlaceholder>,
+    /// A single-row dim hint whose first glyph is under the CLI's inverted cursor.
+    #[serde(default)]
+    pub(crate) dim_cursor_hint: Option<String>,
     /// The CLI can draw a hint in the same style as a draft in a fresh input.
     #[serde(default)]
     pub probe_unstyled_hint: bool,
