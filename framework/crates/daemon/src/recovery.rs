@@ -488,8 +488,8 @@ impl Daemon {
     ) -> Option<(String, PromptWatch)> {
         let recipient = self.get_agent(&message.to);
         let guest = recipient.as_ref().is_some_and(AgentHandle::is_guest);
-        // A guest reads its inbox. A marked Inbox send also keeps its original delivery deadline.
-        if guest && !notify_failure {
+        // Recover a Guest's bounded delivery so a replay can wait for its read or timeout.
+        if guest && message.delivery.deadline.is_none() {
             return None;
         }
         let whereabouts = match &recipient {
