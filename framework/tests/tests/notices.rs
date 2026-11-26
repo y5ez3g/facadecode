@@ -964,34 +964,31 @@ fn a_creator_stop_accepted_by_the_keeper_is_silent_even_if_its_reply_is_lost() {
 #[cfg_attr(not(debug_assertions), ignore = "uses the test gates of debug builds")]
 fn a_creator_stop_of_an_adopted_resume_stays_silent_through_a_second_crash() {
     let home = TestHome::new("adopted-resume-stop");
+    // Both agents inherit the same session ID. The child uses a distinct rule and a fixture
+    // that runs the configured session hook on every platform.
+    std::fs::write(
+        home.path.join("facade.json"),
+        json!({
+            "clis": {
+                "claude": {
+                    "program": test_binaries().fakecli,
+                    "env": { "FAKECLI_LOOK": "claude" }
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
     home.start_facade_with(&[(
         "FACADE_TEST_GATES",
         "before-restart-commit,keeper-stop-accepted",
     )]);
     let session = "86da4482-2bae-4a45-b193-a5664c19826a";
-    // Both processes inherit the fake session ID. Give the child a distinct CLI rule so the
-    // creator's active session does not block its resume.
-    let bin = home.folder().join("programs");
-    install_program(&bin, "codex", &test_binaries().fakecli);
-    let path = format!(
-        "{}{PATH_SEPARATOR}{}",
-        bin.display(),
-        home.path_with_test_programs()
-    );
-    let started = home
-        .command(&test_binaries().facade)
-        .env("PATH", &path)
-        .env("FAKECLI_SESSION", session)
-        .args(["start", "-d", "--name", "boss", "fake"])
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert!(started.status.success(), "{}", stderr(&started));
-    let boss = home.started_agent(&stdout(&started));
+    let boss = home.start_named_fake("boss", &[("FAKECLI_SESSION", session)]);
     let mut creator = McpTestClient::open(&home, &boss.id);
     let started = creator.call(
         "start_agent",
-        json!({ "name": "child", "cli": "codex", "folder": home.project }),
+        json!({ "name": "child", "cli": "claude", "folder": home.project }),
     );
     assert_eq!(started["status"], "success", "{started}");
     let child = &started["data"];
@@ -1009,7 +1006,6 @@ fn a_creator_stop_of_an_adopted_resume_stays_silent_through_a_second_crash() {
 
     let resuming = home
         .command(&test_binaries().facade)
-        .env("PATH", &path)
         .args(["resume", "-d", id])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

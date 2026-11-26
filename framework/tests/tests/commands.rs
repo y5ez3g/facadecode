@@ -637,8 +637,8 @@ fn facade_runs_from_its_build_s_folder_and_runs_name_the_launchers() {
         .and_then(|hello| hello["pid"].as_i64())
         .expect("the daemon answers") as i32;
     let keeper = home.keeper_pid().expect("the keeper runs");
-    // The services start from the launcher, which names this build.
-    let program = bin.join("facade");
+    // The services start from the selected versioned image. Their clients use the launchers.
+    let program = bin.join(&build).join("facade");
     for (service, pid) in [("daemon", daemon), ("keeper", keeper)] {
         let command = command_of(pid);
         assert!(

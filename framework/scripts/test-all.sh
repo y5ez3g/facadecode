@@ -13,8 +13,14 @@ set -u
 framework=$(cd "$(dirname "$0")/.." && pwd -P) || exit 2
 log=${1:-$framework/target/test-all.log}
 selected=false
+progress=false
 if [ "$#" -le 1 ]; then
-	set -- -q --workspace --no-fail-fast
+	if [ "${TEST_ALL_PROGRESS:-0}" = 1 ]; then
+		progress=true
+		set -- --workspace --no-fail-fast
+	else
+		set -- -q --workspace --no-fail-fast
+	fi
 else
 	shift
 	if [ "$1" != -- ] || [ "$#" -lt 2 ]; then
@@ -39,7 +45,10 @@ cd "$framework" || exit 2
 mkdir -p "$(dirname "$log")"
 echo "== start $(date '+%Y-%m-%d %H:%M') $(git rev-parse --short HEAD) changed-files=$(git status --porcelain -- . | wc -l | tr -d ' ')" > "$log"
 run_cargo() { HOME=$tmp/home FACADE_HOME=$tmp/home/.facade TMPDIR=$tmp cargo test "$@"; }
-if "$selected"; then
+if "$progress"; then
+	HOME=$tmp/home FACADE_HOME=$tmp/home/.facade TMPDIR=$tmp \
+		python3 "$framework/scripts/test-progress.py" "$log.full" cargo test "$@" -- -Z unstable-options --format=json
+elif "$selected"; then
 	run_cargo "$@" > "$log.full" 2> "$log.stderr"
 else
 	run_cargo "$@" > "$log.full" 2>&1

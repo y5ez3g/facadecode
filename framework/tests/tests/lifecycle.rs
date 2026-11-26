@@ -609,6 +609,10 @@ fn a_late_shell_hello_uses_the_remaining_window_for_the_same_daemon() {
         home.wait_for_gate(accept);
         assert!(daemon.wait_with_output().unwrap().status.success());
         let (pid, _) = home.lock_record("daemon").unwrap();
+        let identity = process_identity(pid);
+        let framework = home.path.join("framework");
+        let attempt = facade_base::startup::Attempt::current(&framework).unwrap();
+        assert!(wait_until(LOADED_TIMEOUT, || attempt.keeper_has_first_ping(&identity)));
         let connect = "startup-before-observing-daemon";
         let mut command = home.command(&test_binaries().facade);
         if observer {
@@ -623,7 +627,16 @@ fn a_late_shell_hello_uses_the_remaining_window_for_the_same_daemon() {
             .spawn()
             .unwrap();
         home.wait_for_gate(connect);
+        // The first ping's marker precedes its window write. Wait for that whole write before
+        // replacing the clock for the caller. The daemon is still at the accept gate.
+        let ordering = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(framework.join("startup/order.lock"))
+            .unwrap();
+        ordering.lock().unwrap();
         let at = backdate_startup(&home, 175, 0);
+        ordering.unlock().unwrap();
         home.release_gate(connect);
         if late {
             let release = at + Duration::from_millis(5_400);

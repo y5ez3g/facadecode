@@ -286,16 +286,25 @@ fn order_file(root: &Path) -> io::Result<File> {
         .open(root.join("order.lock"))
 }
 
-fn startup_order(root: &Path) -> io::Result<File> {
-    let file = order_file(root)?;
-    file.lock()?;
-    Ok(file)
+struct StartupOrder(File);
+
+impl Drop for StartupOrder {
+    fn drop(&mut self) {
+        // A concurrently forked child can hold a copy until it execs. End our lock at this scope.
+        let _ = self.0.unlock();
+    }
 }
 
-fn try_startup_order(root: &Path) -> io::Result<File> {
+fn startup_order(root: &Path) -> io::Result<StartupOrder> {
+    let file = order_file(root)?;
+    file.lock()?;
+    Ok(StartupOrder(file))
+}
+
+fn try_startup_order(root: &Path) -> io::Result<StartupOrder> {
     let file = order_file(root)?;
     match file.try_lock() {
-        Ok(()) => Ok(file),
+        Ok(()) => Ok(StartupOrder(file)),
         Err(fs::TryLockError::WouldBlock) => Err(io::ErrorKind::WouldBlock.into()),
         Err(fs::TryLockError::Error(error)) => Err(error),
     }
@@ -1190,6 +1199,21 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_order_releases_its_lock_with_an_inherited_descriptor() {
+        let home = Home::new();
+        let order = startup_order(&home.0).unwrap();
+        let inherited = order.0.try_clone().unwrap();
+        assert!(matches!(
+            try_startup_order(&home.0),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock
+        ));
+        drop(order);
+        assert!(try_startup_order(&home.0).is_ok());
+        drop(inherited);
     }
 
     #[test]

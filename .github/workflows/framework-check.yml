@@ -65,6 +65,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
         if: ${{ !cancelled() && runner.os != 'Windows' }}
+        env:
+          TEST_ALL_PROGRESS: ${{ runner.os == 'macOS' && '1' || '0' }}
         run: |
           mkdir -p "$RUNNER_TEMP/facade-tests"
           TMPDIR="$RUNNER_TEMP/facade-tests" scripts/test-all.sh
