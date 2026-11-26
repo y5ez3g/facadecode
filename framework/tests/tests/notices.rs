@@ -788,7 +788,8 @@ fn recover_notice_cleanup(crash: CleanupCrash) {
     if crash == CleanupCrash::AfterSettlement {
         assert!(wait_until(LOADED_TIMEOUT, || read_store(&home)
             .query_row(
-                "SELECT status = 'failure' AND enter_written IS NULL AND withdrawn = 0 \
+                "SELECT status = 'failure' AND reason = 'timeout' AND text_written = 'full' \
+             AND enter_written IS NULL AND withdrawn = 0 \
              AND delivered_via IS NULL AND deadline IS NULL AND paste_draft IS NULL \
              FROM messages WHERE number = 1",
                 [],
