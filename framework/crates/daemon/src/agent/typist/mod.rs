@@ -63,11 +63,11 @@ pub(crate) struct InputObservation<'a> {
     pub(crate) waits_for_frame: bool,
     /// The current frame includes output read after the terminal acknowledged its last write.
     pub(crate) after_write: bool,
-    /// A complete empty frame followed the delivery write and preceded any subsequent edit.
-    pub(crate) empty_after_write: bool,
-    /// A draft a person's Enter submitted, proved by an empty frame in output order without an
-    /// intervening edit. `current` may already show a subsequent frame.
-    pub(crate) submitted: Option<&'a BoxReading>,
+    /// When a complete empty frame followed the delivery write and preceded any subsequent edit.
+    pub(crate) empty_after_write: Option<Instant>,
+    /// A draft a person's Enter submitted and when its empty frame was seen. `current` may
+    /// already show a subsequent frame.
+    pub(crate) submitted: Option<(&'a BoxReading, Instant)>,
     /// An interaction broke the person's proof, which can still be renewed by the deadline.
     pub(crate) awaiting_after_interaction: bool,
 }
@@ -369,6 +369,8 @@ struct Receipt {
     boundaries: Vec<u64>,
     arrived: Option<Instant>,
     delay: Duration,
+    /// This write is the batch's submission key, even if its deadline passes while pending.
+    submits: bool,
 }
 
 impl Receipt {
@@ -605,6 +607,11 @@ impl DraftCheck {
         current
     }
 
+    fn person_submitted(&self, seen: &InputObservation<'_>, deadline: Instant) -> bool {
+        seen.submitted
+            .is_some_and(|(over, at)| at <= deadline && self.is_original_in(over))
+    }
+
     /// Whether `reading` shows the original visible draft by itself.
     fn is_original_in(&self, reading: &BoxReading) -> bool {
         reading.draft.as_deref().is_some_and(|draft| {
@@ -712,6 +719,20 @@ impl DraftCheck {
 }
 
 impl Batch {
+    fn confirmed_submission(
+        &self,
+        seen: &InputObservation<'_>,
+        deadline: Instant,
+    ) -> Option<Outcome> {
+        if seen.empty_after_write.is_some_and(|at| at <= deadline) {
+            Some(Outcome::Typed)
+        } else {
+            self.draft
+                .person_submitted(seen, deadline)
+                .then(|| self.outcome(Outcome::Typed))
+        }
+    }
+
     /// A question before proof leaves the outcome uncertain even if another Enter later takes
     /// the draft. Keep the actual terminal write facts.
     fn outcome(&self, outcome: Outcome) -> Outcome {
@@ -865,7 +886,7 @@ impl Typist {
             });
         self.probed.insert(line.cells.clone(), ProbeVerdict::Other);
         self.probing = Some(Probe::new(line, now, budget));
-        self.record_write(offset, 1, Duration::ZERO);
+        self.record_write(offset, 1);
         Step {
             write: b" ".to_vec(),
             wake: Some(now + PROBE_READ.min(budget)),
@@ -888,7 +909,7 @@ impl Typist {
             }
             Next::Backspace => {
                 self.probing = Some(probe);
-                self.record_write(offset, 1, Duration::ZERO);
+                self.record_write(offset, 1);
                 let mut write = Vec::new();
                 Key::Backspace.write(false, &mut write);
                 Some(Step {
@@ -923,7 +944,7 @@ impl Typist {
                 if self.probing.is_some() && writes == BoxWrites::AwaitingEscape {
                     return self.advance_delivery(now, queued, modes, writes, observe, None);
                 }
-                return self.stalled(now, written);
+                return self.stalled(now, written, observe);
             }
             receipt.arrived = Some(now);
             if let Some(probe) = &mut self.probing {
@@ -932,9 +953,12 @@ impl Typist {
             if let Some(call) = &mut self.current {
                 call.completed += receipt.boundaries.len();
             } else if let Some(batch) = &mut self.batch
-                && matches!(batch.phase, DeliveryPhase::Submitting)
+                && receipt.submits
             {
-                if batch.submissions == 0 && now < batch.draft.hold_until {
+                if matches!(batch.phase, DeliveryPhase::Submitting)
+                    && batch.submissions == 0
+                    && now < batch.draft.hold_until
+                {
                     let draw = self.rule.and_then(|rule| rule.paste.submit_clear_time());
                     batch.draft.hold_until = now + draw.unwrap_or(SLOWEST_DRAW);
                 }
@@ -1564,13 +1588,14 @@ impl Typist {
         now + console_time(self.console, text) + settles + SLOWEST_DRAW
     }
 
-    fn record_write(&mut self, offset: u64, length: usize, delay: Duration) {
-        self.receipt = Some(Receipt {
+    fn record_write(&mut self, offset: u64, length: usize) -> &mut Receipt {
+        self.receipt.insert(Receipt {
             offset,
             boundaries: vec![offset + length as u64],
             arrived: None,
-            delay,
-        });
+            delay: Duration::ZERO,
+            submits: false,
+        })
     }
 
     fn emit_call(&mut self, now: Instant, offset: u64, modes: Modes) -> Step {
@@ -1591,6 +1616,7 @@ impl Typist {
             boundaries: Vec::new(),
             arrived: None,
             delay: Duration::ZERO,
+            submits: false,
         };
         let mut result = Step::default();
         while let Some(stroke) = call.strokes.pop_front() {
@@ -1615,7 +1641,12 @@ impl Typist {
         result
     }
 
-    fn stalled(&mut self, now: Instant, written: u64) -> Step {
+    fn stalled<'a>(
+        &mut self,
+        now: Instant,
+        written: u64,
+        observe: &dyn Fn() -> InputObservation<'a>,
+    ) -> Step {
         if let Some(Batch {
             phase: DeliveryPhase::Clearing(cleanup),
             messages,
@@ -1630,9 +1661,17 @@ impl Typist {
         let Some(batch) = &self.batch else {
             return Step::default();
         };
-        let due = batch.deadline();
-        if due.is_none_or(|due| now < due) {
-            return Step::wait(due);
+        let Some(deadline) = batch.deadline() else {
+            return Step::default();
+        };
+        if now < deadline {
+            return Step::wait(Some(deadline));
+        }
+        if matches!(batch.phase, DeliveryPhase::Submitting)
+            && let Some(outcome) = batch.confirmed_submission(&observe(), deadline)
+        {
+            let batch = self.batch.take().expect("the confirmed submission's batch");
+            return self.settle_delivery(&batch.messages, outcome);
         }
         let outcome = match batch.phase {
             DeliveryPhase::AwaitingPaste => {
@@ -1911,10 +1950,7 @@ impl Typist {
                 batch.draft.observed = false;
                 batch.phase = DeliveryPhase::Draft;
             }
-            DeliveryWrite::Submit => {
-                batch.phase = DeliveryPhase::Submitting;
-                crate::gate_for_test("message-enter");
-            }
+            DeliveryWrite::Submit => batch.phase = DeliveryPhase::Submitting,
             DeliveryWrite::Erase { earlier, .. } => {
                 batch
                     .erase
@@ -1927,7 +1963,7 @@ impl Typist {
                 cleanup.queued_after = Some(earlier);
             }
         }
-        self.record_write(offset, length, Duration::ZERO);
+        self.record_write(offset, length).submits = matches!(kind, DeliveryWrite::Submit);
     }
 
     /// Keeps only the unwritten portion of an independent erase after a completed write.
@@ -1972,11 +2008,10 @@ impl Typist {
         seen: InputObservation<'_>,
     ) -> Step {
         let reading = &seen.current;
-        let submitted = seen.submitted;
         let awaiting_after_interaction = seen.awaiting_after_interaction;
         let deadline = batch.deadline().expect("started paste");
         let draft = &mut batch.draft;
-        if submitted.is_some_and(|over| draft.is_original_in(over)) {
+        if draft.person_submitted(&seen, deadline) {
             return self.settle_delivery(&batch.messages, batch.outcome(Outcome::Typed));
         }
         if awaiting_after_interaction && now < deadline {
@@ -2085,6 +2120,7 @@ impl Typist {
         rule.submission_key(working_message)
             .write(false, &mut write);
         self.batch = Some(batch);
+        crate::gate_for_test("message-enter");
         Step::delivery(write, DeliveryWrite::Submit, None)
     }
 
@@ -2102,15 +2138,8 @@ impl Typist {
     ) -> Step {
         let deadline = batch.deadline().expect("unconfirmed submission");
         let reading = &seen.current;
-        if now < deadline && seen.empty_after_write {
-            return self.settle_delivery(&batch.messages, Outcome::Typed);
-        }
-        if now < deadline
-            && seen
-                .submitted
-                .is_some_and(|over| batch.draft.is_original_in(over))
-        {
-            return self.settle_delivery(&batch.messages, batch.outcome(Outcome::Typed));
+        if let Some(outcome) = batch.confirmed_submission(&seen, deadline) {
+            return self.settle_delivery(&batch.messages, outcome);
         }
         if now < deadline
             && seen.after_write
@@ -2258,7 +2287,7 @@ impl Typist {
             && (draft.observed || draft.recovered || cleanup.queued_after.is_some())
         {
             if cleanup.replace_until.is_some() {
-                if may_write && seen.empty_after_write && self.forget_paste_draft() {
+                if may_write && seen.empty_after_write.is_some() && self.forget_paste_draft() {
                     draft.stable = None;
                     draft.shown = None;
                     draft.observed = false;
@@ -2694,6 +2723,7 @@ mod tests {
         written: usize,
         reading: BoxReading,
         after_write: bool,
+        observed_at: Option<Instant>,
     }
 
     impl Default for Terminal {
@@ -2703,6 +2733,7 @@ mod tests {
                 written: 0,
                 reading: input(InputState::Unknown, None),
                 after_write: true,
+                observed_at: None,
             }
         }
     }
@@ -2764,9 +2795,11 @@ mod tests {
             {
                 typist.observe_probe_frame(reading.clone());
             }
-            let empty_after_write = self.after_write
+            let observed_at = self.observed_at.unwrap_or(now);
+            let empty_after_write = (self.after_write
                 && typist.recall(reading.clone()).info.state == InputState::Usable
-                && !typist.batch.as_ref().is_some_and(|batch| batch.interrupted);
+                && !typist.batch.as_ref().is_some_and(|batch| batch.interrupted))
+            .then_some(observed_at);
             typist.note_erasure_write(self.written as u64);
             let step = typist.step(
                 now,
@@ -2778,7 +2811,7 @@ mod tests {
                     current: reading.clone(),
                     native_wait: None,
                     waits_for_frame: false,
-                    submitted,
+                    submitted: submitted.map(|over| (over, observed_at)),
                     after_write: self.after_write,
                     empty_after_write,
                     awaiting_after_interaction: false,
@@ -5364,7 +5397,7 @@ mod tests {
                 waits_for_frame: false,
                 submitted: None,
                 after_write: true,
-                empty_after_write: false,
+                empty_after_write: None,
                 awaiting_after_interaction: false,
             }
         };
@@ -6713,6 +6746,120 @@ mod tests {
                     ),
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_recovered_enter_confirmed_after_the_deadline_cannot_erase_from_an_old_frame() {
+        let post = test_messages();
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(2);
+        let (typing, number) = message(&post, "hello", deadline);
+        post.delivery_handle().begin_paste(&[number]);
+        let mut terminal = Terminal {
+            reading: input(InputState::Draft, Some("hello")),
+            ..Terminal::default()
+        };
+        let saved = save_draft(&post, number, &terminal.reading);
+        let mut typist = typist_for("fake", &post);
+        typist.finish_paste(vec![typing], None, saved);
+        let enter = terminal.step(&mut typist, start, ANY).unwrap();
+        terminal.step(&mut typist, enter, ANY);
+        assert_eq!(terminal.queued, b"\r");
+        terminal.after_write = false;
+
+        terminal.step(&mut typist, deadline, ANY);
+        let settled = (
+            DeliveryStatus::Failure,
+            Some(DeliveryFailure::SubmissionUnconfirmed),
+            TextWritten::Full,
+            None,
+            None,
+        );
+        assert_eq!(became(&post, number), settled);
+        assert_eq!(terminal.write_all(), b"\r");
+
+        terminal.step(&mut typist, deadline + Duration::from_millis(1), ANY);
+        assert_eq!(
+            terminal.write_all(),
+            b"",
+            "the old draft is still on screen"
+        );
+        assert_eq!(became(&post, number), settled);
+
+        terminal.after_write = true;
+        terminal.step(&mut typist, deadline + Duration::from_millis(2), ANY);
+        assert_eq!(
+            terminal.write_all(),
+            vec![0x7f; 5],
+            "the draft redrew after Enter"
+        );
+        terminal.reading = input(InputState::Usable, None);
+        terminal.step(&mut typist, deadline + Duration::from_millis(3), ANY);
+        assert_eq!(
+            became(&post, number),
+            settled,
+            "the deadline receipt stays final"
+        );
+    }
+
+    #[test]
+    fn an_empty_frame_confirms_submission_only_if_seen_by_the_deadline() {
+        for (acknowledged, frame_delay) in [
+            (false, 0),
+            (true, 0),
+            (false, 50),
+            (true, 50),
+            (false, 501),
+            (true, 501),
+        ] {
+            let post = test_messages();
+            let mut terminal = Terminal::default();
+            let start = Instant::now();
+            let deadline = start + Duration::from_secs(2);
+            let (mut typist, number, _) = pasted(&post, &mut terminal, "hello", (start, deadline));
+            terminal.reading = input(InputState::Draft, Some("hello"));
+            let enter = terminal
+                .step(&mut typist, start + Duration::from_millis(10), ANY)
+                .unwrap();
+            terminal.step(&mut typist, enter, ANY);
+            assert_eq!(&terminal.queued[terminal.written..], b"\r");
+            if acknowledged {
+                assert_eq!(terminal.write_all(), b"\r");
+                terminal.after_write = false;
+                terminal.step(&mut typist, enter + Duration::from_millis(1), ANY);
+                assert_eq!(became(&post, number), PENDING);
+            }
+
+            terminal.after_write = true;
+            terminal.reading = input(InputState::Usable, None);
+            let observed = deadline + Duration::from_millis(frame_delay);
+            terminal.observed_at = Some(observed);
+            let checked = observed.max(deadline + Duration::from_millis(50));
+            let expected = if frame_delay == 0 {
+                TYPED
+            } else {
+                (
+                    DeliveryStatus::Failure,
+                    Some(DeliveryFailure::SubmissionUnconfirmed),
+                    TextWritten::Full,
+                    acknowledged.then_some(true),
+                    None,
+                )
+            };
+            terminal.step(&mut typist, checked, ANY);
+            assert_eq!(
+                became(&post, number),
+                expected,
+                "Wrote before check: {acknowledged}, empty frame delay: {frame_delay}ms"
+            );
+            assert_eq!(
+                terminal.write_all(),
+                if acknowledged { b"".as_slice() } else { b"\r" }
+            );
+            terminal.step(&mut typist, checked + Duration::from_millis(1), ANY);
+            assert!(terminal.write_all().is_empty());
+            assert_eq!(became(&post, number), expected);
         }
     }
 

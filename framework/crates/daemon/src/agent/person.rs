@@ -567,6 +567,7 @@ pub(super) struct Submitting {
     pub(super) through: u64,
     pub(super) until: Instant,
     pub(super) cleared_at: Option<u64>,
+    pub(super) confirmed_at: Option<Instant>,
     pub(super) after_interaction: bool,
     pub(super) delivery_batch: Option<u64>,
     /// The CLI still showed or reported a wait after the following edit went on.
@@ -582,6 +583,7 @@ impl Submitting {
             through,
             until: Instant::now() + SUBMISSION_TAKEN_TIMEOUT,
             cleared_at: None,
+            confirmed_at: None,
             after_interaction: false,
             delivery_batch: None,
             wait_observed_after_edit: false,

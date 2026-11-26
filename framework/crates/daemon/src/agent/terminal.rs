@@ -841,6 +841,13 @@ impl Terminal {
         self.written
     }
 
+    /// Models a one-byte write the CLI has read whose completion has yet to reach the actor.
+    #[cfg(test)]
+    pub(super) fn withhold_last_write_acknowledgement(&mut self) {
+        assert_eq!(self.queued(), 0);
+        self.sent -= 1;
+    }
+
     /// When input was last written.
     pub(crate) fn written_at(&self) -> Option<Instant> {
         self.last_write

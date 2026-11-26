@@ -3819,7 +3819,7 @@ async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
                 waits_for_frame: false,
                 submitted: None,
                 after_write: false,
-                empty_after_write: false,
+                empty_after_write: None,
                 awaiting_after_interaction: false,
             }
         });
