@@ -366,8 +366,8 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			const [, replyId, machine] = returned;
 			assert.strictEqual(machine, address.split('@')[1], JSON.stringify(receipt));
 			const reply = await until(`${child.name}'s reply at the parent terminal`, () =>
-				received(alias).find(text => text.endsWith(child.reply)));
-			assert.strictEqual(reply, `📨 Message ${replyId} from ${child.name} (${child.address}) · in reply to ${id}\n${child.reply}`);
+				received(alias).find(text => text.endsWith(child.reply + ' ')));
+			assert.strictEqual(reply, `📨 Message ${replyId} from ${child.name} (${child.address}) · in reply to ${id}\n${child.reply} `);
 		}
 		const [reviewer, verifier] = references;
 		const typed = 'typed by its creator 中文 🚀';
@@ -397,7 +397,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const input = terminalInputOf(alias);
 		for (const helper of references) {
 			assert.strictEqual(input.split(helper.reply).length - 1, 1, 'each reply was pasted once at the creator');
-			assert.strictEqual(received(alias).filter(text => text.endsWith(helper.reply)).length, 1,
+			assert.strictEqual(received(alias).filter(text => text.endsWith(helper.reply + ' ')).length, 1,
 				'each matching reply was submitted once to the creator');
 		}
 		assert.ok(card.runId);
@@ -676,7 +676,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			await new Promise(resolve => setTimeout(resolve, 5_000));
 			const missed = 'swallow' in quirk;
 			assert.strictEqual(input().slice(before).split(text).length - 1, 1, 'the message was pasted once');
-			assert.strictEqual(once(text), missed ? 0 : 1, JSON.stringify(received(childAlias)));
+			assert.strictEqual(once(text), 1, JSON.stringify(received(childAlias)));
 			if (missed) {
 				assert.strictEqual(sent.data.delivery, 'typed_into_input', JSON.stringify(sent));
 				assert.strictEqual(JSON.parse(fs.readFileSync(quirks, 'utf8')).swallow, 0, 'the CLI saw and ignored the written Enter');
