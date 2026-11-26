@@ -364,6 +364,11 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - `read_box_for_typing(&InputRule, &ScreenView, bool) -> BoxReading` considers an unstyled
     row ambiguous when the daemon reports untouched input and the CLI's rule allows a probe.
     Inspection reports the ambiguity, and delivery can probe the row.
+  - `read_box_with_redraw(&InputRule, &Screen, bool) -> (BoxReading, bool)` adds whether the
+    recognized input was drawn after the caller's input boundary. Its input flag has the same
+    meaning as in `read_box_for_typing`. The returned flag covers the menu anchor in an interaction
+    and both borders, the prompt and visible text in a complete ordinary frame.
+    The actor supplies complete frames in output order.
   - `read_box_after_paint(&InputRule, &Screen) -> BoxReading` requires the cells making up the
     visible draft, or the start of a confirmed empty input, to have been painted since the actor's
     last write boundary.
@@ -424,7 +429,7 @@ Reads a CLI's screen for evidence of its state (`state.rs`). A rule can also hav
     - `turn_error` (OpenCode, over its input box): when a turn's model call failed, the error stands just over that turn's summary. It reads as `Error` with the CLI's words. A turn that produced words shows a rate in its summary, so it never reads as an error.
     - `background_correction` (Codex, around its input prompt): reads `Idle` when, over the prompt, a dim footer counts the commands still running in the background, drawn exactly as the CLI draws it or cut off at the screen's right edge, and over that stands the dim summary of a finished turn. The daemon uses this to correct Codex's `working` report regardless of the installed version.
     - `background_report` (Claude Code, in a report's words) gives the daemon a `background` pattern. A `working` report whose words match the pattern reads as `idle`.
-    - `frame_transcript` (Muse Code, around its input frame): `Working` while the working line stands over the frame, with at most a usage warning or queued input between them. `Idle` under the CLI's header, a question it answered, or the end of an earlier conversation. The reader skips indented text and blank paragraph breaks when it looks for the answer marker. Where no frame is drawn, `Blocked(Auth)` while all of its sign-in choices show, and `Blocked(Permission)` while its question about trusting the workspace shows. Part of a frame on the screen reads as None. Muse Code reports an answer that asks the person something as a question, although its turn has ended. With `answers_ask`, that report counts as done while the CLI's input is on the screen.
+    - `frame_transcript` (Muse Code, around its input frame): `Working` while the working line stands over the frame, with at most a usage warning or queued input between them. `Idle` under the CLI's header, a question it answered, or the end of an earlier conversation. The reader skips indented text and blank paragraph breaks when it looks for the answer marker. Where no frame is drawn, `Blocked(Auth)` while all of its sign-in choices show, and `Blocked(Permission)` while its question about trusting the workspace shows. Part of a frame on the screen reads as None. Muse Code reports an answer that asks the person something as a question, although its turn has ended. With `answers_ask`, the actor can settle that report when a complete later frame redraws the ordinary composer.
   - To check rule files, the layer reads `COUNT` (`${count}`) and `PLURAL` (`${s}`): a footer must contain `COUNT` exactly once, and no placeholder other than these two.
 
 ### sessions

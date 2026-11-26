@@ -270,7 +270,9 @@ fn paste_paint(screen: &facade_screen::Screen) -> BoxPaint<'_> {
     }
 }
 
-/// Reads the input and whether its menu or framed composer was printed after the boundary.
+/// Reads the input and its redraw evidence using the caller's input boundary. For an interaction,
+/// the flag covers the menu anchor. For a complete ordinary frame, it covers the borders, prompt
+/// and visible text. The caller observes frames in output order.
 pub fn read_box_with_redraw(
     rule: &InputRule,
     screen: &facade_screen::Screen,

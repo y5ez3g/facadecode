@@ -12,7 +12,7 @@ pub(super) struct InputGate {
     /// Output position of the last complete redraw of that menu.
     menu_redraw: Option<u64>,
     /// After recovery the last logged frame can precede a native report's withdrawal.
-    needs_fresh_frame: bool,
+    recovery: RecoveryFrame,
     /// Only a fresh ordinary frame after native withdrawal can authorize a probe.
     probe_after_wait: ProbeFrame,
 }
@@ -26,9 +26,25 @@ enum ProbeFrame {
     Composer,
 }
 
+#[derive(Default, PartialEq, Eq)]
+enum RecoveryFrame {
+    #[default]
+    None,
+    InputRow,
+    Composer,
+}
+
 impl InputGate {
-    pub(super) fn recover(&mut self, has_reports: bool) {
-        self.needs_fresh_frame = has_reports;
+    pub(super) fn recover(&mut self, has_reports: bool, answers_ask: bool) {
+        self.recovery = match (has_reports, answers_ask) {
+            (true, true) => RecoveryFrame::Composer,
+            (true, false) => RecoveryFrame::InputRow,
+            (false, _) => RecoveryFrame::None,
+        };
+    }
+
+    pub(super) fn needs_recovery_redraw(&self) -> bool {
+        self.recovery == RecoveryFrame::Composer
     }
 
     pub(super) fn report(&mut self, native_wait: Option<WaitKind>) {
@@ -95,7 +111,7 @@ impl InputGate {
             self.menu_redraw = None;
             if native_wait.is_none() {
                 self.needs_composer = false;
-                self.needs_fresh_frame = false;
+                self.recovery = RecoveryFrame::None;
                 self.probe_after_wait = ProbeFrame::Awaiting;
             }
         }
@@ -114,7 +130,7 @@ impl InputGate {
     }
 
     pub(super) fn blocks_delivery(&self) -> bool {
-        self.blocked() || self.needs_fresh_frame
+        self.blocked() || self.recovery != RecoveryFrame::None
     }
 }
 

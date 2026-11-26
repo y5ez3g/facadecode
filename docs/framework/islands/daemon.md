@@ -419,8 +419,10 @@ The terminal, as a `PtyIo`, and the input waiting for it.
   - Under `answers_ask`, a reported question becomes done when a complete frame prints the
     ordinary composer's borders, prompt and visible text after the report and input boundary.
     The actor supplies reports and frames in output order. State keeps the completed report as
-    done across handover. Recovery still requires fresh input evidence for delivery. Permission
-    reports keep their own wait.
+    done across handover. For an `answers_ask` run with native reports, recovery uses the same
+    whole-composer evidence before delivery. The actor puts replayed paint and any open frame on
+    the earlier side of the boundary before consuming live output. Permission reports keep their
+    own wait.
   - A start and the tools' connection get 30 seconds each. Time the CLI spends asking a question does not count.
   - For a CLI that defers its tool catalog, a live authenticated initializer keeps the tools `Connecting`
     without adding a startup overlay or tools timeout. Native startup keeps its own deadline. The initial

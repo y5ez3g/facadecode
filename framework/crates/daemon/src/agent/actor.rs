@@ -192,7 +192,7 @@ fn new_actor(start: ActorStart, links: Links, recovered: bool) -> anyhow::Result
     let mut input_gate = InputGate::default();
     input_gate.report(tracker.native_wait());
     if recovered {
-        input_gate.recover(tracker.uses_native_reports());
+        input_gate.recover(tracker.uses_native_reports(), tracker.answers_ask());
     }
     let terminal = Terminal::new(master)?;
     Ok(Actor {
@@ -775,6 +775,10 @@ impl Actor {
         }
         let (cols, rows) = self.size();
         let input_rule = self.input_rule;
+        if self.input_gate.needs_recovery_redraw() {
+            // Keep replayed paint and any frame already open on the earlier side of the boundary.
+            self.screen_mut().mark_pending_frame_earlier();
+        }
         self.screen_mut().observe_paint(input_rule.is_some());
         self.recovered_empty = self.read_unread_output()
             && input_rule.is_some_and(|rule| {
@@ -1721,8 +1725,9 @@ impl Actor {
                 }
                 let frame_closed = screen.synchronized_update_deadline().is_none();
                 let frame_follows_write = screen.frame_follows_input_boundary();
-                let check_composer =
-                    frame_closed && frame_follows_write && state.watches_question_composer();
+                let check_composer = frame_closed
+                    && frame_follows_write
+                    && (state.watches_question_composer() || gate.needs_recovery_redraw());
                 let (reading, redrawn) = read_gate_box(rule, ended, None, screen, check_composer);
                 let writes = reading.frame_writes(screen, terminal_writes);
                 *drew_input.get_or_insert(false) |= writes == CursorRowWrites::Current;
@@ -3554,10 +3559,12 @@ fn observe_gate_frame(
     terminal: &mut Terminal,
     native_wait: Option<WaitKind>,
     reading: &BoxReading,
-    (writes, menu_redrawn, frame_follows_write, frame_closed): (CursorRowWrites, bool, bool, bool),
+    (writes, redrawn, frame_follows_write, frame_closed): (CursorRowWrites, bool, bool, bool),
 ) {
-    if frame_closed {
-        gate.probe_frame(reading, writes == CursorRowWrites::Current, native_wait);
+    let needs_redraw = gate.needs_recovery_redraw();
+    let input_was_written = writes == CursorRowWrites::Current;
+    if frame_closed && !needs_redraw {
+        gate.probe_frame(reading, input_was_written, native_wait);
     }
     let state = reading.info.state;
     let read_start = terminal.output_read_start();
@@ -3566,27 +3573,29 @@ fn observe_gate_frame(
             observe_delivery_interaction(typist, submitting, terminal, read_start);
         }
         gate.frame(state, false, native_wait);
-        if menu_redrawn {
+        if redrawn {
             gate.note_menu_redraw(read_start);
         }
-        interrupt_submissions(
-            typist,
-            submitting,
-            terminal,
-            menu_redrawn.then_some(read_start),
-        );
+        interrupt_submissions(typist, submitting, terminal, redrawn.then_some(read_start));
+        return;
+    }
+    if input_was_written
+        && native_wait.is_none()
+        && matches!(state, InputState::Usable | InputState::Draft)
+    {
+        disown_unproven_erase(typist, terminal, Some(read_start));
+    }
+    let ordinary_frame = if needs_redraw {
+        frame_closed && frame_follows_write && redrawn
     } else {
-        let input_was_written = writes == CursorRowWrites::Current;
-        if input_was_written {
-            if native_wait.is_none() && matches!(state, InputState::Usable | InputState::Draft) {
-                disown_unproven_erase(typist, terminal, Some(read_start));
-            }
-            gate.frame(
-                state,
-                state == InputState::Draft && typist.owns_draft(reading),
-                native_wait,
-            );
-        }
+        input_was_written
+    };
+    if ordinary_frame {
+        gate.frame(
+            state,
+            state == InputState::Draft && typist.owns_draft(reading),
+            native_wait,
+        );
     }
 }
 
@@ -5981,7 +5990,8 @@ mod tests {
         new.state = StateTracker::new(Some(rule), Instant::now(), kept, None, Some(&screen));
         new.typist = Typist::new(&new.id, Some(rule), None, messages.delivery_handle());
         new.input_gate.report(new.state.native_wait());
-        new.input_gate.recover(new.state.uses_native_reports());
+        new.input_gate
+            .recover(new.state.uses_native_reports(), new.state.answers_ask());
         new.screen_start = Some(ScreenStart::Recovered {
             screen: Box::new(screen),
             log: None,
@@ -6012,6 +6022,14 @@ mod tests {
             "the recovered screen is still old evidence"
         );
 
+        read_output(&mut new, &mut cli, b"\x1b[2;78H \x1b[2;3H").await;
+        if new.pending_delivery.is_some() {
+            issue_delivery(&mut new).await;
+            expect_cli_input(&mut cli, b"\x1b[200~a message \x1b[201~");
+            panic!("the CLI received a paste after only a distant blank on the recovered composer");
+        }
+        assert!(new.input_gate.blocks_delivery());
+
         read_output(&mut new, &mut cli, composer.as_bytes()).await;
         assert!(!new.input_gate.blocks_delivery());
         assert!(new.pending_delivery.is_some());
@@ -6020,6 +6038,85 @@ mod tests {
         read_output(&mut new, &mut cli, BLOCKED).await;
         assert_eq!(new.state.native_wait(), Some(WaitKind::Question));
         assert!(new.input_gate.blocks_delivery() && new.pending_delivery.is_none());
+    }
+
+    #[tokio::test]
+    async fn muse_wait_ignores_a_title_change_after_handover() {
+        muse_active_question_survives_replay(false, b"\x1b]2;new title\x07").await;
+    }
+
+    #[tokio::test]
+    async fn muse_wait_ignores_an_open_pre_report_frame_after_handover() {
+        muse_active_question_survives_replay(true, b"\x1b[?2026l").await;
+    }
+
+    async fn muse_active_question_survives_replay(open_sync: bool, live_output: &[u8]) {
+        let before = crate::test_folder::TestFolder::new("actor-muse-replay-old");
+        let after = crate::test_folder::TestFolder::new("actor-muse-replay-new");
+        let (messages, _) = messages();
+        let rule = facade_rules::find("muse").unwrap().unwrap();
+        let composer = plain_claude_frame("", "");
+        let (mut old, mut cli) = actor_with_cli(&before, messages.delivery_handle()).await;
+        old.input_rule = Some(&rule.input);
+        old.state = StateTracker::new(Some(rule), Instant::now(), Kept::default(), None, None);
+        if open_sync {
+            read_output(&mut old, &mut cli, b"\x1b[?2026h").await;
+        }
+        read_output(&mut old, &mut cli, composer.as_bytes()).await;
+        read_output(&mut old, &mut cli, BLOCKED).await;
+        assert_eq!(old.state.native_wait(), Some(WaitKind::Question));
+        let kept = serde_json::from_slice(&serde_json::to_vec(&old.state.kept()).unwrap()).unwrap();
+        old.screen_mut().finish().await;
+        let replayed =
+            super::super::screen::recover_after_clean_end(&before, &old.id, Some((80, 24)), &|| {});
+        assert!(replayed.log.is_some());
+        assert_eq!(replayed.screen.is_drawing(), open_sync);
+        drop(old);
+        drop(cli);
+
+        let (mut new, mut cli) = actor_with_cli(&after, messages.delivery_handle()).await;
+        new.input_rule = Some(&rule.input);
+        new.state = StateTracker::new(
+            Some(rule),
+            Instant::now(),
+            kept,
+            None,
+            Some(&replayed.screen),
+        );
+        new.typist = Typist::new(&new.id, Some(rule), None, messages.delivery_handle());
+        new.input_gate.report(new.state.native_wait());
+        new.input_gate
+            .recover(new.state.uses_native_reports(), new.state.answers_ask());
+        new.screen_start = Some(ScreenStart::Recovered {
+            screen: Box::new(replayed.screen),
+            log: replayed.log,
+            handed_over_cleanly: true,
+            restart_size: None,
+        });
+        new.begin(true, false, TerminalColors::default()).await;
+        assert_eq!(new.state.native_wait(), Some(WaitKind::Question));
+        let _settled = queue_a_message(
+            &mut new,
+            &messages,
+            Instant::now() + Duration::from_secs(20),
+        );
+        new.type_next();
+        assert!(new.pending_delivery.is_none() && new.input_gate.blocks_delivery());
+
+        read_output(&mut new, &mut cli, live_output).await;
+        if new.pending_delivery.is_some() {
+            issue_delivery(&mut new).await;
+            expect_cli_input(&mut cli, b"\x1b[200~a message \x1b[201~");
+            panic!("the CLI received a paste using only the pre-report composer");
+        }
+        assert_eq!(new.state.native_wait(), Some(WaitKind::Question));
+        assert!(new.input_gate.blocks_delivery());
+
+        read_output(&mut new, &mut cli, composer.as_bytes()).await;
+        assert_eq!(new.state.native_wait(), None);
+        assert!(!new.input_gate.blocks_delivery());
+        issue_delivery(&mut new).await;
+        expect_cli_input(&mut cli, b"\x1b[200~a message \x1b[201~");
     }
 
     #[tokio::test]

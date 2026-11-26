@@ -332,9 +332,14 @@ impl StateTracker {
         self.question.open = asking;
     }
 
+    /// The CLI reports answers that ask the person something as native questions.
+    pub(super) fn answers_ask(&self) -> bool {
+        matches!(self.evidence.rule, Some(StateRule::FrameTranscript(rule)) if rule.answers_ask)
+    }
+
     /// Whether complete input frames can settle the current native question.
     pub(super) fn watches_question_composer(&self) -> bool {
-        self.uses_native_reports() && self.evidence.question_uses_composer()
+        self.answers_ask() && self.native_wait() == Some(WaitKind::Question)
     }
 
     /// Takes a complete frame in output order. A redrawn composer can settle the report as done,
@@ -606,20 +611,6 @@ impl Evidence {
 
     fn current(&self) -> Option<&EvidenceState> {
         self.correction.as_ref().or(self.base.as_ref())
-    }
-
-    /// The rule lets a freshly drawn ordinary composer settle an answer that asks a question.
-    fn question_uses_composer(&self) -> bool {
-        matches!(
-            (self.current(), self.rule),
-            (
-                Some(EvidenceState::Blocked {
-                    kind: Some(WaitKind::Question),
-                    ..
-                }),
-                Some(StateRule::FrameTranscript(rule)),
-            ) if rule.answers_ask
-        )
     }
 
     fn replace(&mut self, next: EvidenceState) {
