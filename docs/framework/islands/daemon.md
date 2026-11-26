@@ -447,6 +447,9 @@ delivery deadline. Pending rows carry that ownership through daemon recovery. Sc
 rows a false value. Receipt replay uses the original decision. Delivery and result waits share the caller's
 remaining budget. A v1 send with no wait field uses a delivery wait.
 
+For a forwarded Shell delivery or result wait, the origin gives the holder a shorter delivery budget
+in the send arguments. Settlement and the receipt use the remaining peer exchange time.
+
 A command-line result wait belongs to the source daemon and closes with its request. The holder stores the
 reply marker with the original message. Only its verified recipient can answer the associated `#c`
 address. The holder assigns a reply number and the source accepts only the first reply that matches the live
