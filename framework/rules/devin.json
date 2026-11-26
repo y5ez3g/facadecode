@@ -14,7 +14,7 @@
 		"alternate_prompt": ">",
 		"gap": " ",
 		"probe_unstyled_hint": true,
-		"upper": "^[─-]+(?: +\\([^)]+\\) *(?:[─-]+)?)? *$",
+		"upper": "^[─-]+(?: +\\S.*?)? *$",
 		"lower": "^[─-]+ *$",
 		"scrolled": { "position": "rows", "above": "^\\^ (\\d+) more above$", "below": "^v (\\d+) more below$" },
 		"menus": [

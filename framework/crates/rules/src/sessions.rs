@@ -120,18 +120,22 @@ pub fn run_folder(runs: &Path, agent: &str) -> Option<PathBuf> {
 const SESSION_FILE_LIMIT: u64 = 4096;
 /// OpenCode IDs are `ses_` plus at most this many letters and digits.
 const OPENCODE_ID_LIMIT: usize = 64;
+/// Devin's session names, such as `pickled-fighter`, are at most this long.
+const DEVIN_NAME_LIMIT: usize = 64;
 
 /// `text` as a session ID in its one accepted spelling, if it is one. Claude Code, Codex,
 /// Antigravity, Muse Code and Pi use UUIDs, accepted in any case and given back in lowercase.
 /// OpenCode uses `ses_` and letters and digits, kept exactly. Kiro V3 prefixes its UUID
-/// with the literal `sess_`.
+/// with the literal `sess_`. Devin names a session with two lowercase words joined by a hyphen,
+/// such as `pickled-fighter`, kept exactly.
 pub fn parse_session_id(text: &str) -> Option<String> {
     if let Some(uuid) = text.strip_prefix("sess_") {
         return is_uuid(uuid).then(|| text.to_ascii_lowercase());
     }
     match text.strip_prefix("ses_") {
         Some(tail) => is_opencode_tail(tail).then(|| text.to_string()),
-        None => is_uuid(text).then(|| text.to_ascii_lowercase()),
+        None if is_uuid(text) => Some(text.to_ascii_lowercase()),
+        None => is_devin_name(text).then(|| text.to_string()),
     }
 }
 
@@ -161,6 +165,14 @@ pub fn session_evidence(
         _ => None,
     };
     reported == Some(recorded)
+}
+
+fn is_devin_name(text: &str) -> bool {
+    let word = |word: &str| !word.is_empty() && word.bytes().all(|byte| byte.is_ascii_lowercase());
+    text.len() <= DEVIN_NAME_LIMIT
+        && text
+            .split_once('-')
+            .is_some_and(|(first, second)| word(first) && word(second))
 }
 
 fn is_opencode_tail(tail: &str) -> bool {
@@ -441,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn a_session_id_is_a_uuid_written_in_lowercase_or_opencode_s_as_it_is() {
+    fn a_session_id_is_a_uuid_written_in_lowercase_or_opencode_s_or_devin_s_as_it_is() {
         assert_eq!(parse_session_id(&ID.to_uppercase()).as_deref(), Some(ID));
         assert_eq!(
             parse_session_id("ses_1F2e3D").as_deref(),
@@ -449,6 +461,12 @@ mod tests {
         );
         let longest = format!("ses_{}", "a".repeat(64));
         assert_eq!(parse_session_id(&longest), Some(longest.clone()));
+        assert_eq!(
+            parse_session_id("pickled-fighter").as_deref(),
+            Some("pickled-fighter")
+        );
+        let longest_name = format!("{}-{}", "a".repeat(31), "b".repeat(32));
+        assert_eq!(parse_session_id(&longest_name), Some(longest_name.clone()));
         for wrong in [
             "",
             "86da4482",
@@ -459,6 +477,14 @@ mod tests {
             "ses_a-b",
             "SES_abc",
             &format!("{longest}a"),
+            "pickled",
+            "Pickled-fighter",
+            "pickled--fighter",
+            "-pickled",
+            "pickled-",
+            "pickled_fighter",
+            "pickled-fighter-2",
+            &format!("{longest_name}a"),
         ] {
             assert!(parse_session_id(wrong).is_none(), "{wrong:?}");
         }

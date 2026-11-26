@@ -9,7 +9,10 @@ use facade_base::system::{SYSTEM, System, env_var, home_folder_in};
 use facade_base::time::parse_iso_time;
 
 use super::transcript::json_file;
-use super::{Folder, SavedSession, entries, metadata, sqlite, store_error, title, unix_time, uuid};
+use super::{
+    Folder, SavedSession, entries, metadata, parse_session_id, sqlite, store_error, title,
+    unix_time, uuid,
+};
 use crate::formats::parse_jsonc;
 
 pub(super) fn list(
@@ -31,9 +34,18 @@ pub(super) fn list(
     let root = var("DEVIN_SESSIONS_DIR")
         .map(PathBuf::from)
         .or_else(|| data.map(|data| data.join("devin")));
+    // Devin 3000 keeps its database in `cli/`; earlier versions kept it in the root.
     let db = var("CHISEL_SESSION_DB")
         .map(|path| scope.selected.join(path))
-        .or_else(|| Some(scope.selected.join(root.as_ref()?).join("sessions.db")));
+        .or_else(|| {
+            let root = scope.selected.join(root.as_ref()?);
+            let current = root.join("cli").join("sessions.db");
+            Some(if current.is_file() {
+                current
+            } else {
+                root.join("sessions.db")
+            })
+        });
     let configured = crate::devin_config_dir(environment)
         .and_then(|path| {
             std::fs::read_to_string(scope.selected.join(path).join("config.json")).ok()
@@ -122,7 +134,7 @@ fn database(path: &Path, scope: &Folder<'_>) -> Result<Vec<SavedSession>, ErrorB
         let mut found = Vec::new();
         for row in rows {
             let (id, cwd, name, modified) = row.map_err(error)?;
-            if uuid(&id).as_deref() == Some(&id) && scope.matches(Path::new(&cwd)) {
+            if parse_session_id(&id).as_deref() == Some(&id) && scope.matches(Path::new(&cwd)) {
                 found.push(scope.session(id, title(name.as_deref(), None), activity(modified)));
             }
         }
