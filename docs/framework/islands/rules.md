@@ -281,7 +281,8 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     in the 120-column recording.
     A wrapped footer can end with a shortcuts row that may include aligned status, the
     `tab to queue message` hint, or a standalone warning count ending in `f2 to view` with at least
-    20 leading spaces. The model line must start the contiguous, indented footer above the hint
+    20 leading spaces. When a draft hides the hint, a colored model label identifies the
+    wrapped footer. In both cases the model line must start the contiguous, indented footer
     and have a blank row above it.
     Its `last_column` position uses dim glyphs (`↑` and `↓`) in the last column of the first
     and last input rows. When the model line is absent, those glyphs anchor the scrolled composer.

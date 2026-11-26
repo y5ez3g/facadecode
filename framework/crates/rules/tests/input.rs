@@ -603,6 +603,13 @@ fn a_draft_reads_as_its_rows_draw_it_and_a_long_paste_as_its_placeholder() {
             "📨 Message m4 from example-helper (a2@testbox) · in reply to m2\nExample reply body"
         );
     }
+    assert_eq!(
+        draft(
+            "codex",
+            "codex-0.172.0/42x18-idle-shell-paste-with-wrapped-footer"
+        ),
+        "📨 Message m1 from command line\nNARROW42SEND. Reply with the single\nword OK."
+    );
     let lines = |count: usize| {
         (1..=count)
             .map(|line| format!("line {line}"))

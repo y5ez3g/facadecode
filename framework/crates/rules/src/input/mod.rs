@@ -670,16 +670,21 @@ impl<'a> Screen<'a> {
             .find(|&y| model_at(y))
             .filter(|&y| self.blank(y - 1))
             .or_else(|| {
-                let hint = rule.wrapped_footer_hint.as_ref()?;
-                if !hint.is_match(self.lines[bottom].trim_end()) {
-                    return None;
-                }
-                // A wrapped footer begins at the top of the indented block before the hint.
-                (0..bottom)
+                let has_hint = rule
+                    .wrapped_footer_hint
+                    .as_ref()
+                    .is_some_and(|hint| hint.is_match(self.lines[bottom].trim_end()));
+                let footer_end = bottom + usize::from(!has_hint);
+                // A draft can hide the hint. The colored model label still anchors the footer.
+                (0..footer_end)
                     .rev()
                     .take_while(|&y| self.wrapped(y) && !self.blank(y))
                     .last()
-                    .filter(|&y| model_at(y) && self.blank(y - 1))
+                    .filter(|&y| {
+                        model_at(y)
+                            && self.blank(y - 1)
+                            && (has_hint || self.row(y).get(2).is_some_and(|cell| cell.colored))
+                    })
             });
         // The input ends before the blank row above the model line, or after the last row with text.
         let last = model.map_or(bottom, |model| model - 2);
