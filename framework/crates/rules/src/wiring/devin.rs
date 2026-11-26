@@ -78,6 +78,9 @@ pub(super) fn tools(
             ".devin/config.local.json",
             ".devin/mcp_config.json",
             ".devin/mcp_config.local.json",
+            // Devin also loads these MCP files of other tools ahead of its user configuration.
+            ".mcp.json",
+            ".cursor/mcp.json",
         ],
     ) {
         if read_object(&file)?["mcpServers"].get(SERVER).is_some() {

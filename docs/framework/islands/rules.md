@@ -503,7 +503,9 @@ Qoder takes a session MCP file and a settings overlay with `SessionStart` and `U
 Qoder can fire `SessionStart` before a person trusts a new folder. The first prompt after trust reports the
 session in that case. Devin uses a private
 configuration root with the native `devin/mcp_config.json` path and an in-process local agent. Its
-other existing config entries are linked into that root. Devin 3000 keeps its sessions in
+other existing config entries are linked into that root. Devin loads a project's `.devin/` files,
+`.mcp.json` and `.cursor/mcp.json` ahead of that root, so a `facade` server in any of them leaves the
+run without Facade's tools, and the daemon's log names the file. Devin 3000 keeps its sessions in
 `devin/cli/sessions.db` under its data folder; the catalog reads it there, else `devin/sessions.db`. A child Facade agent inherits the original
 configuration root. Oh My Pi takes a local plugin, a settings overlay for the managed tools' approvals,
 and an extension that reports session and turn changes. Oh My Pi announces the servers and tools it
