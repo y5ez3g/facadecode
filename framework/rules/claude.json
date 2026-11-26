@@ -16,6 +16,13 @@
 		"menus": [
 			{ "selected": "^ ❯ \\S", "next": "^ {3}\\S" },
 			{
+				"selected": "^ ❯ Yes, I trust this folder$",
+				"hint": {
+					"pattern": "^ Enter to confirm · Esc to cancel$",
+					"within": 2
+				}
+			},
+			{
 				"selected": "^  ❯ (?:No, exit|Yes, I accept)$",
 				"hint": {
 					"pattern": "^  Enter to confirm · Esc to cancel$",
