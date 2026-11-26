@@ -159,6 +159,39 @@ fn an_added_cli_of_a_built_in_s_type_starts_as_its_entry_says() {
     assert_eq!(home.agents().len(), 1, "invalid type entries start nothing");
 }
 
+/// An added entry of each built-in's type starts the program it names with that built-in's rule,
+/// and takes nothing from the built-in's own entry.
+#[test]
+fn an_added_entry_of_each_built_in_s_type_runs_its_program_with_that_cli_s_rule() {
+    let home = TestHome::new("configtypes");
+    let fake = &test_binaries().fakecli;
+    for cli in [
+        "claude", "codex", "agy", "muse", "opencode", "pi", "devin", "agent", "kiro-cli", "qoder",
+        "omp", "copilot",
+    ] {
+        let file = args_file(&home, cli);
+        let (entry, agent) = (format!("my {cli}"), format!("added-{cli}"));
+        let mut clis = json!({});
+        clis[cli] = json!({ "args": ["--from-the-built-in"] });
+        clis[&entry] = json!({
+            "type": cli, "program": fake, "args": ["--from-the-entry"],
+            "env": { "FAKECLI_ARGS": file },
+        });
+        settings(&home, &json!({ "clis": clis }));
+        let started = facade(&home, &["start", "-d", "--name", &agent, &entry], &[]);
+        assert!(started.status.success(), "{cli}: {}", stderr(&started));
+        let args = args_in(&file);
+        assert!(
+            args.iter().any(|arg| arg == "--from-the-entry")
+                && !args.iter().any(|arg| arg == "--from-the-built-in"),
+            "{cli}: {args:?}"
+        );
+        assert_eq!(home.listed_agent(&agent).unwrap()["cli"], entry.as_str());
+        let rule = connect(&home).call("agent.inspect", json!({ "target": agent }));
+        assert_eq!(rule["result"]["rule"], cli, "{rule}");
+    }
+}
+
 /// `args` without the `--mcp-config <file>` the test CLI's rule gives its run: Facade's server, in
 /// a file of the run's own.
 fn without_wiring(home: &TestHome, mut args: Vec<String>) -> Vec<String> {
