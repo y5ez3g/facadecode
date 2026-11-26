@@ -210,6 +210,26 @@ fn kiro_screen(label: &str) -> ScreenView {
 }
 
 #[test]
+fn kiro_offers_tab_only_on_the_captured_collapse_cue() {
+    let rule = find("kiro-cli").unwrap().unwrap();
+    let view = kiro_screen("collapsed-multiline");
+    let read = |view| read_box(&rule.input, view);
+    let observed = read(&view);
+    assert_eq!(observed.info.state, InputState::Draft);
+    assert!(rule.paste.shows_tab_to_expand(&observed), "{observed:?}");
+
+    let mut plain = view.clone();
+    for cell in &mut plain.rows[plain.cursor.1] {
+        cell.colored = false;
+    }
+    assert!(!rule.paste.shows_tab_to_expand(&read(&plain)));
+
+    let mut other_caret = observed;
+    other_caret.line.as_mut().unwrap().cursor.0 += 1;
+    assert!(!rule.paste.shows_tab_to_expand(&other_caret));
+}
+
+#[test]
 fn kiro_recognizes_the_trust_warning_when_its_heading_scrolls_out() {
     let rule = find("kiro-cli").unwrap().unwrap();
     let question = rule.yolo.question.as_ref().unwrap();

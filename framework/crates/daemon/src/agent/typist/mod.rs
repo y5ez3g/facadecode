@@ -37,6 +37,8 @@ pub(crate) struct Modes {
     pub(crate) bracketed_paste: bool,
     pub(crate) application_cursor_keys: bool,
     pub(crate) working: bool,
+    /// The CLI drew after earlier writes, with no person input waiting and room for Tab.
+    pub(crate) reveal_ready: bool,
 }
 
 /// Bytes to queue now and the next timer to arrange; neither operation waits.
@@ -358,6 +360,14 @@ struct DraftCheck {
     observed: bool,
     recovered: bool,
     typed: Option<u64>,
+    reveal: PasteReveal,
+}
+
+#[derive(PartialEq, Eq)]
+enum PasteReveal {
+    Unavailable,
+    Available,
+    Attempted,
 }
 
 struct PasteDraft {
@@ -400,7 +410,7 @@ impl PasteDraft {
 }
 
 impl DraftCheck {
-    fn new(text: String, typed: Option<u64>) -> Self {
+    fn new(text: String, typed: Option<u64>, can_reveal: bool) -> Self {
         Self {
             paste: PasteDraft { text },
             previous: None,
@@ -408,6 +418,11 @@ impl DraftCheck {
             observed: false,
             recovered: typed.is_none(),
             typed,
+            reveal: if can_reveal {
+                PasteReveal::Available
+            } else {
+                PasteReveal::Unavailable
+            },
         }
     }
 
@@ -723,7 +738,7 @@ impl Typist {
     ) {
         match (self.rule, self.batch.is_none()) {
             (Some(_), true) => {
-                let mut draft = DraftCheck::new(joined(&messages), None);
+                let mut draft = DraftCheck::new(joined(&messages), None, false);
                 draft.previous = previous_text.map(|text| PasteDraft { text });
                 self.batch = Some(Batch {
                     messages,
@@ -861,6 +876,9 @@ impl Typist {
             let batch = self.batch.take().expect("stalled delivery");
             let outcome = match batch.phase {
                 DeliveryPhase::Clearing { .. } => Self::uncleared(),
+                DeliveryPhase::Draft(draft) if draft.reveal == PasteReveal::Attempted => {
+                    Self::uncleared()
+                }
                 _ => Outcome::UNCONFIRMED,
             };
             self.settle_delivery(&batch.messages, outcome)
@@ -877,6 +895,10 @@ impl Typist {
         match &batch.phase {
             DeliveryPhase::Submitting => (TextWritten::Full, Some(full)),
             DeliveryPhase::Clearing { .. } => (TextWritten::Full, Some(false)),
+            // The receipt now tracks Tab. The paste completed before Tab was queued.
+            DeliveryPhase::Draft(draft) if draft.reveal == PasteReveal::Attempted => {
+                (TextWritten::Full, Some(false))
+            }
             DeliveryPhase::Draft(draft) if draft.recovered => (TextWritten::Unknown, None),
             DeliveryPhase::Draft(_) => {
                 let text = if full {
@@ -933,7 +955,7 @@ impl Typist {
                     now,
                     offset,
                     typed,
-                    modes.working,
+                    modes,
                     read(),
                     paused,
                 ),
@@ -948,6 +970,7 @@ impl Typist {
         // its draft before trusting the box again, and erase it only if it is still ours.
         if let Some(draft) = &self.late_draft {
             if draft.typed == Some(typed)
+                && !rule.shows_tab_to_expand(&reading)
                 && (draft.paste.matches(rule, &reading, false)
                     || draft.paste.visible_tail(&reading).is_some())
             {
@@ -1003,7 +1026,11 @@ impl Typist {
                 if granted.is_empty() {
                     return Step::wait((!self.inbox.is_empty()).then_some(now));
                 }
-                let draft = DraftCheck::new(next.text.clone(), Some(typed));
+                let can_reveal = modes.bracketed_paste
+                    && !modes.working
+                    && modes.reveal_ready
+                    && rule.tab_to_expand.is_some();
+                let draft = DraftCheck::new(next.text.clone(), Some(typed), can_reveal);
                 let mut write = Vec::new();
                 write_paste(
                     &draft.paste.text,
@@ -1042,7 +1069,7 @@ impl Typist {
         now: Instant,
         offset: u64,
         typed: u64,
-        working: bool,
+        modes: Modes,
         reading: BoxReading,
         paused: Option<Instant>,
     ) -> Step {
@@ -1052,9 +1079,18 @@ impl Typist {
             .min()
             .expect("started paste");
         let untouched = *draft.typed.get_or_insert(typed) == typed;
+        let revealed = draft.reveal == PasteReveal::Attempted;
+        let collapsed = rule.shows_tab_to_expand(&reading);
         let legacy_split = draft.recovered && self.rule.is_some_and(|rule| rule.cli == "claude");
-        let own = if !untouched {
+        let ready_to_reveal = !modes.working && modes.reveal_ready && !self.paste_held;
+        let own = if !untouched || collapsed {
             None
+        } else if revealed {
+            reading.draft.as_deref().filter(|shown| {
+                ready_to_reveal
+                    && reading.info.state == InputState::Draft
+                    && facade_rules::is_full_draft(shown, &draft.paste.text, reading.info.hidden)
+            })
         } else if draft.matches(rule, &reading, legacy_split) {
             reading.draft.as_deref()
         } else if !draft.recovered {
@@ -1062,6 +1098,28 @@ impl Typist {
         } else {
             None
         };
+        if now < deadline
+            && untouched
+            && draft.reveal == PasteReveal::Available
+            && ready_to_reveal
+            && paused.is_none()
+            && collapsed
+        {
+            // The full paste has reached the PTY. Tab reveals it for a fresh, full draft check.
+            draft.reveal = PasteReveal::Attempted;
+            draft.stable = None;
+            let mut write = Vec::new();
+            Key::Tab.write(false, &mut write);
+            self.record_write(offset, write.len(), Duration::ZERO);
+            self.batch = Some(Batch {
+                messages,
+                phase: DeliveryPhase::Draft(draft),
+            });
+            return Step {
+                write,
+                wake: Some((now + READ_INTERVAL).min(deadline)),
+            };
+        }
         draft.observed |= own.is_some();
         let same = |observed: &str, shown: &str| {
             facade_rules::is_same_draft(observed, shown, &draft.paste.text, reading.info.hidden)
@@ -1071,7 +1129,8 @@ impl Typist {
                 .previous
                 .as_ref()
                 .is_none_or(|previous| previous.char_count() == draft.paste.char_count());
-            if known_length
+            if !revealed
+                && known_length
                 && own.is_some_and(|text| {
                     draft
                         .stable
@@ -1098,7 +1157,8 @@ impl Typist {
             } else {
                 Self::uncleared()
             };
-            if !draft.recovered
+            if !revealed
+                && !draft.recovered
                 && untouched
                 && !draft.observed
                 && self.recall(reading).info.state == InputState::Usable
@@ -1128,7 +1188,7 @@ impl Typist {
                 if now >= settled && paused.is_none() {
                     crate::pause_for_test("before-message-enter");
                     // Recovered drafts can be first prompts, so retain Enter for them.
-                    let working_message = working
+                    let working_message = modes.working
                         && !draft.recovered
                         && !messages.iter().any(|message| message.prompt);
                     let mut write = Vec::new();
@@ -1296,6 +1356,7 @@ mod tests {
         bracketed_paste: true,
         application_cursor_keys: false,
         working: false,
+        reveal_ready: true,
     };
     const ALIASES: [&str; 6] = [
         "Return",
@@ -1343,13 +1404,23 @@ mod tests {
 
     impl Terminal {
         fn step(&mut self, typist: &mut Typist, now: Instant, modes: Modes) -> Option<Instant> {
+            self.step_with_generation(typist, now, modes, 0)
+        }
+
+        fn step_with_generation(
+            &mut self,
+            typist: &mut Typist,
+            now: Instant,
+            modes: Modes,
+            typed: u64,
+        ) -> Option<Instant> {
             let reading = self.reading.clone();
             let step = typist.step(
                 now,
                 self.written as u64,
                 self.queued.len() as u64,
                 modes,
-                0,
+                typed,
                 &|| reading.clone(),
                 &|| reading.clone(),
             );
@@ -1961,6 +2032,188 @@ mod tests {
             Some(enter_written),
             None,
         )
+    }
+
+    fn kiro_collapsed_paste() -> BoxReading {
+        let label = " 3 lines ▸   Press Tab to expand";
+        let mut collapsed = input(InputState::Draft, Some(label));
+        collapsed.line = Some(facade_rules::InputLine {
+            row: 21,
+            start: 2,
+            cursor: (13, 21),
+            rest: false,
+            cells: label
+                .chars()
+                .map(|cell| facade_rules::LineCell {
+                    text: cell.to_string(),
+                    dim: false,
+                    colored: true,
+                })
+                .collect(),
+        });
+        collapsed
+    }
+
+    #[test]
+    fn kiro_reveals_a_fully_written_paste_once_then_requires_the_whole_draft() {
+        let post = test_messages();
+        let mut typist = typist_for("kiro-cli", &post);
+        let mut terminal = Terminal {
+            reading: input(InputState::Usable, None),
+            ..Terminal::default()
+        };
+        let start = Instant::now();
+        let (typing, number) = message(&post, "first\nsecond", start + Duration::from_secs(8));
+        typist.deliver(typing);
+        terminal.step(&mut typist, start, ANY);
+
+        terminal.reading = kiro_collapsed_paste();
+        terminal.step(&mut typist, start + Duration::from_secs(1), ANY);
+        assert_eq!(terminal.write_all(), b"\x1b[200~first\rsecond\x1b[201~");
+        terminal.step(&mut typist, start + Duration::from_secs(2), ANY);
+        terminal.step(&mut typist, start + Duration::from_secs(3), ANY);
+        assert_eq!(terminal.write_all(), b"\t");
+        terminal.step(&mut typist, start + Duration::from_millis(3100), ANY);
+        assert!(terminal.write_all().is_empty());
+
+        terminal.reading = input(InputState::Draft, Some("second"));
+        terminal.reading.paste_tail = Some("second".into());
+        terminal.step(&mut typist, start + Duration::from_secs(4), ANY);
+        assert!(terminal.write_all().is_empty());
+        terminal.reading = input(InputState::Draft, Some("first\n    second"));
+        let settled = terminal
+            .step(&mut typist, start + Duration::from_secs(5), ANY)
+            .unwrap();
+        assert!(terminal.write_all().is_empty());
+        terminal.step(&mut typist, settled, ANY);
+        assert_eq!(terminal.write_all(), b"\r");
+        terminal.step(&mut typist, settled, ANY);
+        assert_eq!(became(&post, number), TYPED);
+    }
+
+    #[test]
+    fn kiro_leaves_person_and_recovered_collapsed_drafts_untouched() {
+        for recovered in [false, true] {
+            let post = test_messages();
+            let mut typist = typist_for("kiro-cli", &post);
+            let mut terminal = Terminal {
+                reading: kiro_collapsed_paste(),
+                ..Terminal::default()
+            };
+            let start = Instant::now();
+            let deadline = start + Duration::from_secs(3);
+            let (typing, number, told) = message_told(&post, "first\nsecond", deadline);
+            if recovered {
+                assert_eq!(
+                    post.delivery_handle().begin_paste(&[number]),
+                    Some(vec![number])
+                );
+                typist.finish_paste(vec![typing], None);
+            } else {
+                typist.deliver(typing);
+            }
+            terminal.step(&mut typist, start, ANY);
+            terminal.step(&mut typist, deadline, ANY);
+            assert!(terminal.write_all().is_empty());
+            if recovered {
+                assert_eq!(became(&post, number), NOT_KNOWN);
+            } else {
+                assert_eq!(
+                    withdrawn(&post, number, &told),
+                    failed(DeliveryFailure::InputDraft, TextWritten::None, false),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kiro_keeps_enter_unwritten_on_an_unverified_or_interrupted_reveal() {
+        for (reading, before_tab, after_tab, tab_written, fresh_draw) in [
+            (input(InputState::Unknown, None), 0, 0, Some(true), true),
+            (
+                input(InputState::Draft, Some("different")),
+                0,
+                0,
+                Some(true),
+                true,
+            ),
+            (
+                input(InputState::Draft, Some("first\nsecond")),
+                0,
+                1,
+                Some(true),
+                true,
+            ),
+            (
+                input(InputState::Draft, Some("first\nsecond")),
+                0,
+                0,
+                Some(true),
+                false,
+            ),
+            (kiro_collapsed_paste(), 1, 1, None, true),
+            (kiro_collapsed_paste(), 0, 0, Some(false), true),
+        ] {
+            let post = test_messages();
+            let mut typist = typist_for("kiro-cli", &post);
+            let mut terminal = Terminal {
+                reading: input(InputState::Usable, None),
+                ..Terminal::default()
+            };
+            let start = Instant::now();
+            let deadline = start + Duration::from_secs(6);
+            let (typing, number) = message(&post, "first\nsecond", deadline);
+            typist.deliver(typing);
+            terminal.step(&mut typist, start, ANY);
+            assert_eq!(terminal.write_all(), b"\x1b[200~first\rsecond\x1b[201~");
+            terminal.reading = kiro_collapsed_paste();
+            terminal.step_with_generation(
+                &mut typist,
+                start + Duration::from_secs(1),
+                ANY,
+                before_tab,
+            );
+            terminal.step_with_generation(
+                &mut typist,
+                start + Duration::from_secs(2),
+                ANY,
+                before_tab,
+            );
+            match tab_written {
+                Some(true) => assert_eq!(terminal.write_all(), b"\t"),
+                None => assert!(terminal.write_all().is_empty()),
+                Some(false) => {}
+            }
+            // The last case leaves Tab queued and exercises expiry before its write receipt.
+            terminal.reading = reading;
+            let modes = Modes {
+                reveal_ready: fresh_draw,
+                ..ANY
+            };
+            terminal.step_with_generation(
+                &mut typist,
+                start + Duration::from_secs(3),
+                modes,
+                after_tab,
+            );
+            terminal.step_with_generation(&mut typist, deadline, modes, after_tab);
+            assert_eq!(
+                terminal.write_all(),
+                if tab_written == Some(false) {
+                    b"\t".as_slice()
+                } else {
+                    b"".as_slice()
+                },
+            );
+            assert_eq!(
+                became(&post, number),
+                failed(
+                    DeliveryFailure::SubmissionUnconfirmed,
+                    TextWritten::Full,
+                    false
+                ),
+            );
+        }
     }
 
     /// How message `number` was delivered, if it was.

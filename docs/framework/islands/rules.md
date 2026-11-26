@@ -146,7 +146,7 @@ Rust regular expressions.
 | `arguments` | how the CLI reads its arguments, and the options and keys Facade sets itself |
 | `choices` | the arguments that give a model and an effort |
 | `input` | the layout of the input box: `frame`, `prompt`, `editor`, `box` or `prompt_row` |
-| `paste` | the settle time, submission key policy, and placeholders for a pasted message |
+| `paste` | the settle time, submission key policy, and visible controls for a pasted message |
 | `session` | `capture` (`session_start` or `none`) and the `resume` arguments with `${session_id}` |
 | `status` | how Facade reads the CLI's state from its screen or a report's words |
 | `status_glyph` | the CLI's glyph for viewer titles once the CLI has reported its state. The `working` list holds one or more glyph frames, each shown for `frame_ms` milliseconds. The `resting` glyph is for Starting after a report, Idle, Just done, Waiting for you and Error. Every glyph must be nonempty, and `frame_ms` must be positive |
@@ -311,6 +311,7 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - A probe is judged from two readings, before its key and after, never from the time between them: whether its space went in by the cursor and the text, what the row was by the text alone, and whether Backspace put the box back by every cell and the cursor.
   - The evidence names the rows, never the draft's text. The draft's text leaves `read_draft` only as its second value and is never saved.
   - A message's own draft is its full text or the CLI's placeholder for a paste of that size. Whitespace is ignored because wrapping and indentation draw it differently. A draft scrolled out above only has to show the text's end.
+  - Kiro's `tab_to_expand` cue matches the colored single-row disclosure at its native caret. It offers Tab to reveal a paste. The resulting draft must show the full text for confirmation, with the usual whitespace handling.
   - OpenCode's `[Pasted ~N lines]` counts the lines after trimming whitespace from both ends of the paste.
     Claude Code's `[Pasted text #N]` matches a paste with no line break.
     Antigravity's `[Pasted text #N M chars]` counts Unicode scalar values, including line breaks.

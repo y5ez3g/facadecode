@@ -41,6 +41,7 @@
 	},
 	"paste": {
 		"enter_ms": 120,
+		"tab_to_expand": "^[1-9][0-9]* lines ▸   Press Tab to expand$",
 		"placeholders": [
 			{ "pattern": "^\\[paste #\\d+ \\+(\\d+) lines\\]$", "count": "lines", "spaced": true },
 			{ "pattern": "^\\[paste #\\d+ (\\d+) chars\\]$", "count": "chars", "spaced": true }

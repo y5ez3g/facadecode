@@ -1458,14 +1458,22 @@ impl Actor {
             .screen
             .as_ref()
             .expect("the screen exists while the actor runs");
+        let written = self.terminal.written();
+        let queued = written + self.terminal.queued() as u64;
         let modes = Modes {
             bracketed_paste: screen.screen().bracketed_paste(),
             application_cursor_keys: screen.screen().application_cursor_keys(),
             working: self.links.shared.record.lock().unwrap().info.state
                 == ManagedAgentState::Working,
+            reveal_ready: self
+                .typist
+                .paste_rule()
+                .is_some_and(|rule| rule.tab_to_expand.is_some())
+                && self.submitting.is_none()
+                && self.held.is_empty()
+                && self.drawn_since(queued).is_some()
+                && self.room() > 0,
         };
-        let written = self.terminal.written();
-        let queued = written + self.terminal.queued() as u64;
         // Messages wait behind what the run's start does first, as behind a draft.
         let first = if self.readiness.readies_tools() {
             Some("the run's start readies its tools first")

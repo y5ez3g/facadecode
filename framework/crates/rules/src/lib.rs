@@ -36,9 +36,9 @@ pub use compose::{
 };
 pub use formats::shell_word;
 pub use input::{
-    BoxReading, InputLine, LineCell, ProbeVerdict, is_legacy_split_paste, is_own_draft,
-    is_own_paste_tail, is_same_draft, read_box, read_box_for_typing, read_draft, read_input,
-    restored, settle_time, shape_of, space_taken, verdict_of, with_paste_text,
+    BoxReading, InputLine, LineCell, ProbeVerdict, is_full_draft, is_legacy_split_paste,
+    is_own_draft, is_own_paste_tail, is_same_draft, read_box, read_box_for_typing, read_draft,
+    read_input, restored, settle_time, shape_of, space_taken, verdict_of, with_paste_text,
 };
 pub use sessions::{
     Reported, SESSION_FILE, SESSION_VARIABLES, SavedSession, SessionFile, WriteFailure,
@@ -233,6 +233,9 @@ pub struct PasteRule {
     /// What the input shows in place of a long paste.
     #[serde(default)]
     pub placeholders: Vec<PastePlaceholder>,
+    /// The exact single-row label offering Tab to reveal a collapsed paste.
+    #[serde(default)]
+    pub tab_to_expand: Option<Pattern>,
 }
 
 /// What the input shows in place of a long paste, such as `[Pasted text #1 +3 lines]`.

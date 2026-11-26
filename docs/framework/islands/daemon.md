@@ -371,6 +371,7 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   - `DeliveryHandle::begin_paste` records the paste before the typist writes the complete message in one paste.
   - The submission key goes once the input box shows this paste alone and stays still for the CLI's settle time.
     Codex queues an ordinary message with Tab while Working. The start prompt and recovered pastes use Enter.
+  - For Kiro's collapsed paste, the typist can press Tab once after writing its fresh bracketed paste, with the same person-input generation and the native disclosure visible. The CLI must draw after each write and earlier person input must be settled. The typist applies the normal whitespace comparison to the full revealed draft before Enter. An unconfirmed reveal leaves the draft to the person. Recovered collapsed pastes retain the existing refusal.
   - A message is delivered once its submission key reaches the terminal. When the deadline expires before
     submission, the typist can withdraw the message after the screen confirms it cleared its own draft.
   - The start prompt is pasted alone; a paste an earlier daemon began is never typed again.

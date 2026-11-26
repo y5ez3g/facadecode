@@ -21,8 +21,8 @@ use crate::{
 };
 
 pub use paste::{
-    is_legacy_split_paste, is_own_draft, is_own_paste_tail, is_same_draft, settle_time,
-    with_paste_text,
+    is_full_draft, is_legacy_split_paste, is_own_draft, is_own_paste_tail, is_same_draft,
+    settle_time, with_paste_text,
 };
 pub use probe::{ProbeVerdict, restored, shape_of, space_taken, verdict_of};
 
