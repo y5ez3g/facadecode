@@ -296,7 +296,7 @@ const KIRO: Provider = Provider {
     cli: "kiro-cli",
     display_name: "Kiro",
     native: Native::Kiro,
-    launch: &["--v3"],
+    launch: &["chat", "--v3"],
     yolo: [&["--trust-all-tools"], &[]],
     id: |id| format!("sess_{id}"),
     approves_only_facade: |given| {

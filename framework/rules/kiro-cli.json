@@ -2,7 +2,7 @@
 	"cli": "kiro-cli",
 	"display_name": "Kiro",
 	"program": "kiro-cli",
-	"launch": { "args": ["--v3"] },
+	"launch": { "args": ["chat", "--v3"] },
 	"arguments": {
 		"reserved": ["--v1", "--v2", "--v3", "--agent-engine", "--classic", "--legacy-ui", "--resume", "-r", "--resume-picker", "--resume-id", "--sessions", "--list-sessions", "--cloud", "--repo", "--no-interactive", "--non-interactive", "--output-format", "--trust-workspace", "--trust-all-tools", "-a", "--trust-tools", "--sandbox", "--model", "--effort"],
 		"required": ["--agent", "--profile", "--model", "--effort", "--mode", "--wrap"],
@@ -17,10 +17,13 @@
 		"mechanism": "prompt_row",
 		"prompt": "› ",
 		"alternate_prompt": "> ",
-		"placeholder": "^ask a question, or describe a task(?: (?:↩|Enter))?$",
+		"placeholder": "^ask a question,? or describe a task(?: (?:↩|↵|Enter))?$",
 		"menus": [
 			{ "selected": "^\\s*Trust this workspace\\?$" },
-			{ "selected": "^\\s*Warning: Kiro is running in trust all tools mode$" },
+			{
+				"selected": "^\\s*❯ \\S",
+				"hint": { "pattern": "^\\s*esc to cancel · ↑↓ to navigate · ↵ to select$", "within": 16 }
+			},
 			{
 				"selected": "^ {2}You are not logged in\\. Login now\\?$",
 				"hint": { "pattern": "^❯ (?:Yes|No)$", "within": 2 }
