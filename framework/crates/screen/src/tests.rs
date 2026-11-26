@@ -768,6 +768,31 @@ fn viewer_redraws_write_the_glyph_and_a_checkpoint_keeps_the_cli_title() {
 }
 
 #[test]
+fn frame_writes_follow_printed_rows_through_scrolling() {
+    for (scroll, row) in [
+        (&b"\x1b[4;1H\n\x1b[2;4H"[..], 1),
+        (&b"\x1b[1;1H\x1bM\x1b[4;4H"[..], 3),
+    ] {
+        for fresh in [false, true] {
+            let mut screen = Screen::new(8, 4, 0);
+            screen.feed(b"\x1b[3;3Hx");
+            screen.mark_pending_frame_earlier();
+            if fresh {
+                screen.feed(b"\x1b[3;3Hx");
+            }
+            screen.feed(scroll);
+            let view = screen.view();
+            assert_eq!(view.rows[row][2].text(), "x");
+            assert_eq!(
+                screen.frame_row_writes(row) == crate::CursorRowWrites::Current,
+                fresh
+            );
+            assert_eq!(screen.frame_printed_cell(row, 2), fresh);
+        }
+    }
+}
+
+#[test]
 fn a_redraw_with_all_scrollback_restores_every_retained_row() {
     let mut screen = Screen::new(20, 3, 2000);
     for n in 0..1500 {

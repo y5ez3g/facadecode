@@ -293,6 +293,13 @@ impl TermDamageState {
         self.frame_writes[rows].fill(written);
     }
 
+    fn scroll(&mut self, rows: Range<usize>, lines: usize, up: bool) {
+        scroll_cells(&mut self.cell_writes[rows.clone()], lines, up, false);
+        let words = rows.start * self.words_per_row..rows.end * self.words_per_row;
+        scroll_cells(&mut self.frame_writes[rows], lines, up, false);
+        scroll_cells(&mut self.printed_cells[words], lines * self.words_per_row, up, 0);
+    }
+
     fn clear_frame_writes(&mut self) {
         self.frame_writes.fill(false);
         self.printed_cells.fill(0);
@@ -318,6 +325,19 @@ impl TermDamageState {
         self.full = false;
         self.lines.iter_mut().for_each(|line| line.reset(num_cols));
         self.cell_writes.fill(false);
+    }
+}
+
+/// Moves drawing evidence with scrolled content. Newly exposed cells start clear.
+fn scroll_cells<T: Copy>(cells: &mut [T], count: usize, up: bool, empty: T) {
+    let count = count.min(cells.len());
+    let retained = cells.len() - count;
+    if up {
+        cells.copy_within(count.., 0);
+        cells[retained..].fill(empty);
+    } else {
+        cells.copy_within(..retained, count);
+        cells[..count].fill(empty);
     }
 }
 
@@ -863,16 +883,7 @@ impl<T> Term<T> {
         if let Some(painted) = &mut self.painted {
             let start = region.start.0 as usize * columns;
             let end = region.end.0 as usize * columns;
-            let rows = &mut painted.cells[start..end];
-            let count = (lines * columns).min(rows.len());
-            if up {
-                rows.rotate_left(count);
-                let start = rows.len() - count;
-                rows[start..].fill(CellPaint::Unseen);
-            } else {
-                rows.rotate_right(count);
-                rows[..count].fill(CellPaint::Unseen);
-            }
+            scroll_cells(&mut painted.cells[start..end], lines * columns, up, CellPaint::Unseen);
         }
     }
 
@@ -991,8 +1002,7 @@ impl<T> Term<T> {
         // Scroll between origin and bottom
         self.grid.scroll_down(&region, lines);
         let rows = region.start.0 as usize..region.end.0 as usize;
-        self.damage.set_row_writes(rows.clone(), false);
-        self.damage.forget_printed_rows(rows);
+        self.damage.scroll(rows, lines, false);
         self.scroll_paint(&region, lines, false);
         self.mark_fully_damaged();
     }
@@ -1014,8 +1024,7 @@ impl<T> Term<T> {
 
         self.grid.scroll_up(&region, lines);
         let rows = region.start.0 as usize..region.end.0 as usize;
-        self.damage.set_row_writes(rows.clone(), false);
-        self.damage.forget_printed_rows(rows);
+        self.damage.scroll(rows, lines, true);
         self.scroll_paint(&region, lines, true);
 
         // Scroll vi mode cursor.

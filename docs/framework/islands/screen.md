@@ -198,7 +198,8 @@ in the current observation after a complete frame. `output_frame_complete` also 
 where only the start of a synchronized update has arrived.
 
 `Screen::frame_row_writes(row: usize) -> CursorRowWrites` reports cell writes and erasures on a
-zero-based viewport row in the observed complete frame. `Current` marks writes in a frame after
+zero-based viewport row in the observed complete frame. Writes follow their cells through
+scrolling. `Current` marks writes in a frame after
 the marked input boundary, `Earlier` marks writes in a frame that began before it, and `None`
 means the frame left the row untouched. Rules uses the row of a drawn caret when the terminal
 cursor is elsewhere.

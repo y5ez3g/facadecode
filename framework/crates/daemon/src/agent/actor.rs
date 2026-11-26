@@ -4639,6 +4639,43 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn a_scrolled_empty_composer_confirms_the_head_and_releases_the_next_paste() {
+        let folder = crate::test_folder::TestFolder::new("actor-scrolled-empty-receipt");
+        let (messages, _) = messages();
+        let (mut actor, mut cli, settled) = pending_paste_in(&folder, &messages).await;
+        issue_delivery(&mut actor).await;
+        expect_cli_input(&mut cli, b"\x1b[200~a message \x1b[201~");
+        let border = "─".repeat(80);
+        let draft =
+            format!("\x1b[2J\x1b[22;1H{border}\r\n❯\u{a0}a message \r\n{border}\x1b[23;13H");
+        read_output(&mut actor, &mut cli, draft.as_bytes()).await;
+        assert_eq!(actor.read_screen_input().info.state, InputState::Draft);
+        write_automatic_enter(&mut actor, &mut cli).await;
+        let _next = queue_a_message(
+            &mut actor,
+            &messages,
+            Instant::now() + Duration::from_secs(20),
+        );
+
+        // ConPTY draws the empty prompt and scrolls it up in the same output frame.
+        let empty = "\x1b[23;1H\x1b[2K❯\u{a0}\x1b[24;1H\n\x1b[22;3H";
+        read_output(&mut actor, &mut cli, empty.as_bytes()).await;
+        assert_eq!(actor.read_screen_input().info.state, InputState::Usable);
+        assert!(
+            was_delivered(&settled),
+            "the new empty prompt survived the scroll"
+        );
+        assert!(actor.typist_at.is_some_and(|wake| wake <= Instant::now()));
+        actor.type_next();
+        assert!(matches!(
+            actor.pending_delivery.as_ref().map(|offer| offer.kind),
+            Some(DeliveryWrite::Paste)
+        ));
+        issue_delivery(&mut actor).await;
+        expect_cli_input(&mut cli, b"\x1b[200~a message \x1b[201~");
+    }
+
     async fn write_automatic_enter(actor: &mut Actor, cli: &mut TestCli) {
         issue_automatic_enter(actor, cli).await;
         actor.take_terminal(TerminalEvent::Wrote);
