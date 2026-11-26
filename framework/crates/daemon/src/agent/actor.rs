@@ -8318,16 +8318,16 @@ mod tests {
             let home = crate::test_folder::TestFolder::new("actor-probe-output-before-issue");
             let (messages, _) = messages();
             let (mut actor, mut cli) = waiting_for_a_late_probe_space(&home, &messages).await;
+            // Keep the recheck inside the probe takeover budget.
+            tokio::time::pause();
             actor
                 .take_input(Input::Raw(b"x".to_vec()), actor.run)
                 .unwrap();
             assert_eq!(actor.terminal.queued(), 2);
             cli.write_output(output.as_bytes()).unwrap();
-            assert_eq!(
-                read_queued_probe_input(&mut actor, &mut cli).await,
-                b"\x7fx",
-                "{case}"
-            );
+            let keys = read_queued_probe_input(&mut actor, &mut cli).await;
+            tokio::time::resume();
+            assert_eq!(keys, b"\x7fx", "{case}");
         }
     }
 

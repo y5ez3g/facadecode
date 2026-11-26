@@ -1147,10 +1147,10 @@ fn a_result_wait_that_times_out_after_delivery_reports_both_facts() {
     assert_eq!(home.submitted_messages().len(), 1);
 }
 
-/// A paste into a CLI that never reads its input fails by its deadline without Enter. Input
-/// already waiting for the terminal keeps the first paste queued on Unix. The second message
-/// waits behind the first and withdraws without typing. If the CLI starts reading again, the
-/// next message goes in only after the first paste is erased.
+/// A delivery to a CLI that never reads its input fails by its deadline without Enter. Saturated
+/// Unix input leaves the first paste unissued, while ConPTY accepts it into the host. The second
+/// message withdraws without typing. If the CLI starts reading again, the next message goes in
+/// only after any paste that reached the terminal is erased.
 #[test]
 fn a_message_to_a_cli_that_reads_no_input_fails_within_30_seconds_and_is_never_submitted() {
     let home = TestHome::new("sendunread");
@@ -1203,20 +1203,19 @@ fn a_message_to_a_cli_that_reads_no_input_fails_within_30_seconds_and_is_never_s
         ),
         "m1 delivery: {delivery}, m2 receipt: {behind}"
     );
-    // A pseudo console's host reads its input whether or not the CLI does, so on Windows all of the
-    // paste is accepted by the host and no Enter is written.
     #[cfg(unix)]
-    let written = (json!("unknown"), None);
+    let first = (json!(true), json!("timeout"), json!("none"));
     #[cfg(windows)]
-    let written = (json!("full"), Some(&json!(false)));
+    let first = (Value::Null, json!("submission_unconfirmed"), json!("full"));
     assert_eq!(
         (
+            &sent["withdrawn"],
             &delivery["reason"],
             &delivery["text_written"],
-            delivery.get("enter_written")
+            &delivery["enter_written"],
         ),
-        (&json!("submission_unconfirmed"), &written.0, written.1),
-        "{delivery}"
+        (&first.0, &first.1, &first.2, &json!(false)),
+        "{sent}"
     );
     assert!(home.submitted_messages().is_empty());
     a_late_paste_is_erased_before_the_next_message();

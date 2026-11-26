@@ -15,7 +15,8 @@ use crate::{DELIVERY_TIME, delivery_limit};
 pub(crate) enum Outcome {
     /// The CLI took the submitted message out of its input.
     Typed,
-    /// The terminal cleared its own unconsumed paste. An earlier daemon's Enter can be unknown.
+    /// A reserved paste was never issued, or the terminal cleared its unconsumed draft.
+    /// An earlier daemon's Enter can be unknown after cleanup.
     Withdrawn {
         reason: DeliveryFailure,
         text_written: TextWritten,

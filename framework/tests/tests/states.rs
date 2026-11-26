@@ -495,8 +495,8 @@ fn two_pasted_texts_before_one_enter_are_each_said_as_themselves() {
     said(&home, "w1", "fifth line sixth line");
 }
 
-/// An Enter the CLI answers with a question of its own in place of its input takes the draft: it is
-/// said.
+/// Once the CLI has drawn an empty composer after Enter, a subsequent question keeps the
+/// submitted draft as what was said.
 // Its stand-in is a sh script that reads keys, which MSYS sh under a pseudo console does not get.
 #[cfg(unix)]
 #[test]
@@ -504,8 +504,7 @@ fn an_enter_the_cli_answers_with_a_question_is_said() {
     let home = TestHome::new("enterquestion");
     let programs = home.project.parent().unwrap().join("bin");
     std::fs::create_dir_all(&programs).unwrap();
-    // Muse Code's input frame across the screen, its draft as typed; Enter draws a menu in its
-    // place.
+    // Enter draws a complete empty composer, then the CLI replaces it with its question.
     let script = r#"#!/bin/sh
 stty raw -echo
 draw() {
@@ -520,6 +519,9 @@ while :; do
 	draft="$draft$c"
 	draw "$draft"
 done
+printf '\033[?2026h'
+draw ''
+printf '\033[?2026l'
 printf '\033[2J\033[H  Muse Code 1.4.14\r\n\r\nWhich one?\r\n⟩ 1  Yes\r\n  2  No\r\n'
 exec sleep 600
 "#.replace("RULE", &"─".repeat(80));

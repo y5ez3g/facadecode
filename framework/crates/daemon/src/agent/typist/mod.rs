@@ -1856,8 +1856,7 @@ impl Typist {
         let outcome = match batch.phase {
             DeliveryPhase::AwaitingPaste => {
                 let batch = self.batch.take().expect("the reserved paste");
-                return self
-                    .settle_delivery(&batch.messages, Outcome::untyped(DeliveryFailure::Timeout));
+                return self.expire_reserved_paste(batch, now, DeliveryFailure::Timeout);
             }
             DeliveryPhase::Submitting => Outcome::Failed {
                 reason: DeliveryFailure::SubmissionUnconfirmed,
@@ -2083,7 +2082,7 @@ impl Typist {
         let deadline = batch.deadline().expect("reserved paste");
         if now >= deadline {
             let reason = self.unpasted_reason(&seen, may_write);
-            return self.settle_delivery(&batch.messages, Outcome::untyped(reason));
+            return self.expire_reserved_paste(batch, now, reason);
         }
         if may_write
             && !self.paste_held
@@ -2093,6 +2092,26 @@ impl Typist {
         }
         self.batch = Some(batch);
         Step::wait(Some(deadline.min(now + READ_INTERVAL)))
+    }
+
+    fn expire_reserved_paste(
+        &mut self,
+        batch: Batch,
+        now: Instant,
+        reason: DeliveryFailure,
+    ) -> Step {
+        // The paste reservation is durable, and AwaitingPaste proves zero bytes went out.
+        let outcome = Outcome::Withdrawn {
+            reason,
+            text_written: TextWritten::None,
+            enter_written: Some(false),
+        };
+        if self.deliveries.settle(&numbers(&batch.messages), outcome) {
+            self.after_batch()
+        } else {
+            self.batch = Some(batch);
+            Step::wait(Some(now + READ_INTERVAL))
+        }
     }
 
     fn write_delivery_paste(&mut self, batch: Batch, rule: &PasteRule, now: Instant) -> Step {
