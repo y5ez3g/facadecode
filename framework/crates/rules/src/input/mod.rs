@@ -500,26 +500,24 @@ impl Reading {
             let row = top + index;
             let cells = view.rows.get(row)?;
             let mut bytes = line.len();
-            let last = cells
-                .iter()
-                .skip_while(|cell| cell.column < start)
-                .take_while(|cell| {
-                    let remains = bytes != 0;
-                    bytes = bytes.saturating_sub(cell.text().len());
-                    remains
-                })
-                .last();
-            let column = last.map_or(start, |cell| cell.column + 1);
-            let painted = if column == start {
-                screen.line_feed_at(row).is_some() || screen.has_painted(row, start..start + 1)
-            } else {
-                screen.has_painted(row, start..column)
-            };
-            if bytes != 0 || !painted {
-                return None;
+            for cell in cells.iter().skip_while(|cell| cell.column < start) {
+                if bytes == 0 {
+                    break;
+                }
+                let text = cell.text();
+                bytes = bytes.saturating_sub(text.len());
+                // ConPTY can move over blanks between words without printing them. Every glyph
+                // still needs paint from this paste. The tail counts printed spaces separately.
+                if text != " " {
+                    end = Some((cell.column + 1, row, screen.painted_at(row, cell.column)?));
+                }
             }
-            if let Some(last) = last {
-                end = Some((column, row, screen.painted_at(row, last.column)?));
+            if bytes != 0
+                || (line.is_empty()
+                    && screen.line_feed_at(row).is_none()
+                    && !screen.has_painted(row, start..start + 1))
+            {
+                return None;
             }
         }
         painted_paste_end(view, screen, cursor, start, end?)

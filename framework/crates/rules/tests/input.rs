@@ -834,6 +834,38 @@ fn a_painted_unicode_tail_can_finish_a_draft_cut_at_the_top() {
 }
 
 #[test]
+fn a_positioned_console_redraw_can_skip_the_blanks_between_fresh_words() {
+    let rule = find("codex").unwrap().unwrap();
+    let text = "first word\nsecond word ";
+    for stale_word in [false, true] {
+        let mut screen = facade_screen::Screen::new(80, 31, 0);
+        screen.feed("\x1b[27;1H› \x1b[30;1H  model · C:\\fixture\x1b[27;3H".as_bytes());
+        if stale_word {
+            screen.feed(b"\x1b[27;9Hword");
+        }
+        screen.observe_paint(true);
+        screen.feed(b"\x1b[?2026h\x1b[27;3Hfirst");
+        if !stale_word {
+            screen.feed(b"\x1b[27;9Hword");
+        }
+        screen.feed(b"\x1b[28;3Hsecond\x1b[28;10Hword\x1b[C\x1b[?2026l");
+
+        let reading = read_box_for_screen(&rule.input, &screen, false);
+        assert_eq!(reading.info.state, InputState::Draft, "{reading:?}");
+        assert_eq!(reading.draft.as_deref(), Some(text.trim_end()));
+        assert_eq!(
+            shows_paste_end(&reading, text),
+            !stale_word,
+            "stale word: {stale_word}, frame: {reading:?}",
+        );
+        assert!(
+            !shows_paste_end(&reading, "first word\nsecond word\u{a0}"),
+            "cursor movement does not print trailing whitespace",
+        );
+    }
+}
+
+#[test]
 fn a_unicode_paste_tail_is_counted_after_the_last_drawn_grapheme() {
     let rule = find("fake").unwrap().unwrap();
     let shows_end = |text: &str, chunks: &[&str]| {
