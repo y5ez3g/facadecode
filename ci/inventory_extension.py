@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 
+from inventory_framework import mcp_methods
+
 
 MANIFEST = "extension/package.json"
 COMMANDS = "extension/src/ui/catalog.ts"
@@ -58,12 +60,6 @@ def _names(names, path: str, label: str) -> set[str]:
 
 def _literals(source: str) -> list[str]:
     return re.findall(r"""['"]([A-Za-z0-9][\w./-]*)['"]""", source)
-
-
-def _require(source: str, path: str, *patterns: str) -> None:
-    for pattern in patterns:
-        if not re.search(pattern, source, re.MULTILINE):
-            raise ValueError(f"{path}: cannot find {pattern}")
 
 
 def _keys(source: str, path: str, label: str) -> set[str]:
@@ -215,16 +211,9 @@ def _panel(root: Path, rows: dict[str, str]) -> None:
 
 def _mcp(root: Path, rows: dict[str, str]) -> None:
     _add(rows, "mcp-framework", "tool", [entry["name"] for entry in _json(root, FRAMEWORK_TOOLS)], FRAMEWORK_TOOLS)
-    source = _read(root, FRAMEWORK_MCP)
-    dispatch = _section(source, r"\bmatch method {", r"^    };", FRAMEWORK_MCP)
-    _add(rows, "mcp-framework", "request", [name.replace("/", ".") for name in re.findall(r'^\s*"([\w./-]+)" =>', dispatch, re.MULTILINE)], FRAMEWORK_MCP)
-    notify = _section(source, r"^fn notice_message\(", r"^}", FRAMEWORK_MCP)
-    methods = re.findall(r'Some\("(notifications/[\w./-]+)"\)', notify)
-    # Initialization is a standard no-response notification, handled by the generic guard.
-    _require(source, FRAMEWORK_MCP, r"if !message.contains_key\(\"id\"\)", r"`notifications/initialized`")
-    _add(rows, "mcp-framework", "notification", ["notifications.initialized", *(method.replace("/", ".") for method in methods)], FRAMEWORK_MCP)
-    if not methods:
-        raise ValueError(f"{FRAMEWORK_MCP}: no explicit notification dispatch found")
+    requests, notifications = mcp_methods(_read(root, FRAMEWORK_MCP), FRAMEWORK_MCP)
+    _add(rows, "mcp-framework", "request", [name.replace("/", ".") for name in requests], FRAMEWORK_MCP)
+    _add(rows, "mcp-framework", "notification", [name.replace("/", ".") for name in notifications], FRAMEWORK_MCP)
 
 
 def _settings(root: Path, rows: dict[str, str]) -> None:

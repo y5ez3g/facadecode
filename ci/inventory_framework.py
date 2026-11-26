@@ -266,23 +266,31 @@ def relay(root, add, schema, branches, source):
     add("relay", "notification", frame["method"], relay_source)
 
 
+def mcp_methods(text, source):
+    top_level_arm = r"^        (\S.*)$"
+    respond = match_one(text, r"^    let answer = match method\.as_str\(\) \{\n([\s\S]*?)^    \};", source)
+    requests = distinct(re.findall(r'^        "([^"]+)" =>', respond, re.MULTILINE), source, "MCP request")
+    require(all(re.match(r'(?:"[^"]+"|method) =>|\},?$', row)
+                for row in re.findall(top_level_arm, respond, re.MULTILINE)),
+            source, "unrecognized MCP request branch")
+
+    notice = match_one(text, r"^    let Some\(id\) = parsed\.id else \{\n([\s\S]*?)^    \};", source)
+    branch = rf'if method == "(notifications/{SEGMENT})" \{{'
+    incoming = distinct(re.findall(rf"^        {branch}$", notice, re.MULTILINE), source, "MCP notice")
+    require(all(re.fullmatch(branch + r"|\}|return None;", row)
+                for row in re.findall(top_level_arm, notice, re.MULTILINE)),
+            source, "unrecognized MCP notice branch")
+    # The missing-id guard handles the standard initialized notification without a response.
+    require(notice.endswith("        return None;\n"), source, "MCP notifications must return no response")
+    return requests, distinct(["notifications/initialized", *incoming], source, "MCP notification")
+
+
 def mcp(root, add):
     source = MCP / "lines.rs"
-    text = (root / source).read_text(encoding="utf-8")
-    respond = match_one(text, r"^    let answered = match method \{\n([\s\S]*?)^    \};", source)
-    requests = distinct(re.findall(r'^        "([^"]+)" =>', respond, re.MULTILINE), source, "MCP request")
-    require(all(re.match(r'^        (?:"[^"]+"|other) =>', row) for row in respond.splitlines()),
-            source, "unrecognized MCP request branch")
+    requests, notifications = mcp_methods((root / source).read_text(encoding="utf-8"), source)
     for name in requests:
         add("mcp", "request", name.replace("/", "."), source)
-    notice = match_one(text, r'^    match message\["method"\]\.as_str\(\) \{\n([\s\S]*?)^    \}', source)
-    incoming = distinct(re.findall(r'^        Some\("([^"]+)"\)', notice, re.MULTILINE), source, "MCP notice")
-    require(all(re.match(r'^        (?:Some\("[^"]+"\)|_)', row)
-                for row in notice.splitlines() if re.match(r"^        \S", row) and row != "        }"),
-            source, "unrecognized MCP notice branch")
-    generic_notice = match_one(text, r"^    // A notification, such as `([^\x60]+)`, asks for nothing\.$", source)
-    for name in distinct([generic_notice, *(incoming - requests)], source, "MCP notification"):
-        require(re.fullmatch(rf"notifications/{SEGMENT}", name), source, f"unexpected notification {name}")
+    for name in notifications:
         add("mcp", "notification", name.replace("/", "."), source)
 
     definitions_source = BASE / "texts/tools.rs"
