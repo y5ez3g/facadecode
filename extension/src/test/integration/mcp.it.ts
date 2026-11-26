@@ -675,9 +675,12 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			await expectSent(sent, childAlias, started.data.id);
 			await new Promise(resolve => setTimeout(resolve, 5_000));
 			const missed = 'swallow' in quirk;
-			assert.strictEqual(input().slice(before).split(text).length - 1, 1, 'the message was pasted once');
+			const writes = input().slice(before);
+			assert.strictEqual(writes.split(text).length - 1, 1, 'the message was pasted once');
 			assert.strictEqual(once(text), 1, JSON.stringify(received(childAlias)));
 			if (missed) {
+				const afterText = writes.slice(writes.indexOf(text) + text.length);
+				assert.strictEqual((afterText.match(/[\r\n]/gu) ?? []).length, 2, 'the same paste got the first Enter and one retry');
 				assert.strictEqual(sent.data.delivery, 'typed_into_input', JSON.stringify(sent));
 				assert.strictEqual(JSON.parse(fs.readFileSync(quirks, 'utf8')).swallow, 0, 'the CLI saw and ignored the written Enter');
 			}
