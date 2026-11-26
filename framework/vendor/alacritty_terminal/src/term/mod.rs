@@ -293,6 +293,7 @@ impl TermDamageState {
         self.frame_writes[rows].fill(written);
     }
 
+    // Facade (scroll evidence)
     fn scroll(&mut self, rows: Range<usize>, lines: usize, up: bool) {
         scroll_cells(&mut self.cell_writes[rows.clone()], lines, up, false);
         let words = rows.start * self.words_per_row..rows.end * self.words_per_row;
@@ -328,6 +329,7 @@ impl TermDamageState {
     }
 }
 
+// Facade (scroll evidence)
 /// Moves drawing evidence with scrolled content. Newly exposed cells start clear.
 fn scroll_cells<T: Copy>(cells: &mut [T], count: usize, up: bool, empty: T) {
     let count = count.min(cells.len());
@@ -883,6 +885,7 @@ impl<T> Term<T> {
         if let Some(painted) = &mut self.painted {
             let start = region.start.0 as usize * columns;
             let end = region.end.0 as usize * columns;
+            // Facade (scroll evidence)
             scroll_cells(&mut painted.cells[start..end], lines * columns, up, CellPaint::Unseen);
         }
     }
@@ -1001,6 +1004,7 @@ impl<T> Term<T> {
 
         // Scroll between origin and bottom
         self.grid.scroll_down(&region, lines);
+        // Facade (scroll evidence)
         let rows = region.start.0 as usize..region.end.0 as usize;
         self.damage.scroll(rows, lines, false);
         self.scroll_paint(&region, lines, false);
@@ -1023,6 +1027,7 @@ impl<T> Term<T> {
         self.selection = self.selection.take().and_then(|s| s.rotate(self, &region, lines as i32));
 
         self.grid.scroll_up(&region, lines);
+        // Facade (scroll evidence)
         let rows = region.start.0 as usize..region.end.0 as usize;
         self.damage.scroll(rows, lines, true);
         self.scroll_paint(&region, lines, true);
