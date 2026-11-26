@@ -790,8 +790,10 @@ impl Actor {
         self.screen_mut().observe_paint(false);
         // Its output may have changed the title since clients took their snapshots.
         self.publish();
-        if handed_over && (self.state.native_wait().is_some() || !self.input_gate.blocks_delivery())
-        {
+        // The replayed composer may have crossed the handover without a complete live frame.
+        let needs_redraw = self.state.watches_question_composer()
+            || (self.state.native_wait().is_none() && self.input_gate.blocks_delivery());
+        if handed_over && !needs_redraw {
             // The log is whole: the screen says now what the CLI shows of its status.
             self.screen_status_at = Some(Instant::now());
         } else {
@@ -6042,15 +6044,42 @@ mod tests {
 
     #[tokio::test]
     async fn muse_wait_ignores_a_title_change_after_handover() {
-        muse_active_question_survives_replay("title-change", false, b"\x1b]2;new title\x07").await;
+        let composer = plain_claude_frame("", "");
+        muse_active_question_survives_replay(
+            "title-change",
+            &[composer.as_bytes(), BLOCKED],
+            b"\x1b]2;new title\x07",
+        )
+        .await;
     }
 
     #[tokio::test]
     async fn muse_wait_ignores_an_open_pre_report_frame_after_handover() {
-        muse_active_question_survives_replay("pre-report-sync", true, b"\x1b[?2026l").await;
+        let composer = plain_claude_frame("", "");
+        muse_active_question_survives_replay(
+            "pre-report-sync",
+            &[b"\x1b[?2026h", composer.as_bytes(), BLOCKED],
+            b"\x1b[?2026l",
+        )
+        .await;
     }
 
-    async fn muse_active_question_survives_replay(case: &str, open_sync: bool, live_output: &[u8]) {
+    #[tokio::test]
+    async fn muse_wait_requests_a_redraw_after_a_post_report_frame_crosses_handover() {
+        let composer = plain_claude_frame("", "");
+        muse_active_question_survives_replay(
+            "post-report-sync",
+            &[BLOCKED, b"\x1b[?2026h", composer.as_bytes()],
+            b"\x1b[?2026l",
+        )
+        .await;
+    }
+
+    async fn muse_active_question_survives_replay(
+        case: &str,
+        recorded_output: &[&[u8]],
+        live_output: &[u8],
+    ) {
         let before = crate::test_folder::TestFolder::new(&format!("actor-muse-replay-{case}-old"));
         let after = crate::test_folder::TestFolder::new(&format!("actor-muse-replay-{case}-new"));
         let (messages, _) = messages();
@@ -6059,11 +6088,10 @@ mod tests {
         let (mut old, mut cli) = actor_with_cli(&before, messages.delivery_handle()).await;
         old.input_rule = Some(&rule.input);
         old.state = StateTracker::new(Some(rule), Instant::now(), Kept::default(), None, None);
-        if open_sync {
-            read_output(&mut old, &mut cli, b"\x1b[?2026h").await;
+        for bytes in recorded_output {
+            read_output(&mut old, &mut cli, bytes).await;
         }
-        read_output(&mut old, &mut cli, composer.as_bytes()).await;
-        read_output(&mut old, &mut cli, BLOCKED).await;
+        let open_sync = old.screen().screen().is_drawing();
         assert_eq!(old.state.native_wait(), Some(WaitKind::Question));
         let kept = serde_json::from_slice(&serde_json::to_vec(&old.state.kept()).unwrap()).unwrap();
         old.screen_mut().finish().await;
@@ -6095,6 +6123,11 @@ mod tests {
         });
         new.begin(true, false, TerminalColors::default()).await;
         assert_eq!(new.state.native_wait(), Some(WaitKind::Question));
+        assert!(
+            matches!(new.redraw_nudge, Some(RedrawNudge::Restart(_))),
+            "an unresolved Muse question needs a new drawing after replay"
+        );
+        assert_eq!(cli.size(), (79, 24));
         let _settled = queue_a_message(
             &mut new,
             &messages,
@@ -6104,10 +6137,12 @@ mod tests {
         assert!(new.pending_delivery.is_none() && new.input_gate.blocks_delivery());
 
         read_output(&mut new, &mut cli, live_output).await;
+        assert_eq!(cli.size(), (80, 24));
+        assert!(new.redraw_nudge.is_none());
         if new.pending_delivery.is_some() {
             issue_delivery(&mut new).await;
             expect_cli_input(&mut cli, b"\x1b[200~a message \x1b[201~");
-            panic!("the CLI received a paste using only the pre-report composer");
+            panic!("the CLI received a paste using only the replayed composer");
         }
         assert_eq!(new.state.native_wait(), Some(WaitKind::Question));
         assert!(new.input_gate.blocks_delivery());
