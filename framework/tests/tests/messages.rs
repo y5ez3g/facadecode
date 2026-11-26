@@ -936,12 +936,16 @@ fn shell_receives_only_the_first_linked_reply_from_the_managed_recipient() {
 
     let request = "请检查构建\n\n  Keep the indentation.";
     let shell = send_in_background(&home, &["worker", request, "-r"]);
+    // The fake CLI records Enter before the daemon sees the confirming frame and saves delivery.
+    let mut inbox = Vec::new();
     assert!(
-        wait_until(secs(10), || !home.submitted_messages().is_empty()),
+        wait_until(secs(10), || {
+            inbox = read_messages(&mut worker_tools, json!({"last": 1}));
+            !inbox.is_empty()
+        }),
         "{}",
         home.daemon_log()
     );
-    let inbox = read_messages(&mut worker_tools, json!({"last": 1}));
     assert_eq!(inbox.len(), 1, "{inbox:?}");
     let original = &inbox[0];
     assert_eq!(original["id"], "m1", "{original}");
