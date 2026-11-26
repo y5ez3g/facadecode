@@ -374,11 +374,12 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     submission, the typist can withdraw the message after the screen confirms it cleared its own draft.
   - The start prompt is pasted alone; a paste an earlier daemon began is never typed again.
   - The wait before submission counts the paste rate from `PASTE_BYTES_PER_MS`. With console typing, characters above U+FFFF go as key-down records and the wait adds `per_char` for each UTF-16 code unit.
-  - When the first row may be a hint or a draft, `probe` types a Space where input starts and reads the row every
-    100 ms for up to a second. Two equal readings settle the row. If both still match the row and cursor from
-    before Space, the probe keeps waiting for the echo within the same deadline. It presses Backspace only once
-    the input shows that Space went in, no menu or question shows and the person has typed nothing since the
-    probe began. It gives Backspace up to another second to settle and checks that it restored the input.
+  - When the first row may be a hint or a draft, `probe` types a Space where input starts. After each key reaches
+    the terminal it reads the row every 100 ms for up to two seconds. Two equal readings settle the row. If the
+    screen still shows the frame from before Space or the space that Backspace is clearing, the probe keeps
+    waiting for that key's echo within its deadline. It presses Backspace only once the input shows that Space
+    went in, no menu or question shows and the person has typed nothing since the probe began. It checks that
+    Backspace restored the input.
     Nothing else is typed during the probe, and a failed check ends it without further keys. The typist keeps
     the finding for that row until the CLI's next run.
 - **Never does:** write the terminal (it hands its bytes to the actor); read the screen except through the reading the actor gives it; take the person's keys; touch the database.

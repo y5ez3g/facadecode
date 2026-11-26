@@ -550,7 +550,7 @@ impl Typist {
     fn begin_probe(&mut self, reading: &BoxReading, now: Instant, offset: u64, typed: u64) -> Step {
         let line = reading.line.clone().expect("an unprobed reading has a row");
         self.probed.insert(line.cells.clone(), ProbeVerdict::Other);
-        self.probing = Some(Probe::new(line, now, typed));
+        self.probing = Some(Probe::new(line, typed));
         self.record_write(offset, 1, Duration::ZERO);
         Step {
             write: b" ".to_vec(),
@@ -567,7 +567,12 @@ impl Typist {
         typed: u64,
         read_screen: &dyn Fn() -> BoxReading,
     ) -> Option<Step> {
-        match probe.next(&self.agent, now, typed, read_screen) {
+        let written_at = self
+            .receipt
+            .as_ref()
+            .and_then(|receipt| receipt.arrived)
+            .expect("the probe key reached the terminal");
+        match probe.next(&self.agent, now, written_at, typed, read_screen) {
             Next::Wait(at) => {
                 self.probing = Some(probe);
                 Some(Step::wait(Some(at)))
@@ -707,6 +712,7 @@ impl Typist {
             .settle(&numbers(&pending), Outcome::untyped(DeliveryFailure::Ended));
         self.late_draft = None;
         self.receipt = None;
+        self.probing = None;
     }
 
     /// Restores a persisted paste without retyping; persistence on refusal may block, no typist lock.
