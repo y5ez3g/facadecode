@@ -234,6 +234,8 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     Kiro trust and Devin's `✱` trust question are also interactions. Kiro's option menus read as
     interactions by the footer below their selected `❯` row, so its trust-all-tools warning does at
     any window height.
+    When the workspace trust heading scrolls away, the selected workspace choice and the nearby
+    `esc to exit` footer identify the question.
   - Frame, editor and prompt rules use a `scrolled` object that identifies the scroll layout by `position`.
     For `rows` (Muse Code and Antigravity), one capture in each pattern counts the hidden rows
     from separate marker rows inside the frame. For `rules` (Claude Code and Pi), the patterns

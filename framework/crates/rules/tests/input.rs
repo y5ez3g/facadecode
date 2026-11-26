@@ -171,6 +171,18 @@ fn kiro_recognizes_the_trust_warning_when_its_heading_scrolls_out() {
 }
 
 #[test]
+fn kiro_reads_workspace_trust_without_its_heading() {
+    let rule = find("kiro-cli").unwrap().unwrap();
+    for label in ["workspace-trust-selected", "workspace-decline-selected"] {
+        assert_eq!(
+            read_input(&rule.input, &kiro_screen(label)).state,
+            InputState::Interaction,
+            "{label}"
+        );
+    }
+}
+
+#[test]
 fn kiro_waits_for_the_composer_before_probing_its_hint() {
     let rule = find("kiro-cli").unwrap().unwrap();
     let reading = read_box_for_typing(&rule.input, &kiro_screen("initializing"), true);

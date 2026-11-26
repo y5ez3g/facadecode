@@ -22,6 +22,10 @@
 		"menus": [
 			{ "selected": "^\\s*Trust this workspace\\?$" },
 			{
+				"selected": "^\\s*❯ (?:Trust, continue|Don't trust, exit)$",
+				"hint": { "pattern": "^\\s*esc to exit · ↑↓ to navigate · ↵ to select$", "within": 3 }
+			},
+			{
 				"selected": "^\\s*❯ \\S",
 				"hint": { "pattern": "^\\s*esc to cancel · ↑↓ to navigate · ↵ to select$", "within": 16 }
 			},
