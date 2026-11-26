@@ -76,12 +76,12 @@ download() {
     # $3, show, draws curl's progress bar for a person.
     quiet=-s
     if [ "${3:-}" = show ] && "$for_person"; then quiet=--progress-bar; fi
-    if status=$(curl --disable --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 \
+    if http_status=$(curl --disable --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 \
         "$quiet" -fL -w '%{http_code}' -o "$2" "$1"); then
-        case "$status" in 2[0-9][0-9]) return 0 ;; esac
+        case "$http_status" in 2[0-9][0-9]) return 0 ;; esac
     fi
-    case "$status" in
-        [1-5][0-9][0-9]) failed_asset=${1##*/}; failed_http=$status ;;
+    case "$http_status" in
+        [1-5][0-9][0-9]) failed_asset=${1##*/}; failed_http=$http_status ;;
         *) [ "$failed_http" != - ] || failed_asset=${1##*/} ;;
     esac
     return 1
@@ -331,14 +331,15 @@ case "$PATH:" in
         printf '\n  Next: facade --help\n' ;;
     *)
         if [ -n "${profiles:-}" ]; then
+            reload_command=source
             case "${SHELL##*/}" in
                 zsh) reload="${ZDOTDIR:-$profile_home}/.zshrc" ;;
                 bash) reload="$profile_home/.bashrc" ;;
                 fish) reload="${XDG_CONFIG_HOME:-$profile_home/.config}/fish/conf.d/facade.fish" ;;
-                *) reload="$profile_home/.profile" ;;
+                *) reload="$profile_home/.profile"; reload_command=. ;;
             esac
             printf '  PATH:     added to %s\n\n' "$profiles"
-            printf '  Next: open a new terminal, or run: source %s\n' "$(shown "$reload")"
+            printf '  Next: open a new terminal, or run: %s %s\n' "$reload_command" "$(shown "$reload")"
             printf '        then: facade --help\n'
         else
             printf '  PATH:     unchanged\n\n'
