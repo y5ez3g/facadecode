@@ -295,10 +295,11 @@ creator a 🔔. A startup blockage and its first prompt failure share that notic
   Facade creates a branch from the selected repo's current `HEAD` and a worktree next to the repo at
   `<repo>.worktrees/<branch>`. A branch that already exists causes a refusal. Use `git worktree remove`
   to remove a worktree.
-- **CLIs.** The built-in entries are Claude Code (`claude`), Codex (`codex`), Antigravity (`agy`), Muse
-  (`muse`), OpenCode (`opencode`) and Pi (`pi`). The target machine's settings can add entries for these
-  and custom programs. A missing CLI name or unavailable entry produces an error with the available entries
-  when applicable. The selected machine must have the program installed.
+- **CLIs.** The built-in entries are Claude Code (`claude`), Codex (`codex`), Antigravity (`agy`), Muse Code
+  (`muse`), OpenCode (`opencode`), Pi (`pi`), Devin (`devin`), Cursor (`agent`), Kiro (`kiro-cli`), Qoder
+  (`qoder`), Oh My Pi (`omp`) and GitHub Copilot CLI (`copilot`). The target machine's settings can add entries
+  for these and custom programs. A missing CLI name or unavailable entry produces an error with the available
+  entries when applicable. The selected machine must have the program installed.
 - **Environment.** A local run uses the initiating Shell, VS Code, agent or Guest relay environment. A remote
   run uses the target login environment.
 - **Models, effort and prompts.** Pass supported native options after the CLI name. The target machine's
@@ -361,10 +362,11 @@ Background delivery has a 30-second deadline. An explicit Shell wait uses the re
 Check the recipient's screen before retrying partial or unconfirmed input.
 
 ```text
-📨 Message from ada (a3@laptop) · m42
-📨 Message from the command line · m43
-📨 Message from the command line (#c44@devbox) · m44
-📨 Message from eve (a9@devbox) · m45 · Reply to m17@devbox
+📨 Message m42 from ada (a3@laptop)
+📨 Message m43 from command line
+📨 Message m44 from command line (#c44@devbox)
+📨 Message m45 from eve (a9@devbox) · in reply to m17
+📨 Message m46 from eve (a9@devbox) · in reply to m17@devbox
 ```
 
 Managed agents normally send without waiting. Replies arrive in their terminals and failed background deliveries
