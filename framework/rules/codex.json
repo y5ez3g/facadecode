@@ -3,7 +3,7 @@
 	"display_name": "Codex",
 	"program": "codex",
 	"launch": { "args": ["--no-daemon"] },
-	"arguments": {"reserved": ["--dangerously-bypass-approvals-and-sandbox", "--yolo", "--sandbox", "-s", "--ask-for-approval", "-a", "--approve-for-me", "--not-so-yolo", "--cd", "-C", "--worktree", "--remote", "--remote-auth-token-env", "--no-daemon", "--model", "-m", "--last"], "attached": ["-s", "-a", "-C", "-m"], "variadic": ["--image", "-i"], "clusters": ["-C", "-a", "-c", "-i", "-m", "-p", "-s"], "config": {"options": ["-c", "--config"], "reserved": ["projects", "mcp_servers.facade", "mcp_optional_startup_grace_ms", "approval_policy", "sandbox_mode", "model", "model_reasoning_effort"]}},
+	"arguments": {"reserved": ["--dangerously-bypass-approvals-and-sandbox", "--yolo", "--sandbox", "-s", "--ask-for-approval", "-a", "--approve-for-me", "--not-so-yolo", "--cd", "-C", "--worktree", "--remote", "--remote-auth-token-env", "--no-daemon", "--model", "-m", "--last"], "attached": ["-s", "-a", "-C", "-m"], "variadic": ["--image", "-i"], "clusters": ["-C", "-a", "-c", "-i", "-m", "-p", "-s"], "config": {"options": ["-c", "--config"], "reserved": ["check_for_update_on_startup", "projects", "mcp_servers.facade", "mcp_optional_startup_grace_ms", "approval_policy", "sandbox_mode", "model", "model_reasoning_effort"]}},
 	"choices": {"model": ["--model", "${value}"], "effort": ["-c", "model_reasoning_effort=${value_toml}"], "spelling": {"model": ["--model", "-m"], "config": {"model": "model", "effort": "model_reasoning_effort"}}},
 	"input": {
 		"mechanism": "prompt",
