@@ -60,7 +60,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		// Facade's own copy of codicons' `new-session`, at its codicon's code point in the font beside the manifest
 		assert.deepStrictEqual(contributes.icons['facade-new-agent'], { description: '%icon.newAgent%', default: { fontPath: './media/new-agent.woff', fontCharacter: '\\EC84' } });
 		// Besides New Agent's, each built-in's logo and each of Facade's robots, for terminal tabs (CONFIGURATION-2.4)
-		assert.deepStrictEqual(Object.keys(contributes.icons).sort(), ['facade-new-agent', ...['claude', 'codex', 'agy', 'muse', 'opencode', 'pi'].map(cli => `facade-cli-${cli}`), ...ROBOTS.map(robot => `facade-robot-${robot}`)].sort());
+		assert.deepStrictEqual(Object.keys(contributes.icons).sort(), ['facade-new-agent', ...['claude', 'codex', 'agy', 'muse', 'opencode', 'pi', 'devin', 'agent', 'kiro-cli', 'qoder', 'omp', 'copilot'].map(cli => `facade-cli-${cli}`), ...ROBOTS.map(robot => `facade-robot-${robot}`)].sort());
 		assert.ok(fs.statSync(path.join(ROOT, 'media', 'new-agent.woff')).isFile());
 		assert.strictEqual(english('%icon.newAgent%'), 'New Agent icon');
 		assert.deepStrictEqual(contributes.viewsContainers, { activitybar: [{ id: 'facade', title: '%view.container%', icon: 'media/facade.svg' }] });

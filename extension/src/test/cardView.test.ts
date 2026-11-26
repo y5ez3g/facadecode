@@ -501,9 +501,10 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 	});
 
 	test('avatars: each built-in\'s maker avatar and each robot, files of media/agents; a name with no icon known shows a program\'s (PANEL-1.3, CONFIGURATION-2.4)', () => {
-		const builtIns = ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi'];
+		const builtIns = ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi', 'devin', 'agent', 'kiro-cli', 'qoder', 'omp', 'copilot'];
 		assert.deepStrictEqual(builtIns.map(icon => avatarOf(icon)), [
-			{ file: 'avatar-claude.png' }, { file: 'avatar-codex.png' }, { file: 'avatar-antigravity.png' }, { file: 'avatar-muse.png' }, { file: 'avatar-opencode.png' }, { file: 'avatar-pi.png' }
+			{ file: 'avatar-claude.png' }, { file: 'avatar-codex.png' }, { file: 'avatar-antigravity.png' }, { file: 'avatar-muse.png' }, { file: 'avatar-opencode.png' }, { file: 'avatar-pi.png' },
+			{ file: 'avatar-devin.png' }, { file: 'avatar-cursor.png' }, { file: 'avatar-kiro.png' }, { file: 'avatar-qoder.png' }, { file: 'avatar-omp.png' }, { file: 'avatar-copilot.png' }
 		]);
 		// A robot: its face, and its eyes over it, which look toward the pointer
 		assert.deepStrictEqual(ROBOT_ICONS.map(icon => avatarOf(icon)), ROBOTS.map(robot => ({ file: `robot-${robot}-face.svg`, eyes: 'robot-eyes.svg' })));

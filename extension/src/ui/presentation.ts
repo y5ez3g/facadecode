@@ -15,7 +15,13 @@ const LOGOS: { readonly [cli: string]: { readonly name: string; readonly light: 
 	agy: { name: 'Antigravity', light: 'antigravity.png', dark: 'antigravity.png' },
 	muse: { name: 'Muse Code', light: 'muse.png', dark: 'muse.png' },
 	opencode: { name: 'OpenCode', light: 'opencode-light.svg', dark: 'opencode-dark.svg' },
-	pi: { name: 'Pi', light: 'pi.svg', dark: 'pi.svg' }
+	pi: { name: 'Pi', light: 'pi.svg', dark: 'pi.svg' },
+	devin: { name: 'Devin', light: 'devin-light.svg', dark: 'devin-dark.svg' },
+	agent: { name: 'Cursor', light: 'cursor-light.svg', dark: 'cursor-dark.svg' },
+	'kiro-cli': { name: 'Kiro', light: 'kiro.svg', dark: 'kiro.svg' },
+	qoder: { name: 'Qoder', light: 'qoder.svg', dark: 'qoder.svg' },
+	omp: { name: 'Oh My Pi', light: 'omp.png', dark: 'omp.png' },
+	copilot: { name: 'GitHub Copilot CLI', light: 'copilot-light.svg', dark: 'copilot-dark.svg' }
 };
 
 /** The name behind a built-in's logo, for searching rows that show only that logo (LIFECYCLE-2.3). */
