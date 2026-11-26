@@ -36,7 +36,7 @@ use crate::{ExitText, Opening, agent_address, single_line};
 mod mouse;
 mod palette;
 
-use mouse::{FOLLOWED_QUERY, LocalMouseInput, MouseInput, Take};
+use mouse::{FOLLOWED_QUERY, LocalMouseInput, MouseInput, Take, without_reports};
 pub(crate) use palette::Probe;
 use palette::Replies;
 
@@ -1728,7 +1728,7 @@ impl Display {
     }
 
     fn forward_ordinary_keys(&mut self, input: &AgentInput, keys: &[u8]) -> std::io::Result<()> {
-        let typing = has_typing(keys);
+        let typing = has_typing(&without_reports(keys));
         if self.held.is_some() && typing {
             self.draw(None)?;
         }
