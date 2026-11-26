@@ -3279,7 +3279,11 @@ fn relay_replays_sends_in_order_and_applies_a_late_cancel_to_the_old_receipt() {
         .iter()
         .map(|message| message.lines().last().unwrap().to_string())
         .collect();
-    assert_eq!(received, ["first in relay order", "second in relay order"]);
+    // Each single-line message paste includes one trailing space in the terminal.
+    assert_eq!(
+        received,
+        ["first in relay order ", "second in relay order "]
+    );
 }
 
 /// Messages sent without pause through facade-mcp and `facade send` while a newer Facade takes over

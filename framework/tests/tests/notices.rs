@@ -227,14 +227,49 @@ fn a_creator_stop_is_silent_and_another_agents_stop_reports_the_end_once() {
     assert!(system_inbox(&mut stopper).is_empty());
 }
 
+const NOTICE_ENTER_WRITTEN: &str = "message-enter-written";
+
+/// The first notice stays in the input even after its Enter reaches the CLI.
+fn start_notice_recipient(home: &TestHome) -> (TestAgent, PathBuf) {
+    let keys = home.folder().join("creator-keys");
+    let boss = home.start_named_fake(
+        "boss",
+        &[
+            ("FAKECLI_IGNORE_FIRST_ENTER", "1"),
+            ("FAKECLI_KEYS", keys.to_str().unwrap()),
+        ],
+    );
+    (boss, keys)
+}
+
+fn wait_for_untaken_notice(home: &TestHome, keys: &Path) {
+    home.wait_for_gate(NOTICE_ENTER_WRITTEN);
+    // The actor pauses after the write. The CLI can read that Enter while the actor is paused.
+    let paste_and_enter = b"\x1b[201~\r";
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            std::fs::read(keys).is_ok_and(|bytes| {
+                bytes
+                    .windows(paste_and_enter.len())
+                    .any(|part| part == paste_and_enter)
+            })
+        }),
+        "the CLI did not read Enter after the notice paste"
+    );
+    assert!(
+        notices(home).is_empty(),
+        "the Enter left the notice in the input"
+    );
+}
+
 /// A terminal caller can stop several children while the creator's CLI survives a crash.
 /// An expired paste on that terminal must be cleared before the later notices are delivered.
 #[test]
 #[cfg_attr(not(debug_assertions), ignore = "uses the test gate of debug builds")]
 fn an_expired_notice_paste_does_not_block_concurrent_end_notices_after_a_crash() {
     let home = TestHome::new("expired-end-notice");
-    home.start_facade_with(&[("FACADE_TEST_GATES", "message-enter")]);
-    let boss = home.start_named_fake("boss", &[]);
+    home.start_facade_with(&[("FACADE_TEST_GATES", NOTICE_ENTER_WRITTEN)]);
+    let (boss, keys) = start_notice_recipient(&home);
     let mut creator = McpTestClient::open(&home, &boss.id);
     let first = start_child(&home, &mut creator, "first", None);
     let children: Vec<_> = (0..24)
@@ -242,11 +277,7 @@ fn an_expired_notice_paste_does_not_block_concurrent_end_notices_after_a_crash()
         .collect();
 
     home.run_facade_ok(&["stop", first["id"].as_str().unwrap()]);
-    home.wait_for_gate("message-enter");
-    assert!(
-        notices(&home).is_empty(),
-        "the first paste has not been submitted"
-    );
+    wait_for_untaken_notice(&home, &keys);
     let keeper = home.lock_record("keeper").unwrap().0;
     pause_process(keeper);
     let old = home.kill_daemon();
@@ -479,16 +510,15 @@ fn a_settled_notice_recovers_its_unfinished_cleanup_without_reopening_the_receip
 fn an_expired_combining_notice_clears_without_a_declared_delete_unit() {
     let home = TestHome::new("combining-notice-cleanup");
     home.start_facade_with(&[
-        ("FACADE_TEST_GATES", "message-enter"),
+        ("FACADE_TEST_GATES", NOTICE_ENTER_WRITTEN),
         ("FACADE_TEST_DELIVERY_MS", "12000"),
     ]);
-    let keys = home.folder().join("creator-keys");
-    let boss = home.start_named_fake("boss", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
+    let (boss, keys) = start_notice_recipient(&home);
     let mut creator = McpTestClient::open(&home, &boss.id);
     let name = "helloe\u{301}";
     let child = start_child(&home, &mut creator, name, None);
     home.run_facade_ok(&["stop", child["id"].as_str().unwrap()]);
-    home.wait_for_gate("message-enter");
+    wait_for_untaken_notice(&home, &keys);
     let proof: Vec<u8> = read_store(&home)
         .query_row(
             "SELECT paste_draft FROM messages WHERE number = 1",
@@ -535,17 +565,16 @@ fn recover_notice_cleanup(crash: CleanupCrash) {
     } else {
         "before-paste-cleanup"
     };
-    let gates = format!("message-enter,{gate}");
+    let gates = format!("{NOTICE_ENTER_WRITTEN},{gate}");
     home.start_facade_with(&[
         ("FACADE_TEST_GATES", &gates),
         ("FACADE_TEST_DELIVERY_MS", "12000"),
     ]);
-    let keys = home.folder().join("creator-keys");
-    let boss = home.start_named_fake("boss", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
+    let (boss, keys) = start_notice_recipient(&home);
     let mut creator = McpTestClient::open(&home, &boss.id);
     let child = start_child(&home, &mut creator, "child", None);
     home.run_facade_ok(&["stop", child["id"].as_str().unwrap()]);
-    home.wait_for_gate("message-enter");
+    wait_for_untaken_notice(&home, &keys);
 
     let keeper = home.lock_record("keeper").unwrap().0;
     pause_process(keeper);

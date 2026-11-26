@@ -3129,7 +3129,7 @@ async fn a_person_s_enter_over_a_message_that_stayed_in_the_input_delivers_it() 
 async fn a_person_s_enter_over_an_edited_message_does_not_confirm_the_original() {
     use facade_base::model::message::{DeliveryFailure, DeliveryStatus};
 
-    let home = home("enterover");
+    let home = home("enterover-edited");
     let mut harness = claude(&home, false);
     harness.plain_claude_input("", "");
     let message = harness.message_pasted("a message").await;

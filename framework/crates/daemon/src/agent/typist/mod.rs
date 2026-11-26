@@ -1046,6 +1046,8 @@ impl Typist {
                     batch.draft.hold_until = now + draw.unwrap_or(SLOWEST_DRAW);
                 }
                 batch.submissions += 1;
+                #[cfg(debug_assertions)]
+                crate::gate_for_test("message-enter-written");
             }
         }
         if self
