@@ -900,9 +900,11 @@ record and retires its inbox. Its sends use the same creation-tree and delivery 
 
 ### lifecycle
 
-`lifecycle/` owns work counts and guards, idle exit, a newer build's takeover, the `framework/clean-end`
-note and `framework/logs/daemon.log`. The keeper points the daemon's standard error at the log.
-`log_file.rs` prunes lines after 30 days and returns up to 200 lines to the person's clients.
+`lifecycle/` owns work counts and guards, idle exit, a newer build's takeover, the decision that
+terminal output has drained cleanly, and `framework/logs/daemon.log`. The keeper points the
+daemon's standard error at the log. `log_file.rs` prunes lines after 30 days and returns up to 200
+lines to the person's clients. Base owns the shared `framework/clean-end` note.
+[Base ownership](base.md#owns)
 
 - `begin(Work)` counts the work until its guard drops. The idle decision uses the same lock to
   exclude new work. After 30 idle seconds it asks the server to pause acceptance, informs compatible
@@ -915,11 +917,12 @@ note and `framework/logs/daemon.log`. The keeper points the daemon's standard er
   for this preparation. If it expires, the original launcher stays selected and the daemon resumes
   admitting effects. Once a connection queues `closing`, it stays sealed until it reconnects.
   After confirmation, takeover selects the launcher, settles pastes and work, asks the actors to go
-  quiet, records a clean end when they all do, and sends `closing` to ordinary API clients.
-  The keeper holds the terminals throughout.
+  quiet, records the clean end through Base's `programs::mark_clean_takeover` when all actors
+  quiesce, and sends `closing` to ordinary API clients. The keeper holds the terminals throughout.
 - The parent implements `LifecycleActivity` to report activity, screen writes and keeper details,
-  and to send paste and quiet commands to actors. The parent takes the clean-end note at startup
-  and uses that fact to select how it recovers screens.
+  and to send paste and quiet commands to actors. The new daemon consumes the clean-end note
+  through Base's `programs::take_clean_end` after taking `daemon.lock` and before connecting to the
+  keeper. The result selects how it recovers screens.
 - The Windows MSVC executable requests the segment heap in its embedded manifest so the heap can
   return idle pages after message bursts and groups of terminal exits.
 

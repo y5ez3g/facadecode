@@ -22,6 +22,9 @@ to speak of, so every other crate can depend on it and it depends on none of the
   attempt and issues a claim. A separate inherited file reference keeps the claim until the Keeper
   takes its lock, even if the launcher ends first. The `programs.lock` section selects and publishes
   the program set after the claim.
+- `framework/clean-end` holds the departing daemon's build ID after a clean takeover drain.
+  Base owns the note's path, format and access. Daemon Lifecycle determines when the terminal
+  output has drained and when recovery consumes the note.
 - `framework/bin/`: each build's `facade` and `facade-mcp` in a folder named after the build, with the
   ConPTY package in its `conpty/` on Windows, and the two launchers that point at the current
   build: symbolic links on Unix, copies on Windows.
@@ -114,6 +117,14 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 - `random_u64()`.
 
 **The keeper and the daemon** (services)
+
+- `programs::start_keeper()` selects the programs and commits one keeper candidate for a sleeping
+  home. `programs::start_daemon(framework, attempt)` starts the selected daemon build and records
+  each attempted image path in the supplied startup attempt.
+- `programs::mark_clean_takeover(framework)` records the departing daemon's build ID.
+  `programs::take_clean_end(framework)` consumes the note and reports whether it removed it.
+  On Windows, the keeper uses `programs::clean_takeover_published(framework)` to check for a
+  published build newer than the one in the note. The check leaves the note available for recovery.
 - `service`: `create_private_home`, `lock_home(framework, Service)`, `lock_record`, `live_holder`,
   `launch(service, program, words) -> Candidate` and `Candidate::into_process() ->
   ServiceProcess`, `StartupChannel`, `RestartBackoff`, `close_inherited(keep)`,
@@ -209,9 +220,9 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   `call_until` uses the caller's absolute deadline for request writes and response reads on the
   negotiated connection. Existing calls can use `call_with_request_id` to recover an interrupted
   start or send. Shell captures its launch environment.
-- `programs::{install_running, current_build, point_launchers_at, launcher}`;
-  `service::{create_private_home, launch, live_holder}` to start the keeper;
-  `unix_process::calling_program()` for a hook's CLI.
+- `programs::{install_running, current_build, point_launchers_at, launcher, start_keeper}` manages
+  the installed services. `service::{create_private_home, live_holder}` prepares the home and
+  observes services. `unix_process::calling_program()` identifies a hook's CLI.
 - `ssh` prepares the selected-home administration bootstrap and SSH arguments for Shell. It resolves the SSH account
   and the source IP observed by the remote sshd. Dedicated keys live in the Facade home's `framework/ssh/` folder,
   with owner-only access to the private file. `SshKeyProof` checks the dedicated key used by an independent
