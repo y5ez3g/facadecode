@@ -93,10 +93,11 @@ managed relay and session-start hook use a Facade profile.
   is the first eight characters of its ID when they match no other session in the CLI histories `facade resume`
   searches in that directory, including sessions that managed agents use, and its full ID otherwise.
 - `facade status <AGENT>` shows the same Agent State as `list` while the agent runs, with the reason for
-  `Waiting for you` and `Error`. Recognized CLI choices such as a Codex update or a Cursor tool approval
-  report `Waiting for you` while the CLI awaits a response. For an ended agent it shows `Ended (stopped by Facade)`, `Ended (code N)`,
-  `Ended (signal <SIGNAL>)`, or `Ended` when the way it ended is unknown. Its `Session` line shows the same native
-  name or preview as `list`, and `Session ID` the CLI's full session ID.
+  `Waiting for you` and `Error`. A CLI that shows a choice of its own in place of its input box, such as a Codex
+  update or a Cursor tool approval, is `Waiting for you` until it gets an answer. An answer that ends in a question
+  is not. For an ended agent it shows `Ended (stopped by Facade)`, `Ended (code N)`, `Ended (signal <SIGNAL>)`, or
+  `Ended` when the way it ended is unknown. Its `Session` line shows the same native name or preview as `list`, and
+  `Session ID` the CLI's full session ID.
 - Resuming an `Ended` agent keeps its reference, directory and session and starts with an empty terminal.
   Resume waits up to 30 seconds for the previous run to finish releasing its resources.
   Resuming a `Saved` session creates an agent. A session already in use produces the reference of the agent using it.
@@ -112,33 +113,39 @@ wake it when needed.
 ## Terminals
 
 - `facade attach a3@devbox` opens a running managed agent's terminal. Ctrl+] detaches with exit code 0 and leaves
-  the agent running. A CLI exit returns its actual exit status. The attached view follows the CLI's primary and
-  alternate screens. A primary view adds the CLI's retained rows to the terminal app's native history and leaves
-  the next shell prompt below the guest output. The preceding shell page stays in that history. A view that used
-  only the alternate screen returns to the original shell page. Both paths print one receipt.
-  A CLI that requests mouse reporting receives the reports the terminal sends, including
-  wheel input. Otherwise the terminal app handles the mouse, selection, copy and right-click actions. In macOS
-  Terminal, select text and use Command+C to copy. Ctrl+C sent by the terminal reaches the CLI. Some terminals
-  send Up and Down for wheel input on the alternate screen. Those keys reach the CLI.
-  The Facade Code editor labels the terminal with the CLI's title
+  the agent running. A CLI exit returns its actual exit status. The attached view uses the terminal app's alternate
+  screen, as any full-screen program does. Every end returns to the shell page and scrollback from before the attach
+  and prints one receipt.
+- In macOS Terminal, in VS Code and the Facade Code editor on macOS and Windows, and in Windows terminals, selecting,
+  copying and the right click are the terminal app's own, for every CLI. The wheel scrolls a CLI that tracks the
+  mouse, as when it runs alone, and browses the scrollback of one that does not, never leaving the agent's screen.
+  Scrolling back down or typing returns to the live screen. A CLI that tracks the mouse also receives its clicks in
+  macOS Terminal, once Accessibility allows Terminal to control the computer, and none in VS Code and Windows
+  terminals.
+- A CLI's question taller than the window, such as Kiro's trust-all-tools warning, leaves its top in the
+  scrollback. Once you answer it, Facade drops that part, and scrolling back shows the CLI's start as it redrew it.
+- In other terminal apps, on Linux, over SSH and inside tmux, Screen or Zellij, a CLI that tracks the mouse receives
+  it, as when it runs alone, and Attach takes the mouse of one that leaves it alone. The wheel browses the CLI's scrollback there too. Drag to select text in the live view or its
+  scrollback. Releasing the button copies it to the clipboard of the computer Attach runs on, and asks the terminal app
+  to copy it as well. Over SSH only the terminal app can. Ctrl+C and a right click copy a selection again.
+- The Facade Code editor labels the terminal with the CLI's title
   while it is attached, and the terminal's own title returns when the attachment ends. Until the CLI sets a title, and
   for a CLI that never sets one, the terminal keeps its own title, as when the CLI runs alone. Claude Code's title
   keeps the status glyph it shows when run alone, which it leaves out once Facade takes its state reports: `◐` and `◑`
   in turn while it works, `✳` while it is idle, done, waiting for you or in error. A Claude Code agent whose turn
   ended while background work still runs is `Idle`, as a Codex agent is.
-- Before a foreground `start` or `resume`, Facade gives the terminal app up to 100 ms to report its default
-  foreground, background and cursor colors and ANSI colors 0–15. The agent's screen uses replies received in that
-  window to answer the CLI's color queries from its first output. The CLI chooses its own theme fallback for any
-  color it cannot query.
+- `start` and `resume` ask the terminal app for its foreground, background and cursor colors and ANSI colors 0–15, in
+  the foreground and with `-d`. The agent's screen answers the CLI's color queries with them from its first output, so
+  a CLI picks the theme it picks when run alone. A terminal app answers within milliseconds. Facade waits up to one
+  second for one that does not say it has finished. The CLI chooses its own theme for a color without an answer.
 - `facade screen [-n <lines>] <agent>` reads the last lines of the screen and scrollback as text. It also reads the
   last screen of an ended agent.
 - `facade type <agent> "hello" -k Enter "again" -k Enter` pastes text and presses keys in the given order.
   Quote each text argument that contains spaces. Facade queues the sequence as one input operation.
   `facade type --help` lists the key names.
 - Attach viewers share the smallest open terminal width and height. A larger Shell displays the shared grid in its
-  top-left corner and updates rows in place. The shared grid changes as viewers resize or leave.
-  Foreground Shell starts and resumes read the terminal's reported default colors before launching the CLI.
-  VS Code can supply colors as its terminal resizes.
+  top-left corner and updates rows in place. The shared grid changes as viewers resize or leave. VS Code can provide
+  terminal colors.
 - After reconnecting, Attach redraws the current screen. It reports discarded input in bytes when any was lost.
 
 ## Messages and tools
@@ -263,9 +270,11 @@ See [Machine sessions](../../framework/protocol/DAEMON.md#machine-sessions).
   `facade upgrade --version X.Y.Z` reads the BUILD marker of the `extension/X.Y.Z` release. Both forms pin the
   exact build when installing. The installed build takes over a running Orchestrator when its compatibility
   checks pass, keeping agents running.
-- `facade status` reports the local home, settings file, versions, daemon and keeper process IDs, active agent count,
-  connected machines and Guest MCP launcher. When the local Orchestrator is sleeping, status says so without
-  starting it.
+- `facade status` reports, in four parts, the state (versions and active agent count), the local home, settings
+  file and daemon and keeper process IDs, the Guest MCP launcher, and last the CLIs each machine can start: this
+  machine first, for the current directory, then each connected machine. A CLI is listed where it is installed and
+  its machine's `facade.json` does not turn it off. When the local Orchestrator is sleeping, status says so without
+  starting it and lists this machine alone. `facade start --help` points there.
 - The logs are `framework/logs/daemon.log` and `framework/logs/keeper.log` inside the home. Each service keeps 30 days. VS Code
   can read recent daemon log lines for diagnostics.
 - `facade` shows the command groups. `facade <COMMAND> --help` shows examples, arguments and options.

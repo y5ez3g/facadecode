@@ -129,36 +129,23 @@ which replays at most `REDRAW_SCROLLBACK_ROWS` (1,000) scrollback rows. A redraw
   `offset` rows above the live view. It clamps the offset to the active grid's readable scrollback.
   The application alternate grid has no scrollback. The draw clears unused host margins, hides
   the cursor and preserves input modes. The host must be at least as large as the shared grid.
-- `occupied_rows() -> u16` gives the one-based last occupied physical row in the active
-  viewport, or zero if it is blank. Cells that draw a style or link count as occupied. Shell uses
-  this position to place the exit receipt below the shown content.
 - `scrollback_range()` gives the active grid's readable row positions, ending at the top of
   the live viewport. It excludes the extra retained row used to detect trimmed reads. The compact
   store counts dropped rows so Shell can keep a row selected across feeds at the same size. Shell
   resets the selection on a redraw or explicit scrollback clear.
-- `primary_history() -> Option<PrimaryHistory>` gives a local epoch and half-open readable
-  positions for retained primary rows, including while the alternate grid is active. The oldest
-  position advances as rows leave retention. Actual primary history clears, terminal resets and
-  effective canonical resizes advance the epoch. A screen without a compact store or with an open
-  synchronized update has no available span.
-- `append_primary_history(epoch, next, columns, rows) -> Option<HistoryAppend>` gives the
-  represented source positions and the bytes to append them to native primary history in a host
-  that fits the canonical grid. It clips to readable retention and holds a trailing soft-wrapped
-  line until its end is retained. Shell selects the host buffer, writes the append with its live
-  repaint, and owns the position through which that write succeeded.
-- `append_primary_history_before_alternate(epoch, next, columns, rows) -> Option<HistoryAppend>`
-  adds the saved primary viewport, cursor and pen to a complete append while the alternate grid
-  is active. It writes wrapped rows at an exact fit and positions rows in a larger host. Shell
-  writes and flushes this output with the host still on its primary buffer, then switches to
-  alternate.
 - `selection_view(offset) -> SelectionView` captures one viewport of styled cells at the same
   offset as `redraw_scrollback_view`. `SelectionView::redraw(selected)` paints that capture with
-  optional selection endpoints. `SelectionView::text(anchor, end)` copies the highlighted cells,
-  including selected spaces. The one-based `(column, row)` endpoints are inclusive and can be in
-  either order. The selection includes whole wide characters and joins soft wraps in copied text.
+  optional selection endpoints. `SelectionView::text(anchor, end)` copies the highlighted cells
+  without the blanks at the end of a line. The one-based `(column, row)` endpoints are inclusive and
+  can be in either order. The selection includes whole wide characters and joins soft wraps in
+  copied text.
 - `title_output()` gives the sanitized title sequence for viewers using the same status glyph rule
   as viewer output. It is empty when the CLI has no nonblank title.
-- `reports_mouse()` follows the CLI's active tracking mode. `encode_wheel(col, row, delta, modifiers)`
+- `end_synchronized_update()` before a full frame, when Shell cannot wait for the update to end: the
+  frame then includes the output held back, and what follows it continues from there.
+- `reports_mouse()` follows the CLI's active tracking mode. `mouse_modes()` sets the CLI's tracking
+  and encoding modes on a viewer, on or off, with each group's active mode last: a terminal can take
+  any reset as turning the whole group off. Redraws use it too. `encode_wheel(col, row, delta, modifiers)`
   uses the current SGR, UTF-8 or legacy encoding. It takes one-based grid coordinates, 120 delta
   units per tick, positive for up, and Shift, Alt and Ctrl bits 4, 8 and 16. It returns `None`
   without tracking or when the input cannot produce a report.
@@ -172,7 +159,8 @@ which replays at most `REDRAW_SCROLLBACK_ROWS` (1,000) scrollback rows. A redraw
 
 **Rules** (`rules/src/state.rs`, `rules/src/input/`): `ScreenView { rows, cols, continues, cursor,
 cursor_visible, synchronized_update }` and `VisibleCell { text, column, bold, dim, inverse,
-colored }`, to find a CLI's input box and state on screen.
+colored, foreground }`, to find a CLI's input box and state on screen. `foreground` is the same number for
+cells of the same color.
 
 **Scenario tests** (`framework/tests`): a `Screen` per viewer, to check what a viewer would show.
 
@@ -182,7 +170,8 @@ limits it sets.
 ## Depends on
 
 - `alacritty_terminal` 0.26.0 from `framework/vendor/`, whose changes let a grid hand the rows its
-  scrollback lets go of to a `HistoryKeeper` and take rows back (`vendor/README.md`).
+  scrollback lets go of to a `HistoryKeeper` and take rows back, and erase a cleared main screen
+  where it is (`vendor/README.md`). Scrolling back so shows no page that the CLI took off its screen.
 - `base64`, for the words in status reports.
 - No Facade crate.
 
@@ -279,11 +268,6 @@ and below stays blank. Scrollback replays one canonical row per console row. The
 cursor at its grid position and applies the screen's scrolling region within the shared height.
 Steady viewport updates use that same explicit row placement. They write each row's content and
 erase its remaining tail with the default pen. They finish with the cursor, modes and known title.
-
-A primary history append reflows the retained suffix to the physical host width and draws it
-with the same cell pens and hyperlinks. Automatic wrapping keeps soft lines joined for native
-selection. The append erases the old live page in place, then moves the staged rows into native
-history by scrolling from the physical bottom. The remaining live area is clear for Shell's repaint.
 
 A scrollback view ends any synchronized update on the host and clears the selected buffer's
 visible area. It uses the same explicit row placement and cell drawing, starting in the active

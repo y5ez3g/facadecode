@@ -201,18 +201,28 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   receipt carrying the exact failed file and HTTP status.
 - `console::{VtModes, ConsoleReader, ConsoleSignals}`: what Attach needs of the person's
   console beside crossterm's size and raw mode. `ConsoleReader::read_until` also supports the
-  bounded foreground color query. On Windows, Attach can consume an exact
+  bounded color query before a launch. On Windows, Attach can consume an exact
   queued release from its detach chord. A native wheel record gives one-based viewport
   coordinates, a signed delta and terminal modifier bits. Native pointer records carry left press,
   drag and release, and right press at those coordinates. A release can finish a drag that leaves
-  the viewport. Foreground start, resume and attach honor the CLI's mouse tracking while its
-  grid is visible and fits the host viewport. On Windows, Attach enables native capture through
-  `VtModes::set_mouse_capture` only for that reporting view and uses Screen to encode native
-  wheel records for the CLI. The host handles pointer events on other views. Attach forwards the
-  keys the host sends for alternate scrolling. Disabling native capture restores the saved Quick
-  Edit setting. Shell enters `VtModes` before enabling any additional raw mode, so it saves and
-  restores the original Windows input and output modes. On Unix, `ConsoleSignals` reports `SIGPIPE`
-  as an end signal so Shell can restore the terminal before exiting.
+  the viewport. Attach enables capture when the CLI tracks the mouse or the Shell owns scrolling
+  and selection. `VtModes` restores the console's input and output modes on handback. Shell enters
+  it before enabling any additional raw mode, so that it saves the original Windows modes. On Unix,
+  `ConsoleSignals` reports `SIGPIPE` as an end signal so Shell can restore the terminal before
+  exiting. `console::owns_input()` says whether the program may read the console now, which a Unix
+  shell's background job may not. `console::return_input(bytes)` gives input taken from the console
+  back to the next reader. It does nothing on Windows and on a Unix system that forbids it.
+- `clipboard::copy`: puts text on the clipboard of the computer the person sits at, through pbcopy or
+  the Wayland and X11 clipboard programs, for terminals that ignore OSC 52. It does nothing over SSH,
+  where that is another computer's, and on Windows.
+- `desktop::{sees_keys, arrows}`: whether Up and Down are down on the keyboard the person types on,
+  for a terminal that sends the same bytes for them and for the wheel. It uses the session's key state
+  on macOS and the desktop's on Windows, without a permission, and loads their libraries only when
+  asked. It sees no keys on Linux, over SSH, outside a desktop session, or in a terminal that
+  another computer can show: tmux, Screen, Zellij and VS Code's remote terminals.
+- `desktop::{clicks, pointer, right_click_at, press_left_at, left_button_down}`: the pointer and the
+  buttons, for Attach's clicks in macOS Terminal. Posting a click needs Accessibility for the
+  terminal app; `clicks` checks it and never asks. Elsewhere there are none.
 
 **Rules**
 - `settings::{Settings, Member, Json, is_space}`: rules reads the CLI entries of `clis`.

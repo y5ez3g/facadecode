@@ -90,6 +90,8 @@ public `run()` entry point.
 - After a passive probe finds the service sleeping, Shell can call `offline_machine_name()`
   to read the committed local machine name through Store. A read-only connection uses a
   retained WAL and SQLite's shared memory. A checkpointed database is opened as immutable.
+- Shell's `status` calls `offline_clis(environment, folder)` for the CLIs a start there can run. It
+  reads the settings and looks for the programs as `cli.list` does.
 
 ## Storage format and migrations
 
@@ -204,7 +206,7 @@ Changes to the stored contract follow the [compatibility review](../ENGINEERING.
 | `operations.rs` | Starts, stops, resumes, renames and removes runs and records their exits. |
 | `resume.rs` | Finds stopped Agents and saved sessions and routes a chosen resume target. A local listing reads this machine and the supplied folder. A saved candidate carries an eight-character selector if it uniquely matches across the folder's saved sessions, including hidden ones, or the full ID. A named Shell listing reads managed Agents on the selected machine. The holder reads native names or previews using the recorded session ID and launch choices. |
 | `delivery.rs`, `command_replies.rs` | Deliver typed input, messages, initial prompts and results. A send keeps its typed target and reply reference through routing and replays receipts by request ID. The daemon serving a command-line request owns its in-memory reply waiter. |
-| `presence.rs` | Recovers Guests, retires their inboxes, validates an editor's terminal colors and maps those of a foreground launch. |
+| `presence.rs` | Recovers Guests, retires their inboxes, validates an editor's terminal colors and maps those of a launch. |
 | `topics.rs`, `remote_agents.rs` | Maintain subscriptions, terminal viewers and each reachable peer's roster contribution. |
 | `machine_service.rs`, `network_operations.rs` | Authorize and register machine streams, track routes and resolve requests to stable targets. |
 | `relays.rs`, `service.rs` | Establish relay actors and serve both local and forwarded operations. `service.rs` takes the launch context off every caller's environment and keeps the terminal colors of a Terminal caller. |
@@ -234,6 +236,10 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
   - Automatic input never interleaves (RULES 1.10): messages wait behind the start prompt; while the start readies the tools, calls wait, and so do keys once the tool startup owns the input ([readiness](#readiness)), and are then released in the order they came; the person's Enter waits, with the keys after it, until the input can be read.
   - An ordered input sequence enters the typist once. Earlier accepted input runs first. Later calls and raw Attach input wait until the sequence's last write.
   - Every screen change goes into the screen log before the screen takes it.
+  - A question taller than the screen, such as Kiro's trust-all-tools warning, pushes its top into
+    the scrollback, where the CLI's redraw after the answer cannot reach. When the person or Facade
+    answers a question of the CLI's own before anything was said in a new session, the actor erases
+    the scrollback (`CSI 3 J`, logged and shown) if it holds at most a screenful.
   - The record shows a run's end before anything waiting on the run learns it. The installed run
     number changes when its terminal is installed. Input is fenced from the previous run as soon
     as restart preparation begins.
@@ -321,6 +327,8 @@ The terminal, as a `PtyIo`, and the input waiting for it.
   - Under `background_report`, a `working` report with matching words becomes idle evidence.
   - Under `background_correction`, a `working` report is narrowed to idle evidence while the screen
     matches the rule's idle anchors. The rule applies regardless of the CLI's installed version.
+  - Under `answers_ask`, a reported question reads as done while the CLI's input, empty or with a draft, is on
+    the screen.
   - A start and the tools' connection get 30 seconds each. Time the CLI spends asking a question does not count.
   - For a CLI that defers its tool catalog, a live authenticated initializer keeps the tools `Connecting`
     without adding a startup overlay or tools timeout. Native startup keeps its own deadline. The initial
@@ -328,7 +336,7 @@ The terminal, as a `PtyIo`, and the input waiting for it.
     native startup deadline if it fails. The typist still checks whether it can write the prompt safely.
   - Only `keep` writes the state file, through a private temporary file and a rename. What the screen shows is read again, never kept.
 - **Never does:** touch the terminal; change the agent's record; publish.
-- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(asking, now)`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connections(connections: ToolsConnections)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
+- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(asking, now)`, `shows_input(shown)`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connections(connections: ToolsConnections)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
 
 #### glyph
 
@@ -382,9 +390,6 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
 - **Owns:** the viewers and those waiting for their first snapshot, each shared viewer's capacity,
   the bytes queued for each, the redraws and exits they are owed, and the signal that drops a viewer too far behind.
 - **Keeps:** At most 1 MiB of output waits for a viewer; past that it is marked behind and later gets one redraw instead. Snapshots and redraws wait for a synchronized update to end. A viewer behind gets its redraw before the exit. When the new terminal is installed on resume, a viewer still over 1 MiB is dropped and its client told to reconnect. `Removed` comes last.
-  A Shell watch that requests history and replaces its local scrollback receives bounded authoritative
-  history with its first fitting, nonempty primary full frame. An initial snapshot can fulfill this once.
-  Alternate, blank and undersized frames leave it pending. Ordinary incremental output keeps its existing path.
 - **Never does:** change the screen; read the terminal; decide when the exit goes out.
 - **Interface:** the actor: `new()`, `request(ViewerRequest)`, `admit(&Screen, exit, process)`, `remove(viewer)`, `show(&ParsedOutput)`, `redraw_all()`, `catch_up(&Screen, exit) -> bool`, `send_exit(&Screen, exit)`, `finish_run(&Screen, exit)`, `finish(&Screen, exit)`, `is_watched()`, `is_behind()`. The server's screen watches: `viewer_channel()`, `ViewerReceiver::{recv, stalled}`, `ViewerSnapshot`, `ViewerChange`.
 
@@ -575,8 +580,9 @@ A run's command line, environment, folder, plugin, workspace configuration and s
   The files stay in place during the hold. Once the folder is free, the next start replaces the plugin.
   Only CLIs for which `facade_rules::uses_folder_plugin` holds use it. A run-owned workspace file has
   a private ownership record with its canonical workspace, relative path and content digest. Preparation
-  publishes a complete file without replacing existing content. It removes the owned file on exit, failed
-  launch, replacement and orphan cleanup. Edits or substitutions leave the file alone.
+  publishes a complete file without replacing existing content. It removes the owned file, and the folders
+  that leaves empty, on exit, failed launch, replacement and orphan cleanup. Edits or substitutions leave the
+  file alone.
   The session file is checked by its modified time and size a second after the run's terminal gives
   output, as a CLI saves its
   session while it works: at most once a second while output goes on, once more a quiet second

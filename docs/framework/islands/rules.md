@@ -229,7 +229,9 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - Claude's theme chooser shows its heading, the `/theme` help and a selected native theme.
     Kiro shows a login question with a selected Yes or No, and Cursor shows its login hint
     below the Cursor Agent splash title. Those login notices also report authentication waits.
-    Kiro trust and Devin's `✱` trust question are also interactions.
+    Kiro trust and Devin's `✱` trust question are also interactions. Kiro's option menus read as
+    interactions by the footer below their selected `❯` row, so its trust-all-tools warning does at
+    any window height.
   - Frame, editor and prompt rules use a `scrolled` object that identifies the scroll layout by `position`.
     For `rows` (Muse Code and Antigravity), one capture in each pattern counts the hidden rows
     from separate marker rows inside the frame. For `rules` (Claude Code and Pi), the patterns
@@ -260,6 +262,8 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     The first-run setup wizard reads `interaction` from the complete default
     `↑/↓ select · ⏎ confirm · ⎋ skip · ⌃C exit setup` footer at the bottom when the scene fits.
     A readable editor takes priority, and a clipped or remapped footer supplies no match.
+    Oh My Pi draws what it predicts the person types next from the cursor on, in another color than
+    the text before it. The reading leaves that out of the draft.
   - Copilot draws a colored rail or two plain full-width rules around its input. Both layouts
     require a visible hardware caret and the `Interactive` footer below the editor.
     The plain frame additionally has a `❯ ` prompt. A full viewport uses the shared editor
@@ -331,7 +335,7 @@ Reads a CLI's screen for evidence of its state (`state.rs`). A rule can also hav
     - `turn_error` (OpenCode, over its input box): when a turn's model call failed, the error stands just over that turn's summary. It reads as `Error` with the CLI's words. A turn that produced words shows a rate in its summary, so it never reads as an error.
     - `background_correction` (Codex, around its input prompt): reads `Idle` when, over the prompt, a dim footer counts the commands still running in the background, drawn exactly as the CLI draws it or cut off at the screen's right edge, and over that stands the dim summary of a finished turn. The daemon uses this to correct Codex's `working` report regardless of the installed version.
     - `background_report` (Claude Code, in a report's words) gives the daemon a `background` pattern. A `working` report whose words match the pattern reads as `idle`.
-    - `frame_transcript` (Muse Code, around its input frame): `Working` while the working line stands over the frame, with at most a usage warning or queued input between them. `Idle` under the CLI's header, a question it answered, or the end of an earlier conversation. The reader skips indented text and blank paragraph breaks when it looks for the answer marker. Where no frame is drawn, `Blocked(Auth)` while all of its sign-in choices show, and `Blocked(Permission)` while its question about trusting the workspace shows. Part of a frame on the screen reads as None.
+    - `frame_transcript` (Muse Code, around its input frame): `Working` while the working line stands over the frame, with at most a usage warning or queued input between them. `Idle` under the CLI's header, a question it answered, or the end of an earlier conversation. The reader skips indented text and blank paragraph breaks when it looks for the answer marker. Where no frame is drawn, `Blocked(Auth)` while all of its sign-in choices show, and `Blocked(Permission)` while its question about trusting the workspace shows. Part of a frame on the screen reads as None. Muse Code reports an answer that asks the person something as a question, although its turn has ended. With `answers_ask`, that report counts as done while the CLI's input is on the screen.
   - To check rule files, the layer reads `COUNT` (`${count}`) and `PLURAL` (`${s}`): a footer must contain `COUNT` exactly once, and no placeholder other than these two.
 
 ### sessions
@@ -349,7 +353,7 @@ a folder (`sessions.rs` and `sessions/history/`).
     head and tail windows, so later output does not hide a saved rename.
     Muse Code looks up an individual session's first prompt in its transcript when the index has
     no displayable title for it. The saved-session catalog reads the index.
-  - A session ID uses the CLI's native spelling. UUIDs are lowercase. OpenCode uses `ses_` followed by 1 to 64 letters and digits, and Kiro V3 uses `sess_` followed by a lowercase UUID.
+  - A session ID uses the CLI's native spelling. UUIDs are lowercase. OpenCode uses `ses_` followed by 1 to 64 letters and digits, Kiro V3 uses `sess_` followed by a lowercase UUID, and Devin names a session with lowercase words joined by hyphens, such as `pickled-fighter`, at most 64 characters.
   - A session counts only once it is saved. If the file names a path that does not exist yet, it reads as no session, so a session the CLI has not saved cannot be resumed. This holds for every CLI.
   - A write goes to a temporary file that only its owner can read (base's `files::private_options`). The file is synced, then renamed over the session file, so a reader sees the old file or the new one, never part of either; the folder is synced through `files::sync_folder`.
   - On Windows a session variable's name is compared without case.
@@ -477,10 +481,14 @@ session. It also defines the formats of Facade's hooks.
 Cursor loads its local plugin at startup. The plugin supplies Facade's relay, instructions and session hook.
 Qoder takes a session MCP file and a settings overlay with a SessionStart hook. Devin uses a private
 configuration root with the native `devin/mcp_config.json` path and an in-process local agent. Its
-other existing config entries are linked into that root. A child Facade agent inherits the original
+other existing config entries are linked into that root. Devin 3000 keeps its sessions in
+`devin/cli/sessions.db` under its data folder; the catalog reads it there, else `devin/sessions.db`. A child Facade agent inherits the original
 configuration root. Oh My Pi takes a local plugin, a settings overlay for the managed tools' approvals,
-and an extension that reports session and turn changes. Oh My Pi selects its input layout from its settings.
-Kiro V3 reads a projected workspace profile. Its private launcher holds the relay credential. A
+and an extension that reports session and turn changes. Oh My Pi announces the servers and tools it
+connects. The overlay and the extension leave Facade's own out of those notices, so its conversation
+opens as it does without Facade, and a failure to connect still shows. Oh My Pi selects its input layout
+from its settings. Kiro starts as `kiro-cli chat --v3` and reads a projected workspace profile. Its
+private launcher holds the relay credential. A
 managed profile can be recreated under its saved name when another Facade agent resumes that session.
 A native profile selected at launch, in the workspace or user settings, or in a saved session
 keeps its own configuration and tools.
