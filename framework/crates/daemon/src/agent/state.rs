@@ -88,6 +88,8 @@ pub(crate) struct StateTracker {
     evidence: Evidence,
     progress: TurnProgress,
     question: Question,
+    /// Whether the CLI's input, not a question, is on the screen.
+    input_shown: bool,
     connection: Connection,
     started: Instant,
     tools_since: Instant,
@@ -114,7 +116,7 @@ impl StateTracker {
             return reading;
         }
 
-        let current = self.evidence.current();
+        let current = self.evidence.settled(self.input_shown);
         let held_until = self
             .progress
             .advance(Turn::from(current), now, viewing, &mut self.saved);
@@ -182,6 +184,7 @@ impl StateTracker {
             rule,
             progress: TurnProgress::default(),
             question: Question::default(),
+            input_shown: false,
             connection: Connection::Pending,
             started,
             tools_since: started,
@@ -304,6 +307,11 @@ impl StateTracker {
             self.question.answered = Some(now);
         }
         self.question.open = asking;
+    }
+
+    /// Updates whether the CLI's input is on the screen, empty or with a draft.
+    pub(crate) fn shows_input(&mut self, shown: bool) {
+        self.input_shown = shown;
     }
 
     /// Startup deadline, suspended until the CLI's current question is answered.
@@ -562,6 +570,20 @@ impl Evidence {
 
     fn current(&self) -> Option<&EvidenceState> {
         self.correction.as_ref().or(self.base.as_ref())
+    }
+
+    /// The current evidence, where a question that a finished answer asked reads as done.
+    fn settled(&self, input_shown: bool) -> Option<&EvidenceState> {
+        match (self.current(), self.rule) {
+            (
+                Some(EvidenceState::Blocked {
+                    kind: Some(WaitKind::Question),
+                    ..
+                }),
+                Some(StateRule::FrameTranscript(rule)),
+            ) if rule.answers_ask && input_shown => Some(&EvidenceState::Done),
+            (current, _) => current,
+        }
     }
 
     fn replace(&mut self, next: EvidenceState) {
@@ -1244,6 +1266,42 @@ mod tests {
             state(&mut muse, now).0,
             ManagedAgentState::Unknown,
             "its screen no longer counts"
+        );
+    }
+
+    /// Muse Code reports an answer that asks the person something as a question. Its turn has ended
+    /// and its input is there, so nothing waits for the person.
+    #[test]
+    fn a_question_that_ends_muse_s_answer_is_a_finished_turn() {
+        let now = Instant::now();
+        let later = now + Duration::from_secs(60);
+        let question = || vec![report("state=blocked:kind=question")];
+        let mut muse = tracker(Some("muse"), now);
+        muse.take(vec![StatusEvent::Asked, report("state=working")]);
+        assert_eq!(state(&mut muse, now).0, ManagedAgentState::Working);
+        muse.take(question());
+        assert_eq!(
+            state(&mut muse, now).0,
+            ManagedAgentState::WaitingForYou,
+            "its input is not there"
+        );
+        muse.shows_input(true);
+        state(&mut muse, now);
+        assert_eq!(state(&mut muse, later).0, ManagedAgentState::JustDone);
+        muse.take(vec![report("state=blocked:kind=permission")]);
+        assert_eq!(
+            state(&mut muse, later).0,
+            ManagedAgentState::WaitingForYou,
+            "an approval waits wherever it shows"
+        );
+
+        let mut claude = tracker(Some("claude"), now);
+        claude.shows_input(true);
+        claude.take([vec![StatusEvent::Asked], question()].concat());
+        assert_eq!(
+            state(&mut claude, now).0,
+            ManagedAgentState::WaitingForYou,
+            "another CLI's question waits"
         );
     }
 

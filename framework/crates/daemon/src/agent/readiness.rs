@@ -47,6 +47,8 @@ pub(crate) struct StartStep {
     pub(crate) release_held: bool,
     /// Readying the tools failed: they stay unavailable until their server connects.
     pub(crate) tools_not_started: bool,
+    /// Facade answered the CLI's trust question.
+    pub(crate) answered: bool,
 }
 
 /// What a run's start does first: readying its CLI's tools and answering its trust question when allowed.
@@ -114,6 +116,7 @@ impl Readiness {
             wake: None,
             release_held: false,
             tools_not_started: false,
+            answered: false,
         };
         if let Some(mut tools) = self.tools.take() {
             tools.advance(now, view, press, &mut result, &self.agent_id);
@@ -125,7 +128,9 @@ impl Readiness {
             }
         }
         if let Some(mut trust) = self.trust.take() {
+            let answering = matches!(trust.phase, TrustPhase::Answer { .. });
             trust.advance(now, view, press, &self.agent_id);
+            result.answered = !answering && matches!(trust.phase, TrustPhase::Answer { .. });
             if !matches!(trust.phase, TrustPhase::Done) {
                 let next = trust.wake(now, view);
                 result.wake = Some(result.wake.map_or(next, |wake| wake.min(next)));

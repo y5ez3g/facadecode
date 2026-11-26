@@ -57,6 +57,7 @@ const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 const REDRAW_NUDGE_TIMEOUT: Duration = Duration::from_millis(200);
 /// How long output settles before the screen is read for the CLI's status.
 const SCREEN_STATUS_DELAY: Duration = Duration::from_millis(200);
+const ERASE_SAVED_LINES: &[u8] = b"\x1b[3J";
 
 /// The batching delay, which a debug build lets a test set through `FACADE_TEST_PUBLISH_AFTER_MS`.
 fn publish_delay() -> Duration {
@@ -202,6 +203,7 @@ pub(super) fn spawn(
         replies_dropped: false,
         typed: 0,
         untouched_input,
+        start_rows: untouched_input && !recovered,
         holds_input_for_probe: false,
     };
     // The record shows the state from the start.
@@ -289,6 +291,8 @@ struct Actor {
     typed: u64,
     /// Automatic delivery can probe an unstyled hint before it accepts any external input.
     untouched_input: bool,
+    /// A new session whose conversation has not begun: what its start pushed off the screen can go.
+    start_rows: bool,
     /// The probe of a fresh unstyled hint finishes before external keys reach the terminal.
     holds_input_for_probe: bool,
 }
@@ -772,6 +776,7 @@ impl Actor {
                 self.set_status_glyph(None);
                 self.typist.clear_probes();
                 self.untouched_input = false;
+                self.start_rows = false;
                 self.holds_input_for_probe = false;
                 self.ready_at =
                     self.readiness
@@ -1515,8 +1520,7 @@ impl Actor {
             self.state_changed = true;
         }
         if self.typist.take_entered() && !self.start_holds_input() {
-            self.state.asked();
-            self.state_changed = true;
+            self.enters();
         }
         submitted
     }
@@ -1561,6 +1565,9 @@ impl Actor {
         };
         let step = self.readiness.step(now, &view, &mut press);
         self.ready_at = step.wake;
+        if step.answered {
+            self.drop_start_rows();
+        }
         if step.tools_not_started {
             self.state.tools_not_started();
             self.state_changed = true;
@@ -1646,8 +1653,7 @@ impl Actor {
         self.typed += 1;
         let enter = self.person.enter(&keys);
         if enter.is_some() {
-            self.state.asked();
-            self.state_changed = true;
+            self.enters();
         }
         match (
             &mut self.submitting,
@@ -1664,6 +1670,30 @@ impl Actor {
                 ));
             }
             (_, None) => self.terminal.push(&keys),
+        }
+    }
+
+    /// An Enter, typed or the person's, asks the CLI to do something. One that answers a question
+    /// of the CLI's own, which the screen still shows, may let the start's rows go.
+    fn enters(&mut self) {
+        if self.read_screen_input().info.state == InputState::Interaction {
+            self.drop_start_rows();
+        }
+        self.state.asked();
+        self.state_changed = true;
+    }
+
+    /// The person or Facade answers a question of the CLI's own before a new session's
+    /// conversation begins: the rows the question pushed off the top of the screen go, as the CLI
+    /// cannot erase them when it redraws. More than a screenful can be a conversation that the CLI
+    /// goes on with.
+    fn drop_start_rows(&mut self) {
+        let screen = self.screen().screen();
+        if self.start_rows
+            && self.state.said_line().is_none()
+            && (1..=usize::from(screen.rows())).contains(&screen.scrollback_rows())
+        {
+            self.feed_own(ERASE_SAVED_LINES);
         }
     }
 
@@ -1788,8 +1818,11 @@ impl Actor {
             .expect("the screen exists while the actor runs");
         self.state.observe(screen.screen());
         // A menu or question of the CLI's own in place of its input waits for the person.
-        let asking = self.read_screen_input().info.state == InputState::Interaction;
-        self.state.asks(asking, Instant::now());
+        let input = self.read_screen_input().info.state;
+        self.state
+            .asks(input == InputState::Interaction, Instant::now());
+        self.state
+            .shows_input(matches!(input, InputState::Usable | InputState::Draft));
         self.state_changed = true;
     }
 
@@ -1808,6 +1841,10 @@ impl Actor {
             Viewing::Unwatched
         };
         let reading = self.state.read(Instant::now(), viewing);
+        self.start_rows &= !matches!(
+            reading.state,
+            ManagedAgentState::Working | ManagedAgentState::JustDone
+        );
         self.viewers.set_working(matches!(
             reading.state,
             ManagedAgentState::Starting | ManagedAgentState::Working
