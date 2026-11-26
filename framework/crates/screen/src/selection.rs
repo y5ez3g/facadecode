@@ -49,7 +49,8 @@ impl SelectionView {
     }
 
     /// Copies the inclusive stream selection between two one-based `(column, row)` endpoints
-    /// inside the grid, including selected spaces. A soft wrap joins adjacent rows in the text.
+    /// inside the grid, without the blanks at the end of a line. A soft wrap joins adjacent rows in
+    /// the text.
     pub fn text(&self, anchor: (u16, u16), end: (u16, u16)) -> String {
         let selection = SelectionRange::new([anchor, end]);
         let mut text = String::new();
@@ -62,8 +63,11 @@ impl SelectionView {
                 }
                 text.push_str(cell_text(cell).as_str());
             }
-            if line < selection.end.0 && !wraps(row, self.cols) {
-                text.push('\n');
+            if !wraps(row, self.cols) {
+                text.truncate(text.trim_end_matches(' ').len());
+                if line < selection.end.0 {
+                    text.push('\n');
+                }
             }
         }
         text

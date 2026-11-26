@@ -47,6 +47,8 @@ pub(crate) struct StartStep {
     pub(crate) wake: Option<Instant>,
     /// Readying the tools failed: they stay unavailable until their server connects.
     pub(crate) tools_not_started: bool,
+    /// Facade answered the CLI's trust question.
+    pub(crate) answered: bool,
 }
 
 /// What a run's start does first: readying its CLI's tools and answering its trust question when allowed.
@@ -116,6 +118,7 @@ impl Readiness {
         let mut result = StartStep {
             wake: None,
             tools_not_started: false,
+            answered: false,
         };
         if let Some(mut tools) = self.tools.take() {
             tools.advance(now, view, press, &mut result, &self.agent_id);
@@ -125,7 +128,9 @@ impl Readiness {
             }
         }
         if let Some(mut trust) = self.trust.take() {
+            let answering = matches!(trust.phase, TrustPhase::Answer { .. });
             trust.advance(now, view, press, &self.agent_id);
+            result.answered = !answering && matches!(trust.phase, TrustPhase::Answer { .. });
             if !matches!(trust.phase, TrustPhase::Done) {
                 let next = trust.wake(now, view);
                 result.wake = Some(result.wake.map_or(next, |wake| wake.min(next)));
@@ -222,15 +227,17 @@ impl Readiness {
         })
     }
 
+    /// Whether the tool startup is still watching for the composer, before typing anything.
     pub(super) fn waiting_for_input(&self) -> bool {
         self.tools
             .as_ref()
             .is_some_and(|tools| matches!(tools.phase, ToolPhase::Input))
     }
 
-    /// The person took the input while the start was waiting for the probe.
-    pub(super) fn interrupt_input_wait(&mut self) -> bool {
-        if self.waiting_for_input() {
+    /// Lets the person type when the probe is only watching. A confirmed native question
+    /// already allows keys and can still be followed by the tool probe.
+    pub(super) fn yield_to_input(&mut self, input: InputState) -> bool {
+        if self.waiting_for_input() && input != InputState::Interaction {
             self.tools = None;
             return true;
         }

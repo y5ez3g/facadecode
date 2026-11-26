@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
@@ -47,10 +47,14 @@ pub struct CommandLine {
     pub captures: bool,
     /// The files the run's folder holds for the CLI: each name and its text.
     pub files: Vec<(String, String)>,
+    /// Aliases inside the private run folder to the user's existing configuration entries.
+    pub config_links: Vec<(PathBuf, PathBuf)>,
     /// The files of the plugin the CLI reads in [`crate::PLUGIN_FOLDER`] of the folder it starts
     /// in, each name and its text. They are written there before it starts and shared by the runs
     /// there.
     pub plugin: Vec<(String, String)>,
+    /// A native configuration file named relative to the workspace and owned by this run.
+    pub workspace_file: Option<(PathBuf, String)>,
     /// How the CLI was given Facade's tools.
     pub tools: Tools,
     /// The run's credential is present in the relay configuration this command will load.
@@ -89,9 +93,8 @@ pub fn start_managed_launch_command(
     policy: LaunchPolicy<'_>,
 ) -> CommandLine {
     let (mut wiring, launch_env, tools, uses_run_credential) =
-        wire(rule, server, environment, policy);
-    let reports = session
-        .is_some_and(|session| wiring::report_session(&rule.cli, &mut wiring, session, server));
+        wire(rule, words, session, server, environment, policy, None);
+    let reports = wiring::report_session(&rule.cli, &mut wiring, session, server);
     let hooked = hook(rule, words, session, &wiring, environment);
     let mut command = rule_args(rule, policy.yolo);
     let (hook_args, rest) = (hooked.args, hooked.rest);
@@ -109,7 +112,7 @@ pub fn start_managed_launch_command(
         environment,
     );
     // A CLI that reports its session through its settings reports it only where they merged.
-    let captures = hooked.reported || (reports && !merged.is_empty());
+    let captures = wiring.captures || hooked.reported || (reports && !merged.is_empty());
     let after_words = wiring.takes_values_to_next_option && hook_args.is_empty();
     place_tool_args(
         rule,
@@ -128,7 +131,9 @@ pub fn start_managed_launch_command(
         launch_env,
         captures,
         files: [wiring.files, hooked.files, settings_files].concat(),
+        config_links: wiring.config_links,
         plugin: wiring.plugin,
+        workspace_file: wiring.workspace_file,
         tools,
         uses_run_credential,
     }
@@ -151,9 +156,8 @@ pub fn resume_managed_launch_command(
 ) -> Option<CommandLine> {
     let resume = rule.resume_args(id)?;
     let (mut wiring, launch_env, tools, uses_run_credential) =
-        wire(rule, server, environment, policy);
-    let reports = session
-        .is_some_and(|session| wiring::report_session(&rule.cli, &mut wiring, session, server));
+        wire(rule, words, session, server, environment, policy, Some(id));
+    let reports = wiring::report_session(&rule.cli, &mut wiring, session, server);
     let mut command = vec![rule.program.clone()];
     command.extend(resume);
     command.extend(rule_args(rule, policy.yolo).into_iter().skip(1));
@@ -172,7 +176,7 @@ pub fn resume_managed_launch_command(
         policy.yolo,
         environment,
     );
-    let captures = hooked.reported || (reports && !merged.is_empty());
+    let captures = wiring.captures || hooked.reported || (reports && !merged.is_empty());
     let after_words = wiring.takes_values_to_next_option && merged.is_empty();
     place_tool_args(rule, &mut command, &mut rest, &mut wiring, after_words);
     command.extend(merged);
@@ -184,7 +188,9 @@ pub fn resume_managed_launch_command(
         launch_env,
         captures,
         files: [wiring.files, hooked.files, settings_files].concat(),
+        config_links: wiring.config_links,
         plugin: wiring.plugin,
+        workspace_file: wiring.workspace_file,
         tools,
         uses_run_credential,
     })
@@ -194,19 +200,27 @@ pub fn resume_managed_launch_command(
 /// merged into theirs. Without a server, no tools.
 fn wire(
     rule: &Rule,
+    words: &[String],
+    session: Option<&SessionReport<'_>>,
     server: Option<&ManagedServer<'_>>,
     environment: &BTreeMap<String, String>,
     policy: LaunchPolicy<'_>,
+    resume: Option<&str>,
 ) -> (Wiring, BTreeMap<String, String>, Tools, bool) {
-    let given = match server {
-        Some(server) => wiring::wire_managed(&rule.cli, server, environment),
-        None => Ok(None),
+    let profile = wiring::native_profile(rule, words, session, server, environment, resume);
+    let given = match (server, &profile) {
+        (Some(server), Ok(profile)) => {
+            wiring::wire_managed(rule, words, server, environment, profile.as_deref())
+        }
+        (Some(_), Err(reason)) => Err(reason.clone()),
+        (None, _) => Ok(None),
     };
     let (mut wiring, tools, uses_run_credential) = match given {
         Ok(Some(output)) => (output.wiring, output.tools, output.uses_run_credential),
         Err(reason) => (Wiring::default(), Tools::NotGiven(reason), false),
         Ok(None) => (Wiring::default(), Tools::NotInjected, false),
     };
+    wiring.profile_name = profile.unwrap_or_default();
     let mut launch_env = if policy.origin == LaunchOrigin::Agent {
         rule.launch.agent_env.clone()
     } else {
@@ -268,14 +282,14 @@ fn hook(
     }
 }
 
-/// The program, the rule's own arguments, and YOLO's where it is on.
+/// The program, the rule's own arguments, and the selected approval mode.
 fn rule_args(rule: &Rule, yolo: Option<&Path>) -> Vec<String> {
     let mut command = vec![rule.program.clone()];
     command.extend(rule.launch.args.iter().cloned());
-    command.extend(
-        yolo.map(|folder| rule.yolo.work.args(folder))
-            .unwrap_or_default(),
-    );
+    command.extend(yolo.map_or_else(
+        || rule.yolo.off_args.clone(),
+        |folder| rule.yolo.work.args(folder),
+    ));
     command
 }
 

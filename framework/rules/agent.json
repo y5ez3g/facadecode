@@ -1,0 +1,57 @@
+{
+	"cli": "agent",
+	"display_name": "Cursor",
+	"program": "agent",
+	"arguments": {
+		"reserved": ["--resume", "--continue", "--new-session-id", "--print", "-p", "--output-format", "--force", "-f", "--yolo", "--auto-review", "--approve-mcps", "--sandbox", "--trust", "--workspace", "--worktree", "-w", "--data-dir", "--exclude-workspace-context", "--model"],
+		"required": ["--model", "--mode", "--add-dir", "--plugin-dir", "--image", "--api-key"],
+		"clusters": []
+	},
+	"choices": { "model": ["--model", "${value}"], "spelling": { "model": ["--model"] } },
+	"input": {
+		"mechanism": "prompt_row",
+		"prompt": "→ ",
+		"alternate_prompt": "> ",
+		"placeholder": "^(?:Plan, search, build anything|Add a follow-up(?: — /plan to review and build)?)$",
+		"dim_draft": "^\\[Pasted text #\\d+ \\+\\d+ lines?\\]$",
+		"drawn_cursor": true,
+		"menus": [
+			{
+				"selected": "^ *│ +▶ \\[(?:a\\] Trust this workspace|q\\] Quit) *│ *$",
+				"hint": {
+					"pattern": "^ *│ +Use arrow keys to navigate, Enter to select, or press the key shown *│ *$",
+					"within": 3
+				}
+			},
+			{
+				"selected": "^ Run this MCP tool\\? *$",
+				"next": "^ {2}→ Run \\(once\\) \\(y\\) *$",
+				"hint": {
+					"pattern": "^ {4}Allowlist MCP Tool \\(tab\\) *$",
+					"within": 2
+				}
+			},
+			{
+				"selected": "^ +Cursor Agent$",
+				"hint": { "pattern": "^ +Press any key to log in\\.\\.\\.$", "within": 2 }
+			}
+		]
+	},
+	"paste": {
+		"enter_ms": 250,
+		"placeholders": [
+			{ "pattern": "^\\[Pasted text #\\d+ \\+(\\d+) lines?\\]$", "count": "lines", "spaced": true }
+		]
+	},
+	"session": { "capture": "session_start", "resume": ["--resume", "${session_id}"], "resume_requires_saved_session": true },
+	"status": {
+		"mechanism": "composer",
+		"working_hint": "ctrl+c to stop",
+		"authentication": ["^ *Not logged in\\. Run /login first\\.$", "^ +Press any key to log in\\.\\.\\.$"],
+		"permission": ["^ *(?:⚠ )?Workspace Trust Required$", "^ Run this MCP tool\\?$"]
+	},
+	"yolo": {
+		"work": { "args": ["--force", "--sandbox", "disabled"] },
+		"startup": { "args": ["--trust"] }
+	}
+}

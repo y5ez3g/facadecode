@@ -417,6 +417,15 @@ impl LifecycleActivity for Daemon {
     }
 }
 
+/// The CLIs a start can run in `folder` with `environment`, read while the daemon is sleeping, or
+/// why the settings keep them from being known.
+pub fn offline_clis(
+    environment: std::collections::BTreeMap<String, String>,
+    folder: &str,
+) -> Result<Vec<String>, String> {
+    command_line::available(&Ok(environment), folder)
+}
+
 /// Reads the committed name of the local machine while its daemon is sleeping.
 pub fn offline_machine_name() -> Option<String> {
     Store::offline_machine_name(&facade_base::paths::framework_dir().ok()?)

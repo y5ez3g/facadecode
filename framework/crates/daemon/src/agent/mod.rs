@@ -261,6 +261,8 @@ pub(crate) enum AgentCommand {
         captures: bool,
         launch_command: Option<String>,
         tools: ToolsGiven,
+        /// None leaves the screen's colors in use. Some replaces all of them, an omitted entry included.
+        colors: Option<TerminalColors>,
         reply: oneshot::Sender<ManagedAgent>,
     },
     /// Tells viewers the agent is removed, waits for a checkpoint being written, replies and ends
@@ -269,8 +271,8 @@ pub(crate) enum AgentCommand {
         reply: oneshot::Sender<()>,
     },
     /// Holds the messages of a run's start behind its prompt until [`AgentCommand::StartPrompt`]
-    /// and reserves room for the prompt's rendered `text`.
-    /// `ready` is told once the start settled: its CLI's tools connected or will not.
+    /// and reserves room for the prompt's rendered text.
+    /// The ready signal follows settled tools or a live initializer that can use native startup.
     AwaitPrompt {
         text: String,
         ready: oneshot::Sender<()>,
@@ -377,7 +379,8 @@ pub(crate) fn spawn_with_trust(
     let (settled_tx, settled) = watch::channel(false);
     let (output_tx, output) = watch::channel(());
     // Followed from before the agent can be found, so no connection of its tools is missed.
-    let (tools_tx, tools_rx) = watch::channel(0);
+    let running = start.info.process == ProcessState::Running && start.info.exit.is_none();
+    let (tools_tx, tools_rx) = watch::channel(ToolsConnections::new(FIRST_RUN, running));
     let tools = Arc::new(tools_tx);
     let handle = AgentHandle {
         id: start.info.agent_id.clone(),
@@ -399,7 +402,7 @@ pub(crate) fn spawn_with_trust(
         settled: settled_tx,
         output: output_tx,
         changes,
-        _tools: tools,
+        tools,
         tools_connections: tools_rx,
     };
     actor::spawn(start, links, rx, allow_auto_trust)?;
@@ -450,7 +453,7 @@ pub(crate) struct AgentHandle {
     rule: Option<String>,
     start_prompt: Option<u64>,
     run_change: Arc<tokio::sync::Mutex<()>>,
-    tools: Arc<watch::Sender<usize>>,
+    tools: Arc<watch::Sender<ToolsConnections>>,
 }
 
 impl AgentHandle {
@@ -469,7 +472,7 @@ impl AgentHandle {
             rule: None,
             start_prompt: None,
             run_change: Arc::new(tokio::sync::Mutex::new(())),
-            tools: Arc::new(watch::channel(0).0),
+            tools: Arc::new(watch::channel(ToolsConnections::new(FIRST_RUN, false)).0),
         }
     }
 
@@ -563,11 +566,32 @@ impl AgentHandle {
         self.commands.clone()
     }
 
-    /// Counts one open connection of the agent's Facade server, until the result is dropped:
-    /// while one is open, its tools are there.
+    /// Counts one verified connection to the installed run until the guard is dropped.
+    pub(crate) fn hold_tools_connection(
+        &self,
+        run: u64,
+        stage: ToolsStage,
+    ) -> Option<ToolsConnection> {
+        self.tools
+            .send_if_modified(|connections| {
+                if connections.run != run || !connections.accepting {
+                    return false;
+                }
+                *connections.count(stage) += 1;
+                connections.verified = true;
+                true
+            })
+            .then(|| ToolsConnection {
+                tools: self.tools.clone(),
+                run,
+                stage,
+            })
+    }
+
+    #[cfg(test)]
     pub(crate) fn tools_connected(&self) -> ToolsConnection {
-        self.tools.send_modify(|open| *open += 1);
-        ToolsConnection(self.tools.clone())
+        self.hold_tools_connection(self.run(), ToolsStage::Listed)
+            .expect("the test's run accepts tool connections")
     }
 
     /// Sends `command` to the actor, waiting for room. False where no actor takes it.
@@ -593,12 +617,59 @@ impl AgentHandle {
     }
 }
 
-/// One open connection of an agent's Facade server; dropping it closes it.
-pub(crate) struct ToolsConnection(Arc<watch::Sender<usize>>);
+/// What the agent's CLI has completed with the Facade server.
+#[derive(Clone, Copy)]
+pub(crate) enum ToolsStage {
+    Initialized,
+    Listed,
+}
+
+#[derive(Clone, Copy)]
+struct ToolsConnections {
+    run: u64,
+    /// Only a live, installed run accepts new leases.
+    accepting: bool,
+    initialized: usize,
+    listed: usize,
+    /// Keeps proof of a connection even if it closed before the actor read the watch.
+    verified: bool,
+}
+
+impl ToolsConnections {
+    fn new(run: u64, accepting: bool) -> Self {
+        Self {
+            run,
+            accepting,
+            initialized: 0,
+            listed: 0,
+            verified: false,
+        }
+    }
+
+    fn count(&mut self, stage: ToolsStage) -> &mut usize {
+        match stage {
+            ToolsStage::Initialized => &mut self.initialized,
+            ToolsStage::Listed => &mut self.listed,
+        }
+    }
+}
+
+/// One open connection at a verified stage of an agent's run.
+pub(crate) struct ToolsConnection {
+    tools: Arc<watch::Sender<ToolsConnections>>,
+    run: u64,
+    stage: ToolsStage,
+}
 
 impl Drop for ToolsConnection {
     fn drop(&mut self) {
-        self.0.send_modify(|open| *open -= 1);
+        self.tools.send_if_modified(|connections| {
+            if connections.run != self.run {
+                return false;
+            }
+            *connections.count(self.stage) -= 1;
+            true
+        });
     }
 }
 

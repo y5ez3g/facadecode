@@ -79,6 +79,15 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   the daemon's typist the same one MiB input limit. `TerminalInput::typing_bytes` counts typed input with
   the bytes for each paste and key.
 
+**The Shell and the daemon**
+
+- `start::LaunchColors` holds the reported foreground, background, cursor and ANSI colors 0–15 as
+  optional 8-bit sRGB triples. `carry_terminal_colors` writes a nonempty sample into a private launch
+  context in the existing v1 `env` field. `take_terminal_colors` removes the reserved entry before
+  decoding it and returns only a valid, nonempty sample. The daemon also uses `start::LAUNCH_CONTEXT`
+  to strip that entry from inherited CLI environments. The public terminal color DTO keeps its existing
+  format.
+
 **Every program**
 - Build and version helpers include `build_id()`, `version()`, `VERSION`, `build_version(build)`,
   `version_of(build)`, `compare_builds(left, right)` and `takes_over(newer, running)`.
@@ -214,12 +223,29 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   known. Upgrade and SSH leave PATH management to the standalone installer. Shell can request a
   receipt carrying the exact failed file and HTTP status.
 - `console::{VtModes, ConsoleReader, ConsoleSignals}`: what Attach needs of the person's
-  console beside crossterm's size and raw mode. On Windows, Attach can consume an exact
+  console beside crossterm's size and raw mode. `ConsoleReader::read_until` also supports the
+  bounded color query before a launch. On Windows, Attach can consume an exact
   queued release from its detach chord. A native wheel record gives one-based viewport
   coordinates, a signed delta and terminal modifier bits. Native pointer records carry left press,
   drag and release, and right press at those coordinates. A release can finish a drag that leaves
   the viewport. Attach enables capture when the CLI tracks the mouse or the Shell owns scrolling
-  and selection. `VtModes` restores the console's input and output modes on handback.
+  and selection. `VtModes` restores the console's input and output modes on handback. Shell enters
+  it before enabling any additional raw mode, so that it saves the original Windows modes. On Unix,
+  `ConsoleSignals` reports `SIGPIPE` as an end signal so Shell can restore the terminal before
+  exiting. `console::owns_input()` says whether the program may read the console now, which a Unix
+  shell's background job may not. `console::return_input(bytes)` gives input taken from the console
+  back to the next reader. It does nothing on Windows and on a Unix system that forbids it.
+- `clipboard::copy`: puts text on the clipboard of the computer the person sits at, through pbcopy or
+  the Wayland and X11 clipboard programs, for terminals that ignore OSC 52. It does nothing over SSH,
+  where that is another computer's, and on Windows.
+- `desktop::{sees_keys, arrows}`: whether Up and Down are down on the keyboard the person types on,
+  for a terminal that sends the same bytes for them and for the wheel. It uses the session's key state
+  on macOS and the desktop's on Windows, without a permission, and loads their libraries only when
+  asked. It sees no keys on Linux, over SSH, outside a desktop session, or in a terminal that
+  another computer can show: tmux, Screen, Zellij and VS Code's remote terminals.
+- `desktop::{clicks, pointer, right_click_at, press_left_at, left_button_down}`: the pointer and the
+  buttons, for Attach's clicks in macOS Terminal. Posting a click needs Accessibility for the
+  terminal app; `clicks` checks it and never asks. Elsewhere there are none.
 
 **Rules**
 - `settings::{Settings, Member, Json, is_space}`: rules reads the CLI entries of `clis`.

@@ -316,7 +316,13 @@ const AVATARS: { readonly [cli: string]: string } = {
 	agy: 'avatar-antigravity.png',
 	muse: 'avatar-muse.png',
 	opencode: 'avatar-opencode.png',
-	pi: 'avatar-pi.png'
+	pi: 'avatar-pi.png',
+	devin: 'avatar-devin.png',
+	agent: 'avatar-cursor.png',
+	'kiro-cli': 'avatar-kiro.png',
+	qoder: 'avatar-qoder.png',
+	omp: 'avatar-omp.png',
+	copilot: 'avatar-copilot.png'
 };
 
 /**

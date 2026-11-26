@@ -130,12 +130,43 @@ fn readable(reader: &File, ms: i32) -> Option<bool> {
 
 impl TestTerminal {
     pub fn spawn(command: &mut Command, cols: u16, rows: u16) -> TestTerminal {
+        Self::spawn_with_colors(
+            command,
+            cols,
+            rows,
+            facade_screen::TerminalColors::default(),
+        )
+    }
+
+    /// A terminal that answers no query, as one at the far end of a slow connection has not yet.
+    pub fn spawn_silent(command: &mut Command, cols: u16, rows: u16) -> TestTerminal {
+        Self::spawn_answering(command, cols, rows, None)
+    }
+
+    pub fn spawn_with_colors(
+        command: &mut Command,
+        cols: u16,
+        rows: u16,
+        colors: facade_screen::TerminalColors,
+    ) -> TestTerminal {
+        Self::spawn_answering(command, cols, rows, Some(colors))
+    }
+
+    fn spawn_answering(
+        command: &mut Command,
+        cols: u16,
+        rows: u16,
+        colors: Option<facade_screen::TerminalColors>,
+    ) -> TestTerminal {
         #[cfg(unix)]
         let (child, master, mut reader) = start(command, cols, rows);
         #[cfg(windows)]
         let (console, child, master, reader) = windows::start(command, cols, rows);
         let writer = Arc::new(Mutex::new(master));
-        let screen = Arc::new(Mutex::new(facade_screen::Screen::new(cols, rows, 1000)));
+        let mut screen = facade_screen::Screen::new(cols, rows, 1000);
+        screen.set_colors(colors.unwrap_or_default());
+        let answers = colors.is_some();
+        let screen = Arc::new(Mutex::new(screen));
         let output = Arc::new(Mutex::new(Vec::new()));
         let arrived = Arc::new(std::sync::Condvar::new());
         let arrived_in = arrived.clone();
@@ -189,7 +220,7 @@ impl TestTerminal {
                         replies.extend(screen.end_synchronized_update().query_replies);
                     }
                 }
-                if !replies.is_empty() {
+                if answers && !replies.is_empty() {
                     let _ = writer_in.lock().unwrap().write_all(&replies);
                 }
             }
@@ -260,6 +291,11 @@ impl TestTerminal {
         self.screen.lock().unwrap().view()
     }
 
+    /// Whether the displayed program has taken the host's mouse events.
+    pub fn reports_mouse(&self) -> bool {
+        self.screen.lock().unwrap().reports_mouse()
+    }
+
     /// Returns visible text with one line per screen row.
     pub fn text(&self) -> String {
         self.screen.lock().unwrap().text(self.rows).join("\n")
@@ -315,6 +351,21 @@ impl TestTerminal {
         text.into_iter()
             .chain(std::iter::repeat(String::new()))
             .take(self.rows)
+            .collect()
+    }
+
+    /// The physical viewport, keeping blank rows and preserving screen coordinates.
+    pub fn viewport_rows(&self) -> Vec<String> {
+        self.screen
+            .lock()
+            .unwrap()
+            .view()
+            .rows
+            .into_iter()
+            .map(|row| {
+                let text: String = row.iter().map(|cell| cell.text()).collect();
+                text.trim_end().to_string()
+            })
             .collect()
     }
 

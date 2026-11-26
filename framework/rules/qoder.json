@@ -1,0 +1,47 @@
+{
+	"cli": "qoder",
+	"display_name": "Qoder",
+	"program": "qoder",
+	"arguments": {
+		"reserved": ["--permission-mode", "--yolo", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions", "--continue", "-c", "--resume", "-r", "--resume-session-at", "--resume-drops-turn", "--session-id", "--fork-session", "--no-session-persistence", "--list-sessions", "--delete-session", "--cwd", "-w", "--workspace", "--worktree", "--remote", "--remote-session", "--print", "-p", "--prompt", "--prompt-interactive", "-i", "--model", "-m", "--reasoning-effort", "--mcp-config", "--strict-mcp-config", "--version", "-v", "--help", "-h"],
+		"clusters": ["-i", "-m", "-n", "-o", "-p", "-r", "-w"],
+		"required": ["--add-dir", "--agent", "--agents", "--allowed-mcp-server-names", "--allowed-tools", "--append-system-prompt", "--attachment", "--config-dir", "--context-window", "--cwd", "--delete-session", "--disallowed-tools", "--input-format", "--max-output-tokens", "--max-turns", "--mcp-config", "--model", "--name", "--output-format", "--output-style", "--permission-mode", "--prompt-interactive", "--reasoning-effort", "--resume-drops-turn", "--resume-session-at", "--session-id", "--setting-sources", "--settings", "--system-prompt", "--tools", "--workspace", "-i", "-m", "-n", "-o", "-w"],
+		"variadic": ["--add-dir", "--allowed-mcp-server-names", "--allowed-tools", "--attachment", "--disallowed-tools", "--tools"]
+	},
+	"choices": {
+		"model": ["--model", "${value}"],
+		"effort": ["--reasoning-effort", "${value}"],
+		"spelling": { "model": ["--model", "-m"], "effort": ["--reasoning-effort"] }
+	},
+	"input": {
+		"mechanism": "frame",
+		"indent": 1,
+		"prompt": ">",
+		"alternate_prompt": "*",
+		"gap": " ",
+		"probe_unstyled_hint": true,
+		"hidden_cursor_in_frame": true,
+		"upper": "^[─-]+(?: .+)?$",
+		"lower": "^[─-]+ *$",
+		"scrolled": { "position": "rows", "above": "^↑ (\\d+) more lines?$", "below": "^↓ (\\d+) more lines?$" },
+		"menus": [{ "selected": "^ *❯ +\\S", "next": "^ +\\S" }]
+	},
+	"paste": {
+		"enter_ms": 100,
+		"placeholders": [
+			{ "pattern": "^\\[Pasted Text: (\\d+) chars?(?: #\\d+)?\\]$", "count": "utf16", "spaced": true },
+			{ "pattern": "^\\[Pasted Text: (\\d+) lines?(?: #\\d+)?\\]$", "count": "lines", "spaced": true }
+		]
+	},
+	"session": { "capture": "session_start", "resume": ["--resume", "${session_id}"] },
+	"status": {
+		"mechanism": "composer",
+		"working": ["^ *(?:[⠁-⣿] )?(?:Generating|Thinking|正在生成|正在思考)\\.\\.\\.(?: .*)?$", "^ *.*\\(esc to cancel, [^)]+\\)$", "^ *.*（按 esc 取消，[^）]+）$"],
+		"authentication": ["^ *How would you like to authenticate for this project\\?$", "^ *Waiting for authentication\\.\\.\\.$", "^ *Sign in to get started, or exit the application\\.$"],
+		"permission": ["^ *Do you trust the files in this folder\\?$", "^ *Do you want to proceed\\?$", "^ *(?:⠏ )?Waiting for user confirmation\\.\\.\\.$"]
+	},
+	"yolo": {
+		"work": { "args": ["--permission-mode", "bypass_permissions"] },
+		"startup": { "settings": { "permissions": { "trustDirectories": ["${folder}"] } } }
+	}
+}

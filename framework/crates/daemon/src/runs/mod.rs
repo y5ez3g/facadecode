@@ -293,7 +293,7 @@ impl Runs {
                     .plugin_used(id, rule, Path::new(&prepared.launch.folder));
             }
             Err(_) if prepared.kind == RunKind::Start => self.preparation.remove_folders(id),
-            Err(_) => {}
+            Err(_) => self.preparation.retire_projection(id),
         }
         launched
     }
@@ -397,6 +397,8 @@ impl Runs {
     /// Lets go of agent `id`'s run once its exit is saved and its output drained, and of Facade's
     /// plugin where it was the last run to use it. Reports whether it released a run.
     pub(crate) fn release(&self, id: &str) -> bool {
+        // Retire the exited run's workspace profile before the keeper path releases a resume.
+        crate::blocking_in_place(|| self.preparation.retire_projection(id));
         if !self.link.release(id) {
             return false;
         }

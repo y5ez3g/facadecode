@@ -20,11 +20,14 @@ use facade_base::api_v1::daemon::{
 use facade_base::api_v1::daemon_client::{Cut, DaemonClient, upgrading};
 use facade_base::api_v1::{NoArgs, Size};
 use facade_base::model::agent::{HowEnded, WaitKind};
-use facade_base::model::terminal::{DEFAULT_TERMINAL_SIZE, display_line, plain};
+use facade_base::model::terminal::{display_line, plain};
 use facade_base::time::parse_iso_time;
+use unicode_width::UnicodeWidthStr;
 
 use crate::errors::{self, AgentCommand, Problem};
-use crate::{ExitText, Opening, Shown, StartOptions, agent_address, roster_table, single_line};
+use crate::{
+    ExitText, LaunchConsole, Opening, Shown, StartOptions, agent_address, roster_table, single_line,
+};
 
 const ROSTER_COLUMNS: [&str; 8] = [
     "NAME",
@@ -40,7 +43,7 @@ const ROSTER_COLUMNS: [&str; 8] = [
 pub(crate) fn start(
     client: &mut DaemonClient,
     options: StartOptions,
-    terminal: Option<(u16, u16)>,
+    terminal: &LaunchConsole,
 ) -> anyhow::Result<Option<Shown>> {
     let StartOptions {
         name,
@@ -54,7 +57,7 @@ pub(crate) fn start(
         return Err(Problem::MissingCli { available }.into());
     };
 
-    let (cols, rows) = terminal.unwrap_or(DEFAULT_TERMINAL_SIZE);
+    let (cols, rows) = terminal.size;
     let folder_is_default = workdir.is_none();
     let selected = machine.clone();
     let (machine, folder) = start_folder(client, machine, workdir).map_err(|error| {
@@ -67,7 +70,7 @@ pub(crate) fn start(
         folder: Some(folder),
         folder_is_default,
         scope: Some(single_machine_scope(machine)),
-        env: Some(environment()),
+        env: Some(terminal_environment(terminal)),
         size: Size { cols, rows },
         prompt: None,
         call_id: None,
@@ -81,7 +84,7 @@ pub(crate) fn start(
         .map_err(|error| {
             errors::start_failed(cli, selected.as_deref(), worktree.as_deref(), error)
         })?;
-    if terminal.is_some() {
+    if terminal.view.is_some() {
         return Ok(Some(shown(&started.agent, Opening::Started)));
     }
     println_or_end!("Started {} in the background.", label(&started.agent));
@@ -108,8 +111,8 @@ fn available_clis(
         scope: Some(single_machine_scope(machine)),
         env: Some(environment()),
     })?;
-    if listed.settings_problem.is_some() {
-        return Ok(Vec::new());
+    if let Some(problem) = listed.settings_problem {
+        anyhow::bail!("{problem}");
     }
     Ok(listed
         .clis
@@ -173,10 +176,10 @@ fn selects_local_machine(client: &mut DaemonClient, selector: &str) -> anyhow::R
 pub(crate) fn resume(
     client: &mut DaemonClient,
     reference: String,
-    terminal: Option<(u16, u16)>,
+    terminal: &LaunchConsole,
 ) -> anyhow::Result<Option<Shown>> {
-    let (cols, rows) = terminal.unwrap_or(DEFAULT_TERMINAL_SIZE);
-    let mut env = environment();
+    let (cols, rows) = terminal.size;
+    let mut env = terminal_environment(terminal);
     env.insert("PWD".into(), current_dir()?);
     let resumed = client
         .call::<AgentResume>(ResumeArgs {
@@ -190,7 +193,7 @@ pub(crate) fn resume(
         })
         .map_err(|error| errors::agent_failed(AgentCommand::Resume, &reference, error))?;
     let cli = &resumed.agent.cli;
-    if terminal.is_some() {
+    if terminal.view.is_some() {
         let opening = if resumed.from_saved_session == Some(true) {
             Opening::SavedSession { cli: cli.clone() }
         } else {
@@ -668,18 +671,26 @@ pub(crate) fn status(client: Option<&mut DaemonClient>) -> anyhow::Result<()> {
             let result = client.call::<DaemonStatus>(StatusArgs {
                 scope: Some(SingleMachineScope::Local),
             })?;
-            status_text(
-                &result,
-                &client.hello_result.machine_id,
-                &cli_version,
-                &launcher,
-            )
+            let local_id = client.hello_result.machine_id.clone();
+            let mut clis = vec![machine_clis(available_clis(client, None, None))];
+            for machine in connected_machines(&result, &local_id) {
+                let listed = available_clis(client, Some(machine.selector.clone()), None);
+                clis.push(machine_clis(listed));
+            }
+            status_text(&result, &clis, &local_id, &cli_version, &launcher)
         }
         None => {
             let home = facade_base::paths::facade_home()?;
             let settings = facade_base::settings::settings_file()?;
             let machine = facade_daemon::offline_machine_name().unwrap_or_else(default_local_name);
+            let listed = current_dir()
+                .map_err(anyhow::Error::from)
+                .and_then(|folder| {
+                    facade_daemon::offline_clis(environment(), &folder).map_err(anyhow::Error::msg)
+                });
+            let clis = machine_clis(listed);
             sleeping_text(
+                &clis,
                 &home.to_string_lossy(),
                 &settings.to_string_lossy(),
                 &cli_version,
@@ -703,14 +714,21 @@ fn made_request_id() -> String {
     format!("facade-{}-{}-1", std::process::id(), since_1970.as_millis())
 }
 
+fn terminal_environment(terminal: &LaunchConsole) -> BTreeMap<String, String> {
+    let mut env = environment();
+    facade_base::start::carry_terminal_colors(&mut env, &terminal.colors);
+    env
+}
+
 /// Pass the shell's environment to the daemon for local launches.
 fn environment() -> BTreeMap<String, String> {
-    let (variables, left_out) = crate::launch_environment();
+    let (mut variables, left_out) = crate::launch_environment();
+    facade_rules::restore_config_environment(&mut variables);
     if !left_out.is_empty() {
-        eprintln!(
+        crate::attach::write_console_warning(format_args!(
             "warning: omitted non-UTF-8 environment variables: {}",
             left_out.join(", ")
-        );
+        ));
     }
     variables
 }
@@ -942,6 +960,7 @@ fn default_local_name() -> String {
 }
 
 pub(crate) fn sleeping_text(
+    clis: &str,
     home: &str,
     settings: &str,
     version: &str,
@@ -956,6 +975,7 @@ pub(crate) fn sleeping_text(
         &headline,
         launcher,
         ServiceFields {
+            clis: &[(single_line(machine), clis.to_owned())],
             home,
             settings,
             ..ServiceFields::default()
@@ -963,8 +983,28 @@ pub(crate) fn sleeping_text(
     )
 }
 
+/// The online machines other than this one, as `status` lists them.
+fn connected_machines<'a>(
+    status: &'a StatusResult,
+    local_id: &'a str,
+) -> impl Iterator<Item = &'a MachineQuery> {
+    status.machines.iter().filter(move |machine| {
+        machine.state == MachineState::Online && machine.machine_id != local_id
+    })
+}
+
+/// The CLIs a machine can start, or why they could not be listed.
+fn machine_clis(listed: anyhow::Result<Vec<String>>) -> String {
+    match listed {
+        Ok(clis) => clis.join(", "),
+        Err(error) => format!("could not be listed: {error}"),
+    }
+}
+
+/// `clis` holds what [`machine_clis`] says for this machine, then for each connected one.
 pub(crate) fn status_text(
     status: &StatusResult,
+    clis: &[String],
     local_id: &str,
     cli_version: &str,
     launcher: &str,
@@ -982,20 +1022,19 @@ pub(crate) fn status_text(
         &fallback
     };
     let headline = format!("Facade {version} is running on {}.", single_line(name));
-    let machines = status
-        .machines
-        .iter()
-        .filter(|machine| machine.state == MachineState::Online && machine.machine_id != local_id)
-        .map(|machine| machine.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
+    let names = std::iter::once(name.as_str())
+        .chain(connected_machines(status, local_id).map(|machine| machine.name.as_str()));
+    let machines: Vec<(String, String)> = names
+        .zip(clis)
+        .map(|(name, clis)| (single_line(name), clis.clone()))
+        .collect();
     service_text(
         &headline,
         launcher,
         ServiceFields {
             cli_version: (version != cli_version).then_some(cli_version),
+            clis: &machines,
             agents: Some(status.agent_count),
-            machines: &machines,
             home: &status.home,
             settings: &status.settings_file,
             daemon_pid: Some(status.daemon_pid),
@@ -1007,8 +1046,9 @@ pub(crate) fn status_text(
 #[derive(Default)]
 struct ServiceFields<'a> {
     cli_version: Option<&'a str>,
+    /// Each machine's name and the CLIs it can start, this machine's first.
+    clis: &'a [(String, String)],
     agents: Option<u64>,
-    machines: &'a str,
     home: &'a str,
     settings: &'a str,
     daemon_pid: Option<u32>,
@@ -1021,12 +1061,19 @@ fn service_text(headline: &str, launcher: &str, status: ServiceFields<'_>) -> St
         summary.push(("CLI version", version));
     }
     let agents = number(status.agents);
-    summary.extend([
-        ("Active agents", agents.as_str()),
-        ("Connected machines", status.machines),
-    ]);
+    summary.push(("Active agents", agents.as_str()));
+    let machines: Vec<(&str, &str)> = status
+        .clis
+        .iter()
+        .map(|(machine, clis)| (machine.as_str(), clis.as_str()))
+        .collect();
+    // A machine name as long as the labels still leaves two spaces before its CLIs.
+    let width = machines
+        .iter()
+        .map(|(machine, _)| machine.width() + 2)
+        .fold(20, usize::max);
     format!(
-        "{headline}\n{}\n\n{}\n\n{}",
+        "{headline}\n{}\n\n{}\n\n{}\n\nAvailable CLIs\n{}",
         fields(20, &summary),
         fields(
             20,
@@ -1044,5 +1091,6 @@ fn service_text(headline: &str, launcher: &str, status: ServiceFields<'_>) -> St
                 &format!("Add {} as a stdio server.", errors::quoted(launcher))
             )]
         ),
+        fields(width, &machines),
     )
 }

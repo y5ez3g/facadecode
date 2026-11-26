@@ -335,6 +335,19 @@ fn clis_from(environment: &Result<BTreeMap<String, String>, ErrorBody>, folder: 
     }
 }
 
+/// The names of the CLIs that can start in `folder`, or why the settings keep them from being known.
+pub(crate) fn available(
+    environment: &Result<BTreeMap<String, String>, ErrorBody>,
+    folder: &str,
+) -> Result<Vec<String>, String> {
+    let clis = clis_from(environment, folder);
+    if let Some(problem) = clis.settings_problem {
+        return Err(problem);
+    }
+    let available = clis.rows.into_iter().filter(|row| row.available);
+    Ok(available.map(|row| row.cli).collect())
+}
+
 /// Whether `entry` can start in `folder` for an agent with `environment`, else why not; `None`
 /// where it is not listed there. Where the agent's environment cannot be read, what its `env`
 /// reads is not known: an entry turned on or with problems says why, and the others are not

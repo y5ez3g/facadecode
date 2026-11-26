@@ -38,10 +38,10 @@ pub use formats::shell_word;
 pub use input::{
     BoxReading, InputLine, LineCell, PasteDrawing, ProbeVerdict, canonical_text,
     could_be_paste_prefix, draft_backspace_count, is_legacy_split_paste, is_own_draft,
-    is_own_recovered_draft, is_paste_placeholder, is_same_draft, read_box, read_box_after_paint,
-    read_box_for_screen, read_box_for_typing, read_box_with_menu_redraw, read_draft, read_input,
-    restored, settle_time, shape_of, shows_original_text, shows_paste_end, shows_paste_placeholder,
-    shows_whole, space_taken, verdict_of, with_paste_text,
+    is_own_paste_tail, is_own_recovered_draft, is_paste_placeholder, is_same_draft, read_box,
+    read_box_after_paint, read_box_for_screen, read_box_for_typing, read_box_with_menu_redraw,
+    read_draft, read_input, restored, settle_time, shape_of, shows_original_text, shows_paste_end,
+    shows_paste_placeholder, shows_whole, space_taken, verdict_of, with_paste_text,
 };
 pub use sessions::{
     Reported, SESSION_FILE, SESSION_VARIABLES, SavedSession, SessionFile, WriteFailure,
@@ -53,9 +53,14 @@ pub use state::{ScreenState, read_state};
 pub use wiring::{
     INSTRUCTIONS_FILE, PLUGIN_FOLDER, PLUGIN_MEMBERS, SKILL_FILE, Server, SessionReport, Tools,
     guest_entry_serves_run, hook, integration, plugin_files, plugin_version,
-    runs_start_guest_entry, session_ends_with_process, uses_folder_plugin,
+    restore_config_environment, runs_start_guest_entry, session_ends_with_process,
+    uses_folder_plugin,
 };
 pub use wrappers::direct_command;
+
+pub(crate) use sessions::copilot_config_dir;
+pub(crate) use sessions::qoder_config_dir;
+pub(crate) use wiring::devin_config_dir;
 
 /// The argument that precedes the credential for a managed run's MCP relay.
 pub const RUN_CREDENTIAL_ARG: &str = "--run-credential";
@@ -69,13 +74,19 @@ pub struct ManagedServer<'a> {
 }
 
 /// The rule files of the CLIs Facade starts, by name, in the order `facade` lists them.
-const FILES: [(&str, &str); 6] = [
+const FILES: [(&str, &str); 12] = [
     ("claude", include_str!("../../../rules/claude.json")),
     ("codex", include_str!("../../../rules/codex.json")),
     ("agy", include_str!("../../../rules/agy.json")),
     ("muse", include_str!("../../../rules/muse.json")),
     ("opencode", include_str!("../../../rules/opencode.json")),
     ("pi", include_str!("../../../rules/pi.json")),
+    ("devin", include_str!("../../../rules/devin.json")),
+    ("agent", include_str!("../../../rules/agent.json")),
+    ("kiro-cli", include_str!("../../../rules/kiro-cli.json")),
+    ("qoder", include_str!("../../../rules/qoder.json")),
+    ("omp", include_str!("../../../rules/omp.json")),
+    ("copilot", include_str!("../../../rules/copilot.json")),
 ];
 
 /// The test CLI's rule. Only debug builds carry it, as only they run the test gates: a release
@@ -137,6 +148,9 @@ pub struct Rule {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct McpRule {
+    /// The CLI initializes its managed relay at startup and lists tools on its first turn.
+    #[serde(default)]
+    pub deferred_tool_list: bool,
     /// The `_meta` key in which a tool call names its session, for a CLI whose one MCP server
     /// serves many sessions. A CLI that starts an MCP server for each session names it in the
     /// server's environment instead.
@@ -308,6 +322,8 @@ pub enum PasteCount {
     Chars,
     /// Its characters, as Unicode scalar values. A differing UTF-16 unit count is rejected.
     UnicodeScalars,
+    /// Its characters, as UTF-16 units.
+    Utf16,
     /// Its characters other than control characters, as UTF-16 units, each tab as four spaces.
     VisibleUtf16,
 }
@@ -333,6 +349,9 @@ pub struct SessionRule {
     /// stands for its ID.
     #[serde(default)]
     pub resume: Option<Vec<String>>,
+    /// A stopped managed run can resume only if the CLI has saved the session in its history.
+    #[serde(default)]
+    pub resume_requires_saved_session: bool,
 }
 
 /// How a running CLI reports its session.
@@ -356,20 +375,36 @@ pub enum InputRule {
     Frame(Frame),
     /// A prompt row above a model line, or with scroll marks when the model line is absent.
     Prompt(Prompt),
-    /// An editor between two rules, with a cursor the CLI draws itself.
+    /// An editor between two rules, with a cursor in its text.
     Editor(Editor),
     /// A box of bar rows above a half-block border.
     Box(BoxInput),
     /// The last row that starts with the prompt holds the input.
-    PromptRow { prompt: String },
+    PromptRow {
+        prompt: String,
+        alternate_prompt: Option<String>,
+        /// A native placeholder identifies a cursor-anchored, possibly wrapped composer.
+        placeholder: Option<Pattern>,
+        /// A paste marker that the CLI draws dim, like a hint.
+        dim_draft: Option<Pattern>,
+        /// The CLI hides the terminal cursor and draws its own, one inverse cell in its input box.
+        #[serde(default)]
+        drawn_cursor: bool,
+        #[serde(default)]
+        menus: Vec<Menu>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Frame {
-    /// The prompt in the prompt row's first column.
+    /// Blank columns before the prompt and wrapped lines.
+    #[serde(default)]
+    pub indent: usize,
     pub prompt: String,
-    /// What follows the prompt, in the second column.
+    /// The prompt glyph in another permission mode.
+    pub alternate_prompt: Option<String>,
+    /// The cell after the prompt glyph.
     pub gap: String,
     pub upper: Pattern,
     pub lower: Pattern,
@@ -387,6 +422,9 @@ pub struct Frame {
     /// draft's first rows.
     #[serde(default)]
     pub(crate) scrolls_unmarked: bool,
+    /// A hidden terminal cursor supplies its position inside the complete input frame.
+    #[serde(default)]
+    pub(crate) hidden_cursor_in_frame: bool,
     pub menus: Vec<Menu>,
 }
 
@@ -409,6 +447,15 @@ pub struct Prompt {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Editor {
+    /// The CLI may use the terminal cursor instead of painting its own cursor.
+    #[serde(default)]
+    pub hardware_cursor: bool,
+    /// An optional one-row status band above the editor's prompt and its styled margin.
+    #[serde(default)]
+    pub(crate) band: Option<EditorBand>,
+    /// An editor with a rail and a plain fallback, both identified by their interactive footer.
+    #[serde(default)]
+    pub(crate) rail: Option<EditorRail>,
     pub upper: Pattern,
     pub lower: Pattern,
     pub scrolled: Scrolled,
@@ -418,8 +465,10 @@ pub struct Editor {
     /// The rows the CLI keeps of its editor, rules included, where the screen has no room for it
     /// all. Pi 1.4.0's full-screen layout keeps three: `minSize` of the editor at line 16 of
     /// pi-coding-agent's `dist/modes/interactive/chat-viewport.js`.
-    pub(crate) least_rows: usize,
-    pub(crate) question: Question,
+    #[serde(default)]
+    pub(crate) least_rows: Option<usize>,
+    #[serde(default)]
+    pub(crate) question: Option<Question>,
     pub menus: Vec<Menu>,
 }
 
@@ -436,6 +485,56 @@ pub(crate) struct Question {
     /// How many rows the CLI's own footer has, right under its input. The CLI cuts them before the
     /// keys.
     pub(crate) footer_rows: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EditorBand {
+    pub(crate) top: Pattern,
+    pub(crate) prompt: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EditorRail {
+    pub(crate) fallback_prompt: String,
+    pub(crate) footer: Pattern,
+    #[serde(default)]
+    pub(crate) live_notice: Option<EditorLiveNotice>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EditorLiveNotice {
+    pub(crate) text: String,
+    pub(crate) rows_above_upper: std::num::NonZeroUsize,
+    #[serde(default)]
+    pub(crate) wrapped_context: Option<EditorNoticeContext>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EditorNoticeContext {
+    pub(crate) max_rows: std::num::NonZeroUsize,
+    pub(crate) last: Pattern,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditorHeight {
+    pub min_rows: usize,
+    pub reserved_rows: usize,
+    pub min_reserved_rows: usize,
+}
+
+impl EditorHeight {
+    pub(crate) fn visible_rows(&self, screen: usize, maximum: usize) -> usize {
+        screen
+            .saturating_sub(self.reserved_rows)
+            .clamp(self.min_rows, maximum)
+            .min(screen.saturating_sub(self.min_reserved_rows))
+            .max(1)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -459,6 +558,8 @@ pub struct BoxInput {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "mechanism", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StateRule {
+    /// A drawn composer and the native work or question text near it.
+    Composer(ComposerStatus),
     /// For a CLI that may send no state reports, read until it reports, around its input frame:
     /// working while its working line stands above the frame, idle in its known resting layout,
     /// waiting for the person while a sign-in or trust question stands in place of the frame.
@@ -474,6 +575,19 @@ pub enum StateRule {
     /// the report into an error with the error's words. The patterns guard every version: a
     /// layout drawn otherwise stops matching and reads nothing.
     TurnError(Box<TurnError>),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComposerStatus {
+    #[serde(default)]
+    pub working: Vec<Pattern>,
+    /// A trailing dim hint drawn beside an empty composer during work.
+    pub working_hint: Option<String>,
+    #[serde(default)]
+    pub authentication: Vec<Pattern>,
+    #[serde(default)]
+    pub permission: Vec<Pattern>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -508,6 +622,10 @@ pub struct FrameTranscript {
     pub sign_in: Vec<Pattern>,
     /// The question whether the person trusts the workspace.
     pub trust: Pattern,
+    /// The CLI reports an answer that asks the person something as a question, though its turn has
+    /// ended and its input is there. The report then reads as `done`.
+    #[serde(default)]
+    pub answers_ask: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -543,7 +661,7 @@ pub struct StatusGlyph {
     pub frame_ms: u64,
 }
 
-/// Where a CLI marks a draft scrolled out of the input.
+/// How a CLI shows a draft scrolled out of the input.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "position", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Scrolled {
@@ -553,6 +671,8 @@ pub enum Scrolled {
     Rules(CountedScroll),
     /// Dim glyphs in the last column of the first and last input rows, without counts.
     LastColumn { above: String, below: String },
+    /// An editor with a fixed viewport and no scroll markers.
+    Unmarked(EditorHeight),
 }
 
 /// Each pattern's one capture counts the hidden rows on that side. A mark without a number, the
@@ -699,6 +819,16 @@ impl Rule {
             return Ok(());
         };
         match state {
+            StateRule::Composer(composer) => {
+                if composer
+                    .working_hint
+                    .as_ref()
+                    .is_some_and(|hint| hint.is_empty() || !is_literal(hint))
+                {
+                    return Err("a composer working hint must be nonempty literal text".into());
+                }
+                Ok(())
+            }
             StateRule::FrameTranscript(transcript) => transcript.check(&self.input),
             StateRule::BackgroundCorrection(correction) => correction.check(&self.input),
             StateRule::BackgroundReport(_) => Ok(()),
@@ -825,13 +955,24 @@ impl InputRule {
                     one_cell(field, marker)?;
                 }
             }
-            InputRule::PromptRow { prompt } => {
-                let visible = !prompt.is_empty() && !prompt.chars().any(char::is_control);
-                return if visible {
-                    Ok(())
-                } else {
-                    Err("prompt must be visible text".into())
-                };
+            InputRule::PromptRow {
+                prompt,
+                alternate_prompt,
+                placeholder,
+                drawn_cursor,
+                ..
+            } => {
+                if *drawn_cursor && placeholder.is_none() {
+                    return Err("drawn_cursor requires a placeholder".into());
+                }
+                let visible = std::iter::once(prompt)
+                    .chain(alternate_prompt)
+                    .all(|prompt| {
+                        !prompt.trim().is_empty() && !prompt.chars().any(char::is_control)
+                    });
+                if !visible {
+                    return Err("prompt must be visible text".into());
+                }
             }
         }
         let hints = self.menus().iter().filter_map(|menu| menu.hint.as_ref());
@@ -858,7 +999,7 @@ impl InputRule {
             InputRule::Prompt(Prompt { menus, .. }) => (InputMechanism::Prompt, menus),
             InputRule::Editor(Editor { menus, .. }) => (InputMechanism::Editor, menus),
             InputRule::Box(BoxInput { menus, .. }) => (InputMechanism::Box, menus),
-            InputRule::PromptRow { .. } => (InputMechanism::PromptRow, &[]),
+            InputRule::PromptRow { menus, .. } => (InputMechanism::PromptRow, menus),
         }
     }
 }
@@ -866,10 +1007,14 @@ impl InputRule {
 impl Frame {
     fn check(&self) -> Result<(), String> {
         one_cell("prompt", &self.prompt)?;
+        if let Some(alternate) = &self.alternate_prompt {
+            one_cell("alternate_prompt", alternate)?;
+        }
+        self.indent.checked_add(2).ok_or("indent is too large")?;
         one_cell("gap", &self.gap)?;
         match &self.scrolled {
             Scrolled::Rows(marks) | Scrolled::Rules(marks) => marks.check()?,
-            Scrolled::LastColumn { .. } => {
+            Scrolled::LastColumn { .. } | Scrolled::Unmarked(_) => {
                 return Err("frame requires scrolled.position rows or rules".into());
             }
         }
@@ -886,18 +1031,66 @@ impl Frame {
 
 impl Editor {
     fn check(&self) -> Result<(), String> {
-        let Scrolled::Rules(marks) = &self.scrolled else {
-            return Err("editor requires scrolled.position rules".into());
-        };
-        marks.check()?;
+        if let Some(rail) = &self.rail {
+            if !self.hardware_cursor
+                || self.band.is_some()
+                || !matches!(self.scrolled, Scrolled::Unmarked(_))
+            {
+                return Err(
+                    "an editor rail requires a hardware cursor, unmarked scroll and no status band"
+                        .into(),
+                );
+            }
+            if rail.fallback_prompt.trim().is_empty()
+                || !rail.fallback_prompt.ends_with(' ')
+                || rail.fallback_prompt.chars().any(char::is_control)
+            {
+                return Err(
+                    "an editor rail needs a visible fallback prompt ending in a space".into(),
+                );
+            }
+            if let Some(notice) = &rail.live_notice
+                && (notice.text.is_empty()
+                    || notice.text.trim() != notice.text
+                    || notice.text.chars().any(char::is_control))
+            {
+                return Err(
+                    "an editor live notice needs visible text without edge whitespace".into(),
+                );
+            }
+        }
+        if let Some(band) = &self.band {
+            if !self.hardware_cursor || !matches!(self.scrolled, Scrolled::Unmarked(_)) {
+                return Err(
+                    "an editor status band requires a hardware cursor and unmarked scroll".into(),
+                );
+            }
+            if band.prompt.trim().is_empty()
+                || !band.prompt.ends_with(' ')
+                || band.prompt.chars().any(char::is_control)
+            {
+                return Err(
+                    "an editor status band needs a visible prompt ending in a space".into(),
+                );
+            }
+        }
         if self.most_rows == 0 {
             return Err("most_rows must be positive".into());
         }
-        if self.least_rows < 3 {
+        if self.least_rows.is_some_and(|least| least < 3) {
             return Err("least_rows must hold a row between two rules".into());
         }
-        if self.question.footer_rows == 0 {
+        if self
+            .question
+            .as_ref()
+            .is_some_and(|question| question.footer_rows == 0)
+        {
             return Err("question.footer_rows must be positive".into());
+        }
+        match &self.scrolled {
+            Scrolled::Rules(marks) => marks.check()?,
+            Scrolled::Unmarked(height) if (1..=self.most_rows).contains(&height.min_rows) => {}
+            _ => return Err("an editor must give scroll markers or its unmarked height".into()),
         }
         if (0.0..=1.0).contains(&self.most_share) && self.most_share != 0.0 {
             Ok(())
@@ -1168,9 +1361,10 @@ mod tests {
                 assert!(!input.contains_key(field), "{cli}: {field}");
             }
             let position = match cli {
-                "agy" | "muse" => "rows",
+                "agy" | "muse" | "devin" | "qoder" => "rows",
                 "claude" | "pi" => "rules",
                 "codex" => "last_column",
+                "omp" | "copilot" => "unmarked",
                 _ => {
                     assert!(!input.contains_key("scrolled"), "{cli}");
                     continue;
@@ -1178,6 +1372,13 @@ mod tests {
             };
             let scrolled = input["scrolled"].as_object().unwrap();
             assert_eq!(scrolled["position"], position, "{cli}");
+            if position == "unmarked" {
+                assert_eq!(scrolled.len(), 4, "{cli}: {scrolled:?}");
+                for field in ["min_rows", "reserved_rows", "min_reserved_rows"] {
+                    assert!(scrolled[field].as_u64().is_some(), "{cli}: {field}");
+                }
+                continue;
+            }
             assert_eq!(scrolled.len(), 3, "{cli}: {scrolled:?}");
             for field in ["above", "below"] {
                 assert!(
@@ -1273,7 +1474,10 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["claude", "codex", "agy", "muse", "opencode", "pi", "fake"]
+            [
+                "claude", "codex", "agy", "muse", "opencode", "pi", "devin", "agent", "kiro-cli",
+                "qoder", "omp", "copilot", "fake"
+            ]
         );
         let names = |files: &[(&str, &str)]| {
             files
@@ -1283,7 +1487,10 @@ mod tests {
         };
         assert_eq!(
             names(&FILES),
-            ["claude", "codex", "agy", "muse", "opencode", "pi"],
+            [
+                "claude", "codex", "agy", "muse", "opencode", "pi", "devin", "agent", "kiro-cli",
+                "qoder", "omp", "copilot"
+            ],
             "what a release carries"
         );
         assert_eq!(

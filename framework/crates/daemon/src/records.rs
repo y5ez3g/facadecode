@@ -804,6 +804,66 @@ mod tests {
     }
 
     #[test]
+    fn the_settings_template_holds_the_defaults_and_every_built_in_cli() {
+        let template = facade_base::settings::TEMPLATE;
+        let settings = facade_base::settings::parse(template, "facade.json").expect("it reads");
+        assert!(settings.yolo);
+        let names: Vec<&str> = settings
+            .names
+            .iter()
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            names, DEFAULT_NAMES,
+            "the template lists the built-in names in order"
+        );
+        // A debug build also carries the test CLI, which the file never lists.
+        let shipped = |cli: &str| cli != "fake";
+        let built_ins: Vec<&str> = facade_rules::rules()
+            .unwrap()
+            .iter()
+            .map(|rule| rule.cli.as_str())
+            .filter(|cli| shipped(cli))
+            .collect();
+        let written: Vec<&str> = settings
+            .clis
+            .iter()
+            .map(|member| member.key.as_str())
+            .collect();
+        assert_eq!(
+            written, built_ins,
+            "every built-in CLI, in the rules' order"
+        );
+        let entries = facade_rules::entries::read(&settings);
+        for entry in entries.iter().filter(|entry| shipped(&entry.name)) {
+            assert!(entry.built_in && entry.enabled, "{}", entry.name);
+            assert_eq!(entry.problems, Vec::<String>::new(), "{}", entry.name);
+            assert_eq!(entry.icon, entry.name, "{} shows its own icon", entry.name);
+            assert!((entry.args.is_empty(), entry.env.is_empty()) == (true, true));
+            assert_eq!(
+                (&entry.program, &entry.model, &entry.effort),
+                (&None, &None, &None)
+            );
+        }
+        // Each "or values on line N" points at the list of icons.
+        let icons = template
+            .lines()
+            .position(|line| line.starts_with("\t// - icon:"))
+            .expect("the fields say which icons there are")
+            + 1;
+        for line in template
+            .lines()
+            .filter(|line| line.contains("// or values on line"))
+        {
+            assert!(
+                line.ends_with(&format!("// or values on line {icons}")),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
     fn the_default_names_are_the_extension_s_list() {
         let source = include_str!("../../../../extension/src/base/names.ts");
         let list = &source[source

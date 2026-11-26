@@ -11,13 +11,13 @@ use facade_base::process::ProcessState;
 use facade_base::{system, unix_process};
 use serde_json::{Value, json};
 
-use crate::agent::AgentHandle;
+use crate::agent::{AgentHandle, ToolsStage};
 use crate::guests::{GuestJoin, RelayProcess};
 use crate::lifecycle::RelayLink;
 use crate::machine_service::agent_caller;
 use crate::mcp::{
-    self, ActorIdentity, ActorServices, DiscoverClis, InboxAnswer, InboxOutput, ReadReply, Relay,
-    RelayHelloParams, ToolsPresence,
+    self, AcquirePresence, ActorIdentity, ActorServices, CatalogEvent, DiscoverClis, InboxAnswer,
+    InboxOutput, Initialization, ReadReply, Relay, RelayHelloParams,
 };
 use crate::messages::{InboxRead, InboxSelection, ReplyRead};
 use crate::runs::RunIdentity;
@@ -39,14 +39,6 @@ struct BoundActor {
 struct CurrentActor {
     handle: AgentHandle,
     info: ManagedAgent,
-}
-
-struct RelayTools(tokio::task::JoinHandle<()>);
-
-impl Drop for RelayTools {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
 }
 
 impl BoundActor {
@@ -140,7 +132,9 @@ impl Daemon {
         let relay = Arc::new(self.relay(hello, evidence));
         if relay.reconnect() {
             let relay = relay.clone();
-            tokio::spawn(async move { relay.hold_verified_presence().await });
+            tokio::spawn(async move {
+                relay.hold_verified_presence(CatalogEvent::Reconnect).await;
+            });
         }
         let lines = RelayConnection {
             daemon: self.clone(),
@@ -216,7 +210,14 @@ impl Daemon {
                         let Some((run, _)) = actor.run else {
                             return calling.await;
                         };
-                        let tools = handle.tools_connected();
+                        let tools = if deferred_tool_list(&handle) {
+                            None
+                        } else {
+                            handle.hold_tools_connection(run, ToolsStage::Listed)
+                        };
+                        let Some(tools) = tools else {
+                            return calling.await;
+                        };
                         tokio::pin!(calling);
                         tokio::select! {
                             result = &mut calling => result,
@@ -291,41 +292,57 @@ impl Daemon {
                 let (daemon, evidence) = (daemon.clone(), evidence.clone());
                 Box::pin(async move {
                     let Some(run) = daemon.relay_run(&evidence, credential, None).await? else {
-                        return Ok(None);
+                        return Ok(Initialization {
+                            instructions: None,
+                            acquire: None,
+                        });
                     };
+                    let number = run.run;
                     let actor = BoundActor::managed(run, &daemon.machine_id);
-                    let current = actor.current(&daemon, &evidence.process)?;
-                    if current
-                        .handle
+                    let CurrentActor { handle, info } =
+                        actor.current(&daemon, &evidence.process)?;
+                    let (instructions, handle) = if handle
                         .rule()
                         .is_some_and(facade_rules::managed_instructions_from_hook)
                     {
-                        return Ok(None);
-                    }
-                    let instructions =
-                        blocking_in_place(|| daemon.instructions_for_current_run(&current.info))?;
-                    actor.current(&daemon, &evidence.process)?;
-                    Ok(Some(instructions))
+                        (None, handle)
+                    } else {
+                        let instructions =
+                            blocking_in_place(|| daemon.instructions_for_current_run(&info))?;
+                        let current = actor.current(&daemon, &evidence.process)?;
+                        (Some(instructions), current.handle)
+                    };
+                    let acquire = (credential.is_some() && deferred_tool_list(&handle))
+                        .then(|| prepare_tool_presence(handle, number, ToolsStage::Initialized));
+                    Ok(Initialization {
+                        instructions,
+                        acquire,
+                    })
                 })
             })
         };
         let ready: mcp::verified::Ready = {
             let daemon = self.clone();
-            Box::new(move |credential: Option<&str>| {
+            Box::new(move |credential: Option<&str>, event| {
                 let (daemon, evidence) = (daemon.clone(), evidence.clone());
                 Box::pin(async move {
                     let Some(run) = daemon.relay_run(&evidence, credential, None).await? else {
                         return Ok(None);
                     };
-                    let generation = run.run;
+                    let number = run.run;
                     let actor = BoundActor::managed(run, &daemon.machine_id);
                     let handle = actor.current(&daemon, &evidence.process)?.handle;
-                    let tools = handle.tools_connected();
-                    let held: ToolsPresence = Box::new(RelayTools(tokio::spawn(async move {
-                        let _tools = tools;
-                        run_ended(&handle, generation).await;
-                    })));
-                    Ok(Some(held))
+                    // An older relay can reconnect before the CLI has listed its tools.
+                    if deferred_tool_list(&handle)
+                        && (credential.is_none() || matches!(event, CatalogEvent::Reconnect))
+                    {
+                        return Ok(None);
+                    }
+                    Ok(Some(prepare_tool_presence(
+                        handle,
+                        number,
+                        ToolsStage::Listed,
+                    )))
                 })
             })
         };
@@ -621,6 +638,21 @@ async fn run_ended(handle: &AgentHandle, run: u64) {
         .await;
 }
 
+fn deferred_tool_list(agent: &AgentHandle) -> bool {
+    agent
+        .rule()
+        .and_then(|name| facade_rules::find(name).ok().flatten())
+        .is_some_and(|rule| rule.mcp.deferred_tool_list)
+}
+
+fn prepare_tool_presence(agent: AgentHandle, run: u64, stage: ToolsStage) -> AcquirePresence {
+    Box::new(move || {
+        agent
+            .hold_tools_connection(run, stage)
+            .map(|connection| Box::new(connection) as mcp::PresenceLease)
+    })
+}
+
 fn attached_actor<'a>(
     bound: &'a OnceLock<BoundActor>,
     reference: &AgentRef,
@@ -642,6 +674,7 @@ impl RelayLines for RelayConnection {
     }
 
     fn ended(&self, closing_answered: bool) {
+        self.relay.close_presence();
         if !closing_answered && let Some(id) = self.daemon.guests.end_member(&self.process) {
             self.daemon.end_listed_guest(&id);
         }

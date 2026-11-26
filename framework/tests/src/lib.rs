@@ -13,6 +13,7 @@ mod connections;
 mod home;
 mod machines;
 mod mcp;
+mod providers;
 mod system;
 mod terminal;
 
@@ -21,6 +22,7 @@ pub use connections::*;
 pub use home::*;
 pub use machines::*;
 pub use mcp::*;
+pub use providers::*;
 pub use system::*;
 pub use terminal::*;
 

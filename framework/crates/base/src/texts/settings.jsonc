@@ -1,0 +1,578 @@
+// Facade settings. A saved change applies to agents started afterwards; running agents keep
+// the settings they started with.
+{
+	// Choose how much approval agents require, and how far their tools can reach:
+	// - When set to true, each CLI runs in its no-approval mode. An agent's Facade tools can reach
+	//   every agent on this computer.
+	// - When set to false, each CLI keeps its normal approval prompts and sandbox. An agent's Facade
+	//   tools can reach only its own family: the agent you started, and every agent started from it,
+	//   directly or through other agents. That includes the agent that started it and its siblings,
+	//   while agents from your other starts remain out of reach.
+	"yolo": true,
+
+	// Choose the names suggested when starting an agent, or resuming a conversation with no name:
+	// - A start without a name takes a random name from this list that no running agent uses.
+	// - Edit the list to remove names, or add your own. If every name in the list is in use,
+	//   or the list is empty, the agent is named by its ID, such as a1.
+	"names": [
+		"Abacus", "Alloy", "Anvil", "Arc", "Atom", "Axle", "Baud", "Beacon", "Bit", "Blip", "Bolt",
+		"Boson", "Brace", "Buzz", "Byte", "Cable", "Caliper", "Cam", "Capstan", "Chassis", "Chip",
+		"Circuit", "Clamp", "Clutch", "Cobalt", "Cog", "Coil", "Compass", "Copper", "Crank",
+		"Crystal", "Dial", "Diode", "Dipole", "Drill", "Drone", "Dynamo", "Ember", "Engine",
+		"Fiber", "Filament", "Flange", "Flux", "Fuse", "Gadget", "Gauge", "Gear", "Gimbal", "Gizmo",
+		"Glide", "Grommet", "Gyro", "Hammer", "Helix", "Hertz", "Hinge", "Hover", "Ion", "Jack",
+		"Jet", "Jolt", "Joule", "Kelvin", "Kite", "Knob", "Laser", "Latch", "Lens", "Lever",
+		"Lumen", "Lux", "Magneto", "Mech", "Meter", "Modem", "Motor", "Nano", "Neon", "Nibble",
+		"Nickel", "Nova", "Nozzle", "Ohm", "Optic", "Orbit", "Photon", "Pilot", "Piston", "Pivot",
+		"Pixel", "Plasma", "Plug", "Prism", "Probe", "Pulse", "Pump", "Pylon", "Quark", "Radar",
+		"Ratchet", "Rebar", "Relay", "Rivet", "Rocket", "Rotor", "Rover", "Rudder", "Scout",
+		"Sensor", "Servo", "Shaft", "Shuttle", "Solder", "Sonar", "Spark", "Spindle", "Spoke",
+		"Spring", "Stator", "Strut", "Stylus", "Throttle", "Torque", "Tractor", "Turbo", "Valve",
+		"Vapor", "Visor", "Volt", "Vortex", "Watt", "Wedge", "Weld", "Widget", "Winch", "Wrench",
+		"Yoke", "Zap", "Zener", "Zinc"
+	],
+
+	// Every entry takes eight fields. A field left out or commented out takes its default:
+	// - type: CLI to run (claude, codex, agy, muse, opencode, pi, devin, agent, kiro-cli, qoder, omp,
+	//   copilot, custom). Needed if you add one.
+	// - icon: the entry's icon in the panel, New Agent and terminal tab. Two kinds of values:
+	//   A CLI's own icon: claude, codex, agy, muse, opencode, pi, devin, agent, kiro-cli, qoder,
+	//     omp, or copilot.
+	//   A Facade robot: facade-red, facade-orange, facade-amber, facade-lime, facade-green,
+	//     facade-teal, facade-sky, facade-blue, facade-violet, facade-pink, facade-aurora,
+	//     facade-sunset, facade-ocean, facade-orchid, facade-pearl, or facade-graphite.
+	//   Default: its type's own icon, or facade-pearl for custom.
+	// - program: program to run; custom requires it. Default: the CLI's own on PATH, like claude.
+	// - args: command-line options for the CLI. Default: none.
+	// - env: environment variables for the CLI; one set to null is removed. Default: none.
+	// - model: default model for CLIs that take one. A custom entry or OpenCode cannot set it.
+	// - effort: default effort for CLIs that take it. A custom entry, OpenCode, Devin or Cursor
+	//   cannot set it.
+	// - enabled: false hides the entry from New Agent and from the CLIs that facade status lists.
+	//   Default: true.
+	//
+	// Why Facade adds command-line options and environment variables:
+	// - Tools: Facade gives each agent its MCP server, facade-mcp, for that run alone, allowing
+	//   agents to start other agents, send each other messages, and read each other's terminal
+	//   screens. Where a CLI can approve one server's tools in advance, Facade does. Where the CLI's
+	//   own configuration is in the way, such as a server of yours named facade, Facade changes
+	//   nothing there, and the agent starts without these tools.
+	// - Resume and Pin: Facade adds a hook, plugin or extension so that the CLI writes down which
+	//   conversation the agent is in. It records the conversation's ID, never its text, in the run's
+	//   folder. Resume and Pin then reopen exactly that conversation, not just the latest one.
+	// - YOLO: Facade translates this single switch into each CLI's native approval and sandbox options.
+	// - Started by an agent: when an agent starts another one, Facade turns off the CLI's update
+	//   prompt. With YOLO on, Facade also trusts the workspace folder for that run and answers the
+	//   CLI's own trust question, so that nothing stops the CLI before the agent receives its first
+	//   task.
+	// - Privacy: Facade writes a run's files in its own folder in the Facade home. On macOS and
+	//   Linux, only your account can read them.
+	// - Only this run: everything Facade adds applies strictly to that single run. Two CLIs read part
+	//   of it from the workspace folder: Antigravity from Facade's plugin in .agents/plugins/facade,
+	//   which the Antigravity agents in that folder share, and Kiro from a profile of the run's own in
+	//   .kiro/agents, which Facade removes when the run ends. Facade never changes the CLIs' own
+	//   settings files.
+	//
+	// Shared rules for all twelve CLIs, with YOLO on or off:
+	//
+	// Variables that Facade sets:
+	// Facade sets these variables for every agent, and your own "env" cannot override them:
+	// - FACADE_HOME names the Facade home, and FACADE_AGENT the agent's ID, such as a1, so that
+	//   Facade's tools know which agent is calling.
+	// - TERM=xterm-256color and COLORTERM=truecolor describe the terminal Facade shows the CLI in.
+	// - Variables of the terminal app the agent was started from, such as ITERM_ or KITTY_, are
+	//   removed, and so are other CLIs' session variables. TERM_PROGRAM is kept, and so are the
+	//   variables that VS Code's code command needs.
+	//
+	// Model and effort precedence:
+	// The model or effort you choose when starting an agent comes first. If you do not choose one then,
+	// Facade uses the "model" or "effort" set in the agent's entry under "clis". If neither is set,
+	// the CLI uses its own default. OpenCode takes neither, and Devin and Cursor take no effort:
+	// setting one in their entry is an error, and you configure it in the CLI's own configuration.
+	//
+	// Your custom arguments ("args"):
+	// Facade keeps each of your arguments as written. Facade refuses options that it controls
+	// itself, reporting an error that names the option and where it was set. Refused options
+	// include approval and YOLO options, model, effort, the session, the folder, where the session
+	// runs, and print modes.
+	//
+	// Your custom environment variables ("env"):
+	// Your variables override those the agent would otherwise inherit from the terminal it is started
+	// from. Writing "${env:NAME}" reads NAME from that environment, and results in an error if NAME is
+	// missing. Setting a variable to null removes it from the agent's environment.
+	//
+	// First tasks and resuming:
+	// When an agent starts another one with a first task, Facade types the task into the CLI once it
+	// is ready. To resume an agent, Facade passes the CLI's own resume option with the conversation's
+	// ID; each CLI's section below names it.
+	"clis": {
+		// Claude Code
+		//
+		// What Facade always adds:
+		// - Facade passes --mcp-config with a run file that names its server, and --allowedTools
+		//   mcp__facade so that its tools run without asking.
+		// - Facade passes --settings with a session hook that writes down which conversation the agent
+		//   is in. It also turns off Facade's own server in the project's .mcp.json, if one is there:
+		//   Claude Code would otherwise stop at startup to ask about it, and the run has its own.
+		// - When an agent starts it, Facade sets DISABLE_AUTOUPDATER=1.
+		// - To resume an existing agent, Facade passes --resume <id>.
+		//
+		// Approvals and sandboxing:
+		// - When YOLO is on, Facade passes --dangerously-skip-permissions, and its --settings turn
+		//   Claude Code's sandbox off. When an agent started it, the --settings also skip the warning
+		//   about that mode, and Facade answers the folder trust question.
+		// - When YOLO is off, Facade adds no options, and Claude Code asks for approval and uses its
+		//   sandbox as you set it up.
+		//
+		// Model and effort:
+		// - Facade passes your chosen model with --model and your chosen effort with --effort.
+		//
+		// Where your args differ from the shared rules:
+		// - If you pass --settings, Facade merges it with its own.
+		"claude": {
+			"type": "claude",
+			"icon": "claude", // or values on line 38
+			// "program": "/path/to/claude",
+			"args": [],
+			"env": {},
+			// "model": "opus",
+			// "effort": "high",
+			"enabled": true,
+		},
+
+		// Codex
+		//
+		// What Facade always adds:
+		// - Facade passes -c mcp_servers.facade.* to add its tools to Codex, already approved.
+		// - Facade passes -c mcp_optional_startup_grace_ms=10000 so Codex's first request waits
+		//   up to 10 seconds for Facade's tools instead of 1 second, ensuring a slow start does
+		//   not leave them out.
+		// - Facade passes -c hooks=... with a session hook that writes down which conversation
+		//   the agent is in.
+		// - Facade passes --no-daemon because with -c settings Codex runs on its own anyway
+		//   instead of through its background service; setting it up front prevents Codex from
+		//   showing a warning about it under its input.
+		// - To resume an existing agent, Facade passes resume <id>.
+		//
+		// Approvals and sandboxing:
+		// - When YOLO is on, Facade passes --dangerously-bypass-approvals-and-sandbox. When an agent
+		//   started it, Facade also passes -c projects=... to trust the workspace for this run only,
+		//   writing nothing to Codex's permanent configuration, -c check_for_update_on_startup=false,
+		//   and -c notice.model_migrations=... so that no update or model notice holds back the task.
+		// - When YOLO is off, Facade adds no options, and Codex keeps its own approval rules and
+		//   sandbox.
+		//
+		// Model and effort:
+		// - Facade passes your chosen model with --model and your reasoning effort with
+		//   -c model_reasoning_effort.
+		//
+		// Where your args differ from the shared rules:
+		// - Facade merges your custom -c hooks with its own.
+		"codex": {
+			"type": "codex",
+			"icon": "codex", // or values on line 38
+			// "program": "/path/to/codex",
+			"args": [],
+			"env": {},
+			// "model": "gpt-6-astra",
+			// "effort": "high",
+			"enabled": true,
+		},
+
+		// Antigravity
+		//
+		// What Facade always adds:
+		// - Facade passes --settings with a run file that allows Facade's tools on top of your existing
+		//   rules. It sets Antigravity's title command to a hook that tells Facade which conversation the
+		//   agent is in; any title command you configured still runs and displays your title.
+		// - Facade writes its plugin to .agents/plugins/facade in the workspace folder, where
+		//   Antigravity finds Facade's server and instructions. The Antigravity agents in that folder
+		//   share it, and FACADE_RUN_TOKEN tells the server which agent is calling.
+		// - When an agent starts it, Facade sets AGY_CLI_DISABLE_AUTO_UPDATE=true.
+		// - To resume an existing agent, Facade passes --conversation <id>.
+		//
+		// Approvals and sandboxing:
+		// - When YOLO is on, Facade passes --mode accept-edits --dangerously-skip-permissions, and its
+		//   --settings turn the terminal sandbox off. When an agent started it, the --settings also
+		//   trust the workspace folder.
+		// - When YOLO is off, Facade adds no options, and Antigravity asks for approval normally.
+		//
+		// Model and effort:
+		// - Facade passes your chosen model with --model and your chosen effort with --effort.
+		//
+		// Where your args differ from the shared rules:
+		// - If you pass --settings, Facade merges it with its own.
+		"agy": {
+			"type": "agy",
+			"icon": "agy", // or values on line 38
+			// "program": "/path/to/agy",
+			"args": [],
+			"env": {},
+			// "model": "gemini-4-argon",
+			// "effort": "high",
+			"enabled": true,
+		},
+
+		// Muse Code
+		//
+		// What Facade always adds:
+		// - Facade registers its tools with -c mcpServers.facade=....
+		// - Facade passes -c hooks=... with a session hook that writes down which conversation the
+		//   agent is in, one that gives the model Facade's instructions, and one that approves
+		//   Facade's own tools, as Muse Code cannot approve a server's tools in advance.
+		// - When an agent starts it, Facade sets MUSE_NO_AUTO_UPDATE=1.
+		// - To resume an existing agent, Facade passes resume <id>.
+		//
+		// Approvals and sandboxing:
+		// - When YOLO is on, Facade passes --disable-approval --disable-sandbox. When an agent started
+		//   it, Facade also passes --trust-workspace.
+		// - When YOLO is off, Facade adds no options, and Muse Code asks for approval normally.
+		//
+		// Model and effort:
+		// - Facade passes your chosen model with --model and your reasoning effort with
+		//   -c reasoning_effort.
+		//
+		// Where your args differ from the shared rules:
+		// - Facade merges your custom -c hooks with its own.
+		"muse": {
+			"type": "muse",
+			"icon": "muse", // or values on line 38
+			// "program": "/path/to/muse",
+			"args": [],
+			"env": {},
+			// "model": "muse-spark-1.3",
+			// "effort": "high",
+			"enabled": true,
+		},
+
+		// OpenCode
+		//
+		// What Facade always adds:
+		// - Facade sets OPENCODE_CONFIG_CONTENT to provide its tools.
+		// - Facade sets OPENCODE_CLI_CONFIG_CONTENT with a plugin that writes down which conversation
+		//   the agent is in, beside the plugins you configured.
+		// - Facade passes --standalone so OpenCode starts its own server just for this run.
+		// - When an agent starts it, Facade sets OPENCODE_DISABLE_AUTOUPDATE=1.
+		// - To resume an existing agent, Facade passes --session <id>.
+		//
+		// Approvals and sandboxing:
+		// - When YOLO is on, Facade passes --auto.
+		// - When YOLO is off, Facade adds no options, and OpenCode asks for approval normally.
+		//
+		// Model and effort:
+		// - Facade passes neither model nor effort to OpenCode; setting either here is an error.
+		//   Configure them in OpenCode's own configuration instead.
+		"opencode": {
+			"type": "opencode",
+			"icon": "opencode", // or values on line 38
+			// "program": "/path/to/opencode",
+			"args": [],
+			"env": {},
+			// Model and effort are set in OpenCode's own configuration, not in this file.
+			"enabled": true,
+		},
+
+		// Pi
+		//
+		// What Facade always adds:
+		// - Facade passes -e with a run extension that loads its tools and gives the model Facade's
+		//   instructions, and -e with one that writes down which conversation the agent is in.
+		// - To resume an existing agent, Facade passes --session <id>.
+		//
+		// Approvals and sandboxing:
+		// - Pi has no approvals and no sandbox, so YOLO adds no options for Pi's work. The YOLO
+		//   switch still decides which agents Pi's Facade tools can reach. When an agent started it
+		//   with YOLO on, Facade passes --approve to trust the workspace for this run without writing
+		//   anything to disk, and sets PI_SKIP_VERSION_CHECK=1.
+		//
+		// Model and effort:
+		// - Facade passes your chosen model with --model and your reasoning effort with --thinking.
+		"pi": {
+			"type": "pi",
+			"icon": "pi", // or values on line 38
+			// "program": "/path/to/pi",
+			"args": [],
+			"env": {},
+			// "model": "anthropic/claude-opus-5-5",
+			// "effort": "high",
+			"enabled": true,
+		},
+
+		// Devin
+		//
+		// What Facade always adds:
+		// - Facade passes --config with a run copy of your Devin configuration that adds a session
+		//   hook, which writes down which conversation the agent is in, and allows Facade's tools.
+		// - Facade sets XDG_CONFIG_HOME, or APPDATA on Windows, to a run folder that holds your other
+		//   configuration entries and a devin/mcp_config.json that adds Facade's server.
+		// - Facade passes --process-model in-process so Devin runs its local agent in its own process.
+		// - To resume an existing agent, Facade passes --resume <id>.
+		//
+		// Approvals and sandboxing:
+		// - When YOLO is on, Facade passes --permission-mode dangerous. When an agent started it,
+		//   Facade also passes --respect-workspace-trust=false.
+		// - When YOLO is off, Facade adds no options, and Devin asks for approval normally.
+		//
+		// Model and effort:
+		// - Facade passes your chosen model with --model. Devin takes no effort; setting one here is
+		//   an error.
+		"devin": {
+			"type": "devin",
+			"icon": "devin", // or values on line 38
+			// "program": "/path/to/devin",
+			"args": [],
+			"env": {},
+			// "model": "swe-2-high",
+			// Effort is set by the model Devin runs, not in this file.
+			"enabled": true,
+		},
+
+		// Cursor
+		//
+		// What Facade always adds:
+		// - Facade passes --plugin-dir with a run plugin that gives Cursor Facade's server, its
+		//   instructions, and a session hook that writes down which conversation the agent is in.
+		// - To resume an existing agent, Facade passes --resume <id> once the conversation is saved.
+		//
+		// Approvals and sandboxing:
+		// - When YOLO is on, Facade passes --force --sandbox disabled. When an agent started it,
+		//   Facade also passes --trust.
+		// - When YOLO is off, Facade adds no options, and Cursor asks for approval normally.
+		//
+		// Model and effort:
+		// - Facade passes your chosen model with --model. Cursor takes no effort; setting one here is
+		//   an error.
+		"agent": {
+			"type": "agent",
+			"icon": "agent", // or values on line 38
+			// "program": "/path/to/agent",
+			"args": [],
+			"env": {},
+			// "model": "composer-2.5",
+			// Effort is set by the model Cursor runs, not in this file.
+			"enabled": true,
+		},
+
+		// Kiro
+		//
+		// What Facade always adds:
+		// - Facade starts kiro-cli chat --v3.
+		// - Facade passes --agent with a profile it writes for this run alone to .kiro/agents in the
+		//   workspace folder and removes when the run ends. The profile names Facade's server through
+		//   a launcher in the run's folder, allows its tools, and has a session hook that writes down
+		//   which conversation the agent is in.
+		// - To resume an existing agent, Facade passes --resume-id <id>.
+		//
+		// Approvals and sandboxing:
+		// - When YOLO is on, Facade passes --trust-all-tools. Kiro then asks you to accept that mode;
+		//   Facade answers when an agent started it, and also passes --trust-workspace.
+		// - When YOLO is off, Facade adds no options, and Kiro asks for approval normally.
+		//
+		// Model and effort:
+		// - Facade passes your chosen model with --model and your chosen effort with --effort.
+		//
+		// Where your args differ from the shared rules:
+		// - An agent you choose with --agent, or a default agent in Kiro's settings, takes the place
+		//   of Facade's profile: the agent then has no Facade tools.
+		"kiro-cli": {
+			"type": "kiro-cli",
+			"icon": "kiro-cli", // or values on line 38
+			// "program": "/path/to/kiro-cli",
+			"args": [],
+			"env": {},
+			// "model": "claude-sonnet-4.5",
+			// "effort": "high",
+			"enabled": true,
+		},
+
+		// Qoder
+		//
+		// What Facade always adds:
+		// - Facade passes --mcp-config with a run file that names its server.
+		// - Facade passes --settings with a run file that has a session hook, which writes down which
+		//   conversation the agent is in.
+		// - To resume an existing agent, Facade passes --resume <id>.
+		//
+		// Approvals and sandboxing:
+		// - When YOLO is on, Facade passes --permission-mode bypass_permissions. When an agent started
+		//   it, the --settings also trust the workspace folder.
+		// - When YOLO is off, Facade adds no options, and Qoder asks for approval normally.
+		//
+		// Model and effort:
+		// - Facade passes your chosen model with --model and your reasoning effort with
+		//   --reasoning-effort.
+		"qoder": {
+			"type": "qoder",
+			"icon": "qoder", // or values on line 38
+			// "program": "/path/to/qoder",
+			"args": [],
+			"env": {},
+			// "model": "Qwen-3.8-Flash",
+			// "effort": "high",
+			"enabled": true,
+		},
+
+		// Oh My Pi
+		//
+		// What Facade always adds:
+		// - Facade passes --plugin-dir with a run plugin that gives Oh My Pi Facade's server.
+		// - Facade passes --config with a settings overlay that approves Facade's own tools and keeps
+		//   Facade's notices out of the conversation.
+		// - Facade passes --extension with one that reports which conversation the agent is in and
+		//   when it works.
+		// - To resume an existing agent, Facade passes --session <id>.
+		//
+		// Approvals and sandboxing:
+		// - When YOLO is on, Facade passes --approval-mode yolo.
+		// - When YOLO is off, Facade passes --approval-mode always-ask.
+		//
+		// Model and effort:
+		// - Facade passes your chosen model with --model and your reasoning effort with --thinking.
+		"omp": {
+			"type": "omp",
+			"icon": "omp", // or values on line 38
+			// "program": "/path/to/omp",
+			"args": [],
+			"env": {},
+			// "model": "opus",
+			// "effort": "high",
+			"enabled": true,
+		},
+
+		// GitHub Copilot CLI
+		//
+		// What Facade always adds:
+		// - Facade passes --additional-mcp-config with a run file that names its server, and
+		//   --allow-tool=facade so that its tools run without asking.
+		// - Facade passes --plugin-dir with a run plugin that has a session hook, which writes down
+		//   which conversation the agent is in.
+		// - To resume an existing agent, Facade passes --resume=<id> once the conversation is saved.
+		//
+		// Approvals and sandboxing:
+		// - When YOLO is on, Facade passes --allow-all.
+		// - When YOLO is off, Facade adds no options, and Copilot asks for approval normally.
+		//
+		// Model and effort:
+		// - Facade passes your chosen model with --model and your reasoning effort with
+		//   --reasoning-effort.
+		"copilot": {
+			"type": "copilot",
+			"icon": "copilot", // or values on line 38
+			// "program": "/path/to/copilot",
+			"args": [],
+			"env": {},
+			// "model": "auto",
+			// "effort": "high",
+			"enabled": true,
+		},
+
+		// Adding custom entries:
+		// You can add your own entries under "clis". The key can be any name you like, and New Agent
+		// displays that name. The "type" field is required: choose one of the twelve CLIs above by
+		// its type, or use custom for any other terminal program.
+		//
+		// An added entry stands on its own and inherits nothing from the built-in entry of the same
+		// type. For example, "Codex · Other" with "type": "codex" does not get the "args" or "env" of
+		// the "codex" entry.
+		//
+		// To use an example below, remove the leading // from each of its lines, replace YOUR_API_KEY
+		// and YOUR_PROVIDER_URL with your provider's, check its model names, and save. Agents started
+		// afterwards can use it.
+		//
+		// A key written here is stored in plain text in this file. Facade creates this file so that, on
+		// macOS and Linux, only your account can read it. To keep the key out of this file, write
+		// "${env:NAME}" instead: Facade then reads NAME from the environment the agent is started with.
+		//
+		// Example 1: Claude Code on another provider (samples: OpenRouter and Qwen Cloud)
+		// This example connects Claude Code to an alternate provider instead of Anthropic. Claude Code
+		// only speaks Anthropic's API, so this requires a provider that offers an Anthropic-compatible
+		// endpoint. The values below use DeepSeek V4.1 Flash as the example model.
+		// "Claude · Other": {
+		// 	"type": "claude",
+		// 	"icon": "facade-blue", // or values on line 38
+		// 	// The model the agent starts with. Facade passes it as --model; a model chosen when
+		// 	// the agent is started wins. Use a model the provider serves; DeepSeek V4.1 Flash is
+		// 	// deepseek/deepseek-v4.1-flash on OpenRouter and deepseek-v4.1-flash on Qwen Cloud:
+		// 	"model": "deepseek/deepseek-v4.1-flash",
+		// 	"env": {
+		// 		// Claude Code sends every request to this address: the provider's Anthropic-compatible
+		// 		// address, such as https://openrouter.ai/api on OpenRouter or
+		// 		// https://token-plan.maas.qwencloudapi.com/apps/anthropic on Qwen Cloud:
+		// 		"ANTHROPIC_BASE_URL": "YOUR_PROVIDER_URL",
+		// 		// The provider's key, sent with each request:
+		// 		"ANTHROPIC_AUTH_TOKEN": "YOUR_API_KEY",
+		// 		// Setting this to null removes any Anthropic key you set elsewhere, so Claude Code
+		// 		// neither uses it nor sends it to the other provider. Keep this as it is:
+		// 		"ANTHROPIC_API_KEY": null,
+		// 		// Claude Code requests models across three tiers: opus, sonnet, and haiku. It uses
+		// 		// the haiku tier for small background tasks. Each tier must name a model that the
+		// 		// provider serves, or Claude Code will ask for models the provider does not have.
+		// 		// Set the provider's model names; the three tiers may differ:
+		// 		"ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek/deepseek-v4.1-flash",
+		// 		"ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek/deepseek-v4.1-flash",
+		// 		"ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek/deepseek-v4.1-flash",
+		// 		// DeepSeek V4.1 Flash supports 1,000,000 context tokens. If you use another model,
+		// 		// including one chosen when starting an agent, set this to its actual context window:
+		// 		"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1000000",
+		// 	},
+		// },
+		//
+		// Example 2: Codex on another provider (samples: OpenRouter and Qwen Cloud)
+		// This example connects Codex to an alternate provider using an OpenAI-compatible Responses
+		// API. Codex decides where requests go through a "model provider", which normally lives in
+		// ~/.codex/config.toml. These -c options define and select a provider when the agent starts.
+		// They apply only to this entry's agents: nothing is written to Codex's configuration, and
+		// other Codex agents are not affected. The values below use DeepSeek V4.1 Flash as the example
+		// model.
+		// "Codex · Other": {
+		// 	"type": "codex",
+		// 	"icon": "facade-lime", // or values on line 38
+		// 	// The model the agent starts with. Facade passes it as --model; a model chosen when
+		// 	// the agent is started wins. Use a model the provider serves; DeepSeek V4.1 Flash is
+		// 	// deepseek/deepseek-v4.1-flash on OpenRouter and deepseek-v4.1-flash on Qwen Cloud:
+		// 	"model": "deepseek/deepseek-v4.1-flash",
+		// 	"args": [
+		// 		// Selects the provider defined below. "provider" is only its name; any name works
+		// 		// as long as all lines use the same one:
+		// 		"-c", "model_provider=provider",
+		// 		// DeepSeek V4.1 Flash supports 1,000,000 context tokens. If you use another model,
+		// 		// including one chosen when starting an agent, set this to its actual context window:
+		// 		"-c", "model_context_window=1000000",
+		// 		// The display name of the provider. Any name works here:
+		// 		"-c", "model_providers.provider.name=Provider",
+		// 		// The address Codex sends requests to: the provider's OpenAI-compatible address,
+		// 		// such as https://openrouter.ai/api/v1 on OpenRouter or
+		// 		// https://token-plan.maas.qwencloudapi.com/compatible-mode/v1 on Qwen Cloud:
+		// 		"-c", "model_providers.provider.base_url=YOUR_PROVIDER_URL",
+		// 		// Codex talks to the provider in the Responses API format. Keep it as it is:
+		// 		"-c", "model_providers.provider.wire_api=responses",
+		// 		// The name of the environment variable Codex reads the key from, keeping it off
+		// 		// the command line. Any variable name works as long as the entry's "env" uses
+		// 		// the same one:
+		// 		"-c", "model_providers.provider.env_key=PROVIDER_API_KEY",
+		// 	],
+		// 	// Provide your key here. Any variable name works if model_providers.provider.env_key
+		// 	// above uses the same one:
+		// 	"env": { "PROVIDER_API_KEY": "YOUR_API_KEY" },
+		// },
+		//
+		// Example 3: A program Facade does not know (sample: Aider)
+		// Setting "type": "custom" runs any terminal program that Facade does not natively support.
+		// Facade only starts the program in a terminal, so none of the built-in features apply:
+		// the program gets no Facade tools (it cannot message or start other agents), no YOLO options
+		// (its own approval prompts apply), no first task or messages (you type into its terminal
+		// yourself), no Resume or Pin, and Facade cannot tell whether the program is working. Setting
+		// "model" or "effort" on a custom entry is an error. The program still receives FACADE_AGENT
+		// and follows the shared "env" rules.
+		// "Aider": {
+		// 	"type": "custom",
+		// 	"icon": "facade-pink", // or values on line 38
+		// 	// Required. A program name looked up on PATH, or a full path. It must be a single
+		// 	// program, not a shell command line: pipes and && are not allowed:
+		// 	"program": "aider",
+		// 	// Passed to the program exactly as written, without Facade interpreting them.
+		// 	// For example, --model sonnet is Aider's own option, not Facade's "model" field:
+		// 	"args": ["--model", "sonnet"],
+		// },
+	}
+}

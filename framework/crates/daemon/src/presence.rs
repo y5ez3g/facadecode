@@ -1,6 +1,7 @@
-//! Restores and retires Guests, and validates an editor's terminal colors.
+//! Restores and retires Guests, validates an editor's terminal colors and maps a launch's.
 
 use facade_base::model::error::ErrorBody;
+use facade_base::start::LaunchColors;
 use facade_base::{
     model::agent::{AgentsUpdate, ManagedAgent},
     model::terminal::TerminalColors,
@@ -80,6 +81,22 @@ impl Daemon {
     }
 }
 
+/// The colors a foreground launch reported, as the agent's screen replies with them.
+pub(crate) fn launch_colors(colors: LaunchColors) -> facade_screen::TerminalColors {
+    let LaunchColors {
+        foreground,
+        background,
+        cursor,
+        ansi,
+    } = colors;
+    facade_screen::TerminalColors {
+        foreground,
+        background,
+        cursor,
+        ansi,
+    }
+}
+
 /// `colors` as the screen replies with them; a color that is not `#` and six hexadecimal digits
 /// is refused.
 pub(crate) fn terminal_colors(
@@ -103,5 +120,6 @@ pub(crate) fn terminal_colors(
         foreground: color("foreground", &colors.foreground)?,
         background: color("background", &colors.background)?,
         cursor: color("cursor", &colors.cursor)?,
+        ..facade_screen::TerminalColors::default()
     })
 }

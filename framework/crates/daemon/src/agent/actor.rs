@@ -20,7 +20,9 @@ use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::model::message::DeliveryFailure;
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::{
-    model::agent::{AgentRef, AgentsUpdate, ManagedAgent, ManagedAgentState, ToolsState, WaitKind},
+    model::agent::{
+        AgentRef, AgentsUpdate, ManagedAgent, ManagedAgentState, StateReason, ToolsState, WaitKind,
+    },
     model::terminal::{DEFAULT_TERMINAL_SIZE, InputInfo, InputState},
 };
 use facade_rules::{BoxReading, InputLine, InputRule, Rule, space_taken};
@@ -47,7 +49,7 @@ use super::typist::{
 use super::viewers::{ViewKind, ViewerRequest, Viewers};
 use super::{
     ActorStart, AgentCommand, FIRST_RUN, Input, InputRejection, Inspection, MAX_INPUT_BYTES,
-    ScreenStart, Shared, Submission, WatchdogSink,
+    ScreenStart, Shared, Submission, ToolsConnections, WatchdogSink,
 };
 use crate::messages::{DeliveryHandle, PromptNotice, PromptWatch, Settled};
 use crate::waits::Trouble;
@@ -66,6 +68,7 @@ const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 const REDRAW_NUDGE_TIMEOUT: Duration = Duration::from_millis(200);
 /// How long output settles before the screen is read for the CLI's status.
 const SCREEN_STATUS_DELAY: Duration = Duration::from_millis(200);
+const ERASE_SAVED_LINES: &[u8] = b"\x1b[3J";
 /// I13's idle-key latency target also bounds the time checking output before a person's key.
 const PROBE_TAKEOVER_READ_BUDGET: Duration = Duration::from_millis(16);
 
@@ -120,9 +123,9 @@ pub(super) struct Links {
     /// Marked at each output, for whoever follows the CLI's work, such as its session.
     pub(super) output: watch::Sender<()>,
     pub(super) changes: broadcast::Sender<AgentsUpdate>,
-    /// Keeps the tools channel open while the actor runs.
-    pub(super) _tools: Arc<watch::Sender<usize>>,
-    pub(super) tools_connections: watch::Receiver<usize>,
+    /// The actor changes the generation and whether it accepts tool connections.
+    pub(super) tools: Arc<watch::Sender<ToolsConnections>>,
+    pub(super) tools_connections: watch::Receiver<ToolsConnections>,
 }
 
 /// Builds the actor from `start` and runs it on its own task.
@@ -262,6 +265,7 @@ fn new_actor(start: ActorStart, links: Links, recovered: bool) -> anyhow::Result
         pending_tool_write: None,
         replies_dropped: false,
         untouched_input,
+        start_rows: untouched_input && !recovered,
     })
 }
 
@@ -282,9 +286,10 @@ impl DeliveryFrames {
                 InputState::Usable if typist.accepts_new_empty_evidence() => {
                     self.pending_empty_at.get_or_insert(position);
                 }
-                InputState::Draft
+                state
                     if before_edit
                         && self.pending_empty_at.is_some()
+                        && (state == InputState::Draft || reading.paste_tail.is_some())
                         && typist.redraws_delivery_draft(&reading) =>
                 {
                     self.pending_empty_at = None;
@@ -395,6 +400,8 @@ struct Actor {
     replies_dropped: bool,
     /// Automatic delivery can probe an unstyled hint before it accepts any external input.
     untouched_input: bool,
+    /// A new session whose conversation has not begun: what its start pushed off the screen can go.
+    start_rows: bool,
 }
 
 enum RedrawNudge {
@@ -607,8 +614,6 @@ impl Actor {
                 _ = sleep_until(self.glyph_at), if self.glyph_at.is_some() => self.advance_glyph(),
                 event = self.terminal.ready_with_input(wait, input, |action| update_write_fence(&mut self.typist, action)) => self.take_terminal(event),
                 Ok(()) = self.links.tools_connections.changed() => {
-                    let open = *self.links.tools_connections.borrow_and_update() > 0;
-                    self.state.tools_connection(open);
                     self.state_changed = true;
                 }
                 _ = sleep_until(self.typist_at), if self.typist_at.is_some() => self.type_next(),
@@ -663,7 +668,7 @@ impl Actor {
             self.glyph_at = None;
         }
         if self.prompt_ready.is_some()
-            && self.links.shared.record.lock().unwrap().info.tools_state != ToolsState::Connecting
+            && self.start_prompt_ready()
             && let Some(ready) = self.prompt_ready.take()
         {
             let _ = ready.send(());
@@ -671,6 +676,32 @@ impl Actor {
         if self.screen_unneeded() {
             self.screen_mut().let_go().await;
         }
+    }
+
+    /// Releases the first prompt after tools settle or while a live initializer awaits discovery.
+    fn start_prompt_ready(&self) -> bool {
+        let (tools, reason) = {
+            let record = self.links.shared.record.lock().unwrap();
+            (
+                record.info.tools_state,
+                record
+                    .info
+                    .state_detail
+                    .as_ref()
+                    .and_then(|detail| detail.reason),
+            )
+        };
+        if tools != ToolsState::Connecting {
+            return true;
+        }
+        let connections = *self.links.tools_connections.borrow();
+        connections.run == self.run
+            && connections.accepting
+            && connections.initialized > 0
+            && self
+                .state
+                .native_prompt_ready(reason == Some(StateReason::NotReady))
+            && self.read_screen_input().info.state != InputState::Interaction
     }
 
     /// Sets the screen up, starts keeping the state's facts, and takes up a run that is under way.
@@ -923,6 +954,7 @@ impl Actor {
                 captures,
                 launch_command,
                 tools,
+                colors,
                 reply,
             } => {
                 let Some((_, Size { cols, rows })) =
@@ -938,6 +970,9 @@ impl Actor {
                     return true;
                 }
                 self.restart_screen(cols, rows);
+                if let Some(colors) = colors {
+                    self.screen_mut().set_colors(colors);
+                }
                 // Dropping old viewers at restart leaves the new run at its requested size.
                 self.viewers.take_removed();
                 self.catch_up_at = Some(Instant::now());
@@ -963,10 +998,15 @@ impl Actor {
                 self.terminal.stop_observing_probe();
                 self.probe_takeover = None;
                 self.untouched_input = false;
+                self.start_rows = false;
                 self.ready_at =
                     self.readiness
                         .begin(self.state.started(), self.state.tools_given(), false);
                 self.record_state();
+                if self.early_exit.is_none() {
+                    // Offer the new generation before the installed record becomes visible.
+                    self.links.tools.send_modify(|tools| tools.accepting = true);
+                }
                 let record = {
                     let mut record = self.links.shared.record.lock().unwrap();
                     record.installed_run = run;
@@ -1177,7 +1217,7 @@ impl Actor {
             ));
         }
         if let Some(colors) = colors {
-            self.screen_mut().set_colors(colors);
+            self.screen_mut().set_named_colors(colors);
         }
         self.take_size(SizeRequest::Shared);
         Ok(())
@@ -1414,6 +1454,7 @@ impl Actor {
             self.screen_mut().observe_paint(true);
         }
         if self.terminal.read_starts_after_write()
+            || self.terminal.read_starts_at_paste()
             || self.terminal.read_starts_at_probe()
             || self.terminal.read_starts_at_draft_edit()
         {
@@ -1705,13 +1746,18 @@ impl Actor {
                         before_next,
                     );
                 }
-                if observes_delivery && writes == CursorRowWrites::Current {
-                    let reading = if untouched {
-                        read_box(rule, ended, None, screen, true, false)
-                    } else {
-                        reading
-                    };
-                    delivery.observe(reading, position, before_edit, typist);
+                if writes == CursorRowWrites::Current {
+                    if observes_delivery {
+                        let reading = if untouched {
+                            read_box(rule, ended, None, screen, true, false)
+                        } else {
+                            reading
+                        };
+                        delivery.observe(reading, position, before_edit, typist);
+                    } else if after_paste && typist.occupies_input() {
+                        // A full editor's visible tail can identify only this live paste.
+                        delivery.drawn = reading.paste_tail.is_some().then_some(reading);
+                    }
                 }
             }
         };
@@ -1918,12 +1964,17 @@ impl Actor {
                 before_next,
             );
         }
-        if fed.cursor_row_cells_written && self.terminal.output_follows_delivery_write() {
-            let reading = self.read_screen_input();
-            let position = self.terminal.output_position();
-            let before_edit = self.terminal.delivery_frame_precedes_edit(position);
-            self.delivery_frames
-                .observe(reading, position, before_edit, &self.typist);
+        if fed.cursor_row_cells_written {
+            if self.terminal.output_follows_delivery_write() {
+                let reading = self.read_screen_input();
+                let position = self.terminal.output_position();
+                let before_edit = self.terminal.delivery_frame_precedes_edit(position);
+                self.delivery_frames
+                    .observe(reading, position, before_edit, &self.typist);
+            } else if self.typist.occupies_input() && self.terminal.output_follows_paste() {
+                let reading = self.read_screen_input();
+                self.delivery_frames.drawn = reading.paste_tail.is_some().then_some(reading);
+            }
         }
         if fed.title_change.is_some() {
             self.record_title();
@@ -2040,6 +2091,9 @@ impl Actor {
     /// the run's output is read, or now if the terminal closed.
     fn end_run(&mut self, exit: ProcessExit, stopped: bool, stopped_by: Option<AgentRef>) {
         self.publish_at = None;
+        self.links
+            .tools
+            .send_modify(|tools| tools.accepting = false);
         self.state.ended(&exit, stopped);
         let creator = self.links.shared.record.lock().unwrap().info.creator_ref();
         self.observed_end = !stopped || stopped_by.is_none() || stopped_by != creator;
@@ -2092,6 +2146,9 @@ impl Actor {
         self.record_title();
         // Input bound to the ended run is refused from now on, also for senders waiting for room.
         self.run = run;
+        self.links
+            .tools
+            .send_replace(ToolsConnections::new(run, false));
         self.links.shared.run.store(run, Ordering::SeqCst);
         self.stop_input(&format!("{} is resuming", self.id));
         self.pending_size = None;
@@ -2480,8 +2537,7 @@ impl Actor {
             self.state_changed = true;
         }
         if self.typist.take_entered() && !self.start_holds_input() {
-            self.state.asked();
-            self.state_changed = true;
+            self.enters();
         }
         submitted
     }
@@ -2545,7 +2601,9 @@ impl Actor {
             InputState::Interaction
         } else if self.readiness.waiting_for_input()
             && reading.info.state != InputState::Interaction
-            && (self.typist.probing() || self.input_gate.blocks_delivery())
+            && (self.typist.probing()
+                || self.person_first(now)
+                || self.input_gate.blocks_delivery())
         {
             InputState::Unknown
         } else {
@@ -2581,6 +2639,9 @@ impl Actor {
         };
         let step = self.readiness.step(now, &view, &mut press);
         self.ready_at = step.wake;
+        if step.answered {
+            self.drop_start_rows();
+        }
         if step.tools_not_started {
             self.state.tools_not_started();
             self.state_changed = true;
@@ -2630,7 +2691,8 @@ impl Actor {
             || (self.ordered_input && self.typist.types_calls())
             || self.held_enter.is_some()
             || (self.start_holds_input()
-                && !(self.typist.probing() && self.readiness.waiting_for_input()))
+                && !(self.readiness.waiting_for_input()
+                    && (self.typist.probing() || matches!(next, Input::Raw(_)))))
         {
             return true;
         }
@@ -2680,6 +2742,7 @@ impl Actor {
 
     fn interrupt_probe_for_input(&mut self, at_key_boundary: bool) {
         if !self.typist.probing() {
+            self.yield_start_input_to_person();
             return;
         }
         let revoked = self.terminal.revoke_probe_key();
@@ -2698,11 +2761,22 @@ impl Actor {
                 self.warn_unerased_probe_space();
             }
         }
-        if self.readiness.interrupt_input_wait() {
-            self.state.tools_not_started();
-            self.state_changed = true;
-        }
+        self.yield_start_input_to_person();
         self.finish_observing_probe();
+    }
+
+    fn yield_start_input_to_person(&mut self) {
+        if self.readiness.waiting_for_input() {
+            let input = if self.state.native_wait().is_some() {
+                InputState::Interaction
+            } else {
+                self.typist.recall(self.read_screen_input()).info.state
+            };
+            if self.readiness.yield_to_input(input) {
+                self.state.tools_not_started();
+                self.state_changed = true;
+            }
+        }
     }
 
     fn check_probe_key(&mut self, key: ProbeKey) {
@@ -2958,8 +3032,7 @@ impl Actor {
 
         let mut pastes = None;
         if let Some(enter) = enter {
-            self.state.asked();
-            self.state_changed = true;
+            self.enters();
             let after = keys.split_off(enter.at + 1);
             if !after.is_empty() {
                 self.held.push_front((came, Input::Raw(after)));
@@ -3082,6 +3155,30 @@ impl Actor {
     /// Through which byte the input is queued.
     fn queued_through(&self) -> u64 {
         self.terminal.input_through() + self.terminal.queued() as u64
+    }
+
+    /// An Enter, typed or the person's, asks the CLI to do something. One that answers a question
+    /// of the CLI's own, which the screen still shows, may let the start's rows go.
+    fn enters(&mut self) {
+        if self.read_screen_input().info.state == InputState::Interaction {
+            self.drop_start_rows();
+        }
+        self.state.asked();
+        self.state_changed = true;
+    }
+
+    /// The person or Facade answers a question of the CLI's own before a new session's
+    /// conversation begins: the rows the question pushed off the top of the screen go, as the CLI
+    /// cannot erase them when it redraws. More than a screenful can be a conversation that the CLI
+    /// goes on with.
+    fn drop_start_rows(&mut self) {
+        let screen = self.screen().screen();
+        if self.start_rows
+            && self.state.said_line().is_none()
+            && (1..=usize::from(screen.rows())).contains(&screen.scrollback_rows())
+        {
+            self.feed_own(ERASE_SAVED_LINES);
+        }
     }
 
     /// A held Enter goes now: an agent that reads its terminal no more cannot see the input drawn.
@@ -3280,8 +3377,11 @@ impl Actor {
             .expect("the screen exists while the actor runs");
         self.state.observe(screen.screen());
         // A menu or question of the CLI's own in place of its input waits for the person.
-        let asking = self.read_screen_input().info.state == InputState::Interaction;
-        self.state.asks(asking, Instant::now());
+        let input = self.read_screen_input().info.state;
+        self.state
+            .asks(input == InputState::Interaction, Instant::now());
+        self.state
+            .shows_input(matches!(input, InputState::Usable | InputState::Draft));
         self.state_changed = true;
     }
 
@@ -3290,12 +3390,20 @@ impl Actor {
     /// error.
     fn record_state(&mut self) -> Option<bool> {
         self.state_changed = false;
+        let connections = *self.links.tools_connections.borrow_and_update();
+        if connections.run == self.run {
+            self.state.tools_connections(connections);
+        }
         let viewing = if self.viewers.is_watched() {
             Viewing::Watched
         } else {
             Viewing::Unwatched
         };
         let reading = self.state.read(Instant::now(), viewing);
+        self.start_rows &= !matches!(
+            reading.state,
+            ManagedAgentState::Working | ManagedAgentState::JustDone
+        );
         self.viewers.set_working(matches!(
             reading.state,
             ManagedAgentState::Starting | ManagedAgentState::Working
@@ -3491,18 +3599,16 @@ fn read_box(
     untouched_input: bool,
     cleanup_frame: bool,
 ) -> BoxReading {
-    let unknown = |evidence: &str, rule: Option<&InputRule>| BoxReading {
-        info: InputInfo {
-            state: InputState::Unknown,
-            evidence: evidence.to_string(),
-            mechanism: rule.map(InputRule::mechanism),
-            hidden: None,
-        },
-        draft: None,
-        draft_cursor: None,
-        line: None,
-        paste_drawing: None,
-        unsure: false,
+    let unknown = |evidence: &str, rule: Option<&InputRule>| {
+        BoxReading::new(
+            InputInfo {
+                state: InputState::Unknown,
+                evidence: evidence.to_string(),
+                mechanism: rule.map(InputRule::mechanism),
+                hidden: None,
+            },
+            None,
+        )
     };
     match (rule, undrawn) {
         (None, _) => unknown("the agent has no CLI rule to read its input by", None),
@@ -3558,7 +3664,7 @@ mod tests {
     async fn test_actor(folder: &Path, messages: &Messages) -> (Actor, TestCli) {
         let (master, cli) = test_terminal(80, 24).unwrap();
         let info = record(ProcessState::Running, None, 80, 24);
-        let (tools, tools_connections) = watch::channel(0);
+        let (tools, tools_connections) = watch::channel(ToolsConnections::new(FIRST_RUN, true));
         let links = Links {
             shared: Arc::new(Shared::new(info.clone())),
             room: Arc::new(Notify::new()),
@@ -3566,7 +3672,7 @@ mod tests {
             settled: watch::channel(false).0,
             output: watch::channel(()).0,
             changes: broadcast::channel(16).0,
-            _tools: Arc::new(tools),
+            tools: Arc::new(tools),
             tools_connections,
         };
         let start = ActorStart {
@@ -3623,7 +3729,7 @@ mod tests {
     async fn actor_with_cli(folder: &Path, deliveries: DeliveryHandle) -> (Actor, TestCli) {
         let (master, cli) = test_terminal(80, 24).unwrap();
         let info = record(ProcessState::Running, None, 80, 24);
-        let (tools, tools_connections) = watch::channel(0);
+        let (tools, tools_connections) = watch::channel(ToolsConnections::new(FIRST_RUN, true));
         let links = Links {
             shared: Arc::new(Shared::new(info.clone())),
             room: Arc::new(Notify::new()),
@@ -3631,7 +3737,7 @@ mod tests {
             settled: watch::channel(false).0,
             output: watch::channel(()).0,
             changes: broadcast::channel(16).0,
-            _tools: Arc::new(tools),
+            tools: Arc::new(tools),
             tools_connections,
         };
         let start = ActorStart {
@@ -7637,6 +7743,34 @@ mod tests {
         tokio::time::resume();
         write_input(&mut actor).await;
         expect_cli_input(&mut cli, b"x");
+    }
+
+    #[tokio::test]
+    async fn split_focus_keeps_startup_watching_until_a_persons_key_arrives() {
+        let folder = crate::test_folder::TestFolder::new("actor-startup-passive-focus");
+        let (messages, _) = messages();
+        let (mut actor, _cli) = actor_with_cli(&folder, messages.delivery_handle()).await;
+        let rule = facade_rules::find("agy").unwrap().unwrap();
+        actor.input_rule = Some(&rule.input);
+        actor.readiness = Readiness::new(Some(rule), &actor.id);
+        actor.ready_at = actor
+            .readiness
+            .begin(Instant::now(), crate::ToolsGiven::Injected, false);
+        assert!(actor.readiness.waiting_for_input());
+
+        for fragment in [b"\x1b[".as_slice(), b"I"] {
+            actor
+                .take_input(Input::Raw(fragment.to_vec()), actor.run)
+                .unwrap();
+            assert!(actor.readiness.waiting_for_input());
+        }
+        assert!(!actor.typist.probing());
+        actor
+            .take_input(Input::Raw(b"x".to_vec()), actor.run)
+            .unwrap();
+        assert!(!actor.readiness.waiting_for_input());
+        assert!(actor.held.is_empty());
+        assert_eq!(actor.terminal.queued(), 4);
     }
 
     #[tokio::test]

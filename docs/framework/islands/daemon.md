@@ -39,6 +39,10 @@ public `run()` entry point.
   before creating the branch or CLI process. An existing Agent resumes from its stored directory, CLI arguments,
   model and effort. During upgrade, a record without launch options takes the selected CLI's
   configured model and effort once and keeps an empty list of CLI arguments.
+- When a CLI rule requires a saved conversation, the holder checks the recorded session ID in the
+  CLI's native history using the effective launch environment and working folder. The check applies
+  to ended managed Resume candidates even without labels, and to exact or named resume before run
+  preparation. A saved conversation may have no title.
 - A start writes the record and any initial prompt before the run becomes available. It reserves
   the prompt result's number on its creator's machine. That machine accepts a result while the
   creator is present. Shell and editor launches have no Agent to receive such a result.
@@ -47,6 +51,11 @@ public `run()` entry point.
   text goes to the store or actor. Inspection reads this value from the same run as its screen
   facts. For a Terminal caller, inspection also reads the native session name or preview within the roster deadline.
   A recovered keeper run with no committed launch has no displayed command.
+- A start or resume takes the private launch context off its caller's environment. Only a Terminal
+  caller's terminal colors are used. They reach the agent's screen before the run's first output is
+  read, and a launch forwarded to another machine carries them as its whole environment. The daemon
+  keeps them in memory only. Without colors, a new agent's screen has none and a resume keeps the
+  agent's, an editor's included. With colors, a resume replaces all of them.
 - On Windows a stop releases the actor's copy of the pseudo console's signal pipe, then the
   keeper link's copy, before it asks the keeper to stop. Batch stop uses that same path and reports
   each selected Agent's outcome. Scope stops report connected Guests as skipped.
@@ -87,6 +96,8 @@ public `run()` entry point.
 - After a passive probe finds the service sleeping, Shell can call `offline_machine_name()`
   to read the committed local machine name through Store. A read-only connection uses a
   retained WAL and SQLite's shared memory. A checkpointed database is opened as immutable.
+- Shell's `status` calls `offline_clis(environment, folder)` for the CLIs a start there can run. It
+  reads the settings and looks for the programs as `cli.list` does.
 
 ## Storage format and migrations
 
@@ -207,10 +218,10 @@ Changes to the stored contract follow the [compatibility review](../ENGINEERING.
 | `operations.rs` | Starts, stops, resumes, renames and removes runs and records their exits. |
 | `resume.rs` | Finds stopped Agents and saved sessions and routes a chosen resume target. A local listing reads this machine and the supplied folder. A saved candidate carries an eight-character selector if it uniquely matches across the folder's saved sessions, including hidden ones, or the full ID. A named Shell listing reads managed Agents on the selected machine. The holder reads native names or previews using the recorded session ID and launch choices. |
 | `delivery.rs`, `command_replies.rs` | Deliver typed input, messages, initial prompts and results. A send keeps its typed target and reply reference through routing and replays receipts by request ID. The daemon serving a command-line request owns its in-memory reply waiter. |
-| `presence.rs` | Recovers Guests, retires their inboxes and validates editor terminal colors. |
+| `presence.rs` | Recovers Guests, retires their inboxes, validates an editor's terminal colors and maps those of a launch. |
 | `topics.rs`, `remote_agents.rs` | Maintain subscriptions, terminal viewers and each reachable peer's roster contribution. |
 | `machine_service.rs`, `network_operations.rs` | Authorize and register machine streams, track routes and resolve requests to stable targets. |
-| `relays.rs`, `service.rs` | Establish relay actors and serve both local and forwarded operations. |
+| `relays.rs`, `service.rs` | Establish relay actors and serve both local and forwarded operations. `service.rs` takes the launch context off every caller's environment and keeps the terminal colors of a Terminal caller. |
 | `recovery.rs` | Reconnects to keeper-held runs, restores screens and recovers pending deliveries. |
 | `command_line.rs` | Resolves launch environment, settings and program. `cli.list` uses the same resolver as start. |
 | `waits.rs` | Reports a managed run's trouble to its live agent creator, including across machines. |
@@ -236,7 +247,12 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
 - **Owns:** one actor per agent the daemon started (a guest has a handle with no actor). The actor holds the terminal (a `PtyIo`), the input waiting for it, the screen and its screen log, the state, the typist, the viewers and the start of each run. The agent's record (`AgentInfo`) is shared with its handles under a leaf lock; only the actor changes it while it runs. `framework/screens/<id>/`: one folder per agent, deleted through `Screens`.
 - **Keeps:**
   - Input and exits reach only the run they name. Each run has a number, starting at `FIRST_RUN`; `WriteInput`, `ProcessExited` and `StartPrompt` for any other run are refused as ended or dropped. An exit of a run whose terminal is not installed yet waits until it is.
-  - Automatic input never interleaves (RULES 1.10): messages wait behind the start prompt and what the start types. Keys and calls go on in the order they came, through one queue. They go after prior start keys, ordered sequences and the person's Enter. Where a probe occupies the input, the person's key or call takes priority.
+  - Automatic input never interleaves (RULES 1.10). Messages wait behind the start prompt and
+    tool startup. Calls wait while the startup watches for a usable input box. Keys also wait
+    once the startup owns the input ([readiness](#readiness)). Held keys and calls go on in the
+    order they came, after prior startup strokes, ordered sequences and the person's Enter.
+    Enter can hold later input until the terminal shows where it went. Where a probe occupies the
+    input, the person's key or call takes priority.
   - An ordered input sequence enters the typist once. Earlier accepted input runs first. Later calls and raw Attach input wait until the sequence's last write.
   - The person's keys wait for a message from its paste until a complete reading shows the paste has
     left, and while it is erased. A menu or question of the CLI's own takes the keys immediately.
@@ -288,14 +304,18 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     a caller needs their saved content.
     When the last managed run settles, the daemon releases its unused view storage and SQLite
     pager memory.
+  - A question taller than the screen, such as Kiro's trust-all-tools warning, pushes its top into
+    the scrollback, where the CLI's redraw after the answer cannot reach. When the person or Facade
+    answers a question of the CLI's own before anything was said in a new session, the actor erases
+    the scrollback (`CSI 3 J`, logged and shown) if it holds at most a screenful.
   - The record shows a run's end before anything waiting on the run learns it. The installed run
     number changes when its terminal is installed. Input is fenced from the previous run as soon
     as restart preparation begins.
   - Restart preparation reserves the next run and its requested size, waits for screen log room,
     and keeps the ended screen. Once the replacement run is committed and its terminal opens,
     the actor finishes the old viewer frame, logs an empty screen with fresh terminal modes,
-    and applies the requested size before reading the new run's output. The native title carries
-    across the reset.
+    and applies the requested size and any supplied colors before reading the new run's output.
+    The native title carries across the reset.
   - Recovery of a running record continues its replayed screen. When recovery adopts a Keeper
     run for an ended record with a different PID, the actor clears the replayed screen before
     reading output and uses the replacement terminal's size when available, or the replayed size.
@@ -306,6 +326,8 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     The actor recomputes on join, resize and detach. It applies PTY size and the logged screen
     size before delivering a full redraw. The grid stays at its last size when the last viewer
     leaves.
+  - After validating a viewer resize, the actor applies any supplied editor color sample to the
+    named foreground, background and cursor slots. The indexed ANSI palette stays in use.
   - A screen snapshot carries the agent name, process state and any recorded exit from the actor.
     An exact final snapshot waits for the existing exit drain and admits no live viewer.
     A dedicated Shell viewer signals the watched run's terminal exit independently of queued screen changes.
@@ -323,9 +345,12 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
 - **Interface:**
   - `spawn(ActorStart, rx, tx, changes) -> anyhow::Result<AgentHandle>`. `ActorStart` carries the
     record, `PtyMaster`, `ScreenStart`, rule name, `DeliveryHandle`, `StateStart` and initial colors.
+    `InstallRun` carries `Option<TerminalColors>`. `None` leaves the screen's colors in use and `Some`
+    replaces all of them, before the actor reads the run's terminal.
   - `AgentHandle` provides the current `info()`, `title()`, `rule()`, `exit()` and `installed_record()`.
     `lock_run_change()` serializes run transitions. `send(AgentCommand)` addresses the actor.
-    `tools_connected()` holds the tools connection until its guard drops. A Guest has methods for
+    `hold_tools_connection(run: u64, stage: ToolsStage) -> Option<ToolsConnection>` counts a verified
+    connection for the current installed run until its guard drops. A Guest has methods for
     applying its committed name and updating its online state.
   - `AgentCommand` includes `WriteInput` and `ResizeTerminal`, `AttachViewer`, `ResizeViewer` and `RemoveViewer`,
     `ReadScreen` and `Inspect`, along with run transitions and paste settlement. `Input` is `Raw`
@@ -374,6 +399,9 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 - **Keeps:** Every change is logged before the screen takes it. After 4 MiB of output a checkpoint is taken at a clean point; at the log's 64 MiB cap one is forced, and the log says what a recovery from it loses. A full log reads no output until its checkpoint is written; a failed checkpoint is tried again later. A checkpoint is synced before `current` names it, and the folder is synced before older generations are deleted. Recovery starts from the published checkpoint or a valid older one. Folders and files are private through base (0700 and 0600 on Unix); a folder is synced through base, which needs nothing on Windows.
 - **Never does:** touch the terminal; read CLI rules; know viewers; delete the agent's folder.
 - **Interface:** `create(folder, id, cols, rows)` (async), `recovered(folder, id, screen, log)`, `released(folder, id)`; changes: `feed(bytes) -> ParsedOutput`, `resize(cols, rows)`, `end_synchronized_update()`, `set_colors(TerminalColors)` (for the screen it holds and every screen it holds later); reads: `screen() -> &Screen`, `is_held()`; checkpoints: `checkpoint_if_due()`, `is_full()`, `checkpoint_running()`, `checkpoint_written()` (async), `finish_checkpoint(written)`; memory: `let_go()`, `hold()`, `hold_with_log()`, `finish()` (async). Recovery uses `recover`, `recover_after_clean_end` and `saved_size`; the daemon's lifecycle waits for `screen_writes()` to reach 0 before it exits or a newer build takes over.
+- `set_named_colors(&mut self, colors: TerminalColors)` replaces the three named slots, including
+  any absent slot, and retains all indexed ANSI slots. Like `set_colors`, it updates the held Screen
+  and the sample used when the same Logged Screen opens a Screen again.
 - `set_status_glyph(Option<String>) -> Vec<u8>` forwards to the held screen and returns the title
   bytes for viewers. The screen log and checkpoints keep the CLI's own title.
 
@@ -388,10 +416,16 @@ The terminal, as a `PtyIo`, and the input waiting for it.
   - Under `background_report`, a `working` report with matching words becomes idle evidence.
   - Under `background_correction`, a `working` report is narrowed to idle evidence while the screen
     matches the rule's idle anchors. The rule applies regardless of the CLI's installed version.
+  - Under `answers_ask`, a reported question reads as done while the CLI's input, empty or with a draft, is on
+    the screen.
   - A start and the tools' connection get 30 seconds each. Time the CLI spends asking a question does not count.
+  - For a CLI that defers its tool catalog, a live authenticated initializer keeps the tools `Connecting`
+    without adding a startup overlay or tools timeout. Native startup keeps its own deadline. The initial
+    prompt can proceed when native startup is shown and no question is open, or after the existing
+    native startup deadline if it fails. The typist still checks whether it can write the prompt safely.
   - Only `keep` writes the state file, through a private temporary file and a rename. What the screen shows is read again, never kept.
 - **Never does:** touch the terminal; change the agent's record; publish.
-- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(asking, now)`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connection(open)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
+- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(asking, now)`, `shows_input(shown)`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connections(connections: ToolsConnections)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
 
 #### glyph
 
@@ -546,11 +580,27 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
 authenticated Agent start when the target home has YOLO on. On a person's start or resume, the CLI's trust
 question stays available for the person.
 
+The tool startup has two parts, the same for every rule with `ReadyTools`.
+
+- **Before it owns the input** it only waits for the input box. The person's first raw key ends it for
+  that run. The tools then count as not started, and what was held is released before the key is
+  taken. The startup types nothing afterwards. The next run tries again. While the CLI shows a
+  recognized question, keys and calls are let through and the startup goes on after it. Otherwise calls and
+  messages wait and do not end it. Focus reports are not keys. Any other raw input
+  counts as one, such as the Up or Down a terminal app makes of its wheel. So an early key can skip a CLI's automatic tool
+  startup. The tools still read available once their relay connects.
+- **Once it owns the input** the actor holds keys and calls through the startup strokes. The
+  startup pastes its command into the complete, empty input of a CLI at rest. When the startup
+  finishes or yields, the actor releases held input in its accepted order.
+
 - **Owns:** the rule's `ReadyTools` and `TrustQuestion`, how far each has got, and when each wait ends.
 - **Keeps:** The startup deadline for a usable box also bounds the command echo and panel phases. The command must show alone in a complete input frame before Enter. The open panel must show the tools ready in a complete frame before Escape. The actor validates the current complete composer for the command and Enter, and the open ready panel for Escape. It reads the available terminal output before attempting each stroke. A question releases the person and withdraws unissued startup strokes. The same deadline fences each handoff. At the deadline the typist and actor withdraw unissued startup strokes, and the start reports any possible remaining command and that the first turn may lack the tools. An issued close key's interval starts at the write time recorded by Terminal. The actor waits for confirmation and releases the person's input as soon as that interval has elapsed. Each key of the trust answer waits for the screen to be still for 1 second. The trusting answer goes once per run while it is selected.
 - **Never does:** type (it hands each `Press` to the actor, which gives it to the typist); read the terminal; hold input; change the state.
-- **Interface:** `new(rule, id)`, `begin(started, tools, allow_auto_trust) -> Option<Instant>`, `end()`, `step(now, &StartView, press) -> StartStep { wake, tools_not_started }`, `tool_write_matches(screen, input, draft, composer_allowed)`, `tool_write_issued()`, `tool_write_arrived(written_at)`,
-  `holds_input(InputState)`, `readies_tools()`, `is_under_way()`.
+- **Interface:** `new(rule, id)`, `begin(started, tools, allow_auto_trust) -> Option<Instant>`, `end()`,
+  `step(now, &StartView, press) -> StartStep`, `tool_write_matches(screen, input, draft, composer_allowed)`,
+  `tool_write_issued()`, `tool_write_arrived(written_at)`, `holds_input(InputState)`,
+  `waiting_for_input()`, `readies_tools()` and `is_under_way()`. The actor can interrupt the
+  wait for the composer when the person's input takes priority.
 
 ### messages
 
@@ -740,8 +790,8 @@ The keeper connection, the run registry, and starts not yet registered.
 
 #### preparation
 
-A run's command line, environment, folder, plugin and session following.
-`runs/preparation/` (`mod.rs`, `environment.rs`, `folder.rs`, `plugin.rs`, `session.rs`).
+A run's command line, environment, folder, plugin, workspace configuration and session following.
+`runs/preparation/` (`mod.rs`, `environment.rs`, `folder.rs`, `plugin.rs`, `projection.rs`, `session.rs`).
 
 - **Owns:** composing a run's command line from its rule (`facade_rules::start_managed_launch_command`,
   `resume_managed_launch_command`) with a fresh credential for the private relay and the managed
@@ -749,8 +799,8 @@ A run's command line, environment, folder, plugin and session following.
   wrapper (`facade_rules::direct_command`). It builds the run's environment from the client's by the
   rule of `env` in
   [`StartArgs`](../../../framework/protocol/DAEMON.md#startargs) and `FACADE_HOME`. It owns private
-  run folders `framework/runs/<agent>/<random>/`, with the session
-  file, the tool files and a `plugin-folder` note naming the project whose plugin a start placed;
+  run folders `framework/runs/<agent>/<random>/`, with the session file, the tool files, aliases to retained
+  configuration entries, and a `plugin-folder` note naming the project whose plugin a start placed;
   Facade's plugin in a project's `.agents/plugins/facade/`, the starts holding it and the runs
   using it; one session follower per running run.
 - **Keeps:** an agent has at most one run folder, and a folder name is never used again; a resume
@@ -763,8 +813,13 @@ A run's command line, environment, folder, plugin and session following.
   in use if the plugin has the old skill file and every current template file is a regular file with
   matching bytes.
   The files stay in place during the hold. Once the folder is free, the next start replaces the plugin.
-  Only CLIs for which `facade_rules::uses_folder_plugin` holds use it. The session file is checked
-  by its modified time and size a second after the run's terminal gives output, as a CLI saves its
+  Only CLIs for which `facade_rules::uses_folder_plugin` holds use it. A run-owned workspace file has
+  a private ownership record with its canonical workspace, relative path and content digest. Preparation
+  publishes a complete file without replacing existing content. It removes the owned file, and the folders
+  that leaves empty, on exit, failed launch, replacement and orphan cleanup. Edits or substitutions leave the
+  file alone.
+  The session file is checked by its modified time and size a second after the run's terminal gives
+  output, as a CLI saves its
   session while it works: at most once a second while output goes on, once more a quiet second
   after it, and nothing while the run is idle. It is read when they change, when it names a session
   its CLI has not saved yet, and once more after the run ends; a session that failed to commit is
@@ -970,6 +1025,10 @@ the available page. When a run ends, the daemon releases its tools readiness gua
 
 One table defines the eight tools served by `tools/list` and dispatched by `tools/call`. The
 catalog is sent as shipped, and a verified connection reports tools ready when it serves the list.
+When a CLI defers its tool catalog, the holder tracks a live, credentialed initializer independently of
+the verified catalog response. Both refer to the current installed run and end with their relay connection.
+A reconnect or a tool-call routing connection supplies no catalog evidence for that CLI. After Daemon
+replacement the holder waits for fresh verified evidence and reports tools available after `tools/list`.
 The tools use the same targets, machine routing and operation requirements as other daemon clients. `list_agents`
 adds available CLI names on answered, reachable machines within the roster deadline.
 Local Managed discovery uses the verified run environment and working directory. Guest discovery and remote

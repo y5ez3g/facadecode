@@ -13,7 +13,7 @@ use facade_base::model::error::ErrorBody;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::{InboxAnswer, InboxOutput, Relay};
+use super::{AcquirePresence, CatalogEvent, InboxAnswer, InboxOutput, Initialization, Relay};
 use crate::{
     Cancel,
     delivery::SendControl,
@@ -83,18 +83,19 @@ pub(crate) type DiscoverClis = Box<
         + Sync,
 >;
 
-pub(crate) type ToolsPresence = Box<dyn Send + Sync>;
-
-/// The instructions for the managed run the daemon verifies during initialization.
+/// The instructions for the verified run and its prepared initialize lease.
 pub(crate) type ManagedInstructions = Box<
-    dyn for<'a> Fn(Option<&'a str>) -> ActorFuture<'a, Result<Option<String>, ErrorBody>>
+    dyn for<'a> Fn(Option<&'a str>) -> ActorFuture<'a, Result<Initialization, ErrorBody>>
         + Send
         + Sync,
 >;
 
-/// Holds tools readiness for a run the daemon can verify without joining a Guest.
+/// Prepares catalog presence for a verified run without joining a Guest.
 pub(crate) type Ready = Box<
-    dyn for<'a> Fn(Option<&'a str>) -> ActorFuture<'a, anyhow::Result<Option<ToolsPresence>>>
+    dyn for<'a> Fn(
+            Option<&'a str>,
+            CatalogEvent,
+        ) -> ActorFuture<'a, anyhow::Result<Option<AcquirePresence>>>
         + Send
         + Sync,
 >;
@@ -134,7 +135,7 @@ impl Verified {
         &self,
         relay: &Relay,
         client_name: Option<&str>,
-    ) -> Result<Option<String>, ErrorBody> {
+    ) -> Result<Initialization, ErrorBody> {
         {
             let mut connection = self.connection.lock().await;
             if connection.actor.is_none() {
@@ -163,17 +164,21 @@ impl Verified {
         Ok(actor)
     }
 
-    pub(super) async fn hold_presence(&self, relay: &Relay) {
-        let mut presence = relay.presence.lock().await;
-        if presence.is_none() {
-            match (self.services.ready)(credential(relay)).await {
-                Ok(held) => *presence = held,
-                // The callback can inspect private run material. Keep it out of logs.
-                Err(_) => facade_base::log::write(
+    pub(super) async fn prepare_presence(
+        &self,
+        relay: &Relay,
+        event: CatalogEvent,
+    ) -> Option<AcquirePresence> {
+        match (self.services.ready)(credential(relay), event).await {
+            Ok(acquire) => acquire,
+            // The callback can inspect private run material. Keep it out of logs.
+            Err(_) => {
+                facade_base::log::write(
                     "facade-mcp",
                     "warn",
                     "could not show that the verified run's tools are there",
-                ),
+                );
+                None
             }
         }
     }

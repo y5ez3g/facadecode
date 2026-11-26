@@ -606,19 +606,15 @@ mod tests {
     use super::*;
 
     fn reading(state: InputState, draft: Option<&str>) -> BoxReading {
-        BoxReading {
-            info: InputInfo {
+        BoxReading::new(
+            InputInfo {
                 state,
                 evidence: String::new(),
                 mechanism: None,
                 hidden: None,
             },
-            draft: draft.map(str::to_string),
-            draft_cursor: None,
-            line: None,
-            paste_drawing: None,
-            unsure: false,
-        }
+            draft.map(str::to_string),
+        )
     }
 
     fn nothing() -> BoxReading {

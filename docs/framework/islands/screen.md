@@ -15,8 +15,8 @@ All of it in memory, one set per `Screen`:
   tracks paint during input observations, using one byte per visible cell while tracking is active.
 - **The unit being written**: the bytes of a character, escape sequence or control string the CLI
   has started and not finished.
-- **Supplied terminal colors**: optional foreground, background and cursor RGB values, used for
-  replies to OSC 10, 11 and 12 queries.
+- **Supplied terminal colors**: optional RGB values for the foreground, background, cursor and the
+  16 colors of the ANSI palette, used for replies to OSC 10, 11, 12 and 4 queries.
 - **The native title**. The last title change reported by the terminal parser, used for
   `title_change` and checkpoint redraws.
 - **The status glyph**. The value supplied by the agent actor. Viewer output and viewer redraws
@@ -70,8 +70,8 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
   states.
 - Touch the disk, start processes or threads, or read the clock. The only time it handles is the
   deadline alacritty puts on a synchronized update.
-- Reply with a color it was not given, reply to other color queries such as OSC 4, the kitty
-  keyboard query, or ENQ.
+- Reply with a color it was not given, or reply to an OSC 4 query above index 15, any other color
+  query, the kitty keyboard query, or ENQ.
 - Show a frame that an open synchronized update is still holding back.
 
 ## Interface
@@ -90,9 +90,10 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
   when its output spanned several reads. OSC status observations carry the offset of the opening
   escape, which can precede the read that completed it.
 - `set_colors(&mut self, colors: TerminalColors)` replaces the colors used for subsequent queries.
-  `TerminalColors { foreground, background, cursor }` has three `Option<[u8; 3]>` fields; its
-  default leaves all three `None`. OSC 10, 11 and 12 replies use `rgb:rrrr/gggg/bbbb`, each 8-bit
-  channel written twice, and the query's BEL or ST ending. No supplied colors means no color replies.
+  `TerminalColors { foreground, background, cursor, ansi }` has three `Option<[u8; 3]>` fields and
+  `ansi: [Option<[u8; 3]>; 16]`, indexed by OSC 4 color number; its default leaves every color
+  `None`. OSC 4, 10, 11 and 12 replies use `rgb:rrrr/gggg/bbbb`, each 8-bit channel written twice,
+  and the query's BEL or ST ending. No supplied colors means no color replies.
 - `at_clean_point()`, then `redraw_with_all_scrollback() -> Vec<u8>` for a checkpoint;
   `on_alternate_screen()` and `has_unfinished_unit()` to say what a forced checkpoint loses.
 - `restore_title(&mut self, title: &str)` seeds the title saved alongside a restored redraw before
@@ -166,12 +167,17 @@ which replays at most `REDRAW_SCROLLBACK_ROWS` (1,000) scrollback rows. A redraw
   resets the selection on a redraw or explicit scrollback clear.
 - `selection_view(offset) -> SelectionView` captures one viewport of styled cells at the same
   offset as `redraw_scrollback_view`. `SelectionView::redraw(selected)` paints that capture with
-  optional selection endpoints. `SelectionView::text(anchor, end)` copies the highlighted cells,
-  including selected spaces. The one-based `(column, row)` endpoints are inclusive and can be in
-  either order. The selection includes whole wide characters and joins soft wraps in copied text.
+  optional selection endpoints. `SelectionView::text(anchor, end)` copies the highlighted cells
+  without the blanks at the end of a line. The one-based `(column, row)` endpoints are inclusive and
+  can be in either order. The selection includes whole wide characters and joins soft wraps in
+  copied text.
 - `title_output()` gives the sanitized title sequence for viewers using the same status glyph rule
   as viewer output. It is empty when the CLI has no nonblank title.
-- `reports_mouse()` follows the CLI's active tracking mode. `encode_wheel(col, row, delta, modifiers)`
+- `end_synchronized_update()` before a full frame, when Shell cannot wait for the update to end: the
+  frame then includes the output held back, and what follows it continues from there.
+- `reports_mouse()` follows the CLI's active tracking mode. `mouse_modes()` sets the CLI's tracking
+  and encoding modes on a viewer, on or off, with each group's active mode last: a terminal can take
+  any reset as turning the whole group off. Redraws use it too. `encode_wheel(col, row, delta, modifiers)`
   uses the current SGR, UTF-8 or legacy encoding. It takes one-based grid coordinates, 120 delta
   units per tick, positive for up, and Shift, Alt and Ctrl bits 4, 8 and 16. It returns `None`
   without tracking or when the input cannot produce a report.
@@ -185,7 +191,8 @@ which replays at most `REDRAW_SCROLLBACK_ROWS` (1,000) scrollback rows. A redraw
 
 **Rules** (`rules/src/state.rs`, `rules/src/input/`): `ScreenView { rows, cols, continues, cursor,
 cursor_visible, synchronized_update }` and each cell's `text()`, `column`, and attributes identify
-a CLI's input box and state on screen. `observe_paint` tracks changes from a
+a CLI's input box and state on screen. Cells with equal terminal foregrounds have the same
+`foreground` value. `observe_paint` tracks changes from a
 caller's output boundary. `painted_at`, `printed_space_at`, and `line_feed_at` report their order
 in the current observation after a complete frame. `output_frame_complete` also covers the case
 where only the start of a synchronized update has arrived.
@@ -198,7 +205,8 @@ limits it sets.
 ## Depends on
 
 - `alacritty_terminal` 0.26.0 from `framework/vendor/`, whose changes let a grid hand the rows its
-  scrollback lets go of to a `HistoryKeeper` and take rows back (`vendor/README.md`).
+  scrollback lets go of to a `HistoryKeeper` and take rows back (`vendor/README.md`). A clear of
+  the main screen erases the page in place, preserving only its earlier scrollback.
   The Screen queries the cursor row's damage as applied by the terminal parser.
 - `vte` 0.15.0, alacritty's parser, from `framework/vendor/`. Complete synchronized frames are
   parsed from the incoming bytes. An open frame holds what it needs across reads in fixed-capacity
@@ -254,7 +262,8 @@ The files:
    opened again after, so the cursor is right and a redraw still waits for the whole frame.
 3. `OSC 7501 ; ?` queues its reply among alacritty's. Then the screen takes alacritty's replies,
    color queries and title changes in order. Supplied colors go through alacritty's formatter into
-   the same replies; other color queries get no reply. The screen remembers the latest title and
+   the same replies: OSC 10, 11 and 12 by their named colors, OSC 4 by its index in `ansi`. Other
+   color queries get no reply. The screen remembers the latest title and
    returns the replies and title changes with the viewer output and status events.
 
 ### resize

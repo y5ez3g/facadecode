@@ -2,10 +2,16 @@
 
 mod claude;
 mod codex;
+mod copilot;
+mod cursor;
+mod devin;
 mod indexes;
+mod kiro;
 mod muse;
+mod omp;
 mod paths;
 mod pi;
+mod qoder;
 mod sqlite;
 mod transcript;
 
@@ -24,6 +30,8 @@ use facade_base::system::{env_var, home_folder_in};
 use super::{parse_session_id, reported_path};
 use crate::Rule;
 
+pub(crate) use copilot::config_dir as copilot_config_dir;
+pub(crate) use qoder::config_dir as qoder_config_dir;
 /// A resumable session that its CLI has saved in the selected folder's history.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SavedSession {
@@ -68,6 +76,19 @@ pub fn session_for_id(
         .next())
 }
 
+/// The native profile Kiro saved for this local V3 session.
+pub(crate) fn kiro_profile(
+    folder: &Path,
+    environment: &BTreeMap<String, String>,
+    id: &str,
+) -> Option<String> {
+    let home = home_folder_in(environment).map(|home| folder.join(home));
+    let root = super::kiro_config_root(home.as_deref(), environment)?;
+    kiro::profile(&root, &Folder::new(folder, Some(id)))
+        .ok()
+        .flatten()
+}
+
 fn read_reported_session(
     cli: &str,
     report: &Path,
@@ -78,6 +99,8 @@ fn read_reported_session(
         "claude" => claude::conversation,
         "codex" => codex::reported,
         "pi" => pi::conversation,
+        "omp" => omp::conversation,
+        "qoder" => qoder::conversation,
         _ => return Ok(None),
     };
     let Some(path) = reported_path(report, id) else {
@@ -129,6 +152,19 @@ fn read_sessions(
             path.map(|file| indexes::opencode(&file, scope))
         }
         "pi" => return pi::list(rule, scope, home, environment, args),
+        "devin" => return devin::list(scope, environment),
+        "copilot" => copilot::config_dir(rule, folder, environment, args)
+            .map(|root| copilot::list(&root, scope)),
+        "agent" => {
+            cursor::config_root(folder, home, environment).map(|root| cursor::list(&root, scope))
+        }
+        "kiro-cli" => {
+            super::kiro_config_root(home, environment).map(|root| kiro::list(&root, scope))
+        }
+        "qoder" => {
+            qoder::config_dir(rule, folder, environment, args).map(|root| qoder::list(&root, scope))
+        }
+        "omp" => return omp::list(rule, scope, home, environment, args),
         _ => None,
     }
     .unwrap_or_else(|| Ok(Vec::new()))
@@ -204,7 +240,7 @@ impl<'a> Folder<'a> {
 }
 
 fn uuid(id: &str) -> Option<String> {
-    parse_session_id(id).filter(|id| !id.starts_with("ses_"))
+    super::is_uuid(id).then(|| id.to_ascii_lowercase())
 }
 
 fn title(native: Option<&str>, prompt: Option<&str>) -> Option<String> {
@@ -259,6 +295,28 @@ fn entries(dir: &Path, take: impl Fn(&str) -> bool) -> Result<Vec<PathBuf>, Erro
         }
     }
     Ok(paths)
+}
+
+/// Reads a small native metadata sidecar, which may be between writes during an active session.
+fn read_metadata<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, ErrorBody> {
+    Ok(read_metadata_bytes(path, 1024 * 1024)?
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok()))
+}
+
+fn read_metadata_bytes(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, ErrorBody> {
+    use std::io::Read;
+
+    if !metadata(path)?.is_some_and(|metadata| metadata.is_file()) {
+        return Ok(None);
+    }
+    let Some(file) = if_present(path, fs::File::open(path))? else {
+        return Ok(None);
+    };
+    let mut bytes = Vec::new();
+    file.take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| store_error(path, error))?;
+    Ok((bytes.len() as u64 <= limit).then_some(bytes))
 }
 
 #[cfg(test)]

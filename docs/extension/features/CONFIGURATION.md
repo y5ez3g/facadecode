@@ -90,15 +90,15 @@ ARCHITECTURE-1.4 owns the migration of legacy workspaces.
 
 **Facade writes settings only when creating a missing file.**
 
-The first read, Open facade.json, and any later read that finds the file missing use one creation step. With no
-0.1.2 settings to move, the file starts with `yolo: true`, then `names` with the 140 built-in names. Next come comments
-listing the eight entry fields and explaining why Facade adds options, then `clis`.
+The Orchestrator writes the file from one template where it is missing: when it first reads its settings, and when its
+status names the file, which Open facade.json opens. The file starts with `yolo: true`, then `names` with the 140
+built-in names. Next come comments listing the eight entry fields and explaining why Facade adds options, then `clis`.
+The template holds the defaults, so a home reads the same before and after the file is written.
 
-Each of the six built-ins shows `type` and `icon` set to its ID, `args: []`, `env: {}` and `enabled: true`.
+Each of the twelve built-ins shows `type` and `icon` set to its ID, `args: []`, `env: {}` and `enabled: true`.
 `program`, `model` and `effort` are commented out with sample values; OpenCode has one comment saying model and effort
-belong in its own configuration instead. Each `icon` has `// or values on line N`, where N is the field list's icon
-line. A migrated value is written out over its sample. An explicit `null` stays `null`, including in `args`, `env` and
-`enabled`; only an absent field takes its default.
+belong in its own configuration instead, and Devin and Cursor one saying the model sets the effort. Each `icon` has
+`// or values on line N`, where N is the field list's icon line.
 
 Comments explain tools, session tracking, folder trust and launch settings, followed by each built-in's additions,
 YOLO behavior, model and effort handling, and how its arguments and environment are combined with Facade's.
@@ -115,25 +115,18 @@ and use DeepSeek V4.1 Flash as the sample model. To use one, remove its outer `/
 check the provider's model names. Inner explanations remain comments. Trailing commas let any combination of the
 examples be uncommented together.
 
-A key written into the file is stored there in plain text. `${env:NAME}` reads it from the editor's environment and
-keeps it out of this settings file. Facade does not add the key to the command line. CLI-specific handling still
-applies: Claude's private run file holds the expanded environment under 5.1, and Codex's `env_key` uses the process
-environment under 5.2.
+A key written into the file is stored there in plain text. `${env:NAME}` reads it from the environment the agent is
+started with and keeps it out of this settings file.
 
-If released settings exist, group 6 moves them over these defaults. Saved values win, including invalid values that
-need correction. Added entries follow the six built-ins, before the commented examples, in their migration order.
 An existing file, including an empty one, is never regenerated or reformatted.
 
-Creation is atomic and never replaces a file that another window or the person created first. On POSIX, both the
+Creation is atomic and never replaces a file that another process or the person created first. On POSIX, both the
 temporary file and the final file have mode 0600: only the current user can read and write them. On Windows, Facade
 sets no access control list. Files inherit their folder's permissions. At the default root, `%USERPROFILE%\.facade`,
 privacy comes from the user profile's permissions. A `FACADE_HOME` elsewhere must be a folder only its user can read.
 
-A failed write reports the reason and leaves no partial settings file. It is not treated as a successful creation or
-as permission to use defaults. If the file disappears between creation and reading, retry creation and reading once.
-
-For example, if two windows try to create the file, one creates it. The other reads that file. It does not overwrite
-it or show a second migration notice.
+A failed write leaves no partial settings file, and the defaults the template holds still apply. If two processes try
+to create the file, one creates it, and the other reads that file without overwriting it.
 
 ### 1.4 Top-level fields
 
@@ -158,7 +151,7 @@ The settings file and its documentation use `cli`, `program`, `args`, `env`, `mo
 Native CLI keys keep their native spelling.
 
 For example, `{"yolo": false, "clis": {"pi": {"enabled": false}}}` uses normal native permissions and hides Pi from
-new starts. The six built-in entries still exist when `clis` is empty.
+new starts. The twelve built-in entries still exist when `clis` is empty.
 
 ## 2 CLI entries
 
@@ -168,12 +161,13 @@ new starts. The six built-in entries still exist when `clis` is empty.
 
 | Key | Meaning |
 | --- | --- |
-| `claude`, `codex`, `agy`, `muse`, `opencode`, `pi` | Change that built-in; omitting the entry restores its defaults |
+| `claude`, `codex`, `agy`, `muse`, `opencode`, `pi`, `devin`, `agent`, `kiro-cli`, `qoder`, `omp`, `copilot` | Change that built-in; omitting the entry restores its defaults |
 | Any other valid name | Add an independent entry with a required `type` |
 
 Names are case-sensitive. They can contain Unicode, spaces and punctuation such as `·`. They need a visible character, have no
 leading or trailing whitespace, and contain no control characters. An added name cannot match a built-in ID or display
-name without regard to case: the six IDs above, Claude Code, Codex, Antigravity, Muse Code, OpenCode and Pi.
+name without regard to case: the twelve IDs above, Claude Code, Codex, Antigravity, Muse Code, OpenCode, Pi, Devin,
+Cursor, Kiro, Qoder, Oh My Pi and GitHub Copilot CLI.
 `claude` itself changes the built-in; `Claude`, `CLAUDE` and `Claude Code` cannot name a new entry.
 The editor schema enforces the same name rules as the reader (1.2).
 
@@ -190,7 +184,7 @@ entry, including its program, arguments or disabled state. `"CODEX"` is not an a
 
 | Field | Accepted value | Default |
 | --- | --- | --- |
-| `type` | `claude`, `codex`, `agy`, `muse`, `opencode`, `pi`, `custom` | Built-in name: that type, and no other; added name: required |
+| `type` | A built-in ID in 2.1, or `custom` | Built-in name: that type, and no other; added name: required |
 | `icon` | One built-in ID or robot value in 2.4 | The type's icon; `facade-pearl` for `custom` or a missing/unknown type |
 | `program` | One nonblank program name or path | The type's command on PATH; required for `custom` |
 | `args` | Array of literal strings, including empty strings | `[]` |
@@ -261,7 +255,8 @@ For example, this starts Aider with its own arguments. Facade does not interpret
 
 **An entry's `icon` chooses its image; without it, the entry uses its type's icon.**
 
-The built-in values are `claude`, `codex`, `agy`, `muse`, `opencode` and `pi`. The 16 robot values are `facade-red`,
+The built-in values are `claude`, `codex`, `agy`, `muse`, `opencode`, `pi`, `devin`, `agent`, `kiro-cli`, `qoder`, `omp`
+and `copilot`. The 16 robot values are `facade-red`,
 `facade-orange`, `facade-amber`, `facade-lime`, `facade-green`, `facade-teal`, `facade-sky`, `facade-blue`,
 `facade-violet`, `facade-pink`, `facade-aurora`, `facade-sunset`, `facade-ocean`, `facade-orchid`, `facade-pearl` and
 `facade-graphite`. A `custom` entry, or one whose type is missing or unknown, defaults to `facade-pearl`.

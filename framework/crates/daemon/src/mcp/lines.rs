@@ -6,7 +6,10 @@ use serde::{Deserialize, Deserializer, Serialize, de::IgnoredAny};
 use serde_json::{Value, json, value::RawValue};
 
 use super::replies::{ReplyTarget, tool_result};
-use super::{Relay, TOOLS, Tool, ToolCall, ToolEntry, verified_tools};
+use super::{
+    CatalogEvent, Initialization, PresenceStage, Relay, TOOLS, Tool, ToolCall, ToolEntry,
+    verified_tools,
+};
 use crate::delivery::SendTurn;
 use crate::lifecycle::RelayLink;
 use crate::server::Outbox;
@@ -296,7 +299,10 @@ async fn initialize(relay: &Relay, params: &Value) -> Result<Value, Refused> {
         .into_iter()
         .find(|known| Some(*known) == asked)
         .unwrap_or(MCP_VERSIONS[0]);
-    let instructions = relay
+    let Initialization {
+        instructions,
+        acquire,
+    } = relay
         .verified
         .initialize(relay, params["clientInfo"]["name"].as_str())
         .await
@@ -305,20 +311,27 @@ async fn initialize(relay: &Relay, params: &Value) -> Result<Value, Refused> {
                 INTERNAL_ERROR,
                 "could not load the managed run's instructions".into(),
             )
-        })?
-        .unwrap_or_else(facade_base::instructions::for_connection);
-    Ok(json!({
+        })?;
+    let instructions = instructions.unwrap_or_else(facade_base::instructions::for_connection);
+    let reply = json!({
         "protocolVersion": version, "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": { "name": "facade", "version": facade_base::VERSION },
         "instructions": instructions,
-    }))
+    });
+    if let Some(acquire) = acquire {
+        relay.acquire_presence(PresenceStage::Initialized, acquire);
+    }
+    Ok(reply)
 }
 
+/// The answer to `tools/list`: the shipped definitions. Every tool returns the same envelope
+/// (MCP-1.2), so the catalog omits result schemas.
 async fn list_tools(relay: &Relay) -> Value {
     crate::gate_for_test("mcp-before-tools-list");
-    relay.hold_verified_presence().await;
     let tools: Vec<&Value> = TOOLS.iter().map(|entry| &entry.definition).collect();
-    json!({ "tools": tools })
+    let catalog = json!({ "tools": tools });
+    relay.hold_verified_presence(CatalogEvent::Listed).await;
+    catalog
 }
 
 async fn call_tool(

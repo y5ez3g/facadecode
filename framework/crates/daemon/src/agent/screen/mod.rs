@@ -418,6 +418,13 @@ impl LoggedScreen {
             screen.set_colors(colors);
         }
     }
+    /// Updates the named colors while keeping the current indexed palette.
+    pub(crate) fn set_named_colors(&mut self, colors: TerminalColors) {
+        self.set_colors(TerminalColors {
+            ansi: self.colors.ansi,
+            ..colors
+        });
+    }
     /// Sets the viewer title's status glyph and returns its update bytes without logging them.
     pub(crate) fn set_status_glyph(&mut self, glyph: Option<String>) -> Vec<u8> {
         self.screen

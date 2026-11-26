@@ -96,6 +96,21 @@ fn replies_to_device_queries_pass_none_on_and_guess_no_colour() {
 }
 
 #[test]
+fn indexed_color_replies_keep_the_query_order_and_terminator() {
+    let mut screen = Screen::new(20, 5, 0);
+    let mut colors = TerminalColors::default();
+    colors.ansi[0] = Some([0x11, 0x22, 0x33]);
+    colors.ansi[15] = Some([0xaa, 0xbb, 0xcc]);
+    screen.set_colors(colors);
+    let fed = screen.feed(b"a\x1b]4;15;?\x1b\\b\x1b]4;7;?\x07c\x1b]4;0;?\x07d\x1b[c");
+    assert_eq!(
+        fed.query_replies,
+        b"\x1b]4;15;rgb:aaaa/bbbb/cccc\x1b\\\x1b]4;0;rgb:1111/2222/3333\x07\x1b[?6c",
+    );
+    assert_eq!(fed.viewer_output, b"abcd");
+}
+
+#[test]
 fn a_status_query_is_answered_in_order_and_status_sequences_reach_only_the_daemon() {
     let mut screen = Screen::new(20, 5, 0);
     let fed =
@@ -1137,4 +1152,45 @@ fn a_tab_kept_in_a_cell_draws_nothing() {
             assert_eq!(copy.text(50), tabbed.text(50), "{shown:?}");
         }
     }
+}
+
+#[test]
+fn mouse_modes_put_the_active_mode_of_each_group_last() {
+    let mut screen = Screen::new(10, 2, 0);
+    for (output, modes) in [
+        (
+            b"".as_slice(),
+            b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1005l".as_slice(),
+        ),
+        (
+            b"\x1b[?1000h\x1b[?1002h\x1b[?1006h",
+            b"\x1b[?1000l\x1b[?1003l\x1b[?1002h\x1b[?1005l\x1b[?1006h",
+        ),
+        (
+            b"\x1b[?1003h\x1b[?1005h",
+            b"\x1b[?1000l\x1b[?1002l\x1b[?1003h\x1b[?1006l\x1b[?1005h",
+        ),
+    ] {
+        screen.feed(output);
+        assert_eq!(
+            String::from_utf8(screen.mouse_modes()).unwrap(),
+            String::from_utf8_lossy(modes)
+        );
+    }
+}
+
+#[test]
+fn a_selection_takes_no_blanks_at_a_line_s_end() {
+    let mut screen = Screen::new(40, 3, 0);
+    screen.feed("see 你好 x   \r\nnext".as_bytes());
+    let view = screen.selection_view(0);
+    assert_eq!(view.text((5, 1), (40, 2)), "你好 x\nnext");
+}
+
+#[test]
+fn a_cleared_screen_is_not_kept_as_scrollback() {
+    let mut screen = Screen::new(20, 3, 100);
+    screen.feed(b"one\r\ntwo\r\nthree\r\nfour");
+    screen.feed(b"\x1b[2J\x1b[Hnext");
+    assert_eq!(screen.text(10), ["one", "next"]);
 }

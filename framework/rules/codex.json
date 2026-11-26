@@ -20,7 +20,8 @@
 					"pattern": { "prefix": "^(?:› | {2})[12]\\. ", "text": "Dismiss and keep waiting", "indent": 5 },
 					"within": 30
 				}
-			}
+			},
+			{ "selected": "^› 1\\. Update now \\(runs .+$", "hint": { "pattern": "^ {2}enter continue · esc skip *$", "within": 5 } }
 		]
 	},
 	"paste": {

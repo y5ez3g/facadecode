@@ -18,7 +18,7 @@ use facade_screen::{BlockKind, ReportedState, Screen, StatusEvent, StatusReport}
 use serde::{Deserialize, Serialize};
 use tokio::{sync::watch, time::Instant};
 
-use super::{START_TIMEOUT, Submission};
+use super::{START_TIMEOUT, Submission, ToolsConnections};
 use crate::ToolsGiven;
 
 const WORK_HOLD: Duration = Duration::from_secs(1);
@@ -88,6 +88,8 @@ pub(crate) struct StateTracker {
     evidence: Evidence,
     progress: TurnProgress,
     question: Question,
+    /// Whether the CLI's input, not a question, is on the screen.
+    input_shown: bool,
     connection: Connection,
     started: Instant,
     tools_since: Instant,
@@ -114,17 +116,18 @@ impl StateTracker {
             return reading;
         }
 
-        let current = self.evidence.current();
+        let current = self.evidence.settled(self.input_shown);
         let held_until = self
             .progress
             .advance(Turn::from(current), now, viewing, &mut self.saved);
         let start_deadline = self.question.deadline(self.started);
-        let starting =
-            now < start_deadline && (!self.evidence.shown || tools == ToolsState::Connecting);
+        let tools_pending =
+            tools == ToolsState::Connecting && !matches!(self.connection, Connection::Initialized);
+        let starting = now < start_deadline && (!self.evidence.shown || tools_pending);
         reading.wake = [
             held_until,
             starting.then_some(start_deadline),
-            (tools == ToolsState::Connecting && !self.question.open)
+            (tools_pending && !self.question.open)
                 .then(|| self.question.deadline(self.tools_since)),
         ]
         .into_iter()
@@ -181,6 +184,7 @@ impl StateTracker {
             rule,
             progress: TurnProgress::default(),
             question: Question::default(),
+            input_shown: false,
             connection: Connection::Pending,
             started,
             tools_since: started,
@@ -323,9 +327,21 @@ impl StateTracker {
         self.question.open = asking;
     }
 
+    /// Updates whether the CLI's input is on the screen, empty or with a draft.
+    pub(crate) fn shows_input(&mut self, shown: bool) {
+        self.input_shown = shown;
+    }
+
     /// Startup deadline, suspended until the CLI's current question is answered.
     pub(crate) fn start_bound(&self) -> Option<Instant> {
         (!self.question.open).then(|| self.question.deadline(self.started))
+    }
+
+    /// Whether the native startup allows the Typist to take the first prompt.
+    pub(super) fn native_prompt_ready(&self, not_ready: bool) -> bool {
+        (self.evidence.shown || not_ready)
+            && !self.question.open
+            && !matches!(self.evidence.current(), Some(EvidenceState::Blocked { .. }))
     }
 
     /// Restarts the tool connection allowance after daemon recovery.
@@ -348,13 +364,26 @@ impl StateTracker {
         self.saved.tools_not_started = true;
     }
 
-    /// Updates the last tool connection while retaining evidence of a lost connection.
-    pub(crate) fn tools_connection(&mut self, open: bool) {
-        self.connection = match (open, self.connection) {
-            (true, _) => Connection::Open,
-            (false, Connection::Pending) => Connection::Pending,
-            (false, _) => Connection::Lost,
+    /// Reads the live stages and the retained proof of a verified connection for this run.
+    pub(super) fn tools_connections(&mut self, connections: ToolsConnections) {
+        self.connection = if connections.listed > 0 {
+            Connection::Listed
+        } else if connections.initialized > 0 {
+            Connection::Initialized
+        } else if connections.verified {
+            Connection::Lost
+        } else {
+            Connection::Pending
         };
+    }
+
+    #[cfg(test)]
+    fn tools_connection(&mut self, open: bool) {
+        self.tools_connections(ToolsConnections {
+            listed: usize::from(open),
+            verified: open || !matches!(self.connection, Connection::Pending),
+            ..ToolsConnections::new(super::FIRST_RUN, true)
+        });
     }
 
     fn tool_reading(&self, now: Instant) -> (ToolsState, Option<ToolsReason>) {
@@ -367,7 +396,8 @@ impl StateTracker {
             Some(ToolsReason::NotGiven)
         } else {
             match self.connection {
-                Connection::Open => return (ToolsState::Available, None),
+                Connection::Listed => return (ToolsState::Available, None),
+                Connection::Initialized => return (ToolsState::Connecting, None),
                 Connection::Lost => Some(ToolsReason::Disconnected),
                 Connection::Pending if self.question.open => None,
                 Connection::Pending if self.saved.tools_not_started => {
@@ -434,7 +464,8 @@ impl Question {
 #[derive(Clone, Copy)]
 enum Connection {
     Pending,
-    Open,
+    Initialized,
+    Listed,
     Lost,
 }
 
@@ -559,6 +590,20 @@ impl Evidence {
         self.correction.as_ref().or(self.base.as_ref())
     }
 
+    /// The current evidence, where a question that a finished answer asked reads as done.
+    fn settled(&self, input_shown: bool) -> Option<&EvidenceState> {
+        match (self.current(), self.rule) {
+            (
+                Some(EvidenceState::Blocked {
+                    kind: Some(WaitKind::Question),
+                    ..
+                }),
+                Some(StateRule::FrameTranscript(rule)),
+            ) if rule.answers_ask && input_shown => Some(&EvidenceState::Done),
+            (current, _) => current,
+        }
+    }
+
     fn replace(&mut self, next: EvidenceState) {
         self.shown |= next.active();
         if self.base.as_ref() != Some(&next) {
@@ -579,7 +624,9 @@ impl Evidence {
 
     fn reads_screen(&self) -> bool {
         match self.rule {
-            Some(StateRule::FrameTranscript(_)) => !matches!(self.source, Source::Reports),
+            Some(StateRule::FrameTranscript(_) | StateRule::Composer(_)) => {
+                !matches!(self.source, Source::Reports)
+            }
             Some(StateRule::BackgroundCorrection(_)) => {
                 matches!(self.base, Some(EvidenceState::Working))
             }
@@ -1257,6 +1304,42 @@ mod tests {
             state(&mut muse, now).0,
             ManagedAgentState::Unknown,
             "its screen no longer counts"
+        );
+    }
+
+    /// Muse Code reports an answer that asks the person something as a question. Its turn has ended
+    /// and its input is there, so nothing waits for the person.
+    #[test]
+    fn a_question_that_ends_muse_s_answer_is_a_finished_turn() {
+        let now = Instant::now();
+        let later = now + Duration::from_secs(60);
+        let question = || vec![report("state=blocked:kind=question")];
+        let mut muse = tracker(Some("muse"), now);
+        muse.take(vec![StatusEvent::Asked, report("state=working")]);
+        assert_eq!(state(&mut muse, now).0, ManagedAgentState::Working);
+        muse.take(question());
+        assert_eq!(
+            state(&mut muse, now).0,
+            ManagedAgentState::WaitingForYou,
+            "its input is not there"
+        );
+        muse.shows_input(true);
+        state(&mut muse, now);
+        assert_eq!(state(&mut muse, later).0, ManagedAgentState::JustDone);
+        muse.take(vec![report("state=blocked:kind=permission")]);
+        assert_eq!(
+            state(&mut muse, later).0,
+            ManagedAgentState::WaitingForYou,
+            "an approval waits wherever it shows"
+        );
+
+        let mut claude = tracker(Some("claude"), now);
+        claude.shows_input(true);
+        claude.take([vec![StatusEvent::Asked], question()].concat());
+        assert_eq!(
+            state(&mut claude, now).0,
+            ManagedAgentState::WaitingForYou,
+            "another CLI's question waits"
         );
     }
 

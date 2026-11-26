@@ -2,17 +2,19 @@ Start an agent from a coding CLI.
 
 Facade options come before the CLI name. Everything after the CLI name is
 passed to that CLI unchanged. Use that CLI's own flags for model, reasoning,
-and prompts.
+and prompts. Run 'facade status' to see the CLIs you can start.
 
 Usage: facade start [OPTIONS] <CLI> [CLI_ARGS]...
 
 Examples
   facade start codex
+  facade start agent
+  facade start kiro-cli
   facade start -d -n Nova codex --model gpt-6.2-sol
   facade start --machine devbox --workdir /work/app -d codex
 
 Arguments
-  <CLI>          Configured coding CLI (e.g. claude, codex)
+  <CLI>          Built-in CLI command or configured name (e.g. claude, codex)
   [CLI_ARGS]...  Arguments passed to the CLI unchanged
 
 Options

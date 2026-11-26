@@ -125,6 +125,25 @@ resume, or a reconnect, can read the final snapshot of the exact run. Each recon
 stable identity and begins with a fresh redraw. Each watch requests the visible screen and up to
 `REDRAW_SCROLLBACK_ROWS` preceding rows.
 
+After connecting to the local daemon for a start or resume, Shell enters raw mode and asks the terminal app for its
+default foreground, background and cursor colors with OSC 10, 11 and 12, and for the ANSI palette with one OSC 4 query
+per color. It ends with the Device Attributes query DA1, which terminal apps answer in order, so its reply says that
+every color reply arrived. Shell waits up to one second for that reply. The launch passes the colors that arrived as
+display context, and the agent's screen answers the CLI's color queries with them. A color without a readable reply
+stays absent. A background launch asks as well when Shell reads the terminal as its foreground job. A process started
+with `&`, a redirected console, `TERM=dumb` and ordinary Attach ask nothing. Keys typed while a background launch
+asks go back to the terminal's input for the next program.
+
+Every reply to those queries belongs to Shell, including one with a value it cannot use. `attach/palette.rs` takes
+complete replies out of the input and hands Attach the same console reader, the remaining input in order, the queries
+still unanswered and any unfinished reply. Attach takes late replies out the same way and forwards the rest in order,
+including a held prefix that turns out to be other input. A read in Attach that ends in ESC or ESC ] counts as Escape
+or Alt+], so a late reply split there goes through to the CLI. Late replies leave the launch's colors as they were.
+One console mode lease keeps echo off from the first query through the launch and first watch snapshot. Shell pauses
+console reads while the daemon calls are in flight, then Attach resumes with the same reader after displaying the
+snapshot. Shell restores the original console modes before reporting a failure or an ended run without a view.
+Replies arriving after that handback belong to the host shell.
+
 The console sends key and resize notifications through the current connection. It drops queued input when a
 connection ends and counts keys typed while disconnected. It leaves keys already handed to that connection there.
 During a planned takeover, any write already in progress completes before Attach acknowledges `closing`. The
@@ -139,30 +158,63 @@ Attach keeps that view through screen switches, resizes and
 reconnects. Full frames use `Screen::redraw_for_attach` and carry the known native title. During ordinary output,
 an equally sized console accepts native bytes and a larger console rewrites the shared rows in place with
 `Screen::redraw_in_viewport_update`. A new connection, geometry change or output containing a screen switch or
-terminal reset takes the full draw path. An undersized console reports the current layout size in the alternate
-screen. Screen carries the CLI's native activity bytes through derived draws.
+terminal reset takes the full draw path. A full frame includes what an open synchronized update holds back, because
+the console then receives only the rest of that update. An undersized console reports the current layout size in the
+alternate screen. Screen carries the CLI's native activity bytes through derived draws.
 
 Attach keeps the host terminal's title until the CLI sets its own. When the attachment ends, Attach clears
 the title only if it showed a CLI title. It always uses the terminal's title stack, where supported, to
 restore the host's previous title.
 
-When Attach shows the CLI's main grid and mouse reporting is off, it requests SGR button, drag and wheel reports
-and disables alternate-scroll arrows. The wheel moves three rows per tick. Shell holds the exact viewport that it
-painted, so a drag selects the text that is still visible even as history ages out. Ctrl+C or a right press copies
-a completed selection to the host terminal's clipboard through OSC 52. Attach accepts legacy ETX, Kitty
-Ctrl+C presses and the ordinary Win32 Ctrl+C key record. When Attach copies on a Kitty press, it consumes
-that key's repeats and release. A Control-only repeat copies again while the selection is visible. A click
-clears the selection, and Shift still lets terminals with a native selection override handle the gesture.
+Attach leaves the CLI's mouse modes, its cursor key mode and its erase-saved-lines command out of what the host
+receives, and sets the host's mouse and cursor key modes itself when they change. The active mode of each group goes
+last, since a terminal can take a reset as turning the whole group off. Repeating the modes could end a drag in
+progress, so Attach writes them once. A CLI that tracks the mouse keeps the modes it asked for, and receives the reports
+the terminal sends. The terminal app has the mouse while the connection is lost and when the attachment ends.
+
+Where `host_tells_the_wheel` holds, the terminal app keeps the mouse for every CLI: selecting, copying and the right
+click are the app's. On its alternate screen the app sends the wheel as Up and Down: the Windows terminals with
+alternate scroll, which Attach turns on, and macOS Terminal only with application cursor keys, which Attach keeps on.
+`attach/mouse.rs` takes a key that Base's `desktop::arrows` finds up as the wheel, which browses the scrollback of a
+CLI that leaves the mouse alone and reaches one that tracks it as its own wheel report. It gives the CLI the other
+cursor keys as it asked for them. A Win32 record with the enhanced
+flag comes from the keyboard whatever its state is by then. The reader asks the keyboard before it waits for anything,
+because a key can be up again soon. A key's last repeat within 150 ms of a press is still that key. All this needs the
+keyboard the person types on, so it applies in macOS Terminal and VS Code on macOS, and in every terminal on Windows.
+
+In macOS Terminal, where Base's `desktop::clicks` holds, a CLI that tracks the mouse also gets its clicks
+(`lends_the_mouse`). Its reports come to Attach, which holds a left press and gives it to the CLI with its release as
+a click. For a drag or a right click Attach lends the mouse back: it writes the host's modes without the CLI's mouse,
+waits for Terminal's answer to a status report, then presses the left button again where the drag began, so that
+Terminal selects from there, or clicks the right button where the person did, so that Terminal shows its menu. It takes
+the mouse back once the button is up or the menu is open. Without Terminal's answer within 500 ms, or with the
+attachment ended by then, nothing is posted. Typing or a click for the CLI leaves Terminal's selection behind by drawing in
+a new alternate buffer. VS Code and Windows terminals keep the CLI's clicks off.
+VS Code's first alternate buffer keeps the size from before the terminal was resized, and holds the rows beyond the
+screen as scrollback. Attach enters it twice there.
+
+Elsewhere Attach takes the mouse of such a CLI and requests SGR button, drag and wheel reports. A drag selects from the
+viewport Shell painted. Releasing the button copies the selection, and Ctrl+C and a right press copy it again. Attach
+accepts legacy ETX, Kitty Ctrl+C presses and the ordinary Win32 Ctrl+C key record. When Attach copies on a Kitty press,
+it consumes that key's repeats and release. A Control-only repeat copies again while the selection is visible. A click
+clears the selection, and Shift still lets terminals with a native selection override handle the gesture. A selection of
+blank cells copies nothing. Copying uses the computer's own clipboard through Base and OSC 52, which some terminals
+ignore. Over SSH only OSC 52 applies. `attach/mouse.rs` holds a report that a read cut off until the rest arrives, for
+up to 50 ms, so no part of a report reaches the CLI as text.
+
+The wheel browses the main grid's scrollback: one row for each report or key in macOS Terminal, which sends one for each
+row, and three rows elsewhere. On an alternate grid without mouse reporting, the wheel presses Up and Down as the
+terminal app would: in macOS Terminal if the CLI turned on application cursor keys, elsewhere always. Shell holds the
+exact viewport that it painted, so the text stays still and selectable even as history ages out.
 
 The live Screen continues to receive output while browsing or selecting. The host keeps receiving the CLI's input
 mode changes, title and activity. Wheel steps start from the browsed row while it remains in history, or from the
 oldest retained row after it falls out. Scrolling clears the selection. Typing, scrolling to the bottom, clearing
-history, a full redraw or a change in mouse ownership brings back the live view.
+history, a full redraw or a change in mouse ownership brings back the live view. Focus reports are not typing.
 
 Base captures native Windows wheel events for local browsing and CLI mouse tracking, and reports native pointer
-actions for local selection. When the CLI tracks mouse input, Attach forwards its raw mouse reports and Screen
-encodes native wheels in the CLI's mouse format.
-An untracked CLI alternate grid uses the host's existing wheel behavior. Windows uses deferred wrapping during
+actions for local selection. When the CLI tracks mouse input, Attach forwards its raw mouse reports and
+Screen encodes native wheels in the CLI's mouse format. Windows uses deferred wrapping during
 Attach so cursor moves after a full row follow the same geometry as the agent's screen.
 
 At the end of an attachment, Attach leaves the alternate screen if it entered it, returning to the shell page,

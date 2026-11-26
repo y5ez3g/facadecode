@@ -94,7 +94,7 @@ fn opencode_state_screens_read_as_recorded() {
 }
 
 #[test]
-fn only_codex_muse_and_opencode_read_their_screens_for_state() {
+fn clis_with_screen_based_state_read_their_screens() {
     let reading: Vec<&str> = rules()
         .unwrap()
         .iter()
@@ -102,11 +102,17 @@ fn only_codex_muse_and_opencode_read_their_screens_for_state() {
             Some(
                 StateRule::BackgroundCorrection(_)
                 | StateRule::FrameTranscript(_)
-                | StateRule::TurnError(_),
+                | StateRule::TurnError(_)
+                | StateRule::Composer(_),
             ) => true,
             Some(StateRule::BackgroundReport(_)) | None => false,
         })
         .map(|rule| rule.cli.as_str())
         .collect();
-    assert_eq!(reading, ["codex", "muse", "opencode"]);
+    assert_eq!(
+        reading,
+        [
+            "codex", "muse", "opencode", "devin", "agent", "kiro-cli", "qoder"
+        ]
+    );
 }

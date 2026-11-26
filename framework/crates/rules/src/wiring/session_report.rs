@@ -105,6 +105,8 @@ pub(crate) fn install_hook(
         ),
         "codex" => codex_hooks(&rule.arguments, words, &session.hook("codex", []), SYSTEM),
         "opencode" => opencode_plugin(words, session, environment),
+        "omp" => Some(super::omp::hook(words, session)),
+        "qoder" => super::qoder::hook(rule, words, session, wiring),
         "pi" => {
             let file = session.folder().join(PI_EXTENSION);
             let args = vec!["-e".into(), file.to_string_lossy().into_owned()];

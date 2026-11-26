@@ -13,7 +13,7 @@ use facade_base::terminal::{key_down_records, key_down_records_len};
 use facade_base::{
     model::agent::WaitKind,
     model::message::{DeliveryFailure, TextWritten},
-    model::terminal::{InputInfo, InputState, first_control},
+    model::terminal::{HiddenRows, InputInfo, InputState, first_control},
 };
 use facade_rules::{BoxReading, ConsoleTyping, InputLine, LineCell, PasteRule, ProbeVerdict, Rule};
 use sha2::{Digest, Sha256};
@@ -638,6 +638,24 @@ impl DraftCheck {
             self.previous = None;
         }
         current
+    }
+
+    /// A full unmarked editor can prove the end of a live paste through its visible suffix.
+    /// Keep it clipped so that recovery cannot save it as a complete draft.
+    fn recognize_live_tail(&self, seen: &mut InputObservation<'_>) {
+        let reading = &mut seen.current;
+        if !self.recovered
+            && !self.edited
+            && seen.after_write
+            && reading.info.state == InputState::Unknown
+            && let Some(tail) = reading
+                .paste_tail
+                .take_if(|tail| facade_rules::is_own_paste_tail(tail, &self.paste.text))
+        {
+            reading.info.state = InputState::Draft;
+            reading.info.hidden = Some(HiddenRows { above: 1, below: 0 });
+            reading.draft = Some(tail);
+        }
     }
 
     fn person_submitted(&self, seen: &InputObservation<'_>, deadline: Instant) -> bool {
@@ -1936,7 +1954,11 @@ impl Typist {
         if let Some(batch) = self.batch.take() {
             let ended = batch.messages.is_empty()
                 || matches!(batch.phase, DeliveryPhase::Clearing(cleanup) if cleanup.report.is_none());
-            let seen = observe();
+            let mut seen = observe();
+            if !matches!(batch.phase, DeliveryPhase::AwaitingPaste) && !self.checks_paste_end(rule)
+            {
+                batch.draft.recognize_live_tail(&mut seen);
+            }
             let step = match batch.phase {
                 DeliveryPhase::AwaitingPaste => {
                     self.await_paste(batch, rule, now, may_write && paused.is_none(), seen)
@@ -2907,27 +2929,26 @@ mod tests {
 
     /// An input reading: its state and a draft's text.
     fn input(state: InputState, draft: Option<&str>) -> BoxReading {
-        BoxReading {
-            info: InputInfo {
+        let mut reading = BoxReading::new(
+            InputInfo {
                 state,
                 evidence: String::new(),
                 mechanism: None,
                 hidden: None,
             },
-            draft: draft.map(str::to_string),
-            draft_cursor: draft.map(|text| {
-                let (rows, last) = text.rsplit_once('\n').map_or((0, text), |(above, last)| {
-                    (
-                        1 + above.bytes().filter(|byte| *byte == b'\n').count(),
-                        last,
-                    )
-                });
-                (last.len(), rows)
-            }),
-            line: None,
-            paste_drawing: Some(facade_rules::PasteDrawing::default()),
-            unsure: false,
-        }
+            draft.map(str::to_string),
+        );
+        reading.draft_cursor = draft.map(|text| {
+            let (rows, last) = text.rsplit_once('\n').map_or((0, text), |(above, last)| {
+                (
+                    1 + above.bytes().filter(|byte| *byte == b'\n').count(),
+                    last,
+                )
+            });
+            (last.len(), rows)
+        });
+        reading.paste_drawing = Some(facade_rules::PasteDrawing::default());
+        reading
     }
 
     fn save_draft(post: &Messages, number: u64, reading: &BoxReading) -> Option<DraftProof> {
@@ -3844,6 +3865,42 @@ mod tests {
         assert!(terminal.write_all().starts_with(b"\x1b[200~"));
         terminal.step(&mut typist, start, ANY);
         (typist, number, told)
+    }
+
+    #[test]
+    fn a_clipped_paste_needs_a_live_unedited_frame_after_its_write() {
+        for edited in [false, true] {
+            let post = test_messages();
+            let mut terminal = Terminal::default();
+            let start = Instant::now();
+            let times = (start, start + Duration::from_secs(30));
+            let (mut typist, number, _) =
+                pasted(&post, &mut terminal, "first line\nsecond line", times);
+            terminal.reading = unread();
+            terminal.reading.paste_tail = Some("second line".into());
+            terminal.after_write = false;
+            terminal.step(&mut typist, start + Duration::from_secs(1), ANY);
+            terminal.step(&mut typist, start + Duration::from_secs(2), ANY);
+            assert!(
+                terminal.write_all().is_empty(),
+                "the old tail cannot submit"
+            );
+
+            if edited {
+                typist.input_edited();
+            }
+            terminal.after_write = true;
+            let shown = start + Duration::from_secs(3);
+            terminal.step(&mut typist, shown, ANY);
+            terminal.step(&mut typist, shown + Duration::from_millis(80), ANY);
+            let expected: &[u8] = if edited { b"" } else { b"\r" };
+            assert_eq!(terminal.write_all(), expected);
+            assert!(
+                typist.draft_proof.is_none(),
+                "a clipped tail cannot be recovered"
+            );
+            assert_eq!(became(&post, number), PENDING);
+        }
     }
 
     /// A CLI that redraws without a pause is read in the middle of a frame time and again, which

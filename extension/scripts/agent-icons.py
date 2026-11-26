@@ -21,7 +21,27 @@ from PIL import Image, ImageColor
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = ROOT / "media" / "agents"
-ICONS = ["claude", "codex", "agy", "muse", "opencode", "pi"]
+# Each icon's shipped logo, the dark theme's where it has two, in the font's order. A PNG is drawn
+# from its pixels, an SVG from its paths.
+LOGOS = {
+    "claude": "claude.svg",
+    "codex": "codex-dark.svg",
+    "agy": "antigravity.png",
+    "muse": "muse.png",
+    "opencode": "opencode-dark.svg",
+    "pi": "pi.svg",
+    "devin": "devin-dark.svg",
+    "agent": "cursor-dark.svg",
+    "kiro-cli": "kiro.svg",
+    "qoder": "qoder.svg",
+    "omp": "omp.png",
+    "copilot": "copilot-dark.svg",
+}
+ICONS = list(LOGOS)
+# The one-color logos, drawn in the theme's foreground.
+MONOCHROME = ("codex", "devin", "agent", "copilot")
+# A color that each logo draws in the theme's foreground instead.
+FOREGROUND = {"opencode": "#FFFFFF"}
 GLYPHS = {".notdef": TTGlyphPen(None).glyph()}
 LAYERS = {}
 PALETTE = []
@@ -36,8 +56,13 @@ def palette(color):
     return PALETTE.index(rgba)
 
 
+def glyph(icon):
+    """A glyph name of letters, digits and periods only."""
+    return icon.replace("-", "_")
+
+
 def layer(icon, pen, color):
-    name = f"{icon}.{len(LAYERS[icon])}"
+    name = f"{glyph(icon)}.{len(LAYERS[icon])}"
     GLYPHS[name] = pen.glyph()
     LAYERS[icon].append((name, palette(color)))
 
@@ -46,13 +71,15 @@ def vector(icon, filename):
     svg = ET.parse(SOURCES / filename).getroot()
     x, y, width, height = map(float, svg.attrib["viewBox"].split())
     scale = 1024 / max(width, height)
-    transform = (scale, 0, 0, -scale, -x * scale, 896 + y * scale)
+    # A view box narrower or shorter than it is long sits in the middle of the glyph's square.
+    across, down = (1024 - width * scale) / 2, (1024 - height * scale) / 2
+    transform = (scale, 0, 0, -scale, across - x * scale, 896 - down + y * scale)
     for node in svg.findall("{http://www.w3.org/2000/svg}path"):
         pen = TTGlyphPen(None)
         parse_path(node.attrib["d"], TransformPen(Cu2QuPen(pen, 0.5, reverse_direction=True), transform))
         fill = node.attrib.get("fill", svg.attrib.get("fill"))
         color = ImageColor.getrgb(fill) + (255,)
-        if icon == "codex" or (icon == "opencode" and fill == "#FFFFFF"):
+        if icon in MONOCHROME or fill == FOREGROUND.get(icon):
             color = None
         elif icon == "opencode":
             color = (128, 128, 128, 255)
@@ -85,27 +112,27 @@ def bitmap(icon, filename):
 
 for icon in ICONS:
     LAYERS[icon] = []
-    if icon in ("agy", "muse"):
-        bitmap(icon, "antigravity.png" if icon == "agy" else "muse.png")
+    if LOGOS[icon].endswith(".png"):
+        bitmap(icon, LOGOS[icon])
     else:
-        vector(icon, icon + ("-dark.svg" if icon in ("codex", "opencode") else ".svg"))
+        vector(icon, LOGOS[icon])
     fallback = TTGlyphPen(GLYPHS)
     for name, _ in LAYERS[icon]:
         fallback.addComponent(name, (1, 0, 0, 1, 0, 0))
-    GLYPHS[icon] = fallback.glyph()
+    GLYPHS[glyph(icon)] = fallback.glyph()
 
 # Native terminal labels render contributed glyphs at 13px, but reserve the same
 # 16px icon slot used by image logos. Keep the original viewBox at 16px in that slot.
 font = FontBuilder(832, isTTF=True)
 font.setupGlyphOrder(list(GLYPHS))
-font.setupCharacterMap({0xe001 + i: icon for i, icon in enumerate(ICONS)})
+font.setupCharacterMap({0xe001 + i: glyph(icon) for i, icon in enumerate(ICONS)})
 font.setupGlyf(GLYPHS)
 font.setupHorizontalMetrics({name: (1024, getattr(glyph, "xMin", 0)) for name, glyph in GLYPHS.items()})
 font.setupHorizontalHeader(ascent=896, descent=-128)
 font.setupNameTable({"familyName": "Facade Agent Icons", "styleName": "Regular", "uniqueFontIdentifier": "FacadeAgentIcons-1", "fullName": "Facade Agent Icons", "psName": "FacadeAgentIcons"})
 font.setupOS2(sTypoAscender=896, sTypoDescender=-128, usWinAscent=896, usWinDescent=128)
 font.setupPost()
-font.font["COLR"] = buildCOLR(LAYERS, version=0, glyphMap=font.font.getReverseGlyphMap())
+font.font["COLR"] = buildCOLR({glyph(icon): layers for icon, layers in LAYERS.items()}, version=0, glyphMap=font.font.getReverseGlyphMap())
 font.font["CPAL"] = buildCPAL([PALETTE])
 font.font["head"].created = font.font["head"].modified = 3786912000
 font.font.recalcTimestamp = False

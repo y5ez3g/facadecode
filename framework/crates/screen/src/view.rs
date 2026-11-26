@@ -20,10 +20,13 @@ pub struct VisibleCell {
     pub inverse: bool,
     /// The foreground is not the default one.
     pub colored: bool,
+    /// Tells foregrounds apart: the same color has the same number.
+    pub foreground: u32,
 }
 
 impl VisibleCell {
-    /// Builds a cell with the supplied text and attributes.
+    /// Builds a cell with the supplied text and attributes, giving colored and default cells
+    /// distinct foregrounds.
     pub fn new(
         text: &str,
         column: usize,
@@ -39,6 +42,7 @@ impl VisibleCell {
             dim,
             inverse,
             colored,
+            foreground: u32::from(colored),
         }
     }
 
@@ -66,6 +70,14 @@ pub struct ScreenView {
     pub synchronized_update: bool,
 }
 
+fn foreground(color: Color) -> u32 {
+    match color {
+        Color::Named(name) => name as u32,
+        Color::Indexed(index) => 1 << 24 | u32::from(index),
+        Color::Spec(rgb) => 2 << 24 | u32::from_be_bytes([0, rgb.r, rgb.g, rgb.b]),
+    }
+}
+
 fn visible_cells(row: &Row<Cell>, cols: usize, cells: &mut Vec<VisibleCell>) {
     cells.clear();
     cells.reserve(cols);
@@ -82,6 +94,7 @@ fn visible_cells(row: &Row<Cell>, cols: usize, cells: &mut Vec<VisibleCell>) {
             dim: flagged(Flags::DIM),
             inverse: flagged(Flags::INVERSE),
             colored: cell.fg != Color::Named(NamedColor::Foreground),
+            foreground: foreground(cell.fg),
         });
     }
 }
@@ -149,6 +162,8 @@ mod tests {
             "the wide character's spacer is left out and the next cell keeps its column"
         );
         assert_eq!(view.rows[0].len(), 9, "ten columns less one spacer");
+        assert_eq!(view.rows[0][0].foreground, view.rows[0][1].foreground);
+        assert_ne!(view.rows[0][0].foreground, view.rows[0][3].foreground);
         assert_eq!(
             (view.cursor, view.cursor_visible, view.synchronized_update),
             ((0, 1), false, false)

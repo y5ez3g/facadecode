@@ -336,6 +336,12 @@ pub fn is_own_recovered_draft(
             }))
 }
 
+/// Whether `shown` is the visible end of a paste made into a previously empty input.
+pub fn is_own_paste_tail(shown: &str, text: &str) -> bool {
+    let shown = without_space(shown);
+    !shown.is_empty() && without_space(text).ends_with(&shown)
+}
+
 /// Whether `draft` is still `seen`, the draft an earlier reading took for the paste of `text`: the
 /// same placeholder, paste number included, as a later paste of the same size gets another number;
 /// or `text` itself. Never waits.
@@ -441,6 +447,7 @@ fn matches_count(count: PasteCount, number: Option<usize>, text: &str) -> bool {
             n == text.chars().count() || n == text.encode_utf16().count()
         }
         (PasteCount::UnicodeScalars, Some(n)) => n == one_ending().chars().count(),
+        (PasteCount::Utf16, Some(n)) => n == one_ending().encode_utf16().count(),
         (PasteCount::VisibleUtf16, Some(n)) => {
             let units = one_ending()
                 .chars()

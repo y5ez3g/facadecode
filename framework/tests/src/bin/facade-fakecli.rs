@@ -14,8 +14,11 @@
 //! it hold its console's closing up and start a child outside the console, writing the child's
 //! process ID to `<file>`. `FAKECLI_KEYLOG=<file>` notes when each read of input arrives and when
 //! the frame it drew is written (`note_key_time`). `FAKECLI_READ_GATE=<file>` holds input reads
-//! until the test creates the file. `FAKECLI_UNANNOUNCED_PASTE=1` accepts bracketed paste without
-//! reporting the mode, as seen by a daemon that lost that output in a crash.
+//! until the test creates the file.
+//! `FAKECLI_UNANNOUNCED_PASTE=1` accepts bracketed paste without reporting the mode, as seen by
+//! a daemon that lost that output in a crash.
+//! `FAKECLI_COMPOSER_GATE=<file>` lets keys through while keeping the composer hidden until the test
+//! creates the file. `FAKECLI_CURSOR_TRUST=1` shows Cursor's workspace question before its composer.
 //! For the stress test, `--flood` writes a line every 10 milliseconds until the agent stops.
 //! For the Attach exit test, `--attach-exit` waits for the exact line `finish` and exits with 23.
 //!
@@ -69,13 +72,15 @@
 //! after a message it takes; `FAKECLI_DRAFT_AT_START=<text>` starts with `<text>` as
 //! a draft in color with the cursor before it, as a draft the person moved the cursor back over;
 //! what is typed goes in before it. `FAKECLI_KEYS=<file>` appends every byte it reads to `<file>`.
-//! `FAKECLI_SCREEN_FILE=<file>` prints the file's lines before drawing its input.
+//! `FAKECLI_SCREEN_FILE=<file>` prints the file's lines before drawing its input. `/fake screen`
+//! reads the same file again and sends its terminal sequences before the next draw.
 //! `FAKECLI_SIZE_LOG=<file>` records the terminal grid measured in the process, at start and on resize.
 //! `FAKECLI_WRAP_TRANSCRIPT=1` writes full transcript lines so the terminal wraps them.
 //! `FAKECLI_IGNORE_KEYS` lists keys it ignores, `space` and `backspace`, comma-separated;
 //! `FAKECLI_NO_LEADING_SPACE=1` draws no space where its input starts; `FAKECLI_SPACE_SUGGESTS=<text>`
 //! draws `<text>` on the row under the input while the input starts with a space, as a CLI that
-//! suggests something.
+//! suggests something. `FAKECLI_KIRO_SPACE_DELAY_MS` holds Kiro's empty frame for this long after
+//! a Space key before drawing its echo.
 //!
 //! Colors: `/fake colors` asks its terminal for its foreground, background and cursor colors, as a
 //! CLI that picks its colors by the background does: OSC 10 and 12 ended by BEL, OSC 11 by ST. Its
@@ -95,6 +100,14 @@
 //! once it answered the start of its MCP session, and a turn that begins before that is logged as
 //! `turn without Facade's server`. `FAKECLI_PANEL_DELAY_MS` starts the server that long after the
 //! panel opens, as a server that starts slowly does.
+//!
+//! `FAKECLI_LOOK` naming one of `Native` makes it stand in for that CLI: its input, the marks it
+//! shows for long pastes, the server its run's own configuration names, its resume option, and the
+//! session reports and files it makes, saved under `FAKECLI_TRANSCRIPTS` where it names its file.
+//! It fails its start when that configuration is not what the CLI reads. `FAKECLI_MCP_INITIALIZE=<file>`
+//! keeps the server's MCP initialize response. `FAKECLI_MCP_TAKEOVER=<folder>` records Devin's
+//! relay PID and catalog and roster replies. Its `read-roster` and `read-catalog` files release the
+//! corresponding requests on the same connection. `/mcp list` opens Cursor's MCP panel, which Escape closes.
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -104,7 +117,9 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context;
-use facade_scenarios::mcp_command;
+use facade_scenarios::{
+    Native, Reporter, mcp_command, option_value, save_cursor_session, save_kiro_session,
+};
 
 const PASTE_START: &[u8] = b"\x1b[200~";
 const PASTE_END: &[u8] = b"\x1b[201~";
@@ -117,6 +132,8 @@ enum InputSegment {
 /// The session-start hook the fake CLI was given, if any.
 struct SessionHook {
     commands: Vec<String>,
+    /// The CLI it stands in for, and how that CLI reports a session.
+    native: Option<(Native, Reporter)>,
     #[cfg(windows)]
     stand_in: StandIn,
     /// The delay before the first hook's command, which then becomes zero.
@@ -128,11 +145,21 @@ struct SessionHook {
 impl SessionHook {
     /// The file session `id` is saved in, where sessions are saved.
     fn transcript(&self, id: &str) -> Option<std::path::PathBuf> {
+        if let Some((native, _)) = &self.native
+            && !native.names_its_file()
+        {
+            return None;
+        }
         Some(self.transcripts.as_ref()?.join(format!("{id}.jsonl")))
     }
 
     /// Runs the hook for session `id`, or for none, and waits for it to end.
     fn report(&mut self, id: Option<&str>, source: &str) {
+        if let Some((native, reporter)) = &self.native {
+            let saved = id.and_then(|id| self.transcript(id));
+            report_natively(*native, reporter, id, source, saved.as_deref());
+            return;
+        }
         let mut input = serde_json::json!({
             "hook_event_name": "SessionStart", "session_id": id, "source": source,
         });
@@ -264,12 +291,22 @@ struct FakeCli {
     muse: bool,
     /// It draws the gap Claude Code uses after its prompt.
     claude: bool,
+    /// The CLI it stands in for.
+    native: Option<Native>,
+    /// Oh My Pi's default band, unless the launch's explicit configuration selects Pi.
+    omp_band: bool,
+    /// It draws what its CLI shows with approvals off.
+    yolo: bool,
     /// Antigravity's MCP panel shows.
     panel: bool,
     /// The question `/fake menu` asks in place of the input, until Enter or Escape.
     menu: Option<String>,
     /// The menu hid the cursor, which the next frame of the input shows again.
     cursor_hidden: bool,
+    /// A test opens the composer by creating this file.
+    composer_gate: Option<PathBuf>,
+    /// Cursor's workspace question, and whether the person has answered it.
+    cursor_trust: Option<bool>,
     /// When the panel starts the plugin's server: `FAKECLI_PANEL_DELAY_MS` after it opened.
     server_due: Option<Instant>,
     /// The configured server and when it starts, where `FAKECLI_MCP_DELAY_MS` delays it.
@@ -280,6 +317,8 @@ struct FakeCli {
     panel_drawn_ready: bool,
     /// A first frame was drawn.
     drawn: bool,
+    /// The lines of `FAKECLI_SCREEN_FILE` printed before the first frame.
+    printed: usize,
     /// Terminal queries the next frame sends, before it draws.
     queries: Vec<String>,
     /// `FAKECLI_OWN_GLYPH`: the title without its glyph, written once the terminal answers the query
@@ -295,11 +334,19 @@ struct FakeCli {
     space_suggests: Option<String>,
     /// When the hint shows again after a message it took: once the message's turn has ended.
     hint_after: Option<Instant>,
+    kiro_space_delay: Duration,
+    kiro_space_at: Option<Instant>,
 }
 
 impl FakeCli {
     /// Selects session `id`, or none, shows it, and reports it through the session-start hook.
     fn select_session(&mut self, id: Option<&str>, source: &str) {
+        if self.native == Some(Native::Cursor)
+            && source == "startup"
+            && let (Some(id), Ok(user), Ok(cwd)) = (id, user_home(), std::env::current_dir())
+        {
+            save_cursor_session(&user, id, &cwd, None, false);
+        }
         self.transcript
             .push(format!("session {}", id.unwrap_or("none")));
         self.session = id.map(str::to_string);
@@ -310,6 +357,23 @@ impl FakeCli {
 
     /// Saves the selected session's message `text` in its file, where sessions are saved.
     fn save(&self, text: &str) {
+        if let (Some(native), Some(id), Ok(user), Ok(cwd)) = (
+            self.native,
+            self.session.as_deref(),
+            user_home(),
+            std::env::current_dir(),
+        ) {
+            match native {
+                Native::Kiro => {
+                    let arguments: Vec<String> = std::env::args_os()
+                        .map(|word| word.to_string_lossy().into_owned())
+                        .collect();
+                    save_kiro_session(&user, id, &cwd, "", option_value(&arguments, "--agent"));
+                }
+                Native::Cursor => save_cursor_session(&user, id, &cwd, None, true),
+                _ => {}
+            }
+        }
         let file = self
             .session
             .as_deref()
@@ -322,7 +386,13 @@ impl FakeCli {
                 .open(file)
                 .ok()
         }) {
-            let _ = writeln!(file, "{}", serde_json::json!({ "message": text }));
+            let new = file.metadata().is_ok_and(|file| file.len() == 0);
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let saved = match (self.native, self.session.as_deref()) {
+                (Some(native), Some(id)) => native.saved(id, text, &cwd, new),
+                _ => format!("{}\n", serde_json::json!({ "message": text })),
+            };
+            let _ = file.write_all(saved.as_bytes());
         }
     }
 
@@ -344,6 +414,10 @@ impl FakeCli {
                     format!("[Pasted Content {} chars]", text.chars().count())
                 }
                 InputSegment::Text(text) => text.clone(),
+                InputSegment::Paste { number, text } if self.native.is_some() => self
+                    .native
+                    .and_then(|native| native.placeholder(*number, text))
+                    .unwrap_or_else(|| text.clone()),
                 InputSegment::Paste { text, .. } if self.muse || self.codex_input => {
                     format!("[Pasted Content {} chars]", text.chars().count())
                 }
@@ -369,7 +443,11 @@ impl FakeCli {
 
     fn paste(&mut self, text: String) {
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
-        if text.contains('\n') || text.len() > 400 {
+        let placeholder = match self.native {
+            Some(native) => native.placeholder(self.pastes + 1, &text).is_some(),
+            None => text.contains('\n') || text.len() > 400,
+        };
+        if placeholder {
             self.pastes += 1;
             self.draft.push(InputSegment::Paste {
                 number: self.pastes,
@@ -409,6 +487,11 @@ impl FakeCli {
             return;
         }
         self.queries.extend(console_title_back());
+        // Cursor's panel of MCP servers, which takes no turn.
+        if self.native == Some(Native::Cursor) && text.trim() == "/mcp list" {
+            self.panel = true;
+            return;
+        }
         let mut lines = text.lines();
         let first = lines.next().unwrap_or_default();
         self.transcript.push(format!("> {first}"));
@@ -452,6 +535,14 @@ impl FakeCli {
         if first.trim() == "/fake colors" {
             self.queries
                 .extend(["\x1b]10;?\x07", "\x1b]11;?\x1b\\", "\x1b]12;?\x07"].map(String::from));
+            return;
+        }
+        if first.trim() == "/fake screen" {
+            if let Some(file) = std::env::var_os("FAKECLI_SCREEN_FILE")
+                && let Ok(frame) = std::fs::read_to_string(file)
+            {
+                self.queries.push(frame);
+            }
             return;
         }
         if first.trim() == "/fake cursor" {
@@ -595,6 +686,11 @@ impl FakeCli {
 
     /// Reports idle once it is ready and once each turn ends. Returns whether it reported.
     fn tick(&mut self) -> bool {
+        if self.kiro_space_at.is_some_and(|at| at <= Instant::now()) {
+            self.kiro_space_at = None;
+            self.push_text(" ");
+            return true;
+        }
         if self.hint_after.is_some_and(|at| at <= Instant::now()) {
             self.hint_after = None;
             return true;
@@ -636,21 +732,21 @@ impl FakeCli {
         if self.sync {
             frame.push_str("\x1b[?2026h");
         }
-        // The first frame clears with ED 2, which a terminal such as Facade's moves up into its
-        // scrollback, as a CLI started below earlier output pushes it up. Later frames erase below
-        // the top-left corner instead: a real CLI's redraws leave no copy of themselves in the
-        // scrollback.
-        frame.push_str(if std::mem::replace(&mut self.drawn, true) {
-            "\x1b[H\x1b[J"
-        } else {
-            "\x1b[H\x1b[2J"
-        });
+        // The first frame scrolls what was printed before it up into the scrollback, as a CLI
+        // started below earlier output pushes it up. Every frame then erases below the top-left
+        // corner: a real CLI's redraws leave no copy of themselves in the scrollback.
+        if !std::mem::replace(&mut self.drawn, true) && self.printed > 0 {
+            let pushed = self.printed.min(rows.saturating_sub(1));
+            frame.push_str(&format!("\x1b[{rows};1H{}", "\n".repeat(pushed)));
+        }
+        frame.push_str("\x1b[H\x1b[J");
         if self.panel {
             self.panel_drawn_ready = self.server_ready();
-            let server = if self.panel_drawn_ready {
-                ">  ✓ facade_facade  Tools: list_agents"
-            } else {
-                ">  ⋯ facade_facade"
+            let server = match (self.native, self.panel_drawn_ready) {
+                (Some(_), true) => "❯ Facade (plugin) - enabled",
+                (Some(_), false) => "❯ Facade (plugin) - connecting",
+                (None, true) => ">  ✓ facade_facade  Tools: list_agents",
+                (None, false) => ">  ⋯ facade_facade",
             };
             frame.push_str(&format!(
                 "MCP Servers\r\n\r\n{server}\r\n\r\nesc Exit\x1b[3;1H"
@@ -661,6 +757,27 @@ impl FakeCli {
             let _ = out.write_all(frame.as_bytes());
             let _ = out.flush();
             return;
+        }
+        if self.composer_gate.is_some() {
+            frame.push_str("Starting up\r\n\x1b[?25l");
+            self.cursor_hidden = true;
+            if self.sync {
+                frame.push_str("\x1b[?2026l");
+            }
+            let _ = out.write_all(frame.as_bytes());
+            let _ = out.flush();
+            return;
+        }
+        if let Some(answered) = self.cursor_trust {
+            draw_cursor_trust(&mut frame, cols, answered);
+            if !answered {
+                if self.sync {
+                    frame.push_str("\x1b[?2026l");
+                }
+                let _ = out.write_all(frame.as_bytes());
+                let _ = out.flush();
+                return;
+            }
         }
         frame.push_str(&format!(
             "\x1b[1m{}\x1b[0m \x1b[2m(Facade test CLI)\x1b[0m\r\n",
@@ -710,6 +827,21 @@ impl FakeCli {
         }
         if std::mem::take(&mut self.cursor_hidden) {
             frame.push_str("\x1b[?25h");
+        }
+        if let Some(native) = self.native {
+            if native == Native::Cursor {
+                self.draw_cursor_input(&mut frame, cols, rows);
+            } else if self.omp_band {
+                self.draw_omp_band(&mut frame, cols, rows);
+            } else {
+                self.draw_native_input(native, &mut frame, cols, rows);
+            }
+            if self.sync {
+                frame.push_str("\x1b[?2026l");
+            }
+            let _ = out.write_all(frame.as_bytes());
+            let _ = out.flush();
+            return;
         }
         frame.push_str(&format!(
             "\x1b[{};1H\x1b[2m{}\x1b[0m",
@@ -771,6 +903,246 @@ impl FakeCli {
         let _ = out.write_all(frame.as_bytes());
         let _ = out.flush();
     }
+}
+
+impl FakeCli {
+    /// Oh My Pi 19.1.1's band has a colored status row, colored gutters and no lower rule.
+    fn draw_omp_band(&self, frame: &mut String, cols: usize, rows: usize) {
+        let draft = self.displayed_draft();
+        let lines: Vec<String> = draft
+            .split('\n')
+            .flat_map(|line| wrapped(line, cols.saturating_sub(4)))
+            .collect();
+        let shown = &lines[lines.len().saturating_sub(omp_viewport(rows) + 1)..];
+        let top = rows.saturating_sub(shown.len());
+        frame.push_str(&format!(
+            "\x1b[{top};1H\x1b[38;5;75m π  Example model\x1b[39m"
+        ));
+        for (index, line) in shown.iter().enumerate() {
+            let row = top + index + 1;
+            let gutter = if index == 0 { "╰─ " } else { "   " };
+            frame.push_str(&format!("\x1b[{row};1H\x1b[38;5;75m{gutter}\x1b[39m{line}"));
+        }
+    }
+
+    /// Cursor 2026.11.22 draws an inverse caret and parks the hidden terminal cursor below its
+    /// footer. Its blank composer and an ordinary draft use the recorded prompt and margins.
+    fn draw_cursor_input(&self, frame: &mut String, cols: usize, rows: usize) {
+        let draft = self.displayed_draft();
+        let footer = if draft.is_empty() {
+            let first = rows.saturating_sub(5).max(1);
+            frame.push_str(&format!(
+                "\x1b[{first};1H  \x1b[2m→ \x1b[22m\x1b[7mP\x1b[27m\x1b[2mlan, search, build anything\x1b[22m"
+            ));
+            first + 3
+        } else {
+            let starts_below_prompt = !draft.starts_with('/')
+                && !draft.starts_with("[Pasted text #")
+                && !draft.contains('\n');
+            let lines: Vec<_> = draft
+                .split('\n')
+                .flat_map(|line| wrapped(line, cols.saturating_sub(5)))
+                .collect();
+            let gap = usize::from(starts_below_prompt);
+            let first = rows.saturating_sub(4 + gap + lines.len()).max(1);
+            frame.push_str(&format!("\x1b[{first};1H  → "));
+            let mut row = first + gap;
+            for (index, line) in lines.iter().enumerate() {
+                let style = if line.starts_with("[Pasted text #") {
+                    "2;36"
+                } else {
+                    "0"
+                };
+                frame.push_str(&format!("\x1b[{row};5H\x1b[{style}m{line}\x1b[0m"));
+                if index + 1 == lines.len() {
+                    frame.push_str("\x1b[7m \x1b[27m");
+                }
+                row += 1;
+            }
+            row + 2
+        };
+        if footer + 2 <= rows {
+            frame.push_str(&format!(
+                "\x1b[{footer};1H\x1b[2m  Auto\r\n  xxxxxxxxxxxx\x1b[22m\r\n"
+            ));
+        }
+        frame.push_str("\x1b[?25l");
+    }
+
+    /// Draws the input of the CLI it stands in for over a status row, and leaves the terminal's own
+    /// cursor where the draft ends. Of a draft with more rows than Oh My Pi's viewport it shows the
+    /// last ones, with nothing to say so. `FAKECLI_HINT` stands at the right of an empty one of
+    /// Oh My Pi's, as its hint on keys does.
+    fn draw_native_input(&self, native: Native, frame: &mut String, cols: usize, rows: usize) {
+        let prompt = native.prompt(self.yolo);
+        let indent = prompt.chars().count();
+        let draft = self.displayed_draft();
+        let drawn: Vec<String> = draft
+            .split('\n')
+            .flat_map(|line| wrapped(line, cols.saturating_sub(indent + 1)))
+            .collect();
+        let most = match native {
+            Native::Omp => omp_viewport(rows),
+            _ => drawn.len(),
+        };
+        let shown = &drawn[drawn.len().saturating_sub(most)..];
+        let first = rows.saturating_sub(1 + shown.len());
+        if native.has_rules() {
+            let rule = format!("\x1b[38;5;240m{}\x1b[0m", "─".repeat(cols));
+            frame.push_str(&format!("\x1b[{};1H{rule}", first - 1));
+            frame.push_str(&format!("\x1b[{};1H{rule}", first + shown.len()));
+        }
+        frame.push_str(&format!("\x1b[{rows};1H\x1b[2m test model\x1b[0m"));
+        if draft.is_empty() {
+            let words = native.empty_words();
+            let column = indent + 1 + usize::from(native == Native::Kiro);
+            frame.push_str(&format!(
+                "\x1b[{first};{column}H\x1b[38;5;245m{words}\x1b[0m"
+            ));
+            if let Some(hint) = self.hint.as_deref().filter(|_| native == Native::Omp) {
+                let column = cols.saturating_sub(hint.chars().count());
+                frame.push_str(&format!(
+                    "\x1b[{first};{column}H\x1b[38;5;240m{hint}\x1b[0m"
+                ));
+            }
+        }
+        // The last row goes last, so that the cursor is left at its end whatever its width.
+        for (at, row) in shown.iter().enumerate() {
+            let before = match at {
+                0 => prompt.to_string(),
+                _ => " ".repeat(indent),
+            };
+            // Qoder draws its placeholders in its accent color.
+            let style = match native {
+                Native::Qoder if row.starts_with("[Pasted Text: ") => "36",
+                _ => "0",
+            };
+            let row = format!("\x1b[{style}m{row}\x1b[0m");
+            frame.push_str(&format!("\x1b[{};1H{before}{row}", first + at));
+        }
+        match native {
+            // Kiro draws an inverse blank at the hidden hardware caret. Its hint starts in the
+            // next cell and vanishes when the draft takes a space.
+            Native::Kiro => frame.push_str("\x1b[7m \x1b[27m\x1b[D\x1b[?25l"),
+            // The recorded Qoder caret is hidden even on the input row and has no inverse cell.
+            Native::Qoder => frame.push_str("\x1b[?25l"),
+            _ => {}
+        }
+    }
+}
+
+/// Sanitized Cursor 2026.11.22 trust frame. After the answer, the box stays above the composer.
+fn draw_cursor_trust(frame: &mut String, cols: usize, answered: bool) {
+    let width = cols.saturating_sub(6);
+    let (option, help) = if answered {
+        ("  [a] Trust this workspace", "⏳ Trusting workspace...")
+    } else {
+        (
+            "▶ [a] Trust this workspace",
+            "Use arrow keys to navigate, Enter to select, or press the key shown",
+        )
+    };
+    let border = "─".repeat(width);
+    frame.push_str(&format!("\x1b[2;1H  ╭{border}╮\r\n"));
+    for row in [
+        "",
+        "  ⚠ Workspace Trust Required",
+        "",
+        "  Cursor Agent can execute code and access files in this directory.",
+        "",
+        "  Do you trust the contents of this directory?",
+        "",
+        "    xxxxxxxxxxxx",
+        "",
+        "",
+        &format!("  {option}"),
+        "    [q] Quit",
+        "",
+        &format!("  {help}"),
+        "",
+    ] {
+        frame.push_str(&format!("  │{row:width$}│\r\n"));
+    }
+    frame.push_str(&format!("  ╰{border}╯\r\n\x1b[?25l"));
+}
+
+/// Reports session `id` as the CLI it stands in for does, and waits for what it runs. A hook gets
+/// what the CLI gives it.
+fn report_natively(
+    native: Native,
+    reporter: &Reporter,
+    id: Option<&str>,
+    source: &str,
+    saved: Option<&std::path::Path>,
+) {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let input = id.and_then(|id| native.hook_input(id, source, &cwd, saved));
+    let commands: Vec<Command> = match reporter {
+        Reporter::File(file) => {
+            let text = id
+                .zip(saved)
+                .map(|(id, saved)| format!("{id}\n{}\n", saved.display()));
+            let _ = write_whole(file, &text.unwrap_or_default());
+            return;
+        }
+        Reporter::Shell(commands) => commands.iter().map(|line| shell_command(line)).collect(),
+        Reporter::Programs(programs) => programs
+            .iter()
+            .map(|words| {
+                let mut command = Command::new(&words[0]);
+                command.args(&words[1..]);
+                command
+            })
+            .collect(),
+    };
+    let Some(input) = input else { return };
+    for mut command in commands {
+        let ran = command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        let Ok(mut child) = ran else { continue };
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(input.to_string().as_bytes());
+        }
+        let _ = child.wait_with_output();
+    }
+}
+
+/// How many text rows Oh My Pi's composer shows in a terminal of `rows`: its interactive-mode.ts
+/// `computeEditorMaxHeight`, less the two rules.
+fn omp_viewport(rows: usize) -> usize {
+    let height = rows.saturating_sub(12).clamp(6, 18);
+    height.min(rows.saturating_sub(4)).max(3) - 2
+}
+
+/// The fixture only reads the shape from explicit JSON configurations, in the CLI's order.
+fn omp_configures_pi(arguments: &[String]) -> bool {
+    arguments
+        .windows(2)
+        .filter(|pair| pair[0] == "--config")
+        .filter_map(|pair| std::fs::read(&pair[1]).ok())
+        .filter_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .filter_map(|config| config["composer"]["shape"].as_str().map(str::to_owned))
+        .next_back()
+        .is_some_and(|shape| shape == "pi")
+}
+
+/// `line` in rows of at most `width` columns, a character that is not ASCII counted as two.
+fn wrapped(line: &str, width: usize) -> Vec<String> {
+    let mut rows = vec![String::new()];
+    let mut taken = 0;
+    for ch in line.chars() {
+        let columns = if ch.is_ascii() { 1 } else { 2 };
+        if taken + columns > width {
+            rows.push(String::new());
+            taken = 0;
+        }
+        taken += columns;
+        rows.last_mut().expect("a row").push(ch);
+    }
+    rows
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {
@@ -1071,10 +1443,21 @@ fn attach_exit() -> anyhow::Result<i32> {
     Ok(91)
 }
 
-fn command_from_config(config: &serde_json::Value) -> anyhow::Result<Command> {
-    let home = std::env::var_os("FACADE_HOME")
+fn isolated_home() -> anyhow::Result<PathBuf> {
+    std::env::var_os("FACADE_HOME")
         .map(PathBuf::from)
-        .context("the fake CLI needs an isolated Facade home")?;
+        .context("the fake CLI needs an isolated Facade home")
+}
+
+/// The home the CLI it stands in for keeps its sessions in.
+fn user_home() -> anyhow::Result<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("the fake CLI needs an isolated home")
+}
+
+fn command_from_config(config: &serde_json::Value) -> anyhow::Result<Command> {
+    let home = isolated_home()?;
     mcp_command(config, &home, |program| Command::new(program))
 }
 
@@ -1135,7 +1518,29 @@ fn stand_in_mcp_args(arguments: &[String]) -> anyhow::Result<Vec<String>> {
     Ok(Vec::new())
 }
 
-fn configured_server(arguments: &[String]) -> anyhow::Result<Option<Command>> {
+fn configured_server(
+    arguments: &[String],
+    native: Option<Native>,
+) -> anyhow::Result<Option<Command>> {
+    if let Some(native) = native {
+        // The server the run's own configuration names, and no other.
+        let devin_config = std::env::var_os(if cfg!(windows) {
+            "APPDATA"
+        } else {
+            "XDG_CONFIG_HOME"
+        })
+        .map(PathBuf::from);
+        return native
+            .mcp_settings(
+                arguments,
+                &isolated_home()?,
+                &user_home()?,
+                &std::env::current_dir()?,
+                devin_config.as_deref(),
+            )?
+            .map(|config| command_from_config(&config))
+            .transpose();
+    }
     let Some(index) = arguments.iter().rposition(|arg| arg == "--mcp-config") else {
         let Some(program) = std::env::var_os("FAKECLI_MCP") else {
             return Ok(None);
@@ -1174,12 +1579,31 @@ fn start_server(
     let answers = server.stdout.take().expect("the server's output");
     let roster = std::env::var_os("FAKECLI_MCP_ROSTER").map(PathBuf::from);
     let ask_roster = roster.is_some();
+    let initialize = std::env::var_os("FAKECLI_MCP_INITIALIZE").map(PathBuf::from);
+    let takeover = std::env::var_os("FAKECLI_MCP_TAKEOVER").map(PathBuf::from);
+    let mut receipt = if let Some(folder) = &takeover {
+        anyhow::ensure!(
+            folder
+                .canonicalize()?
+                .starts_with(isolated_home()?.canonicalize()?),
+            "the takeover probe must stay in its test home"
+        );
+        let file = folder.join("responses.jsonl");
+        let text = format!("{}\n", serde_json::json!({ "relay_pid": server.id() }));
+        write_whole(&file, &text)?;
+        Some((file, text))
+    } else {
+        None
+    };
     std::thread::spawn(move || {
         for line in std::io::BufReader::new(answers)
             .lines()
             .map_while(Result::ok)
         {
             if line.contains("\"id\":1") && line.contains("\"result\"") {
+                if let Some(file) = &initialize {
+                    let _ = write_whole(file, &line);
+                }
                 answered.store(true, Ordering::SeqCst);
             }
             if let Some(file) = &roster
@@ -1187,6 +1611,14 @@ fn start_server(
                     .is_ok_and(|reply| reply["id"] == 3)
             {
                 let _ = write_whole(file, &line);
+            }
+            if let Some((file, text)) = &mut receipt
+                && serde_json::from_str::<serde_json::Value>(&line)
+                    .is_ok_and(|reply| matches!(reply["id"].as_u64(), Some(2..=4)))
+            {
+                text.push_str(&line);
+                text.push('\n');
+                let _ = write_whole(file, text);
             }
         }
     });
@@ -1210,7 +1642,36 @@ fn start_server(
             })
         )?;
     }
+    if let Some(folder) = takeover {
+        // The original handle stays with the relay child after this probe's writes finish.
+        #[cfg(unix)]
+        let writer = std::os::fd::AsFd::as_fd(input).try_clone_to_owned()?;
+        #[cfg(windows)]
+        let writer = std::os::windows::io::AsHandle::as_handle(input).try_clone_to_owned()?;
+        std::thread::spawn(move || probe_takeover(folder, std::fs::File::from(writer)));
+    }
     Ok(server)
+}
+
+/// A takeover test requests real responses on the relay's existing stdio connection.
+fn probe_takeover(folder: PathBuf, mut input: std::fs::File) -> std::io::Result<()> {
+    for (gate, request) in [
+        (
+            "read-roster",
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_agents","arguments":{}}}"#,
+        ),
+        (
+            "read-catalog",
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/list"}"#,
+        ),
+    ] {
+        let gate = folder.join(gate);
+        if !facade_scenarios::wait_until(Duration::from_secs(180), || gate.is_file()) {
+            return Ok(());
+        }
+        writeln!(input, "{request}")?;
+    }
+    Ok(())
 }
 
 fn run() -> anyhow::Result<()> {
@@ -1273,6 +1734,9 @@ fn run() -> anyhow::Result<()> {
     #[cfg(windows)]
     let stand_in = StandIn::of(&std::env::current_exe()?);
     let claude = std::env::var("FAKECLI_LOOK").as_deref() == Ok("claude");
+    let native = std::env::var("FAKECLI_LOOK")
+        .ok()
+        .and_then(|look| Native::of(&look));
     let commands = if claude {
         let settings = arguments
             .windows(2)
@@ -1290,8 +1754,21 @@ fn run() -> anyhow::Result<()> {
     };
     #[cfg(windows)]
     let commands = commands.or_else(|| stand_in.session_hooks(&arguments));
+    let reporter = match native {
+        Some(native) => native
+            .reporter(
+                &arguments,
+                &isolated_home()?,
+                &user_home()?,
+                &std::env::current_dir()?,
+            )?
+            .map(|reporter| (native, reporter)),
+        None => None,
+    };
+    let commands = commands.or_else(|| reporter.is_some().then(Vec::new));
     let hook = commands.map(|commands| SessionHook {
         commands,
+        native: reporter,
         #[cfg(windows)]
         stand_in,
         first_delay: Duration::from_millis(
@@ -1328,7 +1805,7 @@ fn run() -> anyhow::Result<()> {
         });
     let server_answered = Arc::new(AtomicBool::new(false));
     let delay = milliseconds("FAKECLI_MCP_DELAY_MS").unwrap_or_default();
-    let (server, delayed_server) = match configured_server(&arguments)? {
+    let (server, delayed_server) = match configured_server(&arguments, native)? {
         Some(command) if delay.is_zero() => {
             (Some(start_server(command, server_answered.clone())?), None)
         }
@@ -1340,6 +1817,9 @@ fn run() -> anyhow::Result<()> {
         codex_input,
         console_keys: std::env::var("FAKECLI_CONSOLE_KEYS").is_ok_and(|v| v == "1"),
         claude,
+        native,
+        omp_band: native == Some(Native::Omp) && !omp_configures_pi(&arguments),
+        yolo: std::env::var("FAKECLI_YOLO").is_ok_and(|value| value == "1"),
         transcript: Vec::new(),
         wrap_transcript: std::env::var("FAKECLI_WRAP_TRANSCRIPT").is_ok_and(|value| value == "1"),
         draft: Vec::new(),
@@ -1357,11 +1837,16 @@ fn run() -> anyhow::Result<()> {
         panel: false,
         menu: None,
         cursor_hidden: false,
+        composer_gate: std::env::var_os("FAKECLI_COMPOSER_GATE").map(PathBuf::from),
+        cursor_trust: (native == Some(Native::Cursor)
+            && std::env::var_os("FAKECLI_CURSOR_TRUST").is_some())
+        .then_some(false),
         server_due: None,
         delayed_server,
         server_answered,
         panel_drawn_ready: false,
         drawn: false,
+        printed: 0,
         queries: std::env::var("FAKECLI_TITLE")
             .map(|title| match std::env::var("FAKECLI_OWN_GLYPH") {
                 Ok(glyph) => vec![format!("\x1b]2;{glyph} {title}\x07")],
@@ -1380,10 +1865,21 @@ fn run() -> anyhow::Result<()> {
         no_leading_space: std::env::var("FAKECLI_NO_LEADING_SPACE").is_ok_and(|v| v == "1"),
         space_suggests: std::env::var("FAKECLI_SPACE_SUGGESTS").ok(),
         hint_after: None,
+        kiro_space_delay: Duration::from_millis(
+            std::env::var("FAKECLI_KIRO_SPACE_DELAY_MS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or_default(),
+        ),
+        kiro_space_at: None,
     };
     let resumed = arguments
         .iter()
-        .position(|arg| arg == "--resume" || (agy && arg == "--conversation"))
+        .position(|arg| {
+            arg == "--resume"
+                || (agy && arg == "--conversation")
+                || native.is_some_and(|native| arg == native.resume_option())
+        })
         .and_then(|at| arguments.get(at + 1))
         .cloned();
     #[cfg(windows)]
@@ -1414,6 +1910,7 @@ fn run() -> anyhow::Result<()> {
     if let Some(file) = std::env::var_os("FAKECLI_SCREEN_FILE") {
         for line in std::fs::read_to_string(file)?.lines() {
             write!(out, "{line}\r\n")?;
+            app.printed += 1;
         }
     }
     if std::env::var_os("FAKECLI_UNANNOUNCED_PASTE").is_none() {
@@ -1536,6 +2033,9 @@ fn run() -> anyhow::Result<()> {
                 break;
             }
             match pending[i] {
+                b'a' | b'\r' if app.cursor_trust == Some(false) => {
+                    app.cursor_trust = Some(true);
+                }
                 b'\r' | b'\n' | 0x1b
                     if app.menu.is_some()
                         && !(pending[i] == 0x1b
@@ -1616,7 +2116,13 @@ fn run() -> anyhow::Result<()> {
                     } else {
                         text.into_owned()
                     };
-                    if !text.is_empty() {
+                    if app.native == Some(Native::Kiro)
+                        && !app.kiro_space_delay.is_zero()
+                        && text == " "
+                        && app.draft.is_empty()
+                    {
+                        app.kiro_space_at = Some(Instant::now() + app.kiro_space_delay);
+                    } else if !text.is_empty() {
                         app.push_text(&text);
                     }
                     i = end;
@@ -1632,6 +2138,10 @@ fn run() -> anyhow::Result<()> {
             std::process::exit(code);
         }
         dirty |= app.tick();
+        if app.composer_gate.as_ref().is_some_and(|gate| gate.exists()) {
+            app.composer_gate = None;
+            dirty = true;
+        }
         app.start_delayed_server();
         dirty |= app.start_plugin_server();
         // The panel shows the server ready once it answered.

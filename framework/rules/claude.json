@@ -14,7 +14,17 @@
 		"upper": "^(?:─+|─{3} [^─]+ ─+)$",
 		"lower": "^─+$",
 		"scrolled": { "position": "rules", "above": "^─{3} ↑ (\\d+) more ─+$", "below": "^─{3} ↓ (\\d+) more ─+$" },
-		"menus": [{ "selected": "^ ❯ \\S", "next": "^ {3}\\S" }]
+		"menus": [
+			{ "selected": "^ ❯ \\S", "next": "^ {3}\\S" },
+			{
+				"selected": "^ Choose the text style that looks best with your terminal$",
+				"next": "^ To change this later, run /theme$",
+				"hint": {
+					"pattern": "^ ❯ +(?:✔ +)?(?:Auto \\(match terminal\\)|(?:Dark|Light) mode(?: \\((?:colorblind-friendly|ANSI colors only)\\))?)$",
+					"within": 9
+				}
+			}
+		]
 	},
 	"paste": {
 		"bracketed": true,

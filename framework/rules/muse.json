@@ -39,7 +39,8 @@
 		"idle_marks": ["❯ ", "• "],
 		"answer": "◆ ",
 		"sign_in": ["^ *Log in with browser\\b", "^ *Set an API key\\b"],
-		"trust": "^Do you trust this workspace\\?$"
+		"trust": "^Do you trust this workspace\\?$",
+		"answers_ask": true
 	},
 	"yolo": {
 		"work": { "args": ["--disable-approval", "--disable-sandbox"] },
