@@ -144,6 +144,30 @@ fn qoder_waits_for_its_resumed_composer() {
 }
 
 #[test]
+fn qoder_reads_either_terminal_setup_choice_as_interaction() {
+    let rule = find("qoder").unwrap().unwrap();
+    let screens: [serde_json::Value; 2] = recorded("qoder-startup").try_into().unwrap();
+    let [yes, no] = screens.map(|screen| view_of(&screen));
+
+    let mut without_footer = no.clone();
+    without_footer.rows[17].clear();
+    assert_eq!(
+        read_input(&rule.input, &without_footer).state,
+        InputState::Unknown
+    );
+
+    for (choice, screen) in [("Yes", &yes), ("No", &no)] {
+        let input = read_input(&rule.input, screen);
+        assert_eq!(
+            input.state,
+            InputState::Interaction,
+            "{choice} selected. {}",
+            input.evidence
+        );
+    }
+}
+
+#[test]
 fn copilot_reads_a_one_line_login_notice_above_wrapped_context() {
     let rule = find("copilot").unwrap().unwrap();
     let screen = recorded("copilot")

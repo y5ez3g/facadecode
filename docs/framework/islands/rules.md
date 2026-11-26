@@ -250,6 +250,8 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     the hidden terminal cursor without an inverse cell when its position is inside the complete
     input frame, at or after the input column. Both colored hints still need the reversible
     space probe to distinguish them from a draft.
+  - Qoder's terminal setup reads as an interaction for either selected choice when the
+    `↑↓ navigate · Enter select` footer follows within three rows.
   - Qoder's `waiting_above` matches its resume spinner, divider and mode strip on consecutive
     physical rows immediately above the input frame. While they show, an empty or uncertain input
     reads `unknown` without a Space probe. A recognized draft still reads `draft`.
