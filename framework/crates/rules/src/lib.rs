@@ -22,6 +22,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use facade_base::key_input::Key;
+use facade_base::model::agent::WaitKind;
 use facade_base::model::terminal::InputMechanism;
 use facade_base::system::{SYSTEM, System};
 use regex::Regex;
@@ -435,6 +436,8 @@ pub(crate) struct EditorRail {
 #[serde(deny_unknown_fields)]
 pub(crate) struct EditorLiveNotice {
     pub(crate) text: String,
+    #[serde(default)]
+    pub(crate) wait_kind: Option<WaitKind>,
     pub(crate) rows_above_upper: std::num::NonZeroUsize,
     #[serde(default)]
     pub(crate) wrapped_context: Option<EditorNoticeContext>,
@@ -934,14 +937,18 @@ impl Editor {
                     "an editor rail needs a visible fallback prompt ending in a space".into(),
                 );
             }
-            if let Some(notice) = &rail.live_notice
-                && (notice.text.is_empty()
+            if let Some(notice) = &rail.live_notice {
+                if notice.text.is_empty()
                     || notice.text.trim() != notice.text
-                    || notice.text.chars().any(char::is_control))
-            {
-                return Err(
-                    "an editor live notice needs visible text without edge whitespace".into(),
-                );
+                    || notice.text.chars().any(char::is_control)
+                {
+                    return Err(
+                        "an editor live notice needs visible text without edge whitespace".into(),
+                    );
+                }
+                if notice.wait_kind == Some(WaitKind::Unrecognized) {
+                    return Err("an editor live notice needs a recognized wait kind".into());
+                }
             }
         }
         if let Some(band) = &self.band {

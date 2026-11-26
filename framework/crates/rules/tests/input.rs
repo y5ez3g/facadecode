@@ -6,7 +6,10 @@
 
 mod recorded;
 
-use facade_base::model::terminal::{HiddenRows, InputState};
+use facade_base::model::{
+    agent::WaitKind,
+    terminal::{HiddenRows, InputState},
+};
 use facade_rules::{
     Pattern, ProbeVerdict, find, is_own_draft, read_box, read_box_for_typing, read_draft,
     read_input, restored, space_taken, verdict_of,
@@ -120,8 +123,14 @@ fn copilot_reads_a_one_line_login_notice_above_wrapped_context() {
         .into_iter()
         .find(|screen| screen["label"] == "copilot-1.0.116/login-above-wrapped-context")
         .unwrap();
-    let read = read_input(&rule.input, &view_of(&screen));
-    assert_eq!(read.state, InputState::Interaction, "{}", read.evidence);
+    let read = read_box(&rule.input, &view_of(&screen));
+    assert_eq!(
+        read.info.state,
+        InputState::Interaction,
+        "{}",
+        read.info.evidence
+    );
+    assert_eq!(read.wait_kind, Some(WaitKind::Auth));
 }
 
 /// The live question reads as one, by its selected option and key help. Answered, it stays on the

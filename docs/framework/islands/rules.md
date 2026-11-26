@@ -276,7 +276,8 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     require a visible hardware caret and the `Interactive` footer below the editor.
     The plain frame additionally has a `❯ ` prompt. A full viewport uses the shared editor
     guard. Its compact `[Paste #N - M lines]` marker supplies the paste's line count.
-    The full styled sign-in notice two rows above a recognized editor reads `interaction`.
+    The full styled sign-in notice two rows above a recognized editor reads `interaction`
+    with the `auth` wait kind.
     The same styled notice, on one or more rows, also matches directly above one to three
     indented project rows ending in the native `Run on:` context.
     Manual `/login` stays available, and Copilot continues to report its state through OSC.
@@ -312,8 +313,9 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
 - **Never does:** decide when to type, write terminal input, read CLI reports, hooks or session files, or keep state between readings.
 - **Interface** (re-exported from `facade_rules`):
   - `read_box(&InputRule, &ScreenView) -> BoxReading` gives the reading, the draft's text,
-    the input's first row and whether the reading is unsure. The `InputLine` includes the
-    input's starting column and cursor, its cells and styling, and whether the box has more rows.
+    the input's first row, any recognized wait kind, and whether the reading is unsure.
+    The `InputLine` includes the input's starting column and cursor, its cells and styling,
+    and whether the box has more rows.
   - `read_box_for_typing(&InputRule, &ScreenView, bool) -> BoxReading` lets automatic delivery
     consider an unstyled probe when the daemon reports untouched input and the CLI's rule allows it.
   - `read_draft(&InputRule, &ScreenView) -> (InputInfo, Option<String>)` gives the input state,

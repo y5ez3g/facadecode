@@ -8,7 +8,10 @@
 mod paste;
 mod probe;
 
-use facade_base::model::terminal::{HiddenRows, InputInfo, InputState};
+use facade_base::model::{
+    agent::WaitKind,
+    terminal::{HiddenRows, InputInfo, InputState},
+};
 use facade_screen::{ScreenView, VisibleCell};
 use regex::Regex;
 
@@ -50,6 +53,8 @@ pub fn read_draft(rule: &InputRule, view: &ScreenView) -> (InputInfo, Option<Str
 pub struct BoxReading {
     pub info: InputInfo,
     pub draft: Option<String>,
+    /// The reason given by a recognized interaction, when the rule knows it.
+    pub wait_kind: Option<WaitKind>,
     /// Visible text ending at the caret of a full viewport that has no scroll markers.
     /// Only a paste just made into an observed empty input can use it for confirmation.
     pub paste_tail: Option<String>,
@@ -66,6 +71,7 @@ impl BoxReading {
         Self {
             info,
             draft,
+            wait_kind: None,
             paste_tail: None,
             line: None,
             unsure: false,
@@ -112,6 +118,7 @@ pub fn read_box_for_typing(
         evidence,
         hidden,
         draft,
+        wait_kind,
         paste_tail,
         line,
         unsure,
@@ -125,6 +132,7 @@ pub fn read_box_for_typing(
     BoxReading {
         info,
         draft,
+        wait_kind,
         paste_tail,
         line,
         unsure,
@@ -138,6 +146,7 @@ struct Reading {
     hidden: Option<HiddenRows>,
     /// The draft as its rows draw it.
     draft: Option<String>,
+    wait_kind: Option<WaitKind>,
     paste_tail: Option<String>,
     line: Option<InputLine>,
     unsure: bool,
@@ -158,6 +167,7 @@ fn reading(state: InputState, evidence: impl Into<String>) -> Reading {
         evidence: evidence.into(),
         hidden: None,
         draft: None,
+        wait_kind: None,
         paste_tail: None,
         line: None,
         unsure: false,
@@ -896,15 +906,18 @@ impl<'a> Screen<'a> {
             lines.push(&cells[from..to]);
         }
         let place = format!("the editor at {}", row_span(first + 1, lower));
-        if rail
+        if let Some(notice) = rail
             .live_notice
             .as_ref()
-            .is_some_and(|notice| self.editor_live_notice(notice, upper))
+            .filter(|notice| self.editor_live_notice(notice, upper))
         {
-            return reading(
-                InputState::Interaction,
-                format!("the CLI shows a live notice above {place}"),
-            );
+            return Reading {
+                wait_kind: notice.wait_kind,
+                ..reading(
+                    InputState::Interaction,
+                    format!("the CLI shows a live notice above {place}"),
+                )
+            };
         }
         if lines.len() == limit {
             let at = lines[cursor_row - first].partition_point(|cell| cell.column < column);

@@ -18,7 +18,7 @@ use facade_base::model::message::DeliveryFailure;
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::{
     model::agent::{
-        AgentRef, AgentsUpdate, ManagedAgent, ManagedAgentState, StateReason, ToolsState,
+        AgentRef, AgentsUpdate, ManagedAgent, ManagedAgentState, StateReason, ToolsState, WaitKind,
     },
     model::terminal::{DEFAULT_TERMINAL_SIZE, InputInfo, InputState},
 };
@@ -1833,11 +1833,11 @@ impl Actor {
             .as_ref()
             .expect("the screen exists while the actor runs");
         self.state.observe(screen.screen());
-        // A menu or question of the CLI's own in place of its input waits for the person.
-        let input = self.read_screen_input().info.state;
-        self.state
-            .asks(input == InputState::Interaction, Instant::now());
-        let input_shown = matches!(input, InputState::Usable | InputState::Draft);
+        let input = self.read_screen_input();
+        let wait = (input.info.state == InputState::Interaction)
+            .then_some(input.wait_kind.unwrap_or(WaitKind::Unknown));
+        self.state.asks(wait, Instant::now());
+        let input_shown = matches!(input.info.state, InputState::Usable | InputState::Draft);
         self.before_input_box &= !input_shown;
         self.state.shows_input(input_shown);
         self.state_changed = true;
