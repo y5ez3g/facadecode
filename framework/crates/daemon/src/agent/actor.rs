@@ -6042,17 +6042,17 @@ mod tests {
 
     #[tokio::test]
     async fn muse_wait_ignores_a_title_change_after_handover() {
-        muse_active_question_survives_replay(false, b"\x1b]2;new title\x07").await;
+        muse_active_question_survives_replay("title-change", false, b"\x1b]2;new title\x07").await;
     }
 
     #[tokio::test]
     async fn muse_wait_ignores_an_open_pre_report_frame_after_handover() {
-        muse_active_question_survives_replay(true, b"\x1b[?2026l").await;
+        muse_active_question_survives_replay("pre-report-sync", true, b"\x1b[?2026l").await;
     }
 
-    async fn muse_active_question_survives_replay(open_sync: bool, live_output: &[u8]) {
-        let before = crate::test_folder::TestFolder::new("actor-muse-replay-old");
-        let after = crate::test_folder::TestFolder::new("actor-muse-replay-new");
+    async fn muse_active_question_survives_replay(case: &str, open_sync: bool, live_output: &[u8]) {
+        let before = crate::test_folder::TestFolder::new(&format!("actor-muse-replay-{case}-old"));
+        let after = crate::test_folder::TestFolder::new(&format!("actor-muse-replay-{case}-new"));
         let (messages, _) = messages();
         let rule = facade_rules::find("muse").unwrap().unwrap();
         let composer = plain_claude_frame("", "");
