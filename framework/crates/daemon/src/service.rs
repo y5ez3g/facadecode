@@ -1411,10 +1411,12 @@ impl Daemon {
                 .map_err(ErrorBody::internal)?
                 .display()
                 .to_string(),
-            settings_file: facade_base::settings::settings_file()
-                .map_err(ErrorBody::internal)?
-                .display()
-                .to_string(),
+            settings_file: {
+                let file = facade_base::settings::settings_file().map_err(ErrorBody::internal)?;
+                // Whoever opens the file it names finds the settings Facade writes.
+                facade_base::settings::create_missing(&file);
+                file.display().to_string()
+            },
             build: facade_base::build_id(),
             daemon_pid: std::process::id(),
             keeper_pid: self.runs.keeper_info().map(|keeper| keeper.pid),
