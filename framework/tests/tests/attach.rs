@@ -1121,10 +1121,13 @@ fn attach_gives_the_mouse_to_a_cli_that_asks_for_it() {
     let settled = term.output_len();
     reaches(b"\x1b[<64;12;4M\x1b[<0;12;4M\x1b[<0;12;4m\x1b[<2;12;4M\x1b[<2;12;4m");
     reaches(b"\x1bOAz");
+    // The command below goes into an empty input.
+    reaches(b"\x7f");
     let modes = String::from_utf8_lossy(&term.output_since(settled)).into_owned();
     assert!(!modes.contains("\x1b[?1006"), "{modes:?}");
 
-    // Once the CLI lets the mouse go, the wheel and clicks stay with Attach.
+    // Once the CLI lets the mouse go, its clicks stay with Attach, and on its alternate screen the
+    // wheel presses Up as the terminal app would, three rows for each step.
     std::fs::write(&transcript, "\x1b[?1003l\x1b[?1006l").unwrap();
     home.run_facade_ok(&["type", &agent.id, "/fake screen", "--enter"]);
     assert!(
@@ -1142,7 +1145,7 @@ fn attach_gives_the_mouse_to_a_cli_that_asks_for_it() {
         "{:?}",
         read_keys()
     );
-    assert_eq!(read_keys(), [before, b"q".to_vec()].concat());
+    assert_eq!(read_keys(), [before, b"\x1b[A".repeat(3), b"q".to_vec()].concat());
     term.send(b"\x1d");
     assert!(
         term.wait_exit(secs(10))
