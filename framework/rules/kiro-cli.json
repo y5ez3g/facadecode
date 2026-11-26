@@ -25,6 +25,10 @@
 				"hint": { "pattern": "^\\s*esc to cancel · ↑↓ to navigate · ↵ to select$", "within": 16 }
 			},
 			{
+				"selected": "^\\s*❯ \\S",
+				"hint": { "pattern": "^\\s*esc to go back · ↑↓ to navigate · ↵ to select · ↑ at top for controls · tab to switch panels$", "within": 16 }
+			},
+			{
 				"selected": "^ {2}You are not logged in\\. Login now\\?$",
 				"hint": { "pattern": "^❯ (?:Yes|No)$", "within": 2 }
 			}
