@@ -2195,10 +2195,12 @@ impl Actor {
         let expired_recovered = self.typist.expired_recovered_draft(now);
         let cleanup_frame = expired_recovered || self.typist.awaiting_cleanup_frame();
         let deferred = std::mem::take(&mut self.cleanup_frame_after_drain);
+        // Both cases are recoveries: only a recovered cleanup defers its observation, and an
+        // expired draft here is a recovered one.
         if cleanup_frame
             && (deferred
-                || expired_recovered
-                    && !matches!(self.redraw_nudge, Some(RedrawNudge::RecoveredCleanup)))
+                || (expired_recovered
+                    && !matches!(self.redraw_nudge, Some(RedrawNudge::RecoveredCleanup))))
         {
             self.observe_cleanup_frame(true);
         }
@@ -3831,6 +3833,16 @@ mod tests {
                 )
                 .unwrap();
             assert!(recovered.pending_delivery.is_none());
+            // Until the old output is read, nothing asks for the redraw or watches paint.
+            assert_eq!(cli.size(), size, "planned: {planned}");
+            assert!(
+                !recovered.facts.with_file_name("cleanup-resize").exists(),
+                "planned: {planned}"
+            );
+            assert!(
+                !recovered.screen().screen().observes_paint(),
+                "planned: {planned}"
+            );
 
             release.send(()).unwrap();
             let written = recovered.screen_mut().checkpoint_written().await;
@@ -3851,6 +3863,10 @@ mod tests {
                 cli.size(),
                 (size.0, size.1 - 1),
                 "the redraw is asked for once the old output is read"
+            );
+            assert!(
+                recovered.facts.with_file_name("cleanup-resize").exists(),
+                "the redraw size is reserved where the deferral was checked (planned: {planned})"
             );
 
             read_output(&mut recovered, &mut cli, draft.as_bytes()).await;
