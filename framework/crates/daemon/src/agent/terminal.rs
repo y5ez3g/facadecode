@@ -61,6 +61,42 @@ pub(super) enum CheckedInput<'a> {
     },
 }
 
+pub(super) enum WriteFenceAction {
+    Prepare {
+        offset: u64,
+        count: usize,
+        erase: bool,
+    },
+    CancelUnissuedErase,
+}
+
+/// A candidate erase can be refused by the final write check, or lose a select to terminal output
+/// before the system takes anything. Only a fence actually recorded by this attempt is revocable.
+struct EraseFence<'a, F: FnMut(WriteFenceAction) -> io::Result<bool>> {
+    update: F,
+    issued: &'a OnceLock<Option<usize>>,
+    recorded: bool,
+}
+
+impl<F: FnMut(WriteFenceAction) -> io::Result<bool>> EraseFence<'_, F> {
+    fn prepare(&mut self, offset: u64, count: usize, erase: bool) -> io::Result<()> {
+        self.recorded = (self.update)(WriteFenceAction::Prepare {
+            offset,
+            count,
+            erase,
+        })?;
+        Ok(())
+    }
+}
+
+impl<F: FnMut(WriteFenceAction) -> io::Result<bool>> Drop for EraseFence<'_, F> {
+    fn drop(&mut self) {
+        if self.recorded && self.issued.get().is_none() {
+            let _ = (self.update)(WriteFenceAction::CancelUnissuedErase);
+        }
+    }
+}
+
 enum DeliveryEvent {
     Issued,
     Written(io::Result<Option<usize>>),
@@ -231,9 +267,9 @@ impl Terminal {
         &mut self,
         wait: TerminalWait,
         delivery: Option<DeliveryInput<'_>>,
-        before_write: impl FnMut(u64, usize, bool) -> bool,
+        fence: impl FnMut(WriteFenceAction) -> io::Result<bool>,
     ) -> TerminalEvent {
-        self.ready_with_input(wait, delivery.map(CheckedInput::Delivery), before_write)
+        self.ready_with_input(wait, delivery.map(CheckedInput::Delivery), fence)
             .await
     }
 
@@ -242,22 +278,29 @@ impl Terminal {
         &mut self,
         wait: TerminalWait,
         input: Option<CheckedInput<'_>>,
-        mut before_write: impl FnMut(u64, usize, bool) -> bool,
+        mut fence: impl FnMut(WriteFenceAction) -> io::Result<bool>,
     ) -> TerminalEvent {
         if let Some(input) = input
             && matches!(wait, TerminalWait::ReadAndWrite)
             && self.input.is_empty()
         {
-            return self.ready_checked_input(input, before_write).await;
+            return self.ready_checked_input(input, fence).await;
         }
-        self.ready(wait, |offset, count| before_write(offset, count, false))
-            .await
+        self.ready(wait, |offset, count| {
+            fence(WriteFenceAction::Prepare {
+                offset,
+                count,
+                erase: false,
+            })
+            .is_ok()
+        })
+        .await
     }
 
     async fn ready_checked_input(
         &mut self,
         input: CheckedInput<'_>,
-        mut before_write: impl FnMut(u64, usize, bool) -> bool,
+        fence: impl FnMut(WriteFenceAction) -> io::Result<bool>,
     ) -> TerminalEvent {
         let (delivery, tool_start) = match input {
             CheckedInput::Delivery(delivery) => (delivery, false),
@@ -299,11 +342,14 @@ impl Terminal {
             deadline: Some(delivery.deadline.into_std()),
             issued: &issued,
         };
+        let mut fence = EraseFence {
+            update: fence,
+            issued: &issued,
+            recorded: false,
+        };
         let write = async {
-            if !before_write(self.sent, head.len(), !delivery.framed) {
-                return DeliveryEvent::Written(Err(io::Error::other(
-                    "could not save paste cleanup before writing",
-                )));
+            if let Err(error) = fence.prepare(self.sent, head.len(), !delivery.framed) {
+                return DeliveryEvent::Written(Err(error));
             }
             let mut write = std::pin::pin!(master.write_checked(head, check));
             poll_fn(|cx| match write.as_mut().poll(cx) {
@@ -318,6 +364,7 @@ impl Terminal {
             event = write => event,
             event = master.read(&mut self.buffer) => DeliveryEvent::Read(event),
         };
+        drop(fence);
         match event {
             DeliveryEvent::Issued => {
                 if !tool_start {
@@ -1486,7 +1533,7 @@ mod tests {
                     pastes: false,
                     framed: false,
                 }),
-                |_, _, _| true,
+                |_| Ok(false),
             ),
         )
         .await
@@ -1512,7 +1559,7 @@ mod tests {
         cli.write_output(b"blocked").unwrap();
         assert!(matches!(
             terminal
-                .ready_with_delivery(TerminalWait::ReadAndWrite, None, |_, _, _| true)
+                .ready_with_delivery(TerminalWait::ReadAndWrite, None, |_| Ok(false))
                 .await,
             TerminalEvent::Read
         ));
@@ -1545,7 +1592,7 @@ mod tests {
                         read_through: &mut *delivery.read_through,
                         ..delivery
                     }),
-                    |_, _, _| true
+                    |_| Ok(false)
                 )
                 .await,
             TerminalEvent::Read
@@ -1556,7 +1603,7 @@ mod tests {
         cli.write_output(b"later frames").unwrap();
         assert!(matches!(
             terminal
-                .ready_with_delivery(TerminalWait::ReadAndWrite, Some(delivery), |_, _, _| true)
+                .ready_with_delivery(TerminalWait::ReadAndWrite, Some(delivery), |_| Ok(false))
                 .await,
             TerminalEvent::Read
         ));

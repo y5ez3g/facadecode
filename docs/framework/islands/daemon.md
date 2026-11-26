@@ -582,10 +582,12 @@ allowing other input to write.
 
 The local `paste_draft` blob keeps its 32-byte digest and appends five bytes when cleanup begins,
 including when the confirmed Backspace count is zero. Before a PTY write that could contain
-cleanup keys, the actor commits a marker for the outstanding write. The terminal's returned byte
-count advances the confirmed count. After a confirmed partial write, only a complete repaint of
-the current draft after the write boundary can authorize the remaining Backspaces. The typist
-checks the saved digest and the exact literal prefix and caret left by the confirmed keys.
+cleanup keys, the actor commits a marker for the outstanding write. A checked offer releases its
+marker if the final check defers the write or the offer is canceled before system issue. The
+terminal's returned byte count advances the confirmed count. After a confirmed partial write,
+the remaining Backspaces require a complete repaint of the current draft after the write
+boundary. The typist checks the saved digest and the exact literal prefix and caret left by the
+confirmed keys.
 Canonical spellings of a combining character match at the same logical caret. Without a
 recorded deletion unit, the typist issues at most one Backspace per grapheme before reading
 again. Each additional batch needs the confirmed write progress and a complete repaint
@@ -594,8 +596,14 @@ A recovered plan with zero confirmed writes also needs a current complete input 
 drains available terminal output within its existing bounds before checking the box. An outstanding
 write or an unreadable box leaves the cleanup intent waiting for more evidence.
 At takeover, a live drain that shows a freshly painted empty input can also finish cleanup.
-When a saved cleanup needs a redraw, the actor uses a brief row-count resize. This lets a
+When a saved cleanup needs a redraw, the actor temporarily changes the row count. This lets a
 bottom-aligned input move so a terminal that emits only changed cells can send the current box.
+The actor saves the size it requests for that paste before sending the resize. Another daemon
+recovering the same paste chooses a different size, drains available output, and tracks fresh paint.
+The changed size stays in effect until the first cleanup write goes out, recovery of the draft
+ends, or the requested terminal size changes. An edit that revokes cleanup restores the requested
+size before the actor releases the person's keys. A complete painted frame and the saved draft
+proof authorize cleanup in either case.
 
 The delivery receipt settles on its original deadline and graces. An unresolved cleanup stays
 in the v7 field across receipt settlement, inbox history expiry, and daemon takeover. A complete

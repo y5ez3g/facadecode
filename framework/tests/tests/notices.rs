@@ -229,16 +229,16 @@ fn a_creator_stop_is_silent_and_another_agents_stop_reports_the_end_once() {
 
 const NOTICE_ENTER_WRITTEN: &str = "message-enter-written";
 
-/// The first notice stays in the input even after its Enter reaches the CLI.
-fn start_notice_recipient(home: &TestHome) -> (TestAgent, PathBuf) {
+/// The first notice stays in the input even after its Enter reaches the CLI. `env` adds settings
+/// for the fake CLI.
+fn start_notice_recipient(home: &TestHome, env: &[(&str, &str)]) -> (TestAgent, PathBuf) {
     let keys = home.folder().join("creator-keys");
-    let boss = home.start_named_fake(
-        "boss",
-        &[
-            ("FAKECLI_IGNORE_FIRST_ENTER", "1"),
-            ("FAKECLI_KEYS", keys.to_str().unwrap()),
-        ],
-    );
+    let mut settings = vec![
+        ("FAKECLI_IGNORE_FIRST_ENTER", "1"),
+        ("FAKECLI_KEYS", keys.to_str().unwrap()),
+    ];
+    settings.extend_from_slice(env);
+    let boss = home.start_named_fake("boss", &settings);
     (boss, keys)
 }
 
@@ -269,7 +269,7 @@ fn wait_for_untaken_notice(home: &TestHome, keys: &Path) {
 fn an_expired_notice_paste_does_not_block_concurrent_end_notices_after_a_crash() {
     let home = TestHome::new("expired-end-notice");
     home.start_facade_with(&[("FACADE_TEST_GATES", NOTICE_ENTER_WRITTEN)]);
-    let (boss, keys) = start_notice_recipient(&home);
+    let (boss, keys) = start_notice_recipient(&home, &[]);
     let mut creator = McpTestClient::open(&home, &boss.id);
     let first = start_child(&home, &mut creator, "first", None);
     let children: Vec<_> = (0..24)
@@ -318,6 +318,78 @@ fn an_expired_notice_paste_does_not_block_concurrent_end_notices_after_a_crash()
             .contains(first["id"].as_str().unwrap())
     );
     assert_end_notices(&home, &children);
+}
+
+#[cfg(windows)]
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the test gate of debug builds")]
+fn an_expired_notice_is_cleared_when_the_recovered_cli_misses_the_resize_window() {
+    let home = TestHome::new("expired-end-notice");
+    home.start_facade_with(&[
+        ("FACADE_TEST_GATES", NOTICE_ENTER_WRITTEN),
+        ("FACADE_TEST_DELIVERY_MS", "6000"),
+    ]);
+    let size_log = home.folder().join("creator-size.log");
+    let (boss, keys) =
+        start_notice_recipient(&home, &[("FAKECLI_SIZE_LOG", size_log.to_str().unwrap())]);
+    let mut creator = McpTestClient::open(&home, &boss.id);
+    let first = start_child(&home, &mut creator, "first", None);
+    let later = start_child(&home, &mut creator, "later", None);
+    home.run_facade_ok(&["stop", first["id"].as_str().unwrap()]);
+    wait_for_untaken_notice(&home, &keys);
+    let (deadline, observed): (String, bool) = read_store(&home)
+        .query_row(
+            "SELECT deadline, length(paste_draft) = 32 FROM messages WHERE number = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert!(observed, "the first daemon stored the draft before Enter");
+
+    let keeper = home.lock_record("keeper").unwrap().0;
+    pause_process(keeper);
+    pause_process(boss.pid);
+    let old = home.kill_daemon();
+    assert!(wait_until(LOADED_TIMEOUT, || facade_base::time::iso_now() >= deadline));
+    resume_process(keeper);
+    home.wait_for_daemon_after(old, LOADED_TIMEOUT)
+        .expect("the keeper starts a replacement");
+    let cleanup_proof = || {
+        read_store(&home)
+            .query_row(
+                "SELECT substr(paste_draft, 33) FROM messages WHERE number = 1",
+                [],
+                |row| row.get::<_, Option<Vec<u8>>>(0),
+            )
+            .unwrap()
+    };
+    assert!(wait_until(LOADED_TIMEOUT, || cleanup_proof().as_deref()
+        == Some(&[1, 0, 0, 0, 0])));
+    // Simulate a CLI that gets no turn during the short restart resize.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert_eq!(cleanup_proof().as_deref(), Some(&[1, 0, 0, 0, 0][..]));
+    resume_process(boss.pid);
+    assert!(
+        wait_until(secs(6), || cleanup_proof().is_none()),
+        "the expired draft remained in the composer; CLI sizes:\n{}\nscreen:\n{}",
+        std::fs::read_to_string(&size_log).unwrap(),
+        home.screen(&boss.address),
+    );
+    assert!(
+        wait_until(secs(6), || {
+            let sizes = std::fs::read_to_string(&size_log).unwrap();
+            let original = sizes.lines().next();
+            sizes.lines().any(|size| Some(size) != original) && sizes.lines().last() == original
+        }),
+        "the CLI should see the resize and return to its original size",
+    );
+
+    let mut terminal = connect(&home);
+    let stop = stop_from_terminal(&mut terminal, &later["id"]);
+    let response = terminal.wait_for_response(stop, LOADED_TIMEOUT).unwrap();
+    assert_eq!(response["result"]["items"][0]["status"], "stopped");
+    assert!(wait_until(secs(8), || notices(&home).len() == 1));
+    assert_end_notices(&home, &[later]);
 }
 
 /// An already saved exit and an exit that happens while no daemon runs both owe a notice.
@@ -493,6 +565,13 @@ fn an_expired_notice_is_cleared_after_a_crash_before_the_first_backspace() {
     recover_notice_cleanup(CleanupCrash::BeforeWrite);
 }
 
+#[cfg(windows)]
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the test gates of debug builds")]
+fn an_expired_notice_is_cleared_after_a_second_daemon_misses_the_first_resize() {
+    recover_notice_cleanup(CleanupCrash::BeforeWriteMissesResize);
+}
+
 #[test]
 #[cfg_attr(not(debug_assertions), ignore = "uses the test gates of debug builds")]
 fn an_expired_notice_keeps_the_cleanup_receipt_across_a_second_crash() {
@@ -513,7 +592,7 @@ fn an_expired_combining_notice_clears_without_a_declared_delete_unit() {
         ("FACADE_TEST_GATES", NOTICE_ENTER_WRITTEN),
         ("FACADE_TEST_DELIVERY_MS", "12000"),
     ]);
-    let (boss, keys) = start_notice_recipient(&home);
+    let (boss, keys) = start_notice_recipient(&home, &[]);
     let mut creator = McpTestClient::open(&home, &boss.id);
     let name = "helloe\u{301}";
     let child = start_child(&home, &mut creator, name, None);
@@ -553,6 +632,7 @@ fn an_expired_combining_notice_clears_without_a_declared_delete_unit() {
 #[derive(PartialEq, Eq)]
 enum CleanupCrash {
     BeforeWrite,
+    BeforeWriteMissesResize,
     AfterWrite,
     AfterSettlement,
 }
@@ -560,6 +640,7 @@ enum CleanupCrash {
 fn recover_notice_cleanup(crash: CleanupCrash) {
     let home = TestHome::new("notice-cleanup-crash");
     let already_written = crash == CleanupCrash::AfterWrite;
+    let misses_resize = crash == CleanupCrash::BeforeWriteMissesResize;
     let gate = if already_written {
         "after-paste-cleanup-write"
     } else {
@@ -570,11 +651,37 @@ fn recover_notice_cleanup(crash: CleanupCrash) {
         ("FACADE_TEST_GATES", &gates),
         ("FACADE_TEST_DELIVERY_MS", "12000"),
     ]);
-    let (boss, keys) = start_notice_recipient(&home);
+    let sizes = home.folder().join("creator-sizes");
+    let (boss, keys) =
+        start_notice_recipient(&home, &[("FAKECLI_SIZE_LOG", sizes.to_str().unwrap())]);
     let mut creator = McpTestClient::open(&home, &boss.id);
     let child = start_child(&home, &mut creator, "child", None);
+    let later = misses_resize.then(|| start_child(&home, &mut creator, "later", None));
     home.run_facade_ok(&["stop", child["id"].as_str().unwrap()]);
     wait_for_untaken_notice(&home, &keys);
+    if misses_resize {
+        // Start with a durable cleanup plan for the observed paste, before any erase was issued.
+        // This makes the first replacement enter the redraw path even if startup itself paints.
+        let store = rusqlite::Connection::open(home.path.join("framework/facade.db")).unwrap();
+        let mut proof: Vec<u8> = store
+            .query_row(
+                "SELECT paste_draft FROM messages WHERE number = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(proof.len(), 32);
+        proof.extend_from_slice(&[1, 0, 0, 0, 0]);
+        assert_eq!(
+            store
+                .execute(
+                    "UPDATE messages SET paste_draft = ?1 WHERE number = 1",
+                    [&proof]
+                )
+                .unwrap(),
+            1,
+        );
+    }
 
     let keeper = home.lock_record("keeper").unwrap().0;
     pause_process(keeper);
@@ -616,6 +723,13 @@ fn recover_notice_cleanup(crash: CleanupCrash) {
         .lock_record("daemon")
         .expect("the replacement holds the home");
     assert_ne!(old, first);
+    if misses_resize {
+        assert!(wait_until(LOADED_TIMEOUT, || {
+            std::fs::read_to_string(&sizes).unwrap().lines().last() == Some("120x29")
+        }));
+        assert_eq!(backspaces(), 0, "the first resize preceded the first erase");
+        pause_process(boss.pid);
+    }
     kill_process(old);
     if crash == CleanupCrash::AfterSettlement {
         // Reproduce the durable receipt at a crash after its deadline, with the planned cleanup
@@ -639,11 +753,38 @@ fn recover_notice_cleanup(crash: CleanupCrash) {
         drop(store);
         resume_process(keeper);
     }
-    home.wait_for_daemon_after(old, LOADED_TIMEOUT)
-        .expect("the keeper starts a second replacement");
-    assert!(wait_until(LOADED_TIMEOUT, || {
-        backspaces() > 0 && !home.screen(&boss.address).contains("[Pasted text #1")
-    }));
+    let replacement = home.wait_for_daemon_after(old, LOADED_TIMEOUT);
+    if misses_resize {
+        // The CLI still remembers the first changed size when the second daemon starts.
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        let proof: Vec<u8> = read_store(&home)
+            .query_row(
+                "SELECT substr(paste_draft, 33) FROM messages WHERE number = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            proof,
+            [1, 0, 0, 0, 0],
+            "old paint must authorize no erasure"
+        );
+        resume_process(boss.pid);
+    }
+    replacement.expect("the keeper starts a second replacement");
+    let clear_timeout = if misses_resize {
+        secs(6)
+    } else {
+        LOADED_TIMEOUT
+    };
+    assert!(
+        wait_until(clear_timeout, || {
+            backspaces() > 0 && !home.screen(&boss.address).contains("[Pasted text #1")
+        }),
+        "cleanup did not clear the composer; CLI sizes:\n{}\nscreen:\n{}",
+        std::fs::read_to_string(&sizes).unwrap(),
+        home.screen(&boss.address),
+    );
     if crash == CleanupCrash::AfterSettlement {
         assert!(wait_until(LOADED_TIMEOUT, || read_store(&home)
             .query_row(
@@ -665,6 +806,17 @@ fn recover_notice_cleanup(crash: CleanupCrash) {
     assert!(notices(&home).is_empty());
     let mut creator = McpTestClient::open(&home, &boss.id);
     assert_eq!(system_inbox(&mut creator)[0]["id"], "m1");
+    if let Some(later) = later {
+        assert!(wait_until(LOADED_TIMEOUT, || {
+            std::fs::read_to_string(&sizes).unwrap().lines().last() == Some("120x30")
+        }));
+        let mut terminal = connect(&home);
+        let stop = stop_from_terminal(&mut terminal, &later["id"]);
+        let response = terminal.wait_for_response(stop, LOADED_TIMEOUT).unwrap();
+        assert_eq!(response["result"]["items"][0]["status"], "stopped");
+        assert!(wait_until(LOADED_TIMEOUT, || notices(&home).len() == 1));
+        assert_end_notices(&home, &[later]);
+    }
 }
 
 #[test]

@@ -1265,26 +1265,48 @@ impl Typist {
         )
     }
 
-    /// Fences the revocable portion of a cleanup before offering it to the terminal.
-    pub(super) fn before_actor_write(&mut self, offset: u64, count: usize, erase: bool) -> bool {
+    /// Fences the revocable portion of a cleanup before offering it to the terminal. Returns
+    /// whether this attempt recorded an erase fence, or `None` on failure to persist it.
+    pub(super) fn before_actor_write(
+        &mut self,
+        offset: u64,
+        count: usize,
+        erase: bool,
+    ) -> Option<bool> {
         if !erase {
-            return self.before_write(offset, count);
+            return self.before_write(offset, count).then_some(false);
         }
         let Some((number, proof)) = self.draft_proof else {
-            return true;
+            return Some(false);
         };
-        let Some(progress) = proof.cleanup else {
-            return true;
+        let Some(progress) = proof.cleanup.filter(|progress| !progress.writing) else {
+            return Some(false);
         };
-        progress.writing
-            || self.keep_cleanup(
+        self.keep_cleanup(
+            number,
+            proof,
+            CleanupProgress {
+                writing: true,
+                ..progress
+            },
+        )
+        .then_some(true)
+    }
+
+    /// A checked offer was withdrawn before any part of it reached the system.
+    pub(super) fn cancel_unissued_erase(&mut self) {
+        if let Some((number, proof)) = self.draft_proof
+            && let Some(progress) = proof.cleanup.filter(|progress| progress.writing)
+        {
+            self.keep_cleanup(
                 number,
                 proof,
                 CleanupProgress {
-                    writing: true,
+                    writing: false,
                     ..progress
                 },
-            )
+            );
+        }
     }
 
     /// Advances cleanup by the bytes the terminal reported written, before looking for a redraw.
@@ -1677,6 +1699,16 @@ impl Typist {
         self.batch.as_ref().is_some_and(|batch|
             batch.draft.recovered &&
                 matches!(batch.phase, DeliveryPhase::Clearing(cleanup) if cleanup.queued_after.is_none()))
+    }
+
+    /// An expired restored draft needs new paint before the first cleanup step can offer keys.
+    pub(super) fn expired_recovered_draft(&self, now: Instant) -> bool {
+        self.draft_proof.is_some()
+            && self.batch.as_ref().is_some_and(|batch| {
+                batch.draft.recovered
+                    && matches!(batch.phase, DeliveryPhase::Draft)
+                    && batch.deadline().is_some_and(|deadline| now >= deadline)
+            })
     }
 
     /// How long keys wait at most for the submission key of a paste of `text` that begins now: as long

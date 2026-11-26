@@ -8,7 +8,8 @@
 
 use std::cell::OnceCell;
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -38,6 +39,7 @@ use super::screen::LoggedScreen;
 use super::state::{Kept, StateTracker, Viewing, keep};
 use super::terminal::{
     CheckedInput, DeliveryInput, MAX_READ_BYTES, ProbeKey, Terminal, TerminalEvent, TerminalWait,
+    WriteFenceAction,
 };
 use super::typist::{
     BoxWrites, DeliveryWrite, InputObservation, MessageTyping, Modes, Typing, Typist,
@@ -91,6 +93,22 @@ fn publish_delay() -> Duration {
 
 fn log(level: &str, message: &str) {
     facade_base::log::write("daemon", level, message);
+}
+
+fn update_write_fence(typist: &mut Typist, action: WriteFenceAction) -> io::Result<bool> {
+    match action {
+        WriteFenceAction::Prepare {
+            offset,
+            count,
+            erase,
+        } => typist
+            .before_actor_write(offset, count, erase)
+            .ok_or_else(|| io::Error::other("could not save paste cleanup before writing")),
+        WriteFenceAction::CancelUnissuedErase => {
+            typist.cancel_unissued_erase();
+            Ok(false)
+        }
+    }
 }
 
 /// What the actor shares with the agent's handles.
@@ -235,7 +253,7 @@ fn new_actor(start: ActorStart, links: Links, recovered: bool) -> anyhow::Result
         drawn_at: None,
         input_drawn_at: None,
         delivery_frames: DeliveryFrames::default(),
-        nudge_until: None,
+        redraw_nudge: None,
         catch_up_at: None,
         publish_at: None,
         typist_at: None,
@@ -364,7 +382,7 @@ struct Actor {
     /// When CLI output last drew on the input cursor's row.
     input_drawn_at: Option<Instant>,
     delivery_frames: DeliveryFrames,
-    nudge_until: Option<Instant>,
+    redraw_nudge: Option<RedrawNudge>,
     catch_up_at: Option<Instant>,
     publish_at: Option<Instant>,
     typist_at: Option<Instant>,
@@ -374,6 +392,51 @@ struct Actor {
     replies_dropped: bool,
     /// Automatic delivery can probe an unstyled hint before it accepts any external input.
     untouched_input: bool,
+}
+
+enum RedrawNudge {
+    Restart(Instant),
+    RecoveredCleanup,
+}
+
+/// The last size requested for this paste's redraw. A paused CLI could remember any size that
+/// reached its terminal, including one the prior daemon never observed it draw at.
+#[derive(serde::Deserialize, serde::Serialize)]
+struct CleanupResize {
+    paste: u64,
+    size: (u16, u16),
+}
+
+impl CleanupResize {
+    fn reserve(path: &Path, paste: u64, requested: (u16, u16)) -> io::Result<Option<(u16, u16)>> {
+        let previous = match std::fs::read(path) {
+            Ok(bytes) => Some(serde_json::from_slice::<Self>(&bytes).map_err(io::Error::other)?),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        let (cols, rows) = previous
+            .filter(|last| last.paste == paste)
+            .map_or(requested, |last| {
+                (requested.0.min(last.size.0), requested.1.min(last.size.1))
+            });
+        // Descend through distinct sizes so a CLI that missed one or more resizes still sees a
+        // change. Prefer moving its bottom-aligned composer by a row.
+        let size = if rows > 1 {
+            (cols, rows - 1)
+        } else if cols > 1 {
+            (cols - 1, requested.1)
+        } else {
+            return Ok(None);
+        };
+        let temporary = path.with_extension("next");
+        let output = facade_base::files::create_private_file(&temporary)?;
+        serde_json::to_writer(&output, &Self { paste, size }).map_err(io::Error::other)?;
+        output.sync_all()?;
+        drop(output);
+        std::fs::rename(temporary, path)?;
+        facade_base::files::sync_folder(path.parent().expect("an agent screen folder"))?;
+        Ok(Some(size))
+    }
 }
 
 struct PendingDelivery {
@@ -505,6 +568,10 @@ impl Actor {
             } else {
                 TerminalWait::WriteOnly
             };
+            let nudge_until = match self.redraw_nudge {
+                Some(RedrawNudge::Restart(until)) => Some(until),
+                _ => None,
+            };
             let can_issue = self.delivery_can_issue();
             let can_write_tool = self.tool_write_can_issue();
             let writing = self.screen().checkpoint_running();
@@ -535,7 +602,7 @@ impl Actor {
                 _ = wait_for_prompt(&mut self.prompt_result) => self.report_trouble(),
                 // Continuous terminal output must not hold back a glyph frame.
                 _ = sleep_until(self.glyph_at), if self.glyph_at.is_some() => self.advance_glyph(),
-                event = self.terminal.ready_with_input(wait, input, |offset, count, erase| self.typist.before_actor_write(offset, count, erase)) => self.take_terminal(event),
+                event = self.terminal.ready_with_input(wait, input, |action| update_write_fence(&mut self.typist, action)) => self.take_terminal(event),
                 Ok(()) = self.links.tools_connections.changed() => {
                     let open = *self.links.tools_connections.borrow_and_update() > 0;
                     self.state.tools_connection(open);
@@ -552,7 +619,7 @@ impl Actor {
                     self.after_checkpoint();
                 }
                 _ = sleep_until(sync_at), if sync_at.is_some() && !full => self.end_sync(),
-                _ = sleep_until(self.nudge_until), if self.nudge_until.is_some() => {
+                _ = sleep_until(nudge_until), if nudge_until.is_some() => {
                     self.end_nudge();
                 }
                 _ = sleep_until(self.drain_deadline), if self.drain_deadline.is_some() => {
@@ -692,7 +759,7 @@ impl Actor {
         } else {
             self.terminal.set_size(cols.saturating_sub(1).max(1), rows);
             pause_for_test("inside-nudge");
-            self.nudge_until = Some(Instant::now() + REDRAW_NUDGE_TIMEOUT);
+            self.redraw_nudge = Some(RedrawNudge::Restart(Instant::now() + REDRAW_NUDGE_TIMEOUT));
         }
     }
 
@@ -1033,7 +1100,7 @@ impl Actor {
                 self.typist.finish_paste(messages, previous_text, draft);
                 let recovered_empty = std::mem::take(&mut self.recovered_empty);
                 if self.typist.awaiting_cleanup_frame() {
-                    self.observe_cleanup_frame();
+                    self.observe_cleanup_frame(self.typist.recovering_cleanup());
                     if recovered_empty
                         && self.drain_cleanup_output()
                         && self.input_rule.is_some_and(|rule| {
@@ -1140,10 +1207,7 @@ impl Actor {
         }
         if self.screen().is_full() {
             // The size waits for the checkpoint writer; the terminal leaves any nudge meanwhile.
-            if self.nudge_until.take().is_some() {
-                let (now_cols, now_rows) = self.size();
-                self.terminal.set_size(now_cols, now_rows);
-            }
+            self.end_nudge();
             self.pending_size = Some(request);
             return;
         }
@@ -1151,7 +1215,7 @@ impl Actor {
     }
 
     fn apply_requested_size(&mut self, cols: u16, rows: u16) {
-        self.nudge_until = None;
+        self.redraw_nudge = None;
         if self.resize(cols, rows) {
             self.publish_soon();
         } else {
@@ -1239,6 +1303,9 @@ impl Actor {
                     pending.write.len()
                 };
                 self.typist.delivery_issued(pending.kind, offset, length);
+                if matches!(pending.kind, DeliveryWrite::Erase { .. }) {
+                    self.end_cleanup_nudge();
+                }
                 if wrote {
                     self.wrote_input();
                 }
@@ -1319,7 +1386,7 @@ impl Actor {
 
     fn apply_output(&mut self) {
         self.links.output.send_replace(());
-        if !self.typist.recovering_cleanup() {
+        if matches!(self.redraw_nudge, Some(RedrawNudge::Restart(_))) {
             self.end_nudge();
         }
         self.undrawn = None;
@@ -1888,27 +1955,38 @@ impl Actor {
 
     /// Gives the terminal back its logged size after a redraw nudge.
     fn end_nudge(&mut self) {
-        if self.nudge_until.take().is_some() {
+        if self.redraw_nudge.take().is_some() {
             let (cols, rows) = self.size();
             self.terminal.set_size(cols, rows);
         }
     }
 
-    /// A cleanup carried through restart may need a whole redraw. Leave the short resize nudge
-    /// in effect while the CLI has only written a partial frame or moved the cursor.
-    fn observe_cleanup_frame(&mut self) {
-        self.screen_mut().observe_paint(true);
-        if self.typist.recovering_cleanup() {
-            let (cols, rows) = self.size();
-            // Moving a bottom-aligned composer makes its cells visible in consoles that emit
-            // only the differences after a redraw.
-            if rows > 1 {
-                self.terminal.set_size(cols, rows - 1);
-            } else {
-                self.terminal.set_size(cols.saturating_sub(1).max(1), rows);
-            }
-            self.nudge_until = Some(Instant::now() + REDRAW_NUDGE_TIMEOUT);
+    fn end_cleanup_nudge(&mut self) {
+        if matches!(self.redraw_nudge, Some(RedrawNudge::RecoveredCleanup)) {
+            self.end_nudge();
         }
+    }
+
+    /// A cleanup carried through restart needs a whole redraw. Keep the changed size until
+    /// cleanup advances so a busy CLI cannot miss both resize events between its draws.
+    fn observe_cleanup_frame(&mut self, recovered: bool) {
+        if recovered && let Some(paste) = self.typist.delivery_batch() {
+            let path = self.facts.with_file_name("cleanup-resize");
+            let requested = self.size();
+            match crate::blocking_in_place(|| CleanupResize::reserve(&path, paste, requested)) {
+                Ok(Some((cols, rows))) => {
+                    self.drain_cleanup_output();
+                    self.terminal.set_size(cols, rows);
+                    self.redraw_nudge = Some(RedrawNudge::RecoveredCleanup);
+                }
+                Ok(None) => {}
+                Err(error) => log(
+                    "warn",
+                    &format!("#{} could not reserve a cleanup resize: {error}", self.id),
+                ),
+            }
+        }
+        self.screen_mut().observe_paint(true);
     }
 
     /// Reads what a recovered CLI wrote while no daemon read it, so that the redraw the nudge asks
@@ -2014,7 +2092,6 @@ impl Actor {
         self.early_exit = None;
         self.readiness.end();
         self.ready_at = None;
-        self.nudge_until = None;
         self.terminal.detach();
         if self.screen().is_full() {
             self.pending_restart = Some(reply);
@@ -2105,7 +2182,11 @@ impl Actor {
         self.terminal.finish_delivery_output();
         let now = Instant::now();
         self.finish_escape(now);
-        let cleanup_frame = self.typist.awaiting_cleanup_frame();
+        let expired_recovered = self.typist.expired_recovered_draft(now);
+        if expired_recovered && !matches!(self.redraw_nudge, Some(RedrawNudge::RecoveredCleanup)) {
+            self.observe_cleanup_frame(true);
+        }
+        let cleanup_frame = expired_recovered || self.typist.awaiting_cleanup_frame();
         let caught_up =
             !cleanup_frame || (self.drain_cleanup_output() && self.terminal.cleanup_output_seen());
         let previous = self.pending_delivery.take();
@@ -2271,10 +2352,13 @@ impl Actor {
         }
         let still_observing = self.typist.awaiting_cleanup_frame();
         if !cleanup_frame && still_observing {
-            self.observe_cleanup_frame();
+            self.observe_cleanup_frame(self.typist.recovering_cleanup());
         } else if cleanup_frame && !still_observing {
             self.screen_mut().observe_paint(false);
             self.terminal.stop_observing_cleanup();
+        }
+        if !still_observing {
+            self.end_cleanup_nudge();
         }
         if let Some(deadline) = step.tool_start_deadline {
             self.pending_tool_write = Some(PendingToolWrite {
@@ -2727,6 +2811,7 @@ impl Actor {
                 self.screen_mut().observe_paint(false);
                 self.terminal.stop_observing_cleanup();
             }
+            self.end_cleanup_nudge();
             return true;
         }
         let retry = Instant::now() + ENTER_READ_AGAIN;
@@ -2736,6 +2821,7 @@ impl Actor {
 
     /// Drops queued input and fails the typist's calls: `why` typing stopped.
     fn stop_input(&mut self, why: &str) {
+        self.end_nudge();
         self.pending_delivery = None;
         self.pending_tool_write = None;
         self.terminal.clear();
@@ -3553,6 +3639,177 @@ mod tests {
         (actor, cli)
     }
 
+    #[tokio::test]
+    async fn a_persons_key_sees_the_requested_size_after_recovered_cleanup_is_revoked() {
+        use crate::store::{CleanupProgress, DraftProof};
+
+        let home = crate::test_folder::TestFolder::new("actor-recovered-resize-person-key");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = test_actor(&home, &messages).await;
+        let original = cli.size();
+        let text = "a message";
+        draw_input(&mut actor, text);
+
+        let mut pending = message(0, "a1");
+        pending.text = text.into();
+        pending.delivery.deadline = Some(facade_base::time::iso_now());
+        let (kept, _) = post_new(&messages, pending);
+        let number = crate::messages::number(&kept);
+        let deliveries = messages.delivery_handle();
+        assert_eq!(deliveries.begin_paste(&[number]), Some(vec![number]));
+        let mut proof = DraftProof::observed([7; 32]);
+        assert!(deliveries.observe_paste(number, &proof.digest));
+        proof.cleanup = Some(CleanupProgress::default());
+        assert!(deliveries.record_cleanup(number, proof));
+        let typing = MessageTyping::new(
+            text.into(),
+            number,
+            Instant::now() - Duration::from_secs(1),
+            Submission {
+                text: text.into(),
+                sender: Sender::person(),
+            },
+        );
+        let run = actor.run;
+        actor
+            .take_input(
+                Input::BegunPaste {
+                    messages: vec![typing],
+                    previous_text: None,
+                    draft: Some(proof),
+                },
+                run,
+            )
+            .unwrap();
+        assert!(actor.typist.awaiting_cleanup_frame());
+        assert_eq!(cli.size(), (original.0, original.1 - 1));
+
+        actor.take_input(Input::Raw(b"x".to_vec()), run).unwrap();
+        assert!(!actor.typist.awaiting_cleanup_frame());
+        assert!(!actor.typist.reads_input());
+        assert_eq!(
+            cli.size(),
+            original,
+            "restore the size before writing the key"
+        );
+        assert_eq!(actor.terminal.queued(), 1);
+        let event = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
+        assert!(matches!(event, TerminalEvent::Wrote));
+        actor.take_terminal(event);
+        expect_cli_input(&mut cli, b"x");
+        assert_eq!(cli.size(), original);
+    }
+
+    #[tokio::test]
+    async fn an_expired_recovered_draft_needs_paint_before_its_first_erase() {
+        let before = crate::test_folder::TestFolder::new("actor-recovery-first-paste");
+        let after = crate::test_folder::TestFolder::new("actor-recovery-first-fresh-erase");
+        let (messages, _) = messages();
+        let (mut first, mut cli, _) = pending_paste_in(&before, &messages).await;
+        issue_delivery(&mut first).await;
+        let draft = plain_claude_frame("a message ", "");
+        read_output(&mut first, &mut cli, draft.as_bytes()).await;
+        let proof = messages
+            .paste_messages(1)
+            .unwrap()
+            .draft
+            .expect("saved draft");
+        assert!(proof.cleanup.is_none());
+        drop(first);
+
+        let (mut recovered, mut cli) = test_actor(&after, &messages).await;
+        draw_input(&mut recovered, "a message ");
+        let text = "a message";
+        let typing = MessageTyping::new(
+            text.into(),
+            1,
+            Instant::now() - Duration::from_secs(1),
+            Submission {
+                text: text.into(),
+                sender: Sender::person(),
+            },
+        );
+        recovered
+            .take_input(
+                Input::BegunPaste {
+                    messages: vec![typing],
+                    previous_text: None,
+                    draft: Some(proof),
+                },
+                recovered.run,
+            )
+            .unwrap();
+        assert!(recovered.pending_delivery.is_none());
+        // The console can restore the old cursor without painting the composer.
+        read_output(&mut recovered, &mut cli, b"\x1b[3;13H").await;
+        assert!(recovered.pending_delivery.is_none());
+
+        read_output(&mut recovered, &mut cli, draft.as_bytes()).await;
+        assert!(matches!(
+            recovered.pending_delivery.as_ref().map(|write| write.kind),
+            Some(DeliveryWrite::Erase { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_declined_erase_does_not_leave_a_durable_write_fence() {
+        for buffered_output in [true, false] {
+            let home = crate::test_folder::TestFolder::new("actor-declined-erase-fence");
+            let (messages, _) = messages();
+            let (mut actor, mut cli, _) = pending_paste_in(&home, &messages).await;
+            issue_delivery(&mut actor).await;
+            let draft = plain_claude_frame("a message ", "");
+            read_output(&mut actor, &mut cli, draft.as_bytes()).await;
+
+            let due = actor.typist.draft_deadline().unwrap();
+            tokio::time::pause();
+            tokio::time::advance(due.saturating_duration_since(Instant::now())).await;
+            tokio::time::resume();
+            actor.type_next();
+            let erase = actor.pending_delivery.as_mut().expect("offered erase");
+            assert!(matches!(erase.kind, DeliveryWrite::Erase { .. }));
+            let written = actor.terminal.written();
+            let progress = || {
+                messages
+                    .paste_messages(1)
+                    .unwrap()
+                    .draft
+                    .unwrap()
+                    .cleanup
+                    .unwrap()
+            };
+            assert_eq!(progress().written, 0);
+            assert!(!progress().writing);
+
+            if buffered_output {
+                cli.write_output(b"\x1b]0;new title\x07").unwrap();
+                let event = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
+                assert!(matches!(event, TerminalEvent::Read));
+                actor.take_terminal(event);
+            } else {
+                // The platform checks its own clock, independent of the test's Tokio clock.
+                erase.deadline =
+                    Instant::from_std(std::time::Instant::now() - Duration::from_secs(1));
+                let wait = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite);
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(20), wait)
+                        .await
+                        .is_err()
+                );
+            }
+
+            assert_eq!(actor.terminal.written(), written);
+            assert_eq!(progress().written, 0);
+            assert!(
+                !progress().writing,
+                "unissued erase, buffered_output={buffered_output}"
+            );
+            actor.type_next();
+            issue_delivery(&mut actor).await;
+            assert!(actor.terminal.written() > written);
+        }
+    }
+
     /// Sends a paste and queues a person's Enter over it. The test controls the order of
     /// terminal writes and frames so that a frame can reach the actor ahead of the Enter.
     async fn waiting_for_the_paste_frame(
@@ -3622,11 +3879,9 @@ mod tests {
             });
         tokio::time::timeout(
             Duration::from_secs(5),
-            actor
-                .terminal
-                .ready_with_input(wait, pending, |offset, count, erase| {
-                    actor.typist.before_actor_write(offset, count, erase)
-                }),
+            actor.terminal.ready_with_input(wait, pending, |action| {
+                update_write_fence(&mut actor.typist, action)
+            }),
         )
         .await
         .expect("terminal I/O")
@@ -4295,11 +4550,9 @@ mod tests {
             });
             let read = tokio::time::timeout(
                 Duration::from_secs(5),
-                actor.terminal.ready_with_delivery(
-                    TerminalWait::ReadAndWrite,
-                    first_frame,
-                    |_, _, _| true,
-                ),
+                actor
+                    .terminal
+                    .ready_with_delivery(TerminalWait::ReadAndWrite, first_frame, |_| Ok(false)),
             )
             .await
             .unwrap();
@@ -4417,7 +4670,7 @@ mod tests {
                 actor.terminal.ready_with_delivery(
                     TerminalWait::ReadAndWrite,
                     Some(first_frame),
-                    |_, _, _| true,
+                    |_| Ok(false),
                 ),
             )
             .await
@@ -5334,7 +5587,7 @@ mod tests {
         let without_reads = actor.terminal.ready_with_delivery(
             TerminalWait::WriteOnly,
             Some(pending.terminal_input()),
-            |_, _, _| true,
+            |_| Ok(false),
         );
         assert!(
             tokio::time::timeout(Duration::from_millis(20), without_reads)
