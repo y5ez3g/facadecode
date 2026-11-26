@@ -216,6 +216,13 @@ class CatalogPendingTests(unittest.TestCase):
         self.assertEqual(status, 1, errors)
         self.assertIn(self.pending.id, summary)
 
+    def test_catalog_does_not_count_a_new_built_in_s_unbindable_configuration_cases(self):
+        added = [replace(self.pending, id=f'extension/configuration-framework/{kind}/devin')
+                 for kind in ('adapter', 'built-in')]
+        status, summary, errors = self.run_catalog((self.bound,), (self.bound, *added))
+        self.assertEqual(status, 0, errors)
+        self.assertIn(added[0].id, summary)
+
     def test_catalog_accepts_fewer_pending_and_reports_the_newly_bound_id(self):
         newly_bound = replace(self.pending, test=self.binding)
         status, summary, errors = self.run_catalog((self.bound, self.pending), (self.bound, newly_bound))

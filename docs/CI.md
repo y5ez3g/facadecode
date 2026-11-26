@@ -567,7 +567,9 @@ catalog error before any matrix evidence is considered.
 
 The shadow catalog job compares pending totals with the base on PR and main push runs.
 It reports the IDs added to and removed from its pending obligations. An increase in that
-count or the loss of a binding for an existing ID fails the job.
+count or the loss of a binding for an existing ID fails the job. The editor's configuration cases of
+built-in CLIs other than Claude Code do not count: editor journeys run with Claude Code alone, so no
+runner can bind them.
 
 For a same-repository PR that schedules the complete Framework and Extension matrix, run the
 read-only review from a clean, reviewed checkout of the exact head or matching GitHub merge.
