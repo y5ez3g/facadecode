@@ -592,6 +592,52 @@ fn pi_reports_its_session_through_an_extension_of_the_run() {
 }
 
 #[test]
+fn qoder_reports_the_session_at_start_and_on_a_submitted_prompt() {
+    let own = json!({"hooks": {
+        "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "mine" }] }]
+    }})
+    .to_string();
+    let words = words(&["--settings", &own]);
+    let session = "86da4482-2bae-4a45-b193-a5664c19826a";
+    let run = report();
+    let start = start_managed_launch_command(
+        rule("qoder"),
+        &words,
+        Some(&run),
+        None,
+        &BTreeMap::new(),
+        PERSON,
+    );
+    let resume = resume_managed_launch_command(
+        rule("qoder"),
+        session,
+        &words,
+        Some(&run),
+        None,
+        &BTreeMap::new(),
+        PERSON,
+    )
+    .unwrap();
+    assert_eq!(resume.command[..3], ["qoder", "--resume", session]);
+    for launch in [start, resume] {
+        assert!(launch.captures);
+        let hooks = &settings(&launch)["hooks"];
+        let file = run.file.to_str().unwrap();
+        let start = &hooks["SessionStart"][0]["hooks"][0];
+        assert_eq!(start["command"], run.facade);
+        assert_eq!(start["args"], json!(["hook", "session-start", file]));
+        let submit = &hooks["UserPromptSubmit"];
+        assert_eq!(submit[0]["hooks"][0]["command"], "mine");
+        let capture = &submit[1]["hooks"][0];
+        assert_eq!(capture["command"], run.facade);
+        assert_eq!(
+            capture["args"],
+            json!(["hook", "session-prompt", file, "qoder"])
+        );
+    }
+}
+
+#[test]
 fn claude_gets_a_session_start_hook_beside_the_person_s_own_settings() {
     let launch = start_managed_launch_command(
         rule("claude"),

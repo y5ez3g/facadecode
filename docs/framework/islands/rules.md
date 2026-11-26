@@ -366,6 +366,7 @@ a folder (`sessions.rs` and `sessions/history/`).
 - **Interface:**
   - `facade hook` (`hooks.rs`):
     - `session_from_hook(input) -> Option<Option<Reported>>` reads a `SessionStart` hook's `session_id` and `transcript_path`. `session_from_title(input)` reads the `conversation_id` in Antigravity's title input. For both, `Some(None)` means no session is selected and `None` means leave the file alone.
+    - `session_from_prompt(cli, input) -> Option<Reported>` reads the main conversation's ID and transcript path from Qoder's `UserPromptSubmit` hook.
     - The reported session is then written with `write_session_file`.
     - `run_folder(runs, agent)` finds the agent's single run folder. `SESSION_FILE` checks the file name it is given.
     - `session_variable(cli)` finds the hook's own session.
@@ -482,7 +483,9 @@ session. It also defines the formats of Facade's hooks.
     `session_ends_with_process`.
 
 Cursor loads its local plugin at startup. The plugin supplies Facade's relay, instructions and session hook.
-Qoder takes a session MCP file and a settings overlay with a SessionStart hook. Devin uses a private
+Qoder takes a session MCP file and a settings overlay with `SessionStart` and `UserPromptSubmit` hooks.
+Qoder can fire `SessionStart` before a person trusts a new folder. The first prompt after trust reports the
+session in that case. Devin uses a private
 configuration root with the native `devin/mcp_config.json` path and an in-process local agent. Its
 other existing config entries are linked into that root. Devin 3000 keeps its sessions in
 `devin/cli/sessions.db` under its data folder; the catalog reads it there, else `devin/sessions.db`. A child Facade agent inherits the original

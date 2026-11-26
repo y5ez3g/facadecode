@@ -42,8 +42,8 @@ pub use input::{
 pub use sessions::{
     Reported, SESSION_FILE, SESSION_VARIABLES, SavedSession, SessionFile, WriteFailure,
     is_session_variable, list_sessions, parse_session_id, read_session_file, run_folder,
-    session_evidence, session_for_id, session_from_hook, session_from_title, session_variable,
-    write_session_file,
+    session_evidence, session_for_id, session_from_hook, session_from_prompt, session_from_title,
+    session_variable, write_session_file,
 };
 pub use state::{ScreenState, read_state};
 pub use wiring::{
