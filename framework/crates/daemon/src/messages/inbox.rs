@@ -13,8 +13,8 @@ use facade_base::model::message::{MAX_MESSAGE_IDS, MessagesWatchArgs};
 use facade_base::{
     model::machine::WindowRef,
     model::message::{
-        DEFAULT_MESSAGES_LIMIT, Delivery, DeliveryStatus, MAX_MESSAGES_LIMIT, Message,
-        MessagesSnapshot,
+        DEFAULT_MESSAGES_LIMIT, Delivery, DeliveryFailure, DeliveryStatus, FACADE,
+        MAX_MESSAGES_LIMIT, Message, MessagesSnapshot, TextWritten,
     },
 };
 use tokio::sync::broadcast::error::RecvError;
@@ -526,10 +526,15 @@ impl Deliveries {
     ) -> Result<(), ErrorBody> {
         let mut delivered = Vec::new();
         for message in messages.iter_mut() {
-            if message.delivery.status == DeliveryStatus::Success
+            let delivery = &message.delivery;
+            let unsubmitted_notice = message.from == FACADE
+                && (delivery.enter_written == Some(false)
+                    || (delivery.reason == Some(DeliveryFailure::Timeout)
+                        && delivery.text_written == TextWritten::Full));
+            if delivery.status == DeliveryStatus::Success
                 || (matches!(mode, ReadMode::Unstarted)
-                    && message.delivery.status == DeliveryStatus::Failure
-                    && message.delivery.enter_written != Some(false))
+                    && delivery.status == DeliveryStatus::Failure
+                    && !unsubmitted_notice)
             {
                 continue;
             }

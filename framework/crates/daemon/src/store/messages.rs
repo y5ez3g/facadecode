@@ -32,7 +32,9 @@ use super::{Store, log};
 /// What a message not yet delivered satisfies. `messages_undelivered` holds the messages it
 /// selects, and a query that repeats it uses that index.
 const UNDELIVERED: &str = "status != 'success'";
-const UNSUBMITTED_NOTICE: &str = "\"from\" = 'facade' AND status = 'failure' AND enter_written = 0";
+/// A timeout after writing the full text records a paste confirmed cleared before consumption.
+const UNSUBMITTED_NOTICE: &str = "\"from\" = 'facade' AND status = 'failure' \
+    AND (enter_written = 0 OR (reason = 'timeout' AND text_written = 'full'))";
 /// The paste headers with the message number before the sender and no number on notices.
 const PASTE_HEADER: i64 = 1;
 
@@ -301,11 +303,12 @@ pub(crate) struct Gone {
     pub(crate) to: String,
 }
 
-/// What a settlement wrote: the messages it settled, and the results their settlement wrote.
+/// What a settlement wrote, including notices made readable after their automatic attempt ended.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Settlement {
     pub(crate) settled: Vec<u64>,
     pub(crate) results: Vec<u64>,
+    pub(crate) cleaned_notices: Vec<Message>,
 }
 
 /// A read of eligible pending mail, or of history as well when paging or reading the tail.
@@ -698,7 +701,10 @@ pub(crate) struct MessageTable(Arc<Store>);
 
 enum Withdrawal<'a> {
     Unstarted(&'a [u64]),
-    CleanedPaste(&'a [u64]),
+    CleanedPaste {
+        withdraw: &'a [u64],
+        batch: &'a [u64],
+    },
 }
 
 impl MessageTable {
@@ -1084,18 +1090,23 @@ impl MessageTable {
         )
     }
 
-    /// Post uses this after the terminal confirms clearing its own paste before Enter.
+    /// Settles a confirmed erase and retires its saved observation in the same transaction.
+    /// A settled Facade notice may become readable once this proof rules out consumption.
     pub(crate) fn settle_cleaned_paste(
         &self,
         settled: &[(u64, &Delivery)],
         results: &[(u64, Message)],
         withdrawals: &[u64],
+        batch: &[u64],
     ) -> anyhow::Result<Settlement> {
         self.write_deliveries(
             settled,
             "status = 'pending'",
             results,
-            Withdrawal::CleanedPaste(withdrawals),
+            Withdrawal::CleanedPaste {
+                withdraw: withdrawals,
+                batch,
+            },
         )
     }
 
@@ -1136,8 +1147,8 @@ impl MessageTable {
                 let mut written = Settlement::default();
                 for (number, delivery) in deliveries {
                     let (withdraw, eligible) = match withdrawal {
-                        Withdrawal::CleanedPaste(numbers) => (
-                            numbers.contains(number),
+                        Withdrawal::CleanedPaste { withdraw, .. } => (
+                            withdraw.contains(number),
                             "status = 'pending' AND paste IS NOT NULL",
                         ),
                         Withdrawal::Unstarted(numbers) if numbers.contains(number) => {
@@ -1158,6 +1169,31 @@ impl MessageTable {
                     if withdraw {
                         hide_withdrawal(transaction, *number)?;
                     }
+                }
+                if let Withdrawal::CleanedPaste { batch, .. } = withdrawal
+                    && let Some(&paste) = batch.first()
+                {
+                    // Refine the outcome of an automatic notice without changing the known key
+                    // write or settling a sender again. Both facts survive a daemon replacement.
+                    let mut cleared = transaction.prepare(&format!(
+                        "UPDATE messages SET reason = 'timeout', text_written = 'full' \
+                         WHERE number = ?1 AND paste = ?2 AND \"from\" = 'facade' AND status = 'failure' \
+                         AND reason = 'submission_unconfirmed' AND withdrawn = 0 AND private_receipt = 0 \
+                         RETURNING {COLUMNS}"
+                    ))?;
+                    for &number in batch {
+                        if let Some(notice) = cleared
+                            .query_row(params![number as i64, paste as i64], read_message)
+                            .optional()?
+                        {
+                            written.cleaned_notices.push(notice.message);
+                        }
+                    }
+                    transaction.execute(
+                        "UPDATE messages SET paste_draft = NULL WHERE number = ?1 AND paste = ?1 \
+                         AND paste_draft IS NOT NULL",
+                        [paste as i64],
+                    )?;
                 }
                 Ok(written)
             },
@@ -2036,7 +2072,8 @@ mod tests {
             settled,
             Settlement {
                 settled: vec![1],
-                results: vec![1]
+                results: vec![1],
+                ..Settlement::default()
             }
         );
         assert_eq!(owed(&store, 1), None, "the prompt owes nothing more");
@@ -2050,7 +2087,8 @@ mod tests {
             read,
             Settlement {
                 settled: vec![1],
-                results: vec![]
+                results: vec![],
+                ..Settlement::default()
             },
             "a later read delivers the prompt with no second result"
         );
@@ -2147,7 +2185,8 @@ mod tests {
                 settled,
                 Settlement {
                     settled: vec![number],
-                    results: vec![]
+                    results: vec![],
+                    ..Settlement::default()
                 },
                 "{caller}"
             );

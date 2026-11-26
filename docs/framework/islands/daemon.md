@@ -626,10 +626,12 @@ request. If the source is a peer, confirmation goes back along an authenticated 
 the private reply receipt. The persisted original remains identifiable after the waiter ends.
 
 - Post serializes the first terminal paste, inbox settlement and withdrawal under its delivery
-  lock. A read takes pending messages whose paste has yet to begin and Facade notices whose automatic
-  submission failed with no submission key sent. An explicit history page can also include delivered
-  messages and unconfirmed notices. The selector and optional reply filter run
-  before applying the limit. The client projects complete messages and returns the prefix Post
+  lock. A read takes pending messages whose paste has yet to begin and Facade notices proved
+  unsubmitted. That proof can be a known unissued submission key or a confirmed erase of the
+  original draft. The daemon records a completed erase and makes the notice readable in the same
+  transaction, including when the automatic delivery receipt already settled. An explicit history
+  page can also include delivered messages and unconfirmed notices. The selector and optional
+  reply filter run before applying the limit. The client projects complete messages and returns the prefix Post
   must settle. Post commits that prefix and the results it owes together.
 - A send without a reply reference can overlap a Guest waiting for a specific reply. When the
   deadline withdraws that send, its receipt can carry the reference. The sending machine checks

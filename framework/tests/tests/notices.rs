@@ -788,8 +788,9 @@ fn recover_notice_cleanup(crash: CleanupCrash) {
     if crash == CleanupCrash::AfterSettlement {
         assert!(wait_until(LOADED_TIMEOUT, || read_store(&home)
             .query_row(
-                "SELECT status = 'failure' AND reason = 'submission_unconfirmed' \
-             AND deadline IS NULL AND paste_draft IS NULL FROM messages WHERE number = 1",
+                "SELECT status = 'failure' AND enter_written IS NULL AND withdrawn = 0 \
+             AND delivered_via IS NULL AND deadline IS NULL AND paste_draft IS NULL \
+             FROM messages WHERE number = 1",
                 [],
                 |row| row.get::<_, bool>(0),
             )
@@ -805,7 +806,16 @@ fn recover_notice_cleanup(crash: CleanupCrash) {
     }
     assert!(notices(&home).is_empty());
     let mut creator = McpTestClient::open(&home, &boss.id);
-    assert_eq!(system_inbox(&mut creator)[0]["id"], "m1");
+    if crash == CleanupCrash::AfterSettlement {
+        let unread = creator.call("read_messages", json!({}));
+        let messages = unread["data"]["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1, "{unread}");
+        assert_eq!(messages[0]["id"], "m1", "{unread}");
+        let next_read = creator.call("read_messages", json!({}));
+        assert_eq!(next_read["data"]["messages"], json!([]), "{next_read}");
+    } else {
+        assert_eq!(system_inbox(&mut creator)[0]["id"], "m1");
+    }
     if let Some(later) = later {
         assert!(wait_until(LOADED_TIMEOUT, || {
             std::fs::read_to_string(&sizes).unwrap().lines().last() == Some("120x30")

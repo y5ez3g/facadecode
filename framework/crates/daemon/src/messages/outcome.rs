@@ -15,10 +15,11 @@ use crate::{DELIVERY_TIME, delivery_limit};
 pub(crate) enum Outcome {
     /// The CLI took the submitted message out of its input.
     Typed,
-    /// The terminal cleared this message's own paste before submitting it.
+    /// The terminal cleared its own unconsumed paste. An earlier daemon's Enter can be unknown.
     Withdrawn {
         reason: DeliveryFailure,
         text_written: TextWritten,
+        enter_written: Option<bool>,
     },
     /// Not delivered. `text_written` tracks the text that reached the terminal.
     /// `enter_written` tracks the submission key and is None when the write outcome is unknown.
@@ -81,7 +82,8 @@ impl Outcome {
             Outcome::Withdrawn {
                 reason,
                 text_written,
-            } => (reason, text_written, Some(false)),
+                enter_written,
+            } => (reason, text_written, enter_written),
             Outcome::Failed {
                 reason,
                 text_written,

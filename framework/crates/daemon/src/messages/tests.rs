@@ -221,6 +221,7 @@ fn a_message_whose_paste_has_not_begun_is_withdrawn_and_not_kept() {
         Outcome::Withdrawn {
             reason: DeliveryFailure::Timeout,
             text_written: TextWritten::Full,
+            enter_written: Some(false),
         },
     );
     let receipt = withdrawn(&pasting).delivery;

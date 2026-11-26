@@ -774,7 +774,11 @@ impl Batch {
         }
         let (text_written, enter_written) = match outcome {
             Outcome::Typed => (TextWritten::Full, Some(self.submissions > 0)),
-            Outcome::Withdrawn { text_written, .. } => (text_written, Some(false)),
+            Outcome::Withdrawn {
+                text_written,
+                enter_written,
+                ..
+            } => (text_written, enter_written),
             Outcome::Failed {
                 text_written,
                 enter_written,
@@ -1197,20 +1201,40 @@ impl Typist {
                     erase: None,
                 });
             }
-            _ => self
-                .deliveries
-                .settle(&numbers(&messages), Outcome::UNCONFIRMED),
+            _ => {
+                self.deliveries
+                    .settle(&numbers(&messages), Outcome::UNCONFIRMED);
+            }
         }
     }
 
     /// Invalidates the old draft before enqueuing keys that could edit it.
     pub(crate) fn forget_paste_draft(&mut self) -> bool {
-        self.retire_paste_draft(None)
+        if !self.revoke_paste_observation() {
+            return false;
+        }
+        if let Some(batch) = &self.batch
+            && let DeliveryPhase::Clearing(cleanup) = &batch.phase
+        {
+            if let Some((_, outcome)) = cleanup.report {
+                self.deliveries.settle(&numbers(&batch.messages), outcome);
+            }
+            self.batch = None;
+        }
+        true
     }
 
     /// The live drain at takeover saw an empty box before the cleanup was attached.
     pub(crate) fn finish_recovered_cleanup(&mut self) -> bool {
-        self.retire_paste_draft(Some(self.empty_cleanup_outcome(false)))
+        let Some(batch) = &self.batch else {
+            return self.revoke_paste_observation();
+        };
+        let outcome = batch.outcome(self.empty_cleanup_outcome(false, true));
+        if !self.complete_cleanup(&numbers(&batch.messages), outcome) {
+            return false;
+        }
+        self.batch = None;
+        true
     }
 
     /// Revokes recovery's authority before a user key. A live cleanup can still prove its tail
@@ -1225,17 +1249,18 @@ impl Typist {
         true
     }
 
-    fn retire_paste_draft(&mut self, cleared: Option<Outcome>) -> bool {
-        if !self.revoke_paste_observation() {
-            return false;
-        }
-        if let Some(batch) = &self.batch
-            && let DeliveryPhase::Clearing(cleanup) = &batch.phase
-        {
-            if let Some(outcome) = cleared.or_else(|| cleanup.report.map(|(_, outcome)| outcome)) {
-                self.deliveries.settle(&numbers(&batch.messages), outcome);
+    fn complete_cleanup(&mut self, numbers: &[u64], outcome: Outcome) -> bool {
+        if matches!(outcome, Outcome::Withdrawn { .. }) {
+            // Settlement stores the confirmed erase together with retiring its saved proof.
+            if !self.deliveries.settle(numbers, outcome) {
+                return false;
             }
-            self.batch = None;
+            self.draft_proof = None;
+        } else {
+            if !self.revoke_paste_observation() {
+                return false;
+            }
+            self.deliveries.settle(numbers, outcome);
         }
         true
     }
@@ -1882,6 +1907,10 @@ impl Typist {
             self.submitted = Some((*last.submission).clone());
         }
         self.deliveries.settle(&numbers(messages), outcome);
+        self.after_batch()
+    }
+
+    fn after_batch(&self) -> Step {
         Step::wait((!self.inbox.is_empty() || !self.calls.is_empty()).then(Instant::now))
     }
 
@@ -2441,11 +2470,12 @@ impl Typist {
             } else if !draft.recovered && cleanup.queued_after.is_none() {
                 draft.unsubmitted(false)
             } else {
-                self.empty_cleanup_outcome(cleanup.queued_after.is_some())
+                self.empty_cleanup_outcome(cleanup.queued_after.is_some(), draft.recovered)
             };
-            if self.forget_paste_draft() {
-                return self.settle_delivery(&batch.messages, batch.outcome(outcome));
+            if self.complete_cleanup(&numbers(&batch.messages), batch.outcome(outcome)) {
+                return self.after_batch();
             }
+            return self.wait_for_cleanup(batch, cleanup, state, now);
         }
         if !draft.edited
             && let Some(number) = number
@@ -2542,20 +2572,17 @@ impl Typist {
         self.wait_for_cleanup(batch, cleanup, state, now)
     }
 
-    fn cleared() -> Outcome {
-        Outcome::Withdrawn {
-            reason: DeliveryFailure::Timeout,
-            text_written: TextWritten::Full,
-        }
-    }
-
-    fn empty_cleanup_outcome(&self, queued_here: bool) -> Outcome {
+    fn empty_cleanup_outcome(&self, queued_here: bool, recovered: bool) -> Outcome {
         let confirmed = self
             .draft_proof
             .and_then(|(_, proof)| proof.cleanup)
             .is_some_and(|progress| progress.written != 0);
         if queued_here || confirmed {
-            Self::cleared()
+            Outcome::Withdrawn {
+                reason: DeliveryFailure::Timeout,
+                text_written: TextWritten::Full,
+                enter_written: (!recovered).then_some(false),
+            }
         } else {
             Outcome::UNCONFIRMED
         }
@@ -5278,6 +5305,101 @@ mod tests {
             assert_eq!(written, b"\x1b[200~the next \x1b[201~");
             assert_eq!(overdue.receipt(), Some(NOT_KNOWN), "its receipt stays");
         }
+    }
+
+    #[tokio::test]
+    async fn a_notice_can_be_read_once_after_its_expired_paste_is_cleared() {
+        use crate::messages::{InboxRead, InboxSelection, Settled, tests};
+
+        let (post, store) = tests::messages();
+        let notice = facade_base::model::message::Message {
+            from: facade_base::model::message::FACADE.into(),
+            ..tests::message(0, "a1")
+        };
+        let (notice, told) = tests::post_new(&post, notice);
+        let number = crate::messages::number(&notice);
+        let deadline = Instant::now();
+        let typing = MessageTyping::new(
+            notice.text.clone(),
+            number,
+            deadline,
+            Submission {
+                text: notice.text.clone(),
+                sender: Sender::person(),
+            },
+        );
+        let deliveries = post.delivery_handle();
+        assert_eq!(deliveries.begin_paste(&[number]), Some(vec![number]));
+        let draft = fake_draft(4, &notice.text);
+        let mut typist = typist_for("fake", &post);
+        typist.finish_paste(vec![typing], None, save_draft(&post, number, &draft));
+
+        let mut terminal = Terminal {
+            reading: unread(),
+            ..Terminal::default()
+        };
+        terminal.step(&mut typist, deadline, ANY);
+        assert!(terminal.write_all().is_empty());
+        assert_eq!(became(&post, number), NOT_KNOWN);
+        let original_receipt = told.borrow().clone().unwrap();
+
+        async fn read(post: &Messages) -> Vec<facade_base::model::message::Message> {
+            post.read_inbox(
+                "a1",
+                false,
+                InboxRead::default(),
+                crate::Cancel::default(),
+                |page, _: Option<()>| {
+                    Ok(InboxSelection::ready(
+                        page.messages.len(),
+                        page.messages.clone(),
+                    ))
+                },
+            )
+            .await
+            .unwrap()
+        }
+        assert!(
+            read(&post).await.is_empty(),
+            "the draft may still be submitted"
+        );
+
+        // A fresh copy of the owned draft arrives after the receipt has already settled.
+        let redrawn = deadline + Duration::from_secs(1);
+        terminal.reading = draft;
+        terminal.step(&mut typist, redrawn, ANY);
+        assert_eq!(terminal.queued, vec![0x7f; notice.text.len()]);
+        assert!(
+            read(&post).await.is_empty(),
+            "queuing erase does not clear the draft"
+        );
+        assert!(typist.before_write(0, terminal.queued.len()));
+        terminal.write_all();
+        terminal.reading = input(InputState::Usable, None);
+        terminal.step(&mut typist, redrawn + Duration::from_millis(10), ANY);
+        assert!(terminal.write_all().is_empty(), "no second paste or Enter");
+
+        let reopened = Messages::new(store.message_table(), store.test_machine_id());
+        let taken = read(&reopened).await;
+        assert_eq!(
+            taken.len(),
+            1,
+            "the cleared notice must return to the unread inbox"
+        );
+        assert_eq!(taken[0].message_id, notice.message_id);
+        assert_eq!(taken[0].text, notice.text);
+        assert_eq!(
+            delivered_via(&reopened, number),
+            Some(DeliveredVia::ReadByRecipient),
+        );
+        assert!(
+            read(&reopened).await.is_empty(),
+            "the inbox delivers it once"
+        );
+        assert!(matches!(
+            (original_receipt, told.borrow().as_ref()),
+            (Settled::Kept(before), Some(Settled::Kept(after))) if &before == after
+        ));
     }
 
     /// A deadline in the middle of a frame waits for none once the person typed: the message is

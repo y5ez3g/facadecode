@@ -94,8 +94,8 @@ impl DeliveryHandle {
     }
 
     /// Ends the deliveries among `numbers` still open, as `outcome` says.
-    pub(crate) fn settle(&self, numbers: &[u64], outcome: Outcome) {
-        self.0.settle(numbers, outcome);
+    pub(crate) fn settle(&self, numbers: &[u64], outcome: Outcome) -> bool {
+        self.0.settle(numbers, outcome)
     }
 
     /// Gives a due incident to the startup prompt under the paste fence. A paste already in
