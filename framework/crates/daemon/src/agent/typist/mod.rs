@@ -3677,6 +3677,56 @@ mod tests {
         (typing, number)
     }
 
+    #[test]
+    fn native_delivery_frames_each_first_and_regular_multiline_paste() {
+        let mut unframed = Vec::new();
+        for cli in ["agent", "copilot", "devin", "kiro-cli", "omp", "qoder"] {
+            for prompt in [false, true] {
+                for bracketed_paste in [false, true] {
+                    let post = test_messages();
+                    let mut typist = typist_for(cli, &post);
+                    let mut terminal = Terminal {
+                        reading: input(InputState::Usable, None),
+                        ..Terminal::default()
+                    };
+                    let now = Instant::now();
+                    let (mut typing, _) = message(
+                        &post,
+                        "Message header\nline one\nline two",
+                        now + Duration::from_secs(30),
+                    );
+                    if prompt {
+                        typing.prompt = true;
+                        typist.deliver_first(typing);
+                    } else {
+                        typist.deliver(typing);
+                    }
+                    terminal.step(
+                        &mut typist,
+                        now,
+                        Modes {
+                            bracketed_paste,
+                            ..ANY
+                        },
+                    );
+                    let bytes = terminal.write_all();
+                    let expected = if prompt {
+                        &b"\x1b[200~Message header\rline one\rline two\x1b[201~"[..]
+                    } else {
+                        &b"\x1b[200~Message header\rline one\rline two \x1b[201~"[..]
+                    };
+                    if bytes != expected {
+                        let rendered = String::from_utf8_lossy(&bytes);
+                        unframed.push(format!(
+                            "{cli}, first={prompt}, reported={bracketed_paste}: {rendered:?}"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(unframed.is_empty(), "unframed writes: {unframed:#?}");
+    }
+
     /// What its send is told of a message, once it is settled.
     type Told = tokio::sync::watch::Receiver<Option<crate::messages::Settled>>;
 

@@ -538,7 +538,7 @@ impl Stand {
             self.home.screen(name)
         );
         let (_, body) = taken[before].split_once('\n').expect("a header line");
-        assert_eq!(body, text);
+        assert_eq!(body, format!("{text} "));
     }
 
     /// Checks what a launch with YOLO on or off was given, and that its tools connected through it.
@@ -619,7 +619,8 @@ fn starts_takes_messages_and_resumes_its_session(provider: &'static Provider) {
     let session = (provider.id)(FIRST);
     let resume = provider.native.resume_option();
 
-    let agent = stand.start(Some(&session), Some("say hi"), (120, 30));
+    let prompt = "say hi\nthen continue";
+    let agent = stand.start(Some(&session), Some(prompt), (120, 30));
     assert_eq!(agent["cli"], provider.cli, "{agent}");
     let id = agent["reference"]["agent_id"].clone();
     let args = stand.arguments();
@@ -635,7 +636,8 @@ fn starts_takes_messages_and_resumes_its_session(provider: &'static Provider) {
     );
     let first = stand.home.submitted_messages();
     assert_eq!(first.len(), 1, "{first:?}");
-    assert!(first[0].ends_with("\nsay hi"), "{first:?}");
+    let (_, body) = first[0].split_once('\n').expect("a header line");
+    assert_eq!(body, prompt);
     if provider.native == Native::Kiro {
         let keys = std::fs::read(stand.keys_file()).unwrap();
         let paste = keys
@@ -1088,7 +1090,7 @@ fn cursor_accepts_typing_before_its_plugin_connects() {
     );
     let sent = stand.home.submitted_messages();
     assert_eq!(&sent[..2], ["first-turn", "abcd"]);
-    assert!(sent[2].ends_with("\nafter the draft"), "{sent:?}");
+    assert!(sent[2].ends_with("\nafter the draft "), "{sent:?}");
     term.send(b"\x1d");
     assert!(
         term.wait_exit(secs(10))
@@ -1350,7 +1352,7 @@ fn a_draft_that_fills_oh_my_pi_s_composer_is_never_typed_over() {
     );
     let taken = stand.home.submitted_messages();
     assert!(
-        taken.len() == 1 && taken[0].ends_with("\nhello"),
+        taken.len() == 1 && taken[0].ends_with("\nhello "),
         "{taken:?}"
     );
 }
@@ -1388,7 +1390,7 @@ fn messages_of_every_size_arrive(provider: &'static Provider) {
             stand.home.run_facade(&["send", "ada", &text, "-w"]);
             let received = wait_until(secs(10), || !stand.home.submitted_messages().is_empty());
             let taken = stand.home.submitted_messages();
-            let whole = received && taken.len() == 1 && taken[0].ends_with(&format!("\n{text}"));
+            let whole = received && taken.len() == 1 && taken[0].ends_with(&format!("\n{text} "));
             if !whole {
                 let input = stand.home.inspect_agent("ada")["input"].clone();
                 failed.push(format!("{what} at {cols}x{rows}: {input}"));

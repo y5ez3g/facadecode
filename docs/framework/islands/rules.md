@@ -359,6 +359,8 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     its caret. It retains the unknown input state. The daemon can use the tail only to verify
     an active paste that began in an observed empty box.
     `BoxReading::new(info, draft)` builds a reading without the geometry or paste evidence.
+    `frame_writes` uses Screen's cell-write evidence at the input caret it located, including a
+    caret that the CLI drew away from the terminal cursor.
   - `read_box_for_typing(&InputRule, &ScreenView, bool) -> BoxReading` considers an unstyled
     row ambiguous when the daemon reports untouched input and the CLI's rule allows a probe.
     Inspection reports the ambiguity, and delivery can probe the row.

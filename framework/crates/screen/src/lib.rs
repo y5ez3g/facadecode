@@ -92,7 +92,7 @@ pub struct ParsedOutput {
     pub status: Vec<StatusEvent>,
 }
 
-/// What a complete frame wrote on the cursor's row.
+/// What a complete frame wrote on the cursor's row or another requested row.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CursorRowWrites {
     None,
@@ -114,6 +114,14 @@ pub enum InputEvent<'a> {
 }
 
 type InputObserver<'a> = dyn FnMut(InputEvent<'_>) + 'a;
+
+fn frame_writes(written: bool, earlier: bool) -> CursorRowWrites {
+    match (written, earlier) {
+        (true, true) => CursorRowWrites::Earlier,
+        (true, false) => CursorRowWrites::Current,
+        (false, _) => CursorRowWrites::None,
+    }
+}
 
 /// One agent's terminal, without a window. It only computes; the one time it uses is the deadline
 /// alacritty puts on a synchronized update.
@@ -389,15 +397,19 @@ impl Screen {
         !self.earlier_frame
     }
 
+    /// Classifies cell writes on a viewport row while observing the current frame.
+    pub fn frame_row_writes(&self, row: usize) -> CursorRowWrites {
+        frame_writes(
+            self.terminal.term.row_cells_written_in_scope(row),
+            self.earlier_frame,
+        )
+    }
+
     fn observe_frame(&self, observe: &mut InputObserver<'_>, earlier: bool) -> bool {
-        let writes = match (
+        let writes = frame_writes(
             self.terminal.cursor_row_written_since_input_boundary(),
             earlier,
-        ) {
-            (true, true) => CursorRowWrites::Earlier,
-            (true, false) => CursorRowWrites::Current,
-            (false, _) => CursorRowWrites::None,
-        };
+        );
         observe(InputEvent::Frame(self, writes));
         writes == CursorRowWrites::Current
     }

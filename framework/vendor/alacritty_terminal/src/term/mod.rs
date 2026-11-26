@@ -586,7 +586,12 @@ impl<T> Term<T> {
 
     /// Whether the current frame wrote or erased cells on the cursor's row.
     pub fn cursor_row_cells_written_in_scope(&self) -> bool {
-        self.damage.frame_writes[self.grid.cursor.point.line.0 as usize]
+        self.row_cells_written_in_scope(self.grid.cursor.point.line.0 as usize)
+    }
+
+    /// Whether the current frame wrote or erased cells on this viewport row.
+    pub fn row_cells_written_in_scope(&self, row: usize) -> bool {
+        self.damage.frame_writes.get(row).copied().unwrap_or(false)
     }
 
     /// Whether any row was written in the current cell-write scope.

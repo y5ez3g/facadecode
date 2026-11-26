@@ -27,6 +27,7 @@
 		"menus": [{ "selected": "^ *❯ +\\S", "next": "^ +\\S" }]
 	},
 	"paste": {
+		"bracketed": true,
 		"enter_ms": 100,
 		"placeholders": [
 			{ "pattern": "^\\[Pasted Text: (\\d+) chars?(?: #\\d+)?\\]$", "count": "utf16", "spaced": true },

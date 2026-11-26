@@ -1460,8 +1460,8 @@ impl Actor {
         {
             self.screen_mut().mark_pending_frame_earlier();
         }
-        let fed = self.feed_cli_output(&output);
-        if !earlier && fed.cursor_row_cells_written {
+        let (fed, drew_input) = self.feed_cli_output(&output);
+        if !earlier && drew_input {
             self.input_drawn_at = Some(received);
         }
         self.viewers.show(&fed);
@@ -1661,7 +1661,7 @@ impl Actor {
     }
 
     /// Applies reports and complete frames in the order the CLI emitted them.
-    fn feed_cli_output(&mut self, output: &[u8]) -> ParsedOutput {
+    fn feed_cli_output(&mut self, output: &[u8]) -> (ParsedOutput, bool) {
         let (rule, ended) = (self.input_rule, self.ended());
         let after_paste = self.terminal.output_follows_paste();
         let position = self.terminal.output_position();
@@ -1682,6 +1682,7 @@ impl Actor {
             &mut self.submitting,
             &mut self.terminal,
         );
+        let mut drew_input = None;
         let mut observe = |event: InputEvent<'_>| match event {
             InputEvent::Status {
                 event,
@@ -1708,21 +1709,30 @@ impl Actor {
                     disown_unproven_erase(typist, terminal, report_start);
                 }
             }
-            InputEvent::Frame(screen, writes) => {
-                if after_probe && writes == CursorRowWrites::Current {
-                    typist
-                        .observe_probe_frame(read_box(rule, ended, None, screen, untouched, false));
-                }
-                if !gate.blocks_delivery()
-                    && !typist.reads_input()
-                    && !observes_submission
-                    && !before_next
-                    && !observes_delivery
-                    && !state.watches_question_composer()
-                {
+            InputEvent::Frame(screen, terminal_writes) => {
+                let watch = gate.blocks_delivery()
+                    || typist.reads_input()
+                    || observes_submission
+                    || before_next
+                    || observes_delivery
+                    || state.watches_question_composer();
+                if !watch && !after_probe {
                     return;
                 }
                 let (reading, menu_redrawn) = read_gate_box(rule, ended, None, screen, false);
+                let writes = reading.frame_writes(screen, terminal_writes);
+                *drew_input.get_or_insert(false) |= writes == CursorRowWrites::Current;
+                if after_probe && writes == CursorRowWrites::Current {
+                    let probe_reading = if untouched {
+                        read_box(rule, ended, None, screen, true, false)
+                    } else {
+                        reading.clone()
+                    };
+                    typist.observe_probe_frame(probe_reading);
+                }
+                if !watch {
+                    return;
+                }
                 let frame_closed = screen.synchronized_update_deadline().is_none();
                 let frame_follows_write = screen.frame_follows_input_boundary();
                 if frame_closed {
@@ -1768,10 +1778,13 @@ impl Actor {
                 }
             }
         };
-        self.screen
+        let fed = self
+            .screen
             .as_mut()
             .expect("the screen exists while the actor runs")
-            .feed_observing(output, &mut observe)
+            .feed_observing(output, &mut observe);
+        let drew_input = drew_input.unwrap_or(fed.cursor_row_cells_written);
+        (fed, drew_input)
     }
 
     /// Examines one finite prefix before the typist acts on an active delivery. An outstanding
@@ -1928,7 +1941,19 @@ impl Actor {
         self.screen_mut().checkpoint_if_due();
         let frame_follows_write = self.screen().screen().frame_follows_input_boundary();
         let fed = self.screen_mut().end_synchronized_update();
-        let writes = if fed.cursor_row_cells_written
+        let screen = self.screen().screen();
+        let frame_complete = !screen.has_unfinished_unit();
+        let (reading, menu_redrawn) =
+            read_gate_box(self.input_rule, self.ended(), self.undrawn, screen, false);
+        let terminal_writes = if fed.cursor_row_cells_written {
+            CursorRowWrites::Current
+        } else {
+            CursorRowWrites::None
+        };
+        let drew_input = frame_follows_write
+            && frame_complete
+            && reading.frame_writes(screen, terminal_writes) == CursorRowWrites::Current;
+        let writes = if drew_input
             && !self.terminal.output_precedes_submission()
             && !self.terminal.output_precedes_delivery_write()
         {
@@ -1937,18 +1962,11 @@ impl Actor {
         } else {
             CursorRowWrites::None
         };
-        if !self.screen().screen().has_unfinished_unit()
+        if frame_complete
             && (self.input_gate.blocks_delivery()
                 || self.typist.reads_input()
                 || self.state.watches_question_composer())
         {
-            let (reading, menu_redrawn) = read_gate_box(
-                self.input_rule,
-                self.ended(),
-                self.undrawn,
-                self.screen().screen(),
-                false,
-            );
             // A timed-out update closes the earlier frame but cannot prove a new composer.
             self.state_changed |= observe_question_composer(
                 &mut self.state,
@@ -1968,27 +1986,24 @@ impl Actor {
         }
         let before_next = self.terminal.output_between_submissions();
         if !self.input_gate.blocks_delivery() && (self.observes_submission() || before_next) {
-            let reading = self.read_screen_input();
             Self::observe_submissions(
                 &mut self.submitting,
                 &self.typist,
                 || reading.clone(),
                 writes,
                 self.terminal.output_follows_paste(),
-                (fed.cursor_row_cells_written && self.terminal.output_follows_first_submission())
+                (drew_input && self.terminal.output_follows_first_submission())
                     .then(|| self.terminal.output_position()),
                 before_next,
             );
         }
-        if fed.cursor_row_cells_written {
+        if drew_input {
             if self.terminal.output_follows_delivery_write() {
-                let reading = self.read_screen_input();
                 let position = self.terminal.output_position();
                 let before_edit = self.terminal.delivery_frame_precedes_edit(position);
                 self.delivery_frames
                     .observe(reading, position, before_edit, &self.typist);
             } else if self.typist.occupies_input() && self.terminal.output_follows_paste() {
-                let reading = self.read_screen_input();
                 self.delivery_frames.drawn = reading.paste_tail.is_some().then_some(reading);
             }
         }
@@ -2000,7 +2015,7 @@ impl Actor {
         self.admit_viewers();
         self.catch_up_at = Some(Instant::now());
         self.screen_mut().checkpoint_if_due();
-        if fed.cursor_row_cells_written
+        if drew_input
             || self.delivery_frames.pending_empty_at.is_some()
             || self.pending_delivery.is_some()
             || self.typist.pasting()
@@ -2074,7 +2089,7 @@ impl Actor {
             };
             read += n;
             let output = self.terminal.output().to_vec();
-            let fed = self.feed_cli_output(&output);
+            let (fed, _) = self.feed_cli_output(&output);
             self.take_parsed(fed);
             self.screen_mut().checkpoint_if_due();
         }
@@ -3689,6 +3704,10 @@ mod tests {
     }
 
     async fn test_actor(folder: &Path, messages: &Messages) -> (Actor, TestCli) {
+        test_actor_for(folder, messages, "claude").await
+    }
+
+    async fn test_actor_for(folder: &Path, messages: &Messages, rule: &str) -> (Actor, TestCli) {
         let (master, cli) = test_terminal(80, 24).unwrap();
         let info = record(ProcessState::Running, None, 80, 24);
         let (tools, tools_connections) = watch::channel(ToolsConnections::new(FIRST_RUN, true));
@@ -3708,7 +3727,7 @@ mod tests {
             screen: ScreenStart::New(folder.to_owned()),
             untouched_input: false,
             colors: TerminalColors::default(),
-            rule: Some("claude".into()),
+            rule: Some(rule.into()),
             captures: false,
             launch_command: None,
             deliveries: messages.delivery_handle(),
@@ -3722,6 +3741,73 @@ mod tests {
         let mut actor = new_actor(start, links, false).unwrap();
         actor.screen = Some(LoggedScreen::create(folder.to_owned(), "a1", 80, 24).await);
         (actor, cli)
+    }
+
+    #[tokio::test]
+    async fn cursor_delivery_confirms_the_drawn_composer_after_a_complete_frame() {
+        let home = crate::test_folder::TestFolder::new("cursor-drawn-input-receipt");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = test_actor_for(&home, &messages, "agent").await;
+        // The Cursor recording puts an inverse caret in the composer and parks the hidden
+        // terminal cursor below it. Replay the input row and the parked position.
+        let empty = "\x1b[?25l\x1b[10;1H\x1b[2K  \x1b[2m→ \x1b[22m\x1b[7mP\x1b[27m\x1b[2mlan, search, build anything\x1b[22m\x1b[15;1H";
+        read_output(&mut actor, &mut cli, synchronized(empty).as_bytes()).await;
+        let read = actor.read_screen_input();
+        assert_eq!(read.info.state, InputState::Usable);
+        assert_eq!(read.line.unwrap().cursor, (4, 9));
+
+        let settled = queue_a_message(
+            &mut actor,
+            &messages,
+            Instant::now() + Duration::from_secs(20),
+        );
+        actor.type_next();
+        issue_delivery(&mut actor).await;
+        let bracketed = facade_rules::find("agent")
+            .unwrap()
+            .unwrap()
+            .paste
+            .brackets_delivery();
+        expect_cli_input(
+            &mut cli,
+            if bracketed {
+                b"\x1b[200~a message \x1b[201~"
+            } else {
+                b"a message "
+            },
+        );
+        let draft = synchronized("\x1b[10;1H\x1b[2K  → a message \x1b[7m \x1b[27m\x1b[15;1H");
+        read_output(&mut actor, &mut cli, draft.as_bytes()).await;
+        assert_eq!(actor.read_screen_input().info.state, InputState::Draft);
+
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_millis(251)).await;
+        tokio::time::resume();
+        actor.type_next();
+        assert!(matches!(
+            actor.pending_delivery.as_ref().map(|offer| offer.kind),
+            Some(DeliveryWrite::Submit)
+        ));
+        issue_delivery(&mut actor).await;
+        expect_cli_input(&mut cli, b"\r");
+
+        read_output(&mut actor, &mut cli, b"\x1b[15;1H\x1b[2K").await;
+        assert!(
+            settled.borrow().is_none(),
+            "only the parked cursor's row changed"
+        );
+
+        let first = format!("\x1b[?2026h{empty}");
+        read_output(&mut actor, &mut cli, first.as_bytes()).await;
+        assert!(
+            settled.borrow().is_none(),
+            "the empty composer frame is still open"
+        );
+        read_output(&mut actor, &mut cli, b"\x1b[?2026l").await;
+        assert!(
+            was_delivered(&settled),
+            "the completed frame erased the draft at the drawn cursor"
+        );
     }
 
     async fn pending_paste_in(

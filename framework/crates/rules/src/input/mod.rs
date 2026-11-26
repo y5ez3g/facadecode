@@ -12,7 +12,7 @@ use std::borrow::Cow;
 use std::ops::Range;
 
 use facade_base::model::terminal::{HiddenRows, InputInfo, InputState};
-use facade_screen::{ScreenView, VisibleCell};
+use facade_screen::{CursorRowWrites, ScreenView, VisibleCell};
 use regex::Regex;
 use unicode_normalization::{UnicodeNormalization, is_nfc};
 
@@ -97,6 +97,21 @@ impl BoxReading {
             paste_drawing: None,
             unsure: false,
         }
+    }
+
+    /// Reads the frame's writes at the caret found by the input rule. A CLI can draw its own
+    /// caret in the composer while its hardware cursor stays outside the box.
+    pub fn frame_writes(
+        &self,
+        screen: &facade_screen::Screen,
+        terminal_writes: CursorRowWrites,
+    ) -> CursorRowWrites {
+        self.line
+            .as_ref()
+            .filter(|line| line.cursor.1 != usize::from(screen.cursor().1))
+            .map_or(terminal_writes, |line| {
+                screen.frame_row_writes(line.cursor.1)
+            })
     }
 
     /// Joins displayed rows into a logical draft and maps the cursor to a byte offset in it.
