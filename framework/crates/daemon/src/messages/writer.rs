@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use super::write_queue::{Lane, QueueKey, WriteQueue};
+use super::write_queue::{BatchBudget, Lane, QueueKey, ReadyBatch, ReadyWrites, WriteQueue};
 use crate::Cancel;
 use crate::store::{Batch, BatchResult, CommitUnknown, MessageTable};
 
@@ -109,8 +109,22 @@ where
 
 type Start = Box<dyn FnOnce() -> Box<dyn BatchJob> + Send>;
 
+enum BatchWork {
+    Ready(Box<dyn BatchJob>),
+    Prepare(Start),
+}
+
+impl BatchWork {
+    fn start(self) -> Box<dyn BatchJob> {
+        match self {
+            Self::Ready(job) => job,
+            Self::Prepare(start) => start(),
+        }
+    }
+}
+
 enum Work {
-    Batch(Start),
+    Batch(BatchWork),
     Ordered(Box<dyn FnOnce() + Send>),
 }
 pub(super) type Ticket<T> = oneshot::Receiver<Result<T, ErrorBody>>;
@@ -163,7 +177,7 @@ impl Writer {
         std::thread::Builder::new()
             .name("facade-message-writer".into())
             .spawn(move || {
-                while let Some(jobs) = reader.batch() {
+                while let Some(ReadyBatch { jobs, mut budget }) = reader.batch() {
                     if worker_uncertain.load(Ordering::Acquire) {
                         continue;
                     }
@@ -176,6 +190,7 @@ impl Writer {
                                     &table,
                                     std::mem::take(&mut batch),
                                     &worker_uncertain,
+                                    None,
                                 );
                                 if !worker_uncertain.load(Ordering::Acquire) {
                                     run();
@@ -183,7 +198,12 @@ impl Writer {
                             }
                         }
                     }
-                    publish_batch(&table, batch, &worker_uncertain);
+                    publish_batch(
+                        &table,
+                        batch,
+                        &worker_uncertain,
+                        Some((&mut reader, &mut budget)),
+                    );
                 }
             })?;
         Ok(Self { writes, uncertain })
@@ -219,22 +239,6 @@ impl Writer {
         T: Send + 'static,
         S: FnOnce(&mut Batch<'_>) -> rusqlite::Result<Prepared<T>> + Send + 'static,
     {
-        self.enqueue_with_key(lane, bytes, None, None, prepare)
-            .await
-    }
-
-    async fn enqueue_with_key<T, S>(
-        &self,
-        lane: Lane,
-        bytes: usize,
-        key: Option<QueueKey>,
-        traced_request: Option<&str>,
-        prepare: impl FnOnce() -> S + Send + 'static,
-    ) -> Result<Ticket<T>, ErrorBody>
-    where
-        T: Send + 'static,
-        S: FnOnce(&mut Batch<'_>) -> rusqlite::Result<Prepared<T>> + Send + 'static,
-    {
         if self.uncertain() {
             return Err(unknown());
         }
@@ -247,7 +251,13 @@ impl Writer {
             })
         });
         self.writes
-            .push(Work::Batch(start), lane, bytes, key, traced_request)
+            .push(
+                Work::Batch(BatchWork::Prepare(start)),
+                lane,
+                bytes,
+                None,
+                None,
+            )
             .await
             .map_err(|()| ended())?;
         Ok(ticket)
@@ -274,15 +284,25 @@ impl Writer {
         };
         let candidate = guard.plan.clone();
         let waiting = async {
-            let ticket = self
-                .enqueue_with_key(
+            if self.uncertain() {
+                return Err(unknown());
+            }
+            let (reply, ticket) = oneshot::channel();
+            let operation = Operation {
+                stage: Some(move |batch: &mut Batch<'_>| stage(batch, candidate)),
+                prepared: None,
+                answer: reply,
+            };
+            self.writes
+                .push(
+                    Work::Batch(BatchWork::Ready(Box::new(operation))),
                     lane,
                     bytes,
                     Some(guard.key.clone()),
                     traced_request,
-                    move || move |batch: &mut Batch<'_>| stage(batch, candidate),
                 )
-                .await?;
+                .await
+                .map_err(|()| ended())?;
             answer(ticket).await
         };
         tokio::pin!(waiting);
@@ -351,14 +371,32 @@ pub(super) async fn stop_before_effect(
     }
 }
 
-fn publish_batch(table: &MessageTable, jobs: Vec<Start>, uncertain: &AtomicBool) {
+fn publish_batch(
+    table: &MessageTable,
+    jobs: Vec<BatchWork>,
+    uncertain: &AtomicBool,
+    more: Option<(&mut ReadyWrites<Work>, &mut BatchBudget)>,
+) {
     if jobs.is_empty() || uncertain.load(Ordering::Acquire) {
         return;
     }
-    let mut jobs = jobs.into_iter().map(|start| start()).collect::<Vec<_>>();
+    let mut jobs = jobs.into_iter().map(BatchWork::start).collect::<Vec<_>>();
     let committed = table.write_batch(|batch| {
         for job in &mut jobs {
             job.stage(batch)?;
+        }
+        if let Some((reader, budget)) = more {
+            let initial = jobs.len();
+            let ready = reader.take_ready_ordinary(budget, |work| {
+                matches!(work, Work::Batch(BatchWork::Ready(_)))
+            });
+            jobs.extend(ready.into_iter().map(|work| match work {
+                Work::Batch(BatchWork::Ready(job)) => job,
+                _ => unreachable!("only prepared ordinary work can join after staging"),
+            }));
+            for job in &mut jobs[initial..] {
+                job.stage(batch)?;
+            }
         }
         Ok(())
     });
@@ -436,4 +474,76 @@ fn verify(table: &MessageTable, jobs: &mut [Box<dyn BatchJob>]) -> Committed {
         super::warn(&format!("{error:#}"));
         Committed::Unknown(unknown())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::future::poll_fn;
+    use std::sync::mpsc;
+    use std::task::Poll;
+    use std::time::Duration;
+
+    fn record_order(batch: &mut Batch<'_>, label: &str) -> rusqlite::Result<Prepared<i64>> {
+        let number = batch.operation(|connection| {
+            connection.execute("INSERT INTO batch_order (name) VALUES (?)", [label])?;
+            Ok(connection.last_insert_rowid())
+        })??;
+        Ok(Prepared {
+            witness: None,
+            finish: Box::new(move |committed| committed.require().map(|()| number)),
+        })
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_save_ready_during_staging_uses_the_same_commit() {
+        let store = crate::store::Store::in_memory();
+        let writer = Writer::new(store.message_table()).unwrap();
+        let before = store.commits();
+        let (staged, staging) = oneshot::channel();
+        let (release, held) = mpsc::channel();
+        let first = writer
+            .enqueue(Lane::Ordered, 0, move |batch| {
+                batch.operation(|connection| {
+                    connection.execute_batch("CREATE TABLE batch_order (name TEXT)")
+                })??;
+                let prepared = record_order(batch, "first")?;
+                staged.send(()).unwrap();
+                held.recv_timeout(Duration::from_secs(10)).unwrap();
+                Ok(prepared)
+            })
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), staging)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let mut second = std::pin::pin!(writer.before_effect(
+            Lane::Ordinary,
+            0,
+            (),
+            pending(),
+            None,
+            |batch, plan| {
+                plan.lock().unwrap().take().unwrap();
+                record_order(batch, "second")
+            },
+        ));
+        poll_fn(|cx| {
+            assert!(second.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        release.send(()).unwrap();
+
+        let (first, second) = tokio::time::timeout(Duration::from_secs(10), async {
+            (answer(first).await.unwrap(), second.await.unwrap())
+        })
+        .await
+        .unwrap();
+        assert_eq!(first, 1);
+        assert!(matches!(second, Effect::Answered(2)));
+        assert_eq!(store.commits() - before, 1);
+    }
 }

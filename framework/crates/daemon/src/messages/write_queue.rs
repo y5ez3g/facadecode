@@ -61,6 +61,47 @@ pub(super) struct ReadyWrites<T> {
     next_lane: usize,
 }
 
+pub(super) struct ReadyBatch<T> {
+    pub(super) jobs: Vec<T>,
+    pub(super) budget: BatchBudget,
+}
+
+#[derive(Default)]
+pub(super) struct BatchBudget {
+    operations: usize,
+    bytes: usize,
+}
+
+impl BatchBudget {
+    fn take<T>(
+        &mut self,
+        state: &mut QueueState<T>,
+        turn: &mut usize,
+        eligible: impl FnOnce(usize, &T) -> bool,
+    ) -> Option<T> {
+        if self.operations == MAX_BATCH_OPERATIONS {
+            return None;
+        }
+        let closing = Lane::Closing as usize;
+        let index = [closing, *turn, 1 - *turn].into_iter().find(|&lane| {
+            state.ready[lane]
+                .front()
+                .is_some_and(|job| self.bytes + job.bytes <= MAX_BATCH_BYTES)
+        })?;
+        let queue = &mut state.ready[index];
+        if !eligible(index, &queue.front()?.value) {
+            return None;
+        }
+        let job = queue.pop_front().expect("selected a ready operation");
+        if index != closing {
+            *turn = 1 - index;
+        }
+        self.operations += 1;
+        self.bytes += job.bytes;
+        Some(job.value)
+    }
+}
+
 impl<T> WriteQueue<T> {
     pub(super) fn new() -> (Self, ReadyWrites<T>) {
         let shared = Arc::new(Shared {
@@ -178,9 +219,8 @@ impl<T> Drop for ReadyWrites<T> {
 }
 
 impl<T> ReadyWrites<T> {
-    /// Waits for one operation, then fixes the batch at the ready boundary. The first operation
-    /// never waits for a timer or for additional traffic. A second batch can queue during COMMIT.
-    pub(super) fn batch(&mut self) -> Option<Vec<T>> {
+    /// Takes the initial ready work immediately when the first operation arrives.
+    pub(super) fn batch(&mut self) -> Option<ReadyBatch<T>> {
         let mut state = self.shared.state.lock().unwrap();
         while state.ready.iter().all(VecDeque::is_empty) {
             if state.closed {
@@ -191,39 +231,82 @@ impl<T> ReadyWrites<T> {
 
         let ready =
             crate::trace_message_batches().then(|| state.ready.each_ref().map(VecDeque::len));
-        let mut values = Vec::new();
-        let mut bytes = 0;
-        while values.len() < MAX_BATCH_OPERATIONS {
-            let [first, second] = [self.next_lane, 1 - self.next_lane];
-            let Some(index) = [Lane::Closing as usize, first, second]
-                .into_iter()
-                .find(|&lane| {
-                    state.ready[lane]
-                        .front()
-                        .is_some_and(|job| bytes + job.bytes <= MAX_BATCH_BYTES)
-                })
-            else {
-                break;
-            };
-            let job = state.ready[index]
-                .pop_front()
-                .expect("selected a ready operation");
-            if index != Lane::Closing as usize {
-                self.next_lane = 1 - index;
-            }
-            bytes += job.bytes;
-            values.push(job.value);
+        let mut jobs = Vec::new();
+        let mut budget = BatchBudget::default();
+        while let Some(job) = budget.take(&mut state, &mut self.next_lane, |_, _| true) {
+            jobs.push(job);
         }
         drop(state);
         if let Some([ordinary, ordered, closing]) = ready {
             crate::log(
                 "info",
                 &format!(
-                    "message batch ready: ordinary={ordinary} ordered={ordered} closing={closing} selected={} bytes={bytes}",
-                    values.len(),
+                    "message batch ready: ordinary={ordinary} ordered={ordered} closing={closing} selected={} bytes={}",
+                    jobs.len(),
+                    budget.bytes,
                 ),
             );
         }
-        Some(values)
+        Some(ReadyBatch { jobs, budget })
+    }
+
+    /// After staging, adds only prepared ordinary work that would go next. The writer holds the
+    /// database connection here, so use one try-lock and the initial selection's remaining budget.
+    pub(super) fn take_ready_ordinary(
+        &mut self,
+        budget: &mut BatchBudget,
+        prepared: impl Fn(&T) -> bool,
+    ) -> Vec<T> {
+        let Ok(mut state) = self.shared.state.try_lock() else {
+            return Vec::new();
+        };
+        let mut jobs = Vec::new();
+        while let Some(job) = budget.take(&mut state, &mut self.next_lane, |lane, job| {
+            lane == Lane::Ordinary as usize && prepared(job)
+        }) {
+            jobs.push(job);
+        }
+        jobs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn staging_leaves_the_next_ordered_or_closing_job_in_front() {
+        let (queue, mut ready) = WriteQueue::new();
+        queue.push(1, Lane::Ordinary, 1, None, None).await.unwrap();
+        let mut batch = ready.batch().unwrap();
+        queue.push(2, Lane::Ordinary, 1, None, None).await.unwrap();
+        queue.push(3, Lane::Ordered, 1, None, None).await.unwrap();
+        assert!(
+            ready
+                .take_ready_ordinary(&mut batch.budget, |_| true)
+                .is_empty()
+        );
+        queue.push(4, Lane::Closing, 0, None, None).await.unwrap();
+        assert!(
+            ready
+                .take_ready_ordinary(&mut batch.budget, |_| true)
+                .is_empty()
+        );
+        assert_eq!(ready.batch().unwrap().jobs, [4, 3, 2]);
+    }
+
+    #[tokio::test]
+    async fn staging_spends_only_the_batch_budget_that_remains() {
+        let (queue, mut ready) = WriteQueue::new();
+        queue.push(1, Lane::Ordinary, 2, None, None).await.unwrap();
+        queue.push(2, Lane::Ordinary, 1, None, None).await.unwrap();
+        let mut budget = BatchBudget {
+            operations: MAX_BATCH_OPERATIONS - 1,
+            bytes: MAX_BATCH_BYTES - 1,
+        };
+        assert!(ready.take_ready_ordinary(&mut budget, |_| true).is_empty());
+        budget.bytes -= 2;
+        assert_eq!(ready.take_ready_ordinary(&mut budget, |_| true), [1]);
+        assert_eq!(ready.batch().unwrap().jobs, [2]);
     }
 }

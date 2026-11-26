@@ -529,8 +529,8 @@ async fn two_ready_sends_share_one_commit_without_holding_up_the_committed_snaps
     }
     assert_eq!(
         store.commits(),
-        before + 2,
-        "the empty barrier and one transaction for both sends"
+        before + 1,
+        "both ready sends join the transaction that was already staging"
     );
 }
 

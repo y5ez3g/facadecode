@@ -505,8 +505,12 @@ the private reply receipt. The persisted original remains identifiable after the
 - The Messages writer orders saves, paste markers, settlements, reads, withdrawals and inbox
   removal. It groups ready operations into up to 128 operations or 2 MiB of queued message bodies
   per transaction. Ordinary saves, ordered effects, and closing cancellations have separate
-  queue capacity. The short queue and published-state locks are released for the commit. Messages
-  publishes the corresponding watches and receipts after Store confirms the commit.
+  queue capacity. After staging the last group from the initial selection, the writer tries the queue lock
+  once and can add prepared ordinary saves within the same budget. The check follows the usual
+  queue order and stops at the next ordered or closing operation. Independent cross-table
+  transactions keep their publication boundaries. The queue and published-state locks are
+  released for the commit. Messages publishes the corresponding watches and receipts after
+  Store confirms the commit.
 - A read takes pending messages whose paste has yet to begin. A history page can also include
   delivered messages. The selector and reply filter precede the limit. Readers reserve capacity
   for one full candidate page and frame across the daemon before materializing it. The writer
