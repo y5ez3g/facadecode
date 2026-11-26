@@ -68,7 +68,8 @@ impl Projection {
     }
 }
 
-/// Removes a projection the run still owns. User edits and substituted paths are left alone.
+/// Removes a projection the run still owns, and the folders it leaves empty. User edits and
+/// substituted paths are left alone.
 pub(super) fn retire(run: &Path) -> io::Result<()> {
     let note_path = run.join(NOTE);
     let data = match fs::read(&note_path) {
@@ -89,8 +90,15 @@ pub(super) fn retire(run: &Path) -> io::Result<()> {
         }
         Err(error) => return Err(error),
     };
-    for candidate in [path.with_extension("json.tmp"), path] {
-        remove_matching(&candidate, &note)?;
+    for candidate in [&path.with_extension("json.tmp"), &path] {
+        remove_matching(candidate, &note)?;
+    }
+    let folders = note.relative.components().count() - 1;
+    for folder in path.ancestors().skip(1).take(folders) {
+        // Another file keeps its folder.
+        if fs::remove_dir(folder).is_err() {
+            break;
+        }
     }
     remove_if_present(&note_path)
 }
@@ -152,4 +160,36 @@ fn target(workspace: &Path, relative: &Path, create: bool) -> io::Result<PathBuf
         }
     }
     Err(unsafe_path())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_retired_projection_leaves_the_workspace_as_it_was() {
+        let folder = crate::test_folder::TestFolder::new("projection");
+        let (run, workspace) = (folder.join("run"), folder.join("workspace"));
+        fs::create_dir_all(&run).unwrap();
+        fs::create_dir_all(&workspace).unwrap();
+        let projection = Projection {
+            workspace: workspace.clone(),
+            relative: PathBuf::from(".kiro").join("agents").join("facade.json"),
+            contents: "{}".into(),
+        };
+        let file = workspace.join(&projection.relative);
+
+        projection.create(&run).unwrap();
+        assert!(file.is_file());
+        retire(&run).unwrap();
+        assert!(!workspace.join(".kiro").exists());
+        assert!(workspace.is_dir());
+
+        let own = workspace.join(".kiro/agents/own.json");
+        fs::create_dir_all(own.parent().unwrap()).unwrap();
+        fs::write(&own, "{}").unwrap();
+        projection.create(&run).unwrap();
+        retire(&run).unwrap();
+        assert!(own.is_file() && !file.exists());
+    }
 }
