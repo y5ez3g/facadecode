@@ -416,10 +416,11 @@ The terminal, as a `PtyIo`, and the input waiting for it.
   - Under `background_report`, a `working` report with matching words becomes idle evidence.
   - Under `background_correction`, a `working` report is narrowed to idle evidence while the screen
     matches the rule's idle anchors. The rule applies regardless of the CLI's installed version.
-  - Under `answers_ask`, a reported question reads as done once a fresh complete frame draws the
-    ordinary input, empty or with a draft. The actor supplies reports and frames in output order.
-    State uses the same evidence for the public state and the native wait. A frame already open
-    when the report arrived cannot settle it, and permission reports keep their own wait.
+  - Under `answers_ask`, a reported question becomes done when a complete frame prints the
+    ordinary composer's borders, prompt and visible text after the report and input boundary.
+    The actor supplies reports and frames in output order. State keeps the completed report as
+    done across handover. Recovery still requires fresh input evidence for delivery. Permission
+    reports keep their own wait.
   - A start and the tools' connection get 30 seconds each. Time the CLI spends asking a question does not count.
   - For a CLI that defers its tool catalog, a live authenticated initializer keeps the tools `Connecting`
     without adding a startup overlay or tools timeout. Native startup keeps its own deadline. The initial
@@ -427,7 +428,7 @@ The terminal, as a `PtyIo`, and the input waiting for it.
     native startup deadline if it fails. The typist still checks whether it can write the prompt safely.
   - Only `keep` writes the state file, through a private temporary file and a rename. What the screen shows is read again, never kept.
 - **Never does:** touch the terminal; change the agent's record; publish.
-- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take_event(event, sync_open)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(asking, now)`, `observe_question_composer(input, drawn)`, `native_wait()`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connections(connections: ToolsConnections)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
+- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take_event(event, sync_open)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(asking, now)`, `observe_question_composer(redrawn)`, `native_wait()`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connections(connections: ToolsConnections)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
 
 #### glyph
 

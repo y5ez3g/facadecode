@@ -39,7 +39,7 @@ pub use input::{
     BoxReading, InputLine, LineCell, PasteDrawing, ProbeVerdict, canonical_text,
     could_be_paste_prefix, draft_backspace_count, is_legacy_split_paste, is_own_draft,
     is_own_paste_tail, is_own_recovered_draft, is_paste_placeholder, is_same_draft, read_box,
-    read_box_after_paint, read_box_for_screen, read_box_for_typing, read_box_with_menu_redraw,
+    read_box_after_paint, read_box_for_screen, read_box_for_typing, read_box_with_redraw,
     read_draft, read_input, restored, settle_time, shape_of, shows_original_text, shows_paste_end,
     shows_paste_placeholder, shows_whole, space_taken, verdict_of, with_paste_text,
 };

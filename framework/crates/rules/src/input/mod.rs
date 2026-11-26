@@ -270,8 +270,8 @@ fn paste_paint(screen: &facade_screen::Screen) -> BoxPaint<'_> {
     }
 }
 
-/// Reads the current frame and whether the recognized menu's anchor was printed in it.
-pub fn read_box_with_menu_redraw(
+/// Reads the input and whether its menu or framed composer was printed after the boundary.
+pub fn read_box_with_redraw(
     rule: &InputRule,
     screen: &facade_screen::Screen,
     untouched_input: bool,
@@ -290,7 +290,7 @@ fn read_box_in_frame(
     view: &ScreenView,
     untouched_input: bool,
     paint: BoxPaint<'_>,
-    menu_redraw: Option<&facade_screen::Screen>,
+    redraw: Option<&facade_screen::Screen>,
 ) -> (BoxReading, bool) {
     let mut screen = Screen::new(view, rule.menus());
     let mut reading = screen.read(rule, view, untouched_input);
@@ -315,7 +315,7 @@ fn read_box_in_frame(
         paste_tail,
         line,
         unsure,
-        menu_anchor,
+        redraw_rows,
         ..
     } = reading;
     let info = InputInfo {
@@ -350,20 +350,18 @@ fn read_box_in_frame(
             row.checked_sub(top)?,
         ))
     });
-    let redrawn = menu_anchor
-        .zip(menu_redraw)
-        .is_some_and(|(rows, terminal)| {
-            let mut drawn = false;
-            for row in rows {
-                for cell in screen.row(row).iter().filter(|cell| draws(cell)) {
-                    if !terminal.frame_printed_cell(row, cell.column) {
-                        return false;
-                    }
-                    drawn = true;
+    let redrawn = redraw_rows.zip(redraw).is_some_and(|(rows, terminal)| {
+        let mut drawn = false;
+        for row in rows {
+            for cell in screen.row(row).iter().filter(|cell| draws(cell)) {
+                if !terminal.frame_printed_cell(row, cell.column) {
+                    return false;
                 }
+                drawn = true;
             }
-            drawn
-        });
+        }
+        drawn
+    });
     (
         BoxReading {
             info,
@@ -390,7 +388,8 @@ struct Reading {
     paste_tail: Option<String>,
     line: Option<InputLine>,
     unsure: bool,
-    menu_anchor: Option<Range<usize>>,
+    /// The rows whose printed glyphs can prove the recognized menu or framed composer.
+    redraw_rows: Option<Range<usize>>,
 }
 
 impl Reading {
@@ -564,13 +563,13 @@ fn reading(state: InputState, evidence: impl Into<String>) -> Reading {
         paste_tail: None,
         line: None,
         unsure: false,
-        menu_anchor: None,
+        redraw_rows: None,
     }
 }
 
 fn interaction(evidence: impl Into<String>, anchor: Range<usize>) -> Reading {
     Reading {
-        menu_anchor: Some(anchor),
+        redraw_rows: Some(anchor),
         ..reading(InputState::Interaction, evidence)
     }
 }
@@ -1241,6 +1240,11 @@ impl<'a> Screen<'a> {
                 false => draft(),
             };
         }
+        let framed = |reading: Reading| Reading {
+            redraw_rows: matches!(reading.state, InputState::Usable | InputState::Draft)
+                .then_some(upper..lower + 1),
+            ..reading
+        };
         if let Some(hint) = &frame.dim_cursor_hint
             && lower == first + 1
             && self.cursor_at(column, first)
@@ -1256,11 +1260,13 @@ impl<'a> Screen<'a> {
             });
             if dim_after_cursor && joined(cells).trim_end() == hint.as_str() {
                 let line = line_of(self.row(first), first, column, false, self.cursor);
-                return usable(format!(
-                    "the input frame at row {} shows its dim hint",
-                    first + 1
-                ))
-                .with_line(line);
+                return framed(
+                    usable(format!(
+                        "the input frame at row {} shows its dim hint",
+                        first + 1
+                    ))
+                    .with_line(line),
+                );
             }
         }
         if let Some(mode) = &frame.placeholder {
@@ -1273,7 +1279,7 @@ impl<'a> Screen<'a> {
             let shown = shown.trim_end();
             if one_row && footer && mode.texts.iter().any(|text| names_mode(shown, text)) {
                 let place = format!("the input frame at row {}", first + 1);
-                return match self.cursor_at(column, first) {
+                return framed(match self.cursor_at(column, first) {
                     true => usable(format!(
                         "{place} shows its mode placeholder above its empty-input footer"
                     )),
@@ -1281,17 +1287,17 @@ impl<'a> Screen<'a> {
                         "{place} shows its mode placeholder, but the cursor is not where the \
                          input starts"
                     )),
-                };
+                });
             }
         }
-        self.after_prompt(
+        framed(self.after_prompt(
             first,
             lower,
             "the input frame",
             row_marks,
             untouched_input && frame.probe_unstyled_hint,
             column,
-        )
+        ))
     }
 
     /// `prompt`: a prompt row above a model line, or a scrolled input without the model line.

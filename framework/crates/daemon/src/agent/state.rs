@@ -11,7 +11,7 @@ use facade_base::{
         HowEnded, ManagedAgentState, Said, StateDetail, StateReason, ToolsReason, ToolsState,
         WaitKind,
     },
-    model::terminal::{InputState, display_line, display_name},
+    model::terminal::{display_line, display_name},
 };
 use facade_rules::{Rule, ScreenState, StateRule};
 use facade_screen::{BlockKind, ReportedState, Screen, StatusEvent, StatusReport};
@@ -82,23 +82,14 @@ pub(crate) struct StateReading {
     pub(crate) wake: Option<Instant>,
 }
 
-/// The composer evidence for the CLI's current question report.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-enum QuestionComposer {
-    #[default]
-    Awaiting,
-    /// A synchronized update was already open when the CLI reported the question.
-    Earlier,
-    Shown,
-}
-
 /// Evidence, run lifecycle, turn progress and tool connection for one agent.
 pub(crate) struct StateTracker {
     rule: Option<&'static Rule>,
     evidence: Evidence,
     progress: TurnProgress,
     question: Question,
-    question_composer: QuestionComposer,
+    /// The update already open at the question report cannot settle it.
+    question_frame_open_at_report: bool,
     connection: Connection,
     started: Instant,
     tools_since: Instant,
@@ -125,7 +116,7 @@ impl StateTracker {
             return reading;
         }
 
-        let current = self.evidence.settled(self.question_composer);
+        let current = self.evidence.current();
         let held_until = self
             .progress
             .advance(Turn::from(current), now, viewing, &mut self.saved);
@@ -193,7 +184,7 @@ impl StateTracker {
             rule,
             progress: TurnProgress::default(),
             question: Question::default(),
-            question_composer: QuestionComposer::Awaiting,
+            question_frame_open_at_report: false,
             connection: Connection::Pending,
             started,
             tools_since: started,
@@ -245,11 +236,7 @@ impl StateTracker {
     /// Accepts a state event at its place in CLI output.
     pub(super) fn take_event(&mut self, event: StatusEvent, sync_open: bool) {
         if matches!(&event, StatusEvent::Report(_) | StatusEvent::Reset) {
-            self.question_composer = if sync_open {
-                QuestionComposer::Earlier
-            } else {
-                QuestionComposer::Awaiting
-            };
+            self.question_frame_open_at_report = sync_open;
         }
         self.evidence.event(event);
     }
@@ -280,8 +267,7 @@ impl StateTracker {
     /// The CLI's own current report that it is waiting for a person.
     pub(super) fn native_wait(&self) -> Option<WaitKind> {
         if self.uses_native_reports()
-            && let Some(EvidenceState::Blocked { kind, .. }) =
-                self.evidence.settled(self.question_composer)
+            && let Some(EvidenceState::Blocked { kind, .. }) = self.evidence.current()
         {
             return Some(kind.unwrap_or(WaitKind::Unknown));
         }
@@ -351,21 +337,17 @@ impl StateTracker {
         self.uses_native_reports() && self.evidence.question_uses_composer()
     }
 
-    /// Reads a complete frame at its place in CLI output. Returns whether the wait changed.
-    pub(super) fn observe_question_composer(&mut self, input: InputState, drawn: bool) -> bool {
-        if !self.watches_question_composer() {
-            return false;
+    /// Takes a complete frame in output order. A redrawn composer can settle the report as done,
+    /// which is kept with the run's other status evidence.
+    pub(super) fn observe_question_composer(&mut self, redrawn: bool) -> bool {
+        if self.watches_question_composer()
+            && !std::mem::take(&mut self.question_frame_open_at_report)
+            && redrawn
+        {
+            self.evidence.replace(EvidenceState::Done);
+            return true;
         }
-        let before = self.question_composer;
-        self.question_composer = match before {
-            QuestionComposer::Earlier => QuestionComposer::Awaiting,
-            _ if !matches!(input, InputState::Usable | InputState::Draft) => {
-                QuestionComposer::Awaiting
-            }
-            _ if drawn => QuestionComposer::Shown,
-            previous => previous,
-        };
-        (before == QuestionComposer::Shown) != (self.question_composer == QuestionComposer::Shown)
+        false
     }
 
     /// Startup deadline, suspended until the CLI's current question is answered.
@@ -377,10 +359,7 @@ impl StateTracker {
     pub(super) fn native_prompt_ready(&self, not_ready: bool) -> bool {
         (self.evidence.shown || not_ready)
             && !self.question.open
-            && !matches!(
-                self.evidence.settled(self.question_composer),
-                Some(EvidenceState::Blocked { .. })
-            )
+            && !matches!(self.evidence.current(), Some(EvidenceState::Blocked { .. }))
     }
 
     /// Restarts the tool connection allowance after daemon recovery.
@@ -641,14 +620,6 @@ impl Evidence {
                 Some(StateRule::FrameTranscript(rule)),
             ) if rule.answers_ask
         )
-    }
-
-    fn settled(&self, composer: QuestionComposer) -> Option<&EvidenceState> {
-        if composer == QuestionComposer::Shown && self.question_uses_composer() {
-            Some(&EvidenceState::Done)
-        } else {
-            self.current()
-        }
     }
 
     fn replace(&mut self, next: EvidenceState) {
@@ -1370,18 +1341,18 @@ mod tests {
             ManagedAgentState::WaitingForYou,
             "its input is not there"
         );
-        assert!(muse.observe_question_composer(InputState::Usable, true));
+        assert!(muse.observe_question_composer(true));
         assert_eq!(muse.native_wait(), None);
         state(&mut muse, now);
         assert_eq!(state(&mut muse, later).0, ManagedAgentState::JustDone);
 
         muse.take(question());
         assert_eq!(muse.native_wait(), Some(WaitKind::Question));
-        assert!(!muse.observe_question_composer(InputState::Usable, false));
+        assert!(!muse.observe_question_composer(false));
         assert_eq!(muse.native_wait(), Some(WaitKind::Question));
 
         muse.take(vec![report("state=blocked:kind=permission")]);
-        assert!(!muse.observe_question_composer(InputState::Usable, true));
+        assert!(!muse.observe_question_composer(true));
         assert_eq!(
             state(&mut muse, later).0,
             ManagedAgentState::WaitingForYou,
@@ -1390,7 +1361,7 @@ mod tests {
 
         let mut claude = tracker(Some("claude"), now);
         claude.take([vec![StatusEvent::Asked], question()].concat());
-        assert!(!claude.observe_question_composer(InputState::Usable, true));
+        assert!(!claude.observe_question_composer(true));
         assert_eq!(
             state(&mut claude, now).0,
             ManagedAgentState::WaitingForYou,
