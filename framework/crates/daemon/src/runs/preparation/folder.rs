@@ -5,6 +5,8 @@ use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use super::projection::{self, Projection};
+
 const PLUGIN_NOTE: &str = "plugin-folder";
 
 /// The private file plan carried by a prepared run. Only preparation interprets it.
@@ -13,6 +15,8 @@ pub(crate) struct RunFiles {
     folder: Option<PathBuf>,
     session: Option<Option<String>>,
     contents: Vec<(String, String)>,
+    config_links: Vec<(PathBuf, PathBuf)>,
+    projection: Option<Projection>,
 }
 
 impl RunFiles {
@@ -28,9 +32,19 @@ impl RunFiles {
         self.folder.as_deref().expect("a rule has a run folder")
     }
 
-    pub(super) fn fill(&mut self, session: Option<Option<&str>>, contents: Vec<(String, String)>) {
+    pub(super) fn fill(
+        &mut self,
+        session: Option<Option<&str>>,
+        contents: Vec<(String, String)>,
+        config_links: Vec<(PathBuf, PathBuf)>,
+    ) {
         self.session = session.map(|value| value.map(str::to_owned));
         self.contents = contents;
+        self.config_links = config_links;
+    }
+
+    pub(super) fn project(&mut self, projection: Projection) {
+        self.projection = Some(projection);
     }
 
     pub(super) fn note_plugin(&self, project: &Path) -> anyhow::Result<()> {
@@ -75,7 +89,36 @@ impl RunFiles {
             write()
                 .map_err(|error| anyhow::anyhow!("could not write {}: {error}", path.display()))?;
         }
+        for (relative, original) in &self.config_links {
+            let alias = at.join(relative);
+            let parent = alias
+                .parent()
+                .expect("a run configuration alias has a parent");
+            private_folder(parent)?;
+            facade_base::files::link_config_entry(original, &alias).map_err(|error| {
+                anyhow::anyhow!(
+                    "could not link configuration entry {}: {error}",
+                    original.display()
+                )
+            })?;
+        }
+        if let Some(projection) = &self.projection {
+            projection.create(at)?;
+        }
         Ok(())
+    }
+}
+
+pub(super) fn retire_projection(run: &Path) {
+    if let Err(error) = projection::retire(run) {
+        facade_base::log::write(
+            "daemon",
+            "warn",
+            &format!(
+                "could not retire the workspace file of {}: {error}",
+                run.display()
+            ),
+        );
     }
 }
 
@@ -92,7 +135,16 @@ pub(super) fn find(runs: &Path, id: &str) -> Option<PathBuf> {
 }
 
 pub(super) fn remove(runs: &Path, id: &str) -> io::Result<()> {
-    if let Err(error) = std::fs::remove_dir_all(runs.join(id))
+    let folder = runs.join(id);
+    if let Ok(children) = std::fs::read_dir(&folder) {
+        for child in children
+            .flatten()
+            .filter(|child| child.file_type().is_ok_and(|kind| kind.is_dir()))
+        {
+            retire_projection(&child.path());
+        }
+    }
+    if let Err(error) = std::fs::remove_dir_all(folder)
         && error.kind() != io::ErrorKind::NotFound
     {
         return Err(error);
@@ -130,7 +182,7 @@ pub(super) fn discard_unrecorded(
                 }
             }
         }
-        std::fs::remove_dir_all(entry.path())?;
+        remove(runs, &id)?;
     }
     Ok(projects)
 }
@@ -152,7 +204,7 @@ mod tests {
         let (probe, kept_project) = (runs.join("probe"), runs.join("kept"));
         gone.note_plugin(&probe).unwrap();
         kept.note_plugin(&kept_project).unwrap();
-        plain.fill(None, vec![]);
+        plain.fill(None, vec![], vec![]);
         plain.create().unwrap();
         let projects = discard_unrecorded(&runs, &HashSet::from(["a2".to_string()])).unwrap();
         assert_eq!(projects, [probe]);
@@ -181,6 +233,7 @@ mod tests {
         first.fill(
             Some(Some("86da4482-2bae-4a45-b193-a5664c19826a")),
             files.to_vec(),
+            vec![],
         );
         first.create().unwrap();
         assert_eq!(find(&runs, "a1"), Some(first.path().to_owned()));
@@ -203,7 +256,7 @@ mod tests {
                 file.display()
             );
         }
-        second.fill(None, vec![]);
+        second.fill(None, vec![], vec![]);
         second.create().unwrap();
         assert!(
             !session_file(second.path()).exists(),

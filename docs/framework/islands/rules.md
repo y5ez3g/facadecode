@@ -19,6 +19,8 @@ files in `framework/rules/`. It is a library; it starts no program.
 ## Keeps
 
 - A rule's `cli` is its file's name, and no two rules share a program.
+- Cursor, Kiro and Qoder use `agent`, `kiro-cli` and `qoder` as their built-in keys and programs.
+- GitHub Copilot CLI uses `copilot` as its built-in key and program.
 - A rule file is checked as it is read. If any file fails, every rule name fails in `find`. A
   start selects a configured entry. An entry with the `custom` type supplies its own program.
 - No CLI name appears outside rules: what differs by CLI is in a rule file or behind a rules
@@ -27,6 +29,10 @@ files in `framework/rules/`. It is a library; it starts no program.
 - No `cfg` by system. What differs by system is data, chosen by `facade_base::system::SYSTEM` at
   run time: each CLI's hook form, `${folder_toml}`, console typing and the wrappers. On Unix,
   every command line, hook command, file and path is as it was before Windows.
+  For Copilot's managed settings path inside the Unix branch, the runtime OS selects
+  `/Library/Application Support/GitHubCopilot/managed-settings.json` on macOS and
+  `/etc/github-copilot/managed-settings.json` on Linux. Other Unix targets have neither path.
+  Windows uses `GitHubCopilot/managed-settings.json` under the effective `ProgramFiles`.
 - Every read of a variable of a CLI's environment goes through `facade_base::system::env_var`
   (names without case on Windows), and the home folder the CLIs use is
   `facade_base::system::home_folder_in` (Unix `HOME`, Windows `USERPROFILE`).
@@ -43,14 +49,18 @@ files in `framework/rules/`. It is a library; it starts no program.
 - `find(name) -> Result<Option<&'static Rule>, String>`, `rules()`: the rule a CLI name selects.
 - `Rule`: the rule file as typed fields; `Rule::resume_args`, `Rule::remove_wiring_environment`.
 - `start_managed_launch_command(rule, words, session, server, environment, policy) -> CommandLine`
-  builds the run's command line, environment, files and plugin files.
+  builds the run's command line, environment, private files and plugin files. Its optional
+  `workspace_file` gives the daemon a path relative to the launch folder and the contents
+  of one run-owned native configuration. It may reference the private files.
+  `config_links` describes aliases in the private run folder that retain existing configuration
+  entries when a CLI needs a separate configuration root.
   `resume_managed_launch_command(rule, id, words, session, server, environment, policy)` also
   names the session to resume and returns `None` for a CLI without session resume. `Tools` records
   whether the CLI has Facade's tools or why they could not be given. `uses_run_credential` lets
   the daemon save the credential's digest when the resulting configuration carries it.
   Both use `wire_managed` to configure the CLI's connection to Facade API v1's MCP entry point.
   `LaunchPolicy` carries the authenticated launch origin and the folder when YOLO is on.
-- The `entries` module reads `clis` in `facade.json`. `entries::select` checks one configured entry.
+- The `entries` module reads `clis` in `facade.json`. `entries::select` checks the exact entry key.
   `Entry::resolve_program` uses its effective environment and working folder. `Entry::launch_options`
   returns the literal arguments to save and replay, with their model and effort when known. Those
   values are separate from what a run adds for YOLO, session reporting and MCP.
@@ -141,7 +151,7 @@ Rust regular expressions.
 | `status_glyph` | the CLI's glyph for viewer titles once the CLI has reported its state. The `working` list holds one or more glyph frames, each shown for `frame_ms` milliseconds. The `resting` glyph is for Starting after a report, Idle, Just done, Waiting for you and Error. Every glyph must be nonempty, and `frame_ms` must be positive |
 | `ready_tools` | what to type so the CLI starts Facade's tools before its first turn |
 | `mcp` | the session key in MCP metadata or the relay environment, and whether a run gets its instructions from a hook or extension |
-| `yolo` | `work` controls for native permissions, `startup` controls for YOLO agent starts, and the trust question to answer |
+| `yolo` | `work` controls for native permissions, `startup` controls for YOLO agent starts, optional `off_args` for explicit consent mode, and the trust question to answer |
 | `console` | on Windows, for a CLI that reads console input records: `per_char_ms`, the wait before submission for each UTF-16 code unit, and `records_above_bmp` |
 
 **Adding a CLI.** Write `framework/rules/<cli>.json` and add it to `FILES` in `lib.rs`; its place there
@@ -165,6 +175,7 @@ adds, the model and effort, the session a resume names, and the `clis` entries o
   - A rule's `session.resume` names `${session_id}` exactly once and nothing else to fill in, so a
     resume puts the session ID in one place.
   - YOLO enables `work` controls. `startup` controls require both YOLO and an agent start.
+    A rule can specify `off_args` to select its normal approval mode explicitly.
     Rule options interpolate `${folder}` and `${folder_toml}`. The TOML value uses the
     resolved working folder, lowercased on Windows as Codex keys a project there.
   - The rule's agent-start updater environment applies to agent starts in either YOLO mode.
@@ -176,8 +187,9 @@ adds, the model and effort, the session a resume names, and the `clis` entries o
     added.
   - Each `clis` entry is read on its own and takes nothing from another. A mistake makes only
     that entry unavailable, and its problem names the setting path, never the value written.
-  - A built-in's entry can't change its `type`. An added CLI's name can't be a built-in's ID or
-    name, in any letter case.
+  - A built-in keeps its `type`. Added entries have names distinct from the built-in IDs and display
+    names, ignoring case. An existing entry with a newly added provider's name keeps its explicitly
+    selected earlier type, including `custom`.
 - **Never does:** touch Facade's tools or session reports (wiring's job), read the screen, or
   write any file.
 - **Interface:**
@@ -212,12 +224,58 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     and an open synchronized update. For automatic delivery the daemon also supplies whether the
     input is untouched.
   - Each mechanism (`frame`, `prompt`, `editor`, `box`, `prompt_row`) knows only the layout its CLI was recorded drawing. Any other screen reads `unknown`, or `interaction` when one of the rule's menus or questions shows.
-  - Frame, editor and prompt rules use a `scrolled` object with `position`, `above` and `below`.
+  - Menu patterns match physical rows after removing trailing ASCII spaces. Leading columns,
+    adjacency and hint ranges still distinguish native menus from composer text.
+  - Claude's theme chooser shows its heading, the `/theme` help and a selected native theme.
+    Kiro shows a login question with a selected Yes or No, and Cursor shows its login hint
+    below the Cursor Agent splash title. Those login notices also report authentication waits.
+    Kiro trust and Devin's `✱` trust question are also interactions. Kiro's option menus read as
+    interactions by the footer below their selected `❯` row, so its trust-all-tools warning does at
+    any window height.
+  - Frame, editor and prompt rules use a `scrolled` object that identifies the scroll layout by `position`.
     For `rows` (Muse Code and Antigravity), one capture in each pattern counts the hidden rows
     from separate marker rows inside the frame. For `rules` (Claude Code and Pi), the patterns
     capture counts from the upper and lower border rules. A frame with a marked upper rule can
     start on a continuation row.
+  - Frames can specify an indent and a second prompt glyph. Cursor and Kiro anchor their prompt
+    rows at the cursor and read wrapped rows using that prompt's margin.
+  - Devin uses `❭` inside its two-rule frame. Qoder sets `hidden_cursor_in_frame` and can use
+    the hidden terminal cursor without an inverse cell when its position is inside the complete
+    input frame, at or after the input column. Both colored hints still need the reversible
+    space probe to distinguish them from a draft.
+  - Cursor sets `drawn_cursor` on its prompt-row rule. While the terminal cursor is hidden, a single
+    inverse cell at or after the input start of a prompt row or one of its wrapped rows supplies the
+    cursor position for the input reading and the space probe. With zero or several such cells,
+    the rule checks for a menu. A visible terminal cursor supplies its own position.
+  - Cursor's live trust question reads `interaction` when the boxed selected option has the key help
+    within three rows below it. Once answered, the box loses the selection marker and key help.
+    The input box below it can then read `usable` or `draft`.
+  - Cursor's `Run this MCP tool?` question reads `interaction` when the selected `Run (once)`
+    option and the `Allowlist MCP Tool` option follow. Its approval caption near the bottom
+    reports `Blocked(Permission)` while the composer is absent.
+  - Oh My Pi's default Band has a colored status row above its `╰─ ` prompt. With a visible
+    terminal cursor in that input, the colored three-column margin bounds the draft, including
+    blank continuation rows. Oh My Pi's Pi layout uses two horizontal rules. Band holds one
+    more input row than Pi at the same terminal height. A full `unmarked` viewport reads
+    `unknown` and can provide the visible end of a paste for verification. The daemon uses
+    this evidence only when it started the paste in an empty input box in the same input generation.
+    The first-run setup wizard reads `interaction` from the complete default
+    `↑/↓ select · ⏎ confirm · ⎋ skip · ⌃C exit setup` footer at the bottom when the scene fits.
+    A readable editor takes priority, and a clipped or remapped footer supplies no match.
+    Oh My Pi draws what it predicts the person types next from the cursor on, in another color than
+    the text before it. The reading leaves that out of the draft.
+  - Copilot draws a colored rail or two plain full-width rules around its input. Both layouts
+    require a visible hardware caret and the `Interactive` footer below the editor.
+    The plain frame additionally has a `❯ ` prompt. A full viewport uses the shared editor
+    guard. Its compact `[Paste #N - M lines]` marker supplies the paste's line count.
+    The full styled sign-in notice two rows above a recognized editor reads `interaction`.
+    A wrapped notice also matches when the complete styled text sits directly above one to
+    three indented project rows, ending in the native `Run on:` context.
+    Manual `/login` stays available, and Copilot continues to report its state through OSC.
   - Codex's `prompt` input accepts `›` and its `alternate_prompt`, `»` at Ultra effort.
+    The updater menu reads `interaction` when the selected `Update now` row has the
+    `enter continue · esc skip` footer within five rows. This also covers the wrapped option
+    in the 120-column recording.
     A wrapped footer can end with a shortcuts row that may include aligned status, the
     `tab to queue message` hint, or a standalone warning count ending in `f2 to view` with at least
     20 leading spaces. The model line must start the contiguous, indented footer above the hint
@@ -227,7 +285,9 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     The draft omits the glyphs and the reading reports one hidden row for each marked side.
   - OpenCode's box has one space between the bar and the text below `narrow_below` (44 columns),
     and two spaces from that width.
-  - A screen in the middle of a synchronized update, a cursor off the screen, or a hidden terminal cursor with no inverse cell of the CLI's own at that position never reads `usable` or `draft`.
+  - An open synchronized update reads `unknown`. A reader using the terminal cursor's position
+    returns `unknown` when that position is off screen. While that cursor is hidden, those readers
+    require an inverse cell at its position to read `usable` or `draft`.
   - Colored text alone where the input starts could be a hint or a draft. Claude can also draw hints without styling. For automatic delivery to a fresh input that has received no external edits, the reader marks a single unstyled row at the input start as `unknown` and unsure. Ordinary input reads identify that writing as a draft. A dim hint, or a mode placeholder shown above its footer, counts as empty only while the cursor is where the input starts.
   - A probe is judged from two readings, before its key and after, never from the time between them: whether its space went in by the cursor and the text, what the row was by the text alone, and whether Backspace put the box back by every cell and the cursor.
   - The evidence names the rows, never the draft's text. The draft's text leaves `read_draft` only as its second value and is never saved.
@@ -271,10 +331,11 @@ Reads a CLI's screen for evidence of its state (`state.rs`). A rule can also hav
 - **Interface:**
   - `read_state(rule, view) -> Option<ScreenState>`, where `ScreenState` is `Working`, `Idle`, `Blocked(BlockKind)` or `Error(words)`. The daemon's agent state calls it on each complete frame, but only while the selected evidence calls for a screen reading and never while the CLI is drawing a synchronized update. It is None when the rule has no `status` section, or when the screen shows nothing that section recognizes.
   - The `status` mechanisms:
+    - `composer` (Devin, Cursor, Kiro and Qoder) reads the visible composer and the CLI's nearby working, sign-in and approval cues. Cursor can draw a dim work hint beside the composer. A recognized composer with no work indicator reads as `Idle`. Native reports take precedence once received.
     - `turn_error` (OpenCode, over its input box): when a turn's model call failed, the error stands just over that turn's summary. It reads as `Error` with the CLI's words. A turn that produced words shows a rate in its summary, so it never reads as an error.
     - `background_correction` (Codex, around its input prompt): reads `Idle` when, over the prompt, a dim footer counts the commands still running in the background, drawn exactly as the CLI draws it or cut off at the screen's right edge, and over that stands the dim summary of a finished turn. The daemon uses this to correct Codex's `working` report regardless of the installed version.
     - `background_report` (Claude Code, in a report's words) gives the daemon a `background` pattern. A `working` report whose words match the pattern reads as `idle`.
-    - `frame_transcript` (Muse Code, around its input frame): `Working` while the working line stands over the frame, with at most a usage warning or queued input between them. `Idle` under the CLI's header, a question it answered, or the end of an earlier conversation. The reader skips indented text and blank paragraph breaks when it looks for the answer marker. Where no frame is drawn, `Blocked(Auth)` while all of its sign-in choices show, and `Blocked(Permission)` while its question about trusting the workspace shows. Part of a frame on the screen reads as None.
+    - `frame_transcript` (Muse Code, around its input frame): `Working` while the working line stands over the frame, with at most a usage warning or queued input between them. `Idle` under the CLI's header, a question it answered, or the end of an earlier conversation. The reader skips indented text and blank paragraph breaks when it looks for the answer marker. Where no frame is drawn, `Blocked(Auth)` while all of its sign-in choices show, and `Blocked(Permission)` while its question about trusting the workspace shows. Part of a frame on the screen reads as None. Muse Code reports an answer that asks the person something as a question, although its turn has ended. With `answers_ask`, that report counts as done while the CLI's input is on the screen.
   - To check rule files, the layer reads `COUNT` (`${count}`) and `PLURAL` (`${s}`): a footer must contain `COUNT` exactly once, and no placeholder other than these two.
 
 ### sessions
@@ -282,7 +343,7 @@ Reads a CLI's screen for evidence of its state (`state.rs`). A rule can also hav
 Which session a run is in, how a CLI reports it to MCP, and which saved sessions can continue from
 a folder (`sessions.rs` and `sessions/history/`).
 
-- **Owns:** the format of a run's session file, `<run folder>/session`. It holds a session ID and a newline. For a CLI that says where it saves the session, a second line follows with that file's absolute path and a newline. An empty file means no session is selected. A file over 4 KiB is unreadable. It also owns the session variable of each CLI (`SESSION_VARIABLES`: `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID` and `CODEX_THREAD_ID`, and so on) and the 22 Claude Code and Codex variables that mark a session or run, such as `CLAUDECODE` and `CODEX_SANDBOX`.
+- **Owns:** the format of a run's session file, `<run folder>/session`. It holds a session ID and a newline. For a CLI that says where it saves the session, a second line follows with that file's absolute path and a newline. An empty file means no session is selected. A file over 4 KiB is unreadable. It also owns the session variables and run-specific environment keys, including `CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID` and `PI_SESSION_FILE`.
 - **Keeps:**
   - History readers use the selected CLI's effective configuration, environment and arguments.
     They return sessions saved in the requested folder and read the CLI's stores without
@@ -292,7 +353,7 @@ a folder (`sessions.rs` and `sessions/history/`).
     head and tail windows, so later output does not hide a saved rename.
     Muse Code looks up an individual session's first prompt in its transcript when the index has
     no displayable title for it. The saved-session catalog reads the index.
-  - A session ID has one spelling: a UUID in lowercase, or OpenCode's `ses_` followed by 1 to 64 letters and digits.
+  - A session ID uses the CLI's native spelling. UUIDs are lowercase. OpenCode uses `ses_` followed by 1 to 64 letters and digits, Kiro V3 uses `sess_` followed by a lowercase UUID, and Devin names a session with lowercase words joined by hyphens, such as `pickled-fighter`, at most 64 characters.
   - A session counts only once it is saved. If the file names a path that does not exist yet, it reads as no session, so a session the CLI has not saved cannot be resumed. This holds for every CLI.
   - A write goes to a temporary file that only its owner can read (base's `files::private_options`). The file is synced, then renamed over the session file, so a reader sees the old file or the new one, never part of either; the folder is synced through `files::sync_folder`.
   - On Windows a session variable's name is compared without case.
@@ -319,8 +380,12 @@ a folder (`sessions.rs` and `sessions/history/`).
       id: &str, report: Option<&Path>) -> Result<Option<SavedSession>, ErrorBody>` finds the full
       canonical ID in the same native history. The daemon supplies the run's launch context and
       optional session report file on the machine that holds the record. A matching report can
-      locate the original Claude Code, Codex or Pi transcript. The same native eligibility checks
+      locate the original Claude Code, Codex, Pi, Qoder or Oh My Pi transcript. The same native eligibility checks
       apply, and the supplied launch context is used when the report cannot locate a session.
+    - Copilot uses `--config-dir`, `COPILOT_HOME` or the default `.copilot` directory in that
+      order. The session directory and `workspace.yaml` must agree on the exact UUID, the
+      workspace must match the launch folder, and the journal must show a persisted visible
+      primary user message. The session-start hook supplies the live ID.
     - `session_evidence(rule: &Rule, recorded: &str, relay_env: &BTreeMap<String, String>,
       call_meta: Option<&serde_json::Value>) -> bool` compares the run's saved session to the
       evidence its CLI supplies. The daemon verifies which current run the operating system's
@@ -412,6 +477,21 @@ session. It also defines the formats of Facade's hooks.
     `begins_turn`, `is_turn_cut_short`, `session_of` (`NamedSession`), `is_run_own_session` and
     `BACKGROUND_JOB_VARIABLE`; and `integration::session_status_file`, `INSTRUCTIONS_FILE` and
     `session_ends_with_process`.
+
+Cursor loads its local plugin at startup. The plugin supplies Facade's relay, instructions and session hook.
+Qoder takes a session MCP file and a settings overlay with a SessionStart hook. Devin uses a private
+configuration root with the native `devin/mcp_config.json` path and an in-process local agent. Its
+other existing config entries are linked into that root. Devin 3000 keeps its sessions in
+`devin/cli/sessions.db` under its data folder; the catalog reads it there, else `devin/sessions.db`. A child Facade agent inherits the original
+configuration root. Oh My Pi takes a local plugin, a settings overlay for the managed tools' approvals,
+and an extension that reports session and turn changes. Oh My Pi announces the servers and tools it
+connects. The overlay and the extension leave Facade's own out of those notices, so its conversation
+opens as it does without Facade, and a failure to connect still shows. Oh My Pi selects its input layout
+from its settings. Kiro starts as `kiro-cli chat --v3` and reads a projected workspace profile. Its
+private launcher holds the relay credential. A
+managed profile can be recreated under its saved name when another Facade agent resumes that session.
+A native profile selected at launch, in the workspace or user settings, or in a saved session
+keeps its own configuration and tools.
 
 `mod.rs` selects the wiring for each CLI. `servers` and `run_tools` build the run's server entry
 and tool configuration. `conflicts` checks for the person's own `facade` server. `settings`

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -21,6 +22,9 @@ POLICY_PATHS = {
     '.github/workflows/extension-remote.yml',
     '.github/workflows/extension-release.yml',
 }
+# Editor journeys run with Claude Code alone, so no runner can bind the editor's configuration cases
+# of the other built-in CLIs. They stay pending without counting against the pending limit.
+UNBINDABLE = re.compile(r'extension/configuration-framework/(?:adapter|built-in)/(?!claude$|custom$)[^/]+')
 PRODUCT_GUIDES = {'framework/README.md', 'framework/AGENTS.md', 'extension/README.md', 'extension/AGENTS.md'}
 
 
@@ -62,7 +66,8 @@ def require_new_bindings(cases, baseline):
     if not baseline:
         return
     previous = {row['id'] for row in baseline}
-    unbound = sorted(case.id for case in cases.values() if case.id not in previous and not case.test)
+    unbound = sorted(case.id for case in cases.values()
+                     if case.id not in previous and not case.test and not UNBINDABLE.fullmatch(case.id))
     if unbound:
         raise AcceptanceError('new acceptance obligations need an executable binding:\n  ' + '\n  '.join(unbound))
 
@@ -90,8 +95,10 @@ def review_bound_cases(cases, baseline):
         print(f'Acceptance review for {case_id}: {reason}')
     if lost:
         raise AcceptanceError('existing obligations lost their executable binding:\n  ' + '\n  '.join(sorted(lost)))
-    if len(pending) > len(previous_pending):
-        raise AcceptanceError(f'pending acceptance obligations increased from {len(previous_pending)} to {len(pending)}')
+    before, after = (len({case_id for case_id in ids if not UNBINDABLE.fullmatch(case_id)})
+                     for ids in (previous_pending, pending))
+    if after > before:
+        raise AcceptanceError(f'pending acceptance obligations increased from {before} to {after}')
 
 
 def argument_parser():

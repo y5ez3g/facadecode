@@ -3,8 +3,9 @@
 use std::collections::VecDeque;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
-use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Console::{
     CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO, COORD, DISABLE_NEWLINE_AUTO_RETURN, DOUBLE_CLICK,
     ENABLE_ECHO_INPUT, ENABLE_EXTENDED_FLAGS, ENABLE_LINE_INPUT, ENABLE_MOUSE_INPUT,
@@ -16,6 +17,7 @@ use windows_sys::Win32::System::Console::{
     RIGHTMOST_BUTTON_PRESSED, ReadConsoleInputW, SHIFT_PRESSED, STD_HANDLE, STD_INPUT_HANDLE,
     STD_OUTPUT_HANDLE, SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
 };
+use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject};
 
 use super::{ConsoleRead, ConsoleSignal, PointerAction};
 
@@ -138,6 +140,22 @@ impl ConsoleReader {
     }
 
     pub(super) fn read(&mut self, buf: &mut [u8]) -> io::Result<ConsoleRead> {
+        Ok(self.read_event(buf, None)?.expect("no timeout"))
+    }
+
+    pub(super) fn read_until(
+        &mut self,
+        buf: &mut [u8],
+        deadline: Instant,
+    ) -> io::Result<Option<ConsoleRead>> {
+        self.read_event(buf, Some(deadline))
+    }
+
+    fn read_event(
+        &mut self,
+        buf: &mut [u8],
+        deadline: Option<Instant>,
+    ) -> io::Result<Option<ConsoleRead>> {
         loop {
             let event = match self.pending.front_mut() {
                 Some(PendingInput::Keys(keys)) => {
@@ -145,18 +163,31 @@ impl ConsoleReader {
                     buf[..given].copy_from_slice(&keys[..given]);
                     keys.drain(..given);
                     if !keys.is_empty() {
-                        return Ok(ConsoleRead::Keys(given));
+                        return Ok(Some(ConsoleRead::Keys(given)));
                     }
                     ConsoleRead::Keys(given)
                 }
                 Some(PendingInput::Event(event)) => *event,
                 None => {
+                    if let Some(deadline) = deadline {
+                        let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                            return Ok(None);
+                        };
+                        let millis = left.as_millis().clamp(1, u128::from(INFINITE - 1)) as u32;
+                        let input = std_handle(STD_INPUT_HANDLE)?;
+                        // SAFETY: the console handle can be waited on for queued records.
+                        match unsafe { WaitForSingleObject(input, millis) } {
+                            WAIT_OBJECT_0 => {}
+                            WAIT_TIMEOUT => return Ok(None),
+                            _ => return Err(io::Error::last_os_error()),
+                        }
+                    }
                     self.read_records()?;
                     continue;
                 }
             };
             self.pending.pop_front();
-            return Ok(event);
+            return Ok(Some(event));
         }
     }
 
@@ -336,6 +367,12 @@ fn viewport_position(position: COORD, clamp: bool) -> Option<(u16, u16)> {
 }
 
 /// No signals reach a console program on Windows that attach follows.
+pub(super) fn owns_input() -> bool {
+    true
+}
+
+pub(super) fn return_input(_bytes: &[u8]) {}
+
 pub(super) struct ConsoleSignals;
 
 impl ConsoleSignals {

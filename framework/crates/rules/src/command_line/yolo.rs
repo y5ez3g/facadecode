@@ -46,6 +46,8 @@ pub struct TrustQuestion {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct YoloRule {
+    /// The CLI requires an explicit approval mode even with YOLO off.
+    pub(crate) off_args: Vec<String>,
     pub(crate) work: RunOptions,
     pub(crate) startup: RunOptions,
     /// Present only for a CLI that cannot be told to trust the folder any other way.
@@ -54,6 +56,13 @@ pub struct YoloRule {
 
 impl YoloRule {
     pub(crate) fn check(&self) -> Result<(), String> {
+        if self
+            .off_args
+            .iter()
+            .any(|word| word.contains('\0') || word.contains("${"))
+        {
+            return Err("yolo.off_args must be literal text without NUL".into());
+        }
         self.work.check("yolo.work")?;
         self.startup.check("yolo.startup")?;
         let empty_key = self.question.as_ref().is_some_and(|question| {

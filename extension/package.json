@@ -367,6 +367,48 @@
 					"fontCharacter": "\\E006"
 				}
 			},
+			"facade-cli-devin": {
+				"description": "%config.devin.title%",
+				"default": {
+					"fontPath": "./media/agent-icons.woff",
+					"fontCharacter": "\\E007"
+				}
+			},
+			"facade-cli-agent": {
+				"description": "%config.cursor.title%",
+				"default": {
+					"fontPath": "./media/agent-icons.woff",
+					"fontCharacter": "\\E008"
+				}
+			},
+			"facade-cli-kiro-cli": {
+				"description": "%config.kiro.title%",
+				"default": {
+					"fontPath": "./media/agent-icons.woff",
+					"fontCharacter": "\\E009"
+				}
+			},
+			"facade-cli-qoder": {
+				"description": "%config.qoder.title%",
+				"default": {
+					"fontPath": "./media/agent-icons.woff",
+					"fontCharacter": "\\E00A"
+				}
+			},
+			"facade-cli-omp": {
+				"description": "%config.omp.title%",
+				"default": {
+					"fontPath": "./media/agent-icons.woff",
+					"fontCharacter": "\\E00B"
+				}
+			},
+			"facade-cli-copilot": {
+				"description": "%config.copilot.title%",
+				"default": {
+					"fontPath": "./media/agent-icons.woff",
+					"fontCharacter": "\\E00C"
+				}
+			},
 			"facade-robot-red": {
 				"description": "%icon.robot%",
 				"default": {

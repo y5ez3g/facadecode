@@ -10,9 +10,15 @@
 
 mod config_files;
 mod conflicts;
+mod copilot;
+mod cursor;
+mod devin;
 pub mod hook;
 pub mod integration;
+mod kiro;
+mod omp;
 mod plugin;
+mod qoder;
 mod run_tools;
 mod servers;
 mod session_report;
@@ -25,6 +31,7 @@ use serde_json::Value;
 
 use crate::{ManagedServer, RUN_CREDENTIAL_ARG, Rule};
 
+pub(crate) use devin::user_dir as devin_config_dir;
 pub use plugin::{PLUGIN_FOLDER, PLUGIN_MEMBERS, plugin_files, plugin_version, uses_folder_plugin};
 pub use session_report::SessionReport;
 pub(crate) use session_report::{Hooked, install_hook};
@@ -82,19 +89,26 @@ pub(crate) struct Wiring {
     pub(crate) env: Vec<(String, String)>,
     /// Files in the run's folder: each name and its text.
     pub(crate) files: Vec<(String, String)>,
-    /// What the run adds to the CLI's settings: Claude Code's and Antigravity's `--settings`.
+    /// A relative alias and the existing user configuration entry it points to.
+    pub(crate) config_links: Vec<(PathBuf, PathBuf)>,
+    /// The CLI settings the run supplies as an overlay or a run-scoped replacement.
     pub(crate) settings: Option<Value>,
     /// Its options take every value up to the next option, as Claude Code's `--mcp-config` and
     /// `--allowedTools` do, so the person's words never come right after them.
     pub(crate) takes_values_to_next_option: bool,
-    /// What the CLI's own hooks run for the run, each an event and its command: Muse Code's
-    /// `-c hooks=`.
+    /// The run's own hook commands, keyed by event.
     pub(crate) hooks: Vec<(String, String)>,
     /// The files of the plugin the CLI reads in [`PLUGIN_FOLDER`] of the folder it starts in,
     /// shared by the runs there: each name and its text. Antigravity's.
     pub(crate) plugin: Vec<(String, String)>,
     /// The Facade program and session file for Antigravity's title command.
     pub(crate) title: Option<(String, PathBuf)>,
+    /// The CLI reads a session reporter from a configuration supplied through `args`.
+    pub(crate) captures: bool,
+    /// A managed native profile has a name that a resumed session can retain.
+    pub(crate) profile_name: Option<String>,
+    /// One native configuration file read from the workspace, named relative to its root.
+    pub(crate) workspace_file: Option<(PathBuf, String)>,
 }
 
 /// The managed run's wiring and how it gets Facade's tools.
@@ -119,10 +133,13 @@ pub(crate) struct MergedSettings {
 /// Reads the CLI's configuration using its environment. Returns None for a CLI whose rule does
 /// not give the tools, or an error explaining why the tools could not be given.
 pub(crate) fn wire_managed(
-    cli: &str,
+    rule: &Rule,
+    words: &[String],
     managed: &ManagedServer<'_>,
     environment: &BTreeMap<String, String>,
+    profile: Option<&str>,
 ) -> Result<Option<ManagedWiring>, String> {
+    let cli = rule.cli.as_str();
     let server = &managed.server;
     let pi_configured = cli == "pi" && conflicts::pi_has_server(server.cwd, environment)?;
     if !pi_configured && let Some(why) = conflicts::persons_server(cli, server.cwd, environment) {
@@ -168,6 +185,21 @@ pub(crate) fn wire_managed(
             )
         }
         "agy" => (run_tools::agy_managed(server, credential), uses_credential),
+        "copilot" => (
+            copilot::tools(rule, words, server, &entry, environment)?,
+            uses_credential,
+        ),
+        "devin" => (devin::tools(server, &entry, environment)?, uses_credential),
+        "agent" => (cursor::tools(server, &entry), uses_credential),
+        "kiro-cli" => {
+            let name = profile.ok_or("Kiro's managed profile could not be selected")?;
+            (kiro::tools(name, server, &entry), uses_credential)
+        }
+        "qoder" => (
+            qoder::tools(rule, words, server, &entry, environment)?,
+            uses_credential,
+        ),
+        "omp" => (omp::tools(server, &entry), uses_credential),
         #[cfg(debug_assertions)]
         "fake" => (run_tools::fake_run(server, &entry), uses_credential),
         _ => return Ok(None),
@@ -179,16 +211,48 @@ pub(crate) fn wire_managed(
     }))
 }
 
-/// Has `cli` report its session through the settings `wiring` merges with the person's: a
-/// session-start hook in Muse Code's `-c hooks=`, and the title command of Antigravity's
-/// `--settings`, which it runs with the conversation it shows. Whether `cli` reports it so;
-/// [`merged_settings`] then says whether those settings could be merged.
+pub(crate) fn native_profile(
+    rule: &Rule,
+    words: &[String],
+    session: Option<&SessionReport<'_>>,
+    server: Option<&ManagedServer<'_>>,
+    environment: &BTreeMap<String, String>,
+    resume: Option<&str>,
+) -> Result<Option<String>, String> {
+    if rule.cli != "kiro-cli" {
+        return Ok(None);
+    }
+    let location = server
+        .map(|managed| (managed.server.folder, managed.server.cwd))
+        .or_else(|| session.map(|session| (session.folder(), session.cwd)));
+    location
+        .map(|(folder, cwd)| kiro::selected_profile(rule, words, folder, cwd, environment, resume))
+        .transpose()
+}
+
+/// Adds a session reporter to the CLI's native configuration. Returns whether the rule uses this
+/// route. The configuration must be supplied in the launch before the reporter can run.
 pub(crate) fn report_session(
     cli: &str,
     wiring: &mut Wiring,
-    session: &SessionReport,
+    session: Option<&SessionReport<'_>>,
     server: Option<&ManagedServer<'_>>,
 ) -> bool {
+    if cli == "kiro-cli"
+        && let Some(name) = wiring.profile_name.take()
+    {
+        let native_server = server.map(|managed| &managed.server);
+        let folder = session
+            .map(SessionReport::folder)
+            .or_else(|| native_server.map(|server| server.folder));
+        if let Some(folder) = folder {
+            kiro::profile(wiring, folder, name, session, native_server);
+        }
+        return false;
+    }
+    let Some(session) = session else {
+        return false;
+    };
     match cli {
         "muse" => {
             let variables = server
@@ -198,6 +262,12 @@ pub(crate) fn report_session(
             wiring.hooks.push(("SessionStart".into(), command));
         }
         "agy" => wiring.title = Some((session.facade.into(), session.file.into())),
+        "devin" => {
+            let command = session.hook("devin", []);
+            wiring.hooks.push(("SessionStart".into(), command));
+        }
+        "agent" => cursor::report(wiring, session, server.map(|server| &server.server)),
+        "copilot" => copilot::report(wiring, session),
         _ => return false,
     }
     true
@@ -219,6 +289,11 @@ pub(crate) fn merged_settings(
     environment: &BTreeMap<String, String>,
 ) -> MergedSettings {
     let grammar = &rule.arguments;
+    if rule.cli == "copilot"
+        && let Some(folder) = folder
+    {
+        return copilot::settings(rule, wiring, words, folder);
+    }
     let merged = match rule.cli.as_str() {
         "agy" if wiring.settings.is_some() || wiring.title.is_some() => folder.and_then(|folder| {
             settings::agy_settings(grammar, wiring, &words, cwd, folder, environment)
@@ -226,6 +301,10 @@ pub(crate) fn merged_settings(
         "muse" if !wiring.hooks.is_empty() => {
             settings::muse_hooks(grammar, &wiring.hooks, &words, environment)
         }
+        "devin" if wiring.settings.is_some() || !wiring.hooks.is_empty() => {
+            folder.and_then(|folder| devin::settings(wiring, &words, cwd, folder, environment))
+        }
+        "omp" => folder.map(|folder| omp::settings(rule, wiring, &words, folder)),
         _ => None,
     };
     merged.unwrap_or(MergedSettings {
@@ -241,11 +320,23 @@ pub(crate) fn merged_settings(
 pub(crate) fn remove_wiring_environment(cli: &str, env: &mut BTreeMap<String, String>) {
     session_report::unhook(cli, env);
     run_tools::unwire(cli, env);
+    if cli == "devin" {
+        restore_config_environment(env);
+    }
+}
+
+/// Restores the caller's configuration directory before another client uses its environment.
+pub fn restore_config_environment(env: &mut BTreeMap<String, String>) {
+    devin::restore_config_home(env);
 }
 
 /// Whether Facade can have `cli` report its session.
 pub(crate) fn reports_sessions(cli: &str) -> bool {
-    ["claude", "codex", "agy", "muse", "opencode", "pi", "fake"].contains(&cli)
+    [
+        "claude", "codex", "agy", "muse", "opencode", "pi", "devin", "agent", "kiro-cli", "qoder",
+        "omp", "copilot", "fake",
+    ]
+    .contains(&cli)
 }
 
 /// Whether a Facade run of `cli` starts Facade's guest entry, the server the person's

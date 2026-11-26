@@ -10,7 +10,10 @@ use facade_scenarios::*;
 
 use super::{real, record, settings};
 
-const CLIS: [&str; 6] = ["claude", "codex", "agy", "muse", "opencode", "pi"];
+const CLIS: [&str; 11] = [
+    "claude", "codex", "agy", "muse", "opencode", "pi", "devin", "agent", "kiro-cli", "qoder",
+    "omp",
+];
 const UPDATER_KEYS: [&str; 4] = [
     "DISABLE_AUTOUPDATER",
     "AGY_CLI_DISABLE_AUTO_UPDATE",
@@ -247,6 +250,36 @@ fn check_cli(home: &TestHome, cli: &str, args: &[String], env: &Value, agent: bo
                 extension.contains("registerMcpServer(\"facade\",")
                     && extension.contains("\"exposure\":\"deferred\"")
             );
+        }
+        "devin" => {
+            assert_eq!(
+                option(args, "--permission-mode"),
+                yolo.then_some("dangerous")
+            );
+            assert_eq!(has("--respect-workspace-trust=false"), startup);
+        }
+        "agent" => {
+            assert_eq!(has("--force"), yolo);
+            assert_eq!(option(args, "--sandbox"), yolo.then_some("disabled"));
+            assert_eq!(has("--trust"), startup);
+        }
+        "kiro-cli" => {
+            assert_eq!(has("--trust-all-tools"), yolo);
+            assert_eq!(has("--trust-workspace"), startup);
+        }
+        "qoder" => {
+            assert_eq!(
+                option(args, "--permission-mode"),
+                yolo.then_some("bypass_permissions")
+            );
+            assert_eq!(
+                run_settings(args)["permissions"].get("trustDirectories"),
+                startup.then_some(&json!([folder]))
+            );
+        }
+        "omp" => {
+            let mode = if yolo { "yolo" } else { "always-ask" };
+            assert_eq!(option(args, "--approval-mode"), Some(mode));
         }
         _ => unreachable!(),
     }

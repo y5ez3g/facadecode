@@ -5,10 +5,10 @@
 //! Every end of an attachment restores the person's terminal exactly once and reports the result to
 //! stderr. Ctrl-] waits up to one second for the keys typed before it. Termination signals do not wait.
 
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::io::{IsTerminal, Write};
-use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use facade_base::api_v1::daemon::{
@@ -25,7 +25,7 @@ use facade_base::console::{
 };
 use facade_base::paths::ClientSocket;
 use facade_base::unix_process::signal_number;
-use facade_base::{base64, service, system};
+use facade_base::{base64, clipboard, desktop, service, system};
 use facade_screen::{ParsedOutput, REDRAW_SCROLLBACK_ROWS, Screen, SelectionView};
 use unicode_width::UnicodeWidthChar;
 
@@ -34,14 +34,27 @@ use crate::errors::{AgentCommand, agent_failed, agent_label, cause, machine_quer
 use crate::{ExitText, Opening, agent_address, single_line};
 
 mod mouse;
+mod palette;
 
-use mouse::{LocalMouseInput, MouseInput};
+use mouse::{FOLLOWED_QUERY, LocalMouseInput, MouseInput, Take};
+pub(crate) use palette::Probe;
+use palette::Replies;
 
-/// Ctrl-], as plain input and in the kitty keyboard encoding. In win32-input-mode it comes as a
-/// key-down record of its character, which [`is_detach_record`] recognizes.
-const DETACH_KEYS: [&[u8]; 2] = [b"\x1d", b"\x1b[93;5u"];
+/// Ctrl-] in plain input, Kitty keyboard encoding, and xterm modifyOtherKeys.
+/// In win32-input-mode, [`is_detach_record`] recognizes a key-down record of its character.
+const DETACH_KEYS: [&[u8]; 3] = [b"\x1d", b"\x1b[93;5u", b"\x1b[27;5;93~"];
 /// The longest Ctrl-] waits for the keys typed before it to be sent.
 const DETACH_SEND_TIMEOUT: Duration = Duration::from_secs(1);
+/// One read's bytes: as many as standard input buffers, so that it keeps none back from a timed read.
+const READ_BYTES: usize = 8 * 1024;
+/// How long the rest of a cut-off mouse report may take.
+const REPORT_REST: Duration = Duration::from_millis(50);
+/// How long the terminal app may take to follow a change of its mouse modes.
+const MODES_FOLLOWED: Duration = Duration::from_millis(500);
+/// How long it may take to open its menu.
+const MENU_OPENS: Duration = Duration::from_millis(250);
+/// How often a lent drag looks whether the button is up again.
+const BUTTON_POLL: Duration = Duration::from_millis(15);
 /// The wait between attempts to reconnect an attached terminal.
 const RECONNECT_DELAY: Duration = Duration::from_millis(500);
 const RECONNECT_TIMED_OUT: &str = "the terminal did not reconnect in time";
@@ -51,28 +64,50 @@ const MAX_QUEUED_KEY_BYTES: usize = 1024 * 1024;
 const SAVE_HOST_TITLE: &[u8] = b"\x1b[22;0t";
 const RESTORE_HOST_TITLE: &[u8] = b"\x1b[23;0t";
 const CLEAR_TITLE: &[u8] = b"\x1b]2;\x1b\\";
-/// Report button presses, drags and wheel events in SGR and disable arrow emulation.
-const LOCAL_MOUSE: &[u8] = b"\x1b[?1002h\x1b[?1006h\x1b[?1007l";
-const SCROLL_ROWS_PER_TICK: isize = 3;
+const ENTER_ALTERNATE: &[u8] = b"\x1b[?1049h";
+const LEAVE_ALTERNATE: &[u8] = b"\x1b[?6l\x1b[?1049l";
+const RESET_MOUSE_REPORTING: &[u8] = b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l";
+/// Reports button presses, drags and wheel events in SGR. The active mode of each group comes last,
+/// because a terminal can take a reset as turning the whole group off.
+const LOCAL_MOUSE: &[u8] = b"\x1b[?1000l\x1b[?1003l\x1b[?1002h\x1b[?1005l\x1b[?1006h";
+const APPLICATION_CURSOR_KEYS: &[u8] = b"\x1b[?1h";
+/// The default of the Windows terminals, which a program before can have turned off.
+const ALTERNATE_SCROLL: &[u8] = b"\x1b[?1007h";
+const ORDINARY_CURSOR_KEYS: &[u8] = b"\x1b[?1l";
 
-/// Whether raw mode is on and the person's terminal still has to be restored.
-static RAW_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
-/// The console modes entered after raw mode, which the restoration puts back.
-static VT_MODES: Mutex<Option<VtModes>> = Mutex::new(None);
-/// Held while writing to the person's terminal and while restoring it, so that none of the agent's
-/// output lands in the middle of the restoration or after it.
+/// Owns terminal modes and serializes display writes with terminal handback.
 static TERMINAL: Mutex<Display> = Mutex::new(Display {
+    console: None,
+    signal_worker_started: false,
     shared: None,
     host_alternate: false,
     cli_title_shown: false,
     mouse: MouseOwner::Host,
+    lends_mouse: false,
+    followed: None,
+    host_selects: false,
+    captured: None,
+    input_modes: Vec::new(),
     held: None,
+    write_error: None,
 });
 
 /// The person's terminal size, when both dimensions are nonzero.
 pub(crate) fn console_size() -> Option<(u16, u16)> {
     let (cols, rows) = crossterm::terminal::size().ok()?;
     (cols > 0 && rows > 0).then_some((cols, rows))
+}
+
+/// Prints a shell line with the newline needed by the current console mode.
+pub(crate) fn write_console_warning(args: std::fmt::Arguments<'_>) {
+    let leased = lock_terminal().console.is_some();
+    if !leased {
+        eprintln!("{args}");
+        return;
+    }
+    let mut stderr = std::io::stderr().lock();
+    let newline = if stderr.is_terminal() { "\r\n" } else { "\n" };
+    let _ = write!(stderr, "{args}{newline}");
 }
 
 /// Shows the agent's terminal until the person detaches or the agent exits or is removed. Whenever
@@ -83,8 +118,10 @@ pub(crate) fn attach(
     mut client: DaemonClient,
     target: AgentTarget,
     opening: Opening,
+    mut probe: Probe,
     reconnect: &Reconnect,
 ) -> anyhow::Result<i32> {
+    let lease = probe.take_lease();
     // A foreground start or resume already used its connection for a call.
     if !matches!(opening, Opening::Attached) && supports_dedicated_watch(&client) {
         drop(client);
@@ -101,6 +138,7 @@ pub(crate) fn attach(
     let watched = match watch_first(&mut client, &target, &viewer, allow_ended, reconnect) {
         Ok(watched) => watched,
         Err(error) if allow_ended && watch_reason(&error) == Some("ended") => {
+            drop(lease);
             let agent = inspect_agent(&mut client, target);
             let shown = agent.as_ref().map_or_else(
                 || single_line(&address),
@@ -130,14 +168,17 @@ pub(crate) fn attach(
     ));
     input.lock().agent_name.clone_from(&snapshot.name);
     let screen = ScreenWatch { client, watched };
-    // Register before entering raw mode so a termination signal can be handled even during setup.
-    let signals = ConsoleSignals::new()?;
-    let _ = writeln!(std::io::stderr(), "{}", opening_line(&opening, &shown));
-    enter_raw_mode()?;
-    follow_signals(signals, input.clone());
-    let end = follow_agent(screen, &input, &viewer, reconnect);
-    let code = end.as_ref().map_or(1, AttachEnd::code);
-    finish_attachment(&input, end);
+    let lease = match lease {
+        Some(lease) => lease,
+        None => ConsoleLease::acquire()?,
+    };
+    write_console_warning(format_args!("{}", opening_line(&opening, &shown)));
+    let end = if lease.promote(&input) {
+        follow_agent(screen, &input, &viewer, probe, reconnect)
+    } else {
+        Ok(AttachEnd::Detached)
+    };
+    let code = finish_attachment(&mut lock_terminal(), end);
     input.detach();
     Ok(code)
 }
@@ -148,26 +189,65 @@ fn spawn_with(input: &Arc<AgentInput>, work: fn(&AgentInput)) {
     std::thread::spawn(move || work(&input));
 }
 
-/// Turns on raw mode and byte input and saves the host title. Every end of the attachment restores
-/// the terminal from here.
-fn enter_raw_mode() -> std::io::Result<()> {
-    RAW_MODE_ACTIVE.store(true, SeqCst);
-    crossterm::terminal::enable_raw_mode().inspect_err(|_| RAW_MODE_ACTIVE.store(false, SeqCst))?;
-    let modes = VtModes::enter().inspect_err(|_| {
-        RAW_MODE_ACTIVE.store(false, SeqCst);
-        let _ = crossterm::terminal::disable_raw_mode();
-    })?;
-    *lock_vt_modes() = Some(modes);
-    let _terminal = lock_terminal();
-    write_terminal(SAVE_HOST_TITLE);
-    Ok(())
+/// Keeps console modes through sampling, launch and Attach on the synchronous command path.
+struct ConsoleLease;
+
+impl ConsoleLease {
+    fn acquire() -> std::io::Result<Self> {
+        let mut terminal = lock_terminal();
+        debug_assert!(terminal.console.is_none());
+        if !terminal.signal_worker_started {
+            let signals = ConsoleSignals::new()?;
+            std::thread::Builder::new().spawn(move || follow_signals(signals))?;
+            terminal.signal_worker_started = true;
+        }
+        // On Windows, VtModes must save the original console bits before crossterm sees them.
+        let vt = VtModes::enter()?;
+        let enabled_raw = !crossterm::terminal::is_raw_mode_enabled()?;
+        if enabled_raw {
+            crossterm::terminal::enable_raw_mode()?;
+        }
+        terminal.console = Some(ConsoleModes {
+            vt,
+            enabled_raw,
+            input: None,
+        });
+        Ok(Self)
+    }
+
+    /// Owns the display before writing the title save, so a partial write still gets handback.
+    fn promote(&self, input: &Arc<AgentInput>) -> bool {
+        let mut terminal = lock_terminal();
+        terminal
+            .console
+            .as_mut()
+            .expect("active console lease")
+            .input = Some(input.clone());
+        terminal.present(input, |_| write_terminal(SAVE_HOST_TITLE))
+    }
 }
 
-/// Takes the console modes to restore, even if an earlier holder panicked.
-fn lock_vt_modes() -> MutexGuard<'static, Option<VtModes>> {
-    VT_MODES
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+impl Drop for ConsoleLease {
+    fn drop(&mut self) {
+        let mut terminal = lock_terminal();
+        drop(terminal.console.take());
+    }
+}
+
+struct ConsoleModes {
+    vt: VtModes,
+    enabled_raw: bool,
+    /// Present once Attach takes over the display.
+    input: Option<Arc<AgentInput>>,
+}
+
+impl Drop for ConsoleModes {
+    fn drop(&mut self) {
+        if self.enabled_raw {
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+        // VtModes restores the saved console flags after crossterm's mode is released.
+    }
 }
 
 /// Why an attachment ended.
@@ -398,13 +478,18 @@ fn follow_agent(
     mut screen: ScreenWatch,
     input: &Arc<AgentInput>,
     viewer: &str,
+    probe: Probe,
     reconnect: &Reconnect,
 ) -> anyhow::Result<AttachEnd> {
     if let Some(end) = show_snapshot(&mut screen, input)? {
         return Ok(end);
     }
     spawn_with(input, AgentInput::send_queued);
-    spawn_with(input, read_keys);
+    {
+        let input = input.clone();
+        let (reader, keys, replies) = probe.into_input();
+        std::thread::spawn(move || read_keys(&input, reader, keys, replies));
+    }
     loop {
         let failure = match show_until_closed(&mut screen, input) {
             Ok(Some(end)) => return Ok(end),
@@ -414,8 +499,11 @@ fn follow_agent(
         let closing = screen.client.closing.is_some();
         input.disconnected(closing);
         if let Some(mut terminal) = attached_terminal() {
-            terminal.shared = None;
-            terminal.held = None;
+            terminal.present(input, |terminal| {
+                terminal.shared = None;
+                terminal.held = None;
+                terminal.set_mouse(MouseOwner::Host)
+            });
         }
         service::mark_for_test("attach-disconnected");
         if input.is_detached() {
@@ -450,7 +538,11 @@ fn show_snapshot(
     let snapshot = &mut watched.snapshot;
     let grid = (snapshot.size.cols, snapshot.size.rows);
     let capacity = console_size();
-    terminal.draw_frame(&snapshot.redraw, grid, capacity);
+    if !terminal.present(input, |terminal| {
+        terminal.draw_frame(&snapshot.redraw, grid, capacity)
+    }) {
+        return Ok(Some(AttachEnd::Detached));
+    }
     {
         let mut queue = input.lock();
         queue.agent_name.clone_from(&snapshot.name);
@@ -469,7 +561,13 @@ fn show_snapshot(
         }));
     }
     input.push_resize(capacity);
-    let Some(loss) = input.connected(screen.client.writer.try_clone()?, watched.watch) else {
+    let overlay = terminal.host_alternate;
+    let report_loss = overlay || !std::io::stderr().is_terminal();
+    let Some(loss) = input.connected(
+        screen.client.writer.try_clone()?,
+        watched.watch,
+        report_loss,
+    ) else {
         return Ok(Some(AttachEnd::Detached));
     };
     if loss.queued > 0 || loss.disconnected > 0 {
@@ -484,7 +582,9 @@ fn show_snapshot(
             .into_iter()
             .chain(queued)
             .collect();
-        show_status(&notice.join("\n"));
+        if !terminal.present(input, |_| show_status(&notice.join("\n"), overlay)) {
+            return Ok(Some(AttachEnd::Detached));
+        }
     }
     Ok(None)
 }
@@ -503,14 +603,20 @@ fn show_until_closed(
         }
         return Ok(Some(match change {
             ScreenChange::Output { data } => {
-                if let Some(mut terminal) = attached_terminal() {
-                    terminal.write_output(&data);
+                if let Some(mut terminal) = attached_terminal()
+                    && !terminal.present(input, |terminal| terminal.write_output(&data))
+                {
+                    return Ok(Some(AttachEnd::Detached));
                 }
                 continue;
             }
             ScreenChange::Redraw { data, size } => {
-                if let Some(mut terminal) = attached_terminal() {
-                    terminal.draw_frame(&data, (size.cols, size.rows), console_size());
+                if let Some(mut terminal) = attached_terminal()
+                    && !terminal.present(input, |terminal| {
+                        terminal.draw_frame(&data, (size.cols, size.rows), console_size())
+                    })
+                {
+                    return Ok(Some(AttachEnd::Detached));
                 }
                 continue;
             }
@@ -655,74 +761,103 @@ fn watch_reason(error: &anyhow::Error) -> Option<&str> {
 
 /// Queues a resize on each size change; on a termination signal, restores the terminal and exits
 /// with 128 plus the signal's number.
-fn follow_signals(signals: ConsoleSignals, input: Arc<AgentInput>) {
-    std::thread::spawn(move || {
-        for signal in signals {
-            let (name, number) = match signal {
-                ConsoleSignal::Resized => {
+fn follow_signals(signals: ConsoleSignals) {
+    for signal in signals {
+        let (name, number) = match signal {
+            ConsoleSignal::Resized => {
+                let input = lock_terminal().active_input().cloned();
+                if let Some(input) = input {
                     input.resized();
-                    continue;
                 }
-                ConsoleSignal::Ended { name, number } => (name, number),
-            };
-            finish_attachment(&input, Ok(AttachEnd::Signal(name.into())));
+                continue;
+            }
+            ConsoleSignal::Ended { name, number } => (name, number),
+        };
+        let mut terminal = lock_terminal();
+        if terminal.active_input().is_some() {
+            finish_attachment(&mut terminal, Ok(AttachEnd::Signal(name.into())));
+            drop(terminal);
             // A test holds the exit here, as a loaded machine can, while the agent's output
             // keeps coming.
             service::gate_for_test("attach-restored");
-            std::process::exit(128 + number);
+        } else {
+            drop(terminal.console.take());
         }
-    });
+        std::process::exit(128 + number);
+    }
 }
 
 /// The one reader of the person's keys and, where the console reports them with its keys, its size
-/// changes and routes mouse input. Ctrl-] or the end of input ends the attachment once the keys
-/// before it are sent.
-fn read_keys(input: &AgentInput) {
-    let mut buffer = [0u8; 4096];
+/// changes. Routes mouse input to its owner. Ctrl-] or the end of input ends the attachment once the
+/// keys before it are sent.
+fn read_keys(
+    input: &AgentInput,
+    reader: Option<ConsoleReader>,
+    keys: Vec<u8>,
+    mut replies: Replies,
+) {
+    let mut buffer = [0u8; READ_BYTES];
     let mut mouse = LocalMouseInput::default();
     let mut copy_key = None;
-    if let Ok(mut console) = ConsoleReader::new() {
+    let mut initial = (!keys.is_empty()).then_some(keys);
+    if let Some(mut console) = reader.or_else(|| ConsoleReader::new().ok()) {
         loop {
-            let read = match console.read(&mut buffer) {
-                Ok(ConsoleRead::Resized) => {
-                    input.resized();
-                    continue;
-                }
-                Ok(ConsoleRead::Wheel {
-                    col,
-                    row,
-                    delta,
-                    modifiers,
-                }) => {
-                    if let Some(mut terminal) = attached_terminal() {
-                        terminal.native_wheel(input, col, row, delta, modifiers);
-                    }
-                    continue;
-                }
-                Ok(ConsoleRead::Pointer { col, row, action }) => {
-                    if let Some(mut terminal) = attached_terminal() {
-                        terminal.pointer(col, row, action);
-                    }
-                    continue;
-                }
-                Ok(ConsoleRead::Keys(read @ 1..)) => read,
-                Ok(ConsoleRead::Keys(0)) | Err(_) => break,
-            };
-            let keys = &buffer[..read];
-            let detach_at = detach_position(keys);
-            // Keys before Ctrl-] in the same read still go.
-            if let Some(mut terminal) = attached_terminal() {
-                mouse.read(
-                    &keys[..detach_at.unwrap_or(read)],
-                    terminal.mouse == MouseOwner::Local,
-                    |event| match event {
-                        MouseInput::Keys(keys) => terminal.forward_keys(input, keys, &mut copy_key),
-                        MouseInput::Wheel(ticks) => terminal.scroll_history(ticks),
-                        MouseInput::Pointer { col, row, action } => {
-                            terminal.pointer(col, row, action);
+            let first = initial.take();
+            let keys = match first.as_deref() {
+                Some(keys) => Cow::Borrowed(keys),
+                None => match read_console(&mut console, &mut buffer, mouse.unfinished()) {
+                    Ok(None) => {
+                        let held = mouse.give_up();
+                        if let Some(mut terminal) = attached_terminal() {
+                            terminal.present(input, |terminal| {
+                                terminal.forward_keys(input, &held, &mut copy_key)
+                            });
                         }
-                    },
-                );
+                        continue;
+                    }
+                    Ok(Some(ConsoleRead::Resized)) => {
+                        input.resized();
+                        continue;
+                    }
+                    Ok(Some(ConsoleRead::Wheel {
+                        col,
+                        row,
+                        delta,
+                        modifiers,
+                    })) => {
+                        if let Some(mut terminal) = attached_terminal() {
+                            terminal.present(input, |terminal| {
+                                terminal.native_wheel(input, col, row, delta, modifiers)
+                            });
+                        }
+                        continue;
+                    }
+                    Ok(Some(ConsoleRead::Pointer { col, row, action })) => {
+                        if let Some(mut terminal) = attached_terminal() {
+                            terminal.present(input, |terminal| terminal.pointer(col, row, action));
+                        }
+                        continue;
+                    }
+                    Ok(Some(ConsoleRead::Keys(read @ 1..))) => replies.filter(&buffer[..read]),
+                    Ok(Some(ConsoleRead::Keys(0))) | Err(_) => break,
+                },
+            };
+            // Before anything can wait: a key can be up again soon.
+            let arrows = if host_tells_the_wheel() {
+                desktop::arrows()
+            } else {
+                desktop::Arrows::default()
+            };
+            if keys.is_empty() {
+                continue;
+            }
+            let detach_at = detach_position(&keys);
+            // Queue keys before Ctrl-] while the attachment still owns the terminal.
+            if let Some(mut terminal) = attached_terminal() {
+                let keys = &keys[..detach_at.unwrap_or(keys.len())];
+                terminal.present(input, |terminal| {
+                    terminal.route(input, keys, arrows, &mut mouse, &mut copy_key)
+                });
             }
             if let Some(at) = detach_at {
                 finish_detach_release(&mut console, &keys[at..]);
@@ -731,9 +866,26 @@ fn read_keys(input: &AgentInput) {
         }
     }
     if let Some(mut terminal) = attached_terminal() {
-        terminal.forward_keys(input, mouse.remaining_keys(), &mut copy_key);
+        let held = mouse.give_up();
+        terminal.present(input, |terminal| {
+            terminal.forward_keys(input, &held, &mut copy_key)
+        });
     }
     input.detach_after_sending();
+}
+
+/// Reads the console. While the rest of a mouse report is to come, only briefly: none where it does
+/// not come, so that a held Escape key still goes through.
+fn read_console(
+    console: &mut ConsoleReader,
+    buffer: &mut [u8],
+    unfinished: bool,
+) -> std::io::Result<Option<ConsoleRead>> {
+    if unfinished {
+        console.read_until(buffer, Instant::now() + REPORT_REST)
+    } else {
+        console.read(buffer).map(Some)
+    }
 }
 
 /// Removes the queued releases of the ConPTY Ctrl-] chord, including a record split by the read.
@@ -803,6 +955,18 @@ impl Win32Key<'_> {
 
     fn is_release(&self) -> bool {
         matches!(self.key_down, b"0" | b"")
+    }
+
+    fn has_modifiers(&self) -> bool {
+        const ALT_CONTROL_OR_SHIFT: u16 = 0x001f;
+        Self::number(self.control_state).is_none_or(|state| state & ALT_CONTROL_OR_SHIFT != 0)
+    }
+
+    /// Whether the keyboard sent it as one of its arrow keys. The console that turns a terminal's
+    /// bytes into keys does not say so of the arrow keys it makes.
+    fn is_enhanced(&self) -> bool {
+        const ENHANCED_KEY: u16 = 0x0100;
+        Self::number(self.control_state).is_some_and(|state| state & ENHANCED_KEY != 0)
     }
 
     fn is_copy_press(&self) -> bool {
@@ -898,9 +1062,20 @@ fn kitty_c_key_prefix(keys: &[u8]) -> Option<(KittyCEvent, &[u8])> {
     }
 }
 
-/// Modifier-only presses and key releases travel to the CLI without ending scrollback browsing.
+/// Modifier-only presses, key releases and focus changes travel to the CLI without ending scrollback
+/// browsing.
 fn has_typing(mut keys: &[u8]) -> bool {
-    while let Some((key, remaining)) = win32_key_prefix(keys) {
+    loop {
+        if let Some(remaining) = [b"\x1b[I", b"\x1b[O"]
+            .iter()
+            .find_map(|focus| keys.strip_prefix(focus.as_slice()))
+        {
+            keys = remaining;
+            continue;
+        }
+        let Some((key, remaining)) = win32_key_prefix(keys) else {
+            return !keys.is_empty();
+        };
         // Shift, Ctrl, Alt, the Windows keys and the lock keys change only keyboard state
         // when the record carries no character.
         let modifier = matches!(
@@ -927,7 +1102,6 @@ fn has_typing(mut keys: &[u8]) -> bool {
         }
         keys = remaining;
     }
-    !keys.is_empty()
 }
 
 /// The person's input on its way to the agent. Readers queue keys and size changes; one writer
@@ -957,6 +1131,7 @@ struct InputQueue {
     waiting_key_bytes: usize,
     /// Typed bytes discarded because the connected queue was full.
     overflow_key_bytes: usize,
+    /// Input losses awaiting a reconnect notice or the final unsent warning.
     reconnect_loss: ReconnectLoss,
     /// The connection to send on; none while disconnected. A failed write ends it only if it is
     /// still the one the write used.
@@ -1064,7 +1239,7 @@ impl AgentInput {
             && shared.capacity != capacity
         {
             shared.capacity = capacity;
-            terminal.draw(None);
+            terminal.present(self, |terminal| terminal.draw(None));
         }
     }
 
@@ -1107,8 +1282,13 @@ impl AgentInput {
         self.wake.notify_all();
     }
 
-    /// Enables the writer and takes the unsent counts to report after the redraw.
-    fn connected(&self, socket: ClientSocket, watch: u64) -> Option<ReconnectLoss> {
+    /// Enables the writer and takes the unsent counts when a reconnect notice can be shown.
+    fn connected(
+        &self,
+        socket: ClientSocket,
+        watch: u64,
+        report_loss: bool,
+    ) -> Option<ReconnectLoss> {
         let mut queue = self.lock();
         if queue.detached {
             return None;
@@ -1119,7 +1299,11 @@ impl AgentInput {
             watch,
         });
         self.wake.notify_all();
-        Some(std::mem::take(&mut queue.reconnect_loss))
+        Some(if report_loss {
+            std::mem::take(&mut queue.reconnect_loss)
+        } else {
+            ReconnectLoss::default()
+        })
     }
 
     /// Stops handing input to the old connection. A forwarded watch can end while the socket
@@ -1238,59 +1422,94 @@ fn lock_terminal() -> MutexGuard<'static, Display> {
 /// Takes the person's terminal while it is the attachment's; none once it is restored.
 fn attached_terminal() -> Option<MutexGuard<'static, Display>> {
     let terminal = lock_terminal();
-    RAW_MODE_ACTIVE.load(SeqCst).then_some(terminal)
+    (terminal.active_input().is_some() && terminal.write_error.is_none()).then_some(terminal)
 }
 
 /// Writes to the person's terminal. The caller holds [`TERMINAL`].
-fn write_terminal(bytes: &[u8]) {
-    write_terminal_with_suffix(bytes, b"");
-}
-
-fn write_terminal_with_suffix(bytes: &[u8], suffix: &[u8]) {
+fn write_terminal(bytes: &[u8]) -> std::io::Result<()> {
     let mut stdout = std::io::stdout().lock();
-    let _ = stdout.write_all(bytes);
-    let _ = stdout.write_all(suffix);
-    let _ = stdout.flush();
+    stdout.write_all(bytes)?;
+    stdout.flush()
 }
 
+/// Who takes the person's mouse.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MouseOwner {
+    /// The terminal app: where it sends the wheel as keys that Attach tells apart, unless Attach lends
+    /// a CLI its clicks; until the agent's screen shows; and while the connection is lost.
     Host,
+    /// Attach, for such a CLI where the terminal app cannot have it.
     Local,
+    /// The CLI, which asked for mouse reports.
     Cli,
 }
 
 impl MouseOwner {
-    fn for_screen(host_alternate: bool, screen: &Screen) -> Self {
-        if screen.reports_mouse() {
-            Self::Cli
-        } else if host_alternate && !screen.on_alternate_screen() {
-            Self::Local
-        } else {
+    fn for_screen(grid_fits: bool, screen: &Screen) -> Self {
+        let reports = grid_fits && screen.reports_mouse();
+        if host_tells_the_wheel() && !(reports && lends_the_mouse()) {
             Self::Host
+        } else if reports {
+            Self::Cli
+        } else {
+            Self::Local
         }
     }
+}
 
-    fn write_frame(self, frame: &[u8]) {
-        let suffix = if self == Self::Local {
-            LOCAL_MOUSE
-        } else {
-            b""
-        };
-        write_terminal_with_suffix(frame, suffix);
-    }
+/// Whether the wheel reaches Attach while the terminal app has the mouse, with its own selection,
+/// copying and right click: on the alternate screen it sends the wheel as Up and Down, and the
+/// keyboard tells those from the person's.
+fn host_tells_the_wheel() -> bool {
+    static TELLS: OnceLock<bool> = OnceLock::new();
+    *TELLS.get_or_init(|| {
+        let sends_the_wheel = system::SYSTEM == system::System::Windows
+            || program_is(MACOS_TERMINAL)
+            || program_is(VS_CODE);
+        sends_the_wheel && desktop::sees_keys()
+    })
+}
+
+/// Whether a CLI that tracks the mouse can have its clicks while the terminal app keeps its own
+/// selection and menu: macOS Terminal reports the mouse to Attach, which lends it back for each drag
+/// and right click, as the person allowed Facade to post them.
+fn lends_the_mouse() -> bool {
+    static LENDS: OnceLock<bool> = OnceLock::new();
+    *LENDS.get_or_init(|| host_tells_the_wheel() && program_is(MACOS_TERMINAL) && desktop::clicks())
+}
+
+const MACOS_TERMINAL: &str = "Apple_Terminal";
+const VS_CODE: &str = "vscode";
+
+/// Whether the terminal app calls itself `name`.
+fn program_is(name: &str) -> bool {
+    std::env::var_os("TERM_PROGRAM").is_some_and(|program| program == name)
 }
 
 /// The terminal drawing for the current watch, held under the same lock as its writes.
 struct Display {
+    console: Option<ConsoleModes>,
+    /// Registration outlives an unsuccessful palette probe.
+    signal_worker_started: bool,
     shared: Option<SharedScreen>,
     /// Whether Attach has entered the host's alternate screen for this attachment.
     host_alternate: bool,
     /// Whether the attachment has written a CLI title, including an explicit empty title.
     cli_title_shown: bool,
-    /// The mouse mode applied to the host, including while reconnecting.
     mouse: MouseOwner,
+    /// Whether the terminal app has the mouse back for a click that it reported.
+    lends_mouse: bool,
+    /// Told once the terminal app has followed that.
+    followed: Option<mpsc::Sender<()>>,
+    /// Whether the terminal app may show a selection of its own from a lent drag or right click.
+    host_selects: bool,
+    /// Whether Attach last took the mouse of a Windows console or gave it back.
+    captured: Option<bool>,
+    /// The mouse and cursor key modes last written to the host.
+    input_modes: Vec<u8>,
     held: Option<HeldView>,
+    /// A failed host write stops presentation until handback reports the error.
+    write_error: Option<std::io::Error>,
 }
 
 /// The viewport currently on display, which can outlive the rows it came from.
@@ -1302,11 +1521,20 @@ struct HeldView {
 }
 
 impl HeldView {
-    fn paint(&self) {
-        let selected = self.selection.as_ref().and_then(|selection| {
-            (selection.points[0] != selection.points[1]).then_some(selection.points)
-        });
-        write_terminal(&self.view.redraw(selected));
+    fn new(view: SelectionView, history_top: Option<usize>) -> Self {
+        Self {
+            view,
+            history_top,
+            selection: None,
+        }
+    }
+
+    fn paint(&self) -> std::io::Result<()> {
+        let selected = self
+            .selection
+            .as_ref()
+            .and_then(|selection| selection.shown().then_some(selection.points));
+        write_terminal(&self.view.redraw(selected))
     }
 }
 
@@ -1315,11 +1543,41 @@ struct DragSelection {
     complete: bool,
 }
 
+impl DragSelection {
+    /// Whether it highlights anything: a press that has not moved does not.
+    fn shown(&self) -> bool {
+        self.complete || self.points[0] != self.points[1]
+    }
+}
+
 impl Display {
+    fn active_input(&self) -> Option<&Arc<AgentInput>> {
+        self.console.as_ref()?.input.as_ref()
+    }
+
+    /// A failed write may already have reached the terminal. Stop the watch before another draw.
+    fn present(
+        &mut self,
+        input: &AgentInput,
+        write: impl FnOnce(&mut Self) -> std::io::Result<()>,
+    ) -> bool {
+        if let Err(error) = write(self) {
+            self.write_error = Some(error);
+            input.detach();
+            return false;
+        }
+        true
+    }
+
     /// Seeds a new watch or replaces the visible frame while keeping this watch's history.
-    fn draw_frame(&mut self, data: &str, grid: (u16, u16), capacity: Option<(u16, u16)>) {
+    fn draw_frame(
+        &mut self,
+        data: &str,
+        grid: (u16, u16),
+        capacity: Option<(u16, u16)>,
+    ) -> std::io::Result<()> {
         let Ok(bytes) = base64::decode(data) else {
-            return;
+            return Ok(());
         };
         let shared = self.shared.get_or_insert_with(|| SharedScreen {
             screen: Screen::new(grid.0, grid.1, REDRAW_SCROLLBACK_ROWS),
@@ -1329,45 +1587,33 @@ impl Display {
         shared.screen.resize(grid.0, grid.1);
         let output = shared.screen.feed(&bytes);
         self.cli_title_shown |= output.title_change.is_some();
-        self.draw(Some(&output));
+        self.draw(Some(&output))
     }
 
-    fn write_output(&mut self, data: &str) {
+    fn write_output(&mut self, data: &str) -> std::io::Result<()> {
         let Some(shared) = &mut self.shared else {
-            return;
+            return Ok(());
         };
         let Ok(bytes) = base64::decode(data) else {
-            return;
+            return Ok(());
         };
         let output = shared.screen.feed(&bytes);
         let had_cli_title = self.cli_title_shown;
         self.cli_title_shown |= output.title_change.is_some();
-        let mouse = MouseOwner::for_screen(self.host_alternate, &shared.screen);
-        let switches_screen = !self.host_alternate || switches_screen_or_resets(&bytes);
         let grid_fits = fits(shared.grid(), shared.capacity);
+        let mouse = MouseOwner::for_screen(grid_fits, &shared.screen);
+        let switches_screen = !self.host_alternate || switches_screen_or_resets(&bytes);
         let held = self.held.is_some();
         if !switches_screen && !held && grid_fits && !shared.uses_viewport() {
-            let previous = std::mem::replace(&mut self.mouse, mouse);
-            if previous != mouse {
-                capture_mouse(mouse != MouseOwner::Host);
-            }
-            if previous == MouseOwner::Local && mouse != MouseOwner::Local {
-                write_terminal_with_suffix(&bytes, &shared.mouse_modes());
-            } else if mouse == MouseOwner::Local
-                && (previous != mouse || changes_mouse_modes(&bytes))
-            {
-                mouse.write_frame(&bytes);
-            } else {
-                write_terminal(&bytes);
-            }
-            return;
+            write_frame(&bytes)?;
+            return self.set_mouse(mouse);
         }
 
         // Output continues to change the terminal's input encoding while the view is held.
-        if held || mouse != self.mouse {
+        if held {
             let modes = input_mode_changes(&bytes);
             if !modes.is_empty() {
-                write_terminal(&modes);
+                write_terminal(&modes)?;
             }
         }
         if held
@@ -1375,22 +1621,79 @@ impl Display {
             && output.title_change.is_some()
             && shared.screen.title_output().is_empty()
         {
-            write_terminal(CLEAR_TITLE);
+            write_terminal(CLEAR_TITLE)?;
         }
         let clears_history = held
             && escapes(&bytes)
                 .filter_map(csi)
-                .any(|(params, end)| params == b"3" && end == b'J');
-        if switches_screen || clears_history || mouse != self.mouse {
-            self.draw(Some(&output));
-        } else if held || !grid_fits {
-            write_activity(&output);
-            shared.write_title_change(&output);
-        } else {
-            write_activity(&output);
-            self.mouse
-                .write_frame(&shared.screen.redraw_in_viewport_update());
+                .any(|(params, end)| erases_saved_lines(params, end));
+        if switches_screen || clears_history || (held && mouse != self.mouse) {
+            return self.draw(Some(&output));
         }
+        write_activity(&output)?;
+        if held || !grid_fits {
+            shared.write_title_change(&output)?;
+        } else {
+            write_frame(&shared.screen.redraw_in_viewport_update())?;
+        }
+        self.set_mouse(mouse)
+    }
+
+    /// Sends keys to the agent and mouse input to its owner.
+    fn route(
+        &mut self,
+        input: &AgentInput,
+        keys: &[u8],
+        arrows: desktop::Arrows,
+        mouse: &mut LocalMouseInput,
+        copy_key: &mut Option<CopyKey>,
+    ) -> std::io::Result<()> {
+        let mut routed = Ok(());
+        // Reports that arrive together move the view once.
+        let mut ticks = 0i16;
+        let take = match self.mouse {
+            MouseOwner::Local => Take::Reports,
+            MouseOwner::Host if self.wheel_is_cursor_keys() => Take::CursorKeys {
+                down: arrows,
+                application: self.cli_asks_for_application_cursor_keys(),
+            },
+            MouseOwner::Cli if lends_the_mouse() => Take::Lends {
+                awaits_reply: self.followed.is_some(),
+            },
+            MouseOwner::Cli | MouseOwner::Host => Take::Nothing,
+        };
+        mouse.read(keys, take, |event| {
+            if routed.is_err() {
+                return;
+            }
+            if let MouseInput::Wheel(more) = event {
+                ticks = ticks.saturating_add(more);
+                return;
+            }
+            if matches!(event, MouseInput::Keys([])) {
+                return;
+            }
+            routed = self.scroll(input, std::mem::take(&mut ticks));
+            if routed.is_err() {
+                return;
+            }
+            routed = match event {
+                MouseInput::Keys(keys) => self.forward_keys(input, keys, copy_key),
+                MouseInput::Pointer { col, row, action } => self.pointer(col, row, action),
+                MouseInput::Press => self.leave_host_selection(),
+                MouseInput::Drag { from } => self.lend_drag(from),
+                MouseInput::RightClick => self.hand_back_right_click(),
+                MouseInput::Followed => {
+                    if let Some(followed) = self.followed.take() {
+                        let _ = followed.send(());
+                    }
+                    Ok(())
+                }
+                MouseInput::Wheel(_) => Ok(()),
+            };
+        });
+        routed?;
+        self.scroll(input, ticks)
     }
 
     fn forward_keys(
@@ -1398,14 +1701,14 @@ impl Display {
         input: &AgentInput,
         mut keys: &[u8],
         copy_key: &mut Option<CopyKey>,
-    ) {
+    ) -> std::io::Result<()> {
         while !keys.is_empty() && (copy_key.is_some() || self.completed_selection().is_some()) {
             let (consumed, remaining) = if let Some((key, remaining)) = win32_key_prefix(keys) {
-                (self.consume_win32_copy(&key, copy_key), remaining)
+                (self.consume_win32_copy(&key, copy_key)?, remaining)
             } else if let Some((key, remaining)) = kitty_c_key_prefix(keys) {
-                (self.consume_kitty_copy(key, copy_key), remaining)
+                (self.consume_kitty_copy(key, copy_key)?, remaining)
             } else if let Some(remaining) = keys.strip_prefix(b"\x03")
-                && self.copy_selection()
+                && self.copy_selection()?
             {
                 (true, remaining)
             } else {
@@ -1417,57 +1720,70 @@ impl Display {
                 (false, &keys[end..])
             };
             if !consumed {
-                self.forward_ordinary_keys(input, &keys[..keys.len() - remaining.len()]);
+                self.forward_ordinary_keys(input, &keys[..keys.len() - remaining.len()])?;
             }
             keys = remaining;
         }
-        self.forward_ordinary_keys(input, keys);
+        self.forward_ordinary_keys(input, keys)
     }
 
-    fn forward_ordinary_keys(&mut self, input: &AgentInput, keys: &[u8]) {
-        if self.held.is_some() && has_typing(keys) {
-            self.draw(None);
+    fn forward_ordinary_keys(&mut self, input: &AgentInput, keys: &[u8]) -> std::io::Result<()> {
+        let typing = has_typing(keys);
+        if self.held.is_some() && typing {
+            self.draw(None)?;
+        }
+        if typing && !self.lends_mouse {
+            self.leave_host_selection()?;
         }
         input.push_keys(keys);
+        Ok(())
     }
 
-    fn consume_win32_copy(&self, key: &Win32Key<'_>, copy_key: &mut Option<CopyKey>) -> bool {
+    fn consume_win32_copy(
+        &self,
+        key: &Win32Key<'_>,
+        copy_key: &mut Option<CopyKey>,
+    ) -> std::io::Result<bool> {
         let Some(code) = key.code().map(CopyKey::Win32) else {
-            return false;
+            return Ok(false);
         };
         if *copy_key == Some(code) {
             if key.is_release() {
                 *copy_key = None;
             } else if key.key_down != b"1" {
-                return false;
+                return Ok(false);
             } else if key.is_copy_press() {
-                self.copy_selection();
+                self.copy_selection()?;
             }
-            return true;
+            return Ok(true);
         }
-        if key.is_copy_press() && self.copy_selection() {
+        if key.is_copy_press() && self.copy_selection()? {
             *copy_key = Some(code);
-            return true;
+            return Ok(true);
         }
-        false
+        Ok(false)
     }
 
-    fn consume_kitty_copy(&self, event: KittyCEvent, copy_key: &mut Option<CopyKey>) -> bool {
+    fn consume_kitty_copy(
+        &self,
+        event: KittyCEvent,
+        copy_key: &mut Option<CopyKey>,
+    ) -> std::io::Result<bool> {
         let owned = *copy_key == Some(CopyKey::KittyC);
-        match event {
+        Ok(match event {
             KittyCEvent::Press { control_only } => {
                 if owned {
                     *copy_key = None;
                 }
-                if control_only && self.copy_selection() {
+                if control_only && self.copy_selection()? {
                     *copy_key = Some(CopyKey::KittyC);
-                    return true;
+                    return Ok(true);
                 }
                 false
             }
             KittyCEvent::Repeat { control_only } if owned => {
                 if control_only {
-                    self.copy_selection();
+                    self.copy_selection()?;
                 }
                 true
             }
@@ -1476,7 +1792,7 @@ impl Display {
                 true
             }
             _ => false,
-        }
+        })
     }
 
     fn completed_selection(&self) -> Option<(&SelectionView, [(u16, u16); 2])> {
@@ -1485,109 +1801,157 @@ impl Display {
         selection.complete.then_some((&held.view, selection.points))
     }
 
-    fn copy_selection(&self) -> bool {
+    /// Copies a completed selection: through the computer's clipboard where the person sits at it,
+    /// and through the terminal with OSC 52, which some terminals ignore.
+    fn copy_selection(&self) -> std::io::Result<bool> {
         let Some((view, [anchor, end])) = self.completed_selection() else {
-            return false;
+            return Ok(false);
         };
         let text = view.text(anchor, end);
-        let payload = base64::encode(text.as_bytes());
-        write_terminal(format!("\x1b]52;c;{payload}\x1b\\").as_bytes());
-        true
+        // Blank cells hold nothing to copy, and leave the clipboard as it is.
+        if !text.is_empty() {
+            let payload = base64::encode(text.as_bytes());
+            write_terminal(format!("\x1b]52;c;{payload}\x1b\\").as_bytes())?;
+            clipboard::copy(text);
+        }
+        Ok(true)
     }
 
-    fn pointer(&mut self, col: u16, row: u16, action: PointerAction) {
+    fn pointer(&mut self, col: u16, row: u16, action: PointerAction) -> std::io::Result<()> {
         let Some(shared) = &self.shared else {
-            return;
+            return Ok(());
         };
         let grid = shared.grid();
         if self.mouse != MouseOwner::Local || !fits(grid, shared.capacity) || col == 0 || row == 0 {
-            return;
+            return Ok(());
         }
         match action {
             PointerAction::RightDown => {
-                self.copy_selection();
+                self.copy_selection()?;
             }
             PointerAction::LeftDown => {
                 if col > grid.0 || row > grid.1 {
-                    self.clear_selection();
-                    return;
+                    return self.clear_selection();
                 }
-                let held = self.held.get_or_insert_with(|| HeldView {
-                    view: shared.screen.selection_view(0),
-                    history_top: None,
-                    selection: None,
-                });
+                let held = self
+                    .held
+                    .get_or_insert_with(|| HeldView::new(shared.screen.selection_view(0), None));
                 let point = (col, row);
                 let previous = held.selection.replace(DragSelection {
                     points: [point; 2],
                     complete: false,
                 });
                 if previous.is_some() {
-                    held.paint();
+                    held.paint()?;
                 }
             }
             PointerAction::LeftDrag | PointerAction::LeftUp => {
                 let Some(held) = &mut self.held else {
-                    return;
+                    return Ok(());
                 };
                 let Some(selection) = &mut held.selection else {
-                    return;
+                    return Ok(());
                 };
                 if selection.complete {
-                    return;
+                    return Ok(());
                 }
                 let end = (col.min(grid.0), row.min(grid.1));
                 let released = matches!(action, PointerAction::LeftUp);
                 if released && end == selection.points[0] {
-                    self.clear_selection();
-                    return;
+                    return self.clear_selection();
                 }
                 let moved = end != selection.points[1];
                 selection.points[1] = end;
                 selection.complete = released;
                 if moved {
-                    held.paint();
+                    held.paint()?;
+                }
+                // Releasing the button copies, as the CLIs that take the mouse themselves do.
+                if released {
+                    self.copy_selection()?;
                 }
             }
         }
+        Ok(())
     }
 
-    fn clear_selection(&mut self) {
+    fn clear_selection(&mut self) -> std::io::Result<()> {
         if let Some(held) = &mut self.held
             && held.selection.take().is_some()
         {
             if held.history_top.is_some() {
-                held.paint();
+                held.paint()?;
             } else {
-                self.draw(None);
+                self.draw(None)?;
             }
         }
+        Ok(())
     }
 
-    fn native_wheel(&mut self, input: &AgentInput, col: u16, row: u16, delta: i16, modifiers: u8) {
+    fn native_wheel(
+        &mut self,
+        input: &AgentInput,
+        col: u16,
+        row: u16,
+        delta: i16,
+        modifiers: u8,
+    ) -> std::io::Result<()> {
         match self.mouse {
-            MouseOwner::Local => self.scroll_history(delta / 120),
+            MouseOwner::Local => self.scroll(input, delta / 120),
             MouseOwner::Cli => {
                 if let Some(shared) = &self.shared
                     && let Some(keys) = shared.screen.encode_wheel(col, row, delta, modifiers)
                 {
                     input.push_keys(&keys);
                 }
+                Ok(())
             }
-            MouseOwner::Host => {}
+            MouseOwner::Host => Ok(()),
         }
     }
 
-    fn scroll_history(&mut self, ticks: i16) {
+    /// Scrolls the CLI's own output. The wheel never leaves the agent's screen.
+    fn scroll(&mut self, input: &AgentInput, ticks: i16) -> std::io::Result<()> {
         let Some(shared) = &self.shared else {
-            return;
+            return Ok(());
         };
-        if self.mouse != MouseOwner::Local || !fits(shared.grid(), shared.capacity) || ticks == 0 {
-            return;
+        if self.mouse == MouseOwner::Cli || !fits(shared.grid(), shared.capacity) || ticks == 0 {
+            return Ok(());
+        }
+        if shared.screen.reports_mouse() {
+            // The CLI scrolls what it shows, as by a report of the wheel over the middle.
+            let (cols, rows) = shared.grid();
+            let delta = ticks.saturating_mul(120);
+            if let Some(reports) =
+                shared
+                    .screen
+                    .encode_wheel(cols.div_ceil(2), rows.div_ceil(2), delta, 0)
+            {
+                input.push_keys(&reports);
+            }
+            return Ok(());
+        }
+        if shared.screen.on_alternate_screen() {
+            // A full-screen program without mouse reports has no scrollback here. As in the terminal
+            // app, the wheel presses its cursor keys: in macOS Terminal once it has asked for
+            // application cursor keys, in others always.
+            let application = shared.screen.application_cursor_keys();
+            if application || !program_is(MACOS_TERMINAL) {
+                let introducer = if application { 'O' } else { '[' };
+                let key = if ticks > 0 { 'A' } else { 'B' };
+                let presses = match self.mouse {
+                    MouseOwner::Local => rows_per_tick(),
+                    MouseOwner::Host | MouseOwner::Cli => 1,
+                };
+                let keys = format!("\x1b{introducer}{key}");
+                let count = usize::from(ticks.unsigned_abs()) * presses;
+                input.push_keys(keys.repeat(count).as_bytes());
+            }
+            return Ok(());
         }
         let history = shared.screen.scrollback_range();
         let history_top = self.held.as_ref().and_then(|held| held.history_top);
-        let rows = -isize::from(ticks) * SCROLL_ROWS_PER_TICK;
+        let rows = -isize::from(ticks) * rows_per_tick() as isize;
         let top = history_top
             .unwrap_or(history.end)
             .clamp(history.start, history.end)
@@ -1595,27 +1959,33 @@ impl Display {
             .clamp(history.start, history.end);
         if top < history.end {
             if history_top != Some(top) {
-                let held = HeldView {
-                    view: shared.screen.selection_view(history.end - top),
-                    history_top: Some(top),
-                    selection: None,
-                };
-                held.paint();
+                let held =
+                    HeldView::new(shared.screen.selection_view(history.end - top), Some(top));
+                held.paint()?;
                 self.held = Some(held);
+                Ok(())
             } else {
-                self.clear_selection();
+                self.clear_selection()
             }
         } else if self.held.is_some() {
-            self.draw(None);
+            self.draw(None)
+        } else {
+            Ok(())
         }
     }
 
     /// Draws the agent's selected screen in the host's alternate screen.
-    fn draw(&mut self, output: Option<&ParsedOutput>) {
+    fn draw(&mut self, output: Option<&ParsedOutput>) -> std::io::Result<()> {
         self.held = None;
-        let Some(shared) = &self.shared else {
-            return;
+        let Some(shared) = &mut self.shared else {
+            return Ok(());
         };
+        // The part of a frame that an open synchronized update holds back is drawn now: the host
+        // then gets only the rest of that frame.
+        let held_back = shared.screen.end_synchronized_update();
+        let title_changed = held_back.title_change.is_some()
+            || output.is_some_and(|output| output.title_change.is_some());
+        self.cli_title_shown |= title_changed;
         let waiting_for_view = !self.host_alternate
             && !shared.screen.on_alternate_screen()
             && shared
@@ -1625,52 +1995,190 @@ impl Display {
                 .iter()
                 .flatten()
                 .all(|cell| cell.text.trim().is_empty() && !cell.inverse);
-        let grid_fits = fits(shared.grid(), shared.capacity);
+        let grid = shared.grid();
+        let grid_fits = fits(grid, shared.capacity);
+        if title_changed && (waiting_for_view || !grid_fits) {
+            write_terminal(&shared.screen.title_output())?;
+        }
         if let Some(output) = output {
-            if waiting_for_view || !grid_fits {
-                shared.write_title_change(output);
-            }
-            write_activity(output);
+            write_activity(output)?;
         }
-        if !waiting_for_view && !self.host_alternate {
-            write_terminal(b"\x1b[?1049h");
-            self.host_alternate = true;
-        }
-        let mouse = MouseOwner::for_screen(self.host_alternate, &shared.screen);
-        let previous = std::mem::replace(&mut self.mouse, mouse);
-        capture_mouse(mouse != MouseOwner::Host);
         if waiting_for_view {
-            return;
+            return Ok(());
         }
-        if !grid_fits {
-            show_too_small(shared.grid());
-            if mouse == MouseOwner::Local {
-                mouse.write_frame(b"");
-            } else if previous == MouseOwner::Local {
-                write_terminal(&shared.mouse_modes());
+        if !self.host_alternate {
+            // Handback must leave the alternate buffer even if the enter write is partial.
+            self.host_alternate = true;
+            write_terminal(ENTER_ALTERNATE)?;
+            if program_is(VS_CODE) {
+                // Its first alternate buffer keeps the size from before the terminal was resized, and
+                // the rows beyond the screen as scrollback. A new one has the terminal's size.
+                write_terminal(LEAVE_ALTERNATE)?;
+                write_terminal(ENTER_ALTERNATE)?;
             }
-            return;
         }
-        mouse.write_frame(
-            &shared
-                .screen
-                .redraw_for_attach(shared.uses_viewport(), false),
-        );
+        if grid_fits {
+            write_frame(
+                &shared
+                    .screen
+                    .redraw_for_attach(shared.uses_viewport(), false),
+            )?;
+        } else {
+            show_too_small(grid)?;
+        }
+        let mouse = MouseOwner::for_screen(grid_fits, &shared.screen);
+        self.set_mouse(mouse)
     }
+
+    /// Draws in a new alternate buffer, where the terminal app has selected nothing.
+    fn draw_in_a_new_buffer(&mut self) -> std::io::Result<()> {
+        if self.host_alternate {
+            write_terminal(&[LEAVE_ALTERNATE, ENTER_ALTERNATE].concat())?;
+            self.draw(None)?;
+        }
+        Ok(())
+    }
+
+    /// Gives the terminal app the mouse for a right click, so that it shows its menu where the person
+    /// clicked, and takes the mouse again once the menu is open.
+    fn hand_back_right_click(&mut self) -> std::io::Result<()> {
+        let Some(at) = desktop::pointer() else {
+            return Ok(());
+        };
+        self.lend(move || {
+            desktop::right_click_at(at);
+            std::thread::sleep(MENU_OPENS);
+        })
+    }
+
+    /// Gives the terminal app the mouse for a drag the person began at `from`, so that it selects
+    /// from there as its own, and takes the mouse again once the button is up.
+    fn lend_drag(&mut self, from: Option<desktop::Point>) -> std::io::Result<()> {
+        self.lend(move || {
+            if !desktop::left_button_down() {
+                return;
+            }
+            if let Some(from) = from {
+                desktop::press_left_at(from);
+            }
+            while desktop::left_button_down() {
+                std::thread::sleep(BUTTON_POLL);
+            }
+        })
+    }
+
+    /// Gives the terminal app the mouse, runs `use_it` once the app has followed that, and takes the
+    /// mouse back.
+    fn lend(&mut self, use_it: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+        if self.lends_mouse {
+            return Ok(());
+        }
+        self.lends_mouse = true;
+        self.set_mouse(self.mouse)?;
+        let (sender, followed) = mpsc::channel();
+        self.followed = Some(sender);
+        write_terminal(FOLLOWED_QUERY)?;
+        std::thread::spawn(move || {
+            // The app answers at once. Without its answer, or once Attach has ended, the gesture is
+            // over, and nothing is posted for it.
+            let lent =
+                followed.recv_timeout(MODES_FOLLOWED).is_ok() && attached_terminal().is_some();
+            if lent {
+                use_it();
+            }
+            if let Some(mut terminal) = attached_terminal()
+                && let Some(input) = terminal.active_input().cloned()
+            {
+                terminal.present(&input, |terminal| {
+                    terminal.lends_mouse = false;
+                    terminal.host_selects |= lent;
+                    terminal.set_mouse(terminal.mouse)
+                });
+            }
+        });
+        Ok(())
+    }
+
+    /// Typing or a click for the CLI leaves the selection the terminal app made from a drag, or from
+    /// its menu, which selects the word under the pointer: in a new buffer it has nothing selected.
+    fn leave_host_selection(&mut self) -> std::io::Result<()> {
+        if !std::mem::take(&mut self.host_selects) {
+            return Ok(());
+        }
+        self.draw_in_a_new_buffer()
+    }
+
+    /// Whether the host sends the wheel as cursor keys now.
+    fn wheel_is_cursor_keys(&self) -> bool {
+        self.host_alternate && self.mouse == MouseOwner::Host && host_tells_the_wheel()
+    }
+
+    fn cli_asks_for_application_cursor_keys(&self) -> bool {
+        let shared = self.shared.as_ref();
+        shared.is_some_and(|shared| shared.screen.application_cursor_keys())
+    }
+
+    /// Gives the mouse to its owner. Only this writes the host's mouse and cursor key modes, and only
+    /// when they change: a terminal can drop the drag in progress when its modes are set again.
+    fn set_mouse(&mut self, owner: MouseOwner) -> std::io::Result<()> {
+        self.mouse = owner;
+        if !self.host_alternate {
+            return Ok(());
+        }
+        let owner = if self.lends_mouse {
+            MouseOwner::Host
+        } else {
+            owner
+        };
+        // Native capture serves both local browsing and CLI mouse reporting.
+        let capture = owner != MouseOwner::Host;
+        if self.captured != Some(capture)
+            && let Some(console) = &self.console
+        {
+            let _ = console.vt.set_mouse_capture(capture);
+            self.captured = Some(capture);
+        }
+        let mut modes = match (owner, &self.shared) {
+            (MouseOwner::Local, _) => LOCAL_MOUSE.to_vec(),
+            (MouseOwner::Cli, Some(shared)) => shared.screen.mouse_modes(),
+            (MouseOwner::Cli, None) | (MouseOwner::Host, _) => RESET_MOUSE_REPORTING.to_vec(),
+        };
+        // macOS Terminal sends the wheel as application cursor keys alone.
+        let wheel = self.wheel_is_cursor_keys();
+        if wheel && system::SYSTEM == system::System::Windows {
+            modes.extend(ALTERNATE_SCROLL);
+        }
+        modes.extend(if wheel || self.cli_asks_for_application_cursor_keys() {
+            APPLICATION_CURSOR_KEYS
+        } else {
+            ORDINARY_CURSOR_KEYS
+        });
+        if modes != self.input_modes {
+            write_terminal(&modes)?;
+            self.input_modes = modes;
+        }
+        Ok(())
+    }
+}
+
+/// The rows one wheel report scrolls, or one arrow key sent for the wheel. macOS Terminal sends one
+/// for each row, other terminals one for each step of the wheel.
+fn rows_per_tick() -> usize {
+    if program_is(MACOS_TERMINAL) { 1 } else { 3 }
 }
 
 /// Forwards the CLI's own window activity when rendering replaces the original bytes.
-fn write_activity(output: &ParsedOutput) {
+fn write_activity(output: &ParsedOutput) -> std::io::Result<()> {
     if !output.native_activity.is_empty() {
-        write_terminal(&output.native_activity);
+        write_terminal(&output.native_activity)?;
     }
+    Ok(())
 }
 
-/// Native capture serves both local browsing and CLI mouse reporting.
-fn capture_mouse(enabled: bool) {
-    if let Some(modes) = lock_vt_modes().as_ref() {
-        let _ = modes.set_mouse_capture(enabled);
-    }
+/// Writes the CLI's output or a drawing of its screen, leaving out what Attach decides itself: the
+/// host's mouse and cursor key modes and its saved lines.
+fn write_frame(bytes: &[u8]) -> std::io::Result<()> {
+    write_terminal(&filter_host_output(bytes))
 }
 
 /// The daemon's grid, replayed at the confirmed size even when it cannot currently be drawn.
@@ -1688,17 +2196,12 @@ impl SharedScreen {
         self.capacity.is_some_and(|size| size != self.grid())
     }
 
-    /// The CLI's mouse modes from the same frame a full draw would write.
-    fn mouse_modes(&self) -> Vec<u8> {
-        let frame = self.screen.redraw_for_attach(false, false);
-        selected_private_modes(&frame, is_mouse_mode)
-    }
-
     /// Forwards a title change while the agent's screen is hidden.
-    fn write_title_change(&self, output: &ParsedOutput) {
+    fn write_title_change(&self, output: &ParsedOutput) -> std::io::Result<()> {
         if output.title_change.is_some() {
-            write_terminal(&self.screen.title_output());
+            write_terminal(&self.screen.title_output())?;
         }
+        Ok(())
     }
 }
 
@@ -1706,10 +2209,13 @@ fn fits((cols, rows): (u16, u16), capacity: Option<(u16, u16)>) -> bool {
     capacity.is_none_or(|(width, height)| width >= cols && height >= rows)
 }
 
-fn show_too_small((cols, rows): (u16, u16)) {
-    show_status(&format!(
-        "The shared layout is {cols}×{rows}. Enlarge this terminal to see the current screen."
-    ));
+fn show_too_small((cols, rows): (u16, u16)) -> std::io::Result<()> {
+    show_status(
+        &format!(
+            "The shared layout is {cols}×{rows}. Enlarge this terminal to see the current screen."
+        ),
+        true,
+    )
 }
 
 /// Detects output that could switch or reset the host's screen during native passthrough.
@@ -1719,15 +2225,63 @@ fn switches_screen_or_resets(bytes: &[u8]) -> bool {
         || changes_private_modes(bytes, |mode| matches!(mode, b"1049" | b"1047" | b"47"))
 }
 
-fn changes_mouse_modes(bytes: &[u8]) -> bool {
-    changes_private_modes(bytes, is_mouse_mode)
-}
-
-fn is_mouse_mode(mode: &[u8]) -> bool {
+/// The modes that decide what the host does with the mouse and sends for cursor keys.
+fn is_attach_mode(mode: &[u8]) -> bool {
     matches!(
         mode,
-        b"1000" | b"1002" | b"1003" | b"1005" | b"1006" | b"1007"
+        b"1" | b"9"
+            | b"1000"
+            | b"1001"
+            | b"1002"
+            | b"1003"
+            | b"1005"
+            | b"1006"
+            | b"1007"
+            | b"1015"
+            | b"1016"
     )
+}
+
+fn erases_saved_lines(params: &[u8], end: u8) -> bool {
+    end == b'J'
+        && params
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || *byte == b';')
+        && params
+            .split(|&byte| byte == b';')
+            .next()
+            .and_then(|field| std::str::from_utf8(field).ok()?.parse().ok())
+            == Some(3_u16)
+}
+
+/// Keeps the host's saved lines, mouse modes and cursor key mode, and preserves unrelated parameters
+/// in combined mode changes.
+fn filter_host_output(bytes: &[u8]) -> Cow<'_, [u8]> {
+    let needs_filter = |params: &[u8], end| {
+        erases_saved_lines(params, end)
+            || private_modes(params, end).is_some_and(|mut modes| modes.any(is_attach_mode))
+    };
+    if !escapes(bytes)
+        .filter_map(csi)
+        .any(|(params, end)| needs_filter(params, end))
+    {
+        return Cow::Borrowed(bytes);
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut parts = bytes.split(|&byte| byte == 0x1b);
+    out.extend_from_slice(parts.next().unwrap_or_default());
+    for part in parts {
+        if let Some((params, end)) = csi(part)
+            && needs_filter(params, end)
+        {
+            append_private_modes(&mut out, params, end, |mode| !is_attach_mode(mode));
+            out.extend_from_slice(&part[params.len() + 2..]);
+        } else {
+            out.push(0x1b);
+            out.extend_from_slice(part);
+        }
+    }
+    Cow::Owned(out)
 }
 
 fn escapes(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
@@ -1770,14 +2324,6 @@ fn append_private_modes(
     }
 }
 
-fn selected_private_modes(bytes: &[u8], is_selected: impl Fn(&[u8]) -> bool) -> Vec<u8> {
-    let mut modes = Vec::new();
-    for (params, end) in escapes(bytes).filter_map(csi) {
-        append_private_modes(&mut modes, params, end, &is_selected);
-    }
-    modes
-}
-
 /// Pass input encoding changes through without painting live output over the history view.
 fn input_mode_changes(bytes: &[u8]) -> Vec<u8> {
     let mut modes = Vec::new();
@@ -1786,7 +2332,7 @@ fn input_mode_changes(bytes: &[u8]) -> Vec<u8> {
             modes.extend([0x1b, keypad]);
         } else if let Some((params, end)) = csi(sequence) {
             append_private_modes(&mut modes, params, end, |mode| {
-                matches!(mode, b"1" | b"1004" | b"2004" | b"9001")
+                matches!(mode, b"1004" | b"2004" | b"9001")
             });
             // Kitty keyboard flags can push and pop, so forward each change in order.
             if (end == b'u' && matches!(params.first(), Some(b'>' | b'<' | b'=')))
@@ -1802,13 +2348,16 @@ fn input_mode_changes(bytes: &[u8]) -> Vec<u8> {
     modes
 }
 
-/// Writes the notice to stderr. On a console it uses the bottom rows without scrolling.
+/// Writes the notice to stderr. A console overlay needs a page available for Attach to paint.
 /// The caller holds [`TERMINAL`].
-fn show_status(note: &str) {
+fn show_status(note: &str, overlay: bool) -> std::io::Result<()> {
     let mut stderr = std::io::stderr().lock();
     if !stderr.is_terminal() {
         let _ = writeln!(stderr, "{note}");
-        return;
+        return Ok(());
+    }
+    if !overlay {
+        return Ok(());
     }
     let (cols, rows) = console_size().unwrap_or((80, 24));
     let width = usize::from(cols).saturating_sub(1);
@@ -1825,8 +2374,8 @@ fn show_status(note: &str) {
     output.push_str("\x1b[2K");
     output.push_str(&lines.join("\x1b[1B\r\x1b[2K"));
     output.push_str("\x1b8");
-    let _ = stderr.write_all(output.as_bytes());
-    let _ = stderr.flush();
+    stderr.write_all(output.as_bytes())?;
+    stderr.flush()
 }
 
 /// Breaks a console notice at spaces where possible while keeping every word.
@@ -1853,32 +2402,29 @@ fn wrap_status(mut note: &str, width: usize) -> Vec<&str> {
     lines
 }
 
-/// Restores plain text, visible cursor, normal keyboard and keypad modes, wrapping, ASCII charset,
-/// and full-screen scrolling. Disables paste, mouse, alternate scroll, focus, win32-input-mode and
-/// synchronized-update modes; pops kitty flags and resets modifyOtherKeys. Preserves the cursor
-/// position.
-const RESTORE_TERMINAL_SEQUENCE: &[u8] =
-    b"\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1l\x1b>\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?\
-      1006l\x1b[?1007l\x1b[?1015l\x1b[?1004l\x1b[?9001l\x1b[<u\x1b[>4m\x1b[?2026l\x1b[?7h\x1b(B\x0f\x1b7\
-      \x1b[r\x1b8";
-
 /// Restores the person's terminal and writes the result and any unsent warning to stderr.
 /// Only the first call does anything, so a signal cannot restore a half-restored terminal again.
-/// The sequences go out while the console still reads them; then its modes go back, those entered
-/// after raw mode first.
-fn finish_attachment(input: &AgentInput, end: anyhow::Result<AttachEnd>) {
-    let mut terminal = lock_terminal();
-    if !RAW_MODE_ACTIVE.swap(false, SeqCst) {
-        return;
-    }
+/// The display sequences go out before the mode lease is released under [`TERMINAL`].
+fn finish_attachment(terminal: &mut Display, end: anyhow::Result<AttachEnd>) -> i32 {
+    let end = terminal.write_error.take().map_or(end, |error| {
+        Err(anyhow::Error::new(error).context("could not write to the host terminal"))
+    });
+    let code = end.as_ref().map_or(1, AttachEnd::code);
+    let Some(input) = terminal
+        .console
+        .as_mut()
+        .and_then(|console| console.input.take())
+    else {
+        return code;
+    };
     let alternate = std::mem::take(&mut terminal.host_alternate);
     let cli_title_shown = std::mem::take(&mut terminal.cli_title_shown);
-    write_terminal(&restoration(alternate, cli_title_shown));
+    let _ = write_terminal(&restoration(alternate, cli_title_shown));
     terminal.shared = None;
-    terminal.mouse = MouseOwner::Host;
     terminal.held = None;
-    drop(lock_vt_modes().take());
-    let _ = crossterm::terminal::disable_raw_mode();
+    terminal.mouse = MouseOwner::Host;
+    terminal.input_modes.clear();
+    drop(terminal.console.take());
 
     let line = match end {
         Ok(end) => {
@@ -1893,16 +2439,27 @@ fn finish_attachment(input: &AgentInput, end: anyhow::Result<AttachEnd>) {
     if let Some(warning) = unsent_line(input.unsent_bytes()) {
         let _ = writeln!(stderr, "{warning}");
     }
+    code
 }
 
 /// Restores the terminal's display modes and title and returns from the alternate screen when active.
+/// The host keeps its alternate scroll setting (1007).
 fn restoration(alternate: bool, cli_title_shown: bool) -> Vec<u8> {
     // CAN ends any escape sequence the agent's output left open.
     let mut restoration = b"\x18".to_vec();
     if alternate {
-        restoration.extend_from_slice(b"\x1b[?6l\x1b[?1049l");
+        restoration.extend_from_slice(LEAVE_ALTERNATE);
     }
-    restoration.extend_from_slice(RESTORE_TERMINAL_SEQUENCE);
+    // Restore plain text, a visible cursor and normal keyboard and keypad modes.
+    // Disable bracketed paste and mouse reporting.
+    restoration.extend_from_slice(b"\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1l\x1b>");
+    restoration.extend_from_slice(RESET_MOUSE_REPORTING);
+    // Disable the remaining mouse mode, focus reports, win32-input-mode and synchronized
+    // updates. Pop Kitty keyboard flags and reset modifyOtherKeys. Restore wrapping, the ASCII
+    // character set and full-screen scrolling, preserving the cursor position.
+    restoration.extend_from_slice(
+        b"\x1b[?1015l\x1b[?1004l\x1b[?9001l\x1b[<u\x1b[>4m\x1b[?2026l\x1b[?7h\x1b(B\x0f\x1b7\x1b[r\x1b8",
+    );
     if cli_title_shown {
         // Terminals without a title stack can fall back to the host's default label.
         restoration.extend_from_slice(CLEAR_TITLE);
@@ -1918,6 +2475,16 @@ mod tests {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
     use super::*;
+
+    #[test]
+    fn the_host_keeps_its_saved_lines_and_mouse_modes() {
+        let output =
+            b"a\x1b[?9;1000;1002;2004hbc\x1b[?1003;1005;1006;1007;1016lx\x1b[03J\x1b[2J\x1b[?1004h\x1b[31mz";
+        assert_eq!(
+            filter_host_output(output).as_ref(),
+            b"a\x1b[?2004hbcx\x1b[2J\x1b[?1004h\x1b[31mz"
+        );
+    }
 
     const MACHINE_ID: &str = "11111111-2222-4333-8444-555555555555";
     const WATCH_ID: u64 = 7;
@@ -1979,7 +2546,7 @@ mod tests {
         let input = input();
         let (old_writer, _old_daemon) = connection();
         assert_eq!(
-            input.connected(old_writer, WATCH_ID),
+            input.connected(old_writer, WATCH_ID, true),
             Some(ReconnectLoss::default())
         );
         input.push_keys(&vec![b'x'; MAX_QUEUED_KEY_BYTES]);
@@ -1987,14 +2554,26 @@ mod tests {
         input.disconnected(false);
         let offline = "离线".as_bytes();
         input.push_keys(offline);
+        let unreported = MAX_QUEUED_KEY_BYTES + offline.len() + 8;
         assert_eq!(
             input.unsent_bytes(),
-            MAX_QUEUED_KEY_BYTES + offline.len() + 8,
+            unreported,
             "the final warning would include every unreported byte"
         );
+        let (protected_writer, _protected_daemon) = connection();
+        assert_eq!(
+            input.connected(protected_writer, WATCH_ID, false),
+            Some(ReconnectLoss::default())
+        );
+        assert_eq!(
+            input.unsent_bytes(),
+            unreported,
+            "a reconnect without a notice leaves the losses for the final warning"
+        );
+        input.disconnected(false);
         let (writer, mut daemon) = connection();
         assert_eq!(
-            input.connected(writer, WATCH_ID),
+            input.connected(writer, WATCH_ID, true),
             Some(ReconnectLoss {
                 queued: MAX_QUEUED_KEY_BYTES,
                 disconnected: 6,
@@ -2018,7 +2597,7 @@ mod tests {
         spawn_with(&input, AgentInput::send_queued);
         let (writer, daemon) = connection();
         assert_eq!(
-            input.connected(writer, WATCH_ID),
+            input.connected(writer, WATCH_ID, true),
             Some(ReconnectLoss::default())
         );
         drop(daemon);
@@ -2034,7 +2613,7 @@ mod tests {
         input.push_keys(b"offline");
         let (writer, mut daemon) = connection();
         assert_eq!(
-            input.connected(writer, WATCH_ID),
+            input.connected(writer, WATCH_ID, true),
             Some(ReconnectLoss {
                 queued: 0,
                 disconnected: 7,
@@ -2053,7 +2632,7 @@ mod tests {
         // The daemon reads nothing, so the writer soon blocks in a write.
         let (writer, daemon) = connection();
         assert_eq!(
-            input.connected(writer, WATCH_ID),
+            input.connected(writer, WATCH_ID, true),
             Some(ReconnectLoss::default())
         );
         let chunk = vec![b'k'; 64 * 1024];

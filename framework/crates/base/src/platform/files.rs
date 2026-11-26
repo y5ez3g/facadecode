@@ -72,6 +72,23 @@ pub fn create_private_folder_all(path: &Path) -> io::Result<()> {
     folder_builder(true).create(path)
 }
 
+/// Makes an alias inside a private launch directory to an existing configuration entry.
+pub fn link_config_entry(original: &Path, alias: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(original, alias)
+    }
+    #[cfg(windows)]
+    {
+        if std::fs::metadata(original)?.is_dir() {
+            std::os::windows::fs::symlink_dir(original, alias)
+        } else {
+            std::fs::hard_link(original, alias)
+                .or_else(|_| std::os::windows::fs::symlink_file(original, alias))
+        }
+    }
+}
+
 fn folder_builder(recursive: bool) -> std::fs::DirBuilder {
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(recursive);

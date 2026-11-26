@@ -369,6 +369,13 @@ impl PasteDraft {
         false
     }
 
+    fn visible_tail<'a>(&self, reading: &'a BoxReading) -> Option<&'a str> {
+        reading
+            .paste_tail
+            .as_deref()
+            .filter(|text| facade_rules::is_own_paste_tail(text, &self.text))
+    }
+
     fn char_count(&self) -> usize {
         self.text.chars().count()
     }
@@ -920,7 +927,10 @@ impl Typist {
         // An empty box can be the last frame before the CLI took the paste. Wait for
         // its draft before trusting the box again, and erase it only if it is still ours.
         if let Some(draft) = &self.late_draft {
-            if draft.typed == Some(typed) && draft.paste.matches(rule, &reading, false) {
+            if draft.typed == Some(typed)
+                && (draft.paste.matches(rule, &reading, false)
+                    || draft.paste.visible_tail(&reading).is_some())
+            {
                 let write = draft.paste.backspaces();
                 self.late_draft = None;
                 self.record_write(offset, write.len(), Duration::ZERO);
@@ -1023,8 +1033,12 @@ impl Typist {
             .expect("started paste");
         let untouched = *draft.typed.get_or_insert(typed) == typed;
         let legacy_split = draft.recovered && self.rule.is_some_and(|rule| rule.cli == "claude");
-        let own = if untouched && draft.matches(rule, &reading, legacy_split) {
+        let own = if !untouched {
+            None
+        } else if draft.matches(rule, &reading, legacy_split) {
             reading.draft.as_deref()
+        } else if !draft.recovered {
+            draft.paste.visible_tail(&reading)
         } else {
             None
         };
@@ -1296,17 +1310,15 @@ mod tests {
 
     /// An input reading: its state and a draft's text.
     fn input(state: InputState, draft: Option<&str>) -> BoxReading {
-        BoxReading {
-            info: InputInfo {
+        BoxReading::new(
+            InputInfo {
                 state,
                 evidence: String::new(),
                 mechanism: None,
                 hidden: None,
             },
-            draft: draft.map(str::to_string),
-            line: None,
-            unsure: false,
-        }
+            draft.map(str::to_string),
+        )
     }
 
     impl Terminal {

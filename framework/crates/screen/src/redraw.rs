@@ -33,18 +33,6 @@ const DEC_MODES: [(u16, TermMode); 4] = [
     (1004, TermMode::FOCUS_IN_OUT),
 ];
 
-const MOUSE_TRACKING_MODES: [(u16, TermMode); 3] = [
-    (1000, TermMode::MOUSE_REPORT_CLICK),
-    (1002, TermMode::MOUSE_DRAG),
-    (1003, TermMode::MOUSE_MOTION),
-];
-
-const MOUSE_OPTIONS: [(u16, TermMode); 3] = [
-    (1006, TermMode::SGR_MOUSE),
-    (1005, TermMode::UTF8_MOUSE),
-    (1007, TermMode::ALTERNATE_SCROLL),
-];
-
 impl Screen {
     /// A redraw. With `keep_scrollback` the viewer's own scrollback stays; with
     /// `include_scrollback` up to [`REDRAW_SCROLLBACK_ROWS`] rows of the agent's scrollback come
@@ -295,13 +283,16 @@ impl<'a> Redraw<'a> {
         if terminal.has(TermMode::LINE_FEED_NEW_LINE) {
             self.put(b"\x1b[20h");
         }
-        // Some terminals clear all tracking when any of the three modes is reset.
-        let mut tracking = MOUSE_TRACKING_MODES;
-        tracking.sort_by_key(|&(_, mode)| terminal.has(mode));
-        for (number, mode) in DEC_MODES.into_iter().chain(tracking).chain(MOUSE_OPTIONS) {
+        for (number, mode) in DEC_MODES {
             let on_off = if terminal.has(mode) { 'h' } else { 'l' };
             write!(self.out, "\x1b[?{number}{on_off}").unwrap();
         }
+        self.out.extend_from_slice(&screen.mouse_modes());
+        let on_off = match terminal.has(TermMode::ALTERNATE_SCROLL) {
+            true => 'h',
+            false => 'l',
+        };
+        write!(self.out, "\x1b[?1007{on_off}").unwrap();
         self.put(match terminal.has(TermMode::APP_KEYPAD) {
             true => b"\x1b=",
             false => b"\x1b>",

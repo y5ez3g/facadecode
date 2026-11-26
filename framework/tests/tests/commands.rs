@@ -59,6 +59,113 @@ fn start_uses_default_size_when_terminal_size_is_zero() {
     );
 }
 
+/// A launch asks the host terminal before its CLI asks any color questions, in the background too. A
+/// resume uses the new host palette. The outer emulator is fed directly through the Unix test PTY.
+#[cfg(unix)]
+#[test]
+fn start_and_resume_answer_the_first_cli_color_queries() {
+    let home = TestHome::new("launch-colors");
+    let transcript = home.folder().join("color-queries");
+    let query = |number: &str, terminator: &str| format!("\x1b]{number};?{terminator}");
+    let mut first_output = String::from("\x1b[?1000h\x1b[?1007h");
+    for index in 0..16 {
+        first_output.push_str(&query(
+            &format!("4;{index}"),
+            if index % 2 == 0 { "\x07" } else { "\x1b\\" },
+        ));
+    }
+    first_output.push_str("\x1b]10;?\x07\x1b]11;?\x1b\\\x1b]12;?\x07\x1b[c");
+    std::fs::write(&transcript, &first_output).unwrap();
+    let facade = &test_binaries().facade;
+    let cases = [
+        (
+            &["start", "--name", "painter", "fake"][..],
+            ([18, 52, 86], [255, 250, 238]),
+            ["1212/3434/5656", "ffff/fafa/eeee"],
+        ),
+        (
+            &["resume", "painter"][..],
+            ([240, 221, 232], [32, 26, 29]),
+            ["f0f0/dddd/e8e8", "2020/1a1a/1d1d"],
+        ),
+        (
+            &["resume", "-d", "painter"][..],
+            ([10, 20, 30], [40, 50, 60]),
+            ["0a0a/1414/1e1e", "2828/3232/3c3c"],
+        ),
+        (
+            &["start", "-d", "--name", "detached", "fake"][..],
+            ([70, 80, 90], [100, 110, 120]),
+            ["4646/5050/5a5a", "6464/6e6e/7878"],
+        ),
+    ];
+    for (turn, (args, (fg, bg), [foreground, background])) in cases.into_iter().enumerate() {
+        let keys = home.folder().join(format!("keys-{turn}"));
+        let mut cmd = home.command(facade);
+        cmd.args(args)
+            .env("FAKECLI_SCREEN_FILE", &transcript)
+            .env("FAKECLI_KEYS", &keys)
+            .env("FAKECLI_SESSION", "55000000-0000-4000-8000-000000000011");
+        let mut ansi = [None; 16];
+        let mut expected = String::new();
+        for (index, entry) in ansi.iter_mut().enumerate().filter(|(index, _)| *index != 7) {
+            let value = index as u8 + 16 * turn as u8;
+            *entry = Some([value, 0xaa, 0xff]);
+            let terminator = if index % 2 == 0 { "\x07" } else { "\x1b\\" };
+            expected.push_str(&format!(
+                "\x1b]4;{index};rgb:{value:02x}{value:02x}/aaaa/ffff{terminator}"
+            ));
+        }
+        expected.push_str(&format!(
+            "\x1b]10;rgb:{foreground}\x07\x1b]11;rgb:{background}\x1b\\\x1b]12;rgb:1212/ffff/3434\x07\x1b[?6c"
+        ));
+        let mut term = TestTerminal::spawn_with_colors(
+            &mut cmd,
+            110,
+            30,
+            facade_screen::TerminalColors {
+                foreground: Some(fg),
+                background: Some(bg),
+                cursor: Some([18, 255, 52]),
+                ansi,
+            },
+        );
+        let detached = args.contains(&"-d");
+        if !detached {
+            assert!(
+                term.wait_for(LOADED_TIMEOUT, |text| text.contains("❯")),
+                "{}",
+                term.text()
+            );
+            assert!(
+                term.reports_mouse(),
+                "a foreground launch preserves the guest's mouse tracking request"
+            );
+        }
+        assert!(
+            wait_until(LOADED_TIMEOUT, || std::fs::read(&keys)
+                .is_ok_and(|input| input.ends_with(b"\x1b[?6c"))),
+            "guest input: {:?}",
+            std::fs::read(&keys),
+        );
+        if !detached {
+            term.send(b"\x1d");
+        }
+        assert!(
+            term.wait_exit(secs(10))
+                .is_some_and(|status| status.success())
+        );
+        let name = if args.contains(&"detached") {
+            "detached"
+        } else {
+            "painter"
+        };
+        home.run_facade_ok(&["stop", name]);
+        let input = std::fs::read(&keys).unwrap();
+        assert_eq!(String::from_utf8_lossy(&input), expected);
+    }
+}
+
 /// An attached start exits with the agent's code or 128 plus the terminating signal number.
 #[test]
 fn interactive_start_propagates_process_exit_status() {
@@ -327,13 +434,12 @@ fn commands_resolve_agent_ids_numbers_and_names() {
 
 /// No real CLI can start in a test, and no agent of a test reads or writes the person's settings: a
 /// test's commands get no variable of the environment the tests run in besides [`PASSED_THROUGH`],
-/// neither the harness's `PATH` nor an agent's finds `claude`, `codex`, `agy`, `muse`, `opencode`
-/// or `pi`, and an agent started with `facade start` and one started through the protocol keep
+/// neither the harness's `PATH` nor an agent's finds the program of any CLI, and an agent started with `facade start` and one started through the protocol keep
 /// their home and the CLIs' settings folders inside the test. A protocol start that names a home
 /// outside the test stops the test.
 #[test]
 fn no_real_cli_can_start_in_a_test() {
-    const CLIS: &str = "claude codex agy muse opencode pi";
+    const CLIS: &str = "claude codex agy muse opencode pi devin agent kiro-cli qoder omp";
     let home = TestHome::new("isolation");
     for path in [home.test_path(), home.path_with_test_programs()] {
         for folder in path.split(PATH_SEPARATOR) {

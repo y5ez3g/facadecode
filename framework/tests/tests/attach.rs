@@ -164,6 +164,43 @@ fn foreground_alternate_first_start_hands_the_same_shell_page_back() {
     assert!(term.canonical_input_and_echo_enabled());
 }
 
+/// A CLI's output can arrive in parts. The one that brings the first draw can end inside a frame
+/// that the CLI draws as one synchronized update.
+#[test]
+fn the_first_draw_shows_the_start_of_an_unfinished_frame() {
+    let home = TestHome::new("unfinished-frame");
+    let mut term = start_below_a_shell_page(
+        &home,
+        "Unfinished-frame",
+        "while [ ! -f start ]; do sleep 0.05; done; \
+         printf '\\033[?1049h\\033[?2026h\\033[HFIRST-PART '; \
+         while [ ! -f rest ]; do sleep 0.05; done; \
+         printf 'SECOND-PART\\033[?2026l'; sleep 60",
+    );
+    std::fs::write(home.project.join("start"), b"").unwrap();
+    assert!(
+        wait_until(LOADED_TIMEOUT, || term.on_alternate_screen()),
+        "{}",
+        term.text_with_scrollback()
+    );
+    std::fs::write(home.project.join("rest"), b"").unwrap();
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view
+            .contains("FIRST-PART SECOND-PART")),
+        "{}",
+        term.text()
+    );
+
+    let agent = home.inspect_agent("Unfinished-frame");
+    let address = agent["agent"]["address"].as_str().expect("an address");
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert_detach_receipt(&term, "Unfinished-frame", address);
+}
+
 /// Runs a Shell command below a shell page with history above it.
 fn run_below_a_shell_page(home: &TestHome, args: &[&str]) -> TestTerminal {
     TestTerminal::spawn(
@@ -177,7 +214,9 @@ fn run_below_a_shell_page(home: &TestHome, args: &[&str]) -> TestTerminal {
                  printf 'HOST-RETURN\\n'; exit \"$result\"",
                 "host",
             ])
-            .args(args),
+            .args(args)
+            // As in an SSH session, what a test selects stays off this computer's clipboard.
+            .env("SSH_TTY", "test"),
         100,
         24,
     )
@@ -1046,6 +1085,163 @@ fn attach_wheel_browses_main_screen_history_without_typing_into_the_cli() {
     assert!(alive(&agent.process));
 }
 
+/// A CLI that asks for the mouse gets all of it. The host's mouse modes are set only when they change.
+#[test]
+fn attach_gives_the_mouse_to_a_cli_that_asks_for_it() {
+    let home = TestHome::new("attach-mouse");
+    let transcript = home.folder().join("fullscreen-screen");
+    let keys = home.folder().join("fullscreen-keys");
+    std::fs::write(
+        &transcript,
+        "\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003;2004h\x1b[?1006h\x1b[?1007hFULLSCREEN-CLI",
+    )
+    .unwrap();
+    let agent = home.start_fake_with(
+        "Fullscreen",
+        &[
+            ("FAKECLI_SCREEN_FILE", transcript.to_str().unwrap()),
+            ("FAKECLI_KEYS", keys.to_str().unwrap()),
+            ("FAKECLI_NAME", "FULLSCREEN-PROMPT"),
+        ],
+    );
+    let mut term = run_below_a_shell_page(&home, &["attach", &agent.address]);
+    assert!(term.wait_for(LOADED_TIMEOUT, |text| text.contains("FULLSCREEN-PROMPT")));
+    assert!(wait_until(LOADED_TIMEOUT, || term.reports_mouse() && keys.is_file()));
+    let read_keys = || std::fs::read(&keys).unwrap();
+    let mut expected = read_keys();
+    let mut reaches = |event: &[u8]| {
+        term.send(event);
+        expected.extend_from_slice(event);
+        assert!(
+            wait_until(secs(5), || read_keys() == expected),
+            "guest input: {:?}",
+            read_keys()
+        );
+    };
+    let settled = term.output_len();
+    reaches(b"\x1b[<64;12;4M\x1b[<0;12;4M\x1b[<0;12;4m\x1b[<2;12;4M\x1b[<2;12;4m");
+    reaches(b"\x1bOAz");
+    // The command below goes into an empty input.
+    reaches(b"\x7f");
+    let modes = String::from_utf8_lossy(&term.output_since(settled)).into_owned();
+    assert!(!modes.contains("\x1b[?1006"), "{modes:?}");
+
+    // Once the CLI lets the mouse go, its clicks stay with Attach, and on its alternate screen the
+    // wheel presses Up as the terminal app would, three rows for each step.
+    std::fs::write(&transcript, "\x1b[?1003l\x1b[?1006l").unwrap();
+    home.run_facade_ok(&["type", &agent.id, "/fake screen", "--enter"]);
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            String::from_utf8_lossy(&term.output_since(settled)).contains("\x1b[?1002h")
+        }),
+        "host received {:?}\nagent screen:\n{}",
+        String::from_utf8_lossy(&term.output_since(settled)),
+        home.screen(&agent.id)
+    );
+    let before = read_keys();
+    term.send(b"\x1b[<64;12;4M\x1b[<0;12;4M\x1b[<0;12;4mq");
+    assert!(
+        wait_until(secs(5), || read_keys().ends_with(b"q")),
+        "{:?}",
+        read_keys()
+    );
+    assert_eq!(
+        read_keys(),
+        [before, b"\x1b[A".repeat(3), b"q".to_vec()].concat()
+    );
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(secs(10))
+            .is_some_and(|status| status.success())
+    );
+    assert!(!term.on_alternate_screen());
+    assert!(
+        !term.reports_mouse(),
+        "detach returns the mouse to the host"
+    );
+}
+
+/// A CLI that leaves the mouse alone leaves it to the terminal app, where the keyboard tells the
+/// wheel from the arrow keys the app sends for it.
+#[test]
+fn the_wheel_scrolls_while_the_terminal_app_has_the_mouse() {
+    let home = TestHome::new("attach-host-mouse");
+    if !facade_base::desktop::sees_keys() {
+        return;
+    }
+    let mut term = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["start", "--name", "Host-mouse", home.shell_cli(), "-c"])
+            .arg(
+                "i=1; while [ \"$i\" -le 60 ]; do printf 'LINE-%02d\\n' \"$i\"; i=$((i + 1)); done; \
+                 printf 'READY\\n'; exec cat",
+            )
+            .env("TERM_PROGRAM", "Apple_Terminal"),
+        100,
+        24,
+    );
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("READY")),
+        "{}",
+        term.text_with_scrollback()
+    );
+    assert!(term.on_alternate_screen() && !term.reports_mouse());
+    assert!(
+        term.wait_for_bytes(0, b"\x1b[?1h", secs(5)),
+        "the host does not send the wheel as cursor keys"
+    );
+    assert!(!term.text().contains("LINE-35"), "{}", term.text());
+
+    term.send(b"\x1bOA\x1bOA\x1bOA\x1bOA");
+    assert!(
+        term.wait_for(secs(5), |view| view.contains("LINE-35")
+            && !view.contains("READY")),
+        "{}",
+        term.text()
+    );
+    term.send(b"\x1bOB\x1bOB\x1bOB\x1bOB");
+    assert!(
+        term.wait_for(secs(5), |view| view.contains("READY")),
+        "{}",
+        term.text()
+    );
+    // Other cursor keys reach the CLI as it asked for them.
+    #[cfg(unix)]
+    {
+        term.send(b"\x1bOCx\r");
+        assert!(
+            term.wait_for(secs(5), |view| view.contains("^[[Cx")),
+            "{}",
+            term.text()
+        );
+        assert!(!term.text().contains("^[OA"), "{}", term.text());
+    }
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert!(!term.on_alternate_screen());
+}
+
+#[test]
+fn attach_refuses_the_removed_mouse_option() {
+    let home = TestHome::new("attach-mouse-option");
+    let refused = home
+        .command(&test_binaries().facade)
+        .args(["attach", "--mouse", "ada"])
+        .output()
+        .unwrap();
+    let error = stderr(&refused);
+    assert_eq!(refused.status.code(), Some(2), "{error}");
+    assert!(error.contains("Unknown option '--mouse'."), "{error}");
+    assert!(error.contains("Usage: facade attach <AGENT>"), "{error}");
+    assert!(
+        !home.path.join("framework").exists(),
+        "invalid arguments reached Facade"
+    );
+}
+
 const SELECTION_WORD: &str = "é界";
 
 fn attach_selection_fixture(
@@ -1140,7 +1336,9 @@ impl SelectionSpan {
             "plain left drag did not highlight only {SELECTION_WORD:?}:\n{}",
             term.text()
         );
+        let release = term.output_len();
         self.report(term, 0, to, true);
+        assert_selection_copy(term, release, 1);
     }
 }
 
@@ -1587,7 +1785,7 @@ fn attach_keeps_the_host_page_until_a_blank_main_screen_draws() {
         .project
         .join("blank")
         .is_file()));
-    assert!(wait_for_screen_text(&home, address, "EMPTY-HISTORY-80"));
+    assert!(wait_for_screen_text(&home, address, "EMPTY-HISTORY-40"));
 
     let mut term = run_below_a_shell_page(&home, &["attach", address]);
     wait_for_title(&term, 0, "Blank frame ready");

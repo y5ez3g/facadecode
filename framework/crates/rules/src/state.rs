@@ -11,8 +11,8 @@
 use facade_screen::{BlockKind, ScreenView, VisibleCell};
 
 use crate::{
-    BackgroundCorrection, BoxInput, Frame, FrameTranscript, InputRule, Pattern, Prompt, Rule,
-    StateRule, TurnError,
+    BackgroundCorrection, BoxInput, ComposerStatus, Frame, FrameTranscript, InputRule, Pattern,
+    Prompt, Rule, StateRule, TurnError,
 };
 
 /// What a CLI's screen shows it doing.
@@ -36,6 +36,7 @@ pub(crate) const PLURAL: &str = "${s}";
 pub fn read_state(rule: &Rule, view: &ScreenView) -> Option<ScreenState> {
     let state = rule.status.as_ref()?;
     match (state, &rule.input) {
+        (StateRule::Composer(status), input) => composer_state(view, input, status),
         (StateRule::TurnError(turn), InputRule::Box(input)) => {
             failed_turn(&Page::of(view), input, turn)
         }
@@ -51,6 +52,65 @@ pub fn read_state(rule: &Rule, view: &ScreenView) -> Option<ScreenState> {
         }
         _ => None,
     }
+}
+
+/// A working indicator must be near the current composer. Auth and approval are separate
+/// screens and only win if the composer cannot be read.
+fn composer_state(
+    view: &ScreenView,
+    input: &InputRule,
+    status: &ComposerStatus,
+) -> Option<ScreenState> {
+    if view.synchronized_update {
+        return None;
+    }
+    let reading = crate::read_box(input, view);
+    if let (Some(hint), Some(line)) = (&status.working_hint, &reading.line) {
+        let tail = line
+            .cells
+            .iter()
+            .rev()
+            .take_while(|cell| cell.dim || cell.text.trim().is_empty())
+            .collect::<Vec<_>>();
+        let text: String = tail
+            .into_iter()
+            .rev()
+            .map(|cell| cell.text.as_str())
+            .collect();
+        if text.ends_with(hint) {
+            return Some(ScreenState::Working);
+        }
+    }
+    let page = Page::of(view);
+    let composer = reading.line.as_ref().map(|line| {
+        view.continues
+            .iter()
+            .take(line.row + 1)
+            .filter(|&&continues| !continues)
+            .count()
+            .saturating_sub(1)
+    });
+    let bottom = page.climb(page.len().checked_sub(1), |at| page.blank(at))?;
+    let start = composer.unwrap_or(bottom).saturating_sub(8);
+    let shows = |range: std::ops::Range<usize>, patterns: &[Pattern]| {
+        range.filter(|&at| page.whole(at)).any(|at| {
+            patterns
+                .iter()
+                .any(|pattern| pattern.is_match(page.text(at)))
+        })
+    };
+    if composer.is_none() {
+        if shows(start..bottom + 1, &status.authentication) {
+            return Some(ScreenState::Blocked(BlockKind::Auth));
+        }
+        if shows(start..bottom + 1, &status.permission) {
+            return Some(ScreenState::Blocked(BlockKind::Permission));
+        }
+    }
+    if shows(start..composer.unwrap_or(bottom + 1), &status.working) {
+        return Some(ScreenState::Working);
+    }
+    composer.map(|_| ScreenState::Idle)
 }
 
 /// `turn_error`: the last turn's error, at the end of the conversation over the input box. Its
@@ -316,6 +376,20 @@ mod tests {
 
     fn state_of(cli: &str, view: &ScreenView) -> Option<ScreenState> {
         read_state(find(cli).unwrap().unwrap(), view)
+    }
+
+    #[test]
+    fn cursor_reads_the_dim_work_hint_and_leaves_identical_draft_text_alone() {
+        let estimate = |input| state_of("agent", &view(80, 20, input));
+        assert_eq!(
+            estimate("→ \x1b[2mPlan, search, build anything\x1b[0m\r\x1b[2C"),
+            Some(ScreenState::Idle)
+        );
+        assert_eq!(
+            estimate("→ \x1b[2mAdd a follow-up                   ctrl+c to stop\x1b[0m\r\x1b[2C"),
+            Some(ScreenState::Working)
+        );
+        assert_eq!(estimate("→ ctrl+c to stop"), Some(ScreenState::Idle));
     }
 
     #[test]

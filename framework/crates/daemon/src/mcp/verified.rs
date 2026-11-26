@@ -11,7 +11,7 @@ use facade_base::model::agent::AgentRef;
 use facade_base::model::error::ErrorBody;
 use serde_json::Value;
 
-use super::{ManagedInstructions, Relay};
+use super::{AcquirePresence, CatalogEvent, Initialization, ManagedInstructions, Ready, Relay};
 use crate::{
     Cancel,
     messages::{InboxRead, ReplyRead},
@@ -49,10 +49,6 @@ pub(crate) type DiscoverClis = Box<
         + Sync,
 >;
 
-/// Holds a tools-ready connection only for a run the daemon can verify without joining a Guest.
-pub(crate) type Ready =
-    Box<dyn Fn(Option<&str>) -> anyhow::Result<Option<DaemonClient>> + Send + Sync>;
-
 pub(crate) struct ActorServices {
     pub(crate) authenticate: Authenticate,
     pub(crate) connect: ActorConnect,
@@ -88,7 +84,7 @@ impl Verified {
         &self,
         relay: &Relay,
         client_name: Option<&str>,
-    ) -> Result<Option<String>, ErrorBody> {
+    ) -> Result<Initialization, ErrorBody> {
         {
             let mut connection = self
                 .connection
@@ -122,20 +118,21 @@ impl Verified {
         Ok(actor)
     }
 
-    pub(super) fn hold_presence(&self, relay: &Relay) {
-        let mut presence = relay
-            .presence
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if presence.is_none() {
-            match (self.services.ready)(credential(relay)) {
-                Ok(held) => *presence = held,
-                // The callback can inspect private run material. Keep it out of logs.
-                Err(_) => facade_base::log::write(
+    pub(super) fn prepare_presence(
+        &self,
+        relay: &Relay,
+        event: CatalogEvent,
+    ) -> Option<AcquirePresence> {
+        match (self.services.ready)(credential(relay), event) {
+            Ok(acquire) => acquire,
+            // The callback can inspect private run material. Keep it out of logs.
+            Err(_) => {
+                facade_base::log::write(
                     "facade-mcp",
                     "warn",
                     "could not show that the verified run's tools are there",
-                ),
+                );
+                None
             }
         }
     }

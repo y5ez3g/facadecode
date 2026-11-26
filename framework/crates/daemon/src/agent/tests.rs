@@ -891,6 +891,7 @@ impl Harness {
             captures: false,
             launch_command: None,
             tools,
+            colors: Default::default(),
             reply,
         })
         .await;
@@ -1962,15 +1963,15 @@ async fn a_question_antigravity_asks_at_its_start_is_answered_first_and_takes_no
     // long to take the next screen.
     let started = Instant::now() - START_TIMEOUT + Duration::from_secs(10);
     let mut harness = antigravity_started(&home, started);
-    harness
-        .type_bytes(b"1")
+    let answer = harness
+        .type_call(Typing::keys(&["1".into()]).unwrap())
         .await
-        .expect("the person's keys are taken, to wait");
+        .unwrap();
     assert!(
         harness
             .cli_reads_within(1, Duration::from_millis(300))
             .is_empty(),
-        "keys wait while the CLI shows nothing"
+        "scripted keys wait while the CLI shows nothing"
     );
     harness.agy_question();
     assert_eq!(
@@ -1978,6 +1979,7 @@ async fn a_question_antigravity_asks_at_its_start_is_answered_first_and_takes_no
         b"1",
         "the keys that waited reach the question"
     );
+    assert_eq!(answered(answer).await, Ok(()));
     tokio::time::sleep_until(started + START_TIMEOUT + Duration::from_millis(500)).await;
     harness.type_bytes(b"2").await.unwrap();
     assert_eq!(
@@ -2063,13 +2065,17 @@ async fn readying_the_tools_asks_the_cli_for_nothing() {
 }
 
 /// Keys from an attached terminal and calls that come while a start readies Antigravity's tools
-/// wait until it is done, those typed before its input first shows too, so that its first turn
-/// has the tools, however late the panel shows them ready; then they go in, in the order they
-/// came.
+/// wait once it owns the composer or its panel. They go in, in the order they came,
+/// after the panel is closed.
 #[tokio::test(flavor = "multi_thread")]
 async fn keys_and_calls_wait_while_a_start_readies_the_tools() {
     let home = home("readyhold");
     let mut harness = antigravity(&home);
+    harness.agy_input("");
+    assert_eq!(harness.cli_reads(4), b"/mcp", "the start goes first");
+    harness.agy_input("/mcp");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.agy_panel(false);
     harness
         .type_bytes(b"hi")
         .await
@@ -2078,17 +2084,6 @@ async fn keys_and_calls_wait_while_a_start_readies_the_tools() {
         .type_call(Typing::text(" there".into(), false, Sender::person()).unwrap())
         .await
         .unwrap();
-    assert!(
-        harness
-            .cli_reads_within(1, Duration::from_millis(300))
-            .is_empty(),
-        "nothing goes in before the input shows"
-    );
-    harness.agy_input("");
-    assert_eq!(harness.cli_reads(4), b"/mcp", "the start goes first");
-    harness.agy_input("/mcp");
-    assert_eq!(harness.cli_reads(1), b"\r");
-    harness.agy_panel(false);
     assert!(
         harness
             .cli_reads_within(1, Duration::from_millis(1500))
@@ -2107,8 +2102,26 @@ async fn keys_and_calls_wait_while_a_start_readies_the_tools() {
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// The hold ends at the start's bound: a CLI that never shows its input lets the person's keys
-/// in then, and its tools are not started.
+/// A person's keystroke takes over a passive startup probe, even if the CLI has not yet
+/// shown an input that Facade recognizes. No probe is typed after control passes to the person.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_person_can_type_while_tool_startup_waits_for_an_input_box() {
+    let home = home("type-before-tools");
+    let mut harness = antigravity(&home);
+    harness.type_bytes(b"hi").await.unwrap();
+    assert_eq!(harness.cli_reads_within(2, Duration::from_secs(2)), b"hi");
+    harness.agy_input("");
+    assert!(
+        harness
+            .cli_reads_within(1, Duration::from_millis(300))
+            .is_empty(),
+        "no automatic command follows the person's keys"
+    );
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// The hold on scripted input ends at the start's bound even if no composer was found.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_hold_ends_at_the_start_s_bound() {
     let home = home("holdbound");
@@ -2116,7 +2129,10 @@ async fn the_hold_ends_at_the_start_s_bound() {
         .checked_sub(START_TIMEOUT - Duration::from_secs(1))
         .expect("a clock that has run a minute");
     let mut harness = antigravity_started(&home, almost);
-    harness.type_bytes(b"hi").await.unwrap();
+    let answer = harness
+        .type_call(Typing::keys(&["h".into(), "i".into()]).unwrap())
+        .await
+        .unwrap();
     assert!(
         harness
             .cli_reads_within(1, Duration::from_millis(500))
@@ -2128,6 +2144,7 @@ async fn the_hold_ends_at_the_start_s_bound() {
         b"hi",
         "let in at the bound"
     );
+    assert_eq!(answered(answer).await, Ok(()));
     assert!(
         tools_read(
             &harness,

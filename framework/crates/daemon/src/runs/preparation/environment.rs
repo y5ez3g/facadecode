@@ -24,7 +24,7 @@ const FACADE_VARIABLES: &[&str] = &[
     "FACADE_RUN",
     "FACADE_RUN_TOKEN",
     "FACADE_PTYD",
-    "FACADE_LAUNCH_CONTEXT",
+    facade_base::start::LAUNCH_CONTEXT,
     "FACADE_ELECTRON_RUN_AS_NODE",
     "ELECTRON_RUN_AS_NODE",
     "TERM",
@@ -74,6 +74,7 @@ pub(super) fn build(
     home: &Path,
     id: &str,
 ) -> BTreeMap<String, String> {
+    facade_rules::restore_config_environment(&mut inherited);
     inherited.retain(|name, _| keep(name));
     remove(&mut inherited, LAUNCH_ENV);
     for (name, value) in [

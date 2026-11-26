@@ -60,7 +60,8 @@ fn reads_as_recorded(cli: &str) {
     states.dedup();
     // Codex's recordings also show its search and selection screens, which read unknown, and
     // Muse's its drafts with the cursor where the input starts, which read unknown as unsure.
-    let shown: &[&str] = if cli == "codex" || cli == "muse" {
+    // Cursor's show the frame before it hides the terminal cursor and an answered question alone.
+    let shown: &[&str] = if cli == "codex" || cli == "muse" || cli == "agent" {
         &["draft", "interaction", "unknown", "usable"]
     } else {
         &["draft", "interaction", "usable"]
@@ -111,6 +112,91 @@ fn opencode_screens_read_as_recorded() {
 #[test]
 fn pi_screens_read_as_recorded() {
     reads_as_recorded("pi");
+}
+
+/// The live question reads as one, by its selected option and key help. Answered, it stays on the
+/// screen above a fresh input, which then reads by itself.
+#[test]
+fn cursor_screens_read_as_recorded() {
+    reads_as_recorded("agent");
+}
+
+fn cursor_screen(label: &str) -> ScreenView {
+    let label = format!("cursor-2026.11.22/{label}");
+    let screen = recorded("agent")
+        .into_iter()
+        .find(|screen| screen["label"] == label)
+        .unwrap();
+    view_of(&screen)
+}
+
+/// Changes the cells of row `y` at columns `columns`.
+fn mark(
+    view: &mut ScreenView,
+    y: usize,
+    columns: std::ops::Range<usize>,
+    change: impl Fn(&mut VisibleCell),
+) {
+    for cell in &mut view.rows[y] {
+        if columns.contains(&cell.column) {
+            change(cell);
+        }
+    }
+}
+
+/// Where Cursor hides the terminal cursor, the one inverse cell of its input is the cursor: none
+/// there, or a second one, says nothing.
+#[test]
+fn only_one_drawn_cursor_in_cursor_s_input_reads_it() {
+    let rule = &find("agent").unwrap().unwrap().input;
+    let state = |view: &ScreenView| read_input(rule, view).state;
+    let empty = cursor_screen("empty");
+    assert_eq!(state(&empty), InputState::Usable);
+    let line = read_box(rule, &empty).line.unwrap();
+    assert_eq!(line.cursor, (4, 9), "probes compare the drawn cursor");
+
+    let mut two = empty.clone();
+    mark(&mut two, 9, 8..9, |cell| cell.inverse = true);
+    assert_eq!(state(&two), InputState::Unknown);
+
+    let mut elsewhere = empty.clone();
+    mark(&mut elsewhere, 9, 4..5, |cell| cell.inverse = false);
+    mark(&mut elsewhere, 4, 2..3, |cell| cell.inverse = true);
+    assert_eq!(state(&elsewhere), InputState::Unknown);
+
+    // Inverse text outside the input beside the drawn cursor changes nothing.
+    let mut beside = empty.clone();
+    mark(&mut beside, 4, 2..3, |cell| cell.inverse = true);
+    assert_eq!(state(&beside), InputState::Usable);
+
+    let mut written = empty;
+    mark(&mut written, 9, 5..32, |cell| cell.dim = false);
+    assert_ne!(
+        state(&written),
+        InputState::Usable,
+        "a draft of the hint's words"
+    );
+}
+
+/// A visible terminal cursor in Cursor's input reads it as before, and another CLI's prompt row
+/// takes no drawn cursor.
+#[test]
+fn a_drawn_cursor_counts_only_for_cursor_behind_a_hidden_terminal_cursor() {
+    let cursor = &find("agent").unwrap().unwrap().input;
+    let mut visible = cursor_screen("empty");
+    visible.cursor_visible = true;
+    mark(&mut visible, 9, 4..5, |cell| {
+        cell.inverse = false;
+        cell.dim = true;
+    });
+    assert_eq!(read_input(cursor, &visible).state, InputState::Unknown);
+    visible.cursor = (4, 9);
+    assert_eq!(read_input(cursor, &visible).state, InputState::Usable);
+
+    let kiro = &find("kiro-cli").unwrap().unwrap().input;
+    let mut other = cursor_screen("typed");
+    mark(&mut other, 9, 2..3, |cell| cell.text = "›".into());
+    assert_eq!(read_input(kiro, &other).state, InputState::Unknown);
 }
 
 #[test]
@@ -255,6 +341,7 @@ fn an_update_prompt_no_reader_knows_reads_unknown() {
                         dim: false,
                         inverse: false,
                         colored: false,
+                        foreground: 0,
                     })
                     .collect();
                 cells.extend((line.chars().count()..80).map(|column| VisibleCell {
@@ -264,6 +351,7 @@ fn an_update_prompt_no_reader_knows_reads_unknown() {
                     dim: false,
                     inverse: false,
                     colored: false,
+                    foreground: 0,
                 }));
                 cells
             })
@@ -295,6 +383,76 @@ fn screen_after(output: &[u8]) -> ScreenView {
     let mut screen = facade_screen::Screen::new(40, 8, 0);
     screen.feed(output);
     screen.view()
+}
+
+/// Synthetic cells from the native Oh My Pi band layout, including the colored blank gutter.
+#[test]
+fn oh_my_pi_reads_the_native_band_and_guards_the_full_viewport() {
+    use std::fmt::Write;
+
+    let rule = &find("omp").unwrap().unwrap().input;
+    let band = |lines: &[&str], cursor: Option<(usize, usize)>| {
+        let mut vt = String::from("\x1b[4;1H\x1b[38;5;75m π  Example model\x1b[39m");
+        for (index, line) in lines.iter().enumerate() {
+            let gutter = if index == 0 { "╰─ " } else { "   " };
+            write!(
+                vt,
+                "\x1b[{};1H\x1b[38;5;75m{gutter}\x1b[39m{line}",
+                index + 5
+            )
+            .unwrap();
+        }
+        if let Some((row, col)) = cursor {
+            write!(vt, "\x1b[{row};{col}H").unwrap();
+        }
+        let mut screen = facade_screen::Screen::new(80, 24, 0);
+        screen.feed(vt.as_bytes());
+        screen.view()
+    };
+
+    let empty = read_box(rule, &band(&[""], None));
+    assert_eq!(
+        empty.info.state,
+        InputState::Usable,
+        "{}",
+        empty.info.evidence
+    );
+    assert_eq!(empty.line.unwrap().cursor, (3, 4));
+
+    let draft = read_box(rule, &band(&["first", "", "last"], None));
+    assert_eq!(
+        draft.info.state,
+        InputState::Draft,
+        "{}",
+        draft.info.evidence
+    );
+    assert_eq!(draft.draft.as_deref(), Some("first\n\nlast"));
+
+    // Oh My Pi draws what it predicts from the cursor on, in another color.
+    let predicted = read_box(
+        rule,
+        &band(&["comm\x1b[38;5;240mands\x1b[39m"], Some((5, 8))),
+    );
+    assert_eq!(predicted.draft.as_deref(), Some("comm"));
+    let typed = read_box(rule, &band(&["commands"], Some((5, 8))));
+    assert_eq!(typed.draft.as_deref(), Some("commands"));
+
+    let content: Vec<_> = (1..=11).map(|n| format!("line {n}")).collect();
+    let lines: Vec<_> = content.iter().map(String::as_str).collect();
+    let full = read_box_for_typing(rule, &band(&lines, None), true);
+    assert_eq!(
+        full.info.state,
+        InputState::Unknown,
+        "{}",
+        full.info.evidence
+    );
+    assert!(full.draft.is_none());
+    assert_eq!(
+        full.paste_tail.as_deref(),
+        Some(content.join("\n").as_str())
+    );
+    let before_end = read_box_for_typing(rule, &band(&lines, Some((15, 5))), true);
+    assert!(before_end.paste_tail.is_none());
 }
 
 #[test]

@@ -1,7 +1,9 @@
 //! Reads a CLI's input box from the cells its screen shows. Each reader knows one layout a CLI
-//! was recorded drawing: it finds the input box around the cursor, then tells whether the box is
-//! empty, holds a draft, or gives way to a menu or question of the CLI's own. Any other screen
-//! reads `unknown`. A reading comes from the screen alone and never means that input may be typed.
+//! was recorded drawing. It uses the terminal cursor or a drawn cursor recognized by the rule to
+//! find the input box and tell whether it is empty or holds a draft. A menu or question of the
+//! CLI's own can read `interaction` when there is no input box. A rule can also recognize a
+//! live notice next to its input box as `interaction`. Other unrecognized screens read `unknown`.
+//! A reading comes from the screen alone and never means that input may be typed.
 
 mod paste;
 mod probe;
@@ -10,15 +12,24 @@ use facade_base::model::terminal::{HiddenRows, InputInfo, InputState};
 use facade_screen::{ScreenView, VisibleCell};
 use regex::Regex;
 
-use crate::{BoxInput, CountedScroll, Editor, Frame, InputRule, Menu, Prompt, Scrolled};
+use crate::{
+    BoxInput, CountedScroll, Editor, EditorBand, EditorLiveNotice, EditorNoticeContext, EditorRail,
+    Frame, InputRule, Menu, Prompt, Scrolled,
+};
 
-pub use paste::{is_legacy_split_paste, is_own_draft, is_same_draft, settle_time, with_paste_text};
+pub use paste::{
+    is_legacy_split_paste, is_own_draft, is_own_paste_tail, is_same_draft, settle_time,
+    with_paste_text,
+};
 pub use probe::{ProbeVerdict, restored, shape_of, space_taken, verdict_of};
 
-/// Reads the input box `rule` describes from `view`. Never waits. An open synchronized update, a
-/// cursor off the screen, or a hidden terminal cursor where the CLI draws no cursor of its own
-/// reads `unknown`; behind a hidden cursor, a menu or question of the CLI's own reads
-/// `interaction`.
+/// Reads the input box `rule` describes from `view`. Never waits. An open synchronized update
+/// reads `unknown`. When the terminal cursor is hidden, a prompt-row rule that opts in uses a
+/// unique drawn cursor in its input box. A frame rule that opts in can use a hidden terminal
+/// cursor inside a complete frame. Other readings need an on-screen terminal cursor position,
+/// with an inverse cell there if the cursor is hidden. A matching menu or question can read
+/// `interaction` if the reader cannot locate the input box. An editor rule can also recognize
+/// a live notice above its input box as `interaction`.
 pub fn read_input(rule: &InputRule, view: &ScreenView) -> InputInfo {
     read_draft(rule, view).0
 }
@@ -39,11 +50,27 @@ pub fn read_draft(rule: &InputRule, view: &ScreenView) -> (InputInfo, Option<Str
 pub struct BoxReading {
     pub info: InputInfo,
     pub draft: Option<String>,
+    /// Visible text ending at the caret of a full viewport that has no scroll markers.
+    /// Only a paste just made into an observed empty input can use it for confirmation.
+    pub paste_tail: Option<String>,
     /// The input's first row and the cursor, where the reader found the input.
     pub line: Option<InputLine>,
     /// Unknown because the only input row may be a hint or a draft. A space typed and taken back
     /// tells them apart.
     pub unsure: bool,
+}
+
+impl BoxReading {
+    /// A reading without captured input geometry or probe evidence.
+    pub fn new(info: InputInfo, draft: Option<String>) -> Self {
+        Self {
+            info,
+            draft,
+            paste_tail: None,
+            line: None,
+            unsure: false,
+        }
+    }
 }
 
 /// An input's first row from the column its input starts at to its last cell that draws
@@ -85,6 +112,7 @@ pub fn read_box_for_typing(
         evidence,
         hidden,
         draft,
+        paste_tail,
         line,
         unsure,
     } = screen.read(rule, view, untouched_input);
@@ -97,6 +125,7 @@ pub fn read_box_for_typing(
     BoxReading {
         info,
         draft,
+        paste_tail,
         line,
         unsure,
     }
@@ -109,6 +138,7 @@ struct Reading {
     hidden: Option<HiddenRows>,
     /// The draft as its rows draw it.
     draft: Option<String>,
+    paste_tail: Option<String>,
     line: Option<InputLine>,
     unsure: bool,
 }
@@ -128,6 +158,7 @@ fn reading(state: InputState, evidence: impl Into<String>) -> Reading {
         evidence: evidence.into(),
         hidden: None,
         draft: None,
+        paste_tail: None,
         line: None,
         unsure: false,
     }
@@ -216,6 +247,22 @@ fn written(cell: &VisibleCell) -> bool {
     draws(cell) && !cell.dim
 }
 
+/// A row without what its CLI predicts the person types next: drawn from the cursor on, all in
+/// another color than the text before it.
+fn without_prediction(row: &Cells, column: usize) -> &Cells {
+    let (typed, rest) = row.split_at(row.partition_point(|cell| cell.column < column));
+    let predicted = typed
+        .iter()
+        .rev()
+        .find(|cell| draws(cell))
+        .is_some_and(|last| {
+            rest.iter()
+                .filter(|cell| draws(cell))
+                .all(|cell| cell.foreground != last.foreground)
+        });
+    if predicted { typed } else { row }
+}
+
 fn holds_writing(lines: &[&Cells]) -> bool {
     lines.iter().any(|line| line.iter().any(written))
 }
@@ -249,6 +296,7 @@ fn counted(pattern: &Regex, line: &str) -> Option<u32> {
 struct Screen<'a> {
     cells: &'a [Vec<VisibleCell>],
     cols: usize,
+    continues: &'a [bool],
     /// Each row's text.
     lines: Vec<String>,
     /// Column and row.
@@ -261,32 +309,68 @@ impl<'a> Screen<'a> {
         Screen {
             cells: &view.rows,
             cols: view.cols,
+            continues: &view.continues,
             lines: view.rows.iter().map(|row| joined(row)).collect(),
             cursor: view.cursor,
             menus,
         }
     }
 
-    fn read(&self, rule: &InputRule, view: &ScreenView, untouched_input: bool) -> Reading {
-        let (column, row) = self.cursor;
+    fn read(mut self, rule: &InputRule, view: &ScreenView, untouched_input: bool) -> Reading {
         if view.synchronized_update {
             return unknown("the CLI is in the middle of a synchronized update");
         }
-        if row >= self.height() {
-            return unknown("the cursor is not on the screen");
-        }
-        if !view.cursor_visible && !self.own_cursor(row, column) {
-            return self.elsewhere(format!(
-                "the terminal cursor is hidden and the CLI draws no cursor at row {}",
-                row + 1
-            ));
+        if let InputRule::PromptRow {
+            prompt,
+            alternate_prompt,
+            placeholder: Some(_),
+            drawn_cursor: true,
+            ..
+        } = rule
+            && !view.cursor_visible
+        {
+            let Some(cursor) = self.drawn_prompt_cursor(prompt, alternate_prompt.as_deref()) else {
+                return self.elsewhere("no unique drawn cursor in the input box");
+            };
+            self.cursor = cursor;
+        } else {
+            let (column, row) = self.cursor;
+            if row >= self.height() {
+                return unknown("the cursor is not on the screen");
+            }
+            if !view.cursor_visible && !self.own_cursor(row, column) {
+                if let InputRule::Frame(frame) = rule
+                    && frame.hidden_cursor_in_frame
+                {
+                    return self.in_frame(frame, untouched_input, true);
+                }
+                return self.elsewhere(format!(
+                    "the terminal cursor is hidden and the CLI draws no cursor at row {}",
+                    row + 1
+                ));
+            }
         }
         match rule {
-            InputRule::Frame(frame) => self.in_frame(frame, untouched_input),
+            InputRule::Frame(frame) => self.in_frame(frame, untouched_input, false),
             InputRule::Prompt(prompt) => self.in_prompt(prompt),
-            InputRule::Editor(editor) => self.in_editor(editor),
+            InputRule::Editor(editor) => self.in_editor(editor, view.cursor_visible),
             InputRule::Box(input) => self.in_box(input),
-            InputRule::PromptRow { prompt } => self.on_prompt_row(prompt),
+            InputRule::PromptRow {
+                prompt,
+                alternate_prompt,
+                placeholder,
+                dim_draft,
+                ..
+            } => match placeholder {
+                Some(placeholder) => self.in_prompt_rows(
+                    prompt,
+                    alternate_prompt.as_deref(),
+                    placeholder,
+                    dim_draft.as_deref(),
+                    untouched_input,
+                ),
+                None => self.on_prompt_row(prompt),
+            },
         }
     }
 
@@ -334,19 +418,16 @@ impl<'a> Screen<'a> {
 
     /// The row a menu or question of the CLI's shows its selected item or question on.
     fn menu_row(&self, menu: &Menu) -> Option<usize> {
-        let below_matches = |y: usize, pattern: &Regex| {
-            self.lines
-                .get(y + 1)
-                .is_some_and(|line| pattern.is_match(line))
-        };
+        let row = |y: usize| self.lines[y].trim_end_matches(' ');
+        let below_matches =
+            |y: usize, pattern: &Regex| y + 1 < self.lines.len() && pattern.is_match(row(y + 1));
         let hinted = |y: usize, pattern: &Regex, within: usize| {
-            self.lines[y + 1..]
-                .iter()
+            (y + 1..self.lines.len())
                 .take(within)
-                .any(|line| pattern.is_match(line))
+                .any(|next| pattern.is_match(row(next)))
         };
         (0..self.lines.len()).find(|&y| {
-            let line = &self.lines[y];
+            let line = row(y);
             if !menu.selected.is_match(line) {
                 return false;
             }
@@ -392,10 +473,11 @@ impl<'a> Screen<'a> {
         what: &str,
         scrolled: Option<&CountedScroll>,
         probe_unstyled_hint: bool,
+        column: usize,
     ) -> Reading {
         let rest_blank = (prompt + 1..end).all(|y| self.blank(y));
-        let line = line_of(self.row(prompt), prompt, 2, !rest_blank, self.cursor);
-        self.prompt_reading(prompt, end, what, scrolled, probe_unstyled_hint)
+        let line = line_of(self.row(prompt), prompt, column, !rest_blank, self.cursor);
+        self.prompt_reading(prompt, end, what, scrolled, probe_unstyled_hint, column)
             .with_line(line)
     }
 
@@ -406,13 +488,14 @@ impl<'a> Screen<'a> {
         what: &str,
         scrolled: Option<&CountedScroll>,
         probe_unstyled_hint: bool,
+        column: usize,
     ) -> Reading {
         let place = format!("{what} at {}", row_span(prompt + 1, end));
-        // Wrapped rows start under the prompt's two columns.
-        let lines: Vec<&Cells> = (prompt..end).map(|y| self.from(y, 2)).collect();
-        let first = self.from(prompt, 2);
+        // Wrapped rows start under the first input cell.
+        let lines: Vec<&Cells> = (prompt..end).map(|y| self.from(y, column)).collect();
+        let first = self.from(prompt, column);
         let rest_blank = (prompt + 1..end).all(|y| self.blank(y));
-        let at_start = self.cursor_at(2, prompt);
+        let at_start = self.cursor_at(column, prompt);
         let first_holds_writing = first.iter().any(written);
         if at_start
             && rest_blank
@@ -460,34 +543,49 @@ impl<'a> Screen<'a> {
         what: &str,
         marks: (Option<u32>, Option<u32>),
         lines: &[&Cells],
+        column: usize,
     ) -> Reading {
         let place = format!("{what} at {}", row_span(first + 1, first + lines.len()));
         let rest = lines[1..].iter().any(|line| !all_space(line));
-        drafted(&place, marks, lines).with_line(line_of(lines[0], first, 2, rest, self.cursor))
+        drafted(&place, marks, lines).with_line(line_of(lines[0], first, column, rest, self.cursor))
     }
 
     /// `frame`: input between two rules, with a prompt row unless it scrolled out.
-    fn in_frame(&self, frame: &Frame, untouched_input: bool) -> Reading {
-        let cursor_row = self.cursor.1;
+    fn in_frame(
+        &self,
+        frame: &Frame,
+        untouched_input: bool,
+        hidden_hardware_caret: bool,
+    ) -> Reading {
+        let (cursor_column, cursor_row) = self.cursor;
         let missing = || {
             self.elsewhere(format!(
                 "no input frame around the cursor at row {}",
                 cursor_row + 1
             ))
         };
+        let column = frame.indent + 2;
+        if hidden_hardware_caret && !(column..self.cols).contains(&cursor_column) {
+            return missing();
+        }
+        let blank_prefix = |y, width| all_space(self.row(y).get(..width).unwrap_or(self.row(y)));
+        let wrapped = |y| blank_prefix(y, column);
         let prompt_at = |y: usize| {
-            self.char(y, 0) == frame.prompt
-                && (self.char(y, 1) == frame.gap || all_space(self.from(y, 1)))
+            let gap = frame.indent + 1;
+            let glyph = self.char(y, frame.indent);
+            blank_prefix(y, frame.indent)
+                && (glyph == frame.prompt || frame.alternate_prompt.as_deref() == Some(glyph))
+                && (self.char(y, gap) == frame.gap || all_space(self.from(y, gap)))
         };
         let (row_marks, rule_marks) = match &frame.scrolled {
             Scrolled::Rows(marks) => (Some(marks), None),
             Scrolled::Rules(marks) => (None, Some(marks)),
-            Scrolled::LastColumn { .. } => (None, None),
+            Scrolled::LastColumn { .. } | Scrolled::Unmarked(_) => (None, None),
         };
         // Up from the cursor over wrapped rows to the prompt or a marked upper rule.
         let upper = (0..=cursor_row)
             .rev()
-            .find(|&y| prompt_at(y) || !self.wrapped(y))
+            .find(|&y| prompt_at(y) || !wrapped(y))
             .and_then(|y| {
                 if prompt_at(y) {
                     y.checked_sub(1)
@@ -501,24 +599,30 @@ impl<'a> Screen<'a> {
         let first = upper + 1;
         let above = rule_marks.and_then(|marks| counted(&marks.above, &self.lines[upper]));
         if first > cursor_row
-            || !(above.is_some() || prompt_at(first) && frame.upper.is_match(&self.lines[upper]))
+            || !(!hidden_hardware_caret && above.is_some()
+                || prompt_at(first) && frame.upper.is_match(&self.lines[upper]))
         {
             return missing();
         }
         // Down over wrapped rows to the lower rule.
         let below_at =
             |y: usize| rule_marks.and_then(|marks| counted(&marks.below, &self.lines[y]));
-        let lower_at = |y: usize| frame.lower.is_match(&self.lines[y]) || below_at(y).is_some();
+        let lower_at = |y: usize| {
+            frame.lower.is_match(&self.lines[y]) || !hidden_hardware_caret && below_at(y).is_some()
+        };
         let lower = (first + 1..self.height())
-            .find(|&y| lower_at(y) || !self.wrapped(y))
+            .find(|&y| lower_at(y) || !wrapped(y))
             .filter(|&y| lower_at(y));
         let Some(lower) = lower else {
             return missing();
         };
+        if hidden_hardware_caret && cursor_row >= lower {
+            return missing();
+        }
         let below = below_at(lower);
         if above.is_some() || below.is_some() {
-            let lines: Vec<&Cells> = (first..lower).map(|y| self.from(y, 2)).collect();
-            return self.scrolled_draft(first, "the input frame", (above, below), &lines);
+            let lines: Vec<&Cells> = (first..lower).map(|y| self.from(y, column)).collect();
+            return self.scrolled_draft(first, "the input frame", (above, below), &lines, column);
         }
         if let Some(mode) = &frame.placeholder {
             let one_row = lower == first + 1;
@@ -526,11 +630,11 @@ impl<'a> Screen<'a> {
                 .lines
                 .get(lower + 1)
                 .is_some_and(|line| mode.footer.is_match(line));
-            let shown = joined(self.from(first, 2));
+            let shown = joined(self.from(first, column));
             let shown = shown.trim_end();
             if one_row && footer && mode.texts.iter().any(|text| names_mode(shown, text)) {
                 let place = format!("the input frame at row {}", first + 1);
-                return match self.cursor_at(2, first) {
+                return match self.cursor_at(column, first) {
                     true => usable(format!(
                         "{place} shows its mode placeholder above its empty-input footer"
                     )),
@@ -547,6 +651,7 @@ impl<'a> Screen<'a> {
             "the input frame",
             row_marks,
             untouched_input && frame.probe_unstyled_hint,
+            column,
         )
     }
 
@@ -627,7 +732,7 @@ impl<'a> Screen<'a> {
             ));
         }
         if model.is_some() {
-            return self.after_prompt(prompt, end, "the input", None, false);
+            return self.after_prompt(prompt, end, "the input", None, false, 2);
         }
         let lines: Vec<&Cells> = (prompt..end)
             .map(|y| {
@@ -642,14 +747,27 @@ impl<'a> Screen<'a> {
             "the input",
             (above.then_some(1), below.then_some(1)),
             &lines,
+            2,
         )
     }
 
-    /// `editor`: rows between two rules, with a cursor the CLI draws itself.
-    fn in_editor(&self, rule: &Editor) -> Reading {
+    /// `editor`: rows under a status band, beside a rail, or between two rules.
+    fn in_editor(&self, rule: &Editor, cursor_visible: bool) -> Reading {
+        if let Some(rail) = &rule.rail {
+            return self.in_editor_rail(rule, rail, cursor_visible);
+        }
         let (column, cursor_row) = self.cursor;
+        let limit = match &rule.scrolled {
+            Scrolled::Unmarked(height) => Some(height.visible_rows(self.height(), rule.most_rows)),
+            _ => None,
+        };
+        if let (Some(band), Some(limit)) = (&rule.band, limit)
+            && let Some(reading) = self.in_editor_band(band, cursor_visible, limit + 1)
+        {
+            return reading;
+        }
         let tallest = (self.height() as f64 * rule.most_share).floor() as usize;
-        let tallest = tallest.max(rule.most_rows);
+        let tallest = limit.unwrap_or_else(|| tallest.max(rule.most_rows));
         let upper = (0..cursor_row)
             .rev()
             .find(|&y| rule.upper.is_match(&self.lines[y]));
@@ -664,58 +782,350 @@ impl<'a> Screen<'a> {
             ));
         };
         let place = format!("the editor at {}", row_span(upper + 2, lower));
-        if cursor_row == lower || !self.own_cursor(cursor_row, column) {
+        let cursor_in_editor =
+            self.own_cursor(cursor_row, column) || (rule.hardware_cursor && cursor_visible);
+        if cursor_row == lower || !cursor_in_editor {
             return unknown(format!(
                 "{place} has no cursor of its own where the cursor is, at row {}",
                 cursor_row + 1
             ));
         }
         let lines: Vec<&Cells> = (upper + 1..lower).map(|y| self.row(y)).collect();
-        let rest = lines[1..].iter().any(|line| !all_space(line));
-        let line = line_of(lines[0], upper + 1, 0, rest, self.cursor);
-        self.editor_reading(rule, upper, lower, &lines, &place)
-            .with_line(line)
+        if limit == Some(lines.len()) {
+            return self.full_editor(lower, column, lines, &place);
+        }
+        let marks = match &rule.scrolled {
+            Scrolled::Rules(marks) => (
+                counted(&marks.above, &self.lines[upper]),
+                counted(&marks.below, &self.lines[lower]),
+            ),
+            _ => (None, None),
+        };
+        self.editor_reading(upper + 1, 0, &lines, &place, marks, column <= 3)
+    }
+
+    fn in_editor_rail(&self, rule: &Editor, rail: &EditorRail, cursor_visible: bool) -> Reading {
+        let (column, cursor_row) = self.cursor;
+        let missing = || self.elsewhere("no complete interactive input box around the cursor");
+        if !cursor_visible {
+            return missing();
+        }
+
+        let (bounds, start, end) = if self.char(cursor_row, 0) == "┃" {
+            (
+                self.editor_rail_bounds(cursor_row),
+                2,
+                self.cols.saturating_sub(1),
+            )
+        } else {
+            let start = unicode_width::UnicodeWidthStr::width(rail.fallback_prompt.as_str());
+            (
+                self.editor_fallback_bounds(rule, rail, cursor_row, start),
+                start,
+                self.cols.saturating_sub(3),
+            )
+        };
+        let Some((upper, lower)) = bounds else {
+            return missing();
+        };
+        let first = upper + 1;
+        let limit = (self.height().saturating_sub(4) / 2).max(3);
+        if !(start..end).contains(&column) || lower - first > limit {
+            return missing();
+        }
+
+        // The rail can also enclose shell input, so both layouts need the native mode footer.
+        let interactive = self.lines.get(lower + 1).is_some_and(|footer| {
+            rail.footer.is_match(footer)
+                && !footer.split(" · ").any(|segment| {
+                    matches!(
+                        segment.trim(),
+                        "Shell"
+                            | "Plan"
+                            | "Autopilot"
+                            | "Autopilot (limited)"
+                            | "esc exit shell mode"
+                    )
+                })
+        });
+        if !interactive {
+            return missing();
+        }
+
+        let mut lines = Vec::new();
+        for row in first..lower {
+            let cells = self.row(row);
+            let from = cells.partition_point(|cell| cell.column < start);
+            let to = cells.partition_point(|cell| cell.column < end);
+            if !all_space(&cells[to..]) {
+                return missing();
+            }
+            lines.push(&cells[from..to]);
+        }
+        let place = format!("the editor at {}", row_span(first + 1, lower));
+        if rail
+            .live_notice
+            .as_ref()
+            .is_some_and(|notice| self.editor_live_notice(notice, upper))
+        {
+            return reading(
+                InputState::Interaction,
+                format!("the CLI shows a live notice above {place}"),
+            );
+        }
+        if lines.len() == limit {
+            let at = lines[cursor_row - first].partition_point(|cell| cell.column < column);
+            return self.full_editor(lower, at, lines, &place);
+        }
+        self.editor_reading(first, start, &lines, &place, (None, None), column == start)
+    }
+
+    fn editor_live_notice(&self, notice: &EditorLiveNotice, upper: usize) -> bool {
+        let single_row = upper
+            .checked_sub(notice.rows_above_upper.get())
+            .and_then(|row| self.editor_notice_text(row));
+        single_row == Some(notice.text.as_str())
+            || notice
+                .wrapped_context
+                .as_ref()
+                .is_some_and(|context| self.editor_notice_with_context(notice, context, upper))
+    }
+
+    fn editor_notice_text(&self, row: usize) -> Option<&str> {
+        let cells = self.cells.get(row)?;
+        if !self.editor_notice_row_complete(row) {
+            return None;
+        }
+        let last = cells.iter().rposition(|cell| cell.text != " ")?;
+        let literal = &cells[..=last];
+        (literal[0].column == 0 && literal.iter().all(|cell| cell.bold && cell.colored))
+            .then(|| self.lines[row].trim_end_matches(' '))
+    }
+
+    fn editor_notice_with_context(
+        &self,
+        notice: &EditorLiveNotice,
+        context: &EditorNoticeContext,
+        upper: usize,
+    ) -> bool {
+        let Some(last) = upper.checked_sub(1) else {
+            return false;
+        };
+        let is_context = |row| {
+            self.editor_notice_row_complete(row)
+                && self.lines[row].starts_with(' ')
+                && !self.lines[row].trim().is_empty()
+        };
+        if !is_context(last)
+            || !context
+                .last
+                .is_match(self.lines[last].trim_end_matches(' '))
+        {
+            return false;
+        }
+        let preceding = (0..last)
+            .rev()
+            .take(context.max_rows.get() - 1)
+            .take_while(|&row| is_context(row))
+            .count();
+        let Some(bottom) = last.checked_sub(preceding + 1) else {
+            return false;
+        };
+
+        // Each adjacent row must consume whole words from the end of the literal.
+        let mut remaining = notice.text.as_str();
+        for row in (0..=bottom).rev() {
+            let Some(text) = self.editor_notice_text(row) else {
+                return false;
+            };
+            let Some(prefix) = remaining.strip_suffix(text) else {
+                return false;
+            };
+            if prefix.is_empty() {
+                return row != bottom;
+            }
+            let Some(unmatched) = prefix.strip_suffix(' ') else {
+                return false;
+            };
+            remaining = unmatched;
+        }
+        false
+    }
+
+    fn editor_notice_row_complete(&self, row: usize) -> bool {
+        self.continues
+            .get(row..=row + 1)
+            .is_some_and(|wraps| wraps == [false, false])
+    }
+
+    fn editor_rail_bounds(&self, cursor_row: usize) -> Option<(usize, usize)> {
+        let interior = |row| {
+            self.row(row).first().is_some_and(|cell| {
+                cell.column == 0 && cell.text == "┃" && cell.colored && self.char(row, 1) == " "
+            })
+        };
+        if !interior(cursor_row) {
+            return None;
+        }
+        let upper = (0..cursor_row).rev().find(|&row| !interior(row))?;
+        let lower = (cursor_row + 1..self.height()).find(|&row| !interior(row))?;
+        let cap = |row, glyph, fill| {
+            let cells = self.row(row);
+            cells.len() == self.cols
+                && cells.iter().enumerate().all(|(column, cell)| {
+                    cell.column == column
+                        && cell.colored
+                        && cell.text == if column == 0 { glyph } else { fill }
+                })
+        };
+        (cap(upper, "╻", "▄") && cap(lower, "╹", "▀")).then_some((upper, lower))
+    }
+
+    fn editor_fallback_bounds(
+        &self,
+        rule: &Editor,
+        rail: &EditorRail,
+        cursor_row: usize,
+        start: usize,
+    ) -> Option<(usize, usize)> {
+        let border = |row, pattern: &Regex| {
+            self.row(row)
+                .iter()
+                .map(|cell| cell.column)
+                .eq(0..self.cols)
+                && pattern.is_match(&self.lines[row])
+        };
+        let upper = (0..cursor_row)
+            .rev()
+            .find(|&row| border(row, &rule.upper))?;
+        let lower = (cursor_row + 1..self.height()).find(|&row| border(row, &rule.lower))?;
+        let first = upper + 1;
+        let wrapped = |row| {
+            self.row(row).get(..start).is_some_and(|cells| {
+                cells
+                    .iter()
+                    .enumerate()
+                    .all(|(column, cell)| cell.column == column && cell.text == " ")
+            })
+        };
+        (self.lines[first].starts_with(&rail.fallback_prompt) && (first + 1..lower).all(wrapped))
+            .then_some((upper, lower))
+    }
+
+    /// Once the status and prompt identify a band, declines any incomplete input box there.
+    fn in_editor_band(
+        &self,
+        band: &EditorBand,
+        cursor_visible: bool,
+        limit: usize,
+    ) -> Option<Reading> {
+        let (column, cursor_row) = self.cursor;
+        let first = (1..=cursor_row).rev().find(|&row| {
+            self.lines[row].starts_with(&band.prompt) && band.top.is_match(&self.lines[row - 1])
+        })?;
+        let incomplete = || Some(self.elsewhere("the editor band has no complete input box"));
+        let start = unicode_width::UnicodeWidthStr::width(band.prompt.as_str());
+        let split_row = |row| {
+            let cells = self.row(row);
+            cells.split_at(cells.partition_point(|cell| cell.column < start))
+        };
+        let status_text = self
+            .row(first - 1)
+            .iter()
+            .skip_while(|cell| cell.text != " ")
+            .nth(1);
+        let (prompt, _) = split_row(first);
+        if !cursor_visible
+            || !(start..self.cols).contains(&column)
+            || !status_text.is_some_and(|cell| cell.colored && draws(cell))
+            || !prompt.iter().all(|cell| cell.colored)
+        {
+            return incomplete();
+        }
+
+        // The painted margin identifies continuation rows even when their input is blank.
+        let end = (first + 1..self.height())
+            .find(|&row| {
+                let (gutter, _) = split_row(row);
+                gutter.len() != start || !gutter.iter().all(|cell| cell.colored && cell.text == " ")
+            })
+            .unwrap_or_else(|| self.height());
+        if cursor_row >= end
+            || end - first > limit
+            || (end..self.height())
+                .any(|row| !self.blank(row) || split_row(row).0.iter().any(|cell| cell.colored))
+        {
+            return incomplete();
+        }
+
+        let place = format!("the editor at {}", row_span(first + 1, end));
+        let mut lines: Vec<&Cells> = (first..end).map(|row| split_row(row).1).collect();
+        let typed = &mut lines[cursor_row - first];
+        *typed = without_prediction(typed, column);
+        if lines.len() == limit {
+            let at = split_row(cursor_row)
+                .1
+                .partition_point(|cell| cell.column < column);
+            return Some(self.full_editor(end, at, lines, &place));
+        }
+        Some(self.editor_reading(
+            first,
+            start,
+            &lines,
+            &place,
+            (None, None),
+            column <= start + 3,
+        ))
+    }
+
+    fn full_editor(&self, end: usize, at: usize, mut lines: Vec<&Cells>, place: &str) -> Reading {
+        let mut reading = unknown(format!(
+            "{place} fills its viewport and may have scrolled rows"
+        ));
+        let last_row = lines.len() - 1;
+        let last = lines[last_row];
+        let at = at.min(last.len());
+        if self.cursor.1 + 1 == end && !last[at..].iter().any(written) && holds_writing(&lines) {
+            lines[last_row] = &last[..at];
+            reading.paste_tail = drafted(place, (None, None), &lines).draft;
+        }
+        reading
     }
 
     fn editor_reading(
         &self,
-        rule: &Editor,
-        upper: usize,
-        lower: usize,
+        first: usize,
+        start: usize,
         lines: &[&Cells],
         place: &str,
+        marks: (Option<u32>, Option<u32>),
+        near_start: bool,
     ) -> Reading {
         let column = self.cursor.0;
         // One row, with the cursor in its first columns and nothing drawn before it.
         let at_start = lines.len() == 1
-            && column <= 3
+            && near_start
             && !lines[0]
                 .iter()
                 .any(|cell| cell.column < column && draws(cell));
-        if at_start && hint_like(lines[0]) {
-            return Reading {
+        let reading = if at_start && hint_like(lines[0]) {
+            Reading {
                 unsure: true,
                 ..unknown(format!(
                     "{place} shows colored text where its input starts, a hint or a draft"
                 ))
-            };
-        }
-        if holds_writing(lines) {
-            let marks = match &rule.scrolled {
-                Scrolled::Rules(marks) => (
-                    counted(&marks.above, &self.lines[upper]),
-                    counted(&marks.below, &self.lines[lower]),
-                ),
-                _ => (None, None),
-            };
-            return drafted(place, marks, lines);
-        }
-        if lines.len() > 1 || column > 3 {
-            return unknown(format!(
+            }
+        } else if holds_writing(lines) {
+            drafted(place, marks, lines)
+        } else if lines.len() > 1 || !near_start {
+            unknown(format!(
                 "{place} is empty, but the cursor is not where the input starts"
-            ));
-        }
-        usable(format!("{place} is empty"))
+            ))
+        } else {
+            usable(format!("{place} is empty"))
+        };
+        let rest = lines[1..].iter().any(|line| !all_space(line));
+        reading.with_line(line_of(lines[0], first, start, rest, self.cursor))
     }
 
     /// `box`: rows that start with a bar, above a half-block border.
@@ -793,6 +1203,97 @@ impl<'a> Screen<'a> {
         } else {
             empty("")
         }
+    }
+
+    /// Finds the prompt row and its input start for a cursor on that row or a wrapped row.
+    fn prompt_row_at(
+        &self,
+        (column, row): (usize, usize),
+        prompt: &str,
+        alternate: Option<&str>,
+    ) -> Option<(usize, usize)> {
+        for y in (0..=row).rev() {
+            let line = self.lines[y].trim_start_matches(' ');
+            let indent = self.lines[y].len() - line.len();
+            if let Some(marker) = std::iter::once(prompt)
+                .chain(alternate)
+                .find(|marker| line.starts_with(marker) || line == marker.trim_end())
+            {
+                let start = indent + unicode_width::UnicodeWidthStr::width(marker);
+                return (column >= start
+                    && (y + 1..=row).all(|next| self.wrapped_under_prompt(next, start)))
+                .then_some((y, start));
+            }
+            if indent == 0 && !line.is_empty() {
+                break;
+            }
+        }
+        None
+    }
+
+    fn wrapped_under_prompt(&self, row: usize, start: usize) -> bool {
+        self.row(row).iter().take(start).all(|cell| !draws(cell))
+    }
+
+    fn drawn_prompt_cursor(&self, prompt: &str, alternate: Option<&str>) -> Option<(usize, usize)> {
+        let mut candidates = self
+            .cells
+            .iter()
+            .enumerate()
+            .flat_map(|(row, cells)| {
+                cells
+                    .iter()
+                    .filter(|cell| cell.inverse)
+                    .map(move |cell| (cell.column, row))
+            })
+            .filter(|&cursor| self.prompt_row_at(cursor, prompt, alternate).is_some());
+        let cursor = candidates.next()?;
+        candidates.next().is_none().then_some(cursor)
+    }
+
+    /// Reads an input box with a prompt row and any wrapped rows under it.
+    fn in_prompt_rows(
+        &self,
+        prompt: &str,
+        alternate: Option<&str>,
+        placeholder: &Regex,
+        dim_draft: Option<&Regex>,
+        untouched_input: bool,
+    ) -> Reading {
+        let Some((y, start)) = self.prompt_row_at(self.cursor, prompt, alternate) else {
+            return self.elsewhere("no native prompt around the cursor");
+        };
+        let row = self.cursor.1;
+        let end = (row + 1..self.height())
+            .find(|&next| {
+                !self.wrapped_under_prompt(next, start)
+                    || !self.from(next, start).iter().any(written)
+            })
+            .unwrap_or_else(|| self.height());
+        let first = self.from(y, start);
+        if y + 1 == end && dim_draft.is_some_and(|pattern| pattern.is_match(joined(first).trim())) {
+            let place = format!("the prompt at row {}", y + 1);
+            return drafted(&place, (None, None), &[first]).with_line(line_of(
+                self.row(y),
+                y,
+                start,
+                false,
+                self.cursor,
+            ));
+        }
+        let mut probe_unstyled_hint = false;
+        if y + 1 == end && self.cursor_at(start, y) && placeholder.is_match(joined(first).trim()) {
+            if first
+                .iter()
+                .filter(|cell| draws(cell))
+                .all(|cell| cell.dim || cell.inverse)
+            {
+                return usable(format!("the prompt at row {} shows its hint", y + 1))
+                    .with_line(line_of(self.row(y), y, start, false, self.cursor));
+            }
+            probe_unstyled_hint = untouched_input;
+        }
+        self.after_prompt(y, end, "the prompt", None, probe_unstyled_hint, start)
     }
 
     /// `prompt_row`: the last row that starts with the prompt holds the input.

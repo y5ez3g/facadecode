@@ -21,6 +21,8 @@ pub struct VisibleCell {
     pub inverse: bool,
     /// The foreground is not the default one.
     pub colored: bool,
+    /// Tells foregrounds apart: the same color has the same number.
+    pub foreground: u32,
 }
 
 /// The screen as drawn, with the cursor.
@@ -41,6 +43,14 @@ pub struct ScreenView {
     pub synchronized_update: bool,
 }
 
+fn foreground(color: Color) -> u32 {
+    match color {
+        Color::Named(name) => name as u32,
+        Color::Indexed(index) => 1 << 24 | u32::from(index),
+        Color::Spec(rgb) => 2 << 24 | u32::from_be_bytes([0, rgb.r, rgb.g, rgb.b]),
+    }
+}
+
 fn visible_cells(row: &Row<Cell>, cols: usize) -> Vec<VisibleCell> {
     let mut cells = Vec::with_capacity(cols);
     for column in 0..cols {
@@ -56,6 +66,7 @@ fn visible_cells(row: &Row<Cell>, cols: usize) -> Vec<VisibleCell> {
             dim: flagged(Flags::DIM),
             inverse: flagged(Flags::INVERSE),
             colored: cell.fg != Color::Named(NamedColor::Foreground),
+            foreground: foreground(cell.fg),
         });
     }
     cells

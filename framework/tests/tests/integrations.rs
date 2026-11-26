@@ -42,15 +42,23 @@ fn own_facade_line(test: &TestHome, cli: &str) {
             ".gemini/antigravity-cli/settings.json",
             &server.to_string(),
         ),
+        "devin" => write(test, ".config/devin/mcp_config.json", &server.to_string()),
+        "agent" => write(test, ".cursor/mcp.json", &server.to_string()),
+        "kiro-cli" => write(test, ".kiro/settings/mcp.json", &server.to_string()),
+        "qoder" => write(test, ".qoder/settings.json", &server.to_string()),
+        "omp" => write(test, ".omp/agent/mcp.json", &server.to_string()),
         other => panic!("say where {other} reads its MCP servers"),
     }
 }
 
 /// A run Facade starts beside a `facade-mcp` line the person configured themselves gets Facade's
-/// tools on each of the six built-in CLIs. Each run is the test CLI under its CLI's name.
+/// tools on each built-in CLI. Each run is the test CLI under its CLI's name.
 #[test]
 fn a_run_beside_the_person_s_own_facade_line_gets_facade_s_tools() {
-    for cli in ["claude", "codex", "opencode", "pi", "muse", "agy"] {
+    for cli in [
+        "claude", "codex", "opencode", "pi", "muse", "agy", "devin", "agent", "kiro-cli", "qoder",
+        "omp",
+    ] {
         let test = TestHome::new(&format!("beside-{cli}"));
         own_facade_line(&test, cli);
         let programs = test.path.parent().unwrap().join("programs");
@@ -117,7 +125,10 @@ fn has_no_facade_skill(test: &TestHome, cli: &str, run: &Value) -> bool {
             !command.contains("--plugin-dir") && !folder.join("plugin").join(skill).exists()
         }
         "codex" => !command.contains("--skill") && !folder.join(skill).exists(),
-        "muse" | "opencode" | "pi" => !folder.join(skill).exists(),
+        "muse" | "opencode" | "pi" | "kiro-cli" => !folder.join(skill).exists(),
+        "devin" | "qoder" => !command.contains("--skill") && !folder.join(skill).exists(),
+        "agent" => !folder.join("cursor-plugin").join(skill).exists(),
+        "omp" => !folder.join("omp-facade").join(skill).exists(),
         "agy" => !test
             .project
             .join(".agents/plugins/facade")

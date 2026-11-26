@@ -24,17 +24,23 @@
 		"clis": {
 			"type": "object",
 			"default": {},
-			"markdownDescription": "The CLIs New Agent offers, by name. A built-in's name (`claude`, `codex`, `agy`, `muse`, `opencode`, `pi`) changes that built-in; any other name adds a CLI, which needs a `type`. Each entry stands alone.",
+			"markdownDescription": "The CLIs New Agent offers, by name. A built-in's name (`claude`, `codex`, `agy`, `muse`, `opencode`, `pi`, `devin`, `agent`, `kiro-cli`, `qoder`, `omp`, `copilot`) changes that built-in; any other name adds a CLI, which needs a `type`. Each entry stands alone.",
 			"properties": {
 				"claude": { "$ref": "#/definitions/claude", "markdownDescription": "Claude Code." },
 				"codex": { "$ref": "#/definitions/codex", "markdownDescription": "Codex." },
 				"agy": { "$ref": "#/definitions/agy", "markdownDescription": "Antigravity." },
 				"muse": { "$ref": "#/definitions/muse", "markdownDescription": "Muse Code." },
 				"opencode": { "$ref": "#/definitions/opencode", "markdownDescription": "OpenCode." },
-				"pi": { "$ref": "#/definitions/pi", "markdownDescription": "Pi." }
+				"pi": { "$ref": "#/definitions/pi", "markdownDescription": "Pi." },
+				"devin": { "$ref": "#/definitions/devin", "markdownDescription": "Devin." },
+				"agent": { "$ref": "#/definitions/agent", "markdownDescription": "Cursor." },
+				"kiro-cli": { "$ref": "#/definitions/kiro-cli", "markdownDescription": "Kiro." },
+				"qoder": { "$ref": "#/definitions/qoder", "markdownDescription": "Qoder." },
+				"omp": { "$ref": "#/definitions/omp", "markdownDescription": "Oh My Pi." },
+				"copilot": { "$ref": "#/definitions/copilot", "markdownDescription": "GitHub Copilot CLI." }
 			},
 			"propertyNames": {
-				"pattern": "^(?:(?:claude|codex|agy|muse|opencode|pi)|(?!(?:[cC][lL][aA][uU][dD][eE]|[cC][lL][aA][uU][dD][eE] [cC][oO][dD][eE]|[cC][oO][dD][eE][xX]|[aA][gG][yY]|[aA][nN][tT][iI][gG][rR][aA][vV][iI][tT][yY]|[mM][uU][sS][eE]|[mM][uU][sS][eE] [cC][oO][dD][eE]|[oO][pP][eE][nN][cC][oO][dD][eE]|[pP][iI])$)(?=[\\s\\S]*[^\\s\\p{Cf}])(?!\\s)(?![\\s\\S]*\\s$)[^\\p{Cc}]*)$",
+				"pattern": "^(?:(?:claude|codex|agy|muse|opencode|pi|devin|agent|kiro-cli|qoder|omp|copilot)|(?!(?:[cC][lL][aA][uU][dD][eE]|[cC][lL][aA][uU][dD][eE] [cC][oO][dD][eE]|[cC][oO][dD][eE][xX]|[aA][gG][yY]|[aA][nN][tT][iI][gG][rR][aA][vV][iI][tT][yY]|[mM][uU][sS][eE]|[mM][uU][sS][eE] [cC][oO][dD][eE]|[oO][pP][eE][nN][cC][oO][dD][eE]|[pP][iI]|[dD][eE][vV][iI][nN]|[aA][gG][eE][nN][tT]|[cC][uU][rR][sS][oO][rR]|[kK][iI][rR][oO]-[cC][lL][iI]|[kK][iI][rR][oO]|[qQ][oO][dD][eE][rR]|[oO][mM][pP]|[oO][hH] [mM][yY] [pP][iI]|[cC][oO][pP][iI][lL][oO][tT]|[gG][iI][tT][hH][uU][bB] [cC][oO][pP][iI][lL][oO][tT] [cC][lL][iI])$)(?=[\\s\\S]*[^\\s\\p{Cf}])(?!\\s)(?![\\s\\S]*\\s$)[^\\p{Cc}]*)$",
 				"patternErrorMessage": "A CLI's name needs a visible character, no space at either end and no control character, and it cannot be a built-in CLI's ID or name in any letter case."
 			},
 			"additionalProperties": { "$ref": "#/definitions/added" },
@@ -105,7 +111,7 @@
 			"markdownDescription": "`false`: not offered in New Agent, and starts and restorations of it are refused. Running agents keep running."
 		},
 		"icon": {
-			"enum": ["claude", "codex", "agy", "muse", "opencode", "pi", "facade-red", "facade-orange", "facade-amber", "facade-lime", "facade-green", "facade-teal", "facade-sky", "facade-blue", "facade-violet", "facade-pink", "facade-aurora", "facade-sunset", "facade-ocean", "facade-orchid", "facade-pearl", "facade-graphite"],
+			"enum": ["claude", "codex", "agy", "muse", "opencode", "pi", "devin", "agent", "kiro-cli", "qoder", "omp", "copilot", "facade-red", "facade-orange", "facade-amber", "facade-lime", "facade-green", "facade-teal", "facade-sky", "facade-blue", "facade-violet", "facade-pink", "facade-aurora", "facade-sunset", "facade-ocean", "facade-orchid", "facade-pearl", "facade-graphite"],
 			"markdownEnumDescriptions": [
 				"Claude Code's own icon.",
 				"Codex's own icon.",
@@ -113,6 +119,12 @@
 				"Muse Code's own icon.",
 				"OpenCode's own icon.",
 				"Pi's own icon.",
+				"Devin's own icon.",
+				"Cursor's own icon.",
+				"Kiro's own icon.",
+				"Qoder's own icon.",
+				"Oh My Pi's own icon.",
+				"GitHub Copilot CLI's own icon.",
 				"Robot: light red to red.",
 				"Robot: light orange to deep orange.",
 				"Robot: pale yellow to amber.",
@@ -226,12 +238,106 @@
 				"icon": { "$ref": "#/definitions/icon" }
 			}
 		},
+		"devin": {
+			"type": "object",
+			"allOf": [{ "$ref": "#/definitions/programFields" }],
+			"additionalProperties": false,
+			"properties": {
+				"type": { "const": "devin", "markdownDescription": "This entry is Devin's. Its type can only be \"devin\"; omitting it changes nothing." },
+				"program": { "$ref": "#/definitions/program" },
+				"command": { "$ref": "#/definitions/legacyCommand" },
+				"args": { "$ref": "#/definitions/args" },
+				"env": { "$ref": "#/definitions/env" },
+				"model": { "$ref": "#/definitions/model" },
+				"enabled": { "$ref": "#/definitions/enabled" },
+				"icon": { "$ref": "#/definitions/icon" }
+			}
+		},
+		"agent": {
+			"type": "object",
+			"allOf": [{ "$ref": "#/definitions/programFields" }],
+			"additionalProperties": false,
+			"properties": {
+				"type": { "const": "agent", "markdownDescription": "This entry is Cursor's. Its type can only be \"agent\"; omitting it changes nothing." },
+				"program": { "$ref": "#/definitions/program" },
+				"command": { "$ref": "#/definitions/legacyCommand" },
+				"args": { "$ref": "#/definitions/args" },
+				"env": { "$ref": "#/definitions/env" },
+				"model": { "$ref": "#/definitions/model" },
+				"enabled": { "$ref": "#/definitions/enabled" },
+				"icon": { "$ref": "#/definitions/icon" }
+			}
+		},
+		"kiro-cli": {
+			"type": "object",
+			"allOf": [{ "$ref": "#/definitions/programFields" }],
+			"additionalProperties": false,
+			"properties": {
+				"type": { "const": "kiro-cli", "markdownDescription": "This entry is Kiro's. Its type can only be \"kiro-cli\"; omitting it changes nothing." },
+				"program": { "$ref": "#/definitions/program" },
+				"command": { "$ref": "#/definitions/legacyCommand" },
+				"args": { "$ref": "#/definitions/args" },
+				"env": { "$ref": "#/definitions/env" },
+				"model": { "$ref": "#/definitions/model" },
+				"effort": { "type": "string", "pattern": "\\S", "examples": ["low", "medium", "high"], "markdownDescription": "The reasoning effort new agents use where a start names none: Kiro's `--effort`." },
+				"enabled": { "$ref": "#/definitions/enabled" },
+				"icon": { "$ref": "#/definitions/icon" }
+			}
+		},
+		"qoder": {
+			"type": "object",
+			"allOf": [{ "$ref": "#/definitions/programFields" }],
+			"additionalProperties": false,
+			"properties": {
+				"type": { "const": "qoder", "markdownDescription": "This entry is Qoder's. Its type can only be \"qoder\"; omitting it changes nothing." },
+				"program": { "$ref": "#/definitions/program" },
+				"command": { "$ref": "#/definitions/legacyCommand" },
+				"args": { "$ref": "#/definitions/args" },
+				"env": { "$ref": "#/definitions/env" },
+				"model": { "$ref": "#/definitions/model" },
+				"effort": { "type": "string", "pattern": "\\S", "examples": ["low", "medium", "high"], "markdownDescription": "The reasoning effort new agents use where a start names none: Qoder's `--reasoning-effort`." },
+				"enabled": { "$ref": "#/definitions/enabled" },
+				"icon": { "$ref": "#/definitions/icon" }
+			}
+		},
+		"omp": {
+			"type": "object",
+			"allOf": [{ "$ref": "#/definitions/programFields" }],
+			"additionalProperties": false,
+			"properties": {
+				"type": { "const": "omp", "markdownDescription": "This entry is Oh My Pi's. Its type can only be \"omp\"; omitting it changes nothing." },
+				"program": { "$ref": "#/definitions/program" },
+				"command": { "$ref": "#/definitions/legacyCommand" },
+				"args": { "$ref": "#/definitions/args" },
+				"env": { "$ref": "#/definitions/env" },
+				"model": { "$ref": "#/definitions/model" },
+				"effort": { "type": "string", "pattern": "\\S", "examples": ["off", "minimal", "low", "medium", "high", "xhigh"], "markdownDescription": "The reasoning effort new agents use where a start names none: Oh My Pi's `--thinking`." },
+				"enabled": { "$ref": "#/definitions/enabled" },
+				"icon": { "$ref": "#/definitions/icon" }
+			}
+		},
+		"copilot": {
+			"type": "object",
+			"allOf": [{ "$ref": "#/definitions/programFields" }],
+			"additionalProperties": false,
+			"properties": {
+				"type": { "const": "copilot", "markdownDescription": "This entry is GitHub Copilot CLI's. Its type can only be \"copilot\"; omitting it changes nothing." },
+				"program": { "$ref": "#/definitions/program" },
+				"command": { "$ref": "#/definitions/legacyCommand" },
+				"args": { "$ref": "#/definitions/args" },
+				"env": { "$ref": "#/definitions/env" },
+				"model": { "$ref": "#/definitions/model" },
+				"effort": { "type": "string", "pattern": "\\S", "examples": ["none", "minimal", "low", "medium", "high", "xhigh", "max"], "markdownDescription": "The reasoning effort new agents use where a start names none: GitHub Copilot CLI's `--reasoning-effort`." },
+				"enabled": { "$ref": "#/definitions/enabled" },
+				"icon": { "$ref": "#/definitions/icon" }
+			}
+		},
 		"added": {
 			"type": "object",
 			"required": ["type"],
 			"properties": {
 				"type": {
-					"enum": ["claude", "codex", "agy", "muse", "opencode", "pi", "custom"],
+					"enum": ["claude", "codex", "agy", "muse", "opencode", "pi", "devin", "agent", "kiro-cli", "qoder", "omp", "copilot", "custom"],
 					"markdownEnumDescriptions": [
 						"Claude Code, with everything Facade gives it, under this name.",
 						"Codex, with everything Facade gives it, under this name.",
@@ -239,6 +345,12 @@
 						"Muse Code, with everything Facade gives it, under this name.",
 						"OpenCode, with everything Facade gives it, under this name.",
 						"Pi, with everything Facade gives it, under this name.",
+						"Devin, with everything Facade gives it, under this name.",
+						"Cursor, with everything Facade gives it, under this name.",
+						"Kiro, with everything Facade gives it, under this name.",
+						"Qoder, with everything Facade gives it, under this name.",
+						"Oh My Pi, with everything Facade gives it, under this name.",
+						"GitHub Copilot CLI, with everything Facade gives it, under this name.",
 						"Any other program, started in a terminal with nothing of Facade's: no tools, messages, status, model, effort, Resume or Pin."
 					],
 					"markdownDescription": "The CLI this entry runs."
@@ -252,6 +364,12 @@
 				{ "if": { "properties": { "type": { "const": "muse" } } }, "then": { "$ref": "#/definitions/addedMuse" } },
 				{ "if": { "properties": { "type": { "const": "opencode" } } }, "then": { "$ref": "#/definitions/addedOpencode" } },
 				{ "if": { "properties": { "type": { "const": "pi" } } }, "then": { "$ref": "#/definitions/addedPi" } },
+				{ "if": { "properties": { "type": { "const": "devin" } } }, "then": { "$ref": "#/definitions/addedDevin" } },
+				{ "if": { "properties": { "type": { "const": "agent" } } }, "then": { "$ref": "#/definitions/addedAgent" } },
+				{ "if": { "properties": { "type": { "const": "kiro-cli" } } }, "then": { "$ref": "#/definitions/addedKiroCli" } },
+				{ "if": { "properties": { "type": { "const": "qoder" } } }, "then": { "$ref": "#/definitions/addedQoder" } },
+				{ "if": { "properties": { "type": { "const": "omp" } } }, "then": { "$ref": "#/definitions/addedOmp" } },
+				{ "if": { "properties": { "type": { "const": "copilot" } } }, "then": { "$ref": "#/definitions/addedCopilot" } },
 				{ "if": { "properties": { "type": { "const": "custom" } } }, "then": { "$ref": "#/definitions/addedCustom" } }
 			]
 		},
@@ -261,6 +379,12 @@
 		"addedMuse": { "properties": { "type": {}, "program": { "$ref": "#/definitions/program" }, "command": { "$ref": "#/definitions/legacyCommand" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/muse/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
 		"addedOpencode": { "properties": { "type": {}, "program": { "$ref": "#/definitions/program" }, "command": { "$ref": "#/definitions/legacyCommand" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
 		"addedPi": { "properties": { "type": {}, "program": { "$ref": "#/definitions/program" }, "command": { "$ref": "#/definitions/legacyCommand" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/pi/properties/model" }, "effort": { "$ref": "#/definitions/pi/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedDevin": { "properties": { "type": {}, "program": { "$ref": "#/definitions/program" }, "command": { "$ref": "#/definitions/legacyCommand" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedAgent": { "properties": { "type": {}, "program": { "$ref": "#/definitions/program" }, "command": { "$ref": "#/definitions/legacyCommand" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedKiroCli": { "properties": { "type": {}, "program": { "$ref": "#/definitions/program" }, "command": { "$ref": "#/definitions/legacyCommand" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/kiro-cli/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedQoder": { "properties": { "type": {}, "program": { "$ref": "#/definitions/program" }, "command": { "$ref": "#/definitions/legacyCommand" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/qoder/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedOmp": { "properties": { "type": {}, "program": { "$ref": "#/definitions/program" }, "command": { "$ref": "#/definitions/legacyCommand" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/omp/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedCopilot": { "properties": { "type": {}, "program": { "$ref": "#/definitions/program" }, "command": { "$ref": "#/definitions/legacyCommand" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/copilot/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
 		"addedCustom": {
 			"anyOf": [{ "required": ["program"] }, { "required": ["command"] }],
 			"properties": {

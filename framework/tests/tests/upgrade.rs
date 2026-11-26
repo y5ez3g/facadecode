@@ -1274,11 +1274,7 @@ fn a_newer_build_s_status_reports_the_running_service_without_upgrading_it() {
         "{text}"
     );
     assert_eq!(status_field(&text, "Active agents"), Some("1"), "{text}");
-    assert_eq!(
-        status_field(&text, "Connected machines"),
-        Some("-"),
-        "{text}"
-    );
+    assert!(text.contains("\n\nAvailable CLIs\n"), "{text}");
     let after = home.hello_result().unwrap();
     assert_eq!(
         (&after["pid"], &after["build"]),
@@ -3149,7 +3145,40 @@ fn a_start_a_stop_and_a_type_under_way_finish_before_the_takeover_ends() {
     );
 }
 
-/// The test CLI under each of the six CLIs' names, through a v1 takeover: each keeps its process and
+/// Reads the response IDs in order, including duplicates, from Devin's original stdio server.
+fn takeover_responses(
+    folder: &Path,
+    expected: &[u64],
+) -> (facade_base::process::ProcessIdentity, Vec<Value>) {
+    let file = folder.join("responses.jsonl");
+    let read = || {
+        std::fs::read_to_string(&file)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| facade_scenarios::serde_json::from_str(line).unwrap())
+            .collect::<Vec<Value>>()
+    };
+    assert!(
+        wait_until(LOADED_TIMEOUT, || read().len() > expected.len()),
+        "waiting for Devin's MCP responses {expected:?}: {:?}",
+        read()
+    );
+    let rows = read();
+    let replies = rows[1..].to_vec();
+    let ids: Vec<u64> = replies
+        .iter()
+        .map(|reply| reply["id"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ids, expected, "{replies:?}");
+    let pid = process_identity(rows[0]["relay_pid"].as_i64().unwrap() as i32);
+    assert!(
+        !pid.birth.is_empty() && alive(&pid),
+        "Devin's relay: {pid:?}"
+    );
+    (pid, replies)
+}
+
+/// The test CLI under each CLI's name, through a v1 takeover: each keeps its process and
 /// its tools reconnect. Nothing its run was given names a build's folder, so once the new build
 /// proves healthy, the hook lines its CLI runs through the launcher use the new build. Muse Code
 /// and Antigravity still receive the instructions stored with the run. Pi and OpenCode report their
@@ -3157,7 +3186,10 @@ fn a_start_a_stop_and_a_type_under_way_finish_before_the_takeover_ends() {
 #[test]
 fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_run_the_new_build()
 {
-    const CLIS: [&str; 6] = ["claude", "codex", "agy", "muse", "opencode", "pi"];
+    const CLIS: [&str; 11] = [
+        "claude", "codex", "agy", "muse", "opencode", "pi", "devin", "agent", "kiro-cli", "qoder",
+        "omp",
+    ];
     const SESSION: &str = "96da4482-2bae-4a45-b193-a5664c19826c";
     let home = TestHome::new("takeoversix");
     let old = &test_binaries().facade;
@@ -3181,15 +3213,22 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
     );
     let bin = home.path.join("framework").join("bin");
     let run = |name: &str| home.agent_from_watch(name).unwrap_or_default();
+    let probe = home.path.join("devin-takeover-mcp");
+    std::fs::create_dir(&probe).unwrap();
+    let mut devin_relay = None;
     let mut runs = Vec::new();
     for cli in CLIS {
         install_program(&programs, cli, &test_binaries().fakecli);
         let mut start = home.command(old);
         start.env("PATH", &path);
+        if cli == "devin" {
+            start.env("FAKECLI_MCP_TAKEOVER", &probe);
+        }
         // Antigravity starts its plugin's server from its `/mcp` panel, which Facade's start opens;
         // the test CLI runs the others' from the launcher their settings name, as each CLI does.
         match cli {
             "agy" => start.env("FAKECLI_LOOK", "agy"),
+            _ if Native::of(cli).is_some() => start.env("FAKECLI_LOOK", cli),
             _ => start.env("FAKECLI_MCP", bin.join(program_name("facade-mcp"))),
         };
         let name = format!("{cli}-run");
@@ -3211,6 +3250,17 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         );
         let pid = old_run()["pid"].as_i64().unwrap() as i32;
         runs.push((cli, name, process_identity(pid)));
+        if cli == "devin" {
+            let (relay, replies) = takeover_responses(&probe, &[2]);
+            assert!(
+                replies[0]["result"]["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|tool| tool["name"] == "list_agents")
+            );
+            devin_relay = Some(relay);
+        }
     }
     drop(previous);
     let program = program_of_build(&home, &newer());
@@ -3225,23 +3275,57 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         "{}",
         stderr(&listed)
     );
+    let after = home.hello_result().unwrap();
+    assert_eq!(after["api_version"], 1, "{after}");
+    assert_eq!(after["build"], newer());
+    assert_eq!(after["keeper"]["pid"], before["result"]["keeper"]["pid"]);
+    assert_ne!(after["pid"], before["result"]["pid"]);
+    let devin_relay = devin_relay.expect("Devin's relay before takeover");
     for (cli, name, process) in &runs {
         assert!(
             alive(process) && run(name)["pid"].as_i64() == Some(process.pid as i64),
             "{cli} keeps its process: {}",
             run(name)
         );
+        if *cli == "devin" {
+            let current = run(name);
+            assert_ne!(
+                current["tools_state"], "available",
+                "after reconnect: {current}"
+            );
+            assert_eq!(takeover_responses(&probe, &[2]).0, devin_relay);
+            std::fs::write(probe.join("read-roster"), "").unwrap();
+            let (relay, replies) = takeover_responses(&probe, &[2, 3]);
+            assert_eq!(relay, devin_relay);
+            let roster = &replies[1]["result"]["structuredContent"];
+            assert_eq!(roster["status"], "success", "{roster}");
+            let address = run(name)["address"].clone();
+            assert!(
+                roster["data"]["agents"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|agent| agent["id"] == address
+                        && agent["name"] == name.as_str()
+                        && agent["type"] == "managed"),
+                "{roster}"
+            );
+            let current = run(name);
+            assert_ne!(
+                current["tools_state"], "available",
+                "after list_agents: {current}"
+            );
+            std::fs::write(probe.join("read-catalog"), "").unwrap();
+            let (relay, replies) = takeover_responses(&probe, &[2, 3, 4]);
+            assert_eq!(relay, devin_relay);
+            assert_eq!(replies[2]["result"], replies[0]["result"], "{replies:?}");
+        }
         assert!(
             wait_until(secs(30), || run(name)["tools_state"] == "available"),
             "{cli}'s tools after: {}",
             run(name)
         );
     }
-    let after = home.hello_result().unwrap();
-    assert_eq!(after["api_version"], 1, "{after}");
-    assert_eq!(after["build"], newer());
-    assert_eq!(after["keeper"]["pid"], before["result"]["keeper"]["pid"]);
-    assert_ne!(after["pid"], before["result"]["pid"]);
     // What each run was given, its arguments, its environment and its files, names Facade's
     // programs by their launchers only.
     let mut hooks = Vec::new();
@@ -3268,6 +3352,9 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         if *cli == "agy" {
             folders.push(home.project.join(".agents/plugins/facade"));
         }
+        if *cli == "kiro-cli" {
+            folders.push(home.project.join(".kiro/agents"));
+        }
         let before_files = given.len();
         for folder in folders {
             given.extend(
@@ -3285,7 +3372,11 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
                 );
             }
         }
-        // The environment holds no hook line of the six CLIs'.
+        // The stand-ins for these run the hooks their own files hold: see providers.rs.
+        if Native::of(cli).is_some() {
+            continue;
+        }
+        // The environment holds no hook line of the other CLIs'.
         let mut lines: Vec<String> = given[..1]
             .iter()
             .chain(&given[given.len() - files..])
@@ -3438,6 +3529,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
             run(name)
         );
     }
+    assert_eq!(takeover_responses(&probe, &[2, 3, 4]).0, devin_relay);
 }
 
 /// The hook lines in `text` that run Facade's launcher `facade`: each whole command as a CLI's

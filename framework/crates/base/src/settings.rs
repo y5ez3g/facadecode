@@ -13,12 +13,19 @@
 
 use std::collections::HashSet;
 use std::fmt;
+use std::io::Write as _;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub use crate::whitespace::is_space;
 
 /// The settings file's name, in the Facade home.
 pub const SETTINGS_FILE: &str = "facade.json";
+
+/// The settings file Facade writes where there is none (CONFIGURATION-1.3): YOLO on, the built-in
+/// names, every built-in CLI's entry with its fields, and what Facade gives each CLI and why. It
+/// holds the defaults, so a home reads the same before and after it is written.
+pub const TEMPLATE: &str = include_str!("texts/settings.jsonc");
 
 /// The settings a launch takes from the file.
 #[derive(Clone)]
@@ -107,8 +114,49 @@ pub fn settings_file() -> anyhow::Result<PathBuf> {
 }
 
 /// The settings the file holds now, or every problem that keeps them from being read, as one text.
+/// A missing file is written from [`TEMPLATE`] first.
 pub fn read() -> Result<Settings, String> {
-    read_file(&settings_file().map_err(|err| format!("{err:#}"))?)
+    let file = settings_file().map_err(|err| format!("{err:#}"))?;
+    create_missing(&file);
+    read_file(&file)
+}
+
+/// Writes [`TEMPLATE`] to `file` where there is nothing, whole or not at all and readable by this
+/// user alone, never over a file that someone else made first. Where it cannot be written, the
+/// defaults it holds still apply.
+pub fn create_missing(file: &Path) {
+    if std::fs::symlink_metadata(file).is_ok() {
+        return;
+    }
+    let Some(folder) = file.parent() else {
+        return;
+    };
+    if crate::files::create_private_folder_all(folder).is_err() {
+        return;
+    }
+    // Each call stages its own file: two at once in one daemon must not take each other's.
+    static STAGED: AtomicU64 = AtomicU64::new(0);
+    let staged = folder.join(format!(
+        ".{SETTINGS_FILE}.{}.{}.tmp",
+        std::process::id(),
+        STAGED.fetch_add(1, Ordering::Relaxed)
+    ));
+    let Ok(mut staging) = crate::files::private_options()
+        .write(true)
+        .create_new(true)
+        .open(&staged)
+    else {
+        return;
+    };
+    // The final name appears only with the whole file, and never replaces one.
+    if staging
+        .write_all(TEMPLATE.as_bytes())
+        .and_then(|()| staging.sync_all())
+        .is_ok()
+    {
+        let _ = std::fs::hard_link(&staged, file);
+    }
+    let _ = std::fs::remove_file(&staged);
 }
 
 /// The settings `file` holds now, or every problem that keeps them from being read, as one text:

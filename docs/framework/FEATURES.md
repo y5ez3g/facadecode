@@ -64,6 +64,12 @@ artifacts. See the [editor setup](../../extension/GUIDE.md#install-for-your-work
 A managed agent runs a CLI in a terminal the Orchestrator holds. A Guest is an external MCP client's connection and
 gets a name and inbox when it first calls a tool. From that point it can receive messages and appear in `list`.
 
+Start the built-in adapters with their native command names, including `facade start devin`,
+`facade start agent`, `facade start kiro-cli`, `facade start qoder`, `facade start omp` for Oh My Pi
+and `facade start copilot` for GitHub Copilot CLI. Kiro uses its V3 terminal.
+A Kiro session saved with a native profile retains that profile's tools when resumed. Facade's
+managed relay and session-start hook use a Facade profile.
+
 - `facade start [OPTIONS] <CLI> [CLI_ARGS]...` starts a built-in or configured CLI. Put `--name`, `--machine`,
   `--workdir`, `--worktree` and `-d` before the CLI name. Arguments after that name go to the CLI, including its own
   options for models and prompts. A foreground start opens the terminal. A background start prints the name and
@@ -87,9 +93,11 @@ gets a name and inbox when it first calls a tool. From that point it can receive
   is the first eight characters of its ID when they match no other session in the CLI histories `facade resume`
   searches in that directory, including sessions that managed agents use, and its full ID otherwise.
 - `facade status <AGENT>` shows the same Agent State as `list` while the agent runs, with the reason for
-  `Waiting for you` and `Error`. For an ended agent it shows `Ended (stopped by Facade)`, `Ended (code N)`,
-  `Ended (signal <SIGNAL>)`, or `Ended` when the way it ended is unknown. Its `Session` line shows the same native
-  name or preview as `list`, and `Session ID` the CLI's full session ID.
+  `Waiting for you` and `Error`. A CLI that shows a choice of its own in place of its input box, such as a Codex
+  update or a Cursor tool approval, is `Waiting for you` until it gets an answer. An answer that ends in a question
+  is not. For an ended agent it shows `Ended (stopped by Facade)`, `Ended (code N)`, `Ended (signal <SIGNAL>)`, or
+  `Ended` when the way it ended is unknown. Its `Session` line shows the same native name or preview as `list`, and
+  `Session ID` the CLI's full session ID.
 - Resuming an `Ended` agent keeps its reference, directory and session and starts with an empty terminal.
   Resume waits up to 30 seconds for the previous run to finish releasing its resources.
   Resuming a `Saved` session creates an agent. A session already in use produces the reference of the agent using it.
@@ -107,15 +115,29 @@ wake it when needed.
 - `facade attach a3@devbox` opens a running managed agent's terminal. Ctrl+] detaches with exit code 0 and leaves
   the agent running. A CLI exit returns its actual exit status. The attached view uses the terminal app's alternate
   screen, as any full-screen program does. Every end returns to the shell page and scrollback from before the attach
-  and prints one receipt. While attached, the wheel browses the CLI's main-screen scrollback when mouse reporting
-  is off. Drag to select text in the live view or its scrollback and press Ctrl+C to copy it through the terminal.
-  Scrolling back down or typing returns to the live screen. A CLI that enables mouse reporting receives the
-  mouse itself. The Facade Code editor labels the terminal with the CLI's title
+  and prints one receipt.
+- In macOS Terminal, in VS Code and the Facade Code editor on macOS and Windows, and in Windows terminals, selecting,
+  copying and the right click are the terminal app's own, for every CLI. The wheel scrolls a CLI that tracks the
+  mouse, as when it runs alone, and browses the scrollback of one that does not, never leaving the agent's screen.
+  Scrolling back down or typing returns to the live screen. A CLI that tracks the mouse also receives its clicks in
+  macOS Terminal, once Accessibility allows Terminal to control the computer, and none in VS Code and Windows
+  terminals.
+- A CLI's question taller than the window, such as Kiro's trust-all-tools warning, leaves its top in the
+  scrollback. Once you answer it, Facade drops that part, and scrolling back shows the CLI's start as it redrew it.
+- In other terminal apps, on Linux, over SSH and inside tmux, Screen or Zellij, a CLI that tracks the mouse receives
+  it, as when it runs alone, and Attach takes the mouse of one that leaves it alone. The wheel browses the CLI's scrollback there too. Drag to select text in the live view or its
+  scrollback. Releasing the button copies it to the clipboard of the computer Attach runs on, and asks the terminal app
+  to copy it as well. Over SSH only the terminal app can. Ctrl+C and a right click copy a selection again.
+- The Facade Code editor labels the terminal with the CLI's title
   while it is attached, and the terminal's own title returns when the attachment ends. Until the CLI sets a title, and
   for a CLI that never sets one, the terminal keeps its own title, as when the CLI runs alone. Claude Code's title
   keeps the status glyph it shows when run alone, which it leaves out once Facade takes its state reports: `◐` and `◑`
   in turn while it works, `✳` while it is idle, done, waiting for you or in error. A Claude Code agent whose turn
   ended while background work still runs is `Idle`, as a Codex agent is.
+- `start` and `resume` ask the terminal app for its foreground, background and cursor colors and ANSI colors 0–15, in
+  the foreground and with `-d`. The agent's screen answers the CLI's color queries with them from its first output, so
+  a CLI picks the theme it picks when run alone. A terminal app answers within milliseconds. Facade waits up to one
+  second for one that does not say it has finished. The CLI chooses its own theme for a color without an answer.
 - `facade screen [-n <lines>] <agent>` reads the last lines of the screen and scrollback as text. It also reads the
   last screen of an ended agent.
 - `facade type <agent> "hello" -k Enter "again" -k Enter` pastes text and presses keys in the given order.
@@ -248,9 +270,11 @@ See [Machine sessions](../../framework/protocol/DAEMON.md#machine-sessions).
   `facade upgrade --version X.Y.Z` reads the BUILD marker of the `extension/X.Y.Z` release. Both forms pin the
   exact build when installing. The installed build takes over a running Orchestrator when its compatibility
   checks pass, keeping agents running.
-- `facade status` reports the local home, settings file, versions, daemon and keeper process IDs, active agent count,
-  connected machines and Guest MCP launcher. When the local Orchestrator is sleeping, status says so without
-  starting it.
+- `facade status` reports, in four parts, the state (versions and active agent count), the local home, settings
+  file and daemon and keeper process IDs, the Guest MCP launcher, and last the CLIs each machine can start: this
+  machine first, for the current directory, then each connected machine. A CLI is listed where it is installed and
+  its machine's `facade.json` does not turn it off. When the local Orchestrator is sleeping, status says so without
+  starting it and lists this machine alone. `facade start --help` points there.
 - The logs are `framework/logs/daemon.log` and `framework/logs/keeper.log` inside the home. Each service keeps 30 days. VS Code
   can read recent daemon log lines for diagnostics.
 - `facade` shows the command groups. `facade <COMMAND> --help` shows examples, arguments and options.
