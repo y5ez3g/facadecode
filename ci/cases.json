@@ -2,6 +2,16 @@
   "version": 2,
   "cases": [
     {
+      "id": "extension/configuration-framework/adapter/agent",
+      "assertion": "Add a differently named Cursor entry with type agent. Verify it launches the independently configured fake executable with the Cursor adapter and does not inherit changes from the canonical built-in.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/configuration.rs:108",
+        "framework/tests/tests/configuration.rs:166",
+        "extension/src/test/integration/journey.it.ts:171"
+      ]
+    },
+    {
       "id": "extension/configuration-framework/adapter/agy",
       "assertion": "Add a differently named Antigravity entry with type agy. Verify it launches the independently configured fake executable with the Antigravity adapter and does not inherit changes from the canonical built-in.",
       "stage": "pr",
@@ -32,6 +42,16 @@
       ]
     },
     {
+      "id": "extension/configuration-framework/adapter/copilot",
+      "assertion": "Add a differently named GitHub Copilot CLI entry with type copilot. Verify it launches the independently configured fake executable with the GitHub Copilot CLI adapter and does not inherit changes from the canonical built-in.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/configuration.rs:108",
+        "framework/tests/tests/configuration.rs:166",
+        "extension/src/test/integration/journey.it.ts:171"
+      ]
+    },
+    {
       "id": "extension/configuration-framework/adapter/custom",
       "assertion": "Add a uniquely named custom CLI with a configured program. Verify its literal argv and cwd and the absence of Facade tools or resumable Pin capabilities.",
       "stage": "pr",
@@ -42,8 +62,38 @@
       ]
     },
     {
+      "id": "extension/configuration-framework/adapter/devin",
+      "assertion": "Add a differently named Devin entry with type devin. Verify it launches the independently configured fake executable with the Devin adapter and does not inherit changes from the canonical built-in.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/configuration.rs:108",
+        "framework/tests/tests/configuration.rs:166",
+        "extension/src/test/integration/journey.it.ts:171"
+      ]
+    },
+    {
+      "id": "extension/configuration-framework/adapter/kiro-cli",
+      "assertion": "Add a differently named Kiro entry with type kiro-cli. Verify it launches the independently configured fake executable with the Kiro adapter and does not inherit changes from the canonical built-in.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/configuration.rs:108",
+        "framework/tests/tests/configuration.rs:166",
+        "extension/src/test/integration/journey.it.ts:171"
+      ]
+    },
+    {
       "id": "extension/configuration-framework/adapter/muse",
       "assertion": "Add a differently named Muse Code entry with type muse. Verify it launches the independently configured fake executable with the Muse Code adapter and does not inherit changes from the canonical built-in.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/configuration.rs:108",
+        "framework/tests/tests/configuration.rs:166",
+        "extension/src/test/integration/journey.it.ts:171"
+      ]
+    },
+    {
+      "id": "extension/configuration-framework/adapter/omp",
+      "assertion": "Add a differently named Oh My Pi entry with type omp. Verify it launches the independently configured fake executable with the Oh My Pi adapter and does not inherit changes from the canonical built-in.",
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/configuration.rs:108",
@@ -64,6 +114,26 @@
     {
       "id": "extension/configuration-framework/adapter/pi",
       "assertion": "Add a differently named Pi entry with type pi. Verify it launches the independently configured fake executable with the Pi adapter and does not inherit changes from the canonical built-in.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/configuration.rs:108",
+        "framework/tests/tests/configuration.rs:166",
+        "extension/src/test/integration/journey.it.ts:171"
+      ]
+    },
+    {
+      "id": "extension/configuration-framework/adapter/qoder",
+      "assertion": "Add a differently named Qoder entry with type qoder. Verify it launches the independently configured fake executable with the Qoder adapter and does not inherit changes from the canonical built-in.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/configuration.rs:108",
+        "framework/tests/tests/configuration.rs:166",
+        "extension/src/test/integration/journey.it.ts:171"
+      ]
+    },
+    {
+      "id": "extension/configuration-framework/built-in/agent",
+      "assertion": "With no added entry, discover the built-in Cursor under its canonical ID agent. Override its executable to the fake CLI in facade.json and observe that entry’s identity and expected native adapter launch.",
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/configuration.rs:108",
@@ -110,8 +180,48 @@
       ]
     },
     {
+      "id": "extension/configuration-framework/built-in/copilot",
+      "assertion": "With no added entry, discover the built-in GitHub Copilot CLI under its canonical ID copilot. Override its executable to the fake CLI in facade.json and observe that entry’s identity and expected native adapter launch.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/configuration.rs:108",
+        "framework/tests/tests/configuration.rs:166",
+        "extension/src/test/integration/journey.it.ts:171"
+      ]
+    },
+    {
+      "id": "extension/configuration-framework/built-in/devin",
+      "assertion": "With no added entry, discover the built-in Devin under its canonical ID devin. Override its executable to the fake CLI in facade.json and observe that entry’s identity and expected native adapter launch.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/configuration.rs:108",
+        "framework/tests/tests/configuration.rs:166",
+        "extension/src/test/integration/journey.it.ts:171"
+      ]
+    },
+    {
+      "id": "extension/configuration-framework/built-in/kiro-cli",
+      "assertion": "With no added entry, discover the built-in Kiro under its canonical ID kiro-cli. Override its executable to the fake CLI in facade.json and observe that entry’s identity and expected native adapter launch.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/configuration.rs:108",
+        "framework/tests/tests/configuration.rs:166",
+        "extension/src/test/integration/journey.it.ts:171"
+      ]
+    },
+    {
       "id": "extension/configuration-framework/built-in/muse",
       "assertion": "With no added entry, discover the built-in Muse Code under its canonical ID muse. Override its executable to the fake CLI in facade.json and observe that entry’s identity and expected native adapter launch.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/configuration.rs:108",
+        "framework/tests/tests/configuration.rs:166",
+        "extension/src/test/integration/journey.it.ts:171"
+      ]
+    },
+    {
+      "id": "extension/configuration-framework/built-in/omp",
+      "assertion": "With no added entry, discover the built-in Oh My Pi under its canonical ID omp. Override its executable to the fake CLI in facade.json and observe that entry’s identity and expected native adapter launch.",
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/configuration.rs:108",
@@ -132,6 +242,16 @@
     {
       "id": "extension/configuration-framework/built-in/pi",
       "assertion": "With no added entry, discover the built-in Pi under its canonical ID pi. Override its executable to the fake CLI in facade.json and observe that entry’s identity and expected native adapter launch.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/configuration.rs:108",
+        "framework/tests/tests/configuration.rs:166",
+        "extension/src/test/integration/journey.it.ts:171"
+      ]
+    },
+    {
+      "id": "extension/configuration-framework/built-in/qoder",
+      "assertion": "With no added entry, discover the built-in Qoder under its canonical ID qoder. Override its executable to the fake CLI in facade.json and observe that entry’s identity and expected native adapter launch.",
       "stage": "pr",
       "existing_tests": [
         "framework/tests/tests/configuration.rs:108",
