@@ -151,8 +151,8 @@ pub struct McpRule {
 }
 
 /// What a run's start types to ready the CLI's tools: `text` once the input first reads empty,
-/// Enter once the input shows it alone, then `close` once the screen shows the tools `ready`, or
-/// once the wait ends while the panel still shows `opened`. Patterns match a screen line without
+/// Enter once the input shows it alone, then `close` once the open panel shows the tools `ready`.
+/// The startup allowance bounds the waits for these frames. Patterns match a screen line without
 /// its trailing spaces.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

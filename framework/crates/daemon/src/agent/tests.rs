@@ -2020,9 +2020,8 @@ async fn a_start_waits_for_a_draft_that_is_a_redraw_to_go() {
 }
 
 /// The start types nothing where the input first reads anything but empty, as a draft or a
-/// question of the CLI's, or the CLI is working; and where `/mcp` does not show alone, it
-/// presses no Enter and takes `/mcp` back. Each leaves the tools not started, an error, until
-/// the first turn starts them.
+/// question of the CLI's, or the CLI is working. A completion beside `/mcp` leaves its command
+/// unsubmitted. The start reports that the first turn may run without the tools.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_start_readies_no_tools_over_other_input_or_a_turn_and_says_so() {
     let home = home("readynothing");
@@ -2034,7 +2033,8 @@ async fn a_start_readies_no_tools_over_other_input_or_a_turn_and_says_so() {
         .write_all(b"\x1b]7501;state=working\x07")
         .unwrap();
     working.agy_input("");
-    let mut joined = antigravity(&home.join("joined"));
+    let started = Instant::now() - START_TIMEOUT + Duration::from_secs(8);
+    let mut joined = antigravity_started(&home.join("joined"), started);
     joined.agy_input("");
     assert_eq!(joined.cli_reads(4), b"/mcp");
     // A completion shows beside it.
@@ -2046,10 +2046,12 @@ async fn a_start_readies_no_tools_over_other_input_or_a_turn_and_says_so() {
                 .is_empty()
         );
     }
-    assert_eq!(
-        joined.cli_reads_within(5, READY_TYPED + Duration::from_secs(2)),
-        b"\x7f\x7f\x7f\x7f",
-        "taken back, no Enter"
+    let until_expired = START_TIMEOUT.saturating_sub(started.elapsed());
+    assert!(
+        joined
+            .cli_reads_within(1, until_expired + Duration::from_secs(1))
+            .is_empty(),
+        "the command and completion stay available to the person"
     );
     let not_started = (
         ManagedAgentState::Error,
@@ -2262,14 +2264,14 @@ async fn the_hold_ends_at_the_start_s_bound() {
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// A panel that does not show the tools ready within its wait is closed then, but only while it
-/// still shows: once someone else closed it, the key could stop a turn of theirs.
+/// An unready panel releases the person's keys at the startup bound and reports the outcome.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_panel_that_shows_no_ready_tools_is_closed_at_its_wait_only_while_it_shows() {
+async fn an_unready_tools_panel_releases_the_person_at_the_startup_deadline() {
     let home = home("readybound");
+    let started = Instant::now() - START_TIMEOUT + Duration::from_secs(8);
     let (mut open, mut closed) = (
-        antigravity(&home.join("open")),
-        antigravity(&home.join("closed")),
+        antigravity_started(&home.join("open"), started),
+        antigravity_started(&home.join("closed"), started),
     );
     for harness in [&mut open, &mut closed] {
         harness.agy_input("");
@@ -2279,26 +2281,32 @@ async fn a_panel_that_shows_no_ready_tools_is_closed_at_its_wait_only_while_it_s
     }
     open.agy_panel(false);
     closed.agy_input("");
-    // Each wait ends READY_SHOWN after its Enter, with the tools not started, after any Escape.
-    // The test waits for that outcome, not for a time: on a loaded machine the actor's timer
-    // and the screen reader lag.
+    for harness in [&mut open, &mut closed] {
+        harness.type_bytes(b"hi").await.unwrap();
+        assert!(
+            harness
+                .cli_reads_within(1, Duration::from_millis(200))
+                .is_empty(),
+            "held while the tool panel can still become ready"
+        );
+    }
     let not_started = (
         ManagedAgentState::Error,
         Some(facade_base::model::agent::ToolsReason::NotStarted),
     );
-    for harness in [&open, &closed] {
+    for harness in [&mut open, &mut closed] {
         assert!(
-            tools_read_within(harness, not_started, READY_SHOWN + Duration::from_secs(60)).await,
+            tools_read_within(
+                harness,
+                not_started,
+                START_TIMEOUT.saturating_sub(started.elapsed()) + Duration::from_secs(10)
+            )
+            .await,
             "{:?}",
             tools_now(harness)
         );
+        assert_eq!(harness.cli_reads(2), b"hi");
     }
-    assert_eq!(open.cli_reads(1), b"\x1b");
-    assert!(
-        closed
-            .cli_reads_within(1, Duration::from_millis(500))
-            .is_empty()
-    );
     for harness in [open, closed] {
         harness.stop().await;
     }
@@ -4191,8 +4199,6 @@ fn viewer_bytes(change: &ViewerChange) -> usize {
 
 // Timing bounds remain behavioral expectations, independent of the module's private constants.
 const REDRAW_NUDGE_TIMEOUT: Duration = Duration::from_millis(200);
-const READY_TYPED: Duration = Duration::from_secs(2);
-const READY_SHOWN: Duration = Duration::from_secs(10);
 const TRUST_STILL: Duration = Duration::from_secs(1);
 const TRUST_SELECTED: Duration = Duration::from_secs(10);
 const TRUST_GONE: Duration = Duration::from_secs(5);

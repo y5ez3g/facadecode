@@ -37,7 +37,7 @@ use super::readiness::{Press, Readiness, StartView};
 use super::screen::LoggedScreen;
 use super::state::{Kept, StateTracker, Viewing, keep};
 use super::terminal::{
-    DeliveryInput, MAX_READ_BYTES, ProbeKey, Terminal, TerminalEvent, TerminalWait,
+    CheckedInput, DeliveryInput, MAX_READ_BYTES, ProbeKey, Terminal, TerminalEvent, TerminalWait,
 };
 use super::typist::{
     BoxWrites, DeliveryWrite, InputObservation, MessageTyping, Modes, Typing, Typist,
@@ -240,6 +240,7 @@ fn new_actor(start: ActorStart, links: Links, recovered: bool) -> anyhow::Result
         publish_at: None,
         typist_at: None,
         pending_delivery: None,
+        pending_tool_write: None,
         replies_dropped: false,
         untouched_input,
     })
@@ -368,6 +369,7 @@ struct Actor {
     publish_at: Option<Instant>,
     typist_at: Option<Instant>,
     pending_delivery: Option<PendingDelivery>,
+    pending_tool_write: Option<PendingToolWrite>,
     /// Dropped terminal-query replies were logged.
     replies_dropped: bool,
     /// Automatic delivery can probe an unstyled hint before it accepts any external input.
@@ -393,6 +395,22 @@ impl PendingDelivery {
             deadline: self.deadline,
             pastes: matches!(self.kind, DeliveryWrite::Paste),
             framed: !matches!(self.kind, DeliveryWrite::Erase { .. }),
+        }
+    }
+}
+
+struct PendingToolWrite {
+    write: Vec<u8>,
+    deadline: Instant,
+    read_through: Option<u64>,
+}
+
+impl PendingToolWrite {
+    fn terminal_input(&mut self) -> CheckedInput<'_> {
+        CheckedInput::ToolStart {
+            bytes: &self.write,
+            deadline: self.deadline,
+            read_through: &mut self.read_through,
         }
     }
 }
@@ -488,12 +506,19 @@ impl Actor {
                 TerminalWait::WriteOnly
             };
             let can_issue = self.delivery_can_issue();
+            let can_write_tool = self.tool_write_can_issue();
             let writing = self.screen().checkpoint_running();
             let input = self
-                .pending_delivery
+                .pending_tool_write
                 .as_mut()
-                .filter(|_| can_issue)
-                .map(PendingDelivery::terminal_input);
+                .filter(|_| can_write_tool)
+                .map(PendingToolWrite::terminal_input)
+                .or_else(|| {
+                    self.pending_delivery
+                        .as_mut()
+                        .filter(|_| can_issue)
+                        .map(|delivery| CheckedInput::Delivery(delivery.terminal_input()))
+                });
             let screen = self
                 .screen
                 .as_mut()
@@ -510,7 +535,7 @@ impl Actor {
                 _ = wait_for_prompt(&mut self.prompt_result) => self.report_trouble(),
                 // Continuous terminal output must not hold back a glyph frame.
                 _ = sleep_until(self.glyph_at), if self.glyph_at.is_some() => self.advance_glyph(),
-                event = self.terminal.ready_with_delivery(wait, input, |offset, count, erase| self.typist.before_actor_write(offset, count, erase)) => self.take_terminal(event),
+                event = self.terminal.ready_with_input(wait, input, |offset, count, erase| self.typist.before_actor_write(offset, count, erase)) => self.take_terminal(event),
                 Ok(()) = self.links.tools_connections.changed() => {
                     let open = *self.links.tools_connections.borrow_and_update() > 0;
                     self.state.tools_connection(open);
@@ -905,6 +930,7 @@ impl Actor {
                 gate_for_test("agent-quiesce");
                 (self.quiet, self.typist_at) = (true, None);
                 self.pending_delivery = None;
+                self.pending_tool_write = None;
                 self.typist.hold_pastes();
                 // It reads no more, so the person's keys go as they come.
                 if !self.probe_key_prefix.is_empty() {
@@ -1038,6 +1064,10 @@ impl Actor {
             .sum();
         let used = self.terminal.queued()
             + self.typist.held_bytes()
+            + self
+                .pending_tool_write
+                .as_ref()
+                .map_or(0, |write| write.write.len())
             + usize::from(enter)
             + held
             + self.probe_key_prefix.len()
@@ -1213,6 +1243,20 @@ impl Actor {
                     self.wrote_input();
                 }
             }
+            TerminalEvent::ToolWriteIssued { offset, wrote } => {
+                self.pending_tool_write
+                    .take()
+                    .expect("the terminal issued a startup stroke");
+                self.typist.tool_write_issued(offset);
+                self.readiness.tool_write_issued();
+                if wrote {
+                    self.wrote_input();
+                }
+            }
+            TerminalEvent::ToolWriteExpired => {
+                self.step_start();
+                self.type_next();
+            }
             TerminalEvent::ProbeNeedsCheck(key) => self.check_probe_key(key),
             TerminalEvent::WriteFailed(err) => {
                 self.stop_input(&format!(
@@ -1246,6 +1290,12 @@ impl Actor {
 
     fn wrote_input(&mut self) {
         let written = self.terminal.input_through();
+        if let Some(at) = self
+            .typist
+            .note_tool_write(written, self.terminal.written_at())
+        {
+            self.readiness.tool_write_arrived(at);
+        }
         self.typist.wrote(written);
         self.typist.note_erasure_write(written);
         if !self.terminal.has_probe_erase() {
@@ -1254,6 +1304,9 @@ impl Actor {
         self.links.room.notify_waiters();
         if self.typist.busy() {
             self.type_next();
+        }
+        if self.readiness.readies_tools() {
+            self.ready_at = Some(Instant::now());
         }
         self.confirm_input_drained();
     }
@@ -2223,7 +2276,13 @@ impl Actor {
             self.screen_mut().observe_paint(false);
             self.terminal.stop_observing_cleanup();
         }
-        if let Some(mut kind) = step.delivery {
+        if let Some(deadline) = step.tool_start_deadline {
+            self.pending_tool_write = Some(PendingToolWrite {
+                write: step.write,
+                deadline,
+                read_through: None,
+            });
+        } else if let Some(mut kind) = step.delivery {
             let previous = previous.filter(|previous| {
                 previous.matches(kind)
                     && (!matches!(kind, DeliveryWrite::Erase { .. }) || now < previous.deadline)
@@ -2289,6 +2348,23 @@ impl Actor {
             && !screen.has_unfinished_unit()
     }
 
+    fn tool_write_can_issue(&self) -> bool {
+        if self.pending_tool_write.is_none() || self.quiet || self.state.native_wait().is_some() {
+            return false;
+        }
+        let screen = self.screen().screen();
+        if !screen.output_frame_complete() {
+            return false;
+        }
+        let reading = self.typist.recall(self.read_screen_input());
+        self.readiness.tool_write_matches(
+            screen,
+            reading.info.state,
+            reading.draft.as_deref(),
+            !self.input_gate.blocks_delivery() && !self.state.works(),
+        )
+    }
+
     fn erase_waits_for_edit(&self) -> bool {
         self.typist.follows_erase() && self.terminal.draft_edit_is_pending()
     }
@@ -2323,43 +2399,82 @@ impl Actor {
         self.readiness.readies_tools()
             && self
                 .readiness
-                .holds_input(self.typist.recall(self.read_screen_input()).info.state)
+                .holds_input(if self.state.native_wait().is_some() {
+                    InputState::Interaction
+                } else {
+                    self.typist.recall(self.read_screen_input()).info.state
+                })
     }
 
     /// One step of the run's start; the keys it asks for go to the typist.
     fn step_start(&mut self) {
         let now = Instant::now();
+        let revoked = self
+            .pending_tool_write
+            .take_if(|write| now >= write.deadline)
+            .is_some();
+        self.typist
+            .withdraw_tool_writes(revoked, |deadline| now >= deadline);
         let reading = self.typist.recall(self.read_screen_input());
-        // An input that may hold a hint or a draft is probed; the start waits on what it finds.
-        if reading.unsure && self.readiness.readies_tools() && !self.person_first(now) {
+        let native_wait = self.state.native_wait().is_some();
+        // An input that may hold a hint or a draft is probed once it is available.
+        if reading.unsure
+            && !native_wait
+            && self.readiness.readies_tools()
+            && !self.person_first(now)
+        {
             self.typist.want_probe();
         }
-        let input = if self.typist.probing()
-            && self.readiness.waiting_for_input()
+        let screen = self
+            .screen
+            .as_ref()
+            .expect("the screen exists while the actor runs")
+            .screen();
+        let asking = native_wait
+            || (screen.output_frame_complete()
+                && reading.info.state == InputState::Interaction
+                && !self.readiness.in_tool_panel(screen));
+        if asking && self.readiness.interrupt_tools_for_question() {
+            let revoked = self.pending_tool_write.take().is_some();
+            self.typist.withdraw_tool_writes(revoked, |_| true);
+            self.state.tools_not_started();
+            self.state_changed = true;
+        }
+        let input = if native_wait {
+            InputState::Interaction
+        } else if self.readiness.waiting_for_input()
             && reading.info.state != InputState::Interaction
+            && (self.typist.probing() || self.input_gate.blocks_delivery())
         {
             InputState::Unknown
         } else {
             reading.info.state
         };
-        let screen = self
-            .screen
-            .as_ref()
-            .expect("the screen exists while the actor runs");
         let view = StartView {
-            screen: screen.screen(),
+            screen,
             input,
+            draft: reading.draft.as_deref(),
             works: self.state.works(),
-            start_bound: self.state.start_bound(),
+            start_bound: if native_wait {
+                None
+            } else {
+                self.state.start_bound()
+            },
             drawn_at: self.drawn_at,
             typing: self.typist.types_calls(),
         };
         let typist = &mut self.typist;
         let mut press = |press: Press| {
-            let (typing, _answer) = match press {
-                Press::Text(text) => Typing::text(text, false, Sender::person()),
-                Press::Keys(keys) => Typing::keys(&keys),
-            }?;
+            let ((mut typing, _answer), deadline) = match press {
+                Press::ToolCommand { text, deadline } => {
+                    (Typing::text(text, false, Sender::person())?, Some(deadline))
+                }
+                Press::ToolKey { key, deadline } => (Typing::keys(&[key])?, Some(deadline)),
+                Press::Keys(keys) => (Typing::keys(&keys)?, None),
+            };
+            if let Some(deadline) = deadline {
+                typing.start_tools_by(deadline);
+            }
             typist.push(typing);
             Ok(())
         };
@@ -2622,6 +2737,7 @@ impl Actor {
     /// Drops queued input and fails the typist's calls: `why` typing stopped.
     fn stop_input(&mut self, why: &str) {
         self.pending_delivery = None;
+        self.pending_tool_write = None;
         self.terminal.clear();
         self.ordered_input = false;
         self.person = PersonKeys::default();
@@ -2636,6 +2752,9 @@ impl Actor {
         }
         self.typist.fail_all(self.terminal.input_through(), why);
         self.typist_at = None;
+        if self.readiness.readies_tools() {
+            self.ready_at = Some(Instant::now());
+        }
         self.take_typed();
     }
 
@@ -3488,16 +3607,24 @@ mod tests {
 
     async fn next_input_or_output(actor: &mut Actor, wait: TerminalWait) -> TerminalEvent {
         let can_issue = actor.delivery_can_issue();
+        let can_write_tool = actor.tool_write_can_issue();
         let pending = actor
-            .pending_delivery
+            .pending_tool_write
             .as_mut()
-            .filter(|_| can_issue)
-            .map(PendingDelivery::terminal_input);
+            .filter(|_| can_write_tool)
+            .map(PendingToolWrite::terminal_input)
+            .or_else(|| {
+                actor
+                    .pending_delivery
+                    .as_mut()
+                    .filter(|_| can_issue)
+                    .map(|delivery| CheckedInput::Delivery(delivery.terminal_input()))
+            });
         tokio::time::timeout(
             Duration::from_secs(5),
             actor
                 .terminal
-                .ready_with_delivery(wait, pending, |offset, count, erase| {
+                .ready_with_input(wait, pending, |offset, count, erase| {
                     actor.typist.before_actor_write(offset, count, erase)
                 }),
         )
@@ -6693,6 +6820,405 @@ mod tests {
             read_queued_probe_input(&mut actor, &mut cli).await,
             b"\x7fx"
         );
+    }
+
+    async fn actor_readying_tools(folder: &Path, deliveries: DeliveryHandle) -> (Actor, TestCli) {
+        let (mut actor, mut cli) = actor_with_cli(folder, deliveries.clone()).await;
+        let rule = facade_rules::find("agy").unwrap().unwrap();
+        actor.input_rule = Some(&rule.input);
+        actor.typist = Typist::new(&actor.id, Some(rule), None, deliveries);
+        actor.readiness = Readiness::new(Some(rule), &actor.id);
+        actor
+            .readiness
+            .begin(actor.state.started(), crate::ToolsGiven::Injected, false);
+        read_output(&mut actor, &mut cli, agy_composer("", 0).as_bytes()).await;
+        (actor, cli)
+    }
+
+    fn agy_composer(text: &str, caret: usize) -> String {
+        let border = "─".repeat(80);
+        format!(
+            "\x1b[2J\x1b[HAntigravity CLI 1.4.12\r\n\r\n{border}\r\n> {text}\r\n{border}\r\n? for shortcuts\x1b[4;{}H",
+            3 + caret
+        )
+    }
+
+    async fn write_startup_input(actor: &mut Actor, cli: &mut TestCli, expected: &[u8]) {
+        let event = next_input_or_output(actor, TerminalWait::ReadAndWrite).await;
+        let TerminalEvent::ToolWriteIssued { wrote, .. } = event else {
+            panic!("the terminal issued the startup stroke");
+        };
+        actor.take_terminal(event);
+        if !wrote {
+            write_input(actor).await;
+            actor.take_terminal(TerminalEvent::Wrote);
+        }
+        expect_cli_input(cli, expected);
+    }
+
+    async fn echo_startup_command(actor: &mut Actor, cli: &mut TestCli) {
+        write_startup_input(actor, cli, b"/mcp").await;
+        read_output(actor, cli, agy_composer("/mcp", 4).as_bytes()).await;
+        if actor.pending_tool_write.is_none() {
+            let wake = actor.typist_at.expect("the paste's key interval");
+            tokio::time::pause();
+            tokio::time::advance(wake.saturating_duration_since(Instant::now())).await;
+            actor.type_next();
+            tokio::time::resume();
+        }
+        assert!(actor.pending_tool_write.is_some(), "Enter is pending");
+    }
+
+    #[tokio::test]
+    async fn a_buffered_question_withdraws_pending_startup_strokes() {
+        question_with_pending_startup(false).await;
+    }
+
+    #[tokio::test]
+    async fn an_applied_question_withdraws_pending_startup_strokes() {
+        question_with_pending_startup(true).await;
+    }
+
+    async fn question_with_pending_startup(already_read: bool) {
+        for strokes_written in [1, 0, 2] {
+            let home = crate::test_folder::TestFolder::new("actor-startup-question");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) =
+                actor_readying_tools(&home, messages.delivery_handle()).await;
+            if strokes_written >= 1 {
+                echo_startup_command(&mut actor, &mut cli).await;
+            }
+            if strokes_written == 2 {
+                write_startup_input(&mut actor, &mut cli, b"\r").await;
+                actor.feed_own(
+                    "\x1b[2J\x1b[HMCP Servers\r\n\r\n> ✓ facade_facade\r\nesc Exit".as_bytes(),
+                );
+                actor.step_start();
+                actor.type_next();
+            }
+            assert!(actor.pending_tool_write.is_some());
+            let report = b"\x1b]7501;state=blocked:kind=question\x07";
+            if already_read {
+                read_output(&mut actor, &mut cli, report).await;
+            } else {
+                cli.write_output(report).unwrap();
+                assert!(actor.terminal.queued_output_bytes().unwrap() >= report.len());
+            }
+
+            if actor.pending_tool_write.is_some() {
+                let event = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
+                if let TerminalEvent::ToolWriteIssued { wrote, .. } = event {
+                    actor.take_terminal(event);
+                    if !wrote {
+                        write_input(&mut actor).await;
+                        actor.take_terminal(TerminalEvent::Wrote);
+                    }
+                    let sent: &[u8] = match strokes_written {
+                        0 => b"/mcp",
+                        1 => b"\r",
+                        _ => b"\x1b",
+                    };
+                    expect_cli_input(&mut cli, sent);
+                    panic!(
+                        "the PTY took {sent:?} over Question, report already read={already_read}"
+                    );
+                }
+                assert!(matches!(event, TerminalEvent::Read));
+                actor.take_terminal(event);
+            }
+            assert_eq!(actor.state.native_wait(), Some(WaitKind::Question));
+            assert!(actor.pending_tool_write.is_none());
+            actor
+                .take_input(Input::Raw(b"x".to_vec()), actor.run)
+                .unwrap();
+            assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, b"x");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_buffered_title_allows_the_rechecked_startup_enter() {
+        let home = crate::test_folder::TestFolder::new("actor-startup-title");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = actor_readying_tools(&home, messages.delivery_handle()).await;
+        echo_startup_command(&mut actor, &mut cli).await;
+        cli.write_output(b"\x1b]0;new title\x07").unwrap();
+        let event = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
+        assert!(matches!(event, TerminalEvent::Read));
+        actor.take_terminal(event);
+        write_startup_input(&mut actor, &mut cli, b"\r").await;
+    }
+
+    #[tokio::test]
+    async fn unissued_startup_keys_expire_before_the_pty_can_take_them() {
+        for keys_already_written in [1, 0, 2] {
+            let home = crate::test_folder::TestFolder::new("actor-startup-unissued-key");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) =
+                actor_readying_tools(&home, messages.delivery_handle()).await;
+            if keys_already_written >= 1 {
+                echo_startup_command(&mut actor, &mut cli).await;
+            }
+            if keys_already_written == 2 {
+                write_startup_input(&mut actor, &mut cli, b"\r").await;
+                actor.feed_own(
+                    "\x1b[2J\x1b[HMCP Servers\r\n\r\n> ✓ facade_facade\r\nesc Exit".as_bytes(),
+                );
+                actor.step_start();
+                actor.type_next();
+            }
+            assert!(
+                actor.typist.types_calls(),
+                "the next startup write is pending"
+            );
+            actor
+                .take_input(Input::Raw(b"x".to_vec()), actor.run)
+                .unwrap();
+
+            let deadline = actor.state.start_bound().unwrap();
+            tokio::time::pause();
+            tokio::time::advance(deadline.saturating_duration_since(Instant::now())).await;
+            let expired = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
+            assert!(matches!(expired, TerminalEvent::ToolWriteExpired));
+            actor.take_terminal(expired);
+            actor.release_held();
+            tokio::time::resume();
+
+            assert_eq!(
+                read_queued_probe_input(&mut actor, &mut cli).await,
+                b"x",
+                "only the person's key goes after the bound, prior startup writes={keys_already_written}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_enter_still_waiting_for_the_paste_interval_expires_with_startup() {
+        let home = crate::test_folder::TestFolder::new("actor-startup-enter-between-keys");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = actor_readying_tools(&home, messages.delivery_handle()).await;
+        let deadline = actor.state.start_bound().unwrap();
+        let before_deadline = deadline - Duration::from_millis(20);
+        tokio::time::pause();
+        tokio::time::advance(before_deadline.saturating_duration_since(Instant::now())).await;
+        // Keep the virtual clock from automatically advancing while the real PTY writes.
+        let (keep_clock, clock) = std::sync::mpsc::channel::<()>();
+        let blocked = tokio::task::spawn_blocking(move || {
+            let _ = clock.recv_timeout(Duration::from_secs(5));
+        });
+        write_startup_input(&mut actor, &mut cli, b"/mcp").await;
+        drop(keep_clock);
+        blocked.await.unwrap();
+        actor.feed_own(agy_composer("/mcp", 4).as_bytes());
+        actor.step_start();
+        actor.type_next();
+        assert!(actor.typist.types_calls());
+        assert!(
+            actor.pending_tool_write.is_none(),
+            "Enter waits for the paste interval"
+        );
+        actor
+            .take_input(Input::Raw(b"x".to_vec()), actor.run)
+            .unwrap();
+
+        tokio::time::advance(deadline.saturating_duration_since(Instant::now())).await;
+        actor.step_start();
+        actor.type_next();
+        actor.release_held();
+        tokio::time::advance(Duration::from_secs(1)).await;
+        actor.type_next();
+        assert!(actor.pending_tool_write.is_none(), "Enter was withdrawn");
+        tokio::time::resume();
+
+        assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, b"x");
+    }
+
+    #[tokio::test]
+    async fn an_expired_start_leaves_the_unsent_draft_for_the_person() {
+        for (draft, caret) in [("/mcp words", 10), ("/mcp", 2), ("/mcp", 4)] {
+            let home = crate::test_folder::TestFolder::new("actor-startup-unproved-erase");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) =
+                actor_readying_tools(&home, messages.delivery_handle()).await;
+            write_startup_input(&mut actor, &mut cli, b"/mcp").await;
+            actor
+                .take_input(Input::Raw(b"x".to_vec()), actor.run)
+                .unwrap();
+
+            let deadline = actor.state.start_bound().unwrap();
+            tokio::time::pause();
+            tokio::time::advance(deadline.saturating_duration_since(Instant::now())).await;
+            actor.feed_own(agy_composer(draft, caret).as_bytes());
+            actor.step_start();
+            actor.type_next();
+            actor.release_held();
+            tokio::time::resume();
+
+            assert_eq!(
+                read_queued_probe_input(&mut actor, &mut cli).await,
+                b"x",
+                "no erase is authorized at caret {caret} in {draft:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_startup_panel_releases_keys_after_escape_reaches_the_pty_and_its_pause() {
+        close_panel_and_release_keys(false, false).await;
+    }
+
+    #[tokio::test]
+    async fn a_terminal_status_reply_does_not_complete_a_pending_startup_escape() {
+        close_panel_and_release_keys(true, false).await;
+    }
+
+    #[tokio::test]
+    async fn a_late_escape_receipt_does_not_restart_the_elapsed_key_gap() {
+        close_panel_and_release_keys(true, true).await;
+    }
+
+    #[tokio::test]
+    async fn a_probe_cannot_replace_the_late_escape_receipt_before_readiness_observes_it() {
+        use crate::agent::ESCAPE_DELAY;
+
+        let home = crate::test_folder::TestFolder::new("actor-close-then-probe");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = actor_readying_tools(&home, messages.delivery_handle()).await;
+        echo_startup_command(&mut actor, &mut cli).await;
+        write_startup_input(&mut actor, &mut cli, b"\r").await;
+        actor.feed_own("\x1b[2J\x1b[HMCP Servers\r\n\r\n> ✓ facade_facade\r\nesc Exit".as_bytes());
+        actor.step_start();
+        actor.type_next();
+        assert!(actor.pending_tool_write.is_some());
+
+        let event = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
+        let TerminalEvent::ToolWriteIssued { offset, wrote } = event else {
+            panic!("the system took the close key");
+        };
+        actor.take_terminal(TerminalEvent::ToolWriteIssued {
+            offset,
+            wrote: false,
+        });
+        if !wrote {
+            write_input(&mut actor).await;
+        }
+        let reached = actor.terminal.written_at().unwrap();
+        expect_cli_input(&mut cli, b"\x1b");
+
+        // The CLI redraws its prompt before the actor receives the close key's write event.
+        let prompt = agy_composer("\x1b[31mpossible hint\x1b[0m", 0);
+        read_output(&mut actor, &mut cli, prompt.as_bytes()).await;
+        assert!(
+            actor.read_screen_input().unsure,
+            "the new prompt requests a probe"
+        );
+        assert!(
+            actor.typist.types_calls(),
+            "the close still awaits its write event"
+        );
+        assert!(
+            !actor.typist.probing(),
+            "the probe is waiting behind the close"
+        );
+
+        tokio::time::pause();
+        let after_gap = reached + ESCAPE_DELAY + Duration::from_millis(1);
+        tokio::time::advance(after_gap.saturating_duration_since(Instant::now())).await;
+        let before = actor.state.kept();
+        actor.take_terminal(TerminalEvent::Wrote);
+        assert!(actor.typist.probing(), "the next probe has its own receipt");
+        actor.step_start();
+        assert!(
+            !actor.readiness.readies_tools(),
+            "an elapsed Escape gap finishes startup"
+        );
+        assert_eq!(
+            actor.state.kept(),
+            before,
+            "a successful Escape must not turn into a tool-readiness failure"
+        );
+    }
+
+    async fn close_panel_and_release_keys(with_query: bool, delay_receipt: bool) {
+        use crate::agent::ESCAPE_DELAY;
+
+        let home = crate::test_folder::TestFolder::new("actor-startup-panel-drain");
+        let (messages, _) = messages();
+        let (mut actor, mut cli) = actor_readying_tools(&home, messages.delivery_handle()).await;
+        echo_startup_command(&mut actor, &mut cli).await;
+        write_startup_input(&mut actor, &mut cli, b"\r").await;
+
+        let deadline = actor.state.start_bound().unwrap();
+        actor.feed_own("\x1b[2J\x1b[HMCP Servers\r\n\r\n> ✓ facade_facade\r\nesc Exit".as_bytes());
+        actor.step_start();
+        actor.type_next();
+        assert!(actor.pending_tool_write.is_some(), "Escape is pending");
+        actor
+            .take_input(Input::Raw(b"x".to_vec()), actor.run)
+            .unwrap();
+
+        if with_query {
+            cli.write_output(b"\x1b[5n").unwrap();
+            let read = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
+            assert!(matches!(read, TerminalEvent::Read));
+            actor.take_terminal(read);
+            let reply = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
+            assert!(matches!(reply, TerminalEvent::Wrote));
+            expect_cli_input(&mut cli, b"\x1b[0n");
+            actor.take_terminal(reply);
+            assert!(actor.pending_tool_write.is_some());
+            assert!(
+                actor.typist.types_calls(),
+                "the status reply cannot complete the pending Escape"
+            );
+        }
+
+        // Give Escape to the PTY before the bound and delay the actor's write receipt.
+        let issued = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
+        let TerminalEvent::ToolWriteIssued { offset, wrote } = issued else {
+            panic!("the terminal took the close key before the deadline");
+        };
+        actor.take_terminal(TerminalEvent::ToolWriteIssued {
+            offset,
+            wrote: false,
+        });
+        if !wrote {
+            write_input(&mut actor).await;
+        }
+        let reached = actor.terminal.written_at().unwrap();
+        let interval_end = reached + ESCAPE_DELAY;
+        tokio::time::pause();
+        expect_cli_input(&mut cli, b"\x1b");
+        if delay_receipt {
+            let after_deadline = deadline + ESCAPE_DELAY * 2;
+            tokio::time::advance(after_deadline.saturating_duration_since(Instant::now())).await;
+            assert!(Instant::now() >= interval_end);
+        }
+        actor.step_start();
+        actor.release_held();
+        assert_eq!(actor.terminal.queued(), 0, "x still waits for the receipt");
+        actor.take_terminal(TerminalEvent::Wrote);
+        if !delay_receipt && Instant::now() < interval_end {
+            let halfway = reached + ESCAPE_DELAY / 2;
+            tokio::time::advance(halfway.saturating_duration_since(Instant::now())).await;
+            actor.step_start();
+            actor.release_held();
+            assert_eq!(
+                actor.terminal.queued(),
+                0,
+                "the write's interval is still running"
+            );
+            tokio::time::advance(interval_end.saturating_duration_since(Instant::now())).await;
+        }
+        actor.step_start();
+        actor.release_held();
+        assert_eq!(
+            actor.terminal.queued(),
+            1,
+            "the Escape's interval has elapsed"
+        );
+        tokio::time::resume();
+        write_input(&mut actor).await;
+        expect_cli_input(&mut cli, b"x");
     }
 
     #[tokio::test]

@@ -27,6 +27,10 @@ pub(crate) enum TerminalEvent {
     ProbeNeedsCheck(ProbeKey),
     /// The system took a new delivery write.
     DeliveryIssued { offset: u64, wrote: bool },
+    /// The system took the tool preparation's current stroke.
+    ToolWriteIssued { offset: u64, wrote: bool },
+    /// The startup deadline passed before the system took this stroke.
+    ToolWriteExpired,
     /// Writing failed: the terminal takes no more input.
     WriteFailed(std::io::Error),
 }
@@ -46,6 +50,15 @@ pub(super) struct DeliveryInput<'a> {
     pub pastes: bool,
     /// Whether the rest of this input belongs to the same terminal frame.
     pub framed: bool,
+}
+
+pub(super) enum CheckedInput<'a> {
+    Delivery(DeliveryInput<'a>),
+    ToolStart {
+        bytes: &'a [u8],
+        deadline: Instant,
+        read_through: &'a mut Option<u64>,
+    },
 }
 
 enum DeliveryEvent {
@@ -213,33 +226,61 @@ impl Terminal {
         self.delivery_output = None;
     }
 
-    /// Offers a revocable write at the head of the existing input FIFO.
+    #[cfg(test)]
     pub(super) async fn ready_with_delivery(
         &mut self,
         wait: TerminalWait,
         delivery: Option<DeliveryInput<'_>>,
+        before_write: impl FnMut(u64, usize, bool) -> bool,
+    ) -> TerminalEvent {
+        self.ready_with_input(wait, delivery.map(CheckedInput::Delivery), before_write)
+            .await
+    }
+
+    /// Offers an unissued write once the admitted input has drained.
+    pub(super) async fn ready_with_input(
+        &mut self,
+        wait: TerminalWait,
+        input: Option<CheckedInput<'_>>,
         mut before_write: impl FnMut(u64, usize, bool) -> bool,
     ) -> TerminalEvent {
-        if let Some(delivery) = delivery
+        if let Some(input) = input
             && matches!(wait, TerminalWait::ReadAndWrite)
             && self.input.is_empty()
         {
-            let erases = !delivery.framed;
-            return self
-                .ready_delivery(delivery, |offset, count| {
-                    before_write(offset, count, erases)
-                })
-                .await;
+            return self.ready_checked_input(input, before_write).await;
         }
         self.ready(wait, |offset, count| before_write(offset, count, false))
             .await
     }
 
-    async fn ready_delivery(
+    async fn ready_checked_input(
         &mut self,
-        delivery: DeliveryInput<'_>,
-        mut before_write: impl FnMut(u64, usize) -> bool,
+        input: CheckedInput<'_>,
+        mut before_write: impl FnMut(u64, usize, bool) -> bool,
     ) -> TerminalEvent {
+        let (delivery, tool_start) = match input {
+            CheckedInput::Delivery(delivery) => (delivery, false),
+            CheckedInput::ToolStart {
+                bytes,
+                deadline,
+                read_through,
+            } => {
+                if Instant::now() >= deadline {
+                    return TerminalEvent::ToolWriteExpired;
+                }
+                (
+                    DeliveryInput {
+                        bytes,
+                        read_through,
+                        deadline,
+                        pastes: false,
+                        framed: true,
+                    },
+                    true,
+                )
+            }
+        };
         let Some(master) = self.master.as_ref() else {
             return pending().await;
         };
@@ -254,12 +295,12 @@ impl Terminal {
         let head = &delivery.bytes[..delivery.bytes.len().min(MAX_WRITE_BYTES)];
         let issued = OnceLock::new();
         let check = WriteCheck {
-            defer_for_output: delivery.read_through.is_none(),
+            defer_for_output: tool_start || delivery.read_through.is_none(),
             deadline: Some(delivery.deadline.into_std()),
             issued: &issued,
         };
         let write = async {
-            if !before_write(self.sent, head.len()) {
+            if !before_write(self.sent, head.len(), !delivery.framed) {
                 return DeliveryEvent::Written(Err(io::Error::other(
                     "could not save paste cleanup before writing",
                 )));
@@ -279,11 +320,13 @@ impl Terminal {
         };
         match event {
             DeliveryEvent::Issued => {
-                self.mark_delivery_write(
-                    delivery.pastes,
-                    !delivery.framed,
-                    issued.get().copied().flatten(),
-                );
+                if !tool_start {
+                    self.mark_delivery_write(
+                        delivery.pastes,
+                        !delivery.framed,
+                        issued.get().copied().flatten(),
+                    );
+                }
                 self.input.extend(if delivery.framed {
                     delivery.bytes
                 } else {
@@ -291,17 +334,26 @@ impl Terminal {
                 });
                 self.writing = head.len();
                 self.writing_erase = !delivery.framed;
-                TerminalEvent::DeliveryIssued {
-                    offset: self.sent,
-                    wrote: false,
+                if tool_start {
+                    TerminalEvent::ToolWriteIssued {
+                        offset: self.sent,
+                        wrote: false,
+                    }
+                } else {
+                    TerminalEvent::DeliveryIssued {
+                        offset: self.sent,
+                        wrote: false,
+                    }
                 }
             }
             DeliveryEvent::Written(Ok(Some(n))) if n > 0 => {
-                self.mark_delivery_write(
-                    delivery.pastes,
-                    !delivery.framed,
-                    issued.get().copied().flatten(),
-                );
+                if !tool_start {
+                    self.mark_delivery_write(
+                        delivery.pastes,
+                        !delivery.framed,
+                        issued.get().copied().flatten(),
+                    );
+                }
                 let offset = self.sent;
                 if delivery.framed {
                     self.input.extend(&delivery.bytes[n..]);
@@ -312,13 +364,25 @@ impl Terminal {
                     self.written += n as u64;
                 }
                 self.last_write = Some(Instant::now());
-                TerminalEvent::DeliveryIssued {
-                    offset,
-                    wrote: true,
+                if tool_start {
+                    TerminalEvent::ToolWriteIssued {
+                        offset,
+                        wrote: true,
+                    }
+                } else {
+                    TerminalEvent::DeliveryIssued {
+                        offset,
+                        wrote: true,
+                    }
                 }
             }
             DeliveryEvent::Written(Ok(Some(_))) => {
                 TerminalEvent::WriteFailed(io::ErrorKind::WriteZero.into())
+            }
+            DeliveryEvent::Written(Ok(None))
+                if tool_start && Instant::now() >= delivery.deadline =>
+            {
+                TerminalEvent::ToolWriteExpired
             }
             DeliveryEvent::Written(Ok(None)) => {
                 if delivery.read_through.is_none()
@@ -1475,12 +1539,13 @@ mod tests {
         };
         assert!(matches!(
             terminal
-                .ready_delivery(
-                    DeliveryInput {
+                .ready_with_delivery(
+                    TerminalWait::ReadAndWrite,
+                    Some(DeliveryInput {
                         read_through: &mut *delivery.read_through,
                         ..delivery
-                    },
-                    |_, _| true
+                    }),
+                    |_, _, _| true
                 )
                 .await,
             TerminalEvent::Read
@@ -1490,7 +1555,9 @@ mod tests {
 
         cli.write_output(b"later frames").unwrap();
         assert!(matches!(
-            terminal.ready_delivery(delivery, |_, _| true).await,
+            terminal
+                .ready_with_delivery(TerminalWait::ReadAndWrite, Some(delivery), |_, _, _| true)
+                .await,
             TerminalEvent::Read
         ));
         assert_eq!(terminal.output(), &ready[b"frame".len()..]);
@@ -1513,7 +1580,9 @@ mod tests {
                     panic!("terminal ended with a read error: {error}")
                 }
                 TerminalEvent::Wrote | TerminalEvent::ProbeNeedsCheck(_) => {}
-                TerminalEvent::DeliveryIssued { .. } => unreachable!("no automatic intent"),
+                TerminalEvent::DeliveryIssued { .. }
+                | TerminalEvent::ToolWriteIssued { .. }
+                | TerminalEvent::ToolWriteExpired => unreachable!("no automatic intent"),
                 TerminalEvent::WriteFailed(_) => terminal.clear(),
             }
         }

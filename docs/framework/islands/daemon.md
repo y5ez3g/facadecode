@@ -350,16 +350,20 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 - **Keeps:** Input is written in order, at most 64 KiB at a time; a read takes at most 64 KiB. The count of bytes written never resets, across runs too: the typist finds its own bytes by it. Letting go of the terminal, as a read that finds the end of its output does, drops the queued input and the last output. `ready` can be cancelled safely. A write under way is given the same head of the queue until it returns; clearing the queue keeps those bytes. `stop_reading` leaves no read under way.
 - An automatic intent can reach the system after earlier accepted input drains. Before the first
   write attempt, the terminal advances through the ready output prefix and returns it to the actor
-  for revalidation. An intent retains its deadline. `DeliveryIssued` registers the system's write
-  range and `Wrote` confirms pending writes. Framed input keeps its ordered suffix. Independent
+  for revalidation. The actor owns the unissued intent and its original deadline. `DeliveryIssued`
+  registers the system's delivery range. `ToolWriteIssued` gives the actual offset of a startup
+  stroke at system handoff, and `ToolWriteExpired` identifies an unissued stroke that reached
+  its deadline. `Wrote` confirms
+  pending writes. Framed input keeps its ordered suffix. Independent
   erase keys beyond the range accepted by the system return to the typist for admission again.
 - **Never does:** parse output, decide what input may wait, or select a submission key.
 - **Interface**
   - Lifecycle — `new(Option<PtyMaster>)`, `install(PtyMaster)`, `detach()`,
     `stop_reading() -> Option<usize>` (async), `let_go_before_stop()`, `is_open()`, `is_closed()`
     and `set_size(cols, rows)`.
-  - `ready` and `ready_with_delivery` return `Read`, `Closed`, `Wrote`, `DeliveryIssued`,
-    `ReadFailed` or `WriteFailed`. Read the last output with `read_now() -> Option<usize>` and `output() -> &[u8]`.
+  - `ready` and `ready_with_input` return `Read`, `Closed`, `Wrote`, `DeliveryIssued`,
+    `ToolWriteIssued`, `ToolWriteExpired`, `ReadFailed` or `WriteFailed`, or request a probe check.
+    Read the last output with `read_now() -> Option<usize>` and `output() -> &[u8]`.
     Input methods are `push(&[u8])`, `clear()`, `queued()`, `written()` and `written_at()`.
 
 #### screen
@@ -505,8 +509,15 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses
   `new(agent, rule, console_typing, DeliveryHandle)`, `push`, `deliver`, `deliver_first`, `finish_paste`,
   `fail_prompt(prompt, reason)`, `fail_all(written, why)`, `hold_pastes()`, and
-  `step(now, written, queued, modes, writes, observe) -> Step { write, wake, delivery }`. The `writes` argument
-  (`BoxWrites`) tells the typist whether it may write into the input box on its own. The `observe`
+  `step(now, written, queued, modes, writes, observe) -> Step { write, wake, delivery, tool_start_deadline }`.
+  The startup deadline accompanies the stroke that the actor will offer to the terminal.
+  `tool_write_issued(offset)` establishes the stroke's receipt position at handoff. A terminal
+  query reply can use the queue while the stroke awaits handoff. `note_tool_write(written, written_at)`
+  uses Terminal's byte progress to return the write time once for that stroke. The actor gives
+  Readiness this time before the typist advances to another receipt. `withdraw_tool_writes` drops
+  startup calls still waiting in the typist and the receipt for a revoked actor intent.
+  The `writes` argument (`BoxWrites`) tells the typist whether it may write into the input box on
+  its own. The `observe`
   callback gives the current reading, the current native wait and complete-frame requirements
   in `InputObservation`. It also gives the draft proved submitted by the person's Enter in
   output order. Evidence can come from earlier frames in the same read. A pending observation
@@ -536,9 +547,10 @@ authenticated Agent start when the target home has YOLO on. On a person's start 
 question stays available for the person.
 
 - **Owns:** the rule's `ReadyTools` and `TrustQuestion`, how far each has got, and when each wait ends.
-- **Keeps:** A bounded startup wait stays within the start's 30 seconds. Enter goes once the rule's text shows alone in the input box. Each key of the trust answer waits for the screen to be still for 1 second. The trusting answer goes once per run while it is selected.
+- **Keeps:** The startup deadline for a usable box also bounds the command echo and panel phases. The command must show alone in a complete input frame before Enter. The open panel must show the tools ready in a complete frame before Escape. The actor validates the current complete composer for the command and Enter, and the open ready panel for Escape. It reads the available terminal output before attempting each stroke. A question releases the person and withdraws unissued startup strokes. The same deadline fences each handoff. At the deadline the typist and actor withdraw unissued startup strokes, and the start reports any possible remaining command and that the first turn may lack the tools. An issued close key's interval starts at the write time recorded by Terminal. The actor waits for confirmation and releases the person's input as soon as that interval has elapsed. Each key of the trust answer waits for the screen to be still for 1 second. The trusting answer goes once per run while it is selected.
 - **Never does:** type (it hands each `Press` to the actor, which gives it to the typist); read the terminal; hold input; change the state.
-- **Interface:** `new(rule, id)`, `begin(started, tools, allow_auto_trust) -> Option<Instant>`, `end()`, `step(now, &StartView, press) -> StartStep { wake, release_held, tools_not_started }`, `holds_input(InputState)`, `readies_tools()`, `is_under_way()`.
+- **Interface:** `new(rule, id)`, `begin(started, tools, allow_auto_trust) -> Option<Instant>`, `end()`, `step(now, &StartView, press) -> StartStep { wake, tools_not_started }`, `tool_write_matches(screen, input, draft, composer_allowed)`, `tool_write_issued()`, `tool_write_arrived(written_at)`,
+  `holds_input(InputState)`, `readies_tools()`, `is_under_way()`.
 
 ### messages
 

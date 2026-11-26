@@ -90,6 +90,7 @@ pub(crate) struct Step {
     pub(crate) write: Vec<u8>,
     pub(crate) wake: Option<Instant>,
     pub(super) delivery: Option<DeliveryWrite>,
+    pub(super) tool_start_deadline: Option<Instant>,
 }
 
 impl Step {
@@ -105,6 +106,7 @@ impl Step {
             write,
             wake,
             delivery: Some(kind),
+            ..Self::default()
         }
     }
 }
@@ -121,6 +123,7 @@ pub(crate) struct Typing {
     kind: CallKind,
     completed: usize,
     start_by: Option<Instant>,
+    tool_start_deadline: Option<Instant>,
 }
 
 #[derive(Debug)]
@@ -256,6 +259,7 @@ impl Typing {
                 kind,
                 completed: 0,
                 start_by: None,
+                tool_start_deadline: None,
             },
             receiver,
         )
@@ -263,6 +267,13 @@ impl Typing {
 
     pub(crate) fn start_by(&mut self, deadline: Option<Instant>) {
         self.start_by = deadline;
+    }
+
+    /// Sets the deadline on a single startup stroke through its handoff to the system.
+    pub(super) fn start_tools_by(&mut self, deadline: Instant) {
+        debug_assert_eq!(self.strokes.len(), 1);
+        self.start_by = Some(deadline);
+        self.tool_start_deadline = Some(deadline);
     }
 
     /// Maximum queued bytes in either terminal mode, as the `console` takes them where the CLI
@@ -375,14 +386,32 @@ struct Receipt {
     delay: Duration,
     /// This write is the batch's submission key, even if its deadline passes while pending.
     submits: bool,
+    tool_write: Option<ToolReceipt>,
+}
+
+#[derive(Clone, Copy)]
+enum ToolReceipt {
+    AwaitingHandoff,
+    Issued,
+    Written(Instant),
 }
 
 impl Receipt {
+    fn end(&self) -> u64 {
+        self.boundaries.last().copied().unwrap_or(self.offset)
+    }
+
     fn complete(&self, written: u64) -> bool {
-        self.arrived.is_some() || written >= self.boundaries.last().copied().unwrap_or(self.offset)
+        match self.tool_write {
+            Some(tool) => matches!(tool, ToolReceipt::Written(_)),
+            None => self.arrived.is_some() || written >= self.end(),
+        }
     }
 
     fn progress(&self, written: u64) -> (usize, bool) {
+        if matches!(self.tool_write, Some(ToolReceipt::AwaitingHandoff)) {
+            return (0, false);
+        }
         let full = self
             .boundaries
             .iter()
@@ -838,6 +867,53 @@ impl Typist {
         self.probe_wanted = false;
     }
 
+    /// Establishes the offset of the actor's one startup stroke at its system handoff.
+    pub(super) fn tool_write_issued(&mut self, offset: u64) {
+        let receipt = self
+            .receipt
+            .as_mut()
+            .filter(|receipt| matches!(receipt.tool_write, Some(ToolReceipt::AwaitingHandoff)))
+            .expect("the startup stroke awaits handoff");
+        let [end] = receipt.boundaries.as_mut_slice() else {
+            unreachable!("a startup intent offers one stroke");
+        };
+        *end = offset + (*end - receipt.offset);
+        receipt.offset = offset;
+        receipt.tool_write = Some(ToolReceipt::Issued);
+    }
+
+    /// Returns the terminal's write time once the current startup stroke reaches its full range.
+    pub(super) fn note_tool_write(
+        &mut self,
+        written: u64,
+        written_at: Option<Instant>,
+    ) -> Option<Instant> {
+        let at = written_at?;
+        let receipt = self.receipt.as_mut().filter(|receipt| {
+            matches!(receipt.tool_write, Some(ToolReceipt::Issued)) && written >= receipt.end()
+        })?;
+        receipt.tool_write = Some(ToolReceipt::Written(at));
+        Some(at)
+    }
+
+    /// Withdraws tool startup calls whose strokes were never given to the system.
+    pub(super) fn withdraw_tool_writes(
+        &mut self,
+        revoked_write: bool,
+        withdraw: impl Fn(Instant) -> bool,
+    ) {
+        let revoked = |call: &Typing| call.tool_start_deadline.is_some_and(&withdraw);
+        self.calls.retain(|call| !revoked(call));
+        if self
+            .current
+            .take_if(|call| revoked(call) && (revoked_write || !call.strokes.is_empty()))
+            .is_some()
+            && revoked_write
+        {
+            self.receipt = None;
+        }
+    }
+
     /// The run's start waits on an input that may hold a hint or a draft: it is probed once no call
     /// is typed and no paste is under way.
     pub(crate) fn want_probe(&mut self) {
@@ -950,7 +1026,10 @@ impl Typist {
                 }
                 return self.stalled(now, written, observe);
             }
-            receipt.arrived = Some(now);
+            receipt.arrived = Some(match receipt.tool_write {
+                Some(ToolReceipt::Written(at)) => at,
+                _ => now,
+            });
             if let Some(probe) = &mut self.probing {
                 probe.wrote_key(now);
             }
@@ -1614,6 +1693,7 @@ impl Typist {
             arrived: None,
             delay: Duration::ZERO,
             submits: false,
+            tool_write: None,
         })
     }
 
@@ -1636,6 +1716,9 @@ impl Typist {
             arrived: None,
             delay: Duration::ZERO,
             submits: false,
+            tool_write: call
+                .tool_start_deadline
+                .map(|_| ToolReceipt::AwaitingHandoff),
         };
         let mut result = Step::default();
         while let Some(stroke) = call.strokes.pop_front() {
@@ -1649,6 +1732,7 @@ impl Typist {
         }
         if !result.write.is_empty() {
             call.start_by = None;
+            result.tool_start_deadline = call.tool_start_deadline;
         }
         if !result.write.is_empty()
             && let Some(batch) = &mut self.batch
