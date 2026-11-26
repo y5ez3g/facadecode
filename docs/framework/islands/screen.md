@@ -197,6 +197,12 @@ caller's output boundary. `painted_at`, `printed_space_at`, and `line_feed_at` r
 in the current observation after a complete frame. `output_frame_complete` also covers the case
 where only the start of a synchronized update has arrived.
 
+`Screen::frame_row_writes(row: usize) -> CursorRowWrites` reports cell writes and erasures on a
+zero-based viewport row in the observed complete frame. `Current` marks writes in a frame after
+the marked input boundary, `Earlier` marks writes in a frame that began before it, and `None`
+means the frame left the row untouched. Rules uses the row of a drawn caret when the terminal
+cursor is elsewhere.
+
 **Scenario tests** (`framework/tests`): a `Screen` per viewer, to check what a viewer would show.
 
 OSC 7501 itself, the Program Status Protocol, is an outside protocol; `program_status.rs` holds the
