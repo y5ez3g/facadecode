@@ -17,10 +17,10 @@
 		"drawn_cursor": true,
 		"menus": [
 			{
-				"selected": "^ *│ +▶ \\[(?:a\\] Trust this workspace|q\\] Quit) *│ *$",
+				"selected": "^ *│ +▶ \\[(?:a\\] Trust this workspace|w\\] Trust this workspace, but don't enable all MCP servers|q\\] Quit) *│ *$",
 				"hint": {
 					"pattern": "^ *│ +Use arrow keys to navigate, Enter to select, or press the key shown *│ *$",
-					"within": 3
+					"within": 4
 				}
 			},
 			{
