@@ -168,11 +168,11 @@ impl Budget {
     }
 }
 
-/// The startup clock is shared with the bundled editor's high-resolution clock.
+/// Darwin's raw monotonic clock uses the editor's `mach_continuous_time` time base.
 #[cfg(target_os = "macos")]
 pub fn now() -> u64 {
     use nix::time::{ClockId, clock_gettime};
-    let Ok(time) = clock_gettime(ClockId::CLOCK_MONOTONIC_RAW) else {
+    let Ok(time) = clock_gettime(ClockId::from_raw(nix::libc::CLOCK_MONOTONIC_RAW)) else {
         return 0;
     };
     let seconds = u64::try_from(time.tv_sec()).unwrap_or(0);

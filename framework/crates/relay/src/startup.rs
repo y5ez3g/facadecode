@@ -11,10 +11,11 @@ use serde_json::Value;
 #[cfg(not(target_os = "macos"))]
 use crate::relay::monotonic_now;
 
+/// Reads the same Darwin clock used for the startup deadlines published by Base.
 #[cfg(target_os = "macos")]
 fn monotonic_now() -> u64 {
     use nix::time::{ClockId, clock_gettime};
-    let Ok(time) = clock_gettime(ClockId::CLOCK_MONOTONIC_RAW) else {
+    let Ok(time) = clock_gettime(ClockId::from_raw(nix::libc::CLOCK_MONOTONIC_RAW)) else {
         return 0;
     };
     let seconds = u64::try_from(time.tv_sec()).unwrap_or(0);
