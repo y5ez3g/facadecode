@@ -598,8 +598,10 @@ write or an unreadable box leaves the cleanup intent waiting for more evidence.
 At takeover, a live drain that shows a freshly painted empty input can also finish cleanup.
 When a saved cleanup needs a redraw, the actor temporarily changes the row count. This lets a
 bottom-aligned input move so a terminal that emits only changed cells can send the current box.
-The actor saves the size it requests for that paste before sending the resize. Another daemon
-recovering the same paste chooses a different size, drains available output, and tracks fresh paint.
+First the actor reads the output already available. A read stopped by its bound or by a full
+log leaves the resize and paint tracking to a later step, so a frame drawn earlier cannot
+authorize cleanup. The actor then saves the size it requests for that paste, sends the resize,
+and tracks fresh paint. Another daemon recovering the same paste chooses a different size.
 The changed size stays in effect until the first cleanup write goes out, recovery of the draft
 ends, or the requested terminal size changes. An edit that revokes cleanup restores the requested
 size before the actor releases the person's keys. A complete painted frame and the saved draft

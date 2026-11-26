@@ -254,6 +254,7 @@ fn new_actor(start: ActorStart, links: Links, recovered: bool) -> anyhow::Result
         input_drawn_at: None,
         delivery_frames: DeliveryFrames::default(),
         redraw_nudge: None,
+        cleanup_frame_after_drain: false,
         catch_up_at: None,
         publish_at: None,
         typist_at: None,
@@ -383,6 +384,8 @@ struct Actor {
     input_drawn_at: Option<Instant>,
     delivery_frames: DeliveryFrames,
     redraw_nudge: Option<RedrawNudge>,
+    /// A recovered cleanup observes paint only after the output already readable has been read.
+    cleanup_frame_after_drain: bool,
     catch_up_at: Option<Instant>,
     publish_at: Option<Instant>,
     typist_at: Option<Instant>,
@@ -1967,15 +1970,22 @@ impl Actor {
         }
     }
 
-    /// A cleanup carried through restart needs a whole redraw. Keep the changed size until
-    /// cleanup advances so a busy CLI cannot miss both resize events between its draws.
+    /// A cleanup carried through restart needs a whole redraw. Its observation opens only after
+    /// the output already readable is read, so a frame drawn before cannot pass for the redraw;
+    /// reading stopped by its bound or a full log leaves it closed until a later step. Keep the
+    /// changed size until cleanup advances so a busy CLI cannot miss both resize events between
+    /// its draws.
     fn observe_cleanup_frame(&mut self, recovered: bool) {
+        self.cleanup_frame_after_drain = recovered && !self.drain_cleanup_output();
+        if self.cleanup_frame_after_drain {
+            self.screen_mut().observe_paint(false);
+            return;
+        }
         if recovered && let Some(paste) = self.typist.delivery_batch() {
             let path = self.facts.with_file_name("cleanup-resize");
             let requested = self.size();
             match crate::blocking_in_place(|| CleanupResize::reserve(&path, paste, requested)) {
                 Ok(Some((cols, rows))) => {
-                    self.drain_cleanup_output();
                     self.terminal.set_size(cols, rows);
                     self.redraw_nudge = Some(RedrawNudge::RecoveredCleanup);
                 }
@@ -2183,12 +2193,19 @@ impl Actor {
         let now = Instant::now();
         self.finish_escape(now);
         let expired_recovered = self.typist.expired_recovered_draft(now);
-        if expired_recovered && !matches!(self.redraw_nudge, Some(RedrawNudge::RecoveredCleanup)) {
+        let cleanup_frame = expired_recovered || self.typist.awaiting_cleanup_frame();
+        let deferred = std::mem::take(&mut self.cleanup_frame_after_drain);
+        if cleanup_frame
+            && (deferred
+                || expired_recovered
+                    && !matches!(self.redraw_nudge, Some(RedrawNudge::RecoveredCleanup)))
+        {
             self.observe_cleanup_frame(true);
         }
-        let cleanup_frame = expired_recovered || self.typist.awaiting_cleanup_frame();
-        let caught_up =
-            !cleanup_frame || (self.drain_cleanup_output() && self.terminal.cleanup_output_seen());
+        let caught_up = !cleanup_frame
+            || (!self.cleanup_frame_after_drain
+                && self.drain_cleanup_output()
+                && self.terminal.cleanup_output_seen());
         let previous = self.pending_delivery.take();
         let screen = self
             .screen
@@ -3749,6 +3766,102 @@ mod tests {
             recovered.pending_delivery.as_ref().map(|write| write.kind),
             Some(DeliveryWrite::Erase { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn a_frame_left_unread_when_recovered_cleanup_begins_is_no_cleanup_evidence() {
+        use super::super::screen::{Checkpoint, ScreenLog};
+        use crate::store::CleanupProgress;
+        use tokio::sync::oneshot;
+
+        // A planned cleanup begins with the paste; an expired draft begins on the typist's step.
+        for planned in [true, false] {
+            let before = crate::test_folder::TestFolder::new("actor-unread-cleanup-paste");
+            let after = crate::test_folder::TestFolder::new("actor-unread-cleanup-recovery");
+            let (messages, _) = messages();
+            let (mut first, mut cli, _) = pending_paste_in(&before, &messages).await;
+            issue_delivery(&mut first).await;
+            let draft = plain_claude_frame("a message ", "");
+            read_output(&mut first, &mut cli, draft.as_bytes()).await;
+            let mut proof = messages
+                .paste_messages(1)
+                .unwrap()
+                .draft
+                .expect("saved draft");
+            drop(first);
+            if planned {
+                proof.cleanup = Some(CleanupProgress::default());
+                assert!(messages.delivery_handle().record_cleanup(1, proof));
+            }
+
+            let (mut recovered, mut cli) = test_actor(&after, &messages).await;
+            let size = cli.size();
+            // The restored screen shows the draft, and its full log waits for a checkpoint.
+            let mut screen = facade_screen::Screen::new(80, 24, super::super::SCROLLBACK_ROWS);
+            screen.feed(draft.as_bytes());
+            let folder = after.join("screen");
+            let (release, released) = oneshot::channel();
+            let mut log = ScreenLog::create(folder.clone(), "a1", Checkpoint::capture(&screen));
+            log.begin_stalled_checkpoint(Checkpoint::capture(&screen), released);
+            log.fill_to_the_cap();
+            recovered.screen = Some(LoggedScreen::recovered(folder, "a1", screen, Some(log)));
+            recovered.input_drawn_at = Some(Instant::now());
+            assert!(recovered.screen().is_full());
+            // The CLI drew this frame before the recovery, and no daemon has read it yet.
+            cli.write_output(draft.as_bytes()).unwrap();
+
+            let text = "a message";
+            let typing = MessageTyping::new(
+                text.into(),
+                1,
+                Instant::now() - Duration::from_secs(1),
+                Submission {
+                    text: text.into(),
+                    sender: Sender::person(),
+                },
+            );
+            recovered
+                .take_input(
+                    Input::BegunPaste {
+                        messages: vec![typing],
+                        previous_text: None,
+                        draft: Some(proof),
+                    },
+                    recovered.run,
+                )
+                .unwrap();
+            assert!(recovered.pending_delivery.is_none());
+
+            release.send(()).unwrap();
+            let written = recovered.screen_mut().checkpoint_written().await;
+            recovered.screen_mut().finish_checkpoint(written);
+            recovered.screen_mut().checkpoint_if_due();
+            assert!(!recovered.screen().is_full());
+            recovered.after_checkpoint();
+            assert_eq!(
+                recovered.terminal.output_position(),
+                draft.len() as u64,
+                "the old frame was read"
+            );
+            assert!(
+                recovered.pending_delivery.is_none(),
+                "a frame drawn before the observation is no cleanup evidence (planned: {planned})"
+            );
+            assert_eq!(
+                cli.size(),
+                (size.0, size.1 - 1),
+                "the redraw is asked for once the old output is read"
+            );
+
+            read_output(&mut recovered, &mut cli, draft.as_bytes()).await;
+            assert!(
+                matches!(
+                    recovered.pending_delivery.as_ref().map(|write| write.kind),
+                    Some(DeliveryWrite::Erase { .. })
+                ),
+                "a frame drawn after the old output is read is (planned: {planned})"
+            );
+        }
     }
 
     #[tokio::test]
