@@ -35,8 +35,9 @@ use windows_sys::Win32::System::Threading::{
     UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
-use super::{Candidate, Locked, STARTUP_CHANNEL, Service, StartupChannel};
+use super::{Candidate, Locked, STARTUP_CHANNEL, Service, StartupChannel, StartupReport};
 use crate::platform::socket_paths::ClientSocket;
+use crate::platform::startup::{self, Attempt};
 use crate::platform::unix_process::{birth, fork_lock, own_identity};
 use crate::process::ProcessIdentity;
 
@@ -129,6 +130,16 @@ pub fn redirect_stderr(file: &Path) -> io::Result<()> {
 /// Starts `program`, a `facade.exe`, as `program <service> <words>`: detached, without a window,
 /// its output appended to its log, with a startup channel, inheriting those two handles alone.
 pub fn launch(service: Service, program: &Path, words: &[&str]) -> anyhow::Result<Candidate> {
+    launch_with_startup(service, program, words, None, None)
+}
+
+pub fn launch_with_startup(
+    service: Service,
+    program: &Path,
+    words: &[&str],
+    attempt: Option<&Attempt>,
+    lease: Option<&File>,
+) -> anyhow::Result<Candidate> {
     let framework = create_private_home()?;
     let log_path = framework.join("logs").join(service.log_name());
     let log = OpenOptions::new()
@@ -137,8 +148,12 @@ pub fn launch(service: Service, program: &Path, words: &[&str]) -> anyhow::Resul
         .open(log_path)?;
     let _forks = fork_lock();
     let (channel, their_end) = std::io::pipe()?;
-    let inherited = [log.as_raw_handle(), their_end.as_raw_handle()];
-    for handle in inherited {
+    let lease = lease.map(File::try_clone).transpose()?;
+    let inherited = [log.as_raw_handle(), their_end.as_raw_handle()]
+        .into_iter()
+        .chain(lease.as_ref().map(AsRawHandle::as_raw_handle))
+        .collect::<Vec<_>>();
+    for &handle in &inherited {
         // SAFETY: the handle is open; only its inheritance changes.
         if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) } == 0 {
             return Err(io::Error::last_os_error().into());
@@ -150,13 +165,19 @@ pub fn launch(service: Service, program: &Path, words: &[&str]) -> anyhow::Resul
         line.push_str(&quoted(word));
     }
     let channel_value = (their_end.as_raw_handle() as usize).to_string();
-    let child = spawn(program, &line, &channel_value, &inherited, &framework)?;
+    let lease_value = lease
+        .as_ref()
+        .map(|lease| (lease.as_raw_handle() as usize).to_string());
+    let environment = environment_block(&channel_value, attempt, lease_value.as_deref());
+    let child = spawn(program, &line, &environment, &inherited, &framework)?;
     drop(their_end);
     drop(log);
     Ok(Candidate {
         child,
-        channel: Some(channel),
-        received: Vec::new(),
+        report: StartupReport {
+            channel: Some(channel),
+            received: Vec::new(),
+        },
     })
 }
 
@@ -167,8 +188,8 @@ pub fn launch(service: Service, program: &Path, words: &[&str]) -> anyhow::Resul
 fn spawn(
     program: &Path,
     line: &str,
-    channel: &str,
-    inherited: &[HANDLE; 2],
+    environment: &[u16],
+    inherited: &[HANDLE],
     folder: &Path,
 ) -> io::Result<Child> {
     let mut size = 0usize;
@@ -206,7 +227,6 @@ fn spawn(
     let application: Vec<u16> = program.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut command: Vec<u16> = line.encode_utf16().chain(Some(0)).collect();
     let folder: Vec<u16> = folder.as_os_str().encode_wide().chain(Some(0)).collect();
-    let environment = environment_block(channel);
     // SAFETY: an all-zero PROCESS_INFORMATION is valid; CreateProcessW fills it.
     let mut started: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
     let flags = DETACHED_PROCESS | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
@@ -255,11 +275,21 @@ impl Drop for AttributeList {
 /// This process's environment with the startup channel `channel`, as the block `CreateProcessW`
 /// takes: sorted by name without regard to case, each `name=value` ending with a NUL, and one NUL
 /// more at the end.
-fn environment_block(channel: &str) -> Vec<u16> {
+fn environment_block(channel: &str, attempt: Option<&Attempt>, lease: Option<&str>) -> Vec<u16> {
     let mut variables: Vec<(OsString, OsString)> = std::env::vars_os()
-        .filter(|(name, _)| !name.eq_ignore_ascii_case(STARTUP_CHANNEL))
+        .filter(|(name, _)| {
+            ![STARTUP_CHANNEL, startup::GENERATION_ENV, startup::LEASE_ENV]
+                .iter()
+                .any(|key| name.eq_ignore_ascii_case(key))
+        })
         .collect();
     variables.push((STARTUP_CHANNEL.into(), channel.into()));
+    if let Some(attempt) = attempt {
+        variables.push((startup::GENERATION_ENV.into(), attempt.generation().into()));
+    }
+    if let Some(lease) = lease {
+        variables.push((startup::LEASE_ENV.into(), lease.into()));
+    }
     variables.sort_by_key(|(name, _)| name.to_string_lossy().to_uppercase());
     let mut block = Vec::new();
     for (name, value) in variables {
@@ -350,6 +380,21 @@ pub fn authenticate_client(
         return Err(format!("could not identify the peer: {error}"));
     }
     holder(pid, framework, service)
+}
+
+/// Takes the launcher's reservation reference before starting any thread.
+pub fn take_startup_lease() -> Option<File> {
+    let value = std::env::var(startup::LEASE_ENV).ok()?;
+    if std::env::var(STARTUP_CHANNEL).is_ok_and(|channel| channel == value) {
+        return None;
+    }
+    let handle = value.parse::<usize>().ok().filter(|&value| value != 0)? as HANDLE;
+    // SAFETY: this checks the inherited handle and clears only its inheritance flag.
+    if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0 {
+        return None;
+    }
+    // SAFETY: the inherited startup reference is owned by this process alone.
+    Some(unsafe { File::from_raw_handle(handle) })
 }
 
 impl StartupChannel {
@@ -444,4 +489,31 @@ unsafe extern "system" {
 pub(super) fn stop_self() {
     // SAFETY: suspends every thread of this process, this one too, until it is resumed.
     unsafe { NtSuspendProcess(GetCurrentProcess()) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::System::Threading::CreateEventW;
+
+    #[test]
+    fn releasing_a_service_closes_its_handle() {
+        // SAFETY: creates an unnamed, signalled event with default security.
+        let handle = unsafe { CreateEventW(std::ptr::null(), 1, 1, std::ptr::null()) };
+        assert!(!handle.is_null());
+        // SAFETY: this takes ownership of the event's only handle.
+        let owned = unsafe { OwnedHandle::from_raw_handle(handle) };
+        super::super::ServiceProcess(Child {
+            pid: 0,
+            process: owned,
+        })
+        .reap_in_background();
+        let mut flags = 0;
+        // SAFETY: the query permits invalid handle values and only writes to flags.
+        assert_eq!(unsafe { GetHandleInformation(handle, &mut flags) }, 0);
+        assert_eq!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(windows_sys::Win32::Foundation::ERROR_INVALID_HANDLE as i32)
+        );
+    }
 }

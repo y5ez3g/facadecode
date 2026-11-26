@@ -279,6 +279,7 @@ impl<S: Service> Connection<S> {
                         .await;
                     return Next::End;
                 }
+                crate::gate_for_test("before-relay-hello");
                 return Next::Relay(id, params);
             } else {
                 return self.hello(id, params).await;

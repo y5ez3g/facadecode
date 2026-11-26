@@ -3617,6 +3617,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         .output()
         .unwrap();
     assert!(launched.status.success(), "{}", stderr(&launched));
+    assert!(wait_until(LOADED_TIMEOUT, || home.hello_result().is_some()));
     let mut previous = DaemonTestClient::open(&home);
     let before = previous.hello("terminal", DAEMON_API_VERSIONS, json!({}));
     assert_eq!(before["result"]["api_version"], 1, "{before}");

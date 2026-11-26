@@ -95,6 +95,7 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 		const link = await connectOrchestrator({
 			home: deps.root,
 			program,
+			startupObserverProgram: path.join(context.extensionPath, FACADE_PROGRAM),
 			build: String(context.extension.packageJSON.version),
 			log: log.event
 		});

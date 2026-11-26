@@ -52,6 +52,7 @@ impl Keeper {
         let greeted = self.link.as_ref().is_some_and(Link::is_greeted);
         match runtime::admit(request, greeted, terminal.is_some())? {
             AdmittedRequest::Hello(api_version) => {
+                facade_base::service::gate_for_test("before-keeper-hello");
                 let link = self.link.as_mut().expect("serving the daemon's request");
                 link.greet(api_version);
                 self.post(&Response::ok(

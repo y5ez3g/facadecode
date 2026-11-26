@@ -751,12 +751,14 @@ fn facade_started_from_a_copy_runs_on_once_that_copy_is_gone() {
             .unwrap(),
     );
     let program = bin.join("facade");
+    let daemon_image = build.join("facade");
+    assert!(wait_until(LOADED_TIMEOUT, || home.hello_result().is_some()));
     let started = home
         .hello_result()
         .and_then(|hello| hello["pid"].as_i64())
         .expect("the daemon answers") as i32;
     assert!(
-        command_of(started).starts_with(&format!("{} daemon", program.display())),
+        command_of(started).starts_with(&format!("{} daemon", daemon_image.display())),
         "--detach started {}",
         command_of(started)
     );
@@ -827,7 +829,7 @@ fn facade_started_from_a_copy_runs_on_once_that_copy_is_gone() {
         .wait_for_daemon_after(old, secs(20))
         .expect("the keeper starts the daemon again");
     assert!(
-        command_of(next).starts_with(&format!("{} daemon", program.display())),
+        command_of(next).starts_with(&format!("{} daemon", daemon_image.display())),
         "the next daemon runs {}",
         command_of(next)
     );

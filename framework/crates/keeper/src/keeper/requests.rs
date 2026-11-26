@@ -94,7 +94,10 @@ impl Keeper {
         })?;
         let has_terminal = attached.is_some();
         match runtime::admit(request, greeted, has_terminal)? {
-            AdmittedRequest::Hello(api_version) => Ok(self.hello(api_version)),
+            AdmittedRequest::Hello(api_version) => {
+                facade_base::service::gate_for_test("before-keeper-hello");
+                Ok(self.hello(api_version))
+            }
             AdmittedRequest::Call(call) => match call {
                 KeeperCall::Sync(args) => self.sync(args, attached),
                 KeeperCall::Start(args) => self.start(args),

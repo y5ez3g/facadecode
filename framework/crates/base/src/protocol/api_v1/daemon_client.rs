@@ -71,6 +71,7 @@ impl DaemonClient {
         let Some(writer) = connect_transport(socket, until, opening)? else {
             return Ok(None);
         };
+        crate::service::gate_for_test("startup-before-native-hello");
         let Ok(time) = remaining(until) else {
             return Ok(None);
         };

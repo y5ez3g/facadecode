@@ -168,12 +168,14 @@ pub(crate) enum Command {
     Keeper,
     #[command(hide = true)]
     Daemon {
-        #[arg(long, conflicts_with_all = ["takeover", "install_only"])]
+        #[arg(long, conflicts_with_all = ["takeover", "install_only", "await_startup"])]
         detach: bool,
         #[arg(long, conflicts_with = "install_only")]
         takeover: bool,
         #[arg(long)]
         install_only: bool,
+        #[arg(long, hide = true, num_args = 0..=3, conflicts_with_all = ["takeover", "install_only"])]
+        await_startup: Option<Vec<String>>,
     },
 }
 

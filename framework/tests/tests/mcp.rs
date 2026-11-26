@@ -2125,6 +2125,7 @@ fn an_antigravity_start_cut_before_its_record_leaves_no_plugin() {
             plugin.join("mcp_config.json").exists(),
             "{point}: the start placed the plugin"
         );
+        let original = process_identity(daemon);
         kill_process(daemon);
         // The keeper replaces a daemon that ends once it runs the agent; before that, the next
         // command starts one.
@@ -2132,6 +2133,8 @@ fn an_antigravity_start_cut_before_its_record_leaves_no_plugin() {
             home.wait_for_daemon_after(daemon, secs(30))
                 .expect("a replacement daemon");
         } else {
+            // A detach can accept the current lock holder until the process actually exits.
+            assert!(wait_until(LOADED_TIMEOUT, || !alive(&original)));
             home.start_facade_with(&[]);
         }
         assert!(home.agents().is_empty(), "{point}: {:?}", home.agents());

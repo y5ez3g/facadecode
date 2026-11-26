@@ -20,7 +20,7 @@ pub use windows::ClientSocket;
 pub type ClientSocket = std::os::unix::net::UnixStream;
 
 /// Opens the client's socket within the deadline. A busy endpoint can be retried by the caller.
-pub(crate) fn connect_client_until(path: &Path, until: Instant) -> io::Result<ClientSocket> {
+pub fn connect_client_until(path: &Path, until: Instant) -> io::Result<ClientSocket> {
     connect_time_left(until)?;
     #[cfg(unix)]
     let socket = connect_unix_client_until(path, until)?;

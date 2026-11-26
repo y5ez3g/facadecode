@@ -19,6 +19,7 @@ mod jsonrpc;
 mod lines;
 mod relay;
 mod socket;
+mod startup;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
@@ -29,7 +30,7 @@ use std::process::ExitCode;
 use crate::daemon::RelayHelloParams;
 
 fn main() -> ExitCode {
-    let socket = match socket::daemon_socket() {
+    let (framework, socket) = match socket::daemon_socket() {
         Ok(socket) => socket,
         Err(why) => {
             relay::log(
@@ -52,5 +53,5 @@ fn main() -> ExitCode {
             .and_then(|cwd| cwd.into_os_string().into_string().ok()),
         reconnect: false,
     };
-    relay::run(socket, hello)
+    relay::run(framework, socket, hello)
 }

@@ -36,6 +36,8 @@ use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg};
 
 use super::socket_paths::ClientSocket;
+#[cfg(unix)]
+use super::startup::{self, Attempt};
 use super::unix_process::{Presence, presence};
 #[cfg(unix)]
 use super::unix_process::{birth, fork_lock, own_identity};
@@ -333,6 +335,17 @@ pub fn redirect_stderr(file: &Path) -> io::Result<()> {
 /// of its own, reading /dev/null, its output appended to its log, with a startup channel.
 #[cfg(unix)]
 pub fn launch(service: Service, program: &Path, words: &[&str]) -> anyhow::Result<Candidate> {
+    launch_with_startup(service, program, words, None, None)
+}
+
+#[cfg(unix)]
+pub fn launch_with_startup(
+    service: Service,
+    program: &Path,
+    words: &[&str],
+    attempt: Option<&Attempt>,
+    lease: Option<&File>,
+) -> anyhow::Result<Candidate> {
     let log_path = create_private_home()?.join("logs").join(service.log_name());
     let log = OpenOptions::new()
         .append(true)
@@ -341,13 +354,15 @@ pub fn launch(service: Service, program: &Path, words: &[&str]) -> anyhow::Resul
         .open(log_path)?;
     let _forks = fork_lock();
     let (channel, their_end) = std::io::pipe()?;
-    let mut command = service_command(service, program, words, &their_end, log)?;
+    let mut command = service_command(service, program, words, &their_end, log, attempt, lease)?;
     let child = command.spawn()?;
     drop(their_end);
     Ok(Candidate {
         child,
-        channel: Some(channel),
-        received: Vec::new(),
+        report: StartupReport {
+            channel: Some(channel),
+            received: Vec::new(),
+        },
     })
 }
 
@@ -359,11 +374,23 @@ fn service_command(
     words: &[&str],
     channel: &PipeWriter,
     log: File,
+    attempt: Option<&Attempt>,
+    lease: Option<&File>,
 ) -> io::Result<Command> {
     let channel = channel.as_raw_fd();
+    let lease = lease.map(AsRawFd::as_raw_fd);
     let mut command = Command::new(program);
     command.arg(service.command()).args(words);
     command.env(STARTUP_CHANNEL, channel.to_string());
+    command
+        .env_remove(startup::GENERATION_ENV)
+        .env_remove(startup::LEASE_ENV);
+    if let Some(attempt) = attempt {
+        command.env(startup::GENERATION_ENV, attempt.generation());
+    }
+    if let Some(fd) = lease {
+        command.env(startup::LEASE_ENV, fd.to_string());
+    }
     command
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
@@ -371,8 +398,10 @@ fn service_command(
     // SAFETY: setsid and fcntl are async-signal-safe and change only the new process.
     unsafe {
         command.pre_exec(move || {
-            // The channel is the one descriptor of this process's that the service keeps.
-            if libc::setsid() < 0 || libc::fcntl(channel, libc::F_SETFD, 0) < 0 {
+            if libc::setsid() < 0
+                || libc::fcntl(channel, libc::F_SETFD, 0) < 0
+                || lease.is_some_and(|fd| libc::fcntl(fd, libc::F_SETFD, 0) < 0)
+            {
                 Err(io::Error::last_os_error())
             } else {
                 Ok(())
@@ -409,6 +438,11 @@ impl Report {
 /// A service started in the background, until it reports.
 pub struct Candidate {
     child: Child,
+    report: StartupReport,
+}
+
+/// The report on a created service's own startup channel.
+pub struct StartupReport {
     /// The startup channel, until the report.
     channel: Option<PipeReader>,
     /// What came on it so far.
@@ -420,9 +454,28 @@ impl Candidate {
         self.child.id()
     }
 
-    /// The service's report, waiting up to `timeout` for it; None where none came in time, and
-    /// once it has been given.
     pub fn report(&mut self, timeout: Duration) -> Option<Report> {
+        self.report.read(timeout)
+    }
+
+    /// The process and its report may be watched independently.
+    pub fn into_parts(self) -> (ServiceProcess, StartupReport) {
+        (ServiceProcess(self.child), self.report)
+    }
+
+    pub fn into_process(self) -> ServiceProcess {
+        ServiceProcess(self.child)
+    }
+
+    #[cfg(unix)]
+    pub fn into_child(self) -> Child {
+        self.child
+    }
+}
+
+impl StartupReport {
+    /// The report once it arrives, or none if it has not yet arrived or was already taken.
+    pub fn read(&mut self, timeout: Duration) -> Option<Report> {
         let mut channel = self.channel.take()?;
         let deadline = Instant::now() + timeout;
         loop {
@@ -447,17 +500,6 @@ impl Candidate {
                 Err(_) => return Some(Report::Silent),
             }
         }
-    }
-
-    /// The started process, to wait for its end.
-    pub fn into_process(self) -> ServiceProcess {
-        ServiceProcess(self.child)
-    }
-
-    /// The started process, for its parent to reap.
-    #[cfg(unix)]
-    pub fn into_child(self) -> Child {
-        self.child
     }
 }
 
@@ -704,6 +746,15 @@ impl ServiceProcess {
     pub fn wait(mut self) -> io::Result<ProcessExit> {
         self.0.wait().map(exit_of)
     }
+
+    /// Lets the service keep running. Unix waits for its exit in the background and Windows
+    /// releases the process handle immediately.
+    pub fn reap_in_background(self) {
+        #[cfg(unix)]
+        std::thread::spawn(move || self.wait());
+        #[cfg(windows)]
+        drop(self);
+    }
 }
 
 /// The process's handle, which a wait can use.
@@ -741,19 +792,36 @@ fn exit_of(status: std::process::ExitStatus) -> ProcessExit {
 /// Lets go of what this process inherited from the one that started it, but `keep`, before any of
 /// it can pass to another process: Unix closes every descriptor above standard error; Windows does
 /// nothing, as a service inherits only what [`launch`] chose.
-pub fn close_inherited(keep: Option<&StartupChannel>) -> io::Result<()> {
+pub fn close_inherited(keep: Option<&StartupChannel>, lease: Option<&File>) -> io::Result<()> {
     #[cfg(unix)]
     return close_inherited_fds(
         &keep
             .map(StartupChannel::raw_fd)
             .into_iter()
+            .chain(lease.map(AsRawFd::as_raw_fd))
             .collect::<Vec<_>>(),
     );
     #[cfg(windows)]
     {
-        let _ = keep;
+        let _ = (keep, lease);
         Ok(())
     }
+}
+
+/// Takes the launcher's reservation reference before the keeper closes other inherited files.
+#[cfg(unix)]
+pub fn take_startup_lease() -> Option<File> {
+    let value = std::env::var(startup::LEASE_ENV).ok()?;
+    if std::env::var(STARTUP_CHANNEL).is_ok_and(|channel| channel == value) {
+        return None;
+    }
+    let fd = value.parse::<RawFd>().ok().filter(|&fd| fd > 2)?;
+    // SAFETY: fcntl checks the inherited descriptor before it is taken.
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        return None;
+    }
+    // SAFETY: the launcher gave the child this descriptor alone as its startup reference.
+    Some(unsafe { File::from_raw_fd(fd) })
 }
 
 /// Checks that the process serving `socket` is this user's and holds `service`'s lock, by its
@@ -807,6 +875,37 @@ mod tests {
 
     fn framework(test: &str) -> TestFolder {
         TestFolder::new(&format!("service-{test}"))
+    }
+
+    #[test]
+    fn a_released_service_is_reaped_after_it_exits() {
+        use nix::sys::signal::kill;
+        use nix::unistd::Pid;
+
+        let mut child = Command::new("sh")
+            .args(["-c", "read line"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let input = child.stdin.take().unwrap();
+        let pid = Pid::from_raw(child.id() as i32);
+        let (sent, received) = std::sync::mpsc::sync_channel(1);
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                ServiceProcess(child).reap_in_background();
+                sent.send(()).unwrap();
+            });
+            let released = received.recv_timeout(Duration::from_secs(10));
+            let running = kill(pid, None);
+            drop(input);
+            assert!(released.is_ok(), "releasing the running child returned");
+            assert!(running.is_ok(), "releasing did not kill it");
+        });
+        let limit = Instant::now() + Duration::from_secs(10);
+        while kill(pid, None) != Err(Errno::ESRCH) {
+            assert!(Instant::now() < limit, "the exited child was reaped");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]

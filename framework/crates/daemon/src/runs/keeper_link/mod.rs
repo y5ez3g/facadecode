@@ -492,16 +492,53 @@ impl KeeperLink {
         self.connection.lock().unwrap().api_version
     }
 
-    /// Finds the keeper holding the startup lock and waits at most ten seconds for its hello.
-    pub(crate) async fn find_at_startup(&self) -> anyhow::Result<FoundKeeper> {
-        let deadline = Instant::now() + READY_WAIT;
+    /// Finds and authenticates the keeper within this daemon's startup attempt.
+    pub(crate) async fn find_at_startup(
+        &self,
+        startup: &facade_base::startup::DaemonProgress,
+    ) -> anyhow::Result<FoundKeeper> {
         let mut logged = false;
-        loop {
+        'retry: loop {
             let Some(holder) = service::live_holder(&self.framework, Service::Keeper)? else {
                 return Ok(FoundKeeper::Absent);
             };
-            match self.connect(&holder).await {
+            let pending = self.connect_waiting(&holder, Some(startup));
+            tokio::pin!(pending);
+            let result = loop {
+                if startup.budget().exhausted() {
+                    anyhow::bail!(
+                        "keeper {} did not finish its startup hello before the deadline",
+                        holder.pid
+                    );
+                }
+                tokio::select! {
+                    biased;
+                    result = &mut pending => break result,
+                    _ = tokio::time::sleep_until(
+                        (tokio::time::Instant::now() + Duration::from_millis(100))
+                            .min(startup.budget().deadline().into())
+                    ) => {
+                        if service::live_holder(&self.framework, Service::Keeper)?.as_ref() != Some(&holder) {
+                            continue 'retry;
+                        }
+                    }
+                }
+            };
+            match result {
                 Ok(keeper) => {
+                    crate::gate_for_test("before-accepting-startup-keeper-hello");
+                    if service::live_holder(&self.framework, Service::Keeper)?.as_ref()
+                        != Some(&holder)
+                    {
+                        continue 'retry;
+                    }
+                    if startup.budget().exhausted() {
+                        anyhow::bail!(
+                            "keeper {} did not finish its startup hello before the deadline",
+                            holder.pid
+                        );
+                    }
+                    self.admit(&keeper);
                     let found = FoundKeeper::Connected {
                         build: keeper.hello.build.clone(),
                         held: keeper.hello.agents.clone(),
@@ -515,9 +552,6 @@ impl KeeperLink {
                     anyhow::bail!(ConnectError::refusal(pid))
                 }
                 Err(error) => {
-                    if Instant::now() >= deadline {
-                        anyhow::bail!("keeper {} did not accept this daemon: {error}", holder.pid);
-                    }
                     if !logged {
                         logged = true;
                         facade_base::log::write(
@@ -529,12 +563,15 @@ impl KeeperLink {
                             ),
                         );
                     }
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    tokio::time::sleep_until(
+                        (tokio::time::Instant::now() + Duration::from_millis(100))
+                            .min(startup.budget().deadline().into()),
+                    )
+                    .await;
                 }
             }
         }
     }
-
     /// Starts the link task after recovery has registered the startup keeper's runs.
     pub(crate) fn serve(self: &Arc<Self>) {
         let link = Arc::clone(self);
@@ -618,20 +655,33 @@ impl KeeperLink {
     }
 
     async fn connect(&self, holder: &ProcessIdentity) -> Result<Arc<KeeperClient>, ConnectError> {
-        let keeper = KeeperClient::connect(
+        let keeper = self.connect_waiting(holder, None).await?;
+        self.admit(&keeper);
+        Ok(keeper)
+    }
+
+    async fn connect_waiting(
+        &self,
+        holder: &ProcessIdentity,
+        startup: Option<&facade_base::startup::DaemonProgress>,
+    ) -> Result<Arc<KeeperClient>, ConnectError> {
+        KeeperClient::connect(
             &self.framework,
             holder,
             self.events.clone(),
             self.changes.clone(),
+            startup,
         )
-        .await?;
+        .await
+    }
+
+    fn admit(&self, keeper: &Arc<KeeperClient>) {
         keeper.ping();
         {
             let mut state = self.connection.lock().unwrap();
             state.identity = Some(keeper.identity.clone());
             state.build = Some(keeper.hello.build.clone());
         }
-        Ok(keeper)
     }
 
     fn ready(&self, keeper: Arc<KeeperClient>) {
@@ -827,7 +877,7 @@ impl KeeperLink {
             (report, candidate.into_process())
         })
         .await?;
-        tokio::task::spawn_blocking(move || process.wait());
+        process.reap_in_background();
         match report {
             Some(Report::Started | Report::Contention) => {}
             Some(Report::Failed(message)) => {

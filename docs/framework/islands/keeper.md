@@ -206,10 +206,12 @@ as closing a terminal does.
 `Supervisor` (`supervisor.rs`) is either watching a daemon or waiting to start the next one.
 `due(now)` tells the loop what is owed.
 
-- **Watchdog:** the daemon pings once a second from its hello on. After `PING_TIMEOUT` (15 seconds)
-  without a ping, counted from the start of watching until the first ping, the keeper sends
-  SIGKILL.
-- **Restart:** once the daemon ended, a keeper holding CLIs starts the next one after a delay. The
+- **Watchdog:** a daemon started in a known startup attempt has its shared startup budget until
+  its first authenticated ping within that budget. A daemon without a recognized startup record has the usual
+  `PING_TIMEOUT` (15 seconds) from the start of watching. After its first ping the same process
+  stays on the 15-second watchdog, including across reconnects. The daemon pings once a second.
+- **Restart:** after retaining the startup result of the daemon that ended, a keeper holding CLIs
+  starts the next one from the complete selected program set after a delay. The
   delay starts at 0.5 seconds and doubles up to 30 seconds; it starts over after a daemon that ran
   60 seconds. A daemon that cannot be started counts as one that ended at once. A keeper holding
   no CLI exits instead.

@@ -67,6 +67,7 @@ use facade_base::model::machine::new_boot_id;
 use facade_base::process::ProcessState;
 use facade_base::programs::Held;
 use facade_base::service::{self as base_service, Locked, StartupChannel};
+use facade_base::startup::DaemonProgress;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
@@ -425,7 +426,7 @@ pub fn offline_machine_name() -> Option<String> {
 /// the foreground.
 pub fn run() -> anyhow::Result<()> {
     let mut channel = StartupChannel::take();
-    base_service::close_inherited(channel.as_ref())
+    base_service::close_inherited(channel.as_ref(), None)
         .map_err(|err| failed(&mut channel, err.into()))?;
     facade_base::limits::raise_open_files();
     let workers = if cfg!(windows) {
@@ -448,8 +449,17 @@ pub fn run() -> anyhow::Result<()> {
         .build()
         .map_err(|err| failed(&mut channel, err.into()))?;
     runtime.block_on(async {
-        let started = start_and_serve(&mut channel).await;
-        started.map_err(|err| failed(&mut channel, err))
+        let mut progress = None;
+        start_and_serve(&mut channel, &mut progress)
+            .await
+            .map_err(|err| {
+                if let (Some(progress), Ok(framework)) =
+                    (progress, facade_base::paths::framework_dir())
+                {
+                    let _ = progress.failed(&framework, &format!("{err:#}"));
+                }
+                failed(&mut channel, err)
+            })
     })
 }
 
@@ -461,13 +471,17 @@ fn failed(channel: &mut Option<StartupChannel>, err: anyhow::Error) -> anyhow::E
     err
 }
 
-async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result<()> {
+async fn start_and_serve(
+    channel: &mut Option<StartupChannel>,
+    startup: &mut Option<DaemonProgress>,
+) -> anyhow::Result<()> {
     let framework = base_service::create_private_home()?;
     // The lock comes before the store, the keeper and the socket: a daemon that does not get it
     // changes nothing.
     match base_service::lock_home(&framework, base_service::Service::Daemon)? {
         Locked::Held => {
             pause_for_test("after-daemon-lock");
+            *startup = Some(DaemonProgress::start(&framework)?);
             gate_for_test("after-daemon-lock");
             #[cfg(debug_assertions)]
             if framework.join("die-after-lock").exists() {
@@ -488,12 +502,14 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
             return Ok(());
         }
     }
+    let startup = startup.as_ref().expect("the daemon holds its lock");
     lifecycle::take_clean_end(&framework);
     let program = facade_base::programs::install_running()?;
     let held = Arc::new(Held::open(&program, &facade_base::build_id())?);
     let (run_events, run_events_rx) = mpsc::unbounded_channel::<RunEvent>();
     let runs = Runs::new(&framework, held.clone(), run_events);
-    let held_agents = match runs.find_keeper_at_startup().await? {
+    startup.advance("connecting to the keeper")?;
+    let held_agents = match runs.find_keeper_at_startup(startup).await? {
         FoundKeeper::Connected { build, held } => {
             // The launchers every run names point at this build once the keeper is found; the
             // folder of the build it runs from stays.
@@ -505,6 +521,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
             Vec::new()
         }
     };
+    startup.advance("opening the store")?;
     let progress = recovery::RecoveryProgress::start();
     let opened = {
         let framework = framework.clone();
@@ -515,6 +532,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         tokio::task::spawn_blocking(move || Store::open(&framework, &ids)).await??
     };
     progress.advance();
+    startup.advance("store opened")?;
     let store = opened.store.clone();
     let records = Records::new(store.number_table());
     let readable: std::collections::HashSet<String> = opened
@@ -569,15 +587,32 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         store,
     });
     daemon.sweep(SystemTime::now());
+    startup.advance("recovering the home")?;
     gate_for_test("before-recovery");
     let recovered_prompts = opened
         .records
         .iter()
         .filter_map(|record| record.prompt)
         .collect::<HashSet<_>>();
-    let recovered_exits = daemon
-        .recover(held_agents, opened.records, &opened.agent_ids, &progress)
-        .await?;
+    let recovered_exits = {
+        let recovering = daemon.recover(held_agents, opened.records, &opened.agent_ids, &progress);
+        tokio::pin!(recovering);
+        let mut count = progress.count();
+        let mut updates = tokio::time::interval(Duration::from_millis(250));
+        loop {
+            tokio::select! {
+                result = &mut recovering => break result?,
+                _ = updates.tick() => {
+                    let advanced = progress.count();
+                    if advanced > count {
+                        count = advanced;
+                        startup.advance(&format!("recovering the home ({count} steps completed)"))?;
+                    }
+                }
+            }
+        }
+    };
+    startup.advance("records recovered")?;
     daemon.restore_guests()?;
     daemon.take_up_messages(&recovered_prompts).await?;
     for (exit, agent) in recovered_exits {
@@ -622,9 +657,6 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         daemon.clone(),
         network_events_rx,
     ));
-    if let Some(channel) = channel.take() {
-        channel.started();
-    }
     let (closing, closed) = watch::channel(false);
     let (paused, observed_paused) = watch::channel(false);
     tokio::spawn(
@@ -633,7 +665,14 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
             .clone()
             .exit_when_idle(daemon.clone(), closing, observed_paused),
     );
-    server::serve(listener, daemon, closed, paused).await
+    server::serve(listener, daemon, closed, paused, || {
+        startup.ready()?;
+        if let Some(channel) = channel.take() {
+            channel.started();
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// Handles what runs report, as it comes: a run's first exit, and a session its CLI reported,

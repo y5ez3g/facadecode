@@ -6,12 +6,16 @@
 )]
 
 use std::collections::BTreeMap;
-use std::{path::Path, time::Duration};
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use facade_base::api_v1::keeper::{self, KeeperCall, StartArgs, StopArgs, methods};
 use facade_base::api_v1::{ApiVersion, ErrorBody, Request};
 use facade_base::process::ProcessIdentity;
 use facade_base::start::StartCommand;
+use facade_base::startup::Attempt;
 
 /// From a stop's hang-up to its kill, unless the CLI ends first.
 pub(crate) const STOP_TIMEOUT: Duration = Duration::from_secs(3);
@@ -23,6 +27,37 @@ pub(crate) const MIN_RESTART_DELAY: Duration = Duration::from_millis(500);
 pub(crate) const MAX_RESTART_DELAY: Duration = Duration::from_secs(30);
 /// Once a daemon runs this long, the restart delay starts over.
 pub(crate) const RESTART_DELAY_RESET: Duration = Duration::from_secs(60);
+
+/// The startup phase belongs to the daemon, even when its supervising keeper changes.
+pub(crate) fn watched_startup(
+    startup: Option<Attempt>,
+    daemon: &ProcessIdentity,
+    now: Instant,
+) -> (Option<Attempt>, Option<Instant>) {
+    let startup = startup.filter(|attempt| attempt.supervises(daemon));
+    let last_ping = startup
+        .as_ref()
+        .is_some_and(|attempt| attempt.keeper_has_first_ping(daemon))
+        .then_some(now);
+    (startup, last_ping)
+}
+
+pub(crate) fn admit_first_ping(startup: Option<&Attempt>, daemon: &ProcessIdentity) -> bool {
+    let Some(startup) = startup else { return true };
+    match startup.accept_keeper_ping(daemon) {
+        Ok(accepted) => accepted,
+        Err(error) => {
+            crate::log(
+                "warn",
+                &format!(
+                    "could not record the first ping from daemon {}: {error}",
+                    daemon.pid
+                ),
+            );
+            false
+        }
+    }
+}
 
 /// Saves positive evidence of a creator stop before acting on the request.
 pub(crate) fn accept_creator_stop(

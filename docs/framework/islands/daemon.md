@@ -645,7 +645,7 @@ runs, each run's terminal and exit, its files and plugin, and the session its CL
     where the daemon commits the session first and replies on `committed: oneshot::Sender<bool>`.
   - Exits to the actor: `ExitSink = Arc<dyn Fn(RunExit) + Send + Sync>`, given per run;
     `RunExit { run, exit, stopped }`.
-  - Startup: `find_keeper_at_startup() -> FoundKeeper` (`Absent` or `Connected { build, held }`),
+  - Startup: `find_keeper_at_startup(startup) -> FoundKeeper` (`Absent` or `Connected { build, held }`),
     then `serve_keeper()`.
   - Start and resume, in this order: `reserve_start() -> StartReservation`,
     `reservation.wait_for_keeper()` and `prepare_managed(RunRequest, address, context)`.
@@ -696,7 +696,11 @@ The keeper connection, the run registry, and starts not yet registered.
   A start or stop waits up to 10 seconds for a ready keeper, and each request up to 10 seconds for
   its response. The keeper is pinged every second. Lock order: the registry, then pending starts;
   the connection lock is a leaf. Runs proves the keeper's process and birth against its lock before
-  offering its supported API versions. It rejects the whole frame if a required terminal is absent or
+  offering its supported API versions. For the first connection, reaching the Keeper socket,
+  proving it and completing hello on that connection share the daemon's startup deadline.
+  The first session is admitted, and starts pinging, after the daemon rechecks the deadline and the
+  Keeper's lock identity. Running calls use their ordinary response timers.
+  It rejects the whole frame if a required terminal is absent or
   a terminal arrives on a reply or notification that cannot carry one. The registry's copy
   of a run's terminal lets go before any `agent.stop` for that run (a stop, an abandoned start, a stop
   sent again); `agent.sync` passes each copy as it is.

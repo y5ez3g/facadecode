@@ -210,8 +210,11 @@ impl Runs {
     }
 
     /// Finds the keeper that started this daemon, waiting up to 10 seconds for it to accept.
-    pub(crate) async fn find_keeper_at_startup(&self) -> anyhow::Result<FoundKeeper> {
-        self.link.find_at_startup().await
+    pub(crate) async fn find_keeper_at_startup(
+        &self,
+        startup: &facade_base::startup::DaemonProgress,
+    ) -> anyhow::Result<FoundKeeper> {
+        self.link.find_at_startup(startup).await
     }
 
     /// Keeps the keeper link for the daemon's life, in a task of its own: hands the startup

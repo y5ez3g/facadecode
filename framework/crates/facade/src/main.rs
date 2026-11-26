@@ -138,6 +138,7 @@ fn main() {
             errors::report(&error)
         }
     });
+    daemon_client::acknowledge_startup_failure();
     std::process::exit(code)
 }
 
@@ -147,6 +148,10 @@ fn dispatch(command: Command) -> anyhow::Result<i32> {
         Command::PrintVersion
             | Command::Keeper
             | Command::Daemon { takeover: true, .. }
+            | Command::Daemon {
+                await_startup: Some(_),
+                ..
+            }
             | Command::Daemon {
                 install_only: true,
                 ..
@@ -443,6 +448,10 @@ fn run(command: Command) -> anyhow::Result<i32> {
             install_only: true, ..
         } => facade_base::programs::select_running().map(|_| 0),
         Command::Daemon { detach: true, .. } => daemon_client::detach(),
+        Command::Daemon {
+            await_startup: Some(words),
+            ..
+        } => daemon_client::await_startup(&words),
         Command::Daemon { .. } => {
             facade_base::programs::validate_running_build()?;
             facade_daemon::run().map(|()| 0)

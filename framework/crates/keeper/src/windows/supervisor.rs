@@ -5,7 +5,7 @@
 
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use facade_base::process::ProcessIdentity;
@@ -17,26 +17,34 @@ use windows_sys::Win32::System::Threading::{
 
 use super::port::Port;
 use crate::log;
-use crate::runtime::{MAX_RESTART_DELAY, MIN_RESTART_DELAY, PING_TIMEOUT, RESTART_DELAY_RESET};
+use facade_base::startup::Attempt;
+
+use crate::runtime::{
+    self, MAX_RESTART_DELAY, MIN_RESTART_DELAY, PING_TIMEOUT, RESTART_DELAY_RESET,
+};
 
 /// The exit code of a daemon ended for its silence.
 const KILLED_CODE: u32 = 1;
 
 pub(super) struct Supervisor {
     phase: Phase,
+    framework: PathBuf,
+    startup: Option<Attempt>,
     /// Wait before the next start; doubles after each end, up to [`MAX_RESTART_DELAY`].
     backoff: Duration,
 }
 
 enum Phase {
     /// A daemon is up (or believed up) and being watched.
-    Up(Watched),
+    Up(Box<Watched>),
     /// No daemon; the next one starts at this instant.
     Down(Instant),
 }
 
 struct Watched {
     process: ProcessIdentity,
+    startup: Option<Attempt>,
+    report: Option<service::StartupReport>,
     /// How its end is seen; None where it cannot be, and only its pings show it lives.
     end: Option<End>,
     /// Start of watching; the watchdog counts from here until the first ping.
@@ -67,13 +75,25 @@ pub(super) enum Due {
 impl Supervisor {
     /// The state a new keeper begins in: watching the daemon that holds `framework\daemon.lock` (that
     /// daemon started this keeper), or about to start one.
-    pub(super) fn new(framework: &Path, port: &mut Port, now: Instant) -> Supervisor {
-        let phase = match service::live_holder(framework, Service::Daemon) {
+    pub(super) fn new(
+        framework: &Path,
+        port: &mut Port,
+        now: Instant,
+        startup: Option<Attempt>,
+    ) -> Supervisor {
+        let mut phase = match service::live_holder(framework, Service::Daemon) {
             Ok(Some(process)) => observe(process, port, now),
             _ => Phase::Down(now),
         };
+        let startup = startup.or_else(|| Attempt::current(framework));
+        if let Phase::Up(watched) = &mut phase {
+            (watched.startup, watched.last_ping) =
+                runtime::watched_startup(startup.clone(), &watched.process, now);
+        }
         Supervisor {
             phase,
+            framework: framework.to_path_buf(),
+            startup,
             backoff: MIN_RESTART_DELAY,
         }
     }
@@ -123,33 +143,60 @@ impl Supervisor {
             return;
         }
         self.phase = observe(process.clone(), port, now);
+        if let Phase::Up(watched) = &mut self.phase {
+            (watched.startup, watched.last_ping) =
+                runtime::watched_startup(Attempt::current(&self.framework), process, now);
+        }
     }
 
-    /// Starts the daemon through the launcher, so whichever build the launcher points at runs.
+    /// Starts the complete selected daemon image.
     pub(super) fn launch(&mut self, port: &mut Port, now: Instant) -> anyhow::Result<()> {
-        let launcher = facade_base::programs::launcher(facade_base::programs::PROGRAMS[0])?;
-        let started = service::launch(Service::Daemon, &launcher, &[])?.into_process();
-        let pid = started.pid();
+        let startup = match self.startup.take().filter(Attempt::can_continue) {
+            Some(attempt) => attempt,
+            None => Attempt::begin(&self.framework)?,
+        };
+        let (launcher, candidate) = facade_base::programs::start_daemon(&self.framework, &startup)?;
+        let (process, report) = candidate.into_parts();
+        let pid = process.pid();
+        let _ = startup.record("keeper", "daemon process created");
+        self.startup = Some(startup.clone());
+        let started = process;
         // Holding the process keeps its ID, so a daemon that died at once still has a birth here.
         let birth = unix_process::birth(pid)?.unwrap_or_default();
+        let process = ProcessIdentity { pid, birth };
+        let _ = startup.daemon_created(&process);
         let handle = started.as_handle().try_clone_to_owned()?;
         let end = watch_end(handle, port)?;
         log(
             "info",
             &format!("started daemon {pid} from {}", launcher.display()),
         );
-        self.phase = Phase::Up(Watched {
-            process: ProcessIdentity { pid, birth },
+        self.phase = Phase::Up(Box::new(Watched {
+            process,
+            startup: Some(startup),
+            report: Some(report),
             end: Some(end),
             from: now,
             last_ping: None,
             killed: false,
-        });
+        }));
         Ok(())
     }
 
     pub(super) fn ping(&mut self, now: Instant) {
         if let Phase::Up(watched) = &mut self.phase {
+            if watched.last_ping.is_none() {
+                if !runtime::admit_first_ping(watched.startup.as_ref(), &watched.process) {
+                    return;
+                }
+                log(
+                    "info",
+                    &format!(
+                        "first authenticated ping from daemon {}",
+                        watched.process.pid
+                    ),
+                );
+            }
             watched.last_ping = Some(now);
         }
     }
@@ -158,12 +205,26 @@ impl Supervisor {
     pub(super) fn deadline(&self) -> Option<Instant> {
         match &self.phase {
             Phase::Up(watched) if watched.killed => None,
-            Phase::Up(watched) => Some(watched.last_ping.unwrap_or(watched.from) + PING_TIMEOUT),
+            Phase::Up(watched) => Some(match (watched.last_ping, &watched.startup) {
+                (Some(ping), _) => ping + PING_TIMEOUT,
+                (None, Some(attempt)) => attempt.status().0.deadline(),
+                (None, None) => watched.from + PING_TIMEOUT,
+            }),
             Phase::Down(at) => Some(*at),
         }
     }
 
     pub(super) fn due(&self, now: Instant) -> Due {
+        if self.watched().is_some_and(|watched| {
+            !watched.killed
+                && watched.last_ping.is_none()
+                && watched
+                    .startup
+                    .as_ref()
+                    .is_some_and(|attempt| attempt.status().0.exhausted())
+        }) {
+            return Due::Watchdog;
+        }
         match self.deadline() {
             Some(at) if at <= now && self.is_up() => Due::Watchdog,
             Some(at) if at <= now => Due::Start,
@@ -191,6 +252,38 @@ impl Supervisor {
             log("warn", &format!("ending daemon {pid} failed: {err}"));
         }
         false
+    }
+
+    pub(super) fn waited_for_startup(&self) -> bool {
+        self.watched()
+            .is_some_and(|watched| watched.startup.is_some() && watched.last_ping.is_none())
+    }
+
+    pub(super) fn report_end(&mut self, how: &str, restarting: bool) {
+        let Phase::Up(watched) = &mut self.phase else {
+            return;
+        };
+        let Some(attempt) = &watched.startup else {
+            return;
+        };
+        let report = watched
+            .report
+            .as_mut()
+            .and_then(|report| report.read(Duration::ZERO));
+        let reason = match &report {
+            Some(service::Report::Failed(error)) => error.as_str(),
+            Some(service::Report::Contention) => return,
+            _ => how,
+        };
+        if restarting {
+            let _ = attempt.fail_daemon(
+                &watched.process,
+                self.framework.join("logs/daemon.log"),
+                reason,
+            );
+        } else {
+            let _ = attempt.finish(&self.framework, &watched.process, reason);
+        }
     }
 
     /// The daemon is gone. The next start waits the current backoff, which resets first if the
@@ -231,13 +324,15 @@ fn observe(process: ProcessIdentity, port: &mut Port, now: Instant) -> Phase {
             None
         }
     };
-    Phase::Up(Watched {
+    Phase::Up(Box::new(Watched {
         process,
+        startup: None,
+        report: None,
         end,
         from: now,
         last_ping: None,
         killed: false,
-    })
+    }))
 }
 
 /// Arms the wait for the end of the process `handle` under a new key.

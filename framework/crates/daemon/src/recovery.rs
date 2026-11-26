@@ -70,6 +70,10 @@ impl RecoveryProgress {
         }
     }
 
+    pub(crate) fn count(&self) -> u64 {
+        self.steps.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn advance(&self) {
         self.steps.fetch_add(1, Ordering::Relaxed);
     }

@@ -330,7 +330,7 @@ fn malformed_requests_get_json_rpc_errors_and_oversized_lines_close_connection()
 #[test]
 fn unread_responses_backpressure_the_connection() {
     let home = TestHome::new("outbox");
-    home.run_facade_ok(&["daemon", "--detach"]);
+    home.start_facade_with(&[]);
     let mut wire = DaemonTestClient::open(&home);
     hello_v1(&mut wire);
     let started = wire.call_ok("agent.start", json!({

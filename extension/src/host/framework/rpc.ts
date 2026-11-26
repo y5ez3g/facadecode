@@ -17,6 +17,7 @@ import { DaemonError } from './daemonTypes';
 export interface DaemonOptions {
 	readonly home: string;
 	readonly program: string;
+	readonly startupObserverProgram?: string;
 	readonly build: string;
 	log(line: string): void;
 }
@@ -88,33 +89,94 @@ function startupRefusal(stdout: string): DaemonError | undefined {
 	return undefined;
 }
 
+export interface StartupTicket {
+	readonly generation: string;
+	readonly pid: number;
+	readonly birth: string;
+}
+
+export interface StartupReady {
+	readonly pid: number;
+	readonly deadlineNs: bigint;
+}
+
+function startupLine<T>(stdout: string, prefix: string): T | undefined {
+	const line = stdout.split(/\r?\n/).find(item => item.startsWith(prefix));
+	if (!line) { return undefined; }
+	try {
+		return JSON.parse(line.slice(prefix.length)) ?? undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /** Selects the bundled programs or starts the home launcher for the given home. */
-export function startDaemon(options: Pick<DaemonOptions, 'home' | 'program' | 'log'>, mode: '--takeover' | '--detach'): Promise<void> {
+export async function startDaemon(
+	options: Pick<DaemonOptions, 'home' | 'program' | 'startupObserverProgram' | 'log'>,
+	mode: '--takeover' | '--detach',
+	signal?: AbortSignal
+): Promise<StartupTicket | undefined> {
+	const report = mode === '--detach' && options.startupObserverProgram !== undefined;
+	const stdout = await startupCommand(options, options.program, [mode], signal, report);
+	const ticket = startupLine<StartupTicket>(stdout, 'facade-startup-locked ');
+	if (ticket && typeof ticket.generation === 'string' && /^[0-9a-f]{16}$/i.test(ticket.generation)
+		&& Number.isSafeInteger(ticket.pid) && ticket.pid > 0 && typeof ticket.birth === 'string'
+		&& /^[a-z0-9_.:-]{1,128}$/i.test(ticket.birth)) {
+		return ticket;
+	}
+	return undefined;
+}
+
+/** Observes precisely the startup accepted by --detach through the native startup policy. */
+export async function waitForStartup(options: DaemonOptions, ticket: StartupTicket | undefined, signal: AbortSignal): Promise<StartupReady> {
+	const program = options.startupObserverProgram ?? options.program;
+	const words = ['--await-startup'];
+	if (ticket) { words.push(ticket.generation, String(ticket.pid), ticket.birth); }
+	const stdout = await startupCommand(options, program, words, signal, true);
+	const ready = startupLine<{ pid: number; deadlineNs: string }>(stdout, 'facade-startup-ready ');
+	if (!ready || !Number.isSafeInteger(ready.pid) || ready.pid <= 0
+		|| typeof ready.deadlineNs !== 'string' || !/^[0-9]{1,20}$/.test(ready.deadlineNs)) {
+		throw unavailable('Facade Code Framework did not identify the daemon that completed startup.');
+	}
+	const deadlineNs = BigInt(ready.deadlineNs);
+	if (deadlineNs - process.hrtime.bigint() > 180_000_000_000n) {
+		throw unavailable('Facade Code Framework returned an invalid startup deadline.');
+	}
+	return { pid: ready.pid, deadlineNs };
+}
+
+function startupCommand(
+	options: Pick<DaemonOptions, 'home' | 'log'>, program: string, words: string[], signal: AbortSignal | undefined,
+	report: boolean
+): Promise<string> {
 	return new Promise((resolve, reject) => {
-		const child = spawn(options.program, ['daemon', mode], {
-			env: { ...process.env, FACADE_HOME: options.home, FACADE_EDITOR_STARTUP_REPORT: '1' },
-			stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true
+		const child = spawn(program, ['daemon', ...words], {
+			env: { ...process.env, FACADE_HOME: options.home, FACADE_EDITOR_STARTUP_REPORT: '1',
+				...(report ? { FACADE_STARTUP_REPORT: '1' } : {}) },
+			stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, signal
 		});
 		let stdout = '';
 		let stderr = '';
 		child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk; });
-		child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk; });
-		child.once('error', err => reject(new Error(`Could not run ${options.program}: ${messageOf(err)}`)));
+		child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
+			stderr += chunk;
+			if (report) { options.log(chunk.trimEnd()); }
+		});
+		child.once('error', err => reject(new Error(`Could not run ${program}: ${messageOf(err)}`)));
 		child.once('close', code => {
 			const detail = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n');
 			if (code === 0) {
-				if (detail) {
-					options.log(detail);
-				}
-				resolve();
+				const diagnostic = stdout.split(/\r?\n/).filter(line => !/^facade-startup-(locked|ready) /.test(line)).join('\n').trim();
+				const notice = [diagnostic, report ? '' : stderr.trim()].filter(Boolean).join('\n');
+				if (notice) { options.log(notice); }
+				resolve(stdout);
 			} else {
 				reject(startupRefusal(stdout) ??
-					new Error(`${options.program} daemon ${mode} exited with code ${code}${detail ? `\n${detail}` : ''}`));
+					new Error(`${program} daemon ${words[0]} exited with code ${code}${detail ? `\n${detail}` : ''}`));
 			}
 		});
 	});
 }
-
 /** What a response settles a request with. */
 type Outcome = { readonly result: unknown; readonly error?: undefined } | { readonly error: DaemonError };
 

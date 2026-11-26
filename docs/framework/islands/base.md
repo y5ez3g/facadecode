@@ -17,6 +17,11 @@ to speak of, so every other crate can depend on it and it depends on none of the
   their owner alone.
 - `framework/keeper.lock` and `framework/daemon.lock`, and the record in each. Both services use the same
   30-day retention policy for their own log in `framework/logs/`.
+- `framework/startup/` holds local startup attempts, with progress and outcomes tied to a generation and
+  the PID and birth of the service. Startup order verifies the live candidates, seals the previous
+  attempt and issues a claim. A separate inherited file reference keeps the claim until the Keeper
+  takes its lock, even if the launcher ends first. The `programs.lock` section selects and publishes
+  the program set after the claim.
 - `framework/bin/`: each build's `facade` and `facade-mcp` in a folder named after the build, with the
   ConPTY package in its `conpty/` on Windows, and the two launchers that point at the current
   build: symbolic links on Unix, copies on Windows.
@@ -40,6 +45,14 @@ to speak of, so every other crate can depend on it and it depends on none of the
   and keeper support sets each begin at `[1]`. Daemon hello lists operations and topics available
   to that caller. The external MCP relay keeps its own `relay:1` boundary. Its authenticated
   in-process actor uses daemon API v1.
+- Waking callers, the startup Keeper link and the Keeper's initial supervision use the same local monotonic
+  budget. Base publishes one window per generation. Verified progress survives changes of service identity.
+  Only a completed stage renews the 75-second progress window, within the original 180-second limit.
+  Base seals an accepted candidate and its generation when both reporting services and the creation
+  reference are gone. A caller following a candidate reads that candidate's outcome. A new caller
+  seeking readiness takes queued accepted failures in order, then general startup failures, before
+  another claim. A busy startup-order lock leaves the waiter's deadline and cancellation checks active.
+  Each outcome remains readable. Reporting it acknowledges only that dispatch.
 - Each endpoint follows its own formal compatibility window. See [Daemon takeover](../../../framework/protocol/DAEMON.md#daemon-takeover).
 - The files in `framework/protocol/` are exactly what the types generate; the `protocol_files` test
   fails on any difference.

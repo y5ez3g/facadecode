@@ -20,7 +20,8 @@ It keeps nothing on disk.
 
 - One loop: on Unix, one thread waits in `poll`; on Windows, the loop waits on an I/O completion port and one other
   thread blocks reading standard input and posts each read to that port. Reads from the daemon use overlapped I/O.
-  Writes and the hello block, as does running `facade daemon --detach`.
+  A temporary worker runs `facade daemon --detach` and, for a reported startup candidate, a worker completes
+  the first MCP hello. Their completions wake the loop. The loop keeps reading input, including cancellations and EOF.
 - Every byte it passes on goes through unchanged. Of a line it reads only the top-level `id`, `method` and `error`.
 - A request stays pending until the daemon sends a line with its `id` and no `method`.
 - When it connects again, it sends the pending requests first, in their order, then the held lines, then new lines.
@@ -29,12 +30,17 @@ It keeps nothing on disk.
   hello carries the CLI's environment, which may hold keys.
 - Once it has responded to `closing`, it sends that daemon nothing more.
 - It runs `facade daemon --detach` at most once for each time it is disconnected, and only where no one listens.
+- A startup ticket names the real lock holder and startup generation. The relay reads the generation's
+  deadline and the candidate's startup outcome. It checks the connected peer PID and the daemon lock's
+  PID and birth before and after MCP hello. An older daemon can prove readiness through its v1 hello
+  within the same deadline. Only a verified link receives queued work. A launcher without a ticket uses
+  the original reconnect path.
 - Code that differs by operating system stays inside the relay.
 
 ## Never does
 
 - Change or make MCP messages. Its hello and its response to `closing` are its only own lines.
-- Depend on a Facade crate. Its dependencies are `sha2`, `nix` on Unix and `windows-sys` on Windows.
+- Depend on a Facade crate. It uses `serde_json`, `sha2`, `nix` on Unix and `windows-sys` on Windows.
 - Read its arguments. They go into the hello and nowhere else.
 - Start any process other than `facade daemon --detach`.
 - Time out a request, limit a line's size, or queue anything beyond the pending and held lines.

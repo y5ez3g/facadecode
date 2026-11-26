@@ -21,13 +21,14 @@ use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 #[cfg(unix)]
 use nix::time::{ClockId, clock_gettime};
 
-use crate::daemon::{self, DaemonLink, RelayHelloParams};
+use crate::daemon::{self, DaemonLink, OpeningLink, RelayHelloParams};
 use crate::jsonrpc::{self, Id, Message};
 use crate::lines::Lines;
+use crate::startup::{Task, Ticket};
 #[cfg(unix)]
 use crate::unix::ready_input_bytes;
 #[cfg(windows)]
-use crate::windows::monotonic_now;
+pub(crate) use crate::windows::monotonic_now;
 
 /// The first wait before the relay tries a daemon again, and the longest.
 const MIN_RECONNECT_DELAY: Duration = Duration::from_millis(100);
@@ -40,7 +41,7 @@ pub(crate) fn log(level: &str, fact: &str) {
 
 /// Relays between standard input and output and the daemon at `socket`, saying `hello`, until
 /// the CLI's input ends and every request has its response, or no daemon is connected then.
-pub(crate) fn run(socket: PathBuf, hello: RelayHelloParams) -> ExitCode {
+pub(crate) fn run(framework: PathBuf, socket: PathBuf, hello: RelayHelloParams) -> ExitCode {
     #[cfg(unix)]
     let input = match io::stdin().as_fd().try_clone_to_owned() {
         Ok(input) => File::from(input),
@@ -58,7 +59,12 @@ pub(crate) fn run(socket: PathBuf, hello: RelayHelloParams) -> ExitCode {
         }
     };
     let mut relay = Relay {
+        framework,
         socket,
+        launch: None,
+        opening: None,
+        startup: None,
+        notice_at: Instant::now(),
         hello,
         input: Some(input),
         #[cfg(windows)]
@@ -185,8 +191,18 @@ enum ClientLine {
     Other(Vec<u8>),
 }
 
+enum StartupReadiness {
+    Waiting(Instant),
+    Ready(Instant),
+}
+
 struct Relay {
+    framework: PathBuf,
     socket: PathBuf,
+    launch: Option<Task<Option<Ticket>>>,
+    opening: Option<Task<OpeningLink>>,
+    startup: Option<Ticket>,
+    notice_at: Instant,
     hello: RelayHelloParams,
     /// The CLI's input, until it ends.
     #[cfg(unix)]
@@ -232,7 +248,13 @@ impl Relay {
             }
         };
         let (has_cli, has_daemon) = (cli.is_some(), daemon.is_some());
-        let mut fds: Vec<PollFd> = cli.into_iter().chain(daemon).collect();
+        let startup = self
+            .launch
+            .as_ref()
+            .map(|launch| launch.wake.as_fd())
+            .or_else(|| self.opening.as_ref().map(|open| open.wake.as_fd()))
+            .map(|fd| PollFd::new(fd, PollFlags::POLLIN));
+        let mut fds: Vec<PollFd> = cli.into_iter().chain(daemon).chain(startup).collect();
         poll(&mut fds, timeout)?;
         let has_events = |fd: Option<&PollFd>| {
             fd.and_then(PollFd::revents)
@@ -240,7 +262,7 @@ impl Relay {
         };
         Ok((
             has_cli && has_events(fds.first()),
-            has_daemon && has_events(fds.last()),
+            has_daemon && has_events(fds.get(usize::from(has_cli))),
         ))
     }
 
@@ -256,53 +278,86 @@ impl Relay {
             self.input.as_mut(),
             self.daemon.link().map(|link| &mut link.stream),
             timeout,
+            self.launch.is_some() || self.opening.is_some(),
         )
     }
 
-    /// Connects once the wait is over, and gives the daemon the pending requests, then the held
-    /// lines. Where no one listens, it first starts Facade, once.
+    /// Observes the background launcher and resumes the original input loop while it is pending.
     fn connect_when_due(&mut self) {
         let Daemon::Disconnected {
             next_try,
             logged,
-            mut started_facade,
+            started_facade,
         } = self.daemon
         else {
             return;
         };
-        if Instant::now() < next_try {
+        if let Some(launch) = &self.launch {
+            let Some(result) = launch.completed() else {
+                self.retry_at(Instant::now() + MIN_RECONNECT_DELAY, logged, started_facade);
+                return;
+            };
+            self.launch = None;
+            match result {
+                Ok(ticket) => self.startup = ticket,
+                Err(why) => log("warn", &format!("{why}; trying again")),
+            }
+        } else if self.opening.is_none() && Instant::now() < next_try {
             return;
         }
-        let link = match self.open() {
+
+        let startup_until = match self.startup_readiness() {
+            Some(StartupReadiness::Ready(until)) => Some(until),
+            Some(StartupReadiness::Waiting(again)) => {
+                self.retry_at(again, logged, started_facade);
+                return;
+            }
+            None => None,
+        };
+
+        let expected = self.startup.clone();
+        let opening = if let Some(task) = &self.opening {
+            let Some(result) = task.completed() else {
+                self.retry_at(Instant::now() + MIN_RECONNECT_DELAY, logged, started_facade);
+                return;
+            };
+            self.opening = None;
+            result
+        } else if let (Some(ticket), Some(until)) = (&expected, startup_until) {
+            let (framework, socket, hello, ticket) = (
+                self.framework.clone(),
+                self.socket.clone(),
+                self.hello.clone(),
+                ticket.clone(),
+            );
+            match Task::start(
+                move || {
+                    OpeningLink::open(&socket, &hello, Some((&framework, &ticket)), Some(until))
+                },
+                #[cfg(windows)]
+                self.events.startup_waker(),
+            ) {
+                Ok(task) => {
+                    self.opening = Some(task);
+                    self.retry_at(Instant::now() + MIN_RECONNECT_DELAY, logged, started_facade);
+                    return;
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            OpeningLink::open(&self.socket, &self.hello, None, None)
+        };
+        let link = match opening.and_then(|link| self.adopt(link, expected.as_ref())) {
             Ok(link) => link,
             Err(err) => {
-                if !logged {
-                    log("warn", &format!("{err}; trying again"));
-                }
-                let no_one_listens = matches!(
-                    err.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-                );
-                let mut delay = self.reconnect_delay;
-                self.reconnect_delay = (delay * 2).min(MAX_RECONNECT_DELAY);
-                if no_one_listens && !started_facade {
-                    started_facade = true;
-                    match daemon::start_facade() {
-                        Ok(()) => delay = Duration::ZERO,
-                        Err(why) => log("warn", &format!("{why}; trying again")),
-                    }
-                }
-                self.daemon = Daemon::Disconnected {
-                    next_try: Instant::now() + delay,
-                    logged: true,
-                    started_facade,
-                };
+                self.retry_open(&err, logged, started_facade);
                 return;
             }
         };
         if logged {
             log("info", "connected to Facade");
         }
+        self.startup = None;
         self.hello.reconnect = true;
         self.reconnect_delay = MIN_RECONNECT_DELAY;
         self.daemon = Daemon::Connected { link };
@@ -311,15 +366,118 @@ impl Relay {
         }
     }
 
-    /// Opens a link to the daemon and writes it the pending requests.
-    fn open(&mut self) -> io::Result<DaemonLink> {
-        let mut link = DaemonLink::open(
-            &self.socket,
-            &self.hello,
+    fn startup_readiness(&mut self) -> Option<StartupReadiness> {
+        let ticket = self.startup.as_mut()?;
+        let latest = ticket.refresh_window(&self.framework);
+        let observation = ticket.view(&self.framework);
+        let now = Instant::now();
+        let until = ticket.until();
+        let detail = observation
+            .as_ref()
+            .filter(|view| view.status == "failed")
+            .map(|view| view.detail.as_str())
+            .or(latest.as_deref())
+            .unwrap_or("waiting for the daemon lock owner");
+        let failed = observation
+            .as_ref()
+            .is_some_and(|view| view.status == "failed");
+        if failed || ticket.expired() {
+            if !ticket.diagnosed {
+                if failed {
+                    log("warn", detail);
+                } else {
+                    log(
+                        "warn",
+                        &format!("the Orchestrator startup deadline elapsed ({detail})"),
+                    );
+                }
+                ticket.diagnosed = true;
+            }
+            self.opening = None;
+            let again = if let Some(next) = ticket.replacement(&self.framework) {
+                self.startup = Some(next);
+                now
+            } else {
+                now + MAX_RECONNECT_DELAY
+            };
+            return Some(StartupReadiness::Waiting(again));
+        }
+        if now >= self.notice_at && ticket.ten_seconds_in() {
+            log(
+                "info",
+                &format!("the Orchestrator is still starting ({detail})"),
+            );
+            self.notice_at = now + Duration::from_secs(10);
+        }
+        if observation.is_none_or(|view| view.status == "ready") {
+            return Some(StartupReadiness::Ready(until));
+        }
+        let again = if let Some(next) = ticket.replacement(&self.framework) {
+            self.startup = Some(next);
+            now
+        } else {
+            until.min(now + MIN_RECONNECT_DELAY)
+        };
+        Some(StartupReadiness::Waiting(again))
+    }
+
+    fn retry_open(&mut self, err: &io::Error, logged: bool, mut started_facade: bool) {
+        if let Some(ticket) = &self.startup
+            && let Some(next) = ticket.replacement(&self.framework)
+        {
+            if let Some(view) = ticket.view(&self.framework)
+                && view.status == "failed"
+            {
+                log("warn", &view.detail);
+            }
+            self.startup = Some(next);
+            self.retry_at(Instant::now(), true, started_facade);
+            return;
+        }
+        if !logged {
+            log("warn", &format!("{err}; trying again"));
+        }
+        let no_one_listens = matches!(
+            err.kind(),
+            io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+        );
+        let mut delay = self.reconnect_delay;
+        self.reconnect_delay = (delay * 2).min(MAX_RECONNECT_DELAY);
+        if no_one_listens && !started_facade {
+            started_facade = true;
+            match Task::start(
+                daemon::start_facade,
+                #[cfg(windows)]
+                self.events.startup_waker(),
+            ) {
+                Ok(launch) => {
+                    self.launch = Some(launch);
+                    delay = MIN_RECONNECT_DELAY;
+                }
+                Err(why) => log(
+                    "warn",
+                    &format!("could not start Facade: {why}; trying again"),
+                ),
+            }
+        }
+        self.retry_at(Instant::now() + delay, true, started_facade);
+    }
+
+    fn retry_at(&mut self, next_try: Instant, logged: bool, started_facade: bool) {
+        self.daemon = Daemon::Disconnected {
+            next_try,
+            logged,
+            started_facade,
+        };
+    }
+    /// Adopts the proved link and writes it the pending requests.
+    fn adopt(&mut self, opening: OpeningLink, expected: Option<&Ticket>) -> io::Result<DaemonLink> {
+        let mut link = opening.attach(
+            expected.map(|ticket| (self.framework.as_path(), ticket)),
             #[cfg(windows)]
             &mut self.events,
         )?;
-        if !self.pending.is_empty() {
+        if !self.pending.is_empty() || !self.held.is_empty() {
             self.take_ready_cli()?;
         }
         let failed =
@@ -515,7 +673,7 @@ fn drain_ready_input(mut remaining: usize, mut read: impl FnMut(usize) -> usize)
 
 /// The local daemon's monotonic clock, in nanoseconds on the same clock.
 #[cfg(unix)]
-fn monotonic_now() -> u64 {
+pub(crate) fn monotonic_now() -> u64 {
     let Ok(now) = clock_gettime(ClockId::CLOCK_MONOTONIC) else {
         return 0;
     };

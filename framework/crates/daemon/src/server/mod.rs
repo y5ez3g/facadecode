@@ -239,9 +239,11 @@ pub(crate) async fn serve<S: Service>(
     service: Arc<S>,
     mut closing: watch::Receiver<bool>,
     paused: watch::Sender<bool>,
+    ready: impl FnOnce() -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     tokio::spawn(exit_on_signal());
     crate::gate_for_test("before-accept-loop");
+    ready()?;
     let mut was_paused = false;
     loop {
         let pause = *closing.borrow_and_update();

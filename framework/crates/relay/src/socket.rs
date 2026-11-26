@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 
 /// The daemon socket of the Facade home this process's environment names. Fails, saying why,
 /// where it names none.
-pub(crate) fn daemon_socket() -> Result<PathBuf, String> {
+pub(crate) fn daemon_socket() -> Result<(PathBuf, PathBuf), String> {
     let home = facade_home()?;
     let digest = Sha256::digest(home.to_string_lossy().as_bytes());
     let key = digest.iter().take(5).map(|byte| format!("{byte:02x}"));
@@ -22,7 +22,7 @@ pub(crate) fn daemon_socket() -> Result<PathBuf, String> {
     ));
     #[cfg(windows)]
     let socket = PathBuf::from(format!(r"\\.\pipe\facade-framework-daemon-{key}"));
-    Ok(socket)
+    Ok((home.join("framework"), socket))
 }
 
 /// The Facade home, by the same rule.
