@@ -17,8 +17,8 @@
 		"bracketed": true,
 		"backspace_unit": "grapheme",
 		"enter_ms": 80,
-		"submit_clear_ms": 316,
-		"retry_submit_ms": 316,
+		"submit_clear_ms": 608,
+		"retry_submit_ms": 608,
 		"check_paste_end_on_windows": true,
 		"placeholders": [{ "pattern": "^\\[Pasted~(\\d+)lines?\\]$", "count": "trimmed_lines" }]
 	},

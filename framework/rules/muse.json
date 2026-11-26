@@ -19,7 +19,8 @@
 		"bracketed": true,
 		"backspace_unit": "grapheme",
 		"enter_ms": 250,
-		"submit_clear_ms": 78,
+		"submit_clear_ms": 1782,
+		"retry_submit_ms": 1782,
 		"placeholders": [
 			{ "pattern": "^\\[PastedContent(\\d+)chars?\\]$", "count": "chars" },
 			{ "pattern": "^\\[PastedContent(\\d+)chars?\\]$", "count": "chars", "after_first_character": true }

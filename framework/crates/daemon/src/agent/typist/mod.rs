@@ -4989,7 +4989,7 @@ mod tests {
         assert_eq!(terminal.write_all(), b"\r");
         let written = start + Duration::from_millis(350);
         terminal.step(&mut typist, written, ANY);
-        let until = written + Duration::from_millis(582);
+        let until = written + Duration::from_millis(1147);
         assert_eq!(typist.paste_hold_until(), Some(until));
         terminal.reading = unread();
         terminal.step(&mut typist, until, ANY);

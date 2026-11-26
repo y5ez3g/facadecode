@@ -18,9 +18,9 @@
 	"paste": {
 		"bracketed": true,
 		"enter_ms": 80,
-		"submit_clear_ms": 3134,
+		"submit_clear_ms": 514,
 		"backspace_unit": "grapheme",
-		"retry_submit_ms": 3134,
+		"retry_submit_ms": 514,
 		"placeholders": [
 			{ "pattern": "^\\[paste#\\d+\\+(\\d+)lines?\\]$", "count": "lines" },
 			{ "pattern": "^\\[paste #\\d+ (\\d+) chars?\\]$", "count": "visible_utf16", "spaced": true }

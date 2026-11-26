@@ -309,13 +309,12 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
       and the placeholder for the remaining paste.
     - `settle_time(&PasteRule, text) -> Duration` gives the base wait plus the wait for each line.
     - `PasteRule::submit_clear_time() -> Option<Duration>` gives the hold limit once the submission key
-      reaches the terminal. Set `submit_clear_ms` to the p99.9 time from key write to a complete empty
-      input under load. The built-in rules use twice the maximum observed on a quiet machine until
-      the loaded measurements are available.
+      reaches the terminal. For the built-in CLIs, `submit_clear_ms` is the larger p99.9 time
+      from key write to complete empty input measured under load while idle and while working,
+      rounded up to a millisecond.
     - `PasteRule::retry_submit_time() -> Option<Duration>` gives the wait before checking a retained
       draft for another submission. Enable it where a submission key on an empty input is harmless.
-      The real CLI rules use twice the quiet maximum until the loaded measurements are
-      available.
+      The built-in CLIs with retry enabled use the same measured duration for both rules.
     - `is_same_draft(draft, seen, text, hidden) -> bool` compares the observed drafts, including the placeholder's paste number.
     - `is_paste_placeholder(&PasteRule, draft)` identifies any configured paste marker.
       `shows_paste_placeholder(&PasteRule, draft, text)` additionally checks its size against the paste.
