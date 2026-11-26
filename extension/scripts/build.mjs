@@ -4,9 +4,7 @@
 // Packaging uses this stage; integration fixtures are staged separately.
 import * as esbuild from 'esbuild';
 import * as fs from 'node:fs';
-import { createRequire } from 'node:module';
 import * as path from 'node:path';
-import { filesUnder, hostTarget, nativeProblems } from './native.mjs';
 import { packageReadme } from './readme.mjs';
 
 const root = path.join(import.meta.dirname, '..');
@@ -24,13 +22,11 @@ fs.rmSync(windowStage, { recursive: true, force: true });
 fs.mkdirSync(path.join(windowStage, 'l10n'), { recursive: true });
 fs.mkdirSync(path.join(windowStage, 'media'), { recursive: true });
 
-// JavaScript dependencies are bundled; the native backend remains an explicit, packaged dependency.
+// JavaScript dependencies are bundled. Framework programs are staged by the package build.
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 delete manifest.scripts;
 delete manifest.devDependencies;
-const nativeRoot = path.join(root, 'node_modules', 'node-pty');
-const nativeManifest = JSON.parse(fs.readFileSync(path.join(nativeRoot, 'package.json'), 'utf8'));
-manifest.dependencies = { 'node-pty': nativeManifest.version };
+delete manifest.dependencies;
 fs.writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify(manifest, undefined, '\t')}\n`);
 const windowManifest = JSON.parse(fs.readFileSync(path.join(root, 'window', 'package.json'), 'utf8'));
 // Installed with it through its extension pack, never as a dependency that blocks activation in a remote window (ARCHITECTURE-4.3)
@@ -60,68 +56,12 @@ fs.copyFileSync(path.join(root, 'window', 'README.md'), path.join(windowStage, '
 fs.copyFileSync(path.join(root, 'media', 'icon.png'), path.join(windowStage, 'media', 'icon.png'));
 fs.cpSync(path.join(root, 'media'), path.join(stage, 'media'), { recursive: true, filter: source => path.basename(source) !== '.DS_Store' });
 
-// Stage only this build's native target. Linux source builds use build/Release; other targets need their own build.
-const nativeStage = path.join(stage, 'node_modules', 'node-pty');
-fs.mkdirSync(nativeStage, { recursive: true });
-for (const file of ['package.json', 'LICENSE']) {
-	fs.copyFileSync(path.join(nativeRoot, file), path.join(nativeStage, file));
-}
-for (const dir of ['lib', 'typings']) {
-	fs.cpSync(path.join(nativeRoot, dir), path.join(nativeStage, dir), {
-		recursive: true,
-		filter: source => !/\.test\.(?:js|js\.map|d\.ts)$/.test(source) && !source.endsWith('.DS_Store')
-	});
-}
-const target = `${process.platform}-${process.arch}`;
-const prebuild = path.join('prebuilds', target);
-const nativeDir = fs.existsSync(path.join(nativeRoot, prebuild)) ? prebuild : path.join('build', 'Release');
-if (!fs.existsSync(path.join(nativeRoot, nativeDir))) {
-	throw new Error(`No node-pty artifacts for ${target}. Install dependencies on the target platform before bundling.`);
-}
-fs.cpSync(path.join(nativeRoot, nativeDir), path.join(nativeStage, nativeDir), {
-	recursive: true,
-	filter: source => fs.statSync(source).isDirectory() || /\.(?:node|dll|exe)$/.test(source) || path.basename(source) === 'spawn-helper'
-});
-const helper = path.join(nativeStage, nativeDir, 'spawn-helper');
-if (fs.existsSync(helper)) {
-	fs.chmodSync(helper, 0o755);
-}
-// Preserve the installed production dependency graph, including node-addon-api's license and headers.
-const copied = new Set(['node-pty']);
-function copyDependencies(packageRoot) {
-	const pkg = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
-	const require = createRequire(path.join(packageRoot, 'package.json'));
-	for (const name of Object.keys(pkg.dependencies ?? {})) {
-		if (copied.has(name)) continue;
-		const dependencyRoot = path.dirname(require.resolve(`${name}/package.json`));
-		fs.cpSync(dependencyRoot, path.join(stage, 'node_modules', name), { recursive: true, filter: source => path.basename(source) !== 'node_modules' });
-		copied.add(name);
-		copyDependencies(dependencyRoot);
-	}
-}
-copyDependencies(nativeRoot);
-const stagedRequire = createRequire(path.join(stage, 'package.json'));
-if (!stagedRequire.resolve('node-pty').startsWith(`${nativeStage}${path.sep}`)) {
-	throw new Error('The native backend resolved outside the staged extension.');
-}
-stagedRequire('node-pty');
-// Each binary staged is this host's by its own header, whatever it is called, and each addon a Node-API one (ARCHITECTURE-4.3)
-const problems = nativeProblems(filesUnder(path.join(stage, 'node_modules')), hostTarget());
-if (problems.length) {
-	throw new Error(`The staged native backend is not ${hostTarget()}'s: ${problems.join('; ')}.`);
-}
-console.info(`Native PTY: ${nativeManifest.version}, ${hostTarget()}, build runtime ${process.version} (Node-API ${process.versions.napi})`);
-
 // jsonc-parser's ES modules: its `main`, a UMD wrapper, requires its parts at run time, which a bundle leaves out
 const common = { bundle: true, sourcemap: !production, minify: production, minifySyntax: true, logLevel: 'info', define: { FACADE_TEST_MODE: 'false' },
 	alias: { 'jsonc-parser': 'jsonc-parser/lib/esm/main.js' } };
 const builds = [
 	{ ...common, entryPoints: { extension: path.join(root, 'src', 'extension.ts') }, outdir: dist, platform: 'node', format: 'cjs', target: 'node20', external: ['vscode'] },
 	{ ...common, entryPoints: { window: path.join(root, 'src', 'host', 'window.ts') }, outdir: path.join(windowStage, 'dist'), platform: 'node', format: 'cjs', target: 'node20', external: ['vscode'] },
-	// ptyd: run by the extension host's binary as Node, detached; node-pty is native and loads from node_modules beside it
-	{ ...common, entryPoints: { ptyd: path.join(root, 'src', 'ptyd', 'main.ts') }, outdir: dist, platform: 'node', format: 'cjs', target: 'node20', external: ['node-pty'] },
-	// The runs' MCP shim: started by each agent's CLI with the extension host's binary as Node (MCP-6.1)
-	{ ...common, entryPoints: { shim: path.join(root, 'src', 'transport', 'shim.ts') }, outdir: dist, platform: 'node', format: 'cjs', target: 'node20' },
 	{ ...common, entryPoints: { webview: path.join(root, 'src', 'webview', 'panel.ts') }, outdir: page, platform: 'browser', format: 'iife', target: 'es2022' }
 ];
 
@@ -130,5 +70,6 @@ if (watch) {
 		await (await esbuild.context(options)).watch();
 	}
 } else {
-	await Promise.all(builds.map(options => esbuild.build(options)));
+	const results = await Promise.all(builds.map(options => esbuild.build({ ...options, absWorkingDir: root, metafile: true })));
+	fs.writeFileSync(path.join(root, 'build', 'bundle-graphs.json'), JSON.stringify(results.map(result => result.metafile)));
 }

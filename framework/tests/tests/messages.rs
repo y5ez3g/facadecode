@@ -711,7 +711,7 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
     assert!(
         table
             .row("NAME", "Neo")
-            .is_some_and(|row| table.cell(row, "REF") == worker_address),
+            .is_some_and(|row| table.cell(row, "REFERENCE") == worker_address),
         "{table:?}"
     );
     let shell_readback = home.run_facade_ok(&["status", &worker_address]);

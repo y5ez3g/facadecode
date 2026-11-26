@@ -21,13 +21,14 @@ interaction and tokens. This document owns the card, list, filter and webview co
 Container `facade`, view `facade.agents`, title `Facade Code`, icon `media/facade.svg`; background activation uses
 `onStartupFinished`. Opening the contributed view or invoking a contributed command can activate it on demand.
 Until agent records are reconciled use native view progress and draw no false empty state. Git metadata does not block
-card loading. Filter by Working Location (`filter`, filled when active) comes first. Continue Session (`continueSession`) comes next, followed by New Agent. New Agent's icon is Facade's own copy of the `new-session` codicon,
+card loading. Filter Agents (`filter`, filled when active), Resume Agent and New Agent appear in
+that order. New Agent's icon is Facade's own copy of the `new-session` codicon,
 shipped with the extension and shown in every editor: VS Code has that codicon only from 1.111, later than the
 supported minimum. The view's native `Views and More Actions...` (`…`) menu holds Add Folder to Workspace... (the
 editor's command), then New Worktree... when a workspace folder is open, followed by Open Settings in a separate
 group. Open Settings follows CONFIGURATION-1.2: Facade Code's Settings section and its Edit in facade.json link, or
 facade.json directly for a remote window whose Settings open as JSON, including file creation and migration conflicts.
-Go to Agent..., Show Agent Command Line... and Show Agents Log are Command Palette entries, not view-menu items.
+Show Agents Log is available from the Command Palette.
 Facade commands use the titles and flows in UX-3.1. The badge counts this window's cards, including starting,
 retained-error and temporarily disconnected records. Tooltip `1 agent` / `{n} agents`; omit zero. A display filter does
 not change the underlying card count.
@@ -431,18 +432,30 @@ fully visible row count minus one (minimum one).
 
 **The Panel presents the workspace list defined by RULES-6.1.**
 
-Show a card's name, CLI, state and TITLE. Distinguish just done from idle. Show the machine and full address in the
-information details. Copy Agent Reference copies that address verbatim. Message text stays in the agent's terminal.
-The visible and accessible representations describe the same state.
+The second line shows the most recent observed submission from Framework. Error and wait reasons take precedence.
+The status light breathes green while working. Show red for error, theme `charts.yellow` for just done, and no
+light for the other states. Keep reduced-motion support and expose the state in words.
+
+Use the compact icon rows and popover styling in 1.5. Show session, name with a subdued selectable full reference
+followed by a middle dot and state, start time, and folder. Use `-` for an absent value.
 
 ### 4.2 Card actions and toolbar
 
-**The card opens its terminal. Its menu applies RULES-6.3 and RULES-6.4.**
+**Clicking a card opens or focuses its terminal, and Pin is available directly on its card.**
 
-Offer Open Terminal and Stop for a running agent. Offer Hide and Remove for running and ended agents. A pinned
-card offers Unpin. An unpinned card offers Pin once it has a saved session.
-Put Go to Agent beside Resume. Keep New Agent, Filter, Add Folder, Show Agents Log and Open Settings on their
-existing surfaces.
+Show Pin or Unpin when the action applies under RULES-6.4. The card menu contains Rename, Move Up and Move Down,
+as applicable. Move within the visible cards of its Pin group and save the resulting order.
+Place Stop Agent on its own selection entry under LIFECYCLE-5.3. The view menu
+offers standalone New Worktree under WORKTREES-4.3.
+
+### 4.3 Filter Agents
+
+**One native multi-select picker combines location, machine, CLI, state and Pin filters.**
+
+Combine alternatives in one category with OR, and categories with AND. Reflect an active filter on the toolbar
+and offer Clear Filters. Keep a filter in workspace preferences and read earlier folder or location preferences
+as a location filter. Filtering changes presentation. A filtered New Agent action uses the location only when
+the location condition identifies one destination. Cancel preserves the current filter.
 
 ## Checks
 

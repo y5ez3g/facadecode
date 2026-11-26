@@ -18,6 +18,7 @@ suite('Integration drivers: staged in a test window (VERIFICATION)', () => {
 	test('staged drivers load using only editor APIs, Node built-ins and helpers copied beside them', () => {
 		const allowed = ['fs', 'path', 'vscode'];
 		const drivers: Readonly<Record<string, readonly string[]>> = {
+			'cutoverDriver.js': allowed,
 			'conversionDriver.js': [...allowed, './editors'],
 			'editors.js': ['assert', 'child_process', 'crypto', 'fs', 'net', 'path', 'readline'],
 			'pinsDriver.js': allowed,

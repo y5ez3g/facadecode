@@ -297,8 +297,8 @@ body.facade-modern {
 
 /*
  * What is known of the agent, on its avatar's corner as a chat app's presence, cut out of the row so that it reads on any background
- * (RULES-3.2): green and breathing while it starts or works, red and still for an error, and none for anything else - idle, a native
- * blocker or unknown activity, which the hover says. The 2 px ring cut out of the row is the dot's own border, painted with it as
+ * (PANEL-4.1, RULES-3.2): green and breathing for active work, red for an error, and yellow for just done.
+ * The 2 px ring cut out of the row is the dot's own border, painted with it as
  * one shape: the row's colour over the side bar's. Two shadows stacked the same size each smoothed their edge, and the lower one's
  * showed through the upper's at fractional display scales - a light rim round a dot on a blue selected row, a dark one on a dark row.
  */
@@ -329,6 +329,7 @@ body.facade-modern {
 	animation: facade-breathe 1.8s ease-in-out infinite;
 }
 .dot.error { --facade-dot-color: var(--vscode-charts-red); }
+.dot.just_done { --facade-dot-color: var(--vscode-charts-yellow); }
 .dot.none { display: none; }
 
 /* Work: the dot fades towards the row and back - by opacity alone, its cut-out ring staying as it is (PANEL-1.4) */
@@ -383,11 +384,11 @@ body.vscode-reduce-motion .dot.working::after {
 	padding-right: 38px;
 }
 
-.item.agent:is(.pinnable, .remote-agent, .orchestrator.pinned):is(.hovered, .menu-open, .details-open) .line.top {
+.item.agent:is(.pinnable, .remote-agent, .pinned):is(.hovered, .menu-open, .details-open) .line.top {
 	padding-right: 58px;
 }
 
-.item.agent:not(.orchestrator):is(.hovered, .menu-open, .details-open) .pin {
+.item.agent.pinnable:is(.hovered, .menu-open, .details-open) .pin {
 	display: none;
 }
 
@@ -400,19 +401,10 @@ body.vscode-reduce-motion .dot.working::after {
  * a letter has above its capitals or below its baseline still shows: its ellipsis clips that much further out.
  */
 .name,
-.card-meta,
 .title {
 	text-box: trim-both cap alphabetic;
 	padding-block: 4px;
 	margin-block: -4px;
-}
-
-.card-meta {
-	flex: 0 0 auto;
-	max-width: 100%;
-	overflow: hidden;
-	white-space: nowrap;
-	text-overflow: ellipsis;
 }
 
 /* A line its CLI has said nothing on yet as tall as one it has */
@@ -470,7 +462,7 @@ body.vscode-reduce-motion .dot.working::after {
 	visibility: visible;
 }
 
-.item.agent:is(.remote-agent, .orchestrator.pinned) .actions {
+.item.agent:is(.remote-agent, .pinned:not(.pinnable)) .actions {
 	right: 25px;
 }
 
@@ -600,11 +592,6 @@ body.vscode-reduce-motion .details.open {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
-}
-
-.details-facts > .button {
-	align-self: start;
-	margin-top: 4px;
 }
 
 .details-fact {

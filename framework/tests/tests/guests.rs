@@ -24,7 +24,7 @@ fn a_guest_waits_for_the_reply_to_its_message() {
     let ada_address = ada_address.as_str();
     let mut guest = McpTestClient::spawn(&home, home.command(&test_binaries().mcp));
     assert_eq!(
-        home.list_table().column("REF"),
+        home.list_table().column("REFERENCE"),
         [ada_address],
         "the external connection joins on its first tool call"
     );
@@ -159,7 +159,7 @@ fn a_guest_waits_for_the_reply_to_its_message() {
     assert!(
         wait_until(secs(10), || !home
             .list_table()
-            .column("REF")
+            .column("REFERENCE")
             .contains(&guest_address)),
         "the Guest stayed listed after disconnecting"
     );
@@ -498,7 +498,7 @@ fn a_large_roster_matches_the_protocol_and_shell_rosters_inline() {
     let mut rows = roster["agents"].as_array().expect("the v1 roster").clone();
     let table = home.list_table();
     assert_eq!(
-        table.column("REF"),
+        table.column("REFERENCE"),
         rows.iter()
             .map(|row| row["address"].as_str().unwrap())
             .collect::<Vec<_>>()

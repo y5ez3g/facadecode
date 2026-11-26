@@ -4,11 +4,9 @@
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "Новый агент...",
-	"command.goToAgent": "Go to Agent...",
 	"command.openTerminal": "Открыть терминал",
-	"command.hideAgent": "Скрыть",
 	"command.renameAgent": "Переименовать агента...",
-	"command.stopAgent": "Остановить агента",
+	"command.stopAgent": "Остановить агента...",
 	"command.deleteAgent": "Удалить",
 	"command.copyAgentReference": "Скопировать ссылку на агента",
 	"command.dismissAgent": "Скрыть агента",
@@ -28,7 +26,7 @@
 	"config.pi.title": "Pi",
 	"windowDisplayName": "Оконный компонент Facade Code",
 	"windowDescription": "Закрывает оставшиеся вкладки терминалов Facade Code после повторного подключения удалённого окна или перезапуска расширения.",
-	"command.filter": "Фильтровать по рабочему расположению...",
+	"command.filter": "Фильтровать агентов...",
 	"command.showAgentLaunch": "Показать командную строку агента...",
 	"command.showAgentsLog": "Показать журнал агентов",
 	"icon.newAgent": "Значок «Новый агент»",
@@ -37,7 +35,6 @@
 	"command.continueSession": "Продолжить беседу...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "Только для прежней реализации. В этой папке хранятся его настройки, история агентов и сообщения. Путь в этом поле имеет приоритет над `FACADE_HOME` и путём по умолчанию `~/.facade`.\n\n[Изменить в facade.json](command:facade.openSettingsFile) чтобы изменить YOLO, предлагаемые имена и способ запуска CLI.",
-	"config.home.pattern": "Путь должен начинаться с ~/ или быть абсолютным.",
-	"config.framework": "Определяет, в какой реализации работают ваши агенты.\n\n- `auto`: использовать Facade Code Framework. Окно переключится на него, как только на этом компьютере не останется работающих агентов прежней реализации. Работающие агенты никогда не прерываются, а как только переключение станет возможным, Facade предложит перезагрузить окно.\n- `off`: использовать прежнюю реализацию. Если с Facade Code Framework возникнут проблемы, выберите `off`, перезагрузите окно и [сообщите о проблеме на GitHub](https://github.com/y5ez3g/facadecode/issues).\n\nВ удалённом окне действует настройка удалённой машины."
+	"config.home": "Папка Facade, которую это окно использует для настроек, записей агентов и переноса данных из прежних версий. Путь в этом поле имеет приоритет над `FACADE_HOME` и путём по умолчанию `~/.facade`.\n\n[Изменить в facade.json](command:facade.openSettingsFile) чтобы изменить YOLO, предлагаемые имена и способ запуска CLI.",
+	"config.home.pattern": "Путь должен начинаться с ~/ или быть абсолютным."
 }

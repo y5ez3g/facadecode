@@ -3,9 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import * as path from 'path';
-import type * as AgentPtyModule from '../host/execution/agentPty';
-import type { RunBinding } from '../host/execution/agentPty';
+import type * as AgentPtyModule from '../host/terminal/agentPty';
+import type { RunBinding } from '../host/terminal/agentPty';
 import { TerminalReplies } from '../base/terminalReplies';
 import { TestEmitter, withModules } from './withModules';
 
@@ -66,7 +65,7 @@ suite('An agent\'s terminal draws its run as it stands, from its screen (ARCHITE
 	teardown(() => { made.splice(0).forEach(each => each.dispose()); });
 	const load = (answersQueries = true) => {
 		const vscode = { EventEmitter: TestEmitter };
-		const module = withModules({ vscode })<typeof AgentPtyModule>(path.join(__dirname, '..', 'host', 'execution', 'agentPty.js'));
+		const module = withModules({ vscode })<typeof AgentPtyModule>(require.resolve('../host/terminal/agentPty'));
 		const pty = new module.AgentPty('Ada', () => undefined);
 		made.push(pty);
 		// What reaches the editor's terminal of the run, Facade's own colour questions aside
@@ -187,7 +186,7 @@ suite('An agent\'s terminal draws its run as it stands, from its screen (ARCHITE
 	test('it asks the editor\'s terminal for its colours as it opens; what the editor answers for the program reaches the run but keys, and its colours go to the window', async () => {
 		const learned: string[] = [];
 		const vscode = { EventEmitter: TestEmitter };
-		const module = withModules({ vscode })<typeof AgentPtyModule>(path.join(__dirname, '..', 'host', 'execution', 'agentPty.js'));
+		const module = withModules({ vscode })<typeof AgentPtyModule>(require.resolve('../host/terminal/agentPty'));
 		const pty = new module.AgentPty('Ada', () => undefined, () => false, (osc, rgb) => learned.push(`${osc} ${rgb}`));
 		made.push(pty);
 		const drawn: string[] = [];
@@ -208,7 +207,7 @@ suite('An agent\'s terminal draws its run as it stands, from its screen (ARCHITE
 	/** A pty whose run's supervisor is of an earlier protocol, or not, with the window's colours. */
 	const earlier = (answersQueries = false) => {
 		const vscode = { EventEmitter: TestEmitter };
-		const module = withModules({ vscode })<typeof AgentPtyModule>(path.join(__dirname, '..', 'host', 'execution', 'agentPty.js'));
+		const module = withModules({ vscode })<typeof AgentPtyModule>(require.resolve('../host/terminal/agentPty'));
 		const pty = new module.AgentPty('Ada', () => undefined, () => false, () => undefined, () => ({ foreground: 'cccc/cccc/cccc', background: '1f1f/1f1f/1f1f' }));
 		made.push(pty);
 		const { drawn, taken, typed, binding } = load(answersQueries);
@@ -279,7 +278,7 @@ suite('An agent\'s terminal draws its run as it stands, from its screen (ARCHITE
 	test('a run of an earlier protocol\'s ptyd, which answers no query itself, gets the editor\'s answers as they come; its colours still go to the window (ARCHITECTURE-2.3)', async () => {
 		const learned: string[] = [];
 		const vscode = { EventEmitter: TestEmitter };
-		const module = withModules({ vscode })<typeof AgentPtyModule>(path.join(__dirname, '..', 'host', 'execution', 'agentPty.js'));
+		const module = withModules({ vscode })<typeof AgentPtyModule>(require.resolve('../host/terminal/agentPty'));
 		const pty = new module.AgentPty('Ada', () => undefined, () => false, (osc, rgb) => learned.push(`${osc} ${rgb}`));
 		made.push(pty);
 		const { taken, typed, binding } = load(false);
@@ -299,7 +298,7 @@ suite('An agent\'s terminal draws its run as it stands, from its screen (ARCHITE
 	test('the editor\'s answers to the window\'s own colour questions - as a tab opens, as the theme changes - reach no program, whichever its ptyd (ARCHITECTURE-2.3)', async () => {
 		for (const answersQueries of [false, true]) {
 			const vscode = { EventEmitter: TestEmitter };
-			const module = withModules({ vscode })<typeof AgentPtyModule>(path.join(__dirname, '..', 'host', 'execution', 'agentPty.js'));
+			const module = withModules({ vscode })<typeof AgentPtyModule>(require.resolve('../host/terminal/agentPty'));
 			const pty = new module.AgentPty('Ada', () => undefined);
 			made.push(pty);
 			const { taken, typed, binding } = load(answersQueries);

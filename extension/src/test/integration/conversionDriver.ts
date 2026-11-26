@@ -220,13 +220,11 @@ export async function activate(): Promise<void> {
 			return;
 		}
 		if (FRAMEWORK) {
-			// The new workspace URI has its own roster. Go to Agent attaches the original Orchestrator run.
-			void vscode.commands.executeCommand('facade.goToAgent');
-			await until('the original agent in the new workspace', async () => {
-				if ((await state()).cards.some(each => each.runId === runId)) { return true; }
-				await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
-				return undefined;
-			});
+			// The new workspace already shows the original Managed Agent. Open its exact card to restore the terminal.
+			await until('the original running agent in the new workspace', async () =>
+				(await state()).cards.find(each => each.runId === runId && each.orchestrator?.running));
+			const opened = await vscode.commands.executeCommand('facade.openTerminal', { run_id: runId });
+			if (opened !== true) { throw new Error('Could not open the original agent in the new workspace.'); }
 			await vscode.commands.executeCommand('facade.pinAgent', { run_id: runId });
 		}
 		await pinState(runId, true);

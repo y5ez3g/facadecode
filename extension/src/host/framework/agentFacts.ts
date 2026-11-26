@@ -57,6 +57,7 @@ export function agentFacts(info: AgentInfo, view: AgentPresentation): RunFacts {
 	const state = info.state !== 'online' && CARD_STATES.has(info.state) ? info.state : 'unknown';
 	const ended = info.process === 'ended';
 	const detail = info.state_detail;
+	const createdAt = Date.parse(info.created_at);
 	const startedAt = Date.parse(info.started_at);
 	return {
 		id,
@@ -71,8 +72,8 @@ export function agentFacts(info: AgentInfo, view: AgentPresentation): RunFacts {
 		cwd: info.cwd,
 		environment: location?.environment ?? `machine:${machine_id}`,
 		yolo: info.yolo,
-		createdAt: Date.parse(info.created_at),
-		startedAt,
+		createdAt,
+		...(Number.isFinite(startedAt) ? { startedAt } : {}),
 		lifecycle: ended ? 'ended' : 'running',
 		phase: 'running',
 		activity: state === 'working' ? 'working'
@@ -83,13 +84,17 @@ export function agentFacts(info: AgentInfo, view: AgentPresentation): RunFacts {
 		root: agentKey(info.root),
 		origin: info.creator_kind === 'agent' || creator ? 'agent' : 'human',
 		...(creator ? { creator: agentKey(creator) } : {}),
-		...(info.session ? { sessionId: info.session, resumable: true, pinnable: true } : {}),
+		pinnable: true,
+		...(info.session ? { sessionId: info.session, resumable: true } : {}),
 		...(info.title !== undefined ? { title: info.title } : {}),
+		...(info.said?.text !== undefined ? { said: info.said.text } : {}),
 		...(info.model !== undefined ? { model: info.model } : {}),
 		...(info.effort !== undefined ? { effort: info.effort } : {}),
 		...(view.pin !== undefined ? { pin: view.pin.id } : {}),
 		...(state === 'waiting_for_you' ? { blocker: { kind: detail?.kind ?? 'unknown', ...(detail?.text ? { text: detail.text } : {}) } } : {}),
-		...(state === 'error' && detail?.text ? { error: { reason: detail.text, source: 'cli', at: startedAt } } : {}),
+		...(state === 'error' && detail?.reason === 'not_ready' ? { notReady: true } : {}),
+		...(info.tools_reason === 'disconnected' ? { toolsProblem: 'disconnected' } : {}),
+		...(state === 'error' && detail?.text ? { error: { reason: detail.text, source: 'cli', at: Number.isFinite(startedAt) ? startedAt : createdAt } } : {}),
 		...(view.failure !== undefined ? { error: view.failure } : {})
 	};
 }
@@ -108,6 +113,7 @@ export function failedPinFacts(pin: FrameworkPin, error: RunError, machine: stri
 		command: pin.conversation.cli,
 		location: pin.location,
 		cwd: pin.cwd,
+		...(pin.conversation.sessionId ? { sessionId: pin.conversation.sessionId } : {}),
 		environment: pin.conversation.environment,
 		yolo: false,
 		createdAt: error.at,

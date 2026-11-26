@@ -28,7 +28,7 @@ use crate::{ExitText, Opening, Shown, StartOptions, agent_address, roster_table,
 
 const ROSTER_COLUMNS: [&str; 8] = [
     "NAME",
-    "REF",
+    "REFERENCE",
     "STATE",
     "CLI",
     "TYPE",

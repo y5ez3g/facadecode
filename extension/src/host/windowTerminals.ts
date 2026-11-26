@@ -8,7 +8,7 @@ import { messageOf } from '../base/errors';
 import type { OwnerClaim } from '../base/ownership';
 import { unspun } from '../base/tabSpinner';
 import { isTerminalRegistration, TERMINAL_REGISTRATION_MS } from '../base/windowIdentity';
-import { beginWindowTerminals, retireWindowTerminals, type RetiredTerminals } from '../record/windowIdentity';
+import { beginWindowTerminals, claimRetiredTerminals, retireWindowTerminals, type RetiredTerminals } from '../record/windowTerminals';
 
 interface Registration {
 	claim: OwnerClaim;
@@ -69,7 +69,20 @@ export class WindowTerminals implements vscode.Disposable {
 			}
 			if (!owner) {
 				const previous = this.retired.get(value.claim.owner);
-				this.retired.delete(value.claim.owner);
+				if (previous) {
+					const claim = previous.claim;
+					if (value.claim.generation < claim.generation
+						|| value.claim.generation === claim.generation && value.claim.token !== claim.token) { return false; }
+					if (this.storage && this.epoch) {
+						try {
+							if (!claimRetiredTerminals(this.storage.directory, this.epoch, value.claim.owner)) { return false; }
+						} catch (error) {
+							this.storage.log(`Could not claim retired terminal resources: ${messageOf(error)}`);
+							return false;
+						}
+					}
+					this.retired.delete(value.claim.owner);
+				}
 				owner = { claim: { ...value.claim }, runs: new Map(),
 					retiring: value.handedOver && previous && value.claim.generation > previous.claim.generation ? previous : undefined };
 				this.owners.set(value.claim.owner, owner);

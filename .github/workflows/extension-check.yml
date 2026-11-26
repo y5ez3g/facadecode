@@ -51,17 +51,14 @@ concurrency:
 
 jobs:
   verify:
-    name: Extension on ${{ matrix.target }}, ${{ matrix.implementation }} implementation
+    name: Extension on ${{ matrix.target }}, framework implementation
     outputs:
       package_attempt: ${{ steps.native-package-evidence.outputs.attempt }}
-    # Every target runs the editor journeys on the legacy implementation (`facade.framework` off) and runs them
-    # again on the Framework implementation in a job of its own, which builds and tests nothing else.
     # A signing run's Windows packages are signed (ARCHITECTURE-4.3) in the environment Azure trusts with the signing identity.
-    environment: ${{ inputs.sign && startsWith(matrix.target, 'win32-') && matrix.implementation == 'legacy' && 'extension-signing' || '' }}
+    environment: ${{ inputs.sign && startsWith(matrix.target, 'win32-') && 'extension-signing' || '' }}
     strategy:
       fail-fast: false
       matrix:
-        implementation: ${{ fromJSON(inputs.package_only && '["legacy"]' || '["legacy","framework"]') }}
         target: [linux-x64, linux-arm64, win32-x64, win32-arm64, darwin-arm64, darwin-x64]
         include:
           - { os: ubuntu-latest, target: linux-x64 }
@@ -71,11 +68,11 @@ jobs:
           - { os: macos-latest, target: darwin-arm64 }
           - { os: macos-15-intel, target: darwin-x64 }
     runs-on: ${{ matrix.os }}
-    # The windows-11-arm jobs take 37 to 45 minutes unsigned; signing adds about half a minute
-    timeout-minutes: 60
+    # The native job packages Framework and runs the editor journeys on the same runner.
+    timeout-minutes: 75
     env:
       FACADE_PACKAGE_TARGET: ${{ matrix.target }}
-      FACADE_SIGN: ${{ inputs.sign && startsWith(matrix.target, 'win32-') && matrix.implementation == 'legacy' && '--sign' || '' }}
+      FACADE_SIGN: ${{ inputs.sign && startsWith(matrix.target, 'win32-') && '--sign' || '' }}
       CARGO_INCREMENTAL: '0'
     defaults:
       run:
@@ -113,7 +110,7 @@ jobs:
           rustup target add "$(uname -m)-unknown-linux-musl"
           echo "CC_$(uname -m)_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
       - name: Cache Intel macOS editor build dependencies
-        if: github.event_name == 'pull_request' && matrix.target == 'darwin-x64' && matrix.implementation == 'framework'
+        if: github.event_name == 'pull_request' && matrix.target == 'darwin-x64'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: framework
@@ -130,10 +127,10 @@ jobs:
       - run: npm run compile
         if: "!inputs.package_only"
       - run: npm test
-        if: "!inputs.package_only && matrix.implementation == 'legacy'"
+        if: "!inputs.package_only"
       - name: Release script tests
         id: release-tests
-        if: "!inputs.package_only && runner.os == 'Linux' && matrix.implementation == 'legacy'"
+        if: "!inputs.package_only && runner.os == 'Linux'"
         run: |
           if [[ "$FACADE_PACKAGE_TARGET" == linux-x64 && "$GITHUB_EVENT_NAME" == pull_request ]]; then
             mkdir -p "$RUNNER_TEMP/release-fixture"
@@ -142,11 +139,11 @@ jobs:
             node --test scripts/release.test.mjs
           fi
       - name: Record the release fixture results
-        if: github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.implementation == 'legacy' && steps.release-tests.outcome == 'success'
+        if: github.event_name == 'pull_request' && matrix.target == 'linux-x64' && steps.release-tests.outcome == 'success'
         run: node scripts/release-fixture-evidence.mjs stamp "$RUNNER_TEMP/release-fixture"
       - name: Keep the release fixture output
         if: >-
-          always() && github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.implementation == 'legacy' &&
+          always() && github.event_name == 'pull_request' && matrix.target == 'linux-x64' &&
           (steps.release-tests.outcome == 'success' || steps.release-tests.outcome == 'failure')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -154,9 +151,9 @@ jobs:
           path: ${{ runner.temp }}/release-fixture/
           if-no-files-found: error
       - run: node scripts/l10n.mjs check
-        if: "!inputs.package_only && matrix.implementation == 'legacy'"
+        if: "!inputs.package_only"
       - run: python ../docs/extension/audit/check_spec.py
-        if: "!inputs.package_only && matrix.implementation == 'legacy'"
+        if: "!inputs.package_only"
       # Signing: the Artifact Signing client, made for x64 alone, on an x64 .NET 8 - emulated on Arm - and Azure's sign-in
       - uses: actions/setup-dotnet@v5
         if: env.FACADE_SIGN
@@ -180,16 +177,13 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
       - run: npm run package -- --target "$FACADE_PACKAGE_TARGET" $FACADE_SIGN
-        if: matrix.implementation == 'legacy'
       - run: npm run test:package
-        if: matrix.implementation == 'legacy'
       - name: Pack framework from the native VSIX
-        if: matrix.implementation == 'legacy'
         run: |
           node ../framework/scripts/package-framework.mjs --target "$FACADE_PACKAGE_TARGET" \
             --vsix "build/vsix/facadecode-$FACADE_PACKAGE_TARGET-"*.vsix --out-dir build/framework
       - name: Install the local framework archive on Linux and macOS
-        if: matrix.implementation == 'legacy' && runner.os != 'Windows'
+        if: runner.os != 'Windows'
         run: |
           root=$(mktemp -d "$RUNNER_TEMP/facade-install.XXXXXX")
           mkdir "$root/home" "$root/tmp"
@@ -200,7 +194,7 @@ jobs:
           test "$("$root/state/framework/bin/facade" --version)" = "facade $build"
           test -x "$root/state/framework/bin/facade-mcp"
       - name: Install the local framework archive on Windows
-        if: matrix.implementation == 'legacy' && runner.os == 'Windows'
+        if: runner.os == 'Windows'
         shell: powershell
         run: |
           $target = $env:FACADE_PACKAGE_TARGET
@@ -223,7 +217,7 @@ jobs:
             if (-not (Test-Path -LiteralPath "$bin\$file" -PathType Leaf)) { throw "Missing $file." }
           }
       - name: Verify the installed Linux x64 candidate
-        if: github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.implementation == 'legacy'
+        if: github.event_name == 'pull_request' && matrix.target == 'linux-x64'
         run: |
           mkdir -p build/native-install
           (cd ../framework && cargo build --locked --release --target x86_64-unknown-linux-musl \
@@ -238,24 +232,21 @@ jobs:
           python -B ../ci/acceptance.py verify-native-install "$archive" "$checksums" "$receipt" "$output" \
             | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Keep the Linux x64 candidate install evidence
-        if: always() && github.event_name == 'pull_request' && matrix.target == 'linux-x64' && matrix.implementation == 'legacy'
+        if: always() && github.event_name == 'pull_request' && matrix.target == 'linux-x64'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: native-install-linux-x64-${{ github.run_attempt }}
           path: extension/build/native-install/
           if-no-files-found: ignore
-      # The Framework implementation's journeys need the built extension and framework's programs (scripts/build-it.mjs), not the packages
-      - run: npm run bundle
-        if: matrix.implementation == 'framework'
       - name: Build the isolated editor fixtures
         if: "!inputs.package_only"
         run: node scripts/build-it.mjs
       - name: Isolated editor journeys on Linux
         if: "!inputs.package_only && runner.os == 'Linux'"
         env:
-          FACADE_IT_IMPLEMENTATION: ${{ matrix.implementation }}
+          FACADE_IT_IMPLEMENTATION: framework
         run: |
-          if [[ "$GITHUB_EVENT_NAME" == pull_request && "$FACADE_PACKAGE_TARGET" == linux-x64 && "$FACADE_IT_IMPLEMENTATION" == framework ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == pull_request && "$FACADE_PACKAGE_TARGET" == linux-x64 ]]; then
             python -B ../ci/run_native_extension.py xvfb-run -a node build/out/test/integration/run.js 2>&1 | tee build/integration.log
           else
             xvfb-run -a node build/out/test/integration/run.js 2>&1 | tee build/integration.log
@@ -263,7 +254,7 @@ jobs:
       - name: Isolated editor journeys on Windows
         if: "!inputs.package_only && runner.os == 'Windows'"
         env:
-          FACADE_IT_IMPLEMENTATION: ${{ matrix.implementation }}
+          FACADE_IT_IMPLEMENTATION: framework
         run: |
           # A detached Windows helper can keep a logging pipe open after the test runner exits.
           status=0
@@ -273,25 +264,59 @@ jobs:
       - name: Isolated editor journeys on macOS
         if: "!inputs.package_only && runner.os == 'macOS'"
         env:
-          FACADE_IT_IMPLEMENTATION: ${{ matrix.implementation }}
+          FACADE_IT_IMPLEMENTATION: framework
         run: node build/out/test/integration/run.js 2>&1 | tee build/integration.log
+      - name: Verify the published 0.1.5 cutover in the packaged editor
+        id: packaged-cutover
+        if: "!inputs.package_only && matrix.target == 'linux-x64'"
+        timeout-minutes: 18
+        env:
+          FACADE_IT_IMPLEMENTATION: framework
+          FACADE_IT_BUILT_IN: claude
+        run: |
+          prior="$RUNNER_TEMP/facade-0.1.5"
+          mkdir -p build/cutover
+          PYTHONPATH=../ci python -B - "$prior" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+          from evidence import download_prior_vsix
+          from native_framework import hash_file
+
+          prior = Path(sys.argv[1])
+          download_prior_vsix(prior)
+          pairs = {role: {p.name: hash_file(p) for p in sorted(folder.glob('*.vsix'))}
+                   for role, folder in [('prior', prior), ('candidate', Path('build/vsix'))]}
+          Path('build/cutover/packages.json').write_text(json.dumps(pairs, indent=2) + '\n')
+          PY
+          export FACADE_IT_RELEASED="$prior" FACADE_IT_CURRENT="$PWD/build/vsix"
+          for variant in exited live uncertain two-windows prior-owner separate-workspaces; do
+            FACADE_IT_ONLY="cutover-$variant" FACADE_IT_EXPECT_DRIVER="cutover-$variant" \
+              python -B ../ci/run_native_extension.py xvfb-run -a node build/out/test/integration/run.js \
+              2>&1 | tee "build/cutover/$variant.log"
+          done
+      - name: Keep the packaged cutover evidence
+        if: always() && (steps.packaged-cutover.outcome == 'success' || steps.packaged-cutover.outcome == 'failure')
+        uses: actions/upload-artifact@v4
+        with:
+          name: published-cutover-linux-x64
+          path: extension/build/cutover/
+          if-no-files-found: error
       - name: Keep editor test output
         if: always() && !inputs.package_only
         uses: actions/upload-artifact@v4
         with:
-          name: editor-tests-${{ matrix.target }}-${{ matrix.implementation }}
+          name: editor-tests-${{ matrix.target }}-framework
           path: extension/build/integration.log
           if-no-files-found: ignore
       - name: Record the tested native package digests
         id: native-package-evidence
-        if: matrix.implementation == 'legacy'
         run: |
           node scripts/native-package-evidence.mjs stamp build --target "$FACADE_PACKAGE_TARGET" $FACADE_SIGN
           if [[ "$FACADE_PACKAGE_TARGET" == linux-x64 ]]; then
             echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
           fi
       - name: Keep tested packages
-        if: matrix.implementation == 'legacy'
         uses: actions/upload-artifact@v4
         with:
           name: extension-${{ matrix.target }}
@@ -302,10 +327,10 @@ jobs:
             extension/build/native-package-evidence.json
           if-no-files-found: error
       - name: Record the checked-out source tree
-        if: "!inputs.package_only && matrix.target == 'linux-x64' && matrix.implementation == 'legacy'"
+        if: "!inputs.package_only && matrix.target == 'linux-x64'"
         run: git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/extension-tested-tree.txt"
       - name: Keep the checked-out source tree
-        if: "!inputs.package_only && matrix.target == 'linux-x64' && matrix.implementation == 'legacy'"
+        if: "!inputs.package_only && matrix.target == 'linux-x64'"
         uses: actions/upload-artifact@v4
         with:
           name: tested-extension-tree

@@ -511,40 +511,50 @@ once. No UI waits for it.
 
 ### 5.1 New Agent
 
-**New Agent uses the machine and folder selected in Change Working Location.**
+**New Agent starts at the selected location and shows when its name will be assigned automatically.**
 
-Start from the editor host and its workspace folders and worktrees. Offer saved machines, including sleeping machines.
-Selecting a sleeping machine wakes it. For a different machine, offer its login home, recent folders on that
-machine and direct path entry. Resolve launch options under RULES-6.5 and RULES-6.6. Show the started agent's card
-and terminal. A helper started by an agent on the list appears as a card without taking focus.
+Show Auto-assign when the name field is blank. Change Location opens the current machine's directories and lets
+the person change machines. Offer open folders, worktrees, and recent locations on the selected machine, with
+the last successful choice selected when present. Record a recent location after a successful start. Validate
+manual paths on the chosen machine, then return to the list with the entered path selected. Existing worktrees
+are destinations. Offer creation under WORKTREES-5.1 from the selected checkout's HEAD. Keep Back and the current
+choice through the steps. Reopening Change Location reads that machine's directories again. After a worktree
+start, the new worktree is the recent location. Use the selected machine's CLI catalog.
 
-### 5.2 Go to Agent
+### 5.2 Open a running agent
 
-**Go to Agent on the Panel and in the Command Palette opens an eligible running managed agent.**
+**A running Managed Agent appears as a card as soon as the Orchestrator reports it.**
 
-Use RULES-6.2's Attach candidates. Selecting a row opens the terminal and adds the agent and its descendants to the
-workspace list. Put Go to Agent beside Resume in the Panel title. The rows select an agent.
+Click its card or use Open Terminal on the selected card. Open or focus the terminal for the full agent
+reference. Keep one card and one editor terminal view for the reference in this window.
 
-### 5.3 Closing, stopping and hiding
+### 5.3 Closing and stopping
 
-**Close the terminal to detach, Hide to clear the workspace card and Pin, and Stop to end the agent's run.**
+**Close an editor tab to close its view. Use Stop Agent to end a run.**
 
-Use RULES-6.3 for the effects. A normal exit or crash leaves the card available for Resume when it has a session.
-Remove also removes the agent's record. Show operation failures where the person acts.
+Apply RULES-6.3. Stop Agent is a separate selection of eligible running managed agents and uses the exact
+selected target. A normal exit or crash leaves a remembered card available for Resume when it has a session.
+Show operation failures where the person acts.
 
 ### 5.4 Resume Agent
 
-**Use one Resume Agent picker for ended agents and saved CLI sessions.**
+**One Resume Agent picker uses the saved session or ended agent target exactly.**
 
-Show the Orchestrator's candidates scoped to the extension host's machine and the workspace folders. Open the
-selected agent's terminal after success. If the chosen session is in use, identify that agent. See RULES-6.2.
+Use RULES-6.2 and preserve the local and folder scope. Show the agent name when present, then use the session
+title as the fallback. Use the CLI icon. Join secondary fields with a middle dot and shorten only the displayed
+reference. Keep the full original reference and session searchable. Open the terminal after success and identify
+the agent if the session is already in use.
 
-### 5.5 Session-backed Pins
+### 5.5 Pin from startup
 
 **Pin and Unpin operate on the card's workspace record.**
 
-Native tab operations leave the workspace Pin as it was. Apply RULES-6.4 once on workspace reopen and keep a visible
-error on the card when recovery fails.
+Once a card appears for an accepted start, it can be pinned before the CLI reports a session ID. Keep the name,
+actual working directory, CLI and saved session in the Pin. When the editor has the accepted start request, also keep its
+explicit startup arguments and resolved model and effort. The Pin takes a session ID and name when Framework
+reports them. A sessionless restart uses the actual directory, including any existing worktree, and sends no
+initial prompt. Apply RULES-6.4 once on workspace reopen and keep a visible error on the card when recovery fails.
+Native tab operations leave the workspace Pin as it was.
 
 ## Checks
 
@@ -554,6 +564,6 @@ error on the card when recovery fails.
 | 2.1–2.3 | Configured/default names, trimming and case-insensitive exclusions, empty/exhausted lists, blank starts/renames, invalid names blocking starts, ID names omitted from Resume/Pin, duplicate/spaced names and `human`, icon plus name-only tabs through CLI title updates and reloads, a busy tab's spinner, literal native renames, editor-only terminals, agent tabs that stay open where opened, hidden tabs and agent-started agents without one, tabs known by the editor's reports and unknown ones acting on none, a copied tab becoming an ordinary terminal in its agent's folder, a reload's pinned tabs alone back in their groups as 3.5 says, every other tab hidden, ID/copied-reference search, distinguishable picker details |
 | 3.1–3.5 | Separate Stop Agent and Dismiss Agent actions, a closed tab hiding its agent, children kept, reload/disconnect reuse, exact Resume, linked Pins and the person's close of a marked tab Unpinning, bounded restoration, the pinned tabs of a reload, an extension-host restart and Pin restoration opening one at a time in one sequence in the Pins' order, each marked as it opens before the next, the last in front of the active group with nothing given back and the selection on it, the other agents' tabs hidden, Resume file-problem rows and gear buttons before history reads, Edit in facade.json on Pin file errors and restored-card launch failures but not missing locations, a restored Pin whose start fails dropping out, the person's Pin or Unpin - card, Command Palette or key - showing its tab as a click on the card does and marking it there, a hidden agent's Pin opening its tab, marks that borrow the focus put on at once one tab at a time and the person's front given back, a mark changed on a tab Facade could not tell winning once it is known only where no Pin or Unpin came after it, the legacy implementation's uncertain-end red card and restoration after the confirmed end, proven folder/worktree removal |
 | 4.1–4.2 | One service, truthful effects, current startup configuration, bounded cleanup without UI wait |
-| 5.1–5.5 | Start by machine and folder, Go to Agent roster, card and tab actions, unified Resume, session-backed Pin |
+| 5.1–5.5 | Start by machine and folder, automatic Managed Agent cards, terminal view actions, unified Resume, early Pin, session recovery and sessionless restart |
 
 Evidence: [Verification](../engineering/VERIFICATION.md).

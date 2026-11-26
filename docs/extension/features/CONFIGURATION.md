@@ -67,7 +67,7 @@ that is the remote editor settings JSON at `facade.home`.
 The Settings page has one section, **Facade Code**, with **Facade: Home** (`facade.home`, machine scope), whose box
 shows `~/.facade`. Its description explains the home and links **Edit in facade.json** to
 `facade.openSettingsFile`, titled **Open facade.json**. That command creates the file under 1.3 if missing and opens
-it. A remote window opens the remote file. A migration conflict shows 6.2's error and opens the old editor settings
+it. A remote window opens the remote file. For the Framework settings path, see 7.1. A migration conflict shows 6.2's error and opens the old editor settings
 JSON where the values need correction, remotely in a remote window.
 
 The 0.1.2 editor settings remain registered for migration and say **Moved to facade.json**. Unset legacy keys are
@@ -83,9 +83,8 @@ reason. Effort suggestions are not an enum: another nonblank string is valid.
 
 For example, with Facade: Home set to `/tmp/facade-test`, Edit in facade.json opens `/tmp/facade-test/facade.json`.
 
-Below it, **Facade: Framework** (`facade.framework`, machine scope) is `auto`, the default, or `off`: which implementation runs
-a window's agents (ARCHITECTURE-1.4). A change takes effect when the window reloads, offered as Facade: Home's is. A
-remote window reads the remote machine's value, so turning it on locally leaves remote windows as they are.
+The former **Facade: Framework** selector applied to legacy builds. Framework starts all new agents.
+ARCHITECTURE-1.4 owns the migration of legacy workspaces.
 
 ### 1.3 Creating the file
 
@@ -269,7 +268,7 @@ The built-in values are `claude`, `codex`, `agy`, `muse`, `opencode` and `pi`. T
 
 | Surface | How it draws the icon |
 | --- | --- |
-| New Agent, Resume Agent, Continue Session, Go to Agent | A built-in logo image or `media/agents/robot-<color>.svg` |
+| New Agent, Resume Agent, Continue Session | A built-in logo image or `media/agents/robot-<color>.svg` |
 | Terminal tab | A contributed `facade-cli-<id>` glyph in the theme's text color, or `facade-robot-<color>` from `media/robots.woff` |
 | Panel card | A built-in's maker avatar or `robot-<color>-face.svg` with `robot-eyes.svg` over it (PANEL-1.3) |
 
@@ -703,12 +702,12 @@ to reset to product defaults, keep the file and write `{}` instead of deleting i
 
 ### 7.1 Machine settings
 
-**Edit the machine's `facade.json` directly.**
+**Edit in facade.json opens the machine's `facade.json`.**
 
-The Orchestrator uses `FACADE_HOME`, defaulting to `~/.facade`. Open Settings opens the machine's
-`facade.json` at the settings path returned by the Orchestrator's status. `facade.home` applies to the legacy implementation
-during the transition.
-YOLO, the name pool and CLI entries appear in `facade.json`. Mark editor settings that still apply to the legacy implementation.
+The extension resolves `facade.home`, then `FACADE_HOME`, then `~/.facade` for this window's execution
+environment. Framework starts and legacy migration use that same home. Open Settings follows 1.2. The Edit in
+facade.json command uses the settings path returned by the Orchestrator's status.
+YOLO, the name pool and CLI entries appear in `facade.json`.
 A malformed section affects starts that use it and the error points to its source. To find the settings file on another
 machine, connect over SSH and run `facade status` there.
 

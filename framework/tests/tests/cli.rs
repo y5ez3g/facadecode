@@ -84,7 +84,7 @@ fn stop_keeps_successful_receipts_when_other_targets_fail_and_scopes_skip_guests
     let mut guest = McpTestClient::spawn(&home, home.command(&test_binaries().mcp));
     assert_eq!(guest.call("list_agents", json!({}))["status"], "success");
     let listed = home.list_table();
-    let guest_ref = listed.cell(listed.row("TYPE", "Guest").unwrap(), "REF");
+    let guest_ref = listed.cell(listed.row("TYPE", "Guest").unwrap(), "REFERENCE");
     home.run_facade_ok(&["rename", guest_ref, "Cursor"]);
 
     assert_eq!(
@@ -113,7 +113,7 @@ fn stop_keeps_successful_receipts_when_other_targets_fail_and_scopes_skip_guests
         )
     );
     assert!(!alive(&second.process));
-    assert_eq!(home.list_table().column("REF"), [guest_ref]);
+    assert_eq!(home.list_table().column("REFERENCE"), [guest_ref]);
 }
 
 #[test]
@@ -228,8 +228,8 @@ fn roster_refs_work_for_operations_and_removal_keeps_the_empty_roster() {
     let first = home.start_fake("w1");
     let second = home.start_fake("w2");
     let table = home.list_table();
-    assert_eq!(table.column("REF"), [&second.address, &first.address]);
-    for reference in table.column("REF") {
+    assert_eq!(table.column("REFERENCE"), [&second.address, &first.address]);
+    for reference in table.column("REFERENCE") {
         let removed = connect(&home).call_ok("agent.remove", json!({ "target": reference }));
         assert_eq!(removed["address"], reference);
     }
@@ -358,7 +358,7 @@ fn agent_list_inspect_and_status_agree_on_the_record() {
     assert!(selected.get("attachments").is_none(), "{selected}");
     let table = home.list_table();
     let row = table.row("NAME", "worker").expect("the active worker");
-    assert_eq!(table.cell(row, "REF"), worker.address);
+    assert_eq!(table.cell(row, "REFERENCE"), worker.address);
     assert_eq!(table.cell(row, "WORKING DIRECTORY"), agent["cwd"]);
     let detail = home.run_facade_ok(&["status", &worker.address]);
     assert_eq!(

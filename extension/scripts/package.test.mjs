@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { inflateSync } from 'node:zlib';
 import { test } from 'node:test';
@@ -81,9 +80,10 @@ test('production manifest and executable bundles include Stop and Dismiss and ex
 		assert.ok(!registered.has(id), `Registered in the production bundle: ${id}`);
 	}
 	assert.ok(!/facadeDots\./.test(JSON.stringify(manifest)) && !/facadeDots\./.test(extension), 'No retired facadeDots IDs');
-	const ptyd = fs.readFileSync(path.join(stage, 'dist', 'ptyd.js'), 'utf8');
-	assert.ok(!ptyd.includes('node_modules.asar'), 'Native loader reaches into the editor');
-	assert.ok(!ptyd.includes('fixture>'), 'Integration CLI parser in production');
+	assert.equal(manifest.dependencies, undefined, 'The packaged runtime has no unbundled JS dependencies');
+	for (const legacy of ['dist/ptyd.js', 'dist/shim.js', 'node_modules']) {
+		assert.ok(!fs.existsSync(path.join(stage, legacy)), `Retired runtime in the stage: ${legacy}`);
+	}
 	const page = fs.readFileSync(path.join(stage, 'dist', 'webview', 'webview.js'), 'utf8');
 	assert.ok(!page.includes('FACADE_PROBE'), 'Test probe in the shipped page');
 	// The page's folder, the webview's one resource root in dist/, holds the page alone (PANEL-3.2)
@@ -216,32 +216,16 @@ test('the 16 robots an entry\'s icon can name are packaged: tab glyphs in a font
 	assert.doesNotMatch(fs.readFileSync(path.join(stage, 'ThirdPartyNotices.txt'), 'utf8'), /IBM Plex/);
 });
 
-test('the native backend starts a PTY after the extension is moved outside the repository', { timeout: 15000 }, async t => {
-	const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-package-'));
-	t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
-	const moved = path.join(temp, 'extension');
-	fs.cpSync(stage, moved, { recursive: true });
-	const require = createRequire(path.join(moved, 'package.json'));
-	const movedReal = fs.realpathSync(moved);
-	const installed = JSON.parse(fs.readFileSync(path.join(moved, 'node_modules', 'node-pty', 'package.json'), 'utf8'));
-	for (const name of ['node-pty', ...Object.keys(installed.dependencies ?? {})]) {
-		assert.ok(require.resolve(name).startsWith(`${movedReal}${path.sep}`), `${name} resolved outside the moved extension`);
+test('the workspace host, UI host and page bundle no retired execution engine', () => {
+	const graphs = JSON.parse(fs.readFileSync(path.join(root, 'build', 'bundle-graphs.json'), 'utf8'));
+	assert.equal(graphs.length, 3);
+	for (const { inputs } of graphs) {
+		const sources = Object.keys(inputs);
+		assert.ok(!sources.some(source => /(?:^|\/)(?:ptyd|transport|clis|schema|contract)\//u.test(source)),
+			sources.filter(source => /(?:^|\/)(?:ptyd|transport|clis|schema|contract)\//u.test(source)).join(', '));
+		const modules = Object.values(inputs).flatMap(input => input.imports.map(each => each.original ?? each.path));
+		assert.ok(!modules.some(name => /^node-pty(?:\/|$)/u.test(name)));
 	}
-	const marker = 'facade-packaged-pty-ok';
-	// A program needs SystemRoot to start on Windows - Node's random numbers do - and nothing else of this environment
-	const env = { TERM: 'xterm-256color', ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) };
-	// Started in a process of its own, which says what it saw and exits: on Windows node-pty keeps its console's pipes and worker
-	// open after the program ends, which would keep this test's process from ever ending
-	const probe = `const native = require('node:module').createRequire(${JSON.stringify(path.join(moved, 'package.json'))})('node-pty');
-const child = native.spawn(process.execPath, ['-e', ${JSON.stringify(`process.stdout.write('${marker}'); setTimeout(() => {}, 50);`)}], { name: 'xterm-256color', cols: 80, rows: 24, cwd: ${JSON.stringify(temp)}, env: ${JSON.stringify(env)} });
-let output = '';
-child.onData(chunk => { output += chunk; });
-child.onExit(event => process.stdout.write(JSON.stringify({ exitCode: event.exitCode, output }), () => process.exit(0)));`;
-	const ran = spawnSync(process.execPath, ['-e', probe], { encoding: 'utf8', timeout: 10000 });
-	assert.equal(ran.status, 0, `Packaged PTY probe: ${ran.error ?? ran.stderr}`);
-	const result = JSON.parse(ran.stdout);
-	assert.equal(result.exitCode, 0, `Packaged PTY output: ${result.output}`);
-	assert.ok(result.output.includes(marker), `Packaged PTY output: ${result.output}`);
 });
 
 /** Headers as each format begins - Mach-O, universal Mach-O, ELF, PE - of the CPU given, and an addon's Node-API entry point. */
@@ -325,11 +309,9 @@ test('the packaged workspace extension names this host\'s target and carries tha
 	assert.match(identity(runtimeFiles), new RegExp(`\\bTargetPlatform="${target}"`));
 	assert.deepEqual(nativeProblems(runtimeFiles, target), []);
 	const binaries = runtimeFiles.filter(each => binaryTarget(each.bytes)).map(each => each.name);
-	// The PTY backend's, and framework's programs (checked below)
-	assert.ok(binaries.length && binaries.every(each => each.startsWith('extension/node_modules/node-pty/') || each.startsWith('extension/bin/')), binaries.join(', '));
-	for (const bundle of ['extension.js', 'ptyd.js']) {
-		assert.ok(runtimeFiles.some(each => each.name === `extension/dist/${bundle}`), `The package carries dist/${bundle}`);
-	}
+	assert.ok(binaries.length && binaries.every(each => each.startsWith('extension/bin/')), binaries.join(', '));
+	assert.ok(runtimeFiles.some(each => each.name === 'extension/dist/extension.js'), 'The package carries dist/extension.js');
+	assert.ok(!runtimeFiles.some(each => /^extension\/(?:node_modules\/|dist\/(?:ptyd|shim)\.js(?:$|\.))/u.test(each.name)));
 });
 
 test('the packaged window dependency runs locally, exports no API and contains no native backend or test driver', () => {

@@ -4,11 +4,9 @@
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "Neuer Agent...",
-	"command.goToAgent": "Go to Agent...",
 	"command.openTerminal": "Terminal öffnen",
-	"command.hideAgent": "Ausblenden",
 	"command.renameAgent": "Agent umbenennen...",
-	"command.stopAgent": "Agent stoppen",
+	"command.stopAgent": "Agent stoppen...",
 	"command.deleteAgent": "Entfernen",
 	"command.copyAgentReference": "Agentenreferenz kopieren",
 	"command.dismissAgent": "Agent ausblenden",
@@ -28,7 +26,7 @@
 	"config.pi.title": "Pi",
 	"windowDisplayName": "Facade Code-Fensterkomponente",
 	"windowDescription": "Räumt alte Facade Code-Terminal-Tabs auf, wenn sich ein Remote-Fenster erneut verbindet oder die Erweiterung neu startet.",
-	"command.filter": "Nach Arbeitsort filtern...",
+	"command.filter": "Agenten filtern...",
 	"command.showAgentLaunch": "Agent-Befehlszeile anzeigen...",
 	"command.showAgentsLog": "Agentenprotokoll anzeigen",
 	"icon.newAgent": "Symbol „Neuer Agent“",
@@ -37,7 +35,6 @@
 	"command.continueSession": "Sitzung fortsetzen...",
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
-	"config.home": "Nur für die bisherige Implementierung. Dieser Ordner enthält ihre Einstellungen, den Agentenverlauf und Nachrichten. Ein hier angegebener Pfad hat Vorrang vor `FACADE_HOME` und dem Standardpfad `~/.facade`.\n\n[In facade.json bearbeiten](command:facade.openSettingsFile) um YOLO, vorgeschlagene Namen und den Start der CLIs zu ändern.",
-	"config.home.pattern": "Der Pfad muss mit ~/ beginnen oder absolut sein.",
-	"config.framework": "Steuert, welche Implementierung Ihre Agents ausführt.\n\n- `auto`: Facade Code Framework verwenden. Ein Fenster wechselt zu ihr, sobald auf diesem Computer kein Agent der bisherigen Implementierung mehr läuft. Laufende Agents werden nie unterbrochen, und Facade bietet an, das Fenster neu zu laden, sobald der Wechsel möglich ist.\n- `off`: Die bisherige Implementierung verwenden. Wenn Facade Code Framework Probleme verursacht, wählen Sie `off`, laden Sie das Fenster neu und [melden Sie das Problem auf GitHub](https://github.com/y5ez3g/facadecode/issues).\n\nIn einem Remote-Fenster gilt die Einstellung des Remote-Computers."
+	"config.home": "Das Facade-Verzeichnis dieses Fensters für Einstellungen, Agentendaten und die Migration aus früheren Versionen. Ein hier angegebener Pfad hat Vorrang vor `FACADE_HOME` und dem Standardpfad `~/.facade`.\n\n[In facade.json bearbeiten](command:facade.openSettingsFile) um YOLO, vorgeschlagene Namen und den Start der CLIs zu ändern.",
+	"config.home.pattern": "Der Pfad muss mit ~/ beginnen oder absolut sein."
 }
