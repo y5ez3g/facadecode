@@ -164,6 +164,43 @@ fn foreground_alternate_first_start_hands_the_same_shell_page_back() {
     assert!(term.canonical_input_and_echo_enabled());
 }
 
+/// A CLI's output can arrive in parts. The one that brings the first draw can end inside a frame
+/// that the CLI draws as one synchronized update.
+#[test]
+fn the_first_draw_shows_the_start_of_an_unfinished_frame() {
+    let home = TestHome::new("unfinished-frame");
+    let mut term = start_below_a_shell_page(
+        &home,
+        "Unfinished-frame",
+        "while [ ! -f start ]; do sleep 0.05; done; \
+         printf '\\033[?1049h\\033[?2026h\\033[HFIRST-PART '; \
+         while [ ! -f rest ]; do sleep 0.05; done; \
+         printf 'SECOND-PART\\033[?2026l'; sleep 60",
+    );
+    std::fs::write(home.project.join("start"), b"").unwrap();
+    assert!(
+        wait_until(LOADED_TIMEOUT, || term.on_alternate_screen()),
+        "{}",
+        term.text_with_scrollback()
+    );
+    std::fs::write(home.project.join("rest"), b"").unwrap();
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view
+            .contains("FIRST-PART SECOND-PART")),
+        "{}",
+        term.text()
+    );
+
+    let agent = home.inspect_agent("Unfinished-frame");
+    let address = agent["agent"]["address"].as_str().expect("an address");
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert_detach_receipt(&term, "Unfinished-frame", address);
+}
+
 /// Runs a Shell command below a shell page with history above it.
 fn run_below_a_shell_page(home: &TestHome, args: &[&str]) -> TestTerminal {
     TestTerminal::spawn(
@@ -177,7 +214,9 @@ fn run_below_a_shell_page(home: &TestHome, args: &[&str]) -> TestTerminal {
                  printf 'HOST-RETURN\\n'; exit \"$result\"",
                 "host",
             ])
-            .args(args),
+            .args(args)
+            // As in an SSH session, what a test selects stays off this computer's clipboard.
+            .env("SSH_TTY", "test"),
         100,
         24,
     )
@@ -197,13 +236,13 @@ fn start_below_a_shell_page(home: &TestHome, name: &str, script: &str) -> TestTe
     term
 }
 
-/// Once Attach has displayed primary output, the host retains its earlier shell page and the
-/// guest transcript in order, followed by the receipt and the next shell line.
-fn assert_primary_transcript_kept(
+/// After the attachment ends, the host is on its main screen and the shell page is as before,
+/// followed by the opening line, `receipt` and the shell's next line, with none of `agent_text`.
+fn assert_shell_page_returned(
     term: &TestTerminal,
     opening: &str,
     receipt: &str,
-    guest_lines: &[&str],
+    agent_text: &[&str],
 ) {
     assert!(
         term.wait_for(LOADED_TIMEOUT, |view| view.contains("HOST-RETURN")),
@@ -213,21 +252,21 @@ fn assert_primary_transcript_kept(
     assert!(!term.on_alternate_screen());
     let text = term.text_with_scrollback();
     assert_eq!(text.matches("HOST-HISTORY").count(), 1, "{text}");
-    let mut after = text.as_str();
-    for line in ["HOST-PAGE", "HOST-PROMPT", opening]
-        .into_iter()
-        .chain(guest_lines.iter().copied())
-        .chain([receipt, "HOST-RETURN"])
-    {
-        after = after
-            .split_once(line)
-            .unwrap_or_else(|| panic!("missing or out of order {line:?}: {text}"))
-            .1;
+    for shown in agent_text {
+        assert!(!text.contains(shown), "{shown}: {text}");
     }
+    let (_, after) = text
+        .split_once("HOST-PAGE\nHOST-PROMPT\n")
+        .unwrap_or_else(|| panic!("no shell page: {text}"));
+    assert_eq!(
+        after.trim_end(),
+        format!("{opening}\n{receipt}\nHOST-RETURN"),
+        "{text}"
+    );
 }
 
 #[test]
-fn foreground_exit_keeps_primary_output_after_the_shell_page() {
+fn foreground_exit_hands_the_shell_page_back() {
     let home = TestHome::new("exit-page");
     let _wire = connect(&home);
     // The kinds of CLI recorded: one drawing on its main screen that writes its resume hint twice,
@@ -241,9 +280,7 @@ fn foreground_exit_keeps_primary_output_after_the_shell_page() {
              while [ ! -f quit-main ]; do sleep 0.05; done; \
              printf 'Resume with -c MAIN-HINT\\nMAIN-FRAME\\nResume with -c MAIN-HINT\\n'; exit 0",
             "MAIN-FRAME",
-            false,
-            &["MAIN-FRAME", "Resume with -c MAIN-HINT"][..],
-            true,
+            &["MAIN-FRAME", "Resume with", "MAIN-HINT"][..],
         ),
         (
             "Alternate-hint",
@@ -252,9 +289,7 @@ fn foreground_exit_keeps_primary_output_after_the_shell_page() {
              while [ ! -f quit-hint ]; do sleep 0.05; done; \
              printf '\\033[?1049lTo continue this session, run:\\n  demo resume ALT-HINT\\n'; exit 0",
             "ALT-FRAME",
-            true,
-            &["To continue this session", "demo resume ALT-HINT"][..],
-            true,
+            &["ALT-FRAME", "To continue this session", "ALT-HINT"][..],
         ),
         (
             "Transcript",
@@ -265,16 +300,14 @@ fn foreground_exit_keeps_primary_output_after_the_shell_page() {
              i=0; while [ \"$i\" -lt 40 ]; do printf 'TRANSCRIPT-LINE %s\\n' \"$i\"; i=$((i + 1)); done; \
              exit 0",
             "TRANSCRIPT-FRAME",
-            true,
-            &["TRANSCRIPT-LINE 0", "TRANSCRIPT-LINE 39"][..],
-            false,
+            &["TRANSCRIPT-FRAME", "TRANSCRIPT-LINE"][..],
         ),
     ];
-    for (name, gate, script, frame, alternate, guest_lines, short_output) in cases {
+    for (name, gate, script, frame, agent_text) in cases {
         let mut term = start_below_a_shell_page(&home, name, script);
         assert!(
             term.wait_for(LOADED_TIMEOUT, |view| view.contains(frame))
-                && term.on_alternate_screen() == alternate,
+                && term.on_alternate_screen(),
             "{name}: {}",
             term.text()
         );
@@ -288,48 +321,17 @@ fn foreground_exit_keeps_primary_output_after_the_shell_page() {
             status.is_some_and(|status| status.success()),
             "{name}: {status:?}"
         );
-        let receipt = format!("{name} ({address}) exited with code 0.");
-        assert_primary_transcript_kept(
+        assert_shell_page_returned(
             &term,
             &format!("Started {name} ({address}). Press Ctrl+] to detach."),
-            &receipt,
-            guest_lines,
+            &format!("{name} ({address}) exited with code 0."),
+            agent_text,
         );
-        if short_output {
-            let view = term.view();
-            let rows: Vec<String> = view
-                .rows
-                .iter()
-                .map(|row| row.iter().map(|cell| cell.text.as_str()).collect())
-                .collect();
-            let last = guest_lines.last().expect("a final guest line");
-            let following = rows
-                .iter()
-                .rposition(|row| row.trim() == *last)
-                .map(|row| row + 1)
-                .filter(|&row| view.continues.get(row) == Some(&false))
-                .map(|start| {
-                    // A long machine address can wrap the receipt onto the next physical row.
-                    let end = (start + 1..rows.len())
-                        .find(|&row| !view.continues[row])
-                        .unwrap_or(rows.len());
-                    rows[start..end].concat()
-                });
-            assert_eq!(
-                following.as_deref().map(|line| line.trim_end_matches(' ')),
-                Some(receipt.as_str()),
-                "{name}: expected the receipt immediately below {last:?}: {:?}",
-                rows.iter().map(|row| row.trim_end()).collect::<Vec<_>>()
-            );
-        }
-        if alternate {
-            assert!(!term.text_with_scrollback().contains(frame));
-        }
     }
 }
 
 #[test]
-fn detach_from_a_main_screen_cli_keeps_its_primary_output() {
+fn detach_from_a_main_screen_cli_hands_the_shell_page_back() {
     let home = TestHome::new("detach-page");
     let _wire = connect(&home);
     let name = "Main-detach";
@@ -340,7 +342,7 @@ fn detach_from_a_main_screen_cli_keeps_its_primary_output() {
     );
     assert!(
         term.wait_for(LOADED_TIMEOUT, |view| view.contains("MAIN-FRAME"))
-            && !term.on_alternate_screen(),
+            && term.on_alternate_screen(),
         "{}",
         term.text()
     );
@@ -354,7 +356,7 @@ fn detach_from_a_main_screen_cli_keeps_its_primary_output() {
             .is_some_and(|status| status.success())
     );
     assert_detach_receipt(&term, name, &address);
-    assert_primary_transcript_kept(
+    assert_shell_page_returned(
         &term,
         &format!("Started {name} ({address}). Press Ctrl+] to detach."),
         &format!("Detached from {name} ({address}). The agent is still running."),
@@ -371,7 +373,7 @@ fn detach_from_a_main_screen_cli_keeps_its_primary_output() {
     );
     assert!(
         again.wait_for(LOADED_TIMEOUT, |view| view.contains("MAIN-FRAME"))
-            && !again.on_alternate_screen(),
+            && again.on_alternate_screen(),
         "{}",
         again.text()
     );
@@ -389,14 +391,15 @@ fn detach_from_a_main_screen_cli_keeps_its_primary_output() {
     );
 }
 
-/// Waits for `rows` at the top of the host buffer that shows the agent's current screen.
-fn wait_for_viewport(term: &TestTerminal, rows: [&str; 3], alternate: bool) {
+/// Waits for `rows` at the top of the host's alternate screen, which shows the agent on either of
+/// its screens for the whole attachment.
+fn wait_for_viewport(term: &TestTerminal, rows: [&str; 3]) {
     assert!(
         wait_until(LOADED_TIMEOUT, || {
-            term.viewport_rows()[..rows.len()] == rows && term.on_alternate_screen() == alternate
+            term.rows()[..rows.len()] == rows && term.on_alternate_screen()
         }),
-        "expected {rows:?} with alternate screen {alternate}, got {:?}",
-        term.viewport_rows()
+        "expected {rows:?} in the host's alternate screen, got {:?}",
+        term.rows()
     );
 }
 
@@ -429,7 +432,7 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
     );
     let initial_rows = ["PRIMARY-TOP", "primary-stale-tail", "PRIMARY-BOTTOM"];
     wait_for_title(&small, 0, "Native snapshot");
-    wait_for_viewport(&small, initial_rows, false);
+    wait_for_viewport(&small, initial_rows);
     let mut large = TestTerminal::spawn(
         home.command(&test_binaries().facade)
             .args(["attach", &address]),
@@ -437,7 +440,7 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
         35,
     );
     wait_for_title(&large, 0, "Native snapshot");
-    wait_for_viewport(&large, initial_rows, false);
+    wait_for_viewport(&large, initial_rows);
     let agent_info = home.inspect_agent(&address);
     let size = json!({ "cols": 80, "rows": 24 });
     assert_eq!(agent_info["agent"]["size"], size);
@@ -487,7 +490,7 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
         let mut counts = [0; 2];
         for (index, (term, from)) in [&small, &large].into_iter().zip(starts).enumerate() {
             wait_for_title(term, from, title);
-            wait_for_viewport(term, rows, matches!(gate, "alternate" | "update"));
+            wait_for_viewport(term, rows);
             counts[index] = String::from_utf8_lossy(&term.output_since(from))
                 .matches(activity)
                 .count();
@@ -498,13 +501,9 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
         let cleared = ["\x1b[J", "\x1b[0J", "\x1b[1J", "\x1b[2J", "\x1b[3J"]
             .iter()
             .any(|clear| frame.contains(clear));
-        // Full draws stay on the agent's screen switches, and the host follows each switch.
+        // Full draws stay on the agent's screen switches, and the host keeps its alternate screen.
         assert_eq!(cleared, full_draw, "{gate}: {frame:?}");
-        #[cfg(unix)]
-        {
-            assert_eq!(frame.contains("\x1b[?1049h"), gate == "alternate");
-            assert_eq!(frame.contains("\x1b[?1049l"), gate == "primary");
-        }
+        assert!(!frame.contains("\x1b[?1049"), "{gate}: {frame:?}");
     }
 
     // Make the larger terminal larger still. The shared grid stays at 80×24, but the host
@@ -513,7 +512,7 @@ fn shell_viewports_preserve_native_activity_and_repaint_only_on_transitions() {
     large.resize(130, 40);
     wait_for_title(&large, from, "Native primary return");
     assert!(String::from_utf8_lossy(&large.output_since(from)).contains("\x1b[J"));
-    wait_for_viewport(&large, ["PRIMARY-TOP", "back", "PRIMARY-BOTTOM"], false);
+    wait_for_viewport(&large, ["PRIMARY-TOP", "back", "PRIMARY-BOTTOM"]);
     assert_eq!(home.inspect_agent(&address)["agent"]["size"], size);
 
     for term in [&mut large, &mut small] {
@@ -854,7 +853,7 @@ fn no_reconnect_note_follows_the_note_of_a_signal() {
     );
 }
 
-/// Attach follows a combined alternate-screen sequence and leaves the primary transcript on detach.
+/// Attach follows a combined alternate-screen sequence, and detach returns the shell page.
 #[test]
 fn detach_leaves_alternate_screen_set_with_other_modes() {
     let home = TestHome::new("detachmixed");
@@ -900,15 +899,21 @@ fn detach_leaves_alternate_screen_set_with_other_modes() {
     let address = address(&home, &agent);
     assert_detach_receipt(&term, "mixed", &address);
     assert!(!term.on_alternate_screen(), "left on the alternate screen");
-    let text = term.text_with_scrollback();
+    // The agent's screens leave with the view: the receipt follows the opening line.
+    let rows = term.rows();
     assert!(
-        text.split_once("Press Ctrl+] to detach.")
-            .and_then(|(_, transcript)| transcript.split_once("Detached from mixed ("))
-            .is_some_and(|(transcript, _)| transcript.contains("SAVED-MAIN-CONTEXT")),
-        "the primary context should stay between opening and detach: {text}"
+        rows.windows(2).any(|lines| {
+            lines[0].ends_with("Press Ctrl+] to detach.")
+                && lines[1].starts_with("Detached from mixed (")
+        }),
+        "the receipt should follow the opening line: {rows:?}"
     );
-    assert_eq!(text.matches("SAVED-MAIN-CONTEXT").count(), 1, "{text}");
-    assert!(!text.contains("ALT-READY"), "{text}");
+    for shown in ["SAVED-MAIN-CONTEXT", "ALT-READY"] {
+        assert!(
+            !rows.iter().any(|row| row.contains(shown)),
+            "{shown}: {rows:?}"
+        );
+    }
 }
 
 /// Termination during the initial redraw must restore a terminal whose reader is slow.
@@ -980,165 +985,232 @@ fn attach_forwards_input_and_ctrl_bracket_detaches() {
 }
 
 #[test]
-fn attach_tracks_mouse_only_while_the_displayed_cli_requests_it() {
-    let home = TestHome::new("attach-native-pointer");
-    let transcript = home.folder().join("fullscreen-screen");
-    let keys = home.folder().join("fullscreen-keys");
-    let sizes = home.folder().join("fullscreen-sizes");
-    let frame_title = "Fullscreen mouse frame";
-    std::fs::write(
-        &transcript,
-        format!(
-            "\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003;2004h\x1b[?1006h\x1b[?1007hFULLSCREEN-CLI\x1b]2;{frame_title}\x1b\\"
-        ),
-    )
-    .unwrap();
-    home.add_custom_cli("mouse-fixture", &test_binaries().fakecli);
-    let started = home
-        .command(&test_binaries().facade)
-        .args(["start", "-d", "--name", "Fullscreen", "mouse-fixture"])
-        .env("FAKECLI_SCREEN_FILE", &transcript)
-        .env("FAKECLI_KEYS", &keys)
-        .env("FAKECLI_SIZE_LOG", &sizes)
-        .env("FAKECLI_NAME", "FULLSCREEN-PROMPT")
-        .output()
-        .unwrap();
-    assert!(started.status.success(), "{}", stderr(&started));
-    let agent = home.started_agent(&stdout(&started));
-    let mut term = TestTerminal::spawn(
-        home.command(shell())
-            .env("FACADE_TEST_GATES", "attach-evidence")
-            .args([
-                "-c",
-                "printf '\\033[?1007h'; exec facade attach \"$1\"",
-                "host",
-                &agent.address,
-            ]),
-        100,
-        24,
+fn attach_wheel_browses_main_screen_history_without_typing_into_the_cli() {
+    let home = TestHome::new("attach-wheel");
+    let transcript = home.folder().join("wheel-transcript");
+    let keys = home.folder().join("wheel-input");
+    // The CLI uses the main screen, enables alternate scroll, and leaves mouse reporting off.
+    // The transcript is present before the viewer opens its watch.
+    let mut history = String::from("\x1b[?1007h");
+    for row in 1..=80 {
+        use std::fmt::Write as _;
+        writeln!(history, "\x1b[31mWHEEL-HISTORY-{row:02}\x1b[0m").unwrap();
+    }
+    std::fs::write(&transcript, history).unwrap();
+    let name = "Wheel";
+    let agent = home.start_fake_with(
+        name,
+        &[
+            ("FAKECLI_SCREEN_FILE", transcript.to_str().unwrap()),
+            ("FAKECLI_KEYS", keys.to_str().unwrap()),
+            ("FAKECLI_NAME", "WHEEL-LIVE"),
+        ],
     );
-    // A redraw writes its visible text before the terminal has parsed the mouse modes.
-    let wait_for_tracking = |term: &TestTerminal, expected: &str| {
-        assert!(
-            wait_until(LOADED_TIMEOUT, || term.reports_mouse()),
-            "{expected}: {}",
-            term.text()
-        );
-    };
-    assert!(term.wait_for(LOADED_TIMEOUT, |text| text.contains("FULLSCREEN-PROMPT")));
-    wait_for_tracking(&term, "the first draw preserves tracking");
-    assert!(term.on_alternate_screen());
-    assert!(term.bracketed_paste());
-    let send_and_check = |term: &TestTerminal, event: &[u8]| {
-        let mark = std::fs::metadata(&keys).unwrap().len() as usize;
-        term.send(event);
-        assert!(
-            wait_until(secs(5), || std::fs::read(&keys)
-                .is_ok_and(|bytes| bytes.get(mark..) == Some(event))),
-            "guest input: {:?}",
-            std::fs::read(&keys)
-        );
-    };
+    let mut term = run_below_a_shell_page(&home, &["attach", &agent.address]);
+    let shows_live = |text: &str| text.contains("WHEEL-LIVE") && text.contains("❯");
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            shows_live(&term.text()) && term.on_alternate_screen()
+        }),
+        "{}",
+        term.text()
+    );
+    assert!(!term.text().contains("WHEEL-HISTORY-"), "{}", term.text());
     assert!(wait_until(LOADED_TIMEOUT, || keys.is_file()));
-    send_and_check(&term, b"\x1b[<64;12;4M\x1b[<0;12;4M\x1b[<0;12;4m");
+    let read_keys = || std::fs::read(&keys).unwrap();
+    let before = read_keys();
 
-    term.resize(110, 30);
-    assert!(wait_until(LOADED_TIMEOUT, || std::fs::read_to_string(
-        &sizes
-    )
-    .is_ok_and(|log| log.lines().any(|line| line == "110x30"))));
-    wait_for_tracking(&term, "tracking survives the resized draw");
-    send_and_check(&term, b"\x1b[<65;13;4M");
-
-    let mut large = TestTerminal::spawn(
-        home.command(&test_binaries().facade)
-            .args(["attach", &agent.address]),
-        150,
-        40,
-    );
-    assert!(large.wait_for(LOADED_TIMEOUT, |text| text.contains("FULLSCREEN-PROMPT")));
-    wait_for_tracking(&large, "the larger view preserves tracking");
-    // The full draw writes the title after its tracking and encoding settings.
-    wait_for_title(&large, 0, frame_title);
-    let repaint = large.output_len();
-    send_and_check(&large, b"\x1b[<0;13;4M");
-    term.send(b"z");
-    assert!(large.wait_for(secs(5), |text| text.contains("❯ z")));
-    send_and_check(&large, b"\x1b[<32;15;4M\x1b[<0;15;4m");
-    send_and_check(&term, b"\x03");
-    // The cleared draft is a later paint, so the drag repaint's trailing modes have arrived.
-    assert!(large.wait_for(secs(5), |text| !text.contains("❯ z")));
-    let frame = large.output_since(repaint);
-    let tracking_repeated =
-        String::from_utf8_lossy(&frame)
-            .split("\x1b[?")
-            .skip(1)
-            .any(|sequence| {
-                let end = sequence.find(|ch: char| !ch.is_ascii_digit() && ch != ';');
-                end.is_some_and(|at| {
-                    matches!(sequence.as_bytes()[at], b'h' | b'l')
-                        && sequence[..at].split(';').any(|mode| {
-                            matches!(
-                                mode,
-                                "9" | "1000" | "1002" | "1003" | "1005" | "1006" | "1015" | "1016"
-                            )
-                        })
-                })
-            });
-    assert!(!tracking_repeated, "repaint changed tracking during a drag");
-
-    let mode = |bytes: &[u8]| {
-        std::fs::write(&transcript, bytes).unwrap();
-        home.run_facade_ok(&["type", &agent.id, "/fake screen", "--enter"]);
+    let wheel_up = b"\x1b[<64;6;8M".repeat(8);
+    let wheel_down = b"\x1b[<65;6;8M".repeat(8);
+    let shows_history = || {
+        let view = term.view();
+        !view.cursor_visible
+            && view.rows.iter().any(|row| {
+                row.first().is_some_and(|cell| cell.colored)
+                    && row
+                        .iter()
+                        .map(|cell| cell.text.as_str())
+                        .collect::<String>()
+                        .starts_with("WHEEL-HISTORY-")
+            })
     };
-    mode(b"\x1b[?1003l\x1b[?1006l");
+    term.send(&wheel_up);
     assert!(
-        wait_until(LOADED_TIMEOUT, || !term.reports_mouse()
-            && !large.reports_mouse()),
-        "live reset returns pointer ownership"
+        wait_until(secs(5), shows_history),
+        "wheel up never showed the colored history; CLI bytes: {:?}; viewport:\n{}",
+        read_keys(),
+        term.text()
     );
-    send_and_check(&term, b"\x1b[A\x1b[B\x03");
-    mode(b"\x1b[?1003h\x1b[?1006h");
+    assert_eq!(read_keys(), before, "wheel up reached the CLI");
+
+    term.send(&wheel_down);
     assert!(
-        wait_until(LOADED_TIMEOUT, || term.reports_mouse()
-            && large.reports_mouse()),
-        "live set restores tracking"
+        wait_until(secs(5), || {
+            shows_live(&term.text()) && term.view().cursor_visible
+        }),
+        "{}",
+        term.text()
     );
-    send_and_check(&term, b"\x1b[<64;14;4M");
-    large.send(b"\x1d");
+    assert_eq!(read_keys(), before, "wheel down reached the CLI");
+    term.send(&wheel_up);
+    assert!(wait_until(secs(5), shows_history), "{}", term.text());
+    term.send(b"z");
     assert!(
-        large
-            .wait_exit(secs(10))
+        wait_until(secs(5), || {
+            term.text().contains("❯ z") && term.view().cursor_visible
+        }),
+        "{}",
+        term.text()
+    );
+
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
             .is_some_and(|status| status.success())
     );
+    assert_detach_receipt(&term, name, &agent.address);
+    assert_shell_page_returned(
+        &term,
+        &format!(
+            "Attached to {name} ({}). Press Ctrl+] to detach.",
+            agent.address
+        ),
+        &format!(
+            "Detached from {name} ({}). The agent is still running.",
+            agent.address
+        ),
+        &["WHEEL-HISTORY-", "WHEEL-LIVE"],
+    );
+    assert_eq!(read_keys(), [before, b"z".to_vec()].concat());
+    assert!(alive(&agent.process));
+}
 
-    let before_reconnect = term.output_len();
-    let old_daemon = home.kill_daemon();
-    home.wait_for_daemon_after(old_daemon, secs(10))
-        .expect("the keeper brings back the daemon");
-    assert!(term.wait_for_bytes(before_reconnect, b"FULLSCREEN-PROMPT", LOADED_TIMEOUT));
-    // Attach has finished the redraw and reopened input. The reader can still be decoding it.
-    home.wait_for_gate("attach-reconnected");
-    wait_for_tracking(&term, "reconnect redraw restores tracking");
-    send_and_check(&term, b"\x1b[<64;15;4M");
+/// A CLI that asks for the mouse gets all of it. The host's mouse modes are set only when they change.
+#[test]
+fn attach_gives_the_mouse_to_a_cli_that_asks_for_it() {
+    let home = TestHome::new("attach-mouse");
+    let transcript = home.folder().join("fullscreen-screen");
+    let keys = home.folder().join("fullscreen-keys");
+    std::fs::write(
+        &transcript,
+        "\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003;2004h\x1b[?1006h\x1b[?1007hFULLSCREEN-CLI",
+    )
+    .unwrap();
+    let agent = home.start_fake_with(
+        "Fullscreen",
+        &[
+            ("FAKECLI_SCREEN_FILE", transcript.to_str().unwrap()),
+            ("FAKECLI_KEYS", keys.to_str().unwrap()),
+            ("FAKECLI_NAME", "FULLSCREEN-PROMPT"),
+        ],
+    );
+    let mut term = run_below_a_shell_page(&home, &["attach", &agent.address]);
+    assert!(term.wait_for(LOADED_TIMEOUT, |text| text.contains("FULLSCREEN-PROMPT")));
+    assert!(wait_until(LOADED_TIMEOUT, || term.reports_mouse() && keys.is_file()));
+    let read_keys = || std::fs::read(&keys).unwrap();
+    let mut expected = read_keys();
+    let mut reaches = |event: &[u8]| {
+        term.send(event);
+        expected.extend_from_slice(event);
+        assert!(
+            wait_until(secs(5), || read_keys() == expected),
+            "guest input: {:?}",
+            read_keys()
+        );
+    };
+    let settled = term.output_len();
+    reaches(b"\x1b[<64;12;4M\x1b[<0;12;4M\x1b[<0;12;4m\x1b[<2;12;4M\x1b[<2;12;4m");
+    reaches(b"\x1bOAz");
+    let modes = String::from_utf8_lossy(&term.output_since(settled)).into_owned();
+    assert!(!modes.contains("\x1b[?1006"), "{modes:?}");
+
+    // Once the CLI lets the mouse go, the wheel and clicks stay with Attach.
+    std::fs::write(&transcript, "\x1b[?1003l\x1b[?1006l").unwrap();
+    home.run_facade_ok(&["type", &agent.id, "/fake screen", "--enter"]);
+    assert!(wait_until(LOADED_TIMEOUT, || {
+        String::from_utf8_lossy(&term.output_since(settled)).contains("\x1b[?1002h")
+    }));
+    let before = read_keys();
+    term.send(b"\x1b[<64;12;4M\x1b[<0;12;4M\x1b[<0;12;4mq");
+    assert!(
+        wait_until(secs(5), || read_keys().ends_with(b"q")),
+        "{:?}",
+        read_keys()
+    );
+    assert_eq!(read_keys(), [before, b"q".to_vec()].concat());
     term.send(b"\x1d");
     assert!(
         term.wait_exit(secs(10))
             .is_some_and(|status| status.success())
     );
-    assert_detach_receipt(&term, "Fullscreen", &agent.address);
-    assert_eq!(
-        term.output_count("1007"),
-        1,
-        "only the host sets alternate scrolling"
-    );
-
     assert!(!term.on_alternate_screen());
-    assert!(!term.bracketed_paste());
     assert!(
         !term.reports_mouse(),
-        "detach leaves mouse control with the host"
+        "detach returns the mouse to the host"
     );
+}
+
+/// A CLI that leaves the mouse alone leaves it to the terminal app, where the keyboard tells the
+/// wheel from the arrow keys the app sends for it.
+#[test]
+fn the_wheel_scrolls_while_the_terminal_app_has_the_mouse() {
+    let home = TestHome::new("attach-host-mouse");
+    if !facade_base::desktop::sees_keys() {
+        return;
+    }
+    let mut term = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["start", "--name", "Host-mouse", home.shell_cli(), "-c"])
+            .arg(
+                "i=1; while [ \"$i\" -le 60 ]; do printf 'LINE-%02d\\n' \"$i\"; i=$((i + 1)); done; \
+                 printf 'READY\\n'; exec cat",
+            )
+            .env("TERM_PROGRAM", "Apple_Terminal"),
+        100,
+        24,
+    );
+    assert!(
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("READY")),
+        "{}",
+        term.text_with_scrollback()
+    );
+    assert!(term.on_alternate_screen() && !term.reports_mouse());
+    assert!(
+        term.wait_for_bytes(0, b"\x1b[?1h", secs(5)),
+        "the host does not send the wheel as cursor keys"
+    );
+    assert!(!term.text().contains("LINE-35"), "{}", term.text());
+
+    term.send(b"\x1bOA\x1bOA\x1bOA\x1bOA");
+    assert!(
+        term.wait_for(secs(5), |view| view.contains("LINE-35")
+            && !view.contains("READY")),
+        "{}",
+        term.text()
+    );
+    term.send(b"\x1bOB\x1bOB\x1bOB\x1bOB");
+    assert!(
+        term.wait_for(secs(5), |view| view.contains("READY")),
+        "{}",
+        term.text()
+    );
+    // Other cursor keys reach the CLI as it asked for them.
+    #[cfg(unix)]
+    {
+        term.send(b"\x1bOCx\r");
+        assert!(
+            term.wait_for(secs(5), |view| view.contains("^[[Cx")),
+            "{}",
+            term.text()
+        );
+        assert!(!term.text().contains("^[OA"), "{}", term.text());
+    }
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert!(!term.on_alternate_screen());
 }
 
 #[test]
@@ -1157,6 +1229,528 @@ fn attach_refuses_the_removed_mouse_option() {
         !home.path.join("framework").exists(),
         "invalid arguments reached Facade"
     );
+}
+
+const SELECTION_WORD: &str = "é界";
+
+fn attach_selection_fixture(
+    home: &TestHome,
+    keyboard: &str,
+) -> (TestAgent, TestTerminal, std::path::PathBuf) {
+    let transcript = home.folder().join("selection-transcript");
+    let keys = home.folder().join("selection-input");
+    let mut history = format!("\x1b[?1007h{keyboard}");
+    for line in 1..=80 {
+        use std::fmt::Write as _;
+        writeln!(
+            history,
+            "\x1b[31mSEL-HISTORY-{line:02} A{SELECTION_WORD}Z\x1b[0m"
+        )
+        .unwrap();
+    }
+    std::fs::write(&transcript, history).unwrap();
+    let agent = home.start_fake_with(
+        "Selection",
+        &[
+            ("FAKECLI_SCREEN_FILE", transcript.to_str().unwrap()),
+            ("FAKECLI_KEYS", keys.to_str().unwrap()),
+            ("FAKECLI_NAME", "SEL-LIVE Aé界Z"),
+        ],
+    );
+    let term = run_below_a_shell_page(home, &["attach", &agent.address]);
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            term.on_alternate_screen()
+                && term.text().contains("SEL-LIVE")
+                && term.text().contains("❯")
+                && keys.is_file()
+        }),
+        "{}",
+        term.text()
+    );
+    (agent, term, keys)
+}
+
+struct SelectionSpan {
+    row: usize,
+    cells: [facade_screen::VisibleCell; 4],
+}
+
+impl SelectionSpan {
+    fn visible(term: &TestTerminal, prefix: &str) -> Self {
+        for (number, row) in term.view().rows.into_iter().enumerate() {
+            let text: String = row.iter().map(|cell| cell.text.as_str()).collect();
+            if text.starts_with(prefix)
+                && let Some(cells) = row.windows(4).find(|cells| {
+                    cells
+                        .iter()
+                        .map(|cell| cell.text.as_str())
+                        .eq(["A", "é", "界", "Z"])
+                })
+            {
+                return Self {
+                    row: number,
+                    cells: std::array::from_fn(|index| cells[index].clone()),
+                };
+            }
+        }
+        panic!("no selectable span on {prefix:?} in:\n{}", term.text());
+    }
+
+    fn report(&self, term: &TestTerminal, button: u8, index: usize, release: bool) {
+        let col = self.cells[index].column + 1;
+        let row = self.row + 1;
+        let end = if release { 'm' } else { 'M' };
+        term.send(format!("\x1b[<{button};{col};{row}{end}").as_bytes());
+    }
+
+    fn displayed(&self, term: &TestTerminal, highlighted: bool) -> bool {
+        let view = term.view();
+        view.rows.get(self.row).is_some_and(|row| {
+            self.cells.iter().enumerate().all(|(index, cell)| {
+                let mut expected = cell.clone();
+                if highlighted && matches!(index, 1 | 2) {
+                    expected.inverse = !expected.inverse;
+                }
+                row.iter().find(|visible| visible.column == cell.column) == Some(&expected)
+            })
+        })
+    }
+
+    fn drag(&self, term: &TestTerminal, from: usize, to: usize) {
+        self.report(term, 0, from, false);
+        self.report(term, 32, to, false);
+        assert!(
+            wait_until(secs(5), || self.displayed(term, true)),
+            "plain left drag did not highlight only {SELECTION_WORD:?}:\n{}",
+            term.text()
+        );
+        let release = term.output_len();
+        self.report(term, 0, to, true);
+        assert_selection_copy(term, release, 1);
+    }
+}
+
+fn clipboard_writes(output: &[u8]) -> Vec<Vec<u8>> {
+    let prefix = b"\x1b]52;";
+    let mut output = output;
+    let mut writes = Vec::new();
+    while let Some(start) = output.windows(prefix.len()).position(|part| part == prefix) {
+        let record = &output[start + prefix.len()..];
+        let Some(end) = record.iter().position(|&byte| matches!(byte, 0x07 | 0x1b)) else {
+            break;
+        };
+        let terminator = if record[end] == 0x07 {
+            1
+        } else if record.get(end + 1) == Some(&b'\\') {
+            2
+        } else {
+            break;
+        };
+        let record_text = std::str::from_utf8(&record[..end]).unwrap();
+        let (destination, payload) = record_text.split_once(';').unwrap();
+        assert!(
+            destination == "c" || destination.is_empty(),
+            "unexpected OSC 52 destination {destination:?}"
+        );
+        writes.push(facade_base::base64::decode(payload).expect("OSC 52 contains base64"));
+        output = &record[end + terminator..];
+    }
+    writes
+}
+
+fn assert_selection_copy(term: &TestTerminal, from: usize, count: usize) {
+    let expected = vec![SELECTION_WORD.as_bytes().to_vec(); count];
+    assert!(
+        wait_until(secs(5), || clipboard_writes(&term.output_since(from))
+            == expected),
+        "expected {count} OSC 52 writes of {SELECTION_WORD:?}, got {:?}",
+        clipboard_writes(&term.output_since(from))
+    );
+}
+
+fn detach_from_selection(term: &mut TestTerminal, agent: &TestAgent) {
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert_detach_receipt(term, "Selection", &agent.address);
+    assert_shell_page_returned(
+        term,
+        &format!(
+            "Attached to Selection ({}). Press Ctrl+] to detach.",
+            agent.address
+        ),
+        &format!(
+            "Detached from Selection ({}). The agent is still running.",
+            agent.address
+        ),
+        &["SEL-HISTORY-", "SEL-LIVE"],
+    );
+}
+
+#[test]
+fn attach_drag_selects_and_copies_live_text() {
+    let home = TestHome::new("attach-selection-live");
+    let (agent, mut term, keys) = attach_selection_fixture(&home, "");
+    let read_keys = || std::fs::read(&keys).unwrap();
+    let mut expected = read_keys();
+    let span = SelectionSpan::visible(&term, "SEL-LIVE ");
+    assert!(span.cells[1].bold);
+
+    span.drag(&term, 1, 2);
+    let copy = term.output_len();
+    term.send(b"\x03");
+    assert_selection_copy(&term, copy, 1);
+    assert!(
+        span.displayed(&term, true),
+        "copy cleared the live selection"
+    );
+
+    #[cfg(windows)]
+    {
+        // A copy press, auto-repeat and its key-up share one input batch.
+        let from = term.output_len();
+        let copy_press = b"\x1b[67;46;3;1;8;1_";
+        let copy_release = b"\x1b[67;46;0;0;8;1_";
+        term.send(&[copy_press.as_slice(), copy_press, copy_release].concat());
+        assert_selection_copy(&term, from, 2);
+        assert!(
+            span.displayed(&term, true),
+            "Win32 copy cleared the selection"
+        );
+    }
+
+    // Ordinary typing clears the highlight before the later Ctrl+C in the same batch.
+    let after_copy = term.output_len();
+    term.send(b"z\x03");
+    expected.extend_from_slice(b"z\x03");
+    assert!(wait_until(secs(5), || read_keys() == expected));
+    assert!(wait_until(secs(5), || span.displayed(&term, false)));
+    assert!(clipboard_writes(&term.output_since(after_copy)).is_empty());
+    term.send(b"k");
+    expected.push(b'k');
+    assert!(term.wait_for(secs(5), |text| text.contains("❯ k")));
+    detach_from_selection(&mut term, &agent);
+    assert_eq!(read_keys(), expected);
+}
+
+#[test]
+fn attach_kitty_ctrl_c_copies_only_a_completed_selection() {
+    let home = TestHome::new("attach-selection-kitty");
+    // Antigravity requests these Kitty flags and queries them at startup.
+    let (agent, mut term, keys) = attach_selection_fixture(&home, "\x1b[>5u\x1b[?u");
+    assert!(term.wait_for_bytes(0, b"\x1b[=5;1u", LOADED_TIMEOUT));
+    let read_keys = || std::fs::read(&keys).unwrap();
+    let mut expected = read_keys();
+    let ctrl_c = b"\x1b[99;5u";
+
+    let unselected = term.output_len();
+    term.send(ctrl_c);
+    expected.extend_from_slice(ctrl_c);
+    assert!(
+        wait_until(secs(5), || read_keys() == expected),
+        "{:?}",
+        read_keys()
+    );
+    assert!(clipboard_writes(&term.output_since(unselected)).is_empty());
+
+    let span = SelectionSpan::visible(&term, "SEL-LIVE ");
+    span.drag(&term, 1, 2);
+    let selected = term.output_len();
+    term.send(ctrl_c);
+    assert!(
+        wait_until(secs(5), || {
+            !clipboard_writes(&term.output_since(selected)).is_empty() || read_keys() != expected
+        }),
+        "no selection copy or CLI input"
+    );
+    assert_eq!(
+        clipboard_writes(&term.output_since(selected)),
+        [SELECTION_WORD.as_bytes().to_vec()],
+        "selected Kitty Ctrl+C reached ordinary input: {:?}",
+        read_keys()
+    );
+    assert_eq!(read_keys(), expected);
+    assert!(span.displayed(&term, true), "copy cleared the selection");
+
+    let modified = term.output_len();
+    let shift_ctrl_c = b"\x1b[99;6u";
+    term.send(shift_ctrl_c);
+    expected.extend_from_slice(shift_ctrl_c);
+    assert!(
+        wait_until(secs(5), || read_keys() == expected),
+        "{:?}",
+        read_keys()
+    );
+    assert!(clipboard_writes(&term.output_since(modified)).is_empty());
+    assert!(wait_until(secs(5), || span.displayed(&term, false)));
+    detach_from_selection(&mut term, &agent);
+    assert_eq!(read_keys(), expected);
+}
+
+#[test]
+fn attach_kitty_ctrl_c_owns_the_completed_selection_key_lifecycle() {
+    let home = TestHome::new("attach-selection-kitty-events");
+    let (agent, mut term, keys) = attach_selection_fixture(&home, "\x1b[>7u\x1b[?u");
+    assert!(term.wait_for_bytes(0, b"\x1b[=7;1u", LOADED_TIMEOUT));
+    let read_keys = || std::fs::read(&keys).unwrap();
+    let mut expected = read_keys();
+    let press = b"\x1b[99;5u";
+    let explicit_press = b"\x1b[99;5:1u";
+    let repeat = b"\x1b[99;5:2u";
+    let release = b"\x1b[99;5:3u";
+
+    let from = term.output_len();
+    let ordinary = [explicit_press.as_slice(), repeat, release].concat();
+    term.send(&ordinary);
+    expected.extend_from_slice(&ordinary);
+    assert!(
+        wait_until(secs(5), || read_keys() == expected),
+        "unselected Kitty key reports changed: {:?}",
+        read_keys()
+    );
+    assert!(clipboard_writes(&term.output_since(from)).is_empty());
+
+    let span = SelectionSpan::visible(&term, "SEL-LIVE ");
+    span.drag(&term, 1, 2);
+    let selected = term.output_len();
+    term.send(press);
+    assert_selection_copy(&term, selected, 1);
+    term.send(repeat);
+    assert!(
+        wait_until(secs(5), || {
+            clipboard_writes(&term.output_since(selected)).len() >= 2 || read_keys() != expected
+        }),
+        "no Kitty repeat copy or CLI input"
+    );
+    assert_eq!(
+        clipboard_writes(&term.output_since(selected)),
+        vec![SELECTION_WORD.as_bytes().to_vec(); 2],
+        "selected Kitty repeat reached the CLI: {:?}",
+        read_keys()
+    );
+    assert_eq!(read_keys(), expected);
+    assert!(span.displayed(&term, true), "repeat cleared the selection");
+
+    term.send(release);
+    let next_press = term.output_len();
+    term.send(explicit_press);
+    assert_selection_copy(&term, next_press, 1);
+    assert!(span.displayed(&term, true), "release cleared the selection");
+    assert_eq!(read_keys(), expected);
+
+    term.send(b"z");
+    expected.push(b'z');
+    assert!(wait_until(secs(5), || read_keys() == expected
+        && span.displayed(&term, false)));
+    // A matching C key-up belongs to the copy even after typing and releasing Control.
+    term.send(b"\x1b[99;1:3uq");
+    expected.push(b'q');
+    assert!(
+        wait_until(secs(5), || read_keys() == expected),
+        "{:?}",
+        read_keys()
+    );
+    assert_eq!(
+        clipboard_writes(&term.output_since(selected)),
+        vec![SELECTION_WORD.as_bytes().to_vec(); 3]
+    );
+    detach_from_selection(&mut term, &agent);
+    assert_eq!(read_keys(), expected);
+}
+
+#[test]
+fn attach_drag_selects_and_copies_scrollback() {
+    let home = TestHome::new("attach-selection-history");
+    let (agent, mut term, keys) = attach_selection_fixture(&home, "");
+    let read_keys = || std::fs::read(&keys).unwrap();
+    let mut expected = read_keys();
+
+    term.send(&b"\x1b[<64;6;8M".repeat(8));
+    assert!(
+        wait_until(secs(5), || {
+            !term.view().cursor_visible && term.rows()[0].starts_with("SEL-HISTORY-62 ")
+        }),
+        "{}",
+        term.text()
+    );
+    let span = SelectionSpan::visible(&term, "SEL-HISTORY-");
+    assert!(span.cells[1].colored);
+
+    span.drag(&term, 2, 1);
+    let copy = term.output_len();
+    span.report(&term, 2, 1, false);
+    assert_selection_copy(&term, copy, 1);
+    assert!(
+        span.displayed(&term, true),
+        "copy cleared the history selection"
+    );
+
+    span.report(&term, 0, 1, false);
+    span.report(&term, 0, 1, true);
+    assert!(wait_until(secs(5), || span.displayed(&term, false)));
+    assert!(!term.view().cursor_visible, "click left the history view");
+    term.send(&b"\x1b[<65;6;8M".repeat(8));
+    assert!(
+        wait_until(secs(5), || {
+            term.view().cursor_visible && term.text().contains("❯")
+        }),
+        "{}",
+        term.text()
+    );
+    assert_eq!(read_keys(), expected);
+    term.send(b"z");
+    expected.push(b'z');
+    assert!(term.wait_for(secs(5), |text| text.contains("❯ z")));
+    detach_from_selection(&mut term, &agent);
+    assert_eq!(read_keys(), expected);
+}
+
+#[test]
+fn attach_wheel_keeps_its_place_when_full_history_receives_output() {
+    let home = TestHome::new("attach-wheel-cap");
+    let started = home.run_facade_ok(&[
+        "start",
+        "-d",
+        "--name",
+        "Wheel-cap",
+        home.shell_cli(),
+        "-c",
+        "printf '\\033[?1007h'; \
+         i=1; while [ \"$i\" -le 1050 ]; do printf 'CAP-%04d\\n' \"$i\"; i=$((i + 1)); done; \
+         while [ ! -f append ]; do sleep 0.05; done; \
+         while [ \"$i\" -le 1062 ]; do printf 'CAP-%04d\\n' \"$i\"; i=$((i + 1)); done; \
+         printf '\\033]2;Cap appended\\007'; sleep 60",
+    ]);
+    let address = started_ref(&started);
+    assert!(wait_for_screen_text(&home, address, "CAP-1050"));
+
+    let mut term = run_below_a_shell_page(&home, &["attach", address]);
+    assert!(term.wait_for(LOADED_TIMEOUT, |text| text.contains("CAP-1050")));
+    let first_row = || {
+        term.rows()[0]
+            .strip_prefix("CAP-")
+            .and_then(|line| line.trim_end().parse::<u32>().ok())
+    };
+    let live = first_row().expect("the live viewport has numbered rows");
+    let held = live - 24;
+    let wheel_up = b"\x1b[<64;6;8M";
+    term.send(&wheel_up.repeat(8));
+    assert!(
+        wait_until(LOADED_TIMEOUT, || first_row() == Some(held)),
+        "could not browse back to {held}: {:?}",
+        first_row()
+    );
+
+    let from = term.output_len();
+    std::fs::write(home.project.join("append"), b"").unwrap();
+    wait_for_title(&term, from, "Cap appended");
+    assert_eq!(first_row(), Some(held), "output moved the held viewport");
+    term.send(wheel_up);
+    assert!(
+        wait_until(secs(5), || first_row() == Some(held - 3)),
+        "expected three older rows from {held}, got {:?}",
+        first_row()
+    );
+
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn attach_win32_modifiers_do_not_leave_held_history() {
+    let home = TestHome::new("attach-wheel-native-shift");
+    let started = home.run_facade_ok(&[
+        "start",
+        "-d",
+        "--name",
+        "Wheel-shift",
+        home.shell_cli(),
+        "-c",
+        "trap '' INT; \
+         i=1; while [ \"$i\" -le 80 ]; do printf 'SHIFT-%02d\\n' \"$i\"; i=$((i + 1)); done; \
+         printf '\\033[?1007h'; \
+         while [ ! -f win32 ]; do sleep 0.05; done; \
+         printf '\\033[?9001h\\033]2;Win32 input active\\007'; \
+         while :; do sleep 0.05; done",
+    ]);
+    let address = started_ref(&started);
+    assert!(wait_for_screen_text(&home, address, "SHIFT-80"));
+    let mut term = run_below_a_shell_page(&home, &["attach", address]);
+    assert!(term.wait_for(LOADED_TIMEOUT, |text| text.contains("SHIFT-80")));
+    let first_row = || {
+        term.rows()[0]
+            .strip_prefix("SHIFT-")
+            .and_then(|line| line.trim_end().parse::<u32>().ok())
+    };
+    let live = first_row().expect("live rows are numbered");
+    let held = live - 24;
+    let wheel_up = b"\x1b[<64;6;8M";
+    term.send(&wheel_up.repeat(8));
+    assert!(
+        wait_until(LOADED_TIMEOUT, || first_row() == Some(held)
+            && !term.view().cursor_visible),
+        "did not reach held row {held}: {:?}",
+        first_row()
+    );
+
+    let from = term.output_len();
+    std::fs::write(home.project.join("win32"), b"").unwrap();
+    wait_for_title(&term, from, "Win32 input active");
+    assert!(term.wait_for_bytes(from, b"\x1b[?9001h", LOADED_TIMEOUT));
+    assert_eq!(first_row(), Some(held));
+    term.send(b"\x1b[16;42;0;1;16;1_\x1b[16;42;0;0;0;1_");
+    term.send(wheel_up);
+    assert!(
+        wait_until(secs(5), || first_row() == Some(held - 3)
+            && !term.view().cursor_visible),
+        "after native Shift and one wheel-up from row {held}, expected {}, got {:?}",
+        held - 3,
+        first_row()
+    );
+    eprintln!(
+        "win32 input advertised; held row {held} advanced to {} after Shift and one wheel-up",
+        held - 3
+    );
+
+    term.send(b"\x1b[88;45;120;1;0;1_\x1b[88;45;120;0;0;1_");
+    assert!(
+        wait_until(secs(5), || first_row() == Some(live)
+            && term.view().cursor_visible),
+        "a native printable key did not return to live"
+    );
+    term.send(b"\x1b[<0;1;1M\x1b[<32;5;1M\x1b[<0;5;1m");
+    assert!(wait_until(secs(5), || {
+        let view = term.view();
+        !view.cursor_visible && view.rows[0][..5].iter().all(|cell| cell.inverse)
+    }));
+    let copy = term.output_len();
+    term.send(b"\x1b[67;46;3;1;8;1_\x1b[67;46;0;0;8;1_");
+    assert!(wait_until(secs(5), || {
+        clipboard_writes(&term.output_since(copy)) == [b"SHIFT".to_vec()]
+    }));
+    let from = term.output_len();
+    term.send(b"\x1b[67;46;3;1;24;1_");
+    assert!(wait_until(secs(5), || {
+        term.view().cursor_visible || !clipboard_writes(&term.output_since(from)).is_empty()
+    }));
+    let copies = clipboard_writes(&term.output_since(from));
+    assert!(
+        copies.is_empty(),
+        "Shift+Ctrl+C copied the selection in Win32 input mode: {copies:?}"
+    );
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert_detach_receipt(&term, "Wheel-shift", address);
 }
 
 #[test]
@@ -1180,7 +1774,7 @@ fn attach_keeps_the_host_page_until_a_blank_main_screen_draws() {
         .project
         .join("blank")
         .is_file()));
-    assert!(wait_for_screen_text(&home, address, "EMPTY-HISTORY-80"));
+    assert!(wait_for_screen_text(&home, address, "EMPTY-HISTORY-40"));
 
     let mut term = run_below_a_shell_page(&home, &["attach", address]);
     wait_for_title(&term, 0, "Blank frame ready");
@@ -1193,7 +1787,7 @@ fn attach_keeps_the_host_page_until_a_blank_main_screen_draws() {
     std::fs::write(home.project.join("draw"), b"").unwrap();
     assert!(
         wait_until(LOADED_TIMEOUT, || {
-            !term.on_alternate_screen() && term.text().contains("FIRST-VISIBLE")
+            term.on_alternate_screen() && term.text().contains("FIRST-VISIBLE")
         }),
         "{}",
         term.text()
@@ -1204,15 +1798,6 @@ fn attach_keeps_the_host_page_until_a_blank_main_screen_draws() {
             .is_some_and(|status| status.success())
     );
     assert_detach_receipt(&term, name, address);
-    assert_primary_transcript_kept(
-        &term,
-        &format!("Attached to {name} ({address}). Press Ctrl+] to detach."),
-        &format!("Detached from {name} ({address}). The agent is still running."),
-        &["EMPTY-HISTORY-01", "EMPTY-HISTORY-25", "FIRST-VISIBLE"],
-    );
-    let history = term.text_with_scrollback();
-    assert_eq!(history.matches("EMPTY-HISTORY-01").count(), 1, "{history}");
-    assert_eq!(history.matches("EMPTY-HISTORY-25").count(), 1, "{history}");
 }
 
 #[test]
@@ -1623,7 +2208,7 @@ fn host_running(home: &TestHome, args: &[&str], env: &[(&str, &str)]) -> TestTer
     .envs(env.iter().copied());
     let term = TestTerminal::spawn(&mut host, 100, 24);
     assert!(
-        term.wait_for(LOADED_TIMEOUT, |view| view.contains("❯")) && !term.on_alternate_screen(),
+        term.wait_for(LOADED_TIMEOUT, |view| view.contains("❯")) && term.on_alternate_screen(),
         "{args:?}: {}",
         term.text_with_scrollback()
     );
@@ -2149,7 +2734,7 @@ fn the_host_shows_the_attached_cli_s_title_and_gets_its_own_back() {
         let mut term = TestTerminal::spawn(&mut host, 100, 24);
         let shown = |term: &TestTerminal| shown_title(&term.output_since(0));
         assert!(
-            term.wait_for(LOADED_TIMEOUT, |view| view.contains("❯")) && !term.on_alternate_screen(),
+            term.wait_for(LOADED_TIMEOUT, |view| view.contains("❯")) && term.on_alternate_screen(),
             "{case}: {}",
             term.text_with_scrollback()
         );

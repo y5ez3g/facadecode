@@ -1595,7 +1595,7 @@ fn late_host_colors_do_not_take_over_antigravity_startup() {
         .env("FAKECLI_LOOK", "agy")
         .env("FAKECLI_COMPOSER_GATE", &gate)
         .env("FAKECLI_KEYS", &keys);
-    let mut term = TestTerminal::spawn(&mut command, 100, 30);
+    let mut term = TestTerminal::spawn_silent(&mut command, 100, 30);
     assert!(term.wait_for_bytes(0, b"\x1b]4;15;?\x1b\\", LOADED_TIMEOUT));
     term.send(b"\x1b]10;rgb:bad-value\x07\x1b]11;rgb:12/");
     // The relay waits for a composer, and for any input that is really a human key.

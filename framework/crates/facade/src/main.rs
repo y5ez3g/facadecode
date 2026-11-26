@@ -41,6 +41,7 @@ use facade_base::api_v1::daemon::{AgentRef, AgentTarget, MachineList, Scope, Sto
 use facade_base::api_v1::daemon_client::DaemonClient;
 use facade_base::model::terminal::DEFAULT_TERMINAL_SIZE;
 use facade_base::process::{EndReason, ProcessExit};
+use facade_base::start::LaunchColors;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -349,9 +350,22 @@ fn local_machine_name() -> String {
     })
 }
 
+/// The person's terminal at a launch.
 struct LaunchConsole {
     size: (u16, u16),
-    probe: attach::Probe,
+    colors: LaunchColors,
+    /// The console a launch in the foreground keeps for its view.
+    view: Option<attach::Probe>,
+}
+
+impl LaunchConsole {
+    fn without_terminal() -> Self {
+        Self {
+            size: DEFAULT_TERMINAL_SIZE,
+            colors: LaunchColors::default(),
+            view: None,
+        }
+    }
 }
 
 /// Foreground commands need a console on both ends of the attachment.
@@ -377,24 +391,50 @@ fn read_screen_tip(agent: &str) -> String {
     }
 }
 
-fn launch_console(detach: bool) -> anyhow::Result<Option<LaunchConsole>> {
+/// The terminal's size and colors, which a CLI in the background gets too: the person attaches to it
+/// from there. A launch without a terminal takes the defaults.
+fn launch_console(detach: bool) -> anyhow::Result<LaunchConsole> {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return Ok(LaunchConsole::without_terminal());
+    }
+    let size = attach::console_size().unwrap_or(DEFAULT_TERMINAL_SIZE);
+    if detach && !asks_colors() {
+        return Ok(LaunchConsole {
+            size,
+            ..LaunchConsole::without_terminal()
+        });
+    }
     if detach {
-        return Ok(None);
+        return Ok(LaunchConsole {
+            size,
+            colors: attach::Probe::read_colors()?,
+            view: None,
+        });
     }
     let probe = attach::Probe::read()?;
-    let size = attach::console_size().unwrap_or(DEFAULT_TERMINAL_SIZE);
-    Ok(Some(LaunchConsole { size, probe }))
+    Ok(LaunchConsole {
+        size,
+        colors: probe.colors,
+        view: Some(probe),
+    })
+}
+
+/// Whether a launch in the background can ask the terminal for its colors: a shell's background job
+/// may not read it, and a terminal without escape sequences would print the question.
+fn asks_colors() -> bool {
+    facade_base::console::owns_input()
+        && std::env::var("TERM").map_or(cfg!(windows), |term| term != "dumb")
 }
 
 /// Shows the agent a start or resume returned, until the person detaches or it ends.
 fn show(
     client: DaemonClient,
     shown: Option<Shown>,
-    terminal: Option<LaunchConsole>,
+    terminal: LaunchConsole,
 ) -> anyhow::Result<i32> {
     match shown {
         Some(Shown { target, opening }) => {
-            let probe = terminal.map(|console| console.probe).unwrap_or_default();
+            let probe = terminal.view.unwrap_or_default();
             attach::attach(client, target, opening, probe, &reconnect)
         }
         None => Ok(0),
@@ -405,7 +445,9 @@ fn show(
 fn missing_cli(options: StartOptions) -> i32 {
     let error = connect_or_start()
         .ok()
-        .and_then(|mut client| commands::start(&mut client, options, None).err())
+        .and_then(|mut client| {
+            commands::start(&mut client, options, &LaunchConsole::without_terminal()).err()
+        })
         .unwrap_or_else(|| {
             errors::Problem::MissingCli {
                 available: Vec::new(),
@@ -476,7 +518,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
             }
             let mut client = connect_or_start()?;
             let terminal = launch_console(detach)?;
-            let shown = commands::start(&mut client, options, terminal.as_ref())?;
+            let shown = commands::start(&mut client, options, &terminal)?;
             show(client, shown, terminal)
         }
         Command::Resume {
@@ -492,7 +534,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
             }
             let mut client = connect_or_start()?;
             let terminal = launch_console(detach)?;
-            let shown = commands::resume(&mut client, reference, terminal.as_ref())?;
+            let shown = commands::resume(&mut client, reference, &terminal)?;
             show(client, shown, terminal)
         }
         Command::Resume { local, machine, .. } => {

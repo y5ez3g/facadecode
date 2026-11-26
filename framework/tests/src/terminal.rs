@@ -138,11 +138,25 @@ impl TestTerminal {
         )
     }
 
+    /// A terminal that answers no query, as one at the far end of a slow connection has not yet.
+    pub fn spawn_silent(command: &mut Command, cols: u16, rows: u16) -> TestTerminal {
+        Self::spawn_answering(command, cols, rows, None)
+    }
+
     pub fn spawn_with_colors(
         command: &mut Command,
         cols: u16,
         rows: u16,
         colors: facade_screen::TerminalColors,
+    ) -> TestTerminal {
+        Self::spawn_answering(command, cols, rows, Some(colors))
+    }
+
+    fn spawn_answering(
+        command: &mut Command,
+        cols: u16,
+        rows: u16,
+        colors: Option<facade_screen::TerminalColors>,
     ) -> TestTerminal {
         #[cfg(unix)]
         let (child, master, mut reader) = start(command, cols, rows);
@@ -150,7 +164,8 @@ impl TestTerminal {
         let (console, child, master, reader) = windows::start(command, cols, rows);
         let writer = Arc::new(Mutex::new(master));
         let mut screen = facade_screen::Screen::new(cols, rows, 1000);
-        screen.set_colors(colors);
+        screen.set_colors(colors.unwrap_or_default());
+        let answers = colors.is_some();
         let screen = Arc::new(Mutex::new(screen));
         let output = Arc::new(Mutex::new(Vec::new()));
         let arrived = Arc::new(std::sync::Condvar::new());
@@ -205,7 +220,7 @@ impl TestTerminal {
                         replies.extend(screen.end_synchronized_update().query_replies);
                     }
                 }
-                if !replies.is_empty() {
+                if answers && !replies.is_empty() {
                     let _ = writer_in.lock().unwrap().write_all(&replies);
                 }
             }

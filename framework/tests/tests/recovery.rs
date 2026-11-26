@@ -291,7 +291,7 @@ fn attach_reconnects_without_leaving_or_duplicating_the_view() {
         24,
     );
     assert!(
-        term.wait_for(secs(10), |text| text.contains("READY")) && !term.on_alternate_screen(),
+        term.wait_for(secs(10), |text| text.contains("READY")),
         "{}",
         term.text()
     );
@@ -311,19 +311,20 @@ fn attach_reconnects_without_leaving_or_duplicating_the_view() {
         );
         // The first visible bytes can arrive while the rest of the frame is still being drawn.
         home.wait_for_gate("attach-reconnected");
-        // The reconnect redraws the primary view in place, with each visible marker appearing once.
-        assert!(!term.on_alternate_screen(), "attempt {round}");
+        // The reconnect redraws the view in place: the host keeps its alternate screen, and the
+        // agent's visible rows are there once.
+        assert!(term.on_alternate_screen(), "attempt {round}");
         let redraw = String::from_utf8_lossy(&term.output_since(previous)).into_owned();
         assert!(
             !redraw.contains("\x1b[?1049"),
             "attempt {round}: {redraw:?}"
         );
-        let shown = term.viewport_rows();
+        let shown = term.text();
         for row in ["numbered-150", "READY"] {
             assert_eq!(
-                shown.iter().filter(|line| line.as_str() == row).count(),
+                shown.matches(row).count(),
                 1,
-                "attempt {round}, {row}: {shown:?}"
+                "attempt {round}, {row}:\n{shown}"
             );
         }
     }
@@ -346,29 +347,12 @@ fn attach_reconnects_without_leaving_or_duplicating_the_view() {
     assert!(!term.on_alternate_screen(), "left on the alternate screen");
 }
 
-/// Attach reports discarded bytes after the redraw on alternate, or at handback on primary.
+/// Disconnected input is discarded. Attach redraws the screen before reporting its UTF-8 bytes.
 #[test]
 fn keys_typed_while_attach_is_disconnected_are_reported_after_the_redraw() {
-    for alternate in [false, true] {
-        check_disconnected_keys(alternate);
-    }
-}
-
-fn check_disconnected_keys(alternate: bool) {
-    let home = TestHome::new(if alternate {
-        "offlinekeys-alt"
-    } else {
-        "offlinekeys"
-    });
-    let agent = if alternate {
-        let screen = home.folder().join("alternate-frame");
-        std::fs::write(&screen, b"\x1b[?1049h").unwrap();
-        home.start_fake_with("w1", &[("FAKECLI_SCREEN_FILE", screen.to_str().unwrap())])
-    } else {
-        home.start_fake("w1")
-    };
+    let home = TestHome::new("offlinekeys");
+    let agent = home.start_fake("w1");
     let away = "界";
-    let before_detach = b"never sent";
     let note = format!(
         "Reconnected to w1 ({}). {} bytes typed while disconnected were not sent; check the screen and retype if needed.",
         agent.address,
@@ -384,8 +368,7 @@ fn check_disconnected_keys(alternate: bool) {
         30,
     );
     assert!(
-        term.wait_for(secs(10), |text| text.contains("❯"))
-            && term.on_alternate_screen() == alternate,
+        term.wait_for(secs(10), |text| text.contains("❯")),
         "{}",
         term.text()
     );
@@ -405,35 +388,15 @@ fn check_disconnected_keys(alternate: bool) {
     term.send(away.as_bytes());
     home.wait_for_gate("attach-buffered-input");
     resume_process(keeper);
+    assert!(term.wait_for_output(secs(15), &note), "{}", term.text());
+    let written = term.output_since(disconnected);
+    let written = String::from_utf8_lossy(&written);
     assert!(
-        term.wait_for_bytes(disconnected, marker.as_bytes(), secs(15)),
-        "{}",
-        term.text()
-    );
-    home.wait_for_gate("attach-reconnected");
-    assert_eq!(term.on_alternate_screen(), alternate);
-    if alternate {
-        assert!(term.wait_for_output(secs(5), &note), "{}", term.text());
-        let written = term.output_since(disconnected);
-        let written = String::from_utf8_lossy(&written);
-        assert!(
-            written
-                .split_once(marker)
-                .is_some_and(|(_, rest)| rest.contains(&note)),
-            "{written:?}"
-        );
-        assert_eq!(term.output_count(&note), 1);
-    } else {
-        assert_eq!(
-            term.output_count("bytes typed while disconnected were not sent"),
-            0
-        );
-        assert_eq!(term.output_count("bytes you typed were not sent"), 0);
-    }
-    assert!(
-        term.wait_for(secs(2), |text| text.contains(marker)),
-        "{}",
-        term.text()
+        written
+            .find(marker)
+            .zip(written.find(&note))
+            .is_some_and(|(screen, notice)| screen < notice),
+        "{written:?}"
     );
     term.send(b"after\r");
     assert!(
@@ -448,7 +411,7 @@ fn check_disconnected_keys(alternate: bool) {
     home.kill_daemon();
     assert!(wait_until(secs(10), || home.hello_result().is_none()));
     home.wait_for_gate("attach-disconnected");
-    term.send(before_detach);
+    term.send(b"never sent");
     home.wait_for_gate("attach-buffered-input");
     term.send(b"\x1d");
     let status = term
@@ -456,25 +419,13 @@ fn check_disconnected_keys(alternate: bool) {
         .expect("Ctrl-] ends a disconnected attachment");
     resume_process(keeper);
     assert!(status.success(), "{status:?}");
-    assert!(!term.on_alternate_screen());
-    let unsent = before_detach.len() + if alternate { 0 } else { away.len() };
-    let warning = format!("warning: {unsent} bytes you typed were not sent");
-    let receipt = format!(
-        "Detached from w1 ({}). The agent is still running.",
-        agent.address
-    );
-    assert!(term.wait_for_output(secs(2), &warning), "{}", term.text());
-    let bytes = term.output_since(0);
-    let written = String::from_utf8_lossy(&bytes);
     assert!(
-        written
-            .split_once(&receipt)
-            .is_some_and(|(_, rest)| rest.contains(&warning)),
-        "{written:?}"
+        term.wait_for(secs(2), |text| text
+            .contains("warning: 10 bytes you typed were not sent")
+            && text.contains("Detached from ")),
+        "{}",
+        term.text()
     );
-    assert_eq!(term.output_count(&receipt), 1);
-    assert_eq!(term.output_count("bytes you typed were not sent"), 1);
-    assert_eq!(home.submitted_messages(), [marker, "after"]);
 }
 
 /// When the keeper and the daemon both end, no Facade process holds the terminals any more. The

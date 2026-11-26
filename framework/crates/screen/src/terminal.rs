@@ -81,6 +81,8 @@ impl Terminal {
             scrolling_history: scrollback,
             // A viewer's terminal may not take kitty keyboard reports.
             kitty_keyboard: false,
+            // Scrolling back shows no page that the CLI took off its screen.
+            keep_cleared_screen: false,
             ..Default::default()
         };
         let mut term = Term::new(config, &size, outbox.clone());

@@ -43,7 +43,6 @@ impl Screen {
 
         let (handed_over, to_reflow) = {
             let mut store = lock(&store);
-            store.invalidate_positions();
             let count = rows_for_alacritty(&mut store, self, old, new, max_rows);
             let handed_over = store.take_newest(count);
             let to_reflow = width_changes.then(|| store.take_all());
@@ -60,7 +59,7 @@ impl Screen {
             let mut store = lock(&store);
             store.dropping = false;
             if let Some(rows) = to_reflow {
-                store::reflow(rows.into_rows(), old.cols, new.cols, |row| store.push(row));
+                store::reflow(rows, old.cols, new.cols, |row| store.push(row));
             }
             // Past its share, alacritty's rows are the newest the store gets.
             let grid = self.terminal.main_grid();

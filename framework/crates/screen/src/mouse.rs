@@ -1,13 +1,40 @@
-//! Mouse wheel reports for the active terminal mode.
+//! The CLI's mouse modes, and wheel reports for them.
+
+use std::io::Write;
 
 use alacritty_terminal::term::TermMode;
 
 use crate::Screen;
 
+const TRACKING_MODES: [(u16, TermMode); 3] = [
+    (1000, TermMode::MOUSE_REPORT_CLICK),
+    (1002, TermMode::MOUSE_DRAG),
+    (1003, TermMode::MOUSE_MOTION),
+];
+
+const ENCODING_MODES: [(u16, TermMode); 2] =
+    [(1006, TermMode::SGR_MOUSE), (1005, TermMode::UTF8_MOUSE)];
+
 impl Screen {
     /// Whether the CLI is tracking mouse events.
     pub fn reports_mouse(&self) -> bool {
         self.terminal.term.mode().intersects(TermMode::MOUSE_MODE)
+    }
+
+    /// Sets the CLI's tracking and encoding modes on a viewer, on or off. In each group the active
+    /// mode comes last, because a terminal can take any reset as turning the whole group off:
+    /// macOS Terminal returns to the legacy encoding on a reset of 1005, whatever 1006 says.
+    pub fn mouse_modes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for modes in [&TRACKING_MODES[..], &ENCODING_MODES] {
+            let mut modes = modes.to_vec();
+            modes.sort_by_key(|&(_, mode)| self.terminal.has(mode));
+            for (number, mode) in modes {
+                let on_off = if self.terminal.has(mode) { 'h' } else { 'l' };
+                write!(out, "\x1b[?{number}{on_off}").unwrap();
+            }
+        }
+        out
     }
 
     /// Encodes platform-neutral wheel input for the current mouse mode. Coordinates are one-based

@@ -1,4 +1,4 @@
-//! Reads the host's colors before a foreground launch and consumes outstanding replies in Attach.
+//! Reads the host's colors before a launch and consumes outstanding replies in Attach.
 
 use std::borrow::Cow;
 use std::io::{self, Write};
@@ -13,7 +13,12 @@ const QUERIES: [&str; 19] = [
     "10;", "11;", "12;", "4;0;", "4;1;", "4;2;", "4;3;", "4;4;", "4;5;", "4;6;", "4;7;", "4;8;",
     "4;9;", "4;10;", "4;11;", "4;12;", "4;13;", "4;14;", "4;15;",
 ];
-const RESPONSE_TIME: Duration = Duration::from_millis(100);
+/// Asks for the terminal's device attributes. Every terminal answers, and after the color replies,
+/// so the answer ends the wait.
+const LAST_QUERY: &[u8] = b"\x1b[c";
+/// The longest a launch waits for the answers. A nearby terminal takes a few milliseconds and one
+/// at the far end of an SSH connection a round trip.
+const RESPONSE_TIME: Duration = Duration::from_secs(1);
 const MAX_VALUE_LEN: usize = 64;
 
 #[derive(Default)]
@@ -38,6 +43,7 @@ impl Probe {
             QUERIES
                 .iter()
                 .try_for_each(|query| write!(out, "\x1b]{query}?\x1b\\"))?;
+            out.write_all(LAST_QUERY)?;
             out.flush()?;
         }
         let mut probe = Self {
@@ -46,14 +52,14 @@ impl Probe {
             ..Self::default()
         };
         let deadline = Instant::now() + RESPONSE_TIME;
-        let mut buf = [0; 4096];
+        let mut buf = [0; super::READ_BYTES];
         loop {
             match reader.read_until(&mut buf, deadline) {
                 Ok(Some(ConsoleRead::Keys(n @ 1..))) => {
                     probe
                         .replies
                         .take_replies(&buf[..n], &mut probe.keys, Some(&mut probe.colors));
-                    if !probe.replies.unanswered.contains(&true) {
+                    if !probe.replies.awaiting {
                         break;
                     }
                 }
@@ -63,6 +69,18 @@ impl Probe {
         }
         probe.reader = Some(reader);
         Ok(probe)
+    }
+
+    /// Reads the colors for a launch that leaves the console to the shell. What the person typed
+    /// meanwhile goes back to the shell.
+    pub(crate) fn read_colors() -> io::Result<LaunchColors> {
+        let mut probe = Self::read()?;
+        let lease = probe.lease.take();
+        let colors = probe.colors;
+        let (_, keys, _) = probe.into_input();
+        drop(lease);
+        facade_base::console::return_input(&keys);
+        Ok(colors)
     }
 
     pub(super) fn take_lease(&mut self) -> Option<ConsoleLease> {
@@ -78,6 +96,8 @@ impl Probe {
 
 #[derive(Default)]
 pub(super) struct Replies {
+    /// Whether an answer can still arrive: not after the answer to the last query.
+    awaiting: bool,
     unanswered: [bool; QUERIES.len()],
     pending: Vec<u8>,
 }
@@ -85,6 +105,7 @@ pub(super) struct Replies {
 impl Replies {
     fn awaiting_queries() -> Self {
         Self {
+            awaiting: true,
             unanswered: [true; QUERIES.len()],
             pending: Vec::new(),
         }
@@ -92,7 +113,7 @@ impl Replies {
 
     /// Filters one Attach read without changing the launch colors.
     pub(super) fn filter<'a>(&mut self, input: &'a [u8]) -> Cow<'a, [u8]> {
-        if !self.unanswered.contains(&true) {
+        if !self.awaiting {
             return Cow::Borrowed(input);
         }
         let mut keys = Vec::new();
@@ -115,13 +136,13 @@ impl Replies {
     ) {
         self.pending.extend_from_slice(input);
         let mut bytes = self.pending.as_slice();
-        while self.unanswered.contains(&true) {
+        while self.awaiting {
             let Some(start) = bytes.iter().position(|&byte| byte == 0x1b) else {
                 break;
             };
             keys.extend_from_slice(&bytes[..start]);
             bytes = &bytes[start..];
-            match color_reply(bytes, &self.unanswered) {
+            match reply(bytes, &self.unanswered) {
                 Reply::Partial => {
                     let consumed = self.pending.len() - bytes.len();
                     self.pending.drain(..consumed);
@@ -131,7 +152,11 @@ impl Replies {
                     keys.push(bytes[0]);
                     bytes = &bytes[1..];
                 }
-                Reply::Complete { slot, value, len } => {
+                Reply::Last { len } => {
+                    self.awaiting = false;
+                    bytes = &bytes[len..];
+                }
+                Reply::Color { slot, value, len } => {
                     self.unanswered[slot] = false;
                     if let Some(colors) = colors.as_deref_mut() {
                         let color = rgb_color(value);
@@ -154,16 +179,31 @@ impl Replies {
 enum Reply<'a> {
     Partial,
     Other,
-    Complete {
+    Color {
         slot: usize,
         value: &'a [u8],
         len: usize,
     },
+    /// The device attributes.
+    Last {
+        len: usize,
+    },
 }
 
-fn color_reply<'a>(bytes: &'a [u8], unanswered: &[bool; QUERIES.len()]) -> Reply<'a> {
+fn reply<'a>(bytes: &'a [u8], unanswered: &[bool; QUERIES.len()]) -> Reply<'a> {
+    if let Some(attributes) = bytes.strip_prefix(b"\x1b[?") {
+        return match attributes
+            .iter()
+            .take(MAX_VALUE_LEN)
+            .position(|byte| !(byte.is_ascii_digit() || *byte == b';'))
+        {
+            Some(end) if attributes[end] == b'c' => Reply::Last { len: 3 + end + 1 },
+            None if attributes.len() < MAX_VALUE_LEN => Reply::Partial,
+            _ => Reply::Other,
+        };
+    }
     let Some(tail) = bytes.strip_prefix(b"\x1b]") else {
-        return if bytes == b"\x1b" {
+        return if b"\x1b[?".starts_with(bytes) {
             Reply::Partial
         } else {
             Reply::Other
@@ -202,7 +242,7 @@ fn reply_value(value: &[u8], slot: usize, prefix_len: usize) -> Reply<'_> {
         [0x1b, b'\\', ..] => 2,
         _ => return Reply::Other,
     };
-    Reply::Complete {
+    Reply::Color {
         slot,
         value: &value[..end],
         len: prefix_len + end + terminator,
@@ -253,5 +293,23 @@ mod tests {
         assert_eq!(colors.foreground, Some([0x11, 0x22, 0x33]));
         assert_eq!(colors.cursor, Some([0x00, 0x11, 0x22]));
         assert_eq!(keys, b"firstsecond\x1b[Alast");
+    }
+
+    #[test]
+    fn the_device_attributes_end_the_wait() {
+        let mut colors = LaunchColors::default();
+        let mut replies = Replies::awaiting_queries();
+        let mut keys = Vec::new();
+        replies.take_replies(
+            b"ls\x1b]11;rgb:ffff/ffff/ffff\x07\x1b[?1",
+            &mut keys,
+            Some(&mut colors),
+        );
+        assert!(replies.awaiting);
+        replies.take_replies(b";2c\x1b[?x", &mut keys, Some(&mut colors));
+        assert!(!replies.awaiting);
+        assert_eq!(colors.background, Some([0xff; 3]));
+        assert_eq!(colors.foreground, None);
+        assert_eq!(keys, b"ls\x1b[?x");
     }
 }

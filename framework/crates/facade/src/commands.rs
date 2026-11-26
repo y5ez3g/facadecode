@@ -20,7 +20,7 @@ use facade_base::api_v1::daemon::{
 use facade_base::api_v1::daemon_client::{Cut, DaemonClient, upgrading};
 use facade_base::api_v1::{NoArgs, Size};
 use facade_base::model::agent::{HowEnded, WaitKind};
-use facade_base::model::terminal::{DEFAULT_TERMINAL_SIZE, display_line, plain};
+use facade_base::model::terminal::{display_line, plain};
 use facade_base::time::parse_iso_time;
 
 use crate::errors::{self, AgentCommand, Problem};
@@ -42,7 +42,7 @@ const ROSTER_COLUMNS: [&str; 8] = [
 pub(crate) fn start(
     client: &mut DaemonClient,
     options: StartOptions,
-    terminal: Option<&LaunchConsole>,
+    terminal: &LaunchConsole,
 ) -> anyhow::Result<Option<Shown>> {
     let StartOptions {
         name,
@@ -56,7 +56,7 @@ pub(crate) fn start(
         return Err(Problem::MissingCli { available }.into());
     };
 
-    let (cols, rows) = terminal.map_or(DEFAULT_TERMINAL_SIZE, |console| console.size);
+    let (cols, rows) = terminal.size;
     let folder_is_default = workdir.is_none();
     let selected = machine.clone();
     let (machine, folder) = start_folder(client, machine, workdir).map_err(|error| {
@@ -83,7 +83,7 @@ pub(crate) fn start(
         .map_err(|error| {
             errors::start_failed(cli, selected.as_deref(), worktree.as_deref(), error)
         })?;
-    if terminal.is_some() {
+    if terminal.view.is_some() {
         return Ok(Some(shown(&started.agent, Opening::Started)));
     }
     println_or_end!("Started {} in the background.", label(&started.agent));
@@ -175,9 +175,9 @@ fn selects_local_machine(client: &mut DaemonClient, selector: &str) -> anyhow::R
 pub(crate) fn resume(
     client: &mut DaemonClient,
     reference: String,
-    terminal: Option<&LaunchConsole>,
+    terminal: &LaunchConsole,
 ) -> anyhow::Result<Option<Shown>> {
-    let (cols, rows) = terminal.map_or(DEFAULT_TERMINAL_SIZE, |console| console.size);
+    let (cols, rows) = terminal.size;
     let mut env = terminal_environment(terminal);
     env.insert("PWD".into(), current_dir()?);
     let resumed = client
@@ -192,7 +192,7 @@ pub(crate) fn resume(
         })
         .map_err(|error| errors::agent_failed(AgentCommand::Resume, &reference, error))?;
     let cli = &resumed.agent.cli;
-    if terminal.is_some() {
+    if terminal.view.is_some() {
         let opening = if resumed.from_saved_session == Some(true) {
             Opening::SavedSession { cli: cli.clone() }
         } else {
@@ -705,11 +705,9 @@ fn made_request_id() -> String {
     format!("facade-{}-{}-1", std::process::id(), since_1970.as_millis())
 }
 
-fn terminal_environment(terminal: Option<&LaunchConsole>) -> BTreeMap<String, String> {
+fn terminal_environment(terminal: &LaunchConsole) -> BTreeMap<String, String> {
     let mut env = environment();
-    if let Some(console) = terminal {
-        facade_base::start::carry_terminal_colors(&mut env, &console.probe.colors);
-    }
+    facade_base::start::carry_terminal_colors(&mut env, &terminal.colors);
     env
 }
 

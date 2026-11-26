@@ -59,11 +59,11 @@ fn start_uses_default_size_when_terminal_size_is_zero() {
     );
 }
 
-/// Foreground launch queries the host terminal before its CLI asks any color questions. A resume
-/// uses the new host palette. The outer emulator is fed directly through the Unix test PTY.
+/// A launch asks the host terminal before its CLI asks any color questions, in the background too. A
+/// resume uses the new host palette. The outer emulator is fed directly through the Unix test PTY.
 #[cfg(unix)]
 #[test]
-fn foreground_start_and_resume_answer_the_first_cli_color_queries() {
+fn start_and_resume_answer_the_first_cli_color_queries() {
     let home = TestHome::new("launch-colors");
     let transcript = home.folder().join("color-queries");
     let query = |number: &str, terminator: &str| format!("\x1b]{number};?{terminator}");
@@ -87,6 +87,16 @@ fn foreground_start_and_resume_answer_the_first_cli_color_queries() {
             &["resume", "painter"][..],
             ([240, 221, 232], [32, 26, 29]),
             ["f0f0/dddd/e8e8", "2020/1a1a/1d1d"],
+        ),
+        (
+            &["resume", "-d", "painter"][..],
+            ([10, 20, 30], [40, 50, 60]),
+            ["0a0a/1414/1e1e", "2828/3232/3c3c"],
+        ),
+        (
+            &["start", "-d", "--name", "detached", "fake"][..],
+            ([70, 80, 90], [100, 110, 120]),
+            ["4646/5050/5a5a", "6464/6e6e/7878"],
         ),
     ];
     for (turn, (args, (fg, bg), [foreground, background])) in cases.into_iter().enumerate() {
@@ -120,27 +130,37 @@ fn foreground_start_and_resume_answer_the_first_cli_color_queries() {
                 ansi,
             },
         );
-        assert!(
-            term.wait_for(LOADED_TIMEOUT, |text| text.contains("❯")),
-            "{}",
-            term.text()
-        );
-        assert!(
-            term.reports_mouse(),
-            "a foreground launch preserves the guest's mouse tracking request"
-        );
+        let detached = args.contains(&"-d");
+        if !detached {
+            assert!(
+                term.wait_for(LOADED_TIMEOUT, |text| text.contains("❯")),
+                "{}",
+                term.text()
+            );
+            assert!(
+                term.reports_mouse(),
+                "a foreground launch preserves the guest's mouse tracking request"
+            );
+        }
         assert!(
             wait_until(LOADED_TIMEOUT, || std::fs::read(&keys)
                 .is_ok_and(|input| input.ends_with(b"\x1b[?6c"))),
             "guest input: {:?}",
             std::fs::read(&keys),
         );
-        term.send(b"\x1d");
+        if !detached {
+            term.send(b"\x1d");
+        }
         assert!(
             term.wait_exit(secs(10))
                 .is_some_and(|status| status.success())
         );
-        home.run_facade_ok(&["stop", "painter"]);
+        let name = if args.contains(&"detached") {
+            "detached"
+        } else {
+            "painter"
+        };
+        home.run_facade_ok(&["stop", name]);
         let input = std::fs::read(&keys).unwrap();
         assert_eq!(String::from_utf8_lossy(&input), expected);
     }
@@ -192,38 +212,21 @@ fn interactive_start_propagates_process_exit_status() {
             term.text()
         );
         assert_eq!(term.output_count(&said), 1);
+        // The agent's text, including the hint it prints on its way out, leaves with its view:
+        // the restored text ends with the opening line and the receipt.
         let text = term.text_with_scrollback();
-        let opening = format!("Started {name} ({reference}). Press Ctrl+] to detach.");
-        if id == "a1" {
-            // The primary transcript and native resume hint stay between opening and handback.
-            let mut remaining = text.as_str();
-            for line in [
-                opening.as_str(),
-                "INTERACTIVE-FRAME",
-                "To continue this session, run:",
-                "demo resume stored-session",
-                said.as_str(),
-            ] {
-                assert_eq!(text.matches(line).count(), 1, "{script}: {line}: {text}");
-                let (_, rest) = remaining
-                    .split_once(line)
-                    .unwrap_or_else(|| panic!("{script}: {line} out of order: {text}"));
-                remaining = rest;
-            }
-            assert!(remaining.trim().is_empty(), "{script}: {text}");
-        } else {
-            for shown in [
-                "INTERACTIVE-FRAME",
-                "To continue this session",
-                "demo resume",
-            ] {
-                assert!(!text.contains(shown), "{script}: {text}");
-            }
-            assert!(
-                text.trim_end().ends_with(&format!("{opening}\n{said}")),
-                "{script}: {text}"
-            );
+        for shown in [
+            "INTERACTIVE-FRAME",
+            "To continue this session",
+            "demo resume",
+        ] {
+            assert!(!text.contains(shown), "{script}: {text}");
         }
+        let opening = format!("Started {name} ({reference}). Press Ctrl+] to detach.");
+        assert!(
+            text.trim_end().ends_with(&format!("{opening}\n{said}")),
+            "{script}: {text}"
+        );
         // The ended agent's status says how it ended.
         let inspected = home.run_facade_ok(&["status", reference]);
         assert!(

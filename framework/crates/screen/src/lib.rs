@@ -40,8 +40,7 @@ mod store_tests;
 mod tests;
 
 pub use program_status::{BlockKind, ReportedState, StatusEvent, StatusReport};
-pub use read::{PrimaryHistory, Reading};
-pub use redraw::HistoryAppend;
+pub use read::Reading;
 pub use selection::SelectionView;
 pub use store::SCROLLBACK_BUDGET;
 pub use view::{ScreenView, VisibleCell};

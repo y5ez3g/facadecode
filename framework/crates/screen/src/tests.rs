@@ -879,3 +879,44 @@ fn a_redraw_inside_an_unfinished_sequence_continues_correctly() {
         assert_redraw_continuation(&prefix, suffix, 40, 8, b"\x1b[?1049h\x1b[33mold");
     }
 }
+
+#[test]
+fn mouse_modes_put_the_active_mode_of_each_group_last() {
+    let mut screen = Screen::new(10, 2, 0);
+    for (output, modes) in [
+        (
+            b"".as_slice(),
+            b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1005l".as_slice(),
+        ),
+        (
+            b"\x1b[?1000h\x1b[?1002h\x1b[?1006h",
+            b"\x1b[?1000l\x1b[?1003l\x1b[?1002h\x1b[?1005l\x1b[?1006h",
+        ),
+        (
+            b"\x1b[?1003h\x1b[?1005h",
+            b"\x1b[?1000l\x1b[?1002l\x1b[?1003h\x1b[?1006l\x1b[?1005h",
+        ),
+    ] {
+        screen.feed(output);
+        assert_eq!(
+            String::from_utf8(screen.mouse_modes()).unwrap(),
+            String::from_utf8_lossy(modes)
+        );
+    }
+}
+
+#[test]
+fn a_selection_takes_no_blanks_at_a_line_s_end() {
+    let mut screen = Screen::new(40, 3, 0);
+    screen.feed("see 你好 x   \r\nnext".as_bytes());
+    let view = screen.selection_view(0);
+    assert_eq!(view.text((5, 1), (40, 2)), "你好 x\nnext");
+}
+
+#[test]
+fn a_cleared_screen_is_not_kept_as_scrollback() {
+    let mut screen = Screen::new(20, 3, 100);
+    screen.feed(b"one\r\ntwo\r\nthree\r\nfour");
+    screen.feed(b"\x1b[2J\x1b[Hnext");
+    assert_eq!(screen.text(10), ["one", "next"]);
+}

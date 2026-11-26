@@ -351,6 +351,10 @@ pub struct Config {
 
     /// OSC52 support mode.
     pub osc52: Osc52,
+
+    /// Whether the main screen's text is kept in the scrollback when the screen is cleared.
+    // Facade (cleared screens)
+    pub keep_cleared_screen: bool,
 }
 
 impl Default for Config {
@@ -362,6 +366,8 @@ impl Default for Config {
             vi_mode_cursor_style: Default::default(),
             kitty_keyboard: Default::default(),
             osc52: Default::default(),
+            // Facade (cleared screens)
+            keep_cleared_screen: true,
         }
     }
 }
@@ -1796,7 +1802,8 @@ impl<T: EventListener> Handler for Term<T> {
                 self.selection = self.selection.take().filter(|s| !s.intersects_range(range));
             },
             ansi::ClearMode::All => {
-                if self.mode.contains(TermMode::ALT_SCREEN) {
+                // Facade (cleared screens)
+                if self.mode.contains(TermMode::ALT_SCREEN) || !self.config.keep_cleared_screen {
                     self.grid.reset_region(..);
                 } else {
                     let old_offset = self.grid.display_offset();

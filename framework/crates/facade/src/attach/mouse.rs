@@ -1,0 +1,671 @@
+//! The mouse in what the host sends: SGR reports while Attach has the mouse, and the cursor keys that
+//! a terminal app makes of the wheel while it keeps the mouse itself.
+
+use std::time::{Duration, Instant};
+
+use facade_base::console::PointerAction;
+use facade_base::desktop::{self, Arrows, Point};
+
+use super::win32_key_prefix;
+
+const ESCAPE: &[u8] = b"\x1b";
+const CSI: &[u8] = b"\x1b[";
+const SS3: &[u8] = b"\x1bO";
+/// A held key repeats this often at least. Its last repeat can be read once it is up again.
+const KEY_REPEAT: Duration = Duration::from_millis(150);
+
+/// What Attach takes out of the input. The rest travels to the CLI as it came.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Take {
+    Reports,
+    /// The terminal app has the drags and right clicks of a CLI that tracks the mouse: Attach takes
+    /// a left press until it turns into a click, which goes on to the CLI, or a drag, takes right
+    /// clicks, and takes the app's reply that it has followed what Attach wrote, if one is to come.
+    Lends {
+        awaits_reply: bool,
+    },
+    /// The host sends application cursor keys, and the wheel as Up and Down. The CLI asked for such
+    /// keys, or gets the ordinary ones.
+    CursorKeys {
+        down: Arrows,
+        application: bool,
+    },
+    Nothing,
+}
+
+pub(super) enum MouseInput<'a> {
+    Keys(&'a [u8]),
+    Wheel(i16),
+    Pointer {
+        col: u16,
+        row: u16,
+        action: PointerAction,
+    },
+    /// The left button went down while the terminal app has drags: a click or a drag follows.
+    Press,
+    /// The left button moved while down: the terminal app takes the drag over from `from`, where the
+    /// button went down.
+    Drag {
+        from: Option<Point>,
+    },
+    /// The right button came up.
+    RightClick,
+    /// The reply to [`FOLLOWED_QUERY`].
+    Followed,
+}
+
+/// Asks the terminal app to reply once it has followed everything written before.
+pub(super) const FOLLOWED_QUERY: &[u8] = b"\x1b[5n";
+const FOLLOWED_REPLY: &[u8] = b"\x1b[0n";
+
+#[derive(Default)]
+pub(super) struct LocalMouseInput {
+    /// The start of what may be a report or a cursor key, for [`Self::give_up`] if the rest does not
+    /// follow.
+    pending: Vec<u8>,
+    /// The last Up or Down the person pressed, and when.
+    pressed: Option<(Arrow, Instant)>,
+    /// The key whose release belongs to the wheel as well.
+    wheel_key: Option<Arrow>,
+    /// The left press held back while it can still turn into a click or a drag.
+    left_press: Option<LeftPress>,
+    /// Whether the left button moved since it went down, so that its reports are the terminal app's.
+    dragged: bool,
+}
+
+/// A left press as the host reported it, the cell it reported, and where the pointer was.
+struct LeftPress {
+    report: Vec<u8>,
+    cell: (u16, u16),
+    at: Option<Point>,
+}
+
+/// What Attach makes of a report while the terminal app has drags and right clicks.
+enum Lent {
+    /// It reaches no one.
+    Kept,
+    Press,
+    /// The press of a click, which goes on to the CLI with the release.
+    Click(Vec<u8>),
+    Drag(Option<Point>),
+    RightClick,
+}
+
+impl LocalMouseInput {
+    /// Keeps what is unfinished, as a final Escape may be. A report begun under local ownership is
+    /// still consumed after a handoff.
+    pub(super) fn read(&mut self, keys: &[u8], take: Take, mut emit: impl FnMut(MouseInput<'_>)) {
+        let mut joined = std::mem::take(&mut self.pending);
+        let had_pending = !joined.is_empty();
+        joined.extend_from_slice(keys);
+        match take {
+            Take::CursorKeys { down, application } if !joined.starts_with(b"\x1b[<") => {
+                self.read_cursor_keys(&joined, down, application, &mut emit);
+            }
+            _ => self.read_reports(&joined, take, had_pending, &mut emit),
+        }
+    }
+
+    fn read_reports(
+        &mut self,
+        keys: &[u8],
+        take: Take,
+        had_pending: bool,
+        emit: &mut impl FnMut(MouseInput<'_>),
+    ) {
+        let local = take != Take::Nothing;
+        let lends = matches!(take, Take::Lends { .. });
+        let awaits_reply = take == Take::Lends { awaits_reply: true };
+        let mut start = 0;
+        let mut search = 0;
+        let mut candidate = had_pending.then_some(0);
+        loop {
+            if local && candidate.is_none() {
+                candidate = keys[search..]
+                    .windows(CSI.len())
+                    .position(|window| window == CSI)
+                    .map(|at| search + at);
+            }
+            let Some(at) = candidate.take() else {
+                break;
+            };
+            if awaits_reply && keys[at..].starts_with(FOLLOWED_REPLY) {
+                emit(MouseInput::Keys(&keys[start..at]));
+                emit(MouseInput::Followed);
+                start = at + FOLLOWED_REPLY.len();
+                search = start;
+                continue;
+            }
+            if awaits_reply && FOLLOWED_REPLY.starts_with(&keys[at..]) {
+                emit(MouseInput::Keys(&keys[start..at]));
+                self.pending.extend_from_slice(&keys[at..]);
+                return;
+            }
+            match sgr_report(&keys[at..]) {
+                Report::Complete {
+                    length,
+                    event,
+                    right,
+                } if lends => {
+                    let report = &keys[at..at + length];
+                    let Some(lent) = self.lent(report, event, right) else {
+                        search = at + length;
+                        continue;
+                    };
+                    emit(MouseInput::Keys(&keys[start..at]));
+                    match lent {
+                        Lent::Kept => {}
+                        Lent::Press => emit(MouseInput::Press),
+                        Lent::Click(press) => {
+                            emit(MouseInput::Keys(&press));
+                            emit(MouseInput::Keys(report));
+                        }
+                        Lent::Drag(from) => emit(MouseInput::Drag { from }),
+                        Lent::RightClick => emit(MouseInput::RightClick),
+                    }
+                    start = at + length;
+                    search = start;
+                }
+                Report::Complete { length, event, .. } => {
+                    emit(MouseInput::Keys(&keys[start..at]));
+                    if local && let Some(event) = event {
+                        emit(event);
+                    }
+                    start = at + length;
+                    search = start;
+                }
+                Report::Incomplete => {
+                    emit(MouseInput::Keys(&keys[start..at]));
+                    self.pending.extend_from_slice(&keys[at..]);
+                    return;
+                }
+                Report::Other => search = at + 1,
+            }
+        }
+        let mut rest = &keys[start..];
+        if local && let Some(before) = rest.strip_suffix(ESCAPE) {
+            self.pending.extend_from_slice(ESCAPE);
+            rest = before;
+        }
+        emit(MouseInput::Keys(rest));
+    }
+
+    /// What a report comes to while the terminal app has drags and right clicks; None leaves it to
+    /// the CLI.
+    fn lent(
+        &mut self,
+        report: &[u8],
+        event: Option<MouseInput<'static>>,
+        right: Option<Button>,
+    ) -> Option<Lent> {
+        if let Some(right) = right {
+            return Some(match right {
+                Button::Up => Lent::RightClick,
+                Button::Down => Lent::Kept,
+            });
+        }
+        let Some(MouseInput::Pointer { col, row, action }) = event else {
+            return None;
+        };
+        match action {
+            PointerAction::LeftDown => {
+                self.dragged = false;
+                self.left_press = Some(LeftPress {
+                    report: report.to_vec(),
+                    cell: (col, row),
+                    at: desktop::pointer(),
+                });
+                Some(Lent::Press)
+            }
+            PointerAction::LeftDrag => match &self.left_press {
+                Some(press) if press.cell != (col, row) => {
+                    let from = press.at;
+                    self.left_press = None;
+                    self.dragged = true;
+                    Some(Lent::Drag(from))
+                }
+                Some(_) => Some(Lent::Kept),
+                None => self.dragged.then_some(Lent::Kept),
+            },
+            PointerAction::LeftUp => match self.left_press.take() {
+                Some(press) => Some(Lent::Click(press.report)),
+                None => std::mem::take(&mut self.dragged).then_some(Lent::Kept),
+            },
+            PointerAction::RightDown => None,
+        }
+    }
+
+    /// Tells the wheel from the cursor keys it is sent as: the person presses none.
+    fn read_cursor_keys(
+        &mut self,
+        keys: &[u8],
+        down: Arrows,
+        application: bool,
+        emit: &mut impl FnMut(MouseInput<'_>),
+    ) {
+        let mut start = 0;
+        let mut search = 0;
+        while let Some(at) = keys[search..].iter().position(|&byte| byte == 0x1b) {
+            let at = search + at;
+            let (length, key) = match cursor_key(&keys[at..]) {
+                Cursor::Key { length, key } => (length, key),
+                Cursor::Incomplete => {
+                    emit(MouseInput::Keys(&keys[start..at]));
+                    self.pending.extend_from_slice(&keys[at..]);
+                    return;
+                }
+                Cursor::Other => {
+                    search = at + 1;
+                    continue;
+                }
+            };
+            let end = at + length;
+            let sent = &keys[at..end];
+            let tick = match key {
+                Key::Application(b'A') => self.wheel(Arrow::Up, down),
+                Key::Application(b'B') => self.wheel(Arrow::Down, down),
+                Key::Application(_) => None,
+                Key::Win32(arrow, true) => {
+                    let tick = self.wheel(arrow, down);
+                    self.wheel_key = tick.map(|_| arrow);
+                    tick
+                }
+                Key::Win32(arrow, false) if self.wheel_key == Some(arrow) => {
+                    self.wheel_key = None;
+                    Some(0)
+                }
+                Key::Win32(..) => None,
+            };
+            search = end;
+            match (tick, key) {
+                (Some(tick), _) => {
+                    emit(MouseInput::Keys(&keys[start..at]));
+                    emit(MouseInput::Wheel(tick));
+                    start = end;
+                }
+                (None, Key::Application(last)) if !application => {
+                    emit(MouseInput::Keys(&keys[start..at]));
+                    emit(MouseInput::Keys(&[0x1b, b'[', last]));
+                    start = end;
+                }
+                (None, _) => debug_assert!(!sent.is_empty()),
+            }
+        }
+        emit(MouseInput::Keys(&keys[start..]));
+    }
+
+    /// The tick of the wheel an arrow key stands for; none if the person pressed it.
+    fn wheel(&mut self, arrow: Arrow, down: Arrows) -> Option<i16> {
+        let now = Instant::now();
+        let (is_down, tick) = match arrow {
+            Arrow::Up => (down.up, 1),
+            Arrow::Down => (down.down, -1),
+        };
+        if is_down {
+            self.pressed = Some((arrow, now));
+            return None;
+        }
+        let repeats = self
+            .pressed
+            .is_some_and(|(pressed, at)| pressed == arrow && now < at + KEY_REPEAT);
+        (!repeats).then_some(tick)
+    }
+
+    /// Whether the rest of a report or a key is still to come.
+    pub(super) fn unfinished(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// What is held once no more comes: keys, unless it is clear that a report was cut off.
+    pub(super) fn give_up(&mut self) -> Vec<u8> {
+        let mut held = std::mem::take(&mut self.pending);
+        if held.starts_with(b"\x1b[<") {
+            held.clear();
+        }
+        held
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Button {
+    Down,
+    Up,
+}
+
+enum Report {
+    Complete {
+        length: usize,
+        event: Option<MouseInput<'static>>,
+        /// What the right button did, if the report is of it.
+        right: Option<Button>,
+    },
+    Incomplete,
+    Other,
+}
+
+fn sgr_report(bytes: &[u8]) -> Report {
+    let Some(fields) = bytes.strip_prefix(b"\x1b[<") else {
+        return if CSI.starts_with(bytes) {
+            Report::Incomplete
+        } else {
+            Report::Other
+        };
+    };
+    // Each of the three decimal fields fits in five digits, bounding the pending report.
+    let mut numbers = [0u32; 3];
+    let mut separators = 0;
+    let mut digits = 0;
+    for (at, &byte) in fields.iter().enumerate() {
+        match byte {
+            b'0'..=b'9' if digits < 5 => {
+                numbers[separators] = 10 * numbers[separators] + u32::from(byte - b'0');
+                digits += 1;
+            }
+            b';' if separators < 2 && digits > 0 => {
+                separators += 1;
+                digits = 0;
+            }
+            b'M' | b'm' if separators == 2 && digits > 0 => {
+                let right = matches!(numbers[0] & !28, 2 | 34).then_some(if byte == b'm' {
+                    Button::Up
+                } else {
+                    Button::Down
+                });
+                return Report::Complete {
+                    length: 3 + at + 1,
+                    event: sgr_event(numbers, byte),
+                    right,
+                };
+            }
+            _ => return Report::Other,
+        }
+    }
+    Report::Incomplete
+}
+
+fn sgr_event([button, col, row]: [u32; 3], final_byte: u8) -> Option<MouseInput<'static>> {
+    let action = match (button & !28, final_byte) {
+        (64, b'M') => return Some(MouseInput::Wheel(1)),
+        (65, b'M') => return Some(MouseInput::Wheel(-1)),
+        (0, b'M') => PointerAction::LeftDown,
+        (32, b'M') => PointerAction::LeftDrag,
+        (0, b'm') => PointerAction::LeftUp,
+        (2, b'M') => PointerAction::RightDown,
+        _ => return None,
+    };
+    Some(MouseInput::Pointer {
+        col: u16::try_from(col).ok()?,
+        row: u16::try_from(row).ok()?,
+        action,
+    })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Arrow {
+    Up,
+    Down,
+}
+
+#[derive(Clone, Copy)]
+enum Key {
+    /// A cursor key in its application form, by its final byte.
+    Application(u8),
+    /// A record of an arrow key that a terminal's bytes can stand for, and whether it goes down.
+    Win32(Arrow, bool),
+}
+
+enum Cursor {
+    Key { length: usize, key: Key },
+    Incomplete,
+    Other,
+}
+
+fn cursor_key(bytes: &[u8]) -> Cursor {
+    if let Some(&last @ (b'A' | b'B' | b'C' | b'D' | b'F' | b'H')) =
+        bytes.strip_prefix(SS3).and_then(<[u8]>::first)
+    {
+        let key = Key::Application(last);
+        return Cursor::Key { length: 3, key };
+    }
+    if SS3.starts_with(bytes) || starts_arrow_record(bytes) {
+        return Cursor::Incomplete;
+    }
+    let Some((record, rest)) = win32_key_prefix(bytes) else {
+        return Cursor::Other;
+    };
+    let arrow = match record.virtual_key {
+        b"38" => Arrow::Up,
+        b"40" => Arrow::Down,
+        _ => return Cursor::Other,
+    };
+    if record.has_modifiers() || record.is_enhanced() {
+        return Cursor::Other;
+    }
+    Cursor::Key {
+        length: bytes.len() - rest.len(),
+        key: Key::Win32(arrow, !record.is_release()),
+    }
+}
+
+/// Whether a read cut off what can be a record of Up or Down. The Windows console gives its input in
+/// pieces of a fixed length.
+fn starts_arrow_record(bytes: &[u8]) -> bool {
+    [b"\x1b[38;".as_slice(), b"\x1b[40;"].iter().any(|start| {
+        start.starts_with(bytes)
+            || bytes.strip_prefix(*start).is_some_and(|fields| {
+                fields.len() < 24
+                    && fields
+                        .iter()
+                        .all(|&byte| byte.is_ascii_digit() || byte == b';')
+            })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NONE: Arrows = Arrows {
+        up: false,
+        down: false,
+    };
+    const UP: Arrows = Arrows {
+        up: true,
+        down: false,
+    };
+
+    /// What reaches the CLI, and how far the wheel turned.
+    fn routed(parts: [&[u8]; 2], take: Take) -> (String, i16) {
+        let mut mouse = LocalMouseInput::default();
+        let mut keys = Vec::new();
+        let mut ticks = 0;
+        for part in parts {
+            mouse.read(part, take, |event| match event {
+                MouseInput::Keys(more) => keys.extend_from_slice(more),
+                MouseInput::Wheel(more) => ticks += more,
+                MouseInput::Pointer { .. } | MouseInput::Press => {}
+                MouseInput::Drag { .. } => ticks += 10,
+                MouseInput::RightClick => ticks += 100,
+                MouseInput::Followed => ticks += 1000,
+            });
+        }
+        keys.extend(mouse.give_up());
+        (String::from_utf8(keys).unwrap(), ticks)
+    }
+
+    fn cursor_keys(input: &str, down: Arrows, application: bool) -> (String, i16) {
+        let take = Take::CursorKeys { down, application };
+        let whole = routed([input.as_bytes(), b""], take);
+        for cut in 1..input.len() {
+            let (first, rest) = input.as_bytes().split_at(cut);
+            assert_eq!(routed([first, rest], take), whole, "{input:?} cut at {cut}");
+        }
+        whole
+    }
+
+    #[test]
+    fn reports_cut_off_anywhere_stay_with_attach() {
+        let input = b"\x1b[<64;30;8M\x1b[<64;30;8M\x1b[<65;130;48M";
+        for cut in 1..input.len() {
+            let parts = [&input[..cut], &input[cut..]];
+            let routed = routed(parts, Take::Reports);
+            assert_eq!(routed, (String::new(), 1), "cut at {cut}");
+        }
+        let input = b"a\x1b[A\x1b\x1b[<64;30;8Mb\x1b";
+        for cut in 1..input.len() {
+            let parts = [&input[..cut], &input[cut..]];
+            let routed = routed(parts, Take::Reports);
+            assert_eq!(routed, ("a\x1b[A\x1bb\x1b".into(), 1), "cut at {cut}");
+        }
+    }
+
+    #[test]
+    fn a_cli_that_tracks_the_mouse_gets_its_reports() {
+        let input = "x\x1b[<0;3;4M\x1b[<2;3;4M\x1bOA\x1b";
+        let routed = routed([input.as_bytes(), b""], Take::Nothing);
+        assert_eq!(routed, (input.into(), 0));
+    }
+
+    #[test]
+    fn a_right_click_is_taken_from_a_cli_s_reports() {
+        let input = "x\x1b[<2;3;4M\x1b[<34;3;5M\x1b[<2;3;5my\x1b[<64;1;1M\x1b[<35;2;2M";
+        let others = "xy\x1b[<64;1;1M\x1b[<35;2;2M";
+        for cut in 1..input.len() {
+            let (first, rest) = input.as_bytes().split_at(cut);
+            let take = Take::Lends {
+                awaits_reply: false,
+            };
+            let routed = routed([first, rest], take);
+            assert_eq!(routed, (others.into(), 100), "cut at {cut}");
+        }
+    }
+
+    #[test]
+    fn a_click_goes_on_to_the_cli_and_a_drag_to_the_terminal_app() {
+        let lends = |input: &str| {
+            let whole = routed(
+                [input.as_bytes(), b""],
+                Take::Lends {
+                    awaits_reply: false,
+                },
+            );
+            for cut in 1..input.len() {
+                let (first, rest) = input.as_bytes().split_at(cut);
+                let take = Take::Lends {
+                    awaits_reply: false,
+                };
+                assert_eq!(routed([first, rest], take), whole, "{input:?} cut at {cut}");
+            }
+            whole
+        };
+        let click = "\x1b[<0;3;4M\x1b[<0;3;4m";
+        assert_eq!(lends(&format!("a{click}b")), (format!("a{click}b"), 0));
+        // A press that moves within its cell is still a click.
+        assert_eq!(
+            lends("\x1b[<0;3;4M\x1b[<32;3;4M\x1b[<0;3;4m"),
+            (click.into(), 0)
+        );
+        // A drag is the terminal app's from where it began; a click after it is the CLI's again.
+        assert_eq!(
+            lends(&format!(
+                "\x1b[<0;3;4M\x1b[<32;5;4M\x1b[<32;6;4M\x1b[<0;6;4m{click}"
+            )),
+            (click.into(), 10)
+        );
+        // Another button's reports and the motion of no button stay the CLI's.
+        let others = "\x1b[<1;3;4M\x1b[<1;3;4m\x1b[<35;9;9M";
+        assert_eq!(lends(others), (others.into(), 0));
+    }
+
+    #[test]
+    fn the_terminal_app_s_reply_stays_with_attach() {
+        let input = "x\x1b[0ny\x1b[<64;3;4M\x1b[0m";
+        for cut in 1..input.len() {
+            let (first, rest) = input.as_bytes().split_at(cut);
+            let parts = [first, rest];
+            let reply = |awaits_reply| routed(parts, Take::Lends { awaits_reply });
+            assert_eq!(
+                reply(true),
+                ("xy\x1b[<64;3;4M\x1b[0m".into(), 1000),
+                "cut at {cut}"
+            );
+            assert_eq!(reply(false), (input.into(), 0), "cut at {cut}");
+        }
+    }
+
+    #[test]
+    fn an_arrow_key_that_is_not_down_is_the_wheel() {
+        assert_eq!(
+            cursor_keys("a\x1bOA\x1bOA\x1bOA\x1bOBb", NONE, false),
+            ("ab".into(), 2)
+        );
+        assert_eq!(
+            cursor_keys("a\x1bOAb", UP, true),
+            ("a\x1bOAb".into(), 0),
+            "the person pressed Up"
+        );
+        assert_eq!(
+            cursor_keys("\x1bOA\x1bOB", UP, false),
+            ("\x1b[A".into(), -1)
+        );
+    }
+
+    #[test]
+    fn the_other_cursor_keys_reach_the_cli_as_it_asked_for_them() {
+        let others = "\x1bOC\x1bOD\x1bOH\x1bOF";
+        assert_eq!(cursor_keys(others, NONE, true), (others.into(), 0));
+        assert_eq!(
+            cursor_keys(others, NONE, false),
+            ("\x1b[C\x1b[D\x1b[H\x1b[F".into(), 0)
+        );
+        // F1, a modified arrow key, ordinary keys and Escape are no cursor keys of the wheel.
+        let keys = "\x1bOP\x1b[1;2A\x1b[A\x1bxé\x1b";
+        assert_eq!(cursor_keys(keys, NONE, false), (keys.into(), 0));
+    }
+
+    #[test]
+    fn the_wheel_is_told_from_arrow_key_records() {
+        let wheel = "\x1b[38;72;0;1;0;1_\x1b[38;72;0;0;0;1_";
+        assert_eq!(cursor_keys(wheel, NONE, false), (String::new(), 1));
+        assert_eq!(cursor_keys(wheel, UP, false), (wheel.into(), 0));
+        let keyboard = "\x1b[38;72;0;1;256;1_\x1b[38;72;0;0;256;1_";
+        assert_eq!(
+            cursor_keys(keyboard, NONE, false),
+            (keyboard.into(), 0),
+            "the record says that the keyboard sent it"
+        );
+        let with_shift = "\x1b[38;72;0;1;16;1_\x1b[38;72;0;0;16;1_";
+        assert_eq!(cursor_keys(with_shift, NONE, false), (with_shift.into(), 0));
+        let letter = "\x1b[65;30;97;1;0;1_\x1b[65;30;97;0;0;1_";
+        assert_eq!(cursor_keys(letter, NONE, false), (letter.into(), 0));
+    }
+
+    #[test]
+    fn the_last_repeat_of_a_key_can_be_read_after_its_release() {
+        let mut mouse = LocalMouseInput::default();
+        let mut ticks = 0;
+        for down in [UP, NONE] {
+            let take = Take::CursorKeys {
+                down,
+                application: false,
+            };
+            mouse.read(b"\x1bOA", take, |event| {
+                if let MouseInput::Wheel(more) = event {
+                    ticks += more;
+                }
+            });
+        }
+        assert_eq!(ticks, 0);
+        std::thread::sleep(KEY_REPEAT);
+        let take = Take::CursorKeys {
+            down: NONE,
+            application: false,
+        };
+        mouse.read(b"\x1bOA", take, |event| {
+            if let MouseInput::Wheel(more) = event {
+                ticks += more;
+            }
+        });
+        assert_eq!(ticks, 1);
+    }
+}
