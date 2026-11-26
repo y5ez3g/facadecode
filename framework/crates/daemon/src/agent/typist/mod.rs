@@ -180,6 +180,20 @@ impl Typing {
         matches!(self.kind, CallKind::Sequence(_))
     }
 
+    /// Up and Down, with at most one Enter at the end of a key call.
+    pub(super) fn menu_keys(&self) -> bool {
+        matches!(self.kind, CallKind::Keys(_))
+            && self
+                .strokes
+                .iter()
+                .enumerate()
+                .all(|(index, stroke)| match stroke {
+                    Stroke::Key(Key::Up | Key::Down) => true,
+                    Stroke::Key(Key::Enter) => index + 1 == self.strokes.len(),
+                    _ => false,
+                })
+    }
+
     fn validate_text(text: &str) -> Result<(), String> {
         match first_control(text) {
             Some(problem) => Err(format!(

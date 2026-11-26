@@ -360,9 +360,10 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
 `Typist`: types calls and messages into the input box, one at a time, and settles each message.
 
 - **Owns:** the calls and messages waiting, the paste under way, where its bytes are in the terminal, its pauses, and what it submitted; the probe under way, and what this run's probes found of each row they tried (`probed`).
-- The actor allows unstyled hint probes for automatic delivery to a freshly launched input. Starting with a
-  session, recovery, resume, an unconfirmed paste or accepting external input leaves plain writing on the
-  normal draft path. External input that arrives during an unstyled hint probe waits for its Space and
+- The actor allows unstyled hint probes for automatic delivery to a freshly launched input. Up, Down and a
+  final Enter sent directly to a recognized native menu before the input box appears keep the probe available.
+  Other external input, starting with a session, recovery, resume and an unconfirmed paste leave plain writing
+  on the normal draft path. External input that arrives during an unstyled hint probe waits for its Space and
   Backspace to finish.
 - **Keeps:**
   - Each call goes in whole and in order; a pause counts from when its bytes reached the terminal.
