@@ -4439,19 +4439,28 @@ mod tests {
             actor.pending_delivery.as_mut().unwrap().read_through =
                 Some(actor.terminal.output_position());
             cli.write_output(before_enter.as_bytes()).unwrap();
+            actor
+                .terminal
+                .wait_for_queued_output(before_enter.len())
+                .await;
             write_input(&mut actor).await;
             assert_eq!(cli.read_input(&mut received[..1]).unwrap(), 1);
             assert_eq!(received[0], b'\r');
             cli.write_output(after_enter.as_bytes()).unwrap();
             if let Some(after_edit) = after_edit {
+                actor
+                    .terminal
+                    .wait_for_queued_output(before_enter.len() + after_enter.len())
+                    .await;
                 actor.take_keys(Instant::now(), vec![3]);
                 write_input(&mut actor).await;
                 assert_eq!(cli.read_input(&mut received[..1]).unwrap(), 1);
                 assert_eq!(received[0], 3);
                 cli.write_output(after_edit.as_bytes()).unwrap();
             }
-            actor.take_terminal(TerminalEvent::Wrote);
             let len = before_enter.len() + after_enter.len() + after_edit.unwrap_or_default().len();
+            actor.terminal.wait_for_queued_output(len).await;
+            actor.take_terminal(TerminalEvent::Wrote);
             read_buffered_frames(&mut actor, len).await;
             assert_eq!(was_delivered(&settled), delivered, "{case}");
             if case.starts_with("empty then") {
@@ -6222,6 +6231,7 @@ mod tests {
         let (mut actor, mut cli, settled) = pending_paste(&home).await;
         assert!(actor.pending_delivery.is_some());
         cli.write_output(BLOCKED).unwrap();
+        actor.terminal.wait_for_queued_output(BLOCKED.len()).await;
         let event = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
         assert!(matches!(event, TerminalEvent::Read));
         actor.take_terminal(event);
@@ -6272,6 +6282,7 @@ mod tests {
         assert_eq!(actor.terminal.written(), written);
 
         cli.write_output(BLOCKED).unwrap();
+        actor.terminal.wait_for_queued_output(BLOCKED.len()).await;
         let event = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
         assert!(matches!(event, TerminalEvent::Read));
         actor.take_terminal(event);
@@ -7066,6 +7077,7 @@ mod tests {
         draw_input(&mut actor, "a message");
         let frame = format!("\x1b[?2026h{}", plain_claude_frame("", ""));
         cli.write_output(frame.as_bytes()).unwrap();
+        actor.terminal.wait_for_queued_output(frame.len()).await;
 
         write_input(&mut actor).await;
         actor.take_terminal(TerminalEvent::Wrote);

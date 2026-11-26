@@ -873,6 +873,23 @@ impl Terminal {
             .queued_output_bytes()
     }
 
+    /// Waits for a test's output to reach the Unix PTY reader without consuming it.
+    #[cfg(test)]
+    pub(super) async fn wait_for_queued_output(&self, bytes: usize) {
+        use tokio::time::{Duration, sleep, timeout};
+
+        // A Unix PTY can make output readable after the slave's write has returned.
+        if cfg!(unix) && bytes != 0 {
+            timeout(Duration::from_secs(5), async {
+                while self.queued_output_bytes().expect("the test PTY is open") < bytes {
+                    sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .expect("the test's output reaches the PTY reader");
+        }
+    }
+
     /// Reads at most the remainder of a previously sampled output prefix.
     pub(super) fn try_read_now(&mut self, limit: usize) -> io::Result<Option<usize>> {
         let read_size = self.read_limit().min(limit);
@@ -1635,19 +1652,25 @@ mod tests {
             terminal.ready(TerminalWait::ReadAndWrite, |_, _| true),
         );
         assert!(waits.await.is_err(), "arm a read before the earlier output");
-        cli.write_output(b"earlier output").unwrap();
+        let earlier = b"earlier output";
+        let newer = b"newer output";
+        cli.write_output(earlier).unwrap();
+        terminal.wait_for_queued_output(earlier.len()).await;
         terminal.push(b"\r");
         terminal.observe_output_after(1);
         assert!(matches!(next(&mut terminal).await, TerminalEvent::Wrote));
-        cli.write_output(b"newer output").unwrap();
+        cli.write_output(newer).unwrap();
+        terminal
+            .wait_for_queued_output(earlier.len() + newer.len())
+            .await;
 
         terminal.push(b"new input");
         assert!(matches!(next(&mut terminal).await, TerminalEvent::Wrote));
         assert!(matches!(next(&mut terminal).await, TerminalEvent::Read));
-        assert_eq!(terminal.output(), b"earlier output");
+        assert_eq!(terminal.output(), earlier);
         assert!(terminal.output_precedes_submission());
         assert!(matches!(next(&mut terminal).await, TerminalEvent::Read));
-        assert_eq!(terminal.output(), b"newer output");
+        assert_eq!(terminal.output(), newer);
         assert!(!terminal.output_precedes_submission());
     }
 
@@ -1663,7 +1686,10 @@ mod tests {
             terminal.ready(TerminalWait::ReadAndWrite, |_, _| true),
         );
         assert!(armed.await.is_err());
-        cli.write_output(b"earlier redraw").unwrap();
+        let earlier = b"earlier redraw";
+        let newer = b"new redraw";
+        cli.write_output(earlier).unwrap();
+        terminal.wait_for_queued_output(earlier.len()).await;
         terminal.push(b"\x7f");
         terminal.observe_cleanup_through(2);
         let mut fence = None;
@@ -1682,14 +1708,17 @@ mod tests {
         assert_eq!(terminal.written(), 1);
         assert!(!terminal.cleanup_output_seen());
 
-        cli.write_output(b"new redraw").unwrap();
+        cli.write_output(newer).unwrap();
+        terminal
+            .wait_for_queued_output(earlier.len() + newer.len())
+            .await;
         assert!(matches!(next(&mut terminal).await, TerminalEvent::Read));
-        assert_eq!(terminal.output(), b"earlier redraw");
+        assert_eq!(terminal.output(), earlier);
         assert!(!terminal.cleanup_output_seen());
         assert!(!terminal.read_starts_at_cleanup());
 
         assert!(matches!(next(&mut terminal).await, TerminalEvent::Read));
-        assert_eq!(terminal.output(), b"new redraw");
+        assert_eq!(terminal.output(), newer);
         assert!(terminal.cleanup_output_seen());
         assert!(terminal.read_starts_at_cleanup());
     }
