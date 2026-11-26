@@ -283,7 +283,11 @@ What Facade asks of the operating system. `framework/crates/base/src/platform/`.
   file is its face, the same on every system; each system's code is beside it, in
   `<module>/unix.rs` and `<module>/windows.rs`, or in the face itself for the Unix code that was
   there before Windows. On Windows the terminal I/O thread, one thread shared by every terminal, around one
-  completion port, takes terminal reads and writes and `until_ended`'s wait completion packets.
+  completion port, takes terminal reads and writes and wait completion packets from `until_ended`
+  and the one-shot timer used by `terminal::InputTimer`. Callers select a monotonic time and
+  can request a precise wait through the same interface on all platforms. On Windows the timer
+  releases its handle and completion packet when replaced or dropped. When native setup
+  fails, the same due time is awaited through Tokio.
   Both `terminal` and `unix_process` use the private `io_thread` module, which uses neither;
   `unix_process` re-exports its `WaitPacket` for the keeper. Received descriptors are close-on-exec
   before any child can start: atomically on Linux, under

@@ -413,6 +413,9 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     time running; a reading of anything else starts it again. Where somebody typed into the input since the
     paste, only the message's whole text is its draft: a placeholder may stand for a paste of theirs.
     Codex queues an ordinary message with Tab while Working. The start prompt and recovered pastes use Enter.
+    On Windows the actor uses a single high-resolution wait for the current draft's settle time
+    when it comes before the delivery deadline. Waking lets the actor check that same draft and
+    the original deadline again. A new wake time or an ended actor releases the previous wait.
   - What the typist put into the input box is its own from the paste through submission or cleanup.
     No other paste or probe begins meanwhile. After the submission key goes in, the typist keeps
     that ownership until a complete frame reads as an empty input. A menu, question, unread frame
@@ -437,7 +440,9 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses
   `new(agent, rule, console_typing, DeliveryHandle)`, `push`, `deliver`, `deliver_first`, `finish_paste`,
   `fail_prompt(prompt, reason)`, `fail_all(written, why)`, `hold_pastes()`, and
-  `step(now, written, queued, modes, writes, observe) -> Step { write, wake, permit }`. The `writes` argument
+  `step(now, written, queued, modes, writes, observe) -> Step { write, wake, permit, draft_wake }`.
+  `draft_wake` marks a wake for the current draft's settle time. When that is the next wake, the
+  actor requests a precise wait through Base's `InputTimer`. The `writes` argument
   (`BoxWrites`) tells the typist whether it may write into the input box on its own. The `observe`
   callback gives the current reading in `InputObservation` and the draft proved submitted by the
   person's Enter. That proof may come from earlier frames in the same read. A pending observation

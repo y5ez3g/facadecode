@@ -3,6 +3,7 @@
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::Instant;
 
 use windows_sys::Win32::Foundation::{
     ERROR_BROKEN_PIPE, ERROR_IO_INCOMPLETE, ERROR_OPERATION_ABORTED, ERROR_PIPE_NOT_CONNECTED,
@@ -17,12 +18,77 @@ use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
 use windows_sys::Win32::System::Pipes::{
     CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT, PeekNamedPipe,
 };
-use windows_sys::Win32::System::Threading::CreateEventW;
+use windows_sys::Win32::System::Threading::{
+    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CreateEventW, CreateWaitableTimerExW,
+    SYNCHRONIZATION_SYNCHRONIZE, SetWaitableTimer, TIMER_MODIFY_STATE,
+};
 
 use super::super::io_thread::{self, Operation};
 
 /// The most bytes one read takes, and one write gives.
 const CHUNK_BYTES: usize = 64 * 1024;
+
+/// Waits until the monotonic instant through a one-shot timer on the terminal I/O port.
+/// Dropping the future releases the timer and its completion packet.
+pub(super) async fn wait_until_precise(at: Instant) -> io::Result<()> {
+    if at <= Instant::now() {
+        return Ok(());
+    }
+    // SAFETY: no name or security attributes, so the new handle is private to this caller.
+    let raw = unsafe {
+        CreateWaitableTimerExW(
+            std::ptr::null(),
+            std::ptr::null(),
+            CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+            SYNCHRONIZATION_SYNCHRONIZE | TIMER_MODIFY_STATE,
+        )
+    };
+    if raw.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: raw is a new handle with one owner.
+    let timer = unsafe { OwnedHandle::from_raw_handle(raw) };
+    loop {
+        let remaining = at.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        let due = -(remaining.as_nanos().div_ceil(100).min(i64::MAX as u128) as i64);
+        // SAFETY: the timer and relative due time stay valid through the call.
+        let armed =
+            unsafe { SetWaitableTimer(timer.as_raw_handle(), &due, 0, None, std::ptr::null(), 0) };
+        if armed == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        io_thread::wait_for_signal(timer.as_handle()).await?;
+    }
+}
+
+#[cfg(test)]
+mod timer_tests {
+    use super::*;
+    use std::future::{Future, poll_fn};
+    use std::task::Poll;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn dropping_a_wait_leaves_the_next_timer_free_to_wake_at_its_due_time() {
+        let mut first = Box::pin(wait_until_precise(Instant::now() + Duration::from_secs(10)));
+        poll_fn(|cx| {
+            assert!(first.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        drop(first);
+
+        let due = Instant::now() + Duration::from_millis(20);
+        tokio::time::timeout(Duration::from_secs(3), wait_until_precise(due))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(Instant::now() >= due);
+    }
+}
 
 /// The input pipe's write end, the output pipe's read end, the signal pipe's write end until it is
 /// let go of, and the CLI's job.

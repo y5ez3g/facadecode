@@ -72,14 +72,15 @@ pub(crate) struct Step {
     pub(crate) write: Vec<u8>,
     pub(crate) wake: Option<Instant>,
     pub(crate) permit: Option<PasteGrant>,
+    /// The next step is due to the stability time of our visible draft.
+    pub(crate) draft_wake: bool,
 }
 
 impl Step {
     fn wait(at: Option<Instant>) -> Self {
         Self {
-            write: Vec::new(),
             wake: at,
-            permit: None,
+            ..Self::default()
         }
     }
 }
@@ -652,7 +653,7 @@ impl Typist {
         Step {
             write: b" ".to_vec(),
             wake: Some(now + PROBE_READ),
-            permit: None,
+            ..Step::default()
         }
     }
 
@@ -677,7 +678,7 @@ impl Typist {
                 Some(Step {
                     write,
                     wake: Some(now + PROBE_READ),
-                    permit: None,
+                    ..Step::default()
                 })
             }
             Next::Done(verdict) => {
@@ -1445,6 +1446,7 @@ impl Typist {
             write,
             wake: Some(wake),
             permit: Some(grant),
+            ..Step::default()
         }
     }
 
@@ -1533,8 +1535,8 @@ impl Typist {
             draft.stable = Some((now, left));
         }
         let since = draft.stable.as_ref().map_or(now, |(since, _)| *since);
-        let settled = since + facade_rules::settle_time(rule, &draft.paste.text);
-        let settled = settled.max(paused.unwrap_or(now));
+        let stable_at = since + facade_rules::settle_time(rule, &draft.paste.text);
+        let settled = stable_at.max(paused.unwrap_or(now));
         if now >= settled && !own {
             // Someone else took the paste out of the input.
             let outcome = draft.unsubmitted();
@@ -1565,7 +1567,11 @@ impl Typist {
         } else {
             now + READ_INTERVAL
         };
-        Step::wait(Some(look.min(deadline)))
+        let wake = look.min(deadline);
+        Step {
+            draft_wake: own && may_write && now < wake && wake == stable_at && wake < deadline,
+            ..Step::wait(Some(wake))
+        }
     }
 
     /// One step after the submission key reached the terminal. A following paste can use the
@@ -1659,7 +1665,7 @@ impl Typist {
             return Step {
                 write,
                 wake: Some(until),
-                permit: None,
+                ..Step::default()
             };
         }
         // A question in place of the input, or an unread one, shows nothing of it. Until it showed,

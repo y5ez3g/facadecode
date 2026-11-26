@@ -17,6 +17,7 @@ use facade_base::api_v1::Size;
 use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::model::message::DeliveryFailure;
 use facade_base::process::{ProcessExit, ProcessState};
+use facade_base::terminal::InputTimer;
 use facade_base::{
     model::agent::{AgentRef, AgentsUpdate, ManagedAgent, ManagedAgentState, ToolsState},
     model::terminal::{DEFAULT_TERMINAL_SIZE, InputInfo, InputState},
@@ -216,6 +217,7 @@ fn new_actor(start: ActorStart, links: Links, recovered: bool) -> anyhow::Result
         catch_up_at: None,
         publish_at: None,
         typist_at: None,
+        draft_typist_at: None,
         replies_dropped: false,
         untouched_input,
         holds_input_for_probe: false,
@@ -300,6 +302,7 @@ struct Actor {
     catch_up_at: Option<Instant>,
     publish_at: Option<Instant>,
     typist_at: Option<Instant>,
+    draft_typist_at: Option<Instant>,
     /// Dropped terminal-query replies were logged.
     replies_dropped: bool,
     /// Automatic delivery can probe an unstyled hint before it accepts any external input.
@@ -379,6 +382,7 @@ impl Actor {
         Box::pin(self.begin(recovered, allow_auto_trust, colors)).await;
         // A recovered run's first viewer needs the glyph from its restored evidence.
         self.publish_state();
+        let mut input_timer = InputTimer::default();
         loop {
             if !self.typist.pasting()
                 && !self.typist.saving_paste()
@@ -397,6 +401,8 @@ impl Actor {
             let held_at = self.held_wake();
             let wait = self.terminal_wait(full);
             let writing = self.screen().checkpoint_running();
+            let precise = self.typist_at.is_some() && self.typist_at == self.draft_typist_at;
+            let typist_sleep = input_timer.sleep_until(self.typist_at, precise);
             let screen = self
                 .screen
                 .as_mut()
@@ -424,7 +430,7 @@ impl Actor {
                     self.state.tools_connection(open);
                     self.state_changed = true;
                 }
-                _ = sleep_until(self.typist_at), if self.typist_at.is_some() => self.type_next(),
+                _ = typist_sleep, if self.typist_at.is_some() => self.type_next(),
                 // The start's steps read the screen, which a quiet agent reads no more.
                 _ = sleep_until(self.ready_at), if self.ready_at.is_some() && !self.quiet => {
                     self.step_start();
@@ -1616,6 +1622,7 @@ impl Actor {
     /// Lets the typist take its next step and queues what it writes.
     fn type_next(&mut self) {
         self.typist_at = None;
+        self.draft_typist_at = None;
         // A quiet agent types nothing: the next daemon types what is left.
         if self.quiet {
             return;
@@ -1712,6 +1719,9 @@ impl Actor {
             .min()
             .filter(|_| self.typist.reads_input() || self.escape_may_edit);
         self.typist_at = step.wake.into_iter().chain(shown_by).min();
+        if step.draft_wake {
+            self.draft_typist_at = step.wake;
+        }
         let submitted = self.take_typed();
         if pasting && !self.typist.pasting() && !submitted {
             self.untouched_input = false;

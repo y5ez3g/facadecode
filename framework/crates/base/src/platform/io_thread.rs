@@ -1,7 +1,7 @@
 //! The terminal I/O thread: one thread around one completion port, which every terminal's pipe
 //! ends are bound to. A read or write is issued by the task that wants it, overlapped; the thread
-//! takes its completion and wakes that task. It also takes the wait completion packets of
-//! processes whose end a task awaits. It starts on first use and runs for as long as the process.
+//! takes its completion and wakes that task. It also takes wait completion packets for process
+//! exits and waitable timers. It starts on first use and runs for as long as the process.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -26,16 +26,16 @@ use windows_sys::Win32::System::IO::{
 use windows_sys::Win32::System::WindowsProgramming::FILE_SKIP_COMPLETION_PORT_ON_SUCCESS;
 
 /// The key of a read's or write's completion, whose overlapped pointer is its [`Operation`]. A
-/// process end's key is any other.
+/// wait completion packet's key is any other.
 const OPERATION_KEY: usize = 0;
 
 /// How many completions the thread takes at once.
 const BATCH: usize = 64;
 
-/// The thread's port, and the process ends that tasks await, by key.
+/// The thread's port and the objects that tasks await, by key.
 struct IoThread {
     port: OwnedHandle,
-    ends: Mutex<HashMap<usize, Arc<Completion>>>,
+    waits: Mutex<HashMap<usize, Arc<Completion>>>,
     next_key: AtomicUsize,
 }
 
@@ -63,7 +63,7 @@ fn start() -> io::Result<IoThread> {
         .spawn(move || take_completions(port_for_thread))?;
     Ok(IoThread {
         port,
-        ends: Mutex::new(HashMap::new()),
+        waits: Mutex::new(HashMap::new()),
         next_key: AtomicUsize::new(OPERATION_KEY + 1),
     })
 }
@@ -99,9 +99,9 @@ fn take_completions(port: usize) {
                     .done
                     .finish(result_of(status, entry.dwNumberOfBytesTransferred as usize));
             } else if let Some(Ok(thread)) = THREAD.get() {
-                let ends = lock(&thread.ends);
-                if let Some(end) = ends.get(&entry.lpCompletionKey) {
-                    end.finish(Ok(0));
+                let waits = lock(&thread.waits);
+                if let Some(wait) = waits.get(&entry.lpCompletionKey) {
+                    wait.finish(Ok(0));
                 }
             }
         }
@@ -263,20 +263,19 @@ pub(super) fn bind(file: BorrowedHandle<'_>) -> io::Result<()> {
     Ok(())
 }
 
-/// Returns once `process` has ended, through a wait completion packet armed on the thread's port.
-/// Cancel-safe: dropping it cancels the packet.
-pub(crate) async fn process_end(process: BorrowedHandle<'_>) -> io::Result<()> {
+/// Returns when the target signals. Dropping the wait cancels its completion packet.
+pub(crate) async fn wait_for_signal(target: BorrowedHandle<'_>) -> io::Result<()> {
     let thread = io_thread()?;
     let key = thread.next_key.fetch_add(1, Ordering::Relaxed);
-    let end = Arc::new(Completion::default());
-    lock(&thread.ends).insert(key, Arc::clone(&end));
+    let completion = Arc::new(Completion::default());
+    lock(&thread.waits).insert(key, Arc::clone(&completion));
     let _awaited = Awaited { thread, key };
-    let _packet = WaitPacket::arm(thread.port.as_handle(), process, key)?;
-    end.done().await;
+    let _packet = WaitPacket::arm(thread.port.as_handle(), target, key)?;
+    completion.done().await;
     Ok(())
 }
 
-/// A process end's key, forgotten when the wait ends or is dropped.
+/// A completion key, forgotten when the wait ends or is dropped.
 struct Awaited {
     thread: &'static IoThread,
     key: usize,
@@ -284,7 +283,7 @@ struct Awaited {
 
 impl Drop for Awaited {
     fn drop(&mut self) {
-        lock(&self.thread.ends).remove(&self.key);
+        lock(&self.thread.waits).remove(&self.key);
     }
 }
 
@@ -325,16 +324,16 @@ unsafe extern "system" {
 /// The access that asks for every right the caller may have.
 const MAXIMUM_ALLOWED: u32 = 0x0200_0000;
 
-/// A process's end, armed to arrive as a completion on a completion port with a key: for the
-/// keeper's loop and the terminal I/O thread. Dropping it cancels the wait.
+/// A waitable object's signal, armed to arrive on a completion port with a key. Dropping it
+/// cancels the wait.
 pub struct WaitPacket(OwnedHandle);
 
 impl WaitPacket {
-    /// Arms a wait completion packet that completes on `port` with `key` once `process` ends.
+    /// Arms a wait completion packet that completes on `port` with `key` when `target` signals.
     /// The completion's overlapped pointer is null.
     pub fn arm(
         port: BorrowedHandle<'_>,
-        process: BorrowedHandle<'_>,
+        target: BorrowedHandle<'_>,
         key: usize,
     ) -> io::Result<WaitPacket> {
         let mut raw: HANDLE = std::ptr::null_mut();
@@ -352,7 +351,7 @@ impl WaitPacket {
                 NtAssociateWaitCompletionPacket(
                     packet.0.as_raw_handle(),
                     port.as_raw_handle(),
-                    process.as_raw_handle(),
+                    target.as_raw_handle(),
                     key as *const c_void,
                     std::ptr::null(),
                     0,

@@ -6,8 +6,13 @@
 //! CLI's job. The daemon reads and writes every Windows terminal on one thread of its own, the
 //! terminal I/O thread, around a completion port; it starts on first use.
 
+use std::future::{Future, pending};
 use std::io;
+#[cfg(windows)]
+use std::pin::Pin;
 use std::sync::OnceLock;
+
+use tokio::time::Instant;
 
 #[cfg(unix)]
 mod unix;
@@ -17,6 +22,57 @@ use unix as imp;
 mod windows;
 #[cfg(windows)]
 use windows as imp;
+
+#[cfg(windows)]
+type PreciseSleep = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+/// The next time a terminal's caller needs to check its input.
+#[derive(Default)]
+pub struct InputTimer {
+    #[cfg(windows)]
+    waiting: Option<(Instant, PreciseSleep)>,
+}
+
+impl InputTimer {
+    /// Waits for `due`, using a precise wait where available when requested. One native wait
+    /// survives unrelated events until the due time or precision changes. Dropping the timer
+    /// cancels it.
+    pub fn sleep_until(
+        &mut self,
+        due: Option<Instant>,
+        precise: bool,
+    ) -> impl Future<Output = ()> + '_ {
+        #[cfg(windows)]
+        {
+            let native_due = due.filter(|_| precise);
+            if native_due != self.waiting.as_ref().map(|(at, _)| *at) {
+                self.waiting = native_due.map(|at| {
+                    let sleep: PreciseSleep = Box::pin(async move {
+                        if imp::wait_until_precise(at.into_std()).await.is_err() {
+                            tokio::time::sleep_until(at).await;
+                        }
+                    });
+                    (at, sleep)
+                });
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = precise;
+
+        async move {
+            #[cfg(windows)]
+            if let Some((_, sleep)) = self.waiting.as_mut() {
+                sleep.as_mut().await;
+                self.waiting = None;
+                return;
+            }
+            match due {
+                Some(due) => tokio::time::sleep_until(due).await,
+                None => pending().await,
+            }
+        }
+    }
+}
 
 /// How many bytes a terminal takes per millisecond of a paste: the wait before a paste's Enter is
 /// counted from it. A pseudo console takes a paste far slower than a PTY.

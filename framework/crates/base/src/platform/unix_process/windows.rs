@@ -110,7 +110,7 @@ impl ProcessObservation {
     /// Returns once the process ended, through a wait completion packet on the terminal I/O
     /// thread's completion port. Needs a tokio runtime.
     pub async fn until_ended(&self) {
-        let ended = crate::platform::io_thread::process_end(self.as_handle()).await;
+        let ended = crate::platform::io_thread::wait_for_signal(self.as_handle()).await;
         if ended.is_err() {
             while !matches!(self.ended(), Ok(Some(true))) {
                 tokio::time::sleep(PROC_POLL_INTERVAL).await;
