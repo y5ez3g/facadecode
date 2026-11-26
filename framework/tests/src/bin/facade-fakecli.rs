@@ -309,6 +309,8 @@ struct FakeCli {
     panel_drawn_ready: bool,
     /// A first frame was drawn.
     drawn: bool,
+    /// The lines of `FAKECLI_SCREEN_FILE` printed before the first frame.
+    printed: usize,
     /// Terminal queries the next frame sends, before it draws.
     queries: Vec<String>,
     /// `FAKECLI_OWN_GLYPH`: the title without its glyph, written once the terminal answers the query
@@ -719,15 +721,14 @@ impl FakeCli {
         if self.sync {
             frame.push_str("\x1b[?2026h");
         }
-        // The first frame clears with ED 2, which a terminal such as Facade's moves up into its
-        // scrollback, as a CLI started below earlier output pushes it up. Later frames erase below
-        // the top-left corner instead: a real CLI's redraws leave no copy of themselves in the
-        // scrollback.
-        frame.push_str(if std::mem::replace(&mut self.drawn, true) {
-            "\x1b[H\x1b[J"
-        } else {
-            "\x1b[H\x1b[2J"
-        });
+        // The first frame scrolls what was printed before it up into the scrollback, as a CLI
+        // started below earlier output pushes it up. Every frame then erases below the top-left
+        // corner: a real CLI's redraws leave no copy of themselves in the scrollback.
+        if !std::mem::replace(&mut self.drawn, true) && self.printed > 0 {
+            let pushed = self.printed.min(rows.saturating_sub(1));
+            frame.push_str(&format!("\x1b[{rows};1H{}", "\n".repeat(pushed)));
+        }
+        frame.push_str("\x1b[H\x1b[J");
         if self.panel {
             self.panel_drawn_ready = self.server_ready();
             let server = match (self.native, self.panel_drawn_ready) {
@@ -1833,6 +1834,7 @@ fn run() -> anyhow::Result<()> {
         server_answered,
         panel_drawn_ready: false,
         drawn: false,
+        printed: 0,
         queries: std::env::var("FAKECLI_TITLE")
             .map(|title| match std::env::var("FAKECLI_OWN_GLYPH") {
                 Ok(glyph) => vec![format!("\x1b]2;{glyph} {title}\x07")],
@@ -1894,6 +1896,7 @@ fn run() -> anyhow::Result<()> {
     if let Some(file) = std::env::var_os("FAKECLI_SCREEN_FILE") {
         for line in std::fs::read_to_string(file)?.lines() {
             write!(out, "{line}\r\n")?;
+            app.printed += 1;
         }
     }
     let _ = out.write_all(b"\x1b[?2004h");
