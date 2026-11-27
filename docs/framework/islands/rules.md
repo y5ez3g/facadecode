@@ -274,10 +274,12 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - Qoder's `waiting_above` matches its resume spinner, divider and mode strip on consecutive
     physical rows immediately above the input frame. While they show, an empty or uncertain input
     reads `unknown` without a Space probe. A recognized draft still reads `draft`.
-  - Cursor sets `drawn_cursor` on its prompt-row rule. While the terminal cursor is hidden, a single
-    inverse cell at or after the input start of a prompt row or one of its wrapped rows supplies the
-    cursor position for the input reading and the space probe. With zero or several such cells,
-    the rule checks for a menu. A visible terminal cursor supplies its own position.
+  - Cursor and Kiro set `drawn_cursor` on their prompt-row rules. While the terminal cursor is
+    hidden, a single inverse cell at or after the input start of a prompt row or one of its
+    wrapped rows supplies the cursor position for the input reading and the space probe. With zero
+    or several such cells, the rule checks for a menu. A visible terminal cursor supplies its own
+    position. Kiro's drawn cursor appears inside the synchronized composer update. The hidden
+    terminal cursor moves after the update closes.
   - Cursor's live trust question reads `interaction` when the boxed selected option (`[a]`, `[w]`,
     or `[q]`) has the key help within four rows below it. Once answered, the box loses the
     selection marker and key help. The input box below it can then read `usable` or `draft`.

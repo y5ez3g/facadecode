@@ -13,9 +13,9 @@ use facade_base::model::{
     terminal::{HiddenRows, InputState},
 };
 use facade_rules::{
-    PasteDrawing, Pattern, ProbeVerdict, find, is_own_draft, read_box, read_box_for_screen,
-    read_box_for_typing, read_draft, read_input, restored, shows_paste_end, space_taken,
-    verdict_of,
+    InputRule, PasteDrawing, Pattern, ProbeVerdict, find, is_own_draft, read_box,
+    read_box_for_screen, read_box_for_typing, read_draft, read_input, restored, shows_paste_end,
+    space_taken, verdict_of,
 };
 use facade_screen::{ScreenView, VisibleCell};
 use recorded::view_of;
@@ -1096,10 +1096,9 @@ fn only_one_drawn_cursor_in_cursor_s_input_reads_it() {
     );
 }
 
-/// A visible terminal cursor in Cursor's input reads it as before, and another CLI's prompt row
-/// takes no drawn cursor.
+/// Only an opted-in rule with a hidden terminal cursor uses the drawn cursor.
 #[test]
-fn a_drawn_cursor_counts_only_for_cursor_behind_a_hidden_terminal_cursor() {
+fn a_drawn_cursor_requires_an_opted_in_rule_with_a_hidden_terminal_cursor() {
     let cursor = &find("agent").unwrap().unwrap().input;
     let mut visible = cursor_screen("empty");
     visible.cursor_visible = true;
@@ -1111,7 +1110,12 @@ fn a_drawn_cursor_counts_only_for_cursor_behind_a_hidden_terminal_cursor() {
     visible.cursor = (4, 9);
     assert_eq!(read_input(cursor, &visible).state, InputState::Usable);
 
-    let kiro = &find("kiro-cli").unwrap().unwrap().input;
+    let rule: InputRule = serde_json::from_value(serde_json::json!({
+        "mechanism": "prompt_row",
+        "prompt": "› ",
+        "placeholder": "^Type here$"
+    }))
+    .unwrap();
     let mut other = cursor_screen("typed");
     mark(&mut other, 9, 2..3, |cell| {
         *cell = VisibleCell::new(
@@ -1123,7 +1127,7 @@ fn a_drawn_cursor_counts_only_for_cursor_behind_a_hidden_terminal_cursor() {
             cell.colored,
         );
     });
-    assert_eq!(read_input(kiro, &other).state, InputState::Unknown);
+    assert_eq!(read_input(&rule, &other).state, InputState::Unknown);
 }
 
 #[test]
