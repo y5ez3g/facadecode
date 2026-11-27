@@ -282,12 +282,12 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     until it is classified. A completed terminal report removes that boundary, and any editing
     key that follows it has its own byte position. An unclassified escape sequence in the input box
     defers probes, automatic submission and cleanup. The actor preserves the sequence's original
-    input context through later frames, including menus. During a probe it keeps the undecided
-    bytes together until classification, so any probe erase precedes the whole key. A confirmed
-    editing key disowns the paste. A completed terminal report lifts the provisional restriction
-    and leaves the probe active. A sequence still incomplete at the input wait bound counts as an
-    edit. A subsequent empty input allows new delivery. Messages waiting during classification
-    still reach their original deadlines.
+    input context through later frames, including menus. An active probe keeps arriving keys and
+    calls in their original order until it settles. The actor then gives the released keys to
+    Person for classification. A confirmed editing key disowns the paste. A completed terminal
+    report lifts the provisional restriction. A sequence still incomplete at the input wait
+    bound counts as an edit. A subsequent empty input allows new delivery. Messages waiting
+    during classification still reach their original deadlines.
     An already visible interaction takes the Escape itself. The actor offers confirmed frames
     to the typist before retiring their Enter. Later keys wait within the paste's hold limit.
     A native wait also interrupts an unfinished proof. A complete frame after withdrawal must show
@@ -457,18 +457,20 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   where its bytes are in the terminal, its pauses, and what it submitted. It also owns the probe
   under way and the findings for the rows probed in this run (`probed`).
 - The actor allows unstyled hint probes for automatic delivery to a freshly launched input. Up,
-  Down and a final Enter sent through Attach or a named key call to a recognized native menu before
-  the input box appears keep the probe available. Other external input, starting with a session,
-  recovery, resume and an unconfirmed paste leave plain writing on the normal draft path. External
-  input that arrives during an active unstyled hint probe waits for its Space and Backspace.
+  Down and a final Enter sent through Attach or a named key call to a recognized startup menu before
+  the input box appears keep the probe available. A complete ordinary box drawn over that menu
+  lets the first probe run. Terminal reports, including reports received in pieces, preserve this
+  eligibility. Other keys, starting with a session, recovery, resume and an unconfirmed paste
+  leave plain writing on the normal draft path.
 - **Keeps:**
   - Each call goes in whole and in order; a pause counts from when its bytes reached the terminal.
   - `DeliveryHandle::begin_paste` records the paste before the typist writes the complete message in one paste.
     Automatic delivery takes its paste brackets from the CLI rule, including after a daemon restart.
     A direct text call follows the screen's bracketed paste mode.
-  - The actor holds a revocable intent for each automatic paste, submission and erase. A native
-    wait or complete interaction frame pauses those writes and releases the delivery hold on
-    human keys. A later ordinary composer frame reopens the input after the native wait clears.
+  - The actor holds a revocable intent for each automatic paste, Kiro's expansion Tab, submission
+    and erase. A native wait or complete interaction frame pauses those writes and releases the
+    delivery hold on human keys. A later ordinary composer frame reopens the input after the native
+    wait clears.
     Under `answers_ask`, a fresh complete ordinary frame can settle the native question itself.
     The terminal reads the finite prefix of output already available before it tries an automatic
     write. The actor uses those bytes to check the intent again.
@@ -531,11 +533,11 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     input drawn after withdrawal of a native wait can authorize a probe while delivery still needs
     a proved empty box. A frame already open at withdrawal cannot supply that probe's evidence.
     A confirmed hint provides the empty reading.
-  - After each probe key reaches the terminal, the probe checks the row every 100 ms and allows up
-    to two seconds for the native redraw. Its echo budget also accounts for console input time and
-    the CLI's settle and submission-clear times. Two matching complete readings can establish
-    whether the original row was a hint or a draft. While the screen shows the frame from before
-    Space or the space that Backspace is clearing, the probe waits for that key's echo.
+  - From the write receipt for Space or Backspace, the probe checks the row every 100 ms and waits
+    up to two seconds for that key's redraw. Two matching complete readings can establish whether
+    the original row was a hint or a draft. The probe settles when the input is restored or the
+    key's echo budget expires, releasing the person's queued input. Backspace requires evidence of
+    the space while the probe is active.
   - An open synchronized update cannot authorize a write. A resize clears pending approval so an
     unissued key uses the new box. An unissued Space that loses its box is withdrawn, and the row
     can still be probed when the ordinary box returns. Backspace needs a complete frame drawn after

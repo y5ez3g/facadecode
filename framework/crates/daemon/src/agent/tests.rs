@@ -2750,54 +2750,66 @@ async fn a_claude_draft_matching_a_probed_hint_holds_the_next_message() {
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_key_during_a_plain_claude_hint_probe_goes_in_before_its_echo() {
-    let home = home("claudehintpersonkey");
-    let mut harness = claude(&home, false);
-    harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
-    let message = harness
-        .queue_probe_message("a message", Duration::from_secs(5))
-        .await;
-    assert_eq!(harness.cli_reads(1), b" ");
-
-    harness.type_bytes(b"x").await.unwrap();
-    let keys = harness.cli_reads(2);
-    assert_eq!(
-        keys, b"\x7fx",
-        "the erase and the person's key go before the probe's echo"
-    );
-    harness.plain_claude_input(" ", "");
-    harness.plain_claude_input("x", "");
-    assert_plain_draft_held(&mut harness, message, "x").await;
-    harness.stop().await;
-    std::fs::remove_dir_all(&home).unwrap();
+fn finish_probe_before_key(harness: &mut Harness, echo: bool) {
+    harness.nothing_reaches_the_cli(Duration::from_millis(150), "the Space echo is pending");
+    if echo {
+        harness.plain_claude_input(" ", "");
+        assert_eq!(harness.cli_reads(1), b"\x7f");
+        harness.nothing_reaches_the_cli(Duration::from_millis(150), "the erase echo is pending");
+        harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+    }
+    assert_eq!(harness.cli_reads(1), b"x", "Space echoed: {echo}");
+    if !echo {
+        harness.plain_claude_input(" ", "");
+        harness.nothing_reaches_the_cli(Duration::from_millis(150), "the probe already expired");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_call_during_a_plain_claude_hint_probe_precedes_withdrawal() {
-    let home = home("claudehintcall");
-    let mut harness = claude(&home, false);
-    harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
-    let message = harness
-        .queue_probe_message("a message", Duration::from_secs(10))
-        .await;
-    assert_eq!(harness.cli_reads(1), b" ");
+async fn a_key_during_a_plain_claude_hint_probe_waits_for_its_resolution() {
+    for echo in [true, false] {
+        let home = home("claudehintpersonkey");
+        let mut harness = claude(&home, false);
+        harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+        let message = harness
+            .queue_probe_message("a message", Duration::from_secs(5))
+            .await;
+        assert_eq!(harness.cli_reads(1), b" ");
 
-    let answer = harness
-        .type_call(Typing::keys(&["x".into()]).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(harness.cli_reads(2), b"\x7fx");
-    answered(answer).await.unwrap();
-    assert!(harness.messages.withdraw(1));
-    assert!(matches!(
-        probe_message_settled(message).await,
-        crate::messages::Settled::Cancelled
-    ));
-    harness.plain_claude_input(" ", "");
-    harness.nothing_reaches_the_cli(Duration::from_millis(250), "the late echo leaves x alone");
-    harness.stop().await;
-    std::fs::remove_dir_all(&home).unwrap();
+        harness.type_bytes(b"x").await.unwrap();
+        finish_probe_before_key(&mut harness, echo);
+        harness.plain_claude_input("x", "");
+        assert_plain_draft_held(&mut harness, message, "x").await;
+        harness.stop().await;
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_during_a_plain_claude_hint_probe_waits_and_replies() {
+    for echo in [true, false] {
+        let home = home("claudehintcall");
+        let mut harness = claude(&home, false);
+        harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+        let message = harness
+            .queue_probe_message("a message", Duration::from_secs(10))
+            .await;
+        assert_eq!(harness.cli_reads(1), b" ");
+
+        let answer = harness
+            .type_call(Typing::keys(&["x".into()]).unwrap())
+            .await
+            .unwrap();
+        finish_probe_before_key(&mut harness, echo);
+        answered(answer).await.unwrap();
+        assert!(harness.messages.withdraw(1));
+        assert!(matches!(
+            probe_message_settled(message).await,
+            crate::messages::Settled::Cancelled
+        ));
+        harness.stop().await;
+        std::fs::remove_dir_all(&home).unwrap();
+    }
 }
 
 /// What a terminal reports with nothing typed: the wheel, a move and a click of the mouse, the older
@@ -3390,23 +3402,49 @@ async fn a_message_follows_the_person_s_submission_at_once() {
 /// A report before the first message leaves a fresh run's hint to the probe: nothing was typed.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_report_before_the_first_message_leaves_the_hint_to_the_probe() {
-    let home = home("reportbeforehint");
+    let reports: &[&[&[u8]]] = &[&[b"\x1b[I"], &[b"\x1b", b"[", b"O"]];
+    for packets in reports {
+        let home = home("reportbeforehint");
+        let mut harness = claude(&home, false);
+        harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+        for packet in *packets {
+            harness.type_bytes(packet).await.unwrap();
+            assert_eq!(harness.cli_reads(packet.len()), *packet);
+        }
+        let message = harness
+            .queue_probe_message("a message", Duration::from_secs(20))
+            .await;
+        assert_eq!(
+            harness.cli_reads(1),
+            b" ",
+            "the hint is probed after {packets:?}"
+        );
+        harness.plain_claude_input(" ", "");
+        assert_eq!(harness.cli_reads(1), b"\x7f");
+        harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+        harness.cli_reads_paste("a message");
+        harness.plain_claude_input("a message", "");
+        assert_eq!(harness.cli_reads(1), b"\r");
+        harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+        assert_delivered(message).await;
+        harness.stop().await;
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_report_in_the_same_packet_as_a_key_leaves_the_first_draft_alone() {
+    let home = home("reportandkeybeforehint");
     let mut harness = claude(&home, false);
     harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
-    harness.type_bytes(b"\x1b[I").await.unwrap();
-    assert_eq!(harness.cli_reads(3), b"\x1b[I");
+    let input = b"\x1b[Ix";
+    harness.type_bytes(input).await.unwrap();
+    assert_eq!(harness.cli_reads(input.len()), input);
+    harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
     let message = harness
-        .queue_probe_message("a message", Duration::from_secs(20))
+        .queue_probe_message("a message", Duration::from_secs(3))
         .await;
-    assert_eq!(harness.cli_reads(1), b" ", "the hint is probed");
-    harness.plain_claude_input(" ", "");
-    assert_eq!(harness.cli_reads(1), b"\x7f");
-    harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
-    harness.cli_reads_paste("a message");
-    harness.plain_claude_input("a message", "");
-    assert_eq!(harness.cli_reads(1), b"\r");
-    harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
-    assert_delivered(message).await;
+    assert_plain_draft_held(&mut harness, message, CLAUDE_PLAIN_HINT).await;
     harness.stop().await;
     std::fs::remove_dir_all(&home).unwrap();
 }

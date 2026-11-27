@@ -296,6 +296,12 @@ impl DeliveryFrames {
     }
 }
 
+struct HeldInput {
+    came: Instant,
+    input: Input,
+    startup_menu_keys: bool,
+}
+
 struct Actor {
     id: String,
     links: Links,
@@ -337,7 +343,7 @@ struct Actor {
     /// Issued Enters in input order, each waiting for its preceding output to be observed.
     submitting: VecDeque<Submitting>,
     /// External input in the order it came, with when: each goes on once nothing makes it wait.
-    held: VecDeque<(Instant, Input)>,
+    held: VecDeque<HeldInput>,
     /// Keep the held FIFO ordered through a sequence and the input it held back.
     ordered_input: bool,
     input_rule: Option<&'static InputRule>,
@@ -1107,21 +1113,24 @@ impl Actor {
             external @ (Input::Raw(_) | Input::Typed(_)) => {
                 let came = Instant::now();
                 self.ordered_input |= external.is_sequence();
-                if self.untouched_input && !self.typist.probing() {
-                    self.untouched_input = self.before_input_box
-                        && !self.ordered_input
-                        && self.held.is_empty()
-                        && !self.waits(came, &external)
-                        && !self.typist.types_calls()
-                        && self.submitting.is_empty()
-                        && match &external {
-                            Input::Raw(keys) => super::person::menu_keys(keys),
-                            Input::Typed(typing) => typing.menu_keys(),
-                            _ => false,
-                        }
-                        && self.read_screen_input().info.state == InputState::Interaction;
-                }
-                self.held.push_back((came, external));
+                let startup_menu_keys = self.untouched_input
+                    && self.before_input_box
+                    && !self.ordered_input
+                    && self.held.is_empty()
+                    && !self.waits(came, &external)
+                    && !self.typist.types_calls()
+                    && self.submitting.is_empty()
+                    && match &external {
+                        Input::Raw(keys) => super::person::menu_keys(keys),
+                        Input::Typed(typing) => typing.menu_keys(),
+                        _ => false,
+                    }
+                    && self.read_screen_input().info.state == InputState::Interaction;
+                self.held.push_back(HeldInput {
+                    came,
+                    input: external,
+                    startup_menu_keys,
+                });
                 self.release_held();
             }
             message => {
@@ -1172,7 +1181,7 @@ impl Actor {
         let held: usize = self
             .held
             .iter()
-            .map(|(_, input)| input.most_bytes(console))
+            .map(|held| held.input.most_bytes(console))
             .sum();
         let used = self.terminal.queued()
             + self.typist.held_bytes()
@@ -1673,6 +1682,7 @@ impl Actor {
         let after_probe = self.terminal.output_follows_probe();
         let before_edit = self.terminal.delivery_frame_precedes_edit(position);
         let untouched = self.untouched_input;
+        let first_hint = untouched && self.before_input_box;
         let delivery = &mut self.delivery_frames;
         let state_changed = &mut self.state_changed;
         let (state, gate, typist, submitting, terminal) = (
@@ -1721,9 +1731,12 @@ impl Actor {
                 }
                 let frame_closed = screen.synchronized_update_deadline().is_none();
                 let frame_follows_write = screen.frame_follows_input_boundary();
-                let check_composer = frame_closed
-                    && frame_follows_write
-                    && (state.watches_question_composer() || gate.needs_recovery_redraw());
+                let complete = frame_closed && frame_follows_write;
+                let startup_menu = first_hint && gate.waits_for_startup_composer();
+                let check_composer = complete
+                    && (state.watches_question_composer()
+                        || gate.needs_recovery_redraw()
+                        || startup_menu);
                 let (reading, redrawn) = read_gate_box(rule, ended, None, screen, check_composer);
                 let writes = reading.frame_writes(screen, terminal_writes);
                 *drew_input.get_or_insert(false) |= writes == CursorRowWrites::Current;
@@ -1755,6 +1768,9 @@ impl Actor {
                     &reading,
                     (writes, redrawn, frame_follows_write, frame_closed),
                 );
+                if startup_menu && complete && redrawn {
+                    gate.startup_composer(&reading);
+                }
                 if !gate.blocks_delivery() && (observes_submission || before_next) {
                     Self::observe_submissions(
                         submitting,
@@ -2351,7 +2367,10 @@ impl Actor {
         // Messages wait behind what the run's start does first and behind the person's keys.
         let start_first = self.readiness.readies_tools() || self.start_prompt_bytes.is_some();
         let held_first = (probing && !self.held.is_empty())
-            || (matches!(self.held.front(), Some((_, Input::Raw(_))))
+            || (self
+                .held
+                .front()
+                .is_some_and(|held| matches!(held.input, Input::Raw(_)))
                 && (!pasting
                     || self
                         .typist
@@ -2381,7 +2400,7 @@ impl Actor {
             }
         }
         let waits_for_frame = self.input_gate.blocks_delivery() || frame_incomplete;
-        let can_probe = !held_first && self.probe_frame_ready();
+        let can_probe = !held_first && !self.person.is_writing(now) && self.probe_frame_ready();
         let writes = if classifying {
             BoxWrites::AwaitingEscape
         } else if frame_incomplete
@@ -2693,19 +2712,25 @@ impl Actor {
 
     /// Lets external input go on in the order it came, up to what has to wait.
     fn release_held(&mut self) {
-        while let Some((came, next)) = self.held.front()
-            && !self.waits(*came, next)
+        while let Some(held) = self.held.front()
+            && !self.waits(held.came, &held.input)
         {
             // A fragmented sequence might edit the composer. Revoke the durable evidence
             // before the prefix goes on, while the typist waits for its classification.
-            if matches!(next, Input::Raw(keys) if self.person.edits(keys))
+            if matches!(&held.input, Input::Raw(keys) if self.person.edits(keys))
                 && !self.release_draft_evidence()
             {
                 return;
             }
-            match self.held.pop_front().expect("held input") {
-                (came, Input::Raw(keys)) => self.take_keys(came, keys),
-                (_, typed) => {
+            let HeldInput {
+                came,
+                input,
+                startup_menu_keys,
+            } = self.held.pop_front().expect("held input");
+            match input {
+                Input::Raw(keys) => self.take_keys(came, keys, startup_menu_keys),
+                typed => {
+                    self.untouched_input &= startup_menu_keys;
                     self.yield_start_input_to_person();
                     self.give_typist(typed);
                     self.type_next();
@@ -2767,9 +2792,9 @@ impl Actor {
 
     /// When the first held input may go though nothing else happens.
     fn held_wake(&self) -> Option<Instant> {
-        let (came, _) = self.held.front()?;
+        let came = self.held.front()?.came;
         let now = Instant::now();
-        [Some(self.person.due(*came)), self.typist.paste_hold_until()]
+        [Some(self.person.due(came)), self.typist.paste_hold_until()]
             .into_iter()
             .flatten()
             .filter(|at| *at > now)
@@ -2778,7 +2803,6 @@ impl Actor {
 
     fn finish_observing_probe(&mut self) {
         self.terminal.stop_observing_probe();
-        self.untouched_input &= self.held.is_empty();
         if self.readiness.is_under_way() {
             self.ready_at = Some(Instant::now());
         }
@@ -2897,8 +2921,8 @@ impl Actor {
         self.held_enter = None;
         self.submitting.clear();
         // Held calls fail with the others; held keys go with the queued ones.
-        for (_, input) in std::mem::take(&mut self.held) {
-            self.give_typist(input);
+        for held in std::mem::take(&mut self.held) {
+            self.give_typist(held.input);
         }
         self.typist.fail_all(self.terminal.input_through(), why);
         self.typist_at = None;
@@ -2910,7 +2934,7 @@ impl Actor {
 
     /// The person's keys. An Enter that may submit the input waits, with the keys after it, until
     /// the input can be read; a CLI without a rule has no input to read.
-    fn take_keys(&mut self, came: Instant, mut keys: Vec<u8>) {
+    fn take_keys(&mut self, came: Instant, mut keys: Vec<u8>, startup_menu_keys: bool) {
         self.typist.note_reveal_input();
         let PersonInput {
             edits,
@@ -2921,7 +2945,11 @@ impl Actor {
             enter,
             ..
         } = self.person.read(&keys);
-        let edits_input = edits && (first_edit.is_some() || enter.is_some());
+        let has_key = first_edit.is_some() || enter.is_some();
+        if has_key && (!startup_menu_keys || first_edit == Some(KeyOffset::Carried)) {
+            self.untouched_input = false;
+        }
+        let edits_input = edits && has_key;
         if edits_input {
             self.yield_start_input_to_person();
         }
@@ -2965,7 +2993,11 @@ impl Actor {
             self.enters();
             let after = keys.split_off(enter.at + 1);
             if !after.is_empty() {
-                self.held.push_front((came, Input::Raw(after)));
+                self.held.push_front(HeldInput {
+                    came,
+                    input: Input::Raw(after),
+                    startup_menu_keys: false,
+                });
             }
             if self.input_rule.is_some() {
                 keys.pop();
@@ -3052,6 +3084,7 @@ impl Actor {
     fn finish_escape(&mut self, now: Instant) {
         let lone_escape = self.person.lone_escape();
         if self.person.finish_escape(now) {
+            self.untouched_input = false;
             self.yield_start_input_to_person();
             self.terminal.confirm_following_edit();
             self.terminal.classify_draft_edit(true);
@@ -4188,7 +4221,7 @@ mod tests {
             cli.write_output(before_enter.as_bytes()).unwrap();
         }
         assert_eq!(actor.read_screen_input().info.state, InputState::Usable);
-        actor.take_keys(Instant::now(), vec![b'\r']);
+        actor.take_keys(Instant::now(), vec![b'\r'], false);
         actor.held_enter.as_mut().unwrap().release_now();
         actor.follow_enter();
         write_input(&mut actor).await;
@@ -4336,7 +4369,7 @@ mod tests {
                     .terminal
                     .wait_for_queued_output(before_enter.len() + after_enter.len())
                     .await;
-                actor.take_keys(Instant::now(), vec![3]);
+                actor.take_keys(Instant::now(), vec![3], false);
                 write_input(&mut actor).await;
                 assert_eq!(cli.read_input(&mut received[..1]).unwrap(), 1);
                 assert_eq!(received[0], 3);
@@ -5261,7 +5294,7 @@ mod tests {
             cli.write_output(empty.as_bytes()).unwrap();
         }
         // At the paste's hold limit, the next key goes while reads are still paused.
-        actor.take_keys(Instant::now(), vec![key]);
+        actor.take_keys(Instant::now(), vec![key], false);
         if key == b'\r' {
             actor.let_enter_go();
         }
@@ -5305,7 +5338,7 @@ mod tests {
         let empty = synchronized(&plain_claude_frame("", ""));
         let (mut actor, mut cli, settled) = enter_while_reads_are_paused(&home, &draft).await;
         cli.write_output(empty.as_bytes()).unwrap();
-        actor.take_keys(Instant::now(), vec![b'\r']);
+        actor.take_keys(Instant::now(), vec![b'\r'], false);
         assert!(actor.held_enter.is_some());
         read_buffered_frames(&mut actor, draft.len() + empty.len()).await;
         assert!(was_delivered(&settled));
@@ -5318,7 +5351,7 @@ mod tests {
         let empty = synchronized(&plain_claude_frame("", ""));
         let (mut actor, mut cli, settled) = enter_while_reads_are_paused(&home, &draft).await;
         cli.write_output(draft.as_bytes()).unwrap();
-        actor.take_keys(Instant::now(), vec![b'\r']);
+        actor.take_keys(Instant::now(), vec![b'\r'], false);
         actor.let_enter_go();
         write_input(&mut actor).await;
         actor.take_terminal(TerminalEvent::Wrote);
@@ -5331,7 +5364,7 @@ mod tests {
     }
 
     async fn write_person_bytes(actor: &mut Actor, cli: &mut TestCli, bytes: &[u8]) {
-        actor.take_keys(Instant::now(), bytes.to_vec());
+        actor.take_keys(Instant::now(), bytes.to_vec(), false);
         write_input(actor).await;
         actor.take_terminal(TerminalEvent::Wrote);
         expect_cli_input(cli, bytes);
@@ -5576,7 +5609,7 @@ mod tests {
             assert!(settled.borrow().is_none());
 
             if edited {
-                actor.take_keys(Instant::now(), vec![3]);
+                actor.take_keys(Instant::now(), vec![3], false);
                 write_input(&mut actor).await;
                 let mut key = [0; 1];
                 assert_eq!(cli.read_input(&mut key).unwrap(), 1);
@@ -5760,7 +5793,7 @@ mod tests {
         );
 
         // The report finishes in the same packet as the next Enter.
-        actor.take_keys(Instant::now(), b"I\r".to_vec());
+        actor.take_keys(Instant::now(), b"I\r".to_vec(), false);
         actor.let_enter_go();
         write_input(&mut actor).await;
         actor.take_terminal(TerminalEvent::Wrote);
@@ -6231,7 +6264,7 @@ mod tests {
 
             let written = actor.terminal.written();
             for key in std::iter::once(b'\r').chain(keys_after_answer.iter().copied()) {
-                actor.take_keys(Instant::now(), vec![key]);
+                actor.take_keys(Instant::now(), vec![key], false);
                 write_input(&mut actor).await;
                 actor.take_terminal(TerminalEvent::Wrote);
             }
@@ -6251,7 +6284,7 @@ mod tests {
                     settled.borrow().is_none(),
                     "a restored draft alone proves no delivery"
                 );
-                actor.take_keys(Instant::now(), vec![key]);
+                actor.take_keys(Instant::now(), vec![key], false);
                 write_input(&mut actor).await;
                 actor.take_terminal(TerminalEvent::Wrote);
                 output.clear();
@@ -6684,7 +6717,7 @@ mod tests {
         actor.type_next();
         read_output(&mut actor, &mut cli, PERMISSION).await;
         for &key in b"\r\r\x1b" {
-            actor.take_keys(Instant::now(), vec![key]);
+            actor.take_keys(Instant::now(), vec![key], false);
             write_input(&mut actor).await;
             actor.take_terminal(TerminalEvent::Wrote);
         }
@@ -6700,7 +6733,7 @@ mod tests {
             settled.borrow().is_none(),
             "the key is still being classified"
         );
-        actor.take_keys(Instant::now(), b"[I".to_vec());
+        actor.take_keys(Instant::now(), b"[I".to_vec(), false);
         write_input(&mut actor).await;
         actor.take_terminal(TerminalEvent::Wrote);
         actor.type_next();
@@ -6784,7 +6817,7 @@ mod tests {
             actor.type_next();
             read_output(&mut actor, &mut cli, PERMISSION).await;
             for _ in 0..2 {
-                actor.take_keys(Instant::now(), b"\r".to_vec());
+                actor.take_keys(Instant::now(), b"\r".to_vec(), false);
                 write_input(&mut actor).await;
                 actor.take_terminal(TerminalEvent::Wrote);
             }
@@ -6794,7 +6827,7 @@ mod tests {
                 plain_claude_frame("", ""),
             );
             cli.write_output(output.as_bytes()).unwrap();
-            actor.take_keys(Instant::now(), b"\x03".to_vec());
+            actor.take_keys(Instant::now(), b"\x03".to_vec(), false);
             if write_clear {
                 write_input(&mut actor).await;
                 actor.take_terminal(TerminalEvent::Wrote);
@@ -7094,7 +7127,7 @@ mod tests {
         let (mut actor, mut cli, settled) = waiting_for_the_person_s_enter(&home).await;
         write_input(&mut actor).await;
         draw_input(&mut actor, "a message");
-        actor.take_keys(Instant::now(), vec![0x03]);
+        actor.take_keys(Instant::now(), vec![0x03], false);
         assert!(
             !actor.submitting.is_empty(),
             "the interrupt is still queued"
@@ -7388,6 +7421,66 @@ mod tests {
         actor.typist.want_probe();
         actor.type_next();
         assert_eq!(actor.terminal.queued(), 0);
+    }
+
+    #[tokio::test]
+    async fn the_first_hint_after_startup_consent_can_be_probed() {
+        for consent in [None, Some(false), Some(true)] {
+            let home = crate::test_folder::TestFolder::new("actor-startup-consent-probe");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = test_actor_for(&home, &messages, "claude").await;
+            actor.untouched_input = true;
+            actor.before_input_box = true;
+            let _settled = queue_a_message(
+                &mut actor,
+                &messages,
+                Instant::now() + Duration::from_secs(15),
+            );
+            if let Some(named) = consent {
+                read_output(&mut actor, &mut cli, MENU.as_bytes()).await;
+                assert_eq!(
+                    actor.read_screen_input().info.state,
+                    InputState::Interaction
+                );
+                assert!(
+                    actor.state.native_wait().is_none(),
+                    "the screen identified the menu"
+                );
+                let keys = b"\x1b[B\r";
+                if named {
+                    let (call, answered) = Typing::keys(&["Down".into(), "Enter".into()]).unwrap();
+                    actor.take_input(Input::Typed(call), actor.run).unwrap();
+                    assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, keys);
+                    assert!(answered.await.unwrap().is_ok());
+                } else {
+                    actor
+                        .take_input(Input::Raw(keys.to_vec()), actor.run)
+                        .unwrap();
+                    actor.let_enter_go();
+                    assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, keys);
+                }
+                assert!(
+                    actor.untouched_input,
+                    "startup consent keeps the first hint eligible"
+                );
+                read_output(&mut actor, &mut cli, b"\x1b]0;ready\x07").await;
+                assert_eq!(
+                    actor.terminal.queued(),
+                    0,
+                    "the old menu still holds the probe"
+                );
+            }
+            let hint = plain_claude_frame("", "Try this");
+            let frame = synchronized(&format!("\x1b[?25h{hint}"));
+            read_output(&mut actor, &mut cli, frame.as_bytes()).await;
+            assert!(actor.read_input_box(true).unsure);
+            actor.type_next();
+            assert_eq!(
+                read_queued_probe_input(&mut actor, &mut cli).await,
+                b" ",
+                "consent={consent:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -8052,13 +8145,19 @@ mod tests {
             assert_eq!(actor.read_screen_input().info.state, InputState::Usable);
             assert_eq!(actor.terminal.queued(), 0);
             tokio::time::pause();
-            // The revoked offer schedules an immediate recheck before the timed reads.
-            actor.type_next();
-            for _ in 0..2 {
-                if let Some(wake) = actor.typist_at {
-                    tokio::time::advance(wake.saturating_duration_since(Instant::now())).await;
-                    actor.type_next();
+            // The immediate recheck and two timed readings all fit before the echo deadline.
+            let restored_by = Instant::now() + Duration::from_millis(350);
+            for _ in 0..4 {
+                if !actor.typist.probing() {
+                    break;
                 }
+                let wake = actor
+                    .typist_at
+                    .expect("the probe schedules another reading");
+                assert!(wake <= restored_by, "the restored box can settle now");
+                tokio::time::advance(wake.saturating_duration_since(Instant::now())).await;
+                actor.type_next();
+                assert_eq!(actor.terminal.queued(), 0, "there is no space to erase");
             }
             tokio::time::resume();
             assert!(
@@ -8445,7 +8544,7 @@ mod tests {
         let (mut actor, mut cli, settled) = waiting_for_the_person_s_enter(&home).await;
         write_input(&mut actor).await;
         draw_input(&mut actor, "a message");
-        actor.take_keys(Instant::now(), vec![0x1b]);
+        actor.take_keys(Instant::now(), vec![0x1b], false);
         write_input(&mut actor).await;
         actor.take_terminal(TerminalEvent::Wrote);
         read_output(&mut actor, &mut cli, plain_claude_frame("", "").as_bytes()).await;
