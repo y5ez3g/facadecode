@@ -424,8 +424,8 @@ fn launch_console(detach: bool) -> anyhow::Result<LaunchConsole> {
     })
 }
 
-/// Whether a launch in the background can ask the terminal for its colors: a shell's background job
-/// may not read it, and a terminal without escape sequences would print the question.
+/// Whether Shell can ask the terminal for its colors: a shell's background job may not read it,
+/// and a terminal without escape sequences would print the question.
 fn asks_colors() -> bool {
     facade_base::console::owns_input()
         && std::env::var("TERM").map_or(cfg!(windows), |term| term != "dumb")

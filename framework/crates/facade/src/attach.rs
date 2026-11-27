@@ -38,7 +38,7 @@ mod palette;
 
 use mouse::{LocalMouseInput, MouseInput, Take, without_reports};
 pub(crate) use palette::Probe;
-use palette::Replies;
+use palette::{HostColors, Replies};
 
 /// Ctrl-] in plain input, Kitty keyboard encoding, and xterm modifyOtherKeys.
 /// In win32-input-mode, [`is_detach_record`] recognizes a key-down record of its character.
@@ -112,7 +112,7 @@ pub(crate) fn attach(
     mut probe: Probe,
     reconnect: &Reconnect,
 ) -> anyhow::Result<i32> {
-    let lease = probe.take_lease();
+    let mut lease = probe.take_lease();
     // A foreground start or resume already used its connection for a call.
     if !matches!(opening, Opening::Attached) && supports_dedicated_watch(&client) {
         drop(client);
@@ -159,12 +159,16 @@ pub(crate) fn attach(
     ));
     input.lock().agent_name.clone_from(&snapshot.name);
     let screen = ScreenWatch { client, watched };
+    if lease.is_none() && matches!(opening, Opening::Attached) && crate::asks_colors() {
+        probe = Probe::read_named()?;
+        lease = probe.take_lease();
+    }
     let lease = match lease {
         Some(lease) => lease,
         None => ConsoleLease::acquire()?,
     };
     write_console_warning(format_args!("{}", opening_line(&opening, &shown)));
-    let end = if lease.promote(&input) {
+    let end = if lease.promote(&input, probe.take_host_colors()) {
         follow_agent(screen, &input, &viewer, probe, reconnect)
     } else {
         Ok(AttachEnd::Detached)
@@ -202,18 +206,17 @@ impl ConsoleLease {
             vt,
             enabled_raw,
             input: None,
+            colors: HostColors::default(),
         });
         Ok(Self)
     }
 
     /// Owns the display before writing the title save, so a partial write still gets handback.
-    fn promote(&self, input: &Arc<AgentInput>) -> bool {
+    fn promote(&self, input: &Arc<AgentInput>, colors: HostColors) -> bool {
         let mut terminal = lock_terminal();
-        terminal
-            .console
-            .as_mut()
-            .expect("active console lease")
-            .input = Some(input.clone());
+        let console = terminal.console.as_mut().expect("active console lease");
+        console.colors = colors;
+        console.input = Some(input.clone());
         terminal.present(input, |_| write_terminal(SAVE_HOST_TITLE))
     }
 }
@@ -230,6 +233,7 @@ struct ConsoleModes {
     enabled_raw: bool,
     /// Present once Attach takes over the display.
     input: Option<Arc<AgentInput>>,
+    colors: HostColors,
 }
 
 impl Drop for ConsoleModes {
@@ -1581,6 +1585,9 @@ impl Display {
         let switches_screen = !self.host_alternate || switches_screen_or_resets(&bytes);
         let held = self.held.is_some();
         if !switches_screen && !held && grid_fits && !shared.uses_viewport() {
+            if let Some(console) = &mut self.console {
+                console.colors.observe_output(&bytes);
+            }
             write_frame(&bytes)?;
             return self.set_mouse(mouse);
         }
@@ -2274,16 +2281,17 @@ fn finish_attachment(terminal: &mut Display, end: anyhow::Result<AttachEnd>) -> 
         Err(anyhow::Error::new(error).context("could not write to the host terminal"))
     });
     let code = end.as_ref().map_or(1, AttachEnd::code);
-    let Some(input) = terminal
-        .console
-        .as_mut()
-        .and_then(|console| console.input.take())
-    else {
+    let Some(console) = terminal.console.as_mut() else {
+        return code;
+    };
+    let Some(input) = console.input.take() else {
         return code;
     };
     let alternate = std::mem::take(&mut terminal.host_alternate);
     let cli_title_shown = std::mem::take(&mut terminal.cli_title_shown);
-    let _ = write_terminal(&restoration(alternate, cli_title_shown));
+    let mut restoration = restoration(alternate, cli_title_shown);
+    console.colors.restore(&mut restoration);
+    let _ = write_terminal(&restoration);
     terminal.shared = None;
     terminal.held = None;
     terminal.mouse = MouseOwner::Host;

@@ -1,4 +1,4 @@
-//! Reads the host's colors before a launch and consumes outstanding replies in Attach.
+//! Reads the host's terminal colors and restores the colors changed during Attach.
 
 use std::borrow::Cow;
 use std::io::{self, Write};
@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 use facade_base::console::{ConsoleRead, ConsoleReader};
 use facade_base::start::LaunchColors;
 
-use super::ConsoleLease;
+use super::{ConsoleLease, escapes};
 
+const NAMED_COLORS: usize = 3;
 const QUERIES: [&str; 19] = [
     "10;", "11;", "12;", "4;0;", "4;1;", "4;2;", "4;3;", "4;4;", "4;5;", "4;6;", "4;7;", "4;8;",
     "4;9;", "4;10;", "4;11;", "4;12;", "4;13;", "4;14;", "4;15;",
@@ -32,6 +33,15 @@ pub(crate) struct Probe {
 
 impl Probe {
     pub(crate) fn read() -> io::Result<Self> {
+        Self::read_queries(QUERIES.len())
+    }
+
+    /// Reads the host colors used for handback of an already running agent's attachment.
+    pub(super) fn read_named() -> io::Result<Self> {
+        Self::read_queries(NAMED_COLORS)
+    }
+
+    fn read_queries(count: usize) -> io::Result<Self> {
         let Ok(mut reader) = ConsoleReader::new() else {
             return Ok(Self::default());
         };
@@ -40,7 +50,7 @@ impl Probe {
         };
         {
             let mut out = io::stdout().lock();
-            QUERIES
+            QUERIES[..count]
                 .iter()
                 .try_for_each(|query| write!(out, "\x1b]{query}?\x1b\\"))?;
             out.write_all(LAST_QUERY)?;
@@ -48,7 +58,7 @@ impl Probe {
         }
         let mut probe = Self {
             lease: Some(lease),
-            replies: Replies::awaiting_queries(),
+            replies: Replies::awaiting_queries(count),
             ..Self::default()
         };
         let deadline = Instant::now() + RESPONSE_TIME;
@@ -87,6 +97,13 @@ impl Probe {
         self.lease.take()
     }
 
+    pub(super) fn take_host_colors(&mut self) -> HostColors {
+        HostColors {
+            original: std::mem::take(&mut self.replies.named),
+            ..HostColors::default()
+        }
+    }
+
     /// Gives Attach its first keys and keeps any confirmed reply prefix for the next read.
     pub(super) fn into_input(mut self) -> (Option<ConsoleReader>, Vec<u8>, Replies) {
         self.replies.release_short_prefix(&mut self.keys);
@@ -100,15 +117,18 @@ pub(super) struct Replies {
     awaiting: bool,
     unanswered: [bool; QUERIES.len()],
     pending: Vec<u8>,
+    /// The host can report more than eight bits per channel.
+    named: [Option<Vec<u8>>; NAMED_COLORS],
 }
 
 impl Replies {
-    fn awaiting_queries() -> Self {
-        Self {
+    fn awaiting_queries(count: usize) -> Self {
+        let mut replies = Self {
             awaiting: true,
-            unanswered: [true; QUERIES.len()],
-            pending: Vec::new(),
-        }
+            ..Self::default()
+        };
+        replies.unanswered[..count].fill(true);
+        replies
     }
 
     /// Filters one Attach read without changing the launch colors.
@@ -160,6 +180,9 @@ impl Replies {
                     self.unanswered[slot] = false;
                     if let Some(colors) = colors.as_deref_mut() {
                         let color = rgb_color(value);
+                        if slot < NAMED_COLORS && color.is_some() {
+                            self.named[slot] = Some(value.to_vec());
+                        }
                         match slot {
                             0 => colors.foreground = color,
                             1 => colors.background = color,
@@ -173,6 +196,47 @@ impl Replies {
         }
         keys.extend_from_slice(bytes);
         self.pending.clear();
+    }
+}
+
+#[derive(Default)]
+pub(super) struct HostColors {
+    original: [Option<Vec<u8>>; NAMED_COLORS],
+    changed: [bool; NAMED_COLORS],
+}
+
+impl HostColors {
+    /// Records the named colors that the CLI's forwarded OSC setters and resets can change.
+    pub(super) fn observe_output(&mut self, bytes: &[u8]) {
+        if self.original.iter().all(Option::is_none) {
+            return;
+        }
+        for body in escapes(bytes).filter_map(|sequence| sequence.strip_prefix(b"]")) {
+            let body = body.split(|&byte| byte == 0x07).next().unwrap_or_default();
+            let mut fields = body.split(|&byte| byte == b';');
+            let first = match fields.next() {
+                Some([b'1', number @ b'0'..=b'2']) => usize::from(number - b'0'),
+                Some([b'1', b'1', number @ b'0'..=b'2']) => {
+                    self.changed[usize::from(number - b'0')] = true;
+                    continue;
+                }
+                _ => continue,
+            };
+            for (changed, value) in self.changed[first..].iter_mut().zip(fields) {
+                *changed |= !value.is_empty() && value != b"?";
+            }
+        }
+    }
+
+    pub(super) fn restore(&self, output: &mut Vec<u8>) {
+        for ((query, original), changed) in QUERIES.iter().zip(&self.original).zip(self.changed) {
+            if changed && let Some(value) = original {
+                output.extend_from_slice(b"\x1b]");
+                output.extend_from_slice(query.as_bytes());
+                output.extend_from_slice(value);
+                output.extend_from_slice(b"\x1b\\");
+            }
+        }
     }
 }
 
@@ -276,10 +340,10 @@ mod tests {
     #[test]
     fn color_replies_can_arrive_in_pieces_between_keys() {
         let mut colors = LaunchColors::default();
-        let mut replies = Replies::awaiting_queries();
+        let mut replies = Replies::awaiting_queries(QUERIES.len());
         let mut keys = Vec::new();
         replies.take_replies(
-            b"first\x1b]11;rgb:ffff/fafa/eeee\x1b",
+            b"first\x1b]11;rgb:ffff/f54f/eeee\x1b",
             &mut keys,
             Some(&mut colors),
         );
@@ -289,7 +353,11 @@ mod tests {
             &mut keys,
             Some(&mut colors),
         );
-        assert_eq!(colors.background, Some([0xff, 0xfa, 0xee]));
+        assert_eq!(colors.background, Some([0xff, 0xf4, 0xee]));
+        assert_eq!(
+            replies.named[1].as_deref(),
+            Some(&b"rgb:ffff/f54f/eeee"[..])
+        );
         assert_eq!(colors.foreground, Some([0x11, 0x22, 0x33]));
         assert_eq!(colors.cursor, Some([0x00, 0x11, 0x22]));
         assert_eq!(keys, b"firstsecond\x1b[Alast");
@@ -298,7 +366,7 @@ mod tests {
     #[test]
     fn the_device_attributes_end_the_wait() {
         let mut colors = LaunchColors::default();
-        let mut replies = Replies::awaiting_queries();
+        let mut replies = Replies::awaiting_queries(QUERIES.len());
         let mut keys = Vec::new();
         replies.take_replies(
             b"ls\x1b]11;rgb:ffff/ffff/ffff\x07\x1b[?1",

@@ -132,9 +132,10 @@ default foreground, background and cursor colors with OSC 10, 11 and 12, and for
 per color. It ends with the Device Attributes query DA1, which terminal apps answer in order, so its reply says that
 every color reply arrived. Shell waits up to one second for that reply. The launch passes the colors that arrived as
 display context, and the agent's screen answers the CLI's color queries with them. A color without a readable reply
-stays absent. A background launch asks as well when Shell reads the terminal as its foreground job. A process started
-with `&`, a redirected console, `TERM=dumb` and ordinary Attach ask nothing. Keys typed while a background launch
-asks go back to the terminal's input for the next program.
+stays absent. A background launch asks as well when Shell reads the terminal as its foreground job and the terminal
+supports queries. Keys typed while a background launch asks go back to the terminal's input for the next program.
+Ordinary Attach asks for only the three named colors before drawing, when Shell owns a console that supports
+queries. It uses those replies for the host and keeps the agent's launch colors.
 
 Every reply to those queries belongs to Shell, including one with a value it cannot use. `attach/palette.rs` takes
 complete replies out of the input and hands Attach the same console reader, the remaining input in order, the queries
@@ -210,8 +211,10 @@ Screen encodes native wheels in the CLI's mouse format. Windows uses deferred wr
 Attach so cursor moves after a full row follow the same geometry as the agent's screen.
 
 At the end of an attachment, Attach leaves the alternate screen if it entered it, returning to the shell page,
-cursor and scrollback. It restores the terminal modes and prints the receipt and any unsent-input warning after
-the opening line. A normal exit returns the status in the daemon's final event or exact ended snapshot. The daemon
+cursor and scrollback. Before the receipt, it restores the terminal modes and any measured foreground, background
+or cursor colors that forwarded CLI output set or reset. It preserves the channel values reported by the host,
+including values with more than eight bits. The receipt and any unsent-input warning follow the opening line.
+A normal exit returns the status in the daemon's final event or exact ended snapshot. The daemon
 lets an active dedicated watcher receive the final output and exit in order, then closes that connection within its
 post-exit grace period. A removal or lost connection uses the corresponding Shell diagnostic.
 
