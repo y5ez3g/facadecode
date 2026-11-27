@@ -494,7 +494,8 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     pastes use Enter.
   - For Kiro's collapsed paste, the typist can press Tab once after writing its fresh bracketed
     paste, with the same person-input generation and the native disclosure visible. The CLI must
-    draw after each write and earlier person input must be settled. The typist applies the normal
+    draw after each write and earlier person input must be settled. A pending confirmation for an
+    earlier submission delays Tab until it settles. The typist applies the normal
     whitespace comparison to the full revealed draft before Enter. On the main screen, the part
     that scrolls above the viewport can be read from the disclosure's original row. The frame
     must still draw the live input after Tab. An unconfirmed reveal leaves the draft to the

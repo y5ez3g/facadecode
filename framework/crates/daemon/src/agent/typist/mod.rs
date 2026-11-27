@@ -42,8 +42,10 @@ pub(crate) struct Modes {
     pub(crate) application_cursor_keys: bool,
     /// Work used to choose the submission key, even with an unseen completion.
     pub(crate) working_for_submission: bool,
-    /// The CLI is not shown as Working and drew after earlier writes, with no person input waiting
-    /// and room for Tab.
+    /// The CLI drew after earlier writes and is outside Working, with no queued person input
+    /// and room for Tab. An earlier submission can still be awaiting confirmation.
+    pub(crate) reveal_eligible: bool,
+    /// The composer can reveal now, after earlier submissions settled.
     pub(crate) reveal_ready: bool,
 }
 
@@ -2114,7 +2116,7 @@ impl Typist {
                 }
                 let hold_until = self.holds_keys_until(now, &text);
                 let can_reveal =
-                    modes.bracketed_paste && modes.reveal_ready && rule.tab_to_expand.is_some();
+                    modes.bracketed_paste && modes.reveal_eligible && rule.tab_to_expand.is_some();
                 let draft = DraftCheck::new(text, hold_until, can_reveal);
                 let batch = Batch {
                     messages: vec![next],
@@ -3051,6 +3053,7 @@ mod tests {
         bracketed_paste: true,
         application_cursor_keys: false,
         working_for_submission: false,
+        reveal_eligible: true,
         reveal_ready: true,
     };
     const ALIASES: [&str; 6] = [
@@ -4024,11 +4027,22 @@ mod tests {
         let start = Instant::now();
         let (typing, number) = message(&post, "first\nsecond", start + Duration::from_secs(8));
         typist.deliver(typing);
-        terminal.step(&mut typist, start, ANY);
+        let settling = Modes {
+            reveal_ready: false,
+            ..ANY
+        };
+        terminal.step(&mut typist, start, settling);
 
         terminal.reading = kiro_collapsed_paste();
-        terminal.step(&mut typist, start + Duration::from_secs(1), ANY);
         assert_eq!(terminal.write_all(), b"\x1b[200~first\rsecond \x1b[201~");
+        terminal.step_after(
+            &mut typist,
+            start + Duration::from_secs(1),
+            settling,
+            BoxWrites::ObserveOnly,
+            None,
+        );
+        assert!(terminal.write_all().is_empty());
         terminal.step(&mut typist, start + Duration::from_secs(2), ANY);
         terminal.step(&mut typist, start + Duration::from_secs(3), ANY);
         assert_eq!(terminal.write_all(), b"\t");
