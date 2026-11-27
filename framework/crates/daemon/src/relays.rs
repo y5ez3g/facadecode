@@ -1,6 +1,7 @@
 //! The same-user relay socket and the actor it establishes at its first tool call.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
@@ -12,6 +13,7 @@ use facade_base::{system, unix_process};
 use serde_json::{Value, json};
 
 use crate::agent::{AgentHandle, ToolsStage};
+use crate::delivery::missing_reply_inbox;
 use crate::guests::{GuestJoin, RelayProcess};
 use crate::lifecycle::RelayLink;
 use crate::machine_service::agent_caller;
@@ -22,7 +24,7 @@ use crate::mcp::{
 use crate::messages::{InboxRead, InboxSelection, ReplyRead};
 use crate::runs::RunIdentity;
 use crate::server::{Outbox, RelayHandshake, RelayLines, RelayResponse, WhenFull};
-use crate::{Cancel, Daemon, api, blocking_in_place};
+use crate::{Cancel, Daemon, api, blocking_in_place, log};
 
 struct RelayEvidence {
     process: RelayProcess,
@@ -197,6 +199,16 @@ impl Daemon {
                         let CurrentActor { handle, info } = actor
                             .current(&daemon, &evidence.process)
                             .map_err(api::project_error)?;
+                        let project_guest_reply = match &call {
+                            wire::DaemonCall::AgentSend(args) if info.guest => args
+                                .reply_to
+                                .as_ref()
+                                .zip(facade_rules::managed_cli_for_project_guest(&info.cli))
+                                .map(|(reply, managed_cli)| {
+                                    (api::project_error(missing_reply_inbox(reply)), managed_cli)
+                                }),
+                            _ => None,
+                        };
                         let caller = agent_caller(&info);
                         drop(info);
                         let calling = daemon.call_with_result(
@@ -208,7 +220,20 @@ impl Daemon {
                             deadline,
                         );
                         let Some((run, _)) = actor.run else {
-                            return calling.await;
+                            let result = calling.await;
+                            if let (Some((missing, managed_cli)), Err(error)) =
+                                (&project_guest_reply, &result)
+                                && error == missing
+                            {
+                                blocking_in_place(|| {
+                                    daemon.log_project_guest_reply(
+                                        &evidence,
+                                        &reference.agent_id,
+                                        managed_cli,
+                                    )
+                                });
+                            }
+                            return result;
                         };
                         let tools = if deferred_tool_list(&handle) {
                             None
@@ -588,6 +613,46 @@ impl Daemon {
             }
         }
         Ok(authenticated)
+    }
+
+    /// Explains a reply from a project Guest when its relay is descended from a managed run
+    /// in the same project.
+    fn log_project_guest_reply(&self, evidence: &RelayEvidence, guest: &str, managed_cli: &str) {
+        let (Some(cwd), Some(home)) = (
+            evidence.cwd.as_deref(),
+            system::env_var(&evidence.env, "FACADE_HOME"),
+        ) else {
+            return;
+        };
+        let parents = unix_process::ancestors(evidence.process.pid);
+        let managed = self.agent_infos().into_iter().find(|info| {
+            !info.guest
+                && info.cli == managed_cli
+                && info.cwd == cwd
+                && info.process == ProcessState::Running
+                && info.pid.is_some_and(|pid| {
+                    parents.contains(&pid)
+                        && self
+                            .store
+                            .relay_run(&info.agent_id)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|kept| {
+                                kept.process.pid == pid
+                                    && unix_process::birth(pid).ok().flatten().as_ref()
+                                        == Some(&kept.process.birth)
+                            })
+                })
+        });
+        if let Some(managed) = managed
+            && let Some(why) =
+                facade_rules::project_guest_reply(managed_cli, Path::new(cwd), Path::new(home))
+        {
+            log(
+                "warn",
+                &format!("#{}: {why} (Guest #{guest})", managed.agent_id),
+            );
+        }
     }
 
     async fn join_relay_guest(

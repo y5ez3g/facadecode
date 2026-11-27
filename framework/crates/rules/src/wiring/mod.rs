@@ -36,6 +36,22 @@ pub use plugin::{PLUGIN_FOLDER, PLUGIN_MEMBERS, plugin_files, plugin_version, us
 pub use session_report::SessionReport;
 pub(crate) use session_report::{Hooked, install_hook};
 
+/// A managed CLI that can run its project's relay under a separate Guest identity.
+pub fn managed_cli_for_project_guest(guest_cli: &str) -> Option<&'static str> {
+    match guest_cli {
+        "omp-coding-agent" => Some("omp"),
+        _ => None,
+    }
+}
+
+/// Explains a verified project Guest reply whose original message was not in its inbox.
+pub fn project_guest_reply(cli: &str, cwd: &Path, home: &Path) -> Option<String> {
+    match cli {
+        "omp" => omp::project_guest_reply(cwd, home),
+        _ => None,
+    }
+}
+
 /// The old skill path, still recognized in Antigravity plugins and inherited OpenCode settings.
 pub const SKILL_FILE: &str = "skills/facade/SKILL.md";
 /// Where a run's own folder holds its instructions, for a CLI that takes them from a hook: Muse

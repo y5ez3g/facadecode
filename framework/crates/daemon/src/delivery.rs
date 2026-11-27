@@ -50,6 +50,18 @@ use crate::{
 
 pub(crate) use order::{SendAdmission, SendOrder, SendTurn};
 
+/// A resolved reply address refers to a message absent from the sender's inbox.
+pub(crate) fn missing_reply_inbox(reply: &wire::ReplyTo) -> ErrorBody {
+    let address = match reply {
+        wire::ReplyTo::Address(address) => address.as_str(),
+        wire::ReplyTo::Reference(reference) => reference.message_id.as_str(),
+    };
+    ErrorBody::new(
+        Reason::NotFound,
+        format!("no message {address} is in the sender's inbox"),
+    )
+}
+
 type SendFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 type LocalReceipt = (SendOutcome, Option<MessageRef>, Option<AgentLabel>);
 type DeliveryFuture<'a> = SendFuture<'a, Result<LocalReceipt, SendFailure>>;
@@ -1050,18 +1062,7 @@ impl Daemon {
         let original = self
             .messages
             .reply_in_inbox(&agent.agent_id, &reference, None)?
-            .ok_or_else(|| {
-                ErrorBody::new(
-                    Reason::NotFound,
-                    format!(
-                        "no message {} is in the sender's inbox",
-                        match reply {
-                            wire::ReplyTo::Address(address) => address.as_str(),
-                            wire::ReplyTo::Reference(reference) => reference.message_id.as_str(),
-                        }
-                    ),
-                )
-            })?;
+            .ok_or_else(|| missing_reply_inbox(reply))?;
         match original.from.as_str() {
             "human" | "command_line" => Err(ErrorBody::invalid_argument(
                 "the original message came from the command line, which has no reply address",

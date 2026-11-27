@@ -906,6 +906,9 @@ The relay boundary uses its socket peer PID and process birth. A relay joins as 
 tool call when it cannot establish a current managed run. The daemon commits its ID and this machine's
 YOLO snapshot before publishing it. It keeps the relay's environment for a Guest's starts and uses the
 running machine's login home when that Guest supplies no folder.
+If Oh My Pi's project relay cannot find the original message for a linked reply, the daemon can
+log the project configuration path and the managed reply command. The Guest relay must descend
+from a verified live Oh My Pi run in the same project.
 
 A surviving relay keeps its Guest ID and inbox across takeover. A sufficiently old record that lacks
 the YOLO snapshot takes the machine's migration-time setting once. A Guest's exit closes its online

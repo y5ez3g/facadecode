@@ -547,6 +547,9 @@ session. It also defines the formats of Facade's hooks.
     When a hand-configured Facade entry uses that name, the run's extension registers its
     managed server under a different name and gives the model the managed tool names. The
     hand-configured Pi relay joins as a Guest.
+  - Oh My Pi can expose a project's `facade` server alongside the run's `facade-managed:facade`
+    server. The project reply diagnostic uses the path of a matching Facade entry in the current
+    project's `.cursor/mcp.json`, `mcp.json` or `.mcp.json` and names the managed command.
   - OpenCode's `OPENCODE_CLI_CONFIG_CONTENT` for a managed run sets `tabs.enabled` to `false` so the
     terminal shows the run's own session. It also sets `tabs.mode` to `off` if the inline settings,
     `cli.json`, or the `tui.json` used in its absence has a `tabs.mode` key. The overlay keeps the

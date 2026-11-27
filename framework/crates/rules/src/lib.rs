@@ -53,9 +53,9 @@ pub use sessions::{
 pub use state::{ScreenState, read_state};
 pub use wiring::{
     INSTRUCTIONS_FILE, PLUGIN_FOLDER, PLUGIN_MEMBERS, SKILL_FILE, Server, SessionReport, Tools,
-    guest_entry_serves_run, hook, integration, plugin_files, plugin_version,
-    restore_config_environment, runs_start_guest_entry, session_ends_with_process,
-    uses_folder_plugin,
+    guest_entry_serves_run, hook, integration, managed_cli_for_project_guest, plugin_files,
+    plugin_version, project_guest_reply, restore_config_environment, runs_start_guest_entry,
+    session_ends_with_process, uses_folder_plugin,
 };
 pub use wrappers::direct_command;
 
