@@ -25,6 +25,7 @@ signal-hook.workspace = true
 nix = { workspace = true, features = ["time"] }
 
 [target.'cfg(windows)'.dependencies]
+junction = "2.1"
 windows-sys = { version = "0.61", features = [
 	"Wdk_Foundation",
 	"Wdk_Storage_FileSystem",
