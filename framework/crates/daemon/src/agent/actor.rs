@@ -7668,13 +7668,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn kiro_probe_follows_one_unchanged_startup_redraw_before_its_echo() {
+    async fn kiro_probe_follows_unchanged_startup_redraws_before_its_echo() {
         let hint = "ask a question or describe a task ↵";
-        for (redraw, menu_returns, erase) in [
-            (Some(hint), false, true),
-            (None, false, false),
-            (Some("Other text"), false, false),
-            (Some(hint), true, false),
+        for (redraws, menu_returns, unfinished, erase) in [
+            (&[(11, hint)][..], false, false, true),
+            (&[(8, hint), (11, hint)][..], false, false, true),
+            (&[(4, hint), (11, hint)][..], false, false, true),
+            (&[][..], false, false, false),
+            (&[(8, "Other text"), (11, hint)][..], false, false, false),
+            (&[(8, hint), (11, hint)][..], true, false, false),
+            (&[(8, hint), (11, hint)][..], false, true, false),
         ] {
             let home = crate::test_folder::TestFolder::new("actor-kiro-moved-probe");
             let (messages, _) = messages();
@@ -7706,9 +7709,21 @@ mod tests {
                 );
                 assert_eq!(actor.terminal.queued(), 0);
             }
-            if let Some(text) = redraw {
-                read_output(&mut actor, &mut cli, show_hint(11, text).as_bytes()).await;
+            for &(row, text) in redraws {
+                let frame = show_hint(row, text);
+                let frame = if unfinished {
+                    frame.strip_suffix("\x1b[?2026l").unwrap()
+                } else {
+                    &frame
+                };
+                read_output(&mut actor, &mut cli, frame.as_bytes()).await;
                 assert_eq!(actor.terminal.queued(), 0);
+            }
+            if unfinished {
+                actor
+                    .take_input(Input::Raw(b"x".to_vec()), actor.run)
+                    .unwrap();
+                assert_eq!(actor.held.len(), 1);
             }
             let echo = synchronized("\x1b[2J\x1b[11;1H›  \x1b[7m \x1b[0m");
             read_output(&mut actor, &mut cli, echo.as_bytes()).await;
@@ -7724,9 +7739,16 @@ mod tests {
             assert_eq!(
                 input,
                 if erase { b"\x7f".as_slice() } else { b"" },
-                "{redraw:?}, menu returns={menu_returns}"
+                "{redraws:?}, menu returns={menu_returns}, frame left open={unfinished}"
             );
             assert_eq!(pending_delivery_bytes(&actor), 0);
+            if unfinished {
+                tokio::time::pause();
+                tokio::time::advance(Duration::from_secs(2)).await;
+                actor.type_next();
+                tokio::time::resume();
+                assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, b"x");
+            }
         }
     }
 

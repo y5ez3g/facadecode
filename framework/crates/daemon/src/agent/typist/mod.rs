@@ -1667,6 +1667,9 @@ impl Typist {
     }
 
     pub(super) fn saw_interaction(&mut self) {
+        if let Some(probe) = &mut self.probing {
+            probe.interrupt_startup_redraws();
+        }
         if let Some(batch) = &mut self.batch {
             batch.interrupted |= matches!(batch.phase, DeliveryPhase::Submitting);
         }

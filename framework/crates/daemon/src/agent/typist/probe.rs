@@ -31,6 +31,8 @@ pub(super) struct Probe {
     echo_deadline: Instant,
     /// A complete input frame already showed the space, even if an offered erase was revoked.
     space_seen: bool,
+    /// Every input redraw before the echo has kept the same startup composer.
+    follows_startup_redraws: bool,
     /// The last reading and when it was taken.
     last: Option<(Instant, BoxReading)>,
     /// A complete frame that drew its input after this key's write boundary.
@@ -57,6 +59,7 @@ impl Probe {
             since: now,
             echo_deadline: now + PROBE_STILL,
             space_seen: false,
+            follows_startup_redraws: true,
             last: None,
             frame: None,
             verdict: ProbeVerdict::Other,
@@ -82,26 +85,29 @@ impl Probe {
     }
 
     pub(super) fn saw_frame(&mut self, reading: BoxReading, startup_redraw: bool) {
-        // The first redraw after Space can put the unchanged startup composer on another row.
-        // Use that position only when a complete redraw shows the whole original line before
-        // the echo. The echo itself still has to prove that Space was taken there.
-        if startup_redraw
-            && self.pressed == Pressed::Space
-            && !self.space_seen
-            && self.frame.is_none()
-            && reading.unsure
-            && let Some(line) = &reading.line
-            && line.row != self.before.row
-            && self.before.cursor.1 == self.before.row
-        {
-            let mut shifted = self.before.clone();
-            shifted.row = line.row;
-            shifted.cursor.1 = line.row;
-            if &shifted == line {
-                self.before = shifted;
+        // A complete redraw can move the same startup composer again before Space echoes.
+        // Every redraw must still show the original line, and the echo must prove a Space there.
+        if self.follows_startup_redraws && self.pressed == Pressed::Space && !self.space_seen {
+            self.follows_startup_redraws = false;
+            if startup_redraw
+                && reading.unsure
+                && let Some(line) = &reading.line
+                && self.before.cursor.1 == self.before.row
+            {
+                let mut shifted = self.before.clone();
+                shifted.row = line.row;
+                shifted.cursor.1 = line.row;
+                if &shifted == line {
+                    self.before = shifted;
+                    self.follows_startup_redraws = true;
+                }
             }
         }
         self.frame = Some(reading);
+    }
+
+    pub(super) fn interrupt_startup_redraws(&mut self) {
+        self.follows_startup_redraws = false;
     }
 
     pub(super) fn erasing(&self) -> bool {

@@ -541,9 +541,10 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     a proved empty box. A frame already open at withdrawal cannot supply that probe's evidence.
     The first complete composer redraw after startup consent can also authorize a probe,
     including a prompt row that still may hold a hint or draft.
-    Its first complete redraw after Space can move that input to another row before the echo.
-    The whole line and the cursor column must match the original reading before the probe uses
-    the new row. The Space echo and Backspace restoration still need their own evidence.
+    After Space and before its echo, consecutive complete redraws can move that input between
+    rows. The whole line and the cursor column must match at each redraw. A different input or
+    an interaction ends that evidence. The Space echo and Backspace restoration still need
+    their own evidence.
     When a person dismisses a menu during the run, a fresh complete redraw of an ambiguous
     input row lets the typist use a previous hint verdict or apply the same reversible probe.
     A confirmed hint provides the empty reading.
