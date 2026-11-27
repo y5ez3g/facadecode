@@ -170,8 +170,8 @@ def main():
     font.setupHorizontalMetrics({name: (1024, getattr(glyph, "xMin", 0)) for name, glyph in built.items()})
     font.setupHorizontalHeader(ascent=896, descent=-128)
     font.setupNameTable({
-        "familyName": "Facade Code Extension Robots", "styleName": "Regular", "uniqueFontIdentifier": "FacadeRobots-2",
-        "fullName": "Facade Code Extension Robots", "psName": "FacadeRobots", "copyright": "Robot icons by Facade Code Extension"
+        "familyName": "Facade Robots", "styleName": "Regular", "uniqueFontIdentifier": "FacadeRobots-2",
+        "fullName": "Facade Robots", "psName": "FacadeRobots", "copyright": "Robot icons by Facade Code"
     })
     font.setupOS2(sTypoAscender=896, sTypoDescender=-128, usWinAscent=896, usWinDescent=128)
     font.setupPost()

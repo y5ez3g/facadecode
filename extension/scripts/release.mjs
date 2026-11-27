@@ -482,7 +482,7 @@ async function checkPromotion(version, build) {
 	const versionOrder = compareVersions(version, current.version);
 	const buildTime = BigInt(parseFrameworkBuild(build).time ?? -1);
 	assert.ok(versionOrder > 0 || (versionOrder === 0 && buildTime >= BigInt(current.time ?? -1)),
-		`The website is already at Facade Code Extension ${mirrored}`);
+		`The website is already at Facade Code Framework ${mirrored}`);
 	return mirrored;
 }
 
