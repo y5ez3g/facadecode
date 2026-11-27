@@ -466,6 +466,7 @@ struct PendingDelivery {
     kind: DeliveryWrite,
     deadline: Instant,
     read_through: Option<u64>,
+    waiting_for_frame: bool,
 }
 
 impl PendingDelivery {
@@ -1713,6 +1714,7 @@ impl Actor {
         let untouched = self.untouched_input;
         let first_hint = untouched && self.before_input_box;
         let delivery = &mut self.delivery_frames;
+        let pending_delivery = &mut self.pending_delivery;
         let state_changed = &mut self.state_changed;
         let (state, gate, typist, submitting, terminal) = (
             &mut self.state,
@@ -1735,6 +1737,7 @@ impl Actor {
                 gate.report(native_wait);
                 if native_wait.is_some() || matches!(event, StatusEvent::Reset) {
                     delivery.disclosure = None;
+                    pending_delivery.take_if(|pending| pending.waiting_for_frame);
                 }
                 if native_wait.is_some() {
                     let evidence = report_start.filter(|_| matches!(event, StatusEvent::Report(_)));
@@ -1773,6 +1776,9 @@ impl Actor {
                 let writes = reading.frame_writes(screen, terminal_writes);
                 if reading.info.state == InputState::Interaction || screen.on_alternate_screen() {
                     delivery.disclosure = None;
+                }
+                if reading.info.state == InputState::Interaction {
+                    pending_delivery.take_if(|pending| pending.waiting_for_frame);
                 }
                 let disclosed = if observes_delivery && complete && before_edit && !ended {
                     delivery
@@ -2460,16 +2466,15 @@ impl Actor {
             && self.input_gate.waits_for_menu_composer()
             && self.input_gate.has_post_wait_composer();
         let can_probe = !held_first && !self.person.is_writing(now) && self.probe_frame_ready();
-        let writes = if classifying {
-            BoxWrites::AwaitingEscape
-        } else if frame_incomplete
-            || self.erase_waits_for_edit()
+        let input_held = self.erase_waits_for_edit()
             || screen.is_full()
             || start_first
             || held_first
             || self.person_first(now)
-            || (pasting && !self.submitting.is_empty())
-        {
+            || (pasting && !self.submitting.is_empty());
+        let writes = if classifying {
+            BoxWrites::AwaitingEscape
+        } else if frame_incomplete || input_held {
             BoxWrites::ObserveOnly
         } else if !waits_for_frame {
             BoxWrites::Allowed
@@ -2568,6 +2573,7 @@ impl Actor {
         } else if let Some(mut kind) = step.delivery {
             let previous = previous.filter(|previous| {
                 previous.matches(kind)
+                    && (!previous.waiting_for_frame || previous.write == step.write)
                     && (!matches!(kind, DeliveryWrite::Erase { .. }) || now < previous.deadline)
             });
             let mut deadline = self.typist.delivery_deadline(kind);
@@ -2583,6 +2589,7 @@ impl Actor {
                 write: step.write,
                 deadline,
                 read_through,
+                waiting_for_frame: false,
             });
         } else {
             self.terminal.push(&step.write);
@@ -2592,6 +2599,21 @@ impl Actor {
                 }
                 self.terminal.stop_observing_delivery();
                 self.delivery_frames = DeliveryFrames::default();
+            } else if frame_incomplete
+                && !input_held
+                && !classifying
+                && !self.input_gate.blocks_delivery()
+                && step.write.is_empty()
+                && let Some(mut pending) = previous.filter(|pending| {
+                    matches!(pending.kind, DeliveryWrite::Submit)
+                        && pending.read_through.is_some()
+                        && now < pending.deadline
+                })
+            {
+                // Retain the finite sample while the last frame is open. The typist must offer
+                // the submission again from a complete frame before the key can issue.
+                pending.waiting_for_frame = true;
+                self.pending_delivery = Some(pending);
             }
         }
         let shown_by = (unshown_until.into_iter())
@@ -2620,7 +2642,9 @@ impl Actor {
     /// Offers the intent only while the actor's most recent observation still permits it.
     fn delivery_can_issue(&self) -> bool {
         let screen = self.screen().screen();
-        self.pending_delivery.is_some()
+        self.pending_delivery
+            .as_ref()
+            .is_some_and(|pending| !pending.waiting_for_frame)
             && !self.quiet
             && !self.terminal.delivery_output_pending()
             && !self.input_gate.blocks_delivery()
@@ -6382,6 +6406,54 @@ mod tests {
         issue_delivery(&mut actor).await;
         assert_eq!(actor.terminal.output_position(), read);
         assert!(actor.terminal.written() > 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_submission_keeps_its_read_sample_across_a_split_update() {
+        for blocks in [false, true] {
+            let home = crate::test_folder::TestFolder::new("actor-submit-split-update");
+            let (mut actor, mut cli, settled) = waiting_for_the_paste_frame(&home).await;
+            expect_cli_input(&mut cli, b"\x1b[200~a message \x1b[201~");
+            let draft = plain_claude_frame("a message", "");
+            read_output(&mut actor, &mut cli, draft.as_bytes()).await;
+            let rule = actor.typist.paste_rule().unwrap();
+            tokio::time::sleep(facade_rules::settle_time(rule, "a message ")).await;
+            actor.type_next();
+            let written = actor.terminal.written();
+            assert!(actor.delivery_can_issue());
+            assert!(matches!(
+                actor.pending_delivery.as_ref().unwrap().kind,
+                DeliveryWrite::Submit
+            ));
+
+            let open = format!("\x1b[?2026h{draft}");
+            cli.write_output(open.as_bytes()).unwrap();
+            actor.terminal.wait_for_queued_output(open.len()).await;
+            let event = next_input_or_output(&mut actor, TerminalWait::ReadAndWrite).await;
+            assert!(matches!(event, TerminalEvent::Read));
+            actor.take_terminal(event);
+            assert!(!actor.delivery_can_issue());
+            assert_eq!(actor.terminal.written(), written);
+            let through = actor.terminal.output_position();
+            if blocks {
+                read_output(&mut actor, &mut cli, BLOCKED).await;
+                read_output(&mut actor, &mut cli, b"\x1b[?2026l").await;
+                assert!(actor.pending_delivery.is_none());
+                assert_eq!(actor.terminal.written(), written);
+                assert!(settled.borrow().is_none());
+            } else {
+                read_output(&mut actor, &mut cli, b"\x1b[?2026l").await;
+                assert_eq!(
+                    actor.pending_delivery.as_ref().unwrap().read_through,
+                    Some(through),
+                    "a partial update does not restart the same submission's read sample"
+                );
+                cli.write_output(open.as_bytes()).unwrap();
+                actor.terminal.wait_for_queued_output(open.len()).await;
+                issue_delivery(&mut actor).await;
+                expect_cli_input(&mut cli, b"\r");
+            }
+        }
     }
 
     #[tokio::test]
