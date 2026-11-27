@@ -232,7 +232,9 @@ def exercise(scope, output_dir, fake, sockets, processes, receipt):
     receipt["before"] = before
 
     def confirm_refusal(result):
-        assert f"could not upgrade Facade Code Framework {lower_build} to {higher_build}" in result.stderr, result
+        builds = f"{lower_build} to {higher_build}:"
+        assert any(f"could not upgrade {product} {builds}" in result.stderr
+                   for product in ("Facade Code Framework", "Orchestrator")), result
         assert (f"{higher_build} supports keeper API versions [2], and the running keeper negotiated version 1"
                 in result.stderr
                 and f"Stop the running agents {address} and try again" in result.stderr), result

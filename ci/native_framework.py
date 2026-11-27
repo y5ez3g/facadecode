@@ -54,6 +54,7 @@ def cargo_artifact(log, name, *, test):
 def owned_homes(log, test_tmp):
     homes = []
     if log.is_file():
+        test_tmp = test_tmp.resolve()
         for line in log.read_text().splitlines():
             home = Path(line)
             if not home.is_absolute() or not home.resolve().is_relative_to(test_tmp):
