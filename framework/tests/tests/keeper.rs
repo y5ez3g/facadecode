@@ -557,7 +557,7 @@ fn a_dead_keeper_is_replaced_and_the_daemon_keeps_every_terminal() {
         "the record retains the stop: {inspected}"
     );
     println!(
-        "Facade Code Framework Keeper recovery observation {}",
+        "Facade Keeper recovery observation {}",
         json!({
             "daemon": { "pid": daemon.0, "birth": daemon.1 },
             "keeper_before": { "pid": keeper.0, "birth": keeper.1 },

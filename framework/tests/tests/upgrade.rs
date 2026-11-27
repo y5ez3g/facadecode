@@ -2517,7 +2517,7 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
     );
     assert_eq!(process_identity(agent.pid), agent.process);
     println!(
-        "Facade Code Framework hot takeover evidence {}",
+        "Facade hot takeover evidence {}",
         json!({
             "from_build": CURRENT, "to_build": next_build,
             "daemon_api_version": DAEMON_API_VERSIONS[0],

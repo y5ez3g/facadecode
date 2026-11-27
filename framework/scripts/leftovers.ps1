@@ -8,12 +8,12 @@
 #   tests run in their crate's folder.
 # Reads each process's working folder and environment from its process parameters, so it needs 64-bit PowerShell. It
 # only reads; it ends nothing.
-param([Parameter(Mandatory = $true)][string]$Tmp, [string]$Facade Code Framework, [long]$Since = 0)
+param([Parameter(Mandatory = $true)][string]$Tmp, [string]$Framework, [long]$Since = 0)
 $ErrorActionPreference = 'Stop'
 if (-not [Environment]::Is64BitProcess) { Write-Error 'leftovers.ps1 needs 64-bit PowerShell'; exit 2 }
 if (-not (Test-Path -LiteralPath $Tmp -PathType Container)) { [Console]::Error.WriteLine("no folder $Tmp"); exit 2 }
-if ($Facade Code Framework -and -not (Test-Path -LiteralPath $Facade Code Framework -PathType Container)) {
-	[Console]::Error.WriteLine("no folder $Facade Code Framework"); exit 2
+if ($Framework -and -not (Test-Path -LiteralPath $Framework -PathType Container)) {
+	[Console]::Error.WriteLine("no folder $Framework"); exit 2
 }
 
 Add-Type -TypeDefinition @'
@@ -110,7 +110,7 @@ function Within([string]$path, [string[]]$folders) {
 }
 
 $tmpForms = @(Forms $Tmp)
-$frameworkForms = if ($Facade Code Framework) { @(Forms $Facade Code Framework) } else { @() }
+$frameworkForms = if ($Framework) { @(Forms $Framework) } else { @() }
 $homeVariables = 'FACADE_HOME=', 'HOME=', 'USERPROFILE='
 
 $pids = New-Object System.Collections.Generic.List[int]
