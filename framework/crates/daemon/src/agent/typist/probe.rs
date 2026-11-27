@@ -81,7 +81,26 @@ impl Probe {
         self.since = now;
     }
 
-    pub(super) fn saw_frame(&mut self, reading: BoxReading) {
+    pub(super) fn saw_frame(&mut self, reading: BoxReading, startup_redraw: bool) {
+        // The first redraw after Space can put the unchanged startup composer on another row.
+        // Use that position only when a complete redraw shows the whole original line before
+        // the echo. The echo itself still has to prove that Space was taken there.
+        if startup_redraw
+            && self.pressed == Pressed::Space
+            && !self.space_seen
+            && self.frame.is_none()
+            && reading.unsure
+            && let Some(line) = &reading.line
+            && line.row != self.before.row
+            && self.before.cursor.1 == self.before.row
+        {
+            let mut shifted = self.before.clone();
+            shifted.row = line.row;
+            shifted.cursor.1 = line.row;
+            if &shifted == line {
+                self.before = shifted;
+            }
+        }
         self.frame = Some(reading);
     }
 

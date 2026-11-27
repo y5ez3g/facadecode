@@ -541,6 +541,9 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     a proved empty box. A frame already open at withdrawal cannot supply that probe's evidence.
     The first complete composer redraw after startup consent can also authorize a probe,
     including a prompt row that still may hold a hint or draft.
+    Its first complete redraw after Space can move that input to another row before the echo.
+    The whole line and the cursor column must match the original reading before the probe uses
+    the new row. The Space echo and Backspace restoration still need their own evidence.
     A confirmed hint provides the empty reading.
   - From the write receipt for Space or Backspace, the probe checks the row every 100 ms and waits
     up to two seconds for that key's redraw. Two matching complete readings can establish whether
@@ -550,8 +553,9 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
   - An open synchronized update cannot authorize a write. A resize clears pending approval so an
     unissued key uses the new box. An unissued Space that loses its box is withdrawn, and the row
     can still be probed when the ordinary box returns. Backspace needs a complete frame drawn after
-    Space that shows its original position and the space, with no question, menu or intervening
-    external edit. The probe checks that Backspace restored the input before offering delivery.
+    Space that shows the verified input position and the space, with no question, menu or
+    intervening external edit. The probe checks that Backspace restored the input before offering
+    delivery.
     An unread draw or menu supplies no authority to erase. New output sends an unissued erase
     back to the actor for a fresh reading of the available prefix. The row's verdict stays with
     this run.

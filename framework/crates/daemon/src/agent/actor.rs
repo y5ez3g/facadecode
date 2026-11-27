@@ -1746,6 +1746,7 @@ impl Actor {
                         || startup_menu);
                 let (reading, redrawn) = read_gate_box(rule, ended, None, screen, check_composer);
                 let writes = reading.frame_writes(screen, terminal_writes);
+                let startup_redraw = startup_menu && complete && redrawn;
                 *drew_input.get_or_insert(false) |= writes == CursorRowWrites::Current;
                 if after_probe && writes == CursorRowWrites::Current {
                     let probe_reading = if untouched {
@@ -1753,7 +1754,10 @@ impl Actor {
                     } else {
                         reading.clone()
                     };
-                    typist.observe_probe_frame(probe_reading);
+                    typist.observe_probe_frame(
+                        probe_reading,
+                        startup_redraw && gate.has_post_wait_composer(),
+                    );
                 }
                 if !watch {
                     return;
@@ -1775,7 +1779,7 @@ impl Actor {
                     &reading,
                     (writes, redrawn, frame_follows_write, frame_closed),
                 );
-                if startup_menu && complete && redrawn {
+                if startup_redraw {
                     gate.startup_composer(&reading);
                 }
                 if !gate.blocks_delivery() && (observes_submission || before_next) {
@@ -7620,6 +7624,69 @@ mod tests {
         actor.type_next();
         assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, b" ");
         assert_eq!(pending_delivery_bytes(&actor), 0);
+    }
+
+    #[tokio::test]
+    async fn kiro_probe_follows_one_unchanged_startup_redraw_before_its_echo() {
+        let hint = "ask a question or describe a task ↵";
+        for (redraw, menu_returns, erase) in [
+            (Some(hint), false, true),
+            (None, false, false),
+            (Some("Other text"), false, false),
+            (Some(hint), true, false),
+        ] {
+            let home = crate::test_folder::TestFolder::new("actor-kiro-moved-probe");
+            let (messages, _) = messages();
+            let (mut actor, mut cli) = test_actor_for(&home, &messages, "kiro-cli").await;
+            actor.untouched_input = true;
+            actor.before_input_box = true;
+            let _settled = queue_a_message(
+                &mut actor,
+                &messages,
+                Instant::now() + Duration::from_secs(15),
+            );
+            let menu = synchronized(
+                "\x1b[?25l\x1b[2J\x1b[H ❯ No, exit\r\n   Yes, I accept\r\n  esc to cancel · ↑↓ to navigate · ↵ to select",
+            );
+            read_output(&mut actor, &mut cli, menu.as_bytes()).await;
+            let show_hint = |row, text| {
+                synchronized(&format!(
+                    "\x1b[2J\x1b[{row};1H› \x1b[7m \x1b[27;38;5;245m{text}\x1b[0m"
+                ))
+            };
+            read_output(&mut actor, &mut cli, show_hint(4, hint).as_bytes()).await;
+            actor.type_next();
+            assert_eq!(read_queued_probe_input(&mut actor, &mut cli).await, b" ");
+            if menu_returns {
+                read_output(&mut actor, &mut cli, menu.as_bytes()).await;
+                assert_eq!(
+                    actor.read_screen_input().info.state,
+                    InputState::Interaction
+                );
+                assert_eq!(actor.terminal.queued(), 0);
+            }
+            if let Some(text) = redraw {
+                read_output(&mut actor, &mut cli, show_hint(11, text).as_bytes()).await;
+                assert_eq!(actor.terminal.queued(), 0);
+            }
+            let echo = synchronized("\x1b[2J\x1b[11;1H›  \x1b[7m \x1b[0m");
+            read_output(&mut actor, &mut cli, echo.as_bytes()).await;
+            tokio::time::pause();
+            for _ in 0..2 {
+                if let Some(wake) = actor.typist_at {
+                    tokio::time::advance(wake.saturating_duration_since(Instant::now())).await;
+                    actor.type_next();
+                }
+            }
+            tokio::time::resume();
+            let input = read_queued_probe_input(&mut actor, &mut cli).await;
+            assert_eq!(
+                input,
+                if erase { b"\x7f".as_slice() } else { b"" },
+                "{redraw:?}, menu returns={menu_returns}"
+            );
+            assert_eq!(pending_delivery_bytes(&actor), 0);
+        }
     }
 
     #[tokio::test]
