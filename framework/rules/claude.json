@@ -37,6 +37,13 @@
 					"pattern": "^ ❯ +(?:✔ +)?(?:Auto \\(match terminal\\)|(?:Dark|Light) mode(?: \\((?:colorblind-friendly|ANSI colors only)\\))?)$",
 					"within": 9
 				}
+			},
+			{
+				"selected": "^ {2}Select model$",
+				"hint": {
+					"pattern": "^ {2}s to use this session only · Enter to save · Esc to cancel$",
+					"within": 14
+				}
 			}
 		]
 	},

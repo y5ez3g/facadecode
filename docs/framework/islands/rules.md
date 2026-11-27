@@ -230,6 +230,8 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     can also account for continuation indentation the CLI draws itself. Leading columns,
     adjacency and hint ranges distinguish native menus from composer text.
   - Claude's theme chooser shows its heading, the `/theme` help and a selected native theme.
+    Its Select model menu shows the heading and the footer for using the model in this session,
+    saving the choice or cancelling.
     Kiro shows a login question with a selected Yes or No, and Cursor shows its login hint
     below the Cursor Agent splash title. Those login notices also report authentication waits.
     Kiro trust and Devin's `✱` trust question are also interactions. Devin's startup theme choice

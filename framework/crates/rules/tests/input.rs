@@ -81,6 +81,32 @@ fn claude_screens_read_as_recorded() {
 }
 
 #[test]
+fn claude_reads_select_model_with_its_session_footer() {
+    let input = &find("claude").unwrap().unwrap().input;
+    let options = concat!(
+        "\x1b[?25l  Select model\r\n",
+        "  Your pick is the default for new sessions. For other models, use --model.\r\n\r\n",
+        "    1.  Default (recommended)\r\n    2.  Opus 5.5\r\n    3.  Fable 5.2\r\n",
+        "    4.  Sonnet 5.5\r\n  ❯ 5.  Haiku 5.5 ✔\r\n    ↓ 1 more\r\n\r\n",
+        "  ○ Low effort ←/→ to adjust\r\n\r\n  Use /fast to turn on fast mode (Opus 5.5).\r\n\r\n",
+    );
+    let mut screen = facade_screen::Screen::new(120, 30, 0);
+    screen.feed(options.as_bytes());
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Unknown);
+    screen.feed("  s to use this session only · Enter to save · Esc to cancel".as_bytes());
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
+
+    let border = "─".repeat(120);
+    screen.feed(
+        format!("\x1b[2J\x1b[H{border}\r\n❯\u{00a0}\r\n{border}\x1b[2;3H\x1b[?25h").as_bytes(),
+    );
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Usable);
+}
+
+#[test]
 fn codex_screens_read_as_recorded() {
     reads_as_recorded("codex");
 }
