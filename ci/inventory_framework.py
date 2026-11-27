@@ -346,7 +346,8 @@ def configuration(root, add):
 
     paths = BASE / "paths.rs"
     home = match_one((root / paths).read_text(encoding="utf-8"),
-                     r'^    match std::env::var_os\("([A-Z_]+)"\)\.map\(PathBuf::from\) \{$', paths)
+                     r'^    match (?:std::env::var_os|variable)\("([A-Z_]+)"\)\.map\(PathBuf::from\) \{$',
+                     paths)
     add("configuration", "environment", home, paths)
 
 
