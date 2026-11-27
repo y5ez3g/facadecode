@@ -489,7 +489,9 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     the text or paste placeholder. An external edit ends automatic submission and cleanup authority.
     A person's Enter can still prove that they submitted the whole message. Unread frames keep
     settle time running. A readable change restarts the wait.
-    Codex queues an ordinary message with Tab while Working. The start prompt and recovered pastes use Enter.
+    Codex queues an ordinary message with Tab while Working. When `Just done` shows an unseen
+    completion, the submission key follows the current work evidence. The start prompt and recovered
+    pastes use Enter.
   - For Kiro's collapsed paste, the typist can press Tab once after writing its fresh bracketed
     paste, with the same person-input generation and the native disclosure visible. The CLI must
     draw after each write and earlier person input must be settled. The typist applies the normal

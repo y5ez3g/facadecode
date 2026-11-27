@@ -3876,7 +3876,7 @@ async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
     let modes = Modes {
         bracketed_paste: true,
         application_cursor_keys: false,
-        working: false,
+        working_for_submission: false,
         reveal_ready: false,
     };
     let step = |old: &mut Typist, now, terminal: &mut Terminal, screen: &Screen| {

@@ -40,8 +40,10 @@ const KNOWN_KEYS: &str = "keys are Enter (or Return), Escape (or Esc), Tab, Shif
 pub(crate) struct Modes {
     pub(crate) bracketed_paste: bool,
     pub(crate) application_cursor_keys: bool,
-    pub(crate) working: bool,
-    /// The CLI drew after earlier writes, with no person input waiting and room for Tab.
+    /// Work used to choose the submission key, even with an unseen completion.
+    pub(crate) working_for_submission: bool,
+    /// The CLI is not shown as Working and drew after earlier writes, with no person input waiting
+    /// and room for Tab.
     pub(crate) reveal_ready: bool,
 }
 
@@ -2035,9 +2037,14 @@ impl Typist {
                 DeliveryPhase::Draft => {
                     self.check_draft(batch, rule, now, modes, may_write, paused, seen)
                 }
-                DeliveryPhase::Submitting => {
-                    self.check_submitted(batch, rule, now, modes.working, may_write, seen)
-                }
+                DeliveryPhase::Submitting => self.check_submitted(
+                    batch,
+                    rule,
+                    now,
+                    modes.working_for_submission,
+                    may_write,
+                    seen,
+                ),
                 DeliveryPhase::Clearing(cleanup) => {
                     self.check_cleanup(batch, cleanup, rule, seen, now, may_write)
                 }
@@ -2091,10 +2098,8 @@ impl Typist {
                     text.push(' ');
                 }
                 let hold_until = self.holds_keys_until(now, &text);
-                let can_reveal = modes.bracketed_paste
-                    && !modes.working
-                    && modes.reveal_ready
-                    && rule.tab_to_expand.is_some();
+                let can_reveal =
+                    modes.bracketed_paste && modes.reveal_ready && rule.tab_to_expand.is_some();
                 let draft = DraftCheck::new(text, hold_until, can_reveal);
                 let batch = Batch {
                     messages: vec![next],
@@ -2304,7 +2309,7 @@ impl Typist {
         }
         let collapsed = rule.shows_tab_to_expand(reading);
         let revealed = draft.reveal == PasteReveal::Attempted;
-        let may_reveal = !modes.working && modes.reveal_ready && !self.paste_held;
+        let may_reveal = modes.reveal_ready && !self.paste_held;
         if now < deadline
             && !draft.edited
             && matches!(draft.reveal, PasteReveal::Available | PasteReveal::Offered)
@@ -2414,7 +2419,7 @@ impl Typist {
                 return Step::wait(Some((now + READ_INTERVAL).min(deadline)));
             }
             crate::pause_for_test("before-message-enter");
-            return self.send_submission(batch, rule, modes.working);
+            return self.send_submission(batch, rule, modes.working_for_submission);
         }
         self.batch = Some(batch);
         // Where someone else's keys go first, the next output or their end looks again.
@@ -3029,7 +3034,7 @@ mod tests {
     const ANY: Modes = Modes {
         bracketed_paste: true,
         application_cursor_keys: false,
-        working: false,
+        working_for_submission: false,
         reveal_ready: true,
     };
     const ALIASES: [&str; 6] = [

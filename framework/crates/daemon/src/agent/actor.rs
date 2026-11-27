@@ -2326,15 +2326,17 @@ impl Actor {
             .expect("the screen exists while the actor runs");
         let written = self.terminal.input_through();
         let queued = written + self.terminal.queued() as u64;
+        let published_state = self.links.shared.record.lock().unwrap().info.state;
         let modes = Modes {
             bracketed_paste: screen.screen().bracketed_paste(),
             application_cursor_keys: screen.screen().application_cursor_keys(),
-            working: self.links.shared.record.lock().unwrap().info.state
-                == ManagedAgentState::Working,
-            reveal_ready: self
-                .typist
-                .paste_rule()
-                .is_some_and(|rule| rule.tab_to_expand.is_some())
+            working_for_submission: published_state == ManagedAgentState::Working
+                || (published_state == ManagedAgentState::JustDone && self.state.works()),
+            reveal_ready: published_state != ManagedAgentState::Working
+                && self
+                    .typist
+                    .paste_rule()
+                    .is_some_and(|rule| rule.tab_to_expand.is_some())
                 && self.submitting.is_empty()
                 && self.held_enter.is_none()
                 && self.held.is_empty()
