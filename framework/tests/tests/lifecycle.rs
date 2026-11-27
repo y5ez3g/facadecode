@@ -4,10 +4,10 @@
 use std::io::{ErrorKind, Write};
 use std::time::{Duration, Instant};
 
-use facade_scenarios::serde_json::json;
+use facade_scenarios::serde_json::{self, json};
 use facade_scenarios::*;
 
-/// `facade daemon --detach` follows a daemon that holds the daemon lock and ends without serving,
+/// An ordinary command follows a daemon that holds the lock and ends without serving,
 /// as one killed a moment before does while its lock is still being released: once it has ended,
 /// another starts, and a daemon answers.
 #[test]
@@ -15,7 +15,7 @@ use facade_scenarios::*;
     not(debug_assertions),
     ignore = "uses the test pause hook of debug builds"
 )]
-fn detach_starts_a_daemon_once_one_that_held_the_lock_has_ended() {
+fn a_client_starts_after_an_unready_daemon_that_held_the_lock_ends() {
     let home = TestHome::new("detachfollow");
     let mut holder = home.command(&test_binaries().facade);
     holder
@@ -35,12 +35,12 @@ fn detach_starts_a_daemon_once_one_that_held_the_lock_has_ended() {
         "the holder did not take the lock"
     );
     std::thread::scope(|scope| {
-        let detach = scope.spawn(|| home.run_facade(&["daemon", "--detach"]));
+        let command = scope.spawn(|| home.run_facade(&["list"]));
         std::thread::sleep(Duration::from_millis(300));
         kill_process(holder.id() as i32);
         let _ = holder.wait();
-        let detached = detach.join().unwrap();
-        assert!(detached.status.success(), "{}", stderr(&detached));
+        let listed = command.join().unwrap();
+        assert!(listed.status.success(), "{}", stderr(&listed));
     });
     let answering = home
         .hello_result()
@@ -407,40 +407,843 @@ fn a_client_arriving_as_the_daemon_exits_reaches_the_next_daemon() {
 }
 
 #[test]
-fn detach_reports_a_living_worker_still_recovering_as_starting() {
+#[cfg_attr(not(debug_assertions), ignore = "uses the daemon's startup gate")]
+fn detach_returns_at_the_lock_before_recovery() {
     let home = TestHome::new("startingreport");
-    let child = home
+    let gate = "before-recovery";
+    let mut child = home
         .command(&test_binaries().facade)
         .args(["daemon", "--detach"])
-        .env("FACADE_TEST_GATES", "before-recovery")
+        .env("FACADE_TEST_GATES", gate)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    home.wait_for_gate("before-recovery");
-    assert!(
-        !socket_exists(&home.daemon_socket()),
-        "started cannot be reported before serving"
-    );
+    home.wait_for_gate(gate);
+    let (daemon, birth) = home.lock_record("daemon").expect("daemon has its lock");
+    assert_eq!(process_identity(daemon).birth, birth);
+    assert!(!socket_exists(&home.daemon_socket()));
+    let returned = wait_until(secs(3), || child.try_wait().unwrap().is_some());
+    home.release_gate(gate);
     let output = child.wait_with_output().unwrap();
     assert!(
-        output.status.success()
-            && stderr(&output).contains("facade: Orchestrator is still starting; see "),
+        returned && output.status.success(),
+        "detach did not return successfully while the daemon held the lock: {}",
+        stderr(&output)
+    );
+    assert!(wait_until(LOADED_TIMEOUT, || home.daemon_pid() == Some(daemon)));
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the daemon's startup gate")]
+fn a_client_waits_for_the_same_daemon_past_the_old_start_timeout() {
+    let home = TestHome::new("slow-start-hello");
+    let gate = "before-recovery";
+    let mut child = home
+        .command(&test_binaries().facade)
+        .arg("list")
+        .env("FACADE_TEST_GATES", gate)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(gate);
+    let (pid, _) = home.lock_record("daemon").unwrap();
+    let exited_while_starting = wait_until(secs(11), || child.try_wait().unwrap().is_some());
+    home.release_gate(gate);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        !exited_while_starting && output.status.success(),
+        "list abandoned its daemon during recovery: {}",
+        stderr(&output)
+    );
+    assert_eq!(home.daemon_pid(), Some(pid));
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the daemon's startup gate")]
+fn the_next_command_gets_the_failed_start_even_after_both_services_exit() {
+    let home = TestHome::new("failed-after-detach");
+    let gate = "after-daemon-lock";
+    let child = home
+        .command(&test_binaries().facade)
+        .args(["daemon", "--detach"])
+        .env("FACADE_TEST_GATES", gate)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(gate);
+    let daemon = process_identity(home.lock_record("daemon").unwrap().0);
+    let keeper = process_identity(home.lock_record("keeper").unwrap().0);
+    std::fs::write(home.path.join("framework/facade.db"), "not a database").unwrap();
+    let detached = child.wait_with_output().unwrap();
+    home.release_gate(gate);
+    assert!(detached.status.success(), "{}", stderr(&detached));
+    assert!(wait_until(LOADED_TIMEOUT, || !alive(&daemon) && !alive(&keeper)));
+    let command = home.run_facade(&["list"]);
+    assert!(!command.status.success());
+    assert!(
+        stderr(&command).contains("file is not a database"),
+        "{}",
+        stderr(&command)
+    );
+    assert_eq!(home.started_daemons(), vec![daemon.pid as i32]);
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the daemon's startup gate")]
+fn the_next_command_reports_the_accepted_daemon_if_both_services_die_before_reporting() {
+    let home = TestHome::new("startup-both-services-killed");
+    let gate = "after-daemon-lock";
+    let launcher = home
+        .command(&test_binaries().facade)
+        .args(["daemon", "--detach"])
+        .env("FACADE_TEST_GATES", gate)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(gate);
+    let daemon = process_identity(home.lock_record("daemon").unwrap().0);
+    let keeper = process_identity(home.lock_record("keeper").unwrap().0);
+    let framework = home.path.join("framework");
+    let current = framework.join("startup/current");
+    let original = std::fs::read_to_string(&current).unwrap();
+    let accepted = launcher.wait_with_output().unwrap();
+    assert!(accepted.status.success(), "{}", stderr(&accepted));
+    kill_process(keeper.pid as i32);
+    assert!(wait_until(LOADED_TIMEOUT, || !alive(&keeper)));
+    kill_process(daemon.pid as i32);
+    assert!(wait_until(LOADED_TIMEOUT, || !alive(&daemon)));
+
+    let first = home.run_facade(&["list"]);
+    assert!(!first.status.success(), "{}", stdout(&first));
+    let reason = stderr(&first);
+    assert!(
+        reason.contains(&format!("daemon {}", daemon.pid)),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("exited before reporting startup"),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("daemon lock acquired") && reason.contains("daemon.log"),
+        "{reason}"
+    );
+    assert_eq!(home.started_daemons(), [daemon.pid as i32]);
+    home.run_facade_ok(&["list"]);
+    assert_ne!(home.daemon_pid(), Some(daemon.pid as i32));
+    assert_ne!(std::fs::read_to_string(current).unwrap(), original);
+    let ended = facade_base::startup::Attempt::of(&framework, &original).unwrap();
+    assert!(!ended.in_progress());
+    assert!(ended.candidate_failure(&daemon).is_some());
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the daemon's startup gates")]
+fn a_list_following_an_unready_daemon_keeps_its_failure_after_both_services_exit() {
+    let home = TestHome::new("startup-unaccepted-both-exit");
+    let after_lock = "after-daemon-lock";
+    let following = "startup-following-daemon";
+    let follower = home
+        .command(&test_binaries().facade)
+        .arg("list")
+        .env("FACADE_TEST_GATES", format!("{after_lock},{following}"))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(after_lock);
+    let framework = home.path.join("framework");
+    let daemon = process_identity(home.lock_record("daemon").unwrap().0);
+    let keeper = process_identity(home.lock_record("keeper").unwrap().0);
+    let attempt = facade_base::startup::Attempt::current(&framework).unwrap();
+    home.wait_for_gate(following);
+    kill_process(keeper.pid as i32);
+    assert!(wait_until(LOADED_TIMEOUT, || !alive(&keeper)));
+    kill_process(daemon.pid as i32);
+    assert!(wait_until(LOADED_TIMEOUT, || !alive(&daemon)));
+
+    let diagnostic = home.run_facade(&["list"]);
+    let successor = home.run_facade(&["list"]);
+    home.release_gate(following);
+    let original = follower.wait_with_output().unwrap();
+    for failed in [diagnostic, original] {
+        let reason = stderr(&failed);
+        assert!(!failed.status.success(), "{}", stdout(&failed));
+        assert!(
+            reason.contains(&format!(
+                "daemon {} exited before reporting startup",
+                daemon.pid
+            )),
+            "{reason}"
+        );
+    }
+    assert!(successor.status.success(), "{}", stderr(&successor));
+    assert_ne!(home.daemon_pid(), Some(daemon.pid as i32));
+    let next = facade_base::startup::Attempt::current(&framework).unwrap();
+    assert_ne!(next.generation(), attempt.generation());
+    assert!(!attempt.in_progress());
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "uses the daemon accept gate and a synthetic time origin"
+)]
+fn a_late_shell_hello_uses_the_remaining_window_for_the_same_daemon() {
+    for (late, observer) in [(false, false), (true, false), (false, true), (true, true)] {
+        let goal = if observer { "observer" } else { "list" };
+        let home = TestHome::new(&format!("{goal}-hello-late-{late}"));
+        let accept = "before-accept-loop";
+        let daemon = home
+            .command(&test_binaries().facade)
+            .args(["daemon", "--detach"])
+            .env("FACADE_TEST_GATES", accept)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        home.wait_for_gate(accept);
+        assert!(daemon.wait_with_output().unwrap().status.success());
+        let (pid, _) = home.lock_record("daemon").unwrap();
+        let identity = process_identity(pid);
+        let framework = home.path.join("framework");
+        let attempt = facade_base::startup::Attempt::current(&framework).unwrap();
+        assert!(wait_until(LOADED_TIMEOUT, || attempt.keeper_has_first_ping(&identity)));
+        let connect = "startup-before-observing-daemon";
+        let probe = "startup-before-daemon-probe";
+        let mut command = home.command(&test_binaries().facade);
+        if observer {
+            command.args(["daemon", "--await-startup"]);
+        } else {
+            command.arg("list");
+        }
+        let mut command = command
+            .env("FACADE_TEST_GATES", format!("{connect},{probe}"))
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        home.wait_for_gate(connect);
+        // The first ping's marker precedes its window write. Wait for that whole write before
+        // replacing the clock for the caller. The daemon is still at the accept gate.
+        let ordering = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(framework.join("startup/order.lock"))
+            .unwrap();
+        ordering.lock().unwrap();
+        backdate_startup(&home, 175, 0);
+        ordering.unlock().unwrap();
+        home.release_gate(connect);
+        home.wait_for_gate(probe);
+        home.release_gate(probe);
+        if late {
+            // Keep the synthetic window until the caller observes its deadline. The daemon
+            // still holds the real origin and publishes that origin's window when it serves.
+            assert!(
+                wait_until(LOADED_TIMEOUT, || command.try_wait().unwrap().is_some()),
+                "the caller did not expire while the daemon was held"
+            );
+        }
+        home.release_gate(accept);
+        let output = command.wait_with_output().unwrap();
+        assert_ne!(output.status.success(), late, "{}", stderr(&output));
+        if late {
+            assert!(
+                stderr(&output).contains("180-second startup limit"),
+                "{}",
+                stderr(&output)
+            );
+        }
+        assert!(wait_until(LOADED_TIMEOUT, || home.daemon_pid() == Some(pid)));
+    }
+}
+
+fn backdate_startup(home: &TestHome, elapsed_seconds: u64, progress_ago_seconds: u64) {
+    let startup = home.path.join("framework/startup");
+    let generation = std::fs::read_to_string(startup.join("current")).unwrap();
+    let records = startup.join(generation);
+    let now = facade_base::startup::now();
+    let started = now - elapsed_seconds * 1_000_000_000;
+    let advanced = now - progress_ago_seconds * 1_000_000_000;
+    let origin = records.join("origin");
+    let window = records.join("window");
+    let mut beginning: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&origin).unwrap()).unwrap();
+    let mut progress: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&window).unwrap()).unwrap();
+    beginning["started"] = json!(started);
+    progress["progress"]["at"] = json!(advanced);
+    progress["idle"] = json!(advanced + 75_000_000_000u64);
+    progress["hard"] = json!(started + 180_000_000_000u64);
+    std::fs::write(origin, serde_json::to_vec(&beginning).unwrap()).unwrap();
+    std::fs::write(window, serde_json::to_vec(&progress).unwrap()).unwrap();
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "uses the daemon startup and Shell probe gates"
+)]
+fn startup_progress_before_the_first_hello_probe_extends_the_same_daemons_idle_deadline() {
+    startup_progress_during_shell_wait("before-probe", "startup-before-daemon-probe", false);
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "uses the daemon startup and Shell hello gates"
+)]
+fn startup_progress_while_reading_the_first_hello_extends_the_same_daemons_idle_deadline() {
+    startup_progress_during_shell_wait("during-hello", "startup-before-daemon-probe", true);
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "uses the daemon startup and Shell probe gates"
+)]
+fn startup_progress_after_the_first_hello_probe_extends_the_same_daemons_idle_deadline() {
+    startup_progress_during_shell_wait("after-probe", "startup-after-daemon-probe", false);
+}
+
+fn startup_progress_during_shell_wait(case: &str, probe: &str, read_hello: bool) {
+    let home = TestHome::new(&format!("startup-progress-{case}"));
+    let recovery = "before-recovery";
+    let accept = "before-accept-loop";
+    let detached = home
+        .command(&test_binaries().facade)
+        .args(["daemon", "--detach"])
+        .env("FACADE_TEST_GATES", format!("{recovery},{accept}"))
+        .output()
+        .unwrap();
+    assert!(detached.status.success(), "{}", stderr(&detached));
+    home.wait_for_gate(recovery);
+    let framework = home.path.join("framework");
+    let daemon = process_identity(home.lock_record("daemon").unwrap().0);
+    let observe = "startup-before-observing-daemon";
+    let hello = "startup-before-native-hello";
+    let gates = if read_hello {
+        format!("{observe},{probe},{hello}")
+    } else {
+        format!("{observe},{probe}")
+    };
+    let client = home
+        .command(&test_binaries().facade)
+        .arg("list")
+        .env("FACADE_TEST_GATES", gates)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(observe);
+    let attempt = facade_base::startup::Attempt::current(&framework).unwrap();
+    let ping = format!("first authenticated ping from daemon {}", daemon.pid);
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .keeper_log()
+        .contains(&ping)));
+    let old = attempt.status().0;
+    let start = old.deadline() - secs(12);
+    std::thread::sleep(start.saturating_duration_since(Instant::now()));
+    home.release_gate(observe);
+    home.wait_for_gate(probe);
+    assert!(
+        !old.exhausted(),
+        "the first probe already missed the original window"
+    );
+    assert_eq!(attempt.status().0.end(), old.end());
+    assert!(!socket_exists(&home.daemon_socket()));
+    // The daemon starts its idle timer after recovery, so it still holds its lock at the old cutoff.
+    home.release_gate(recovery);
+    home.wait_for_gate(accept);
+    let updated = attempt.status().0;
+    assert!(updated.end() > old.end());
+    assert_eq!(updated.hard(), old.hard());
+    if read_hello {
+        home.release_gate(probe);
+        home.wait_for_gate(hello);
+        home.release_gate(hello);
+    }
+    let release = old.deadline() + Duration::from_millis(650);
+    std::thread::sleep(release.saturating_duration_since(Instant::now()));
+    home.release_gate(accept);
+    if !read_hello {
+        home.release_gate(probe);
+    }
+    let result = client.wait_with_output().unwrap();
+    assert!(result.status.success(), "{}", stderr(&result));
+    assert_eq!(home.daemon_pid(), Some(daemon.pid as i32));
+    assert_eq!(
+        home.lock_record("daemon"),
+        Some((daemon.pid as i32, daemon.birth))
+    );
+    assert_eq!(home.started_daemons(), [daemon.pid as i32]);
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the daemon's startup gate")]
+fn detach_of_a_living_successor_does_not_take_the_previous_failure() {
+    let home = TestHome::new("detach-keeps-previous-failure");
+    let gate = "after-daemon-lock";
+    let launcher = home
+        .command(&test_binaries().facade)
+        .args(["daemon", "--detach"])
+        .env("FACADE_TEST_GATES", gate)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(gate);
+    let daemon = process_identity(home.lock_record("daemon").unwrap().0);
+    let keeper = process_identity(home.lock_record("keeper").unwrap().0);
+    let store = home.path.join("framework/facade.db");
+    std::fs::write(&store, "not a database").unwrap();
+    assert!(launcher.wait_with_output().unwrap().status.success());
+    home.release_gate(gate);
+    assert!(wait_until(LOADED_TIMEOUT, || !alive(&daemon) && !alive(&keeper)));
+    std::fs::remove_file(store).unwrap();
+    let mut successor = home
+        .command(&test_binaries().facade)
+        .arg("daemon")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    assert!(wait_until(LOADED_TIMEOUT, || home.daemon_pid()
+        == Some(successor.id() as i32)));
+    let detach = home.run_facade(&["daemon", "--detach"]);
+    let order = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(home.path.join("framework/startup/order.lock"))
+        .unwrap();
+    order.lock().unwrap();
+    let gate = "startup-after-detach-probe";
+    let contender = home
+        .command(&test_binaries().facade)
+        .args(["daemon", "--detach"])
+        .env("FACADE_TEST_GATES", gate)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(gate);
+    order.unlock().unwrap();
+    home.release_gate(gate);
+    let contended = contender.wait_with_output().unwrap();
+    assert!(contended.status.success(), "{}", stderr(&contended));
+    assert_eq!(home.daemon_pid(), Some(successor.id() as i32));
+    let list = home.run_facade(&["list"]);
+    let _ = successor.kill();
+    let _ = successor.wait();
+    assert!(detach.status.success(), "{}", stderr(&detach));
+    assert!(!list.status.success() && stderr(&list).contains("file is not a database"));
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the service creation gates")]
+fn the_keeper_keeps_the_claim_if_the_launcher_dies_before_publishing_its_pid() {
+    let home = TestHome::new("startup-claim-transfer");
+    let parent_gate = "startup-after-keeper-create";
+    let keeper_gate = "startup-before-keeper-lock";
+    let mut first = home
+        .command(&test_binaries().facade)
+        .arg("list")
+        .env("FACADE_TEST_GATES", format!("{parent_gate},{keeper_gate}"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(parent_gate);
+    home.wait_for_gate(keeper_gate);
+    let framework = home.path.join("framework");
+    let generation = std::fs::read_to_string(framework.join("startup/current")).unwrap();
+    let created = || {
+        std::fs::read_dir(&framework)
+            .unwrap()
+            .filter_map(|entry| {
+                entry
+                    .ok()?
+                    .file_name()
+                    .to_str()?
+                    .strip_prefix("reached-keeper-created-")?
+                    .parse::<i32>()
+                    .ok()
+            })
+            .collect::<Vec<_>>()
+    };
+    let [keeper] = created().try_into().expect("one process was created");
+    let identity = process_identity(keeper);
+    assert!(home.lock_record("keeper").is_none());
+    first.kill().unwrap();
+    let _ = first.wait().unwrap();
+    assert!(alive(&identity));
+    let mut next = home
+        .command(&test_binaries().facade)
+        .arg("list")
+        .env("FACADE_TEST_GATES", keeper_gate)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let premature = wait_until(Duration::from_millis(600), || {
+        next.try_wait().unwrap().is_some() || created().len() != 1
+    });
+    home.release_gate(keeper_gate);
+    let listed = next.wait_with_output().unwrap();
+    assert!(!premature && listed.status.success(), "{}", stderr(&listed));
+    assert_eq!(home.keeper_pid(), Some(keeper));
+    assert_eq!(home.lock_record("keeper").unwrap().1, identity.birth);
+    assert_eq!(created(), vec![keeper]);
+    assert_eq!(
+        std::fs::read_to_string(framework.join("startup/current")).unwrap(),
+        generation
+    );
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the service creation gate")]
+fn an_expired_send_leaves_its_uncreated_attempt_for_the_next_caller() {
+    let home = TestHome::new("startup-short-send");
+    home.run_facade_ok(&["daemon", "--install-only"]);
+    let gate = "startup-before-keeper-create";
+    let mut first = home
+        .command(&test_binaries().facade)
+        .args(["send", "absent", "pending", "--timeout", "6"])
+        .env("FACADE_TEST_GATES", gate)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(gate);
+    let current = home.path.join("framework/startup/current");
+    let generation = std::fs::read_to_string(&current).unwrap();
+    let returned = wait_until(LOADED_TIMEOUT, || first.try_wait().unwrap().is_some());
+    home.release_gate(gate);
+    let output = first.wait_with_output().unwrap();
+    let diagnostic = stderr(&output);
+    assert!(
+        returned && !output.status.success() && diagnostic.contains("the command deadline elapsed"),
+        "{diagnostic}"
+    );
+    assert!(home.lock_record("keeper").is_none());
+    home.run_facade_ok(&["list"]);
+    assert_eq!(std::fs::read_to_string(current).unwrap(), generation);
+    assert_eq!(home.started_daemons(), [home.daemon_pid().unwrap()]);
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the daemon observation gate")]
+fn an_expired_send_does_not_consume_a_queued_startup_failure() {
+    let home = TestHome::new("startup-expired-send-diagnostic");
+    let framework = home.path.join("framework");
+    let attempt = facade_base::startup::Attempt::begin(&framework).unwrap();
+    let reason = "the previous keeper creation failed";
+    attempt
+        .launch_failed(&framework, "starting the keeper", reason)
+        .unwrap();
+
+    let gate = "startup-before-observing-daemon";
+    let child = home
+        .command(&test_binaries().facade)
+        .args(["send", "absent", "pending", "--timeout", "3"])
+        .env("FACADE_TEST_GATES", gate)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(gate);
+    std::thread::sleep(Duration::from_millis(3_200));
+    home.release_gate(gate);
+    let expired = child.wait_with_output().unwrap();
+    assert!(!expired.status.success());
+    assert!(
+        stderr(&expired).contains("the command deadline elapsed"),
+        "{}",
+        stderr(&expired)
+    );
+    let diagnostic = home.run_facade(&["list"]);
+    assert!(
+        !diagnostic.status.success() && stderr(&diagnostic).contains(reason),
+        "{}",
+        stderr(&diagnostic)
+    );
+    assert!(home.lock_record("keeper").is_none());
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the diagnostic output gate")]
+fn a_waiting_failure_report_does_not_block_the_next_start_or_change_its_outcome() {
+    let home = TestHome::new("startup-report-handoff");
+    let gate = "after-daemon-lock";
+    let launcher = home
+        .command(&test_binaries().facade)
+        .args(["daemon", "--detach"])
+        .env("FACADE_TEST_GATES", gate)
+        .env("FACADE_STARTUP_REPORT", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(gate);
+    let old_daemon = process_identity(home.lock_record("daemon").unwrap().0);
+    let old_keeper = process_identity(home.lock_record("keeper").unwrap().0);
+    let database = home.path.join("framework/facade.db");
+    std::fs::write(&database, "not a database").unwrap();
+    let detached = launcher.wait_with_output().unwrap();
+    assert!(detached.status.success(), "{}", stderr(&detached));
+    let output = stdout(&detached);
+    let ticket: serde_json::Value = serde_json::from_str(
+        output
+            .trim()
+            .strip_prefix("facade-startup-locked ")
+            .unwrap(),
+    )
+    .unwrap();
+    let generation = ticket["generation"].as_str().unwrap();
+    let records = home.path.join("framework/startup").join(generation);
+    home.release_gate(gate);
+    assert!(wait_until(LOADED_TIMEOUT, || !alive(&old_daemon)
+        && !alive(&old_keeper)));
+    std::fs::remove_file(database).unwrap();
+
+    let gate = "startup-before-failure-report";
+    let mut reporter = home
+        .command(&test_binaries().facade)
+        .arg("list")
+        .env("FACADE_TEST_GATES", gate)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(gate);
+    let dispatch = format!(
+        "dispatched-{}-{}",
+        old_daemon.pid,
+        old_daemon.birth.replace(':', "_")
+    );
+    let report = records.join(dispatch.replacen("dispatched-", "reported-", 1));
+    assert!(records.join(dispatch).is_file() && !report.exists());
+    home.run_facade_ok(&["list"]);
+    let successor = home.daemon_pid().unwrap();
+    assert_ne!(successor, old_daemon.pid as i32);
+    assert!(reporter.try_wait().unwrap().is_none());
+    let previous = home.run_facade(&[
+        "daemon",
+        "--await-startup",
+        generation,
+        &old_daemon.pid.to_string(),
+        &old_daemon.birth,
+    ]);
+    assert!(
+        !previous.status.success() && stderr(&previous).contains("file is not a database"),
+        "{}",
+        stderr(&previous)
+    );
+    home.release_gate(gate);
+    let result = reporter.wait_with_output().unwrap();
+    assert!(!result.status.success() && stderr(&result).contains("file is not a database"));
+    assert!(report.is_file());
+    assert_eq!(home.daemon_pid(), Some(successor));
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses Relay's native launcher gates")]
+fn relay_reads_eof_while_the_native_launcher_is_still_before_the_lock() {
+    let home = TestHome::new("relay-eof-before-startup-lock");
+    let gate = "startup-selecting-programs";
+    let mut relay = home
+        .command(&test_binaries().mcp)
+        .args(["--guest", "codex"])
+        .env("FACADE_TEST_GATES", gate)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(gate);
+    let mut input = relay.stdin.take().unwrap();
+    writeln!(input, "{}", relay_initialize()).unwrap();
+    writeln!(
+        input,
+        "{}",
+        json!({
+            "jsonrpc": "2.0", "method": "notifications/cancelled",
+            "params": {"requestId": 1}
+        })
+    )
+    .unwrap();
+    drop(input);
+    let returned = wait_until(secs(4), || relay.try_wait().unwrap().is_some());
+    home.release_gate(gate);
+    let output = relay.wait_with_output().unwrap();
+    assert!(returned && output.status.success(), "{}", stderr(&output));
+    home.run_facade_ok(&["list"]);
+    assert_eq!(home.started_daemons(), [home.daemon_pid().unwrap()]);
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the MCP hello gate")]
+fn relay_holds_mcp_requests_until_a_successors_hello_is_verified() {
+    use std::io::{BufRead, BufReader};
+
+    let home = TestHome::new("relay-startup-hello-replaced");
+    let recovery = "before-recovery";
+    let hello = "before-relay-hello";
+    let mut relay = home
+        .command(&test_binaries().mcp)
+        .args(["--guest", "codex"])
+        .env("FACADE_TEST_GATES", format!("{recovery},{hello}"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = relay.stdin.take().unwrap();
+    writeln!(input, "{}", relay_initialize()).unwrap();
+    let output = relay.stdout.take().unwrap();
+    let (send, received) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut line = String::new();
+        let result = BufReader::new(output).read_line(&mut line);
+        let _ = send.send(result.map(|_| line));
+    });
+
+    home.wait_for_gate(recovery);
+    let original = process_identity(home.lock_record("daemon").unwrap().0);
+    let keeper = process_identity(home.lock_record("keeper").unwrap().0);
+    home.release_gate(recovery);
+    home.wait_for_gate(hello);
+    assert!(matches!(
+        received.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    kill_process(original.pid as i32);
+    assert!(wait_until(LOADED_TIMEOUT, || !alive(&original) && !alive(&keeper)));
+    home.run_facade_ok(&["list"]);
+    assert_ne!(home.daemon_pid(), Some(original.pid as i32));
+    let answer = received.recv_timeout(LOADED_TIMEOUT);
+    drop(input);
+    let exited = relay.wait_with_output().unwrap();
+    reader.join().unwrap();
+    assert!(exited.status.success(), "{}", stderr(&exited));
+    let answer = answer
+        .expect("the relay did not forward after the successor's hello")
+        .unwrap();
+    let response: serde_json::Value = serde_json::from_str(&answer).unwrap();
+    assert_eq!(response["id"], 1);
+    assert_eq!(response["result"]["protocolVersion"], "2025-06-18");
+}
+
+fn relay_initialize() -> serde_json::Value {
+    json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18", "capabilities": {},
+            "clientInfo": {"name": "startup-fixture", "version": "1"},
+        },
+    })
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the keeper hello gate")]
+fn a_keeper_hello_can_finish_on_its_original_connection_after_ten_seconds() {
+    let home = TestHome::new("keeper-hello-wait");
+    let gate = "before-keeper-hello";
+    let child = home
+        .command(&test_binaries().facade)
+        .arg("list")
+        .env("FACADE_TEST_GATES", gate)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(gate);
+    let daemon = process_identity(home.lock_record("daemon").unwrap().0);
+    let keeper = process_identity(home.lock_record("keeper").unwrap().0);
+    let ended_early = wait_until(secs(11), || !alive(&daemon) || !alive(&keeper));
+    home.release_gate(gate);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        !ended_early && output.status.success(),
         "{}",
         stderr(&output)
     );
-    home.release_gate("before-recovery");
-    assert!(wait_until(secs(5), || home.hello_result().is_some()));
-    home.wait_for_idle_exit();
+    assert_eq!(home.daemon_pid(), Some(daemon.pid as i32));
+    assert_eq!(home.keeper_pid(), Some(keeper.pid as i32));
 }
 
-/// A daemon that never starts, as one that cannot open its store, fails `daemon --detach` with
-/// exit code 1 once its 10 seconds pass.
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the Keeper hello admission gate")]
+fn an_already_received_keeper_hello_cannot_be_admitted_after_the_deadline() {
+    let home = TestHome::new("keeper-hello-after-deadline");
+    let gate = "before-accepting-startup-keeper-hello";
+    let child = home
+        .command(&test_binaries().facade)
+        .args(["daemon", "--detach"])
+        .env("FACADE_TEST_GATES", gate)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(gate);
+    let daemon = process_identity(home.lock_record("daemon").unwrap().0);
+    let keeper = home.lock_record("keeper").unwrap().0;
+    assert!(child.wait_with_output().unwrap().status.success());
+    let attempt = facade_base::startup::Attempt::current(&home.path.join("framework")).unwrap();
+    // Keep the watchdog from ending the daemon so the admission check owns the outcome.
+    pause_process(keeper);
+    let until = attempt.status().0.deadline();
+    std::thread::sleep(
+        until.saturating_duration_since(Instant::now()) + Duration::from_millis(100),
+    );
+    home.release_gate(gate);
+    let ended = wait_until(secs(10), || !alive(&daemon));
+    resume_process(keeper);
+    assert!(ended, "{}", home.daemon_log());
+    assert!(
+        home.daemon_log()
+            .contains("did not finish its startup hello before the deadline")
+    );
+    assert!(!home.keeper_log().contains("first authenticated ping"));
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the first ping gate")]
+fn the_first_keeper_ping_can_arrive_after_the_runtime_watchdogs_interval() {
+    let home = TestHome::new("first-ping-wait");
+    let gate = "before-first-keeper-ping";
+    let child = home
+        .command(&test_binaries().facade)
+        .arg("list")
+        .env("FACADE_TEST_GATES", gate)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(gate);
+    let daemon = process_identity(home.lock_record("daemon").unwrap().0);
+    let keeper = process_identity(home.lock_record("keeper").unwrap().0);
+    let killed_early = wait_until(secs(16), || !alive(&daemon) || !alive(&keeper));
+    home.release_gate(gate);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        !killed_early && output.status.success(),
+        "{}\n{}",
+        stderr(&output),
+        home.keeper_log()
+    );
+    assert_eq!(home.daemon_pid(), Some(daemon.pid as i32));
+}
+/// A launch failure before the daemon can take its lock is an error to the detaching caller.
 #[test]
 fn detach_fails_when_no_daemon_started() {
     let home = TestHome::new("unstarted");
-    std::fs::create_dir_all(home.path.join("framework")).unwrap();
-    std::fs::write(home.path.join("framework/facade.db"), "not a database").unwrap();
+    std::fs::create_dir_all(home.path.join("framework/programs.lock")).unwrap();
     let output = home
         .command(&test_binaries().facade)
         .args(["daemon", "--detach"])
@@ -448,10 +1251,142 @@ fn detach_fails_when_no_daemon_started() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("the Orchestrator daemon did not start within 10 seconds; see "),
+        stderr(&output).contains("programs.lock"),
         "{}",
         stderr(&output)
     );
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the first ping gate")]
+fn the_first_keeper_ping_cannot_switch_an_expired_startup_to_the_runtime_watchdog() {
+    let home = TestHome::new("late-first-ping");
+    let gate = "before-first-keeper-ping";
+    let child = home
+        .command(&test_binaries().facade)
+        .arg("list")
+        .env("FACADE_TEST_GATES", gate)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate(gate);
+    let daemon = process_identity(home.lock_record("daemon").unwrap().0);
+    let keeper = home.lock_record("keeper").unwrap().0;
+    let started = child.wait_with_output().unwrap();
+    assert!(started.status.success(), "{}", stderr(&started));
+    let _connection = connect(&home);
+    let attempt = facade_base::startup::Attempt::current(&home.path.join("framework")).unwrap();
+    pause_process(keeper);
+    let until = attempt.status().0.deadline();
+    std::thread::sleep(
+        until.saturating_duration_since(Instant::now()) + Duration::from_millis(100),
+    );
+    home.release_gate(gate);
+    std::thread::sleep(Duration::from_millis(350));
+    resume_process(keeper);
+    assert!(
+        wait_until(secs(10), || !alive(&daemon)),
+        "{}",
+        home.keeper_log()
+    );
+    assert!(home.keeper_log().contains(&format!(
+        "daemon {} did not finish its first keeper ping before the startup deadline",
+        daemon.pid
+    )));
+    assert!(!home.keeper_log().contains("first authenticated ping"));
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "uses the first ping and daemon accept gates"
+)]
+fn a_replacement_keeper_before_the_first_ping_uses_the_original_startup_deadline() {
+    keeper_handoff_across_first_ping(false);
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "uses the first ping and daemon accept gates"
+)]
+fn a_replacement_keeper_after_the_first_ping_uses_the_runtime_watchdog() {
+    keeper_handoff_across_first_ping(true);
+}
+
+fn keeper_handoff_across_first_ping(pinged: bool) {
+    let home = TestHome::new(&format!("startup-keeper-handoff-ping-{pinged}"));
+    let gate = if pinged {
+        "before-accept-loop"
+    } else {
+        "before-first-keeper-ping"
+    };
+    let started = home
+        .command(&test_binaries().facade)
+        .args(["daemon", "--detach"])
+        .env("FACADE_TEST_GATES", gate)
+        .output()
+        .unwrap();
+    assert!(started.status.success(), "{}", stderr(&started));
+    home.wait_for_gate(gate);
+    let daemon = process_identity(home.lock_record("daemon").unwrap().0);
+    let keeper = process_identity(home.lock_record("keeper").unwrap().0);
+    let framework = home.path.join("framework");
+    let ping = format!("first authenticated ping from daemon {}", daemon.pid);
+    if pinged {
+        assert!(wait_until(LOADED_TIMEOUT, || home
+            .keeper_log()
+            .contains(&ping)));
+        let attempt = facade_base::startup::Attempt::current(&framework).unwrap();
+        assert!(!attempt.daemon_ready(&daemon));
+    } else {
+        assert!(wait_until(LOADED_TIMEOUT, || home.daemon_pid()
+            == Some(daemon.pid as i32)));
+        assert!(!home.keeper_log().contains(&ping));
+    }
+    kill_process(keeper.pid as i32);
+    assert!(wait_until(LOADED_TIMEOUT, || !alive(&keeper)));
+    let _connection = (!pinged).then(|| connect(&home));
+    if !pinged {
+        backdate_startup(&home, 67, 67);
+    }
+    let log = home.folder().join("replacement-keeper.log");
+    let mut replacement = home
+        .command(&test_binaries().facade)
+        .arg("keeper")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::fs::File::create(&log).unwrap())
+        .spawn()
+        .unwrap();
+    let service = facade_base::service::Service::Keeper;
+    assert!(wait_until(secs(5), || facade_base::service::live_holder(
+        &framework, service
+    )
+    .is_ok_and(
+        |holder| holder.is_some_and(|process| process.pid == replacement.id())
+    )));
+    let reason = if pinged {
+        format!("daemon {} sent no ping for 15 seconds", daemon.pid)
+    } else {
+        format!(
+            "daemon {} did not finish its first keeper ping before the startup deadline",
+            daemon.pid
+        )
+    };
+    let wait = if pinged { secs(23) } else { secs(12) };
+    let read_log = || std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        wait_until(wait, || read_log().contains(&reason)),
+        "{}",
+        read_log()
+    );
+    assert!(
+        wait_until(LOADED_TIMEOUT, || !alive(&daemon)),
+        "{}",
+        read_log()
+    );
+    let _ = replacement.wait();
 }
 
 #[cfg(unix)]

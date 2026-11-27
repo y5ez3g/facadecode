@@ -341,14 +341,11 @@ impl Page {
 impl Line {
     fn of(cells: &[&VisibleCell]) -> Line {
         let drawn: Vec<usize> = (0..cells.len())
-            .filter(|&at| !cells[at].text.trim().is_empty())
+            .filter(|&at| !cells[at].text().trim().is_empty())
             .collect();
         let (text, dim) = match (drawn.first(), drawn.last()) {
             (Some(&first), Some(&last)) => (
-                cells[..=last]
-                    .iter()
-                    .map(|cell| cell.text.as_str())
-                    .collect(),
+                cells[..=last].iter().map(|cell| cell.text()).collect(),
                 cells[first..=last].iter().all(|cell| cell.dim),
             ),
             _ => (String::new(), false),

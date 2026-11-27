@@ -102,7 +102,7 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Send one complete message to an agent; by default the call returns once it is in the recipient's inbox.\nA send to an agent then has 30 seconds to be delivered: a managed agent gets it typed into its input once that is empty; a Guest must read it. If that fails, a notice tells you; success is silent. The result's data.id is the message's full address, such as m42@devbox. A Guest waiting for one reply sets wait_for \"result\" and timeout_seconds 30; to get notices too, it sends with no wait, then calls read_messages with only timeout_seconds 30.",
+    "description": "Send one complete message to an agent; by default the call returns once it is in the recipient's inbox.\nDelivery has a 30-second deadline. A managed CLI confirms delivery by taking the submitted message out of its input. A Guest confirms delivery by reading it. If that fails, a notice tells you; success is silent. The result's data.id is the message's full address, such as m42@devbox. A Guest waiting for one reply sets wait_for \"result\" and timeout_seconds 30; to get notices too, it sends with no wait, then calls read_messages with only timeout_seconds 30.",
     "inputSchema": {
       "type": "object",
       "properties": {

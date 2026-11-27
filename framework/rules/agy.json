@@ -23,8 +23,12 @@
 		"menus": [{ "selected": "^ ?> \\S", "not_selected": "^ ?> /", "next": "^ {2,3}\\S", "hint": { "pattern": "^ {2,3}↑/↓ Navigate · ", "within": 8 } }]
 	},
 	"paste": {
+		"bracketed": true,
+		"backspace_unit": "grapheme",
 		"enter_ms": 80,
 		"line_ms": 45,
+		"submit_clear_ms": 290,
+		"retry_submit_ms": 290,
 		"placeholders": [
 			{ "pattern": "^\\[Pastedtext#\\d+\\+(\\d+)lines?\\]$", "count": "lines" },
 			{ "pattern": "^\\[Pasted text #\\d+ (\\d+) chars\\]$", "count": "unicode_scalars", "spaced": true }

@@ -9,8 +9,9 @@ members = [
 	"crates/daemon",
 	"crates/facade",
 	"tests",
-	# A member so that its own tests run with Facade's (vendor/README.md).
+	# Members so that their own tests run with Facade's (vendor/README.md).
 	"vendor/alacritty_terminal",
+	"vendor/vte",
 	"crates/screen",
 	"crates/rules",
 ]
@@ -45,13 +46,15 @@ schemars = "1.2"
 rusqlite = { version = "0.41", features = ["bundled"] }
 regex = "1.13"
 toml = "1.2"
+unicode-normalization = "0.1.25"
 unicode-segmentation = "1.13"
 unicode-width = "0.2"
 
-# alacritty_terminal 0.26.0 with the changes that keep each agent's screen within its memory
-# bound; vendor/README.md lists each change and why.
+# alacritty_terminal 0.26.0 and its parser, vte 0.15.0, with the changes that keep each agent's screen
+# within its memory bound; vendor/README.md and docs/framework/islands/screen.md list them and why.
 [patch.crates-io]
 alacritty_terminal = { path = "vendor/alacritty_terminal" }
+vte = { path = "vendor/vte" }
 
 [profile.release]
 lto = "thin"

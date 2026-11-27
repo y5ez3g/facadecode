@@ -1,7 +1,7 @@
 //! Memory: an ended agent's screen leaves the daemon's memory and comes back from its files when
-//! something reads, shows or resumes it; a restarted daemon reads it only then. The measurement at
-//! the end, run on purpose, reads the daemon's memory with 1, 10 and 100 idle agents, a flood, and
-//! a restart.
+//! something reads, shows or resumes it; a restarted daemon reads it only then. Idle and ended agents
+//! take little of it, as Windows counts it. The measurement at the end, run on purpose, reads the
+//! daemon's memory with 1, 10 and 100 idle agents, a flood, and a restart.
 
 use std::process::Stdio;
 
@@ -263,6 +263,43 @@ fn an_ended_agent_whose_screen_files_cannot_be_read_is_unavailable() {
     assert!(
         home.screen(&id).contains("BYE"),
         "readable again, it comes back"
+    );
+}
+
+/// Private memory counts what is allocated and never touched, which resident memory does not. A first
+/// round of as many agents leaves what the daemon keeps once.
+#[cfg(windows)]
+#[test]
+fn idle_and_ended_agents_take_little_private_memory() {
+    const MANY: usize = 24;
+    const MOST_IDLE: usize = 1536 * 1024;
+    const MOST_ENDED: usize = 512 * 1024;
+    let home = TestHome::new("privatememory");
+    let _client = connect(&home);
+    let memory = || private_memory(home.daemon_pid().expect("a running daemon"));
+    let stop = |agents: Vec<String>| {
+        for agent in agents {
+            home.run_facade_ok(&["stop", &agent]);
+        }
+    };
+    stop(home.start_plain(MANY));
+    let before = memory();
+    let agents = home.start_plain(MANY);
+    let idle = memory();
+    assert!(
+        idle < before + MANY * MOST_IDLE,
+        "{MANY} idle agents take {} KiB",
+        idle.saturating_sub(before) / 1024
+    );
+    stop(agents);
+    let mut ended = memory();
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            ended = memory();
+            ended < before + MANY * MOST_ENDED
+        }),
+        "{MANY} ended agents take {} KiB",
+        ended.saturating_sub(before) / 1024
     );
 }
 

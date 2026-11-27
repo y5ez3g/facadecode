@@ -50,14 +50,14 @@ The next exchange uses Unix PTY copies on the successful replies to start and sy
 
 ```jsonl keeper
 {"jsonrpc":"2.0","id":1,"method":"hello","params":{"api_versions":@KEEPER_API_VERSIONS@}}
-{"jsonrpc":"2.0","id":1,"result":{"api_version":1,"build":"1.0.0+example","agents":[{"agent_id":"a1","pid":5113,"birth":"123456789"}]}}
+{"jsonrpc":"2.0","id":1,"result":{"api_version":1,"build":"1.0.0+example","agents":[{"agent_id":"a1","pid":5113,"birth":"123456789"}],"stop_receipts":true}}
 {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"daemon.ping","args":{}}}
 {"jsonrpc":"2.0","id":2,"result":{}}
 {"jsonrpc":"2.0","id":3,"method":"call","params":{"op":"agent.start","args":{"agent_id":"a2","command":["/usr/local/bin/codex","--model","gpt-6.2-sol"],"env":{"HOME":"/home/alice","PATH":"/usr/local/bin:/usr/bin","TERM":"xterm-256color"},"cwd":"/work/app","size":{"cols":120,"rows":40}}}}
 {"jsonrpc":"2.0","id":3,"result":{"pid":5114,"birth":"123456910"}}
 {"jsonrpc":"2.0","id":4,"method":"call","params":{"op":"agent.sync","args":{"agent_id":"a1","pid":5113,"birth":"123456789"}}}
 {"jsonrpc":"2.0","id":4,"result":{}}
-{"jsonrpc":"2.0","id":5,"method":"call","params":{"op":"agent.stop","args":{"agent_id":"a2"}}}
+{"jsonrpc":"2.0","id":5,"method":"call","params":{"op":"agent.stop","args":{"agent_id":"a2","creator_stop":{"pid":5114,"birth":"123456910"}}}}
 {"jsonrpc":"2.0","id":5,"result":{}}
 {"jsonrpc":"2.0","method":"changed","params":{"kind":"exit","agent_id":"a2","exit":{"signal":"SIGHUP","at":"2026-11-20T17:03:00.000Z"}}}
 {"jsonrpc":"2.0","id":6,"method":"call","params":{"op":"agent.sync","args":{"agent_id":"a2","pid":5114,"birth":"123456910"}}}
@@ -86,6 +86,13 @@ reports the actual exit. On Unix the keeper signals the verified process group w
 then sends SIGKILL when the CLI exits or three seconds pass, whichever comes first. Repeated
 stops keep the original deadline. On Windows the daemon and keeper release their ConPTY
 signal pipe copies and the keeper terminates the corresponding job.
+
+A Keeper that advertises `stop_receipts: true` in hello accepts `creator_stop` on `agent.stop`.
+It contains the PID and birth of the process the creator asked to stop. The Keeper checks this
+identity and records acceptance in the agent's run folder before it begins stopping the CLI.
+A daemon sends the field only to a Keeper that advertises support. With an older Keeper, the daemon
+records a successful acknowledgement when it receives it. An exit with no saved acknowledgement
+or Keeper receipt can still earn a creator notice after recovery.
 
 On Unix only the keeper that started a CLI can read its exit code or signal. A replacement
 keeper that observes the end of a CLI can give the observation time without either field.

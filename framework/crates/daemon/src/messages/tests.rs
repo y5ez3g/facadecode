@@ -221,6 +221,7 @@ fn a_message_whose_paste_has_not_begun_is_withdrawn_and_not_kept() {
         Outcome::Withdrawn {
             reason: DeliveryFailure::Timeout,
             text_written: TextWritten::Full,
+            enter_written: Some(false),
         },
     );
     let receipt = withdrawn(&pasting).delivery;
@@ -491,9 +492,9 @@ async fn a_typist_and_a_read_never_both_take_a_message() {
             false,
             InboxRead::default(),
             crate::Cancel::default(),
-            |page| {
+            |page, _: Option<()>| {
                 assert_eq!(ids(page), ["m2", "m3"]);
-                Ok((1, page.messages[0].clone()))
+                Ok(super::InboxSelection::ready(1, page.messages[0].clone()))
             },
         )
         .await
@@ -516,7 +517,12 @@ async fn a_typist_and_a_read_never_both_take_a_message() {
                 ..InboxRead::default()
             },
             crate::Cancel::default(),
-            |page| Ok((page.messages.len(), page.clone())),
+            |page, _: Option<()>| {
+                Ok(super::InboxSelection::ready(
+                    page.messages.len(),
+                    page.clone(),
+                ))
+            },
         )
         .await
         .unwrap();
@@ -764,6 +770,8 @@ fn record(id: &str) -> AgentRecord {
         pid: 7,
         created_at: "2026-11-11T00:00:00.000Z".into(),
         exit: None,
+        creator_stop: false,
+        run_birth: None,
         rule: None,
         session: None,
         windows: vec![facade_base::model::machine::WindowRef {
@@ -1000,7 +1008,11 @@ fn a_pending_message_is_taken_up_by_what_is_left_of_its_deadline_and_where_its_r
     );
     assert_eq!(
         decide(&past, Some(4), Recipient::Running, now),
-        TakeUp::Settle(Outcome::UNCONFIRMED)
+        TakeUp::FinishPaste {
+            paste: 4,
+            left: Duration::ZERO,
+        },
+        "the typist still has to clear its draft after the delivery deadline"
     );
     assert_eq!(
         decide(&past, None, Recipient::NotListed, now),

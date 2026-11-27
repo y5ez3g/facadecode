@@ -9,9 +9,10 @@ per agent, rules reads its views, and the scenario tests use it as a viewer's te
 
 All of it in memory, one set per `Screen`:
 
-- **alacritty's terminal** (`alacritty_terminal`, vendored in `framework/vendor/`): the main and
-  alternate grids, cursor and saved cursor, pen, charsets, modes, and the parser with the frame an
-  open synchronized update holds back.
+- **alacritty's terminal** (`alacritty_terminal` and its parser `vte`, vendored in
+  `framework/vendor/`): the main and alternate grids, cursor and saved cursor, pen, charsets, modes,
+  and the parser with the frame an open synchronized update holds back. The local terminal patch
+  tracks paint during input observations, using one byte per visible cell while tracking is active.
 - **The unit being written**: the bytes of a character, escape sequence or control string the CLI
   has started and not finished.
 - **Supplied terminal colors**: optional RGB values for the foreground, background, cursor and the
@@ -35,6 +36,8 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 
 - Reads, views, redraws and resizes give exactly what a terminal keeping every scrollback row in
   alacritty would give. Where a row lives (alacritty or the store) never shows.
+- Reads, views and redraws keep a single UTF-8 character inside its cell's text representation.
+  A longer combining sequence keeps every character, and a wide cell keeps its first column.
 - Viewers get whole characters, sequences and strings only, and never a terminal query or an
   OSC 7501 sequence. Eligible OSC 0 and OSC 2 titles get the current glyph and a space unless
   they already begin with them. A blank title has only whitespace or control characters.
@@ -55,6 +58,9 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
   Each query of a supplied color gets one reply; an omitted color gets none.
 - `scrollback_bytes` stays within `SCROLLBACK_BUDGET` (2 MiB). Past it, whole blocks of the oldest
   rows go, and a read reports `trimmed`.
+- Besides its scrollback a screen takes its two grids' cells and little more: the frame that a
+  synchronized update holds back takes memory only while an update is open, and never more than the
+  parser's 2 MiB limit.
 - A status report that breaks any limit of the protocol is dropped whole. Its words are only ever
   text: base64 decoded, at most 2,048 bytes, no control characters.
 
@@ -76,6 +82,13 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 
 - `Screen::new(cols, rows, scrollback) -> Screen`; the daemon uses 10,000 rows.
 - `feed(&mut self, &[u8]) -> ParsedOutput`, `resize(&mut self, cols, rows)`.
+- `feed_observing` lets its reader inspect complete frames in order, including each applied
+  synchronized update when several finish in one read. `CursorRowWrites` says whether the frame
+  wrote or erased cells on the cursor row and whether it began before the marked boundary. Those
+  facts stay with the frame when the PTY splits its output, including a split cursor movement.
+  `frame_printed_cell` reports a glyph printed in the current frame after that boundary, including
+  when its output spanned several reads. OSC status observations carry the offset of the opening
+  escape, which can precede the read that completed it.
 - `set_colors(&mut self, colors: TerminalColors)` replaces the colors used for subsequent queries.
   `TerminalColors { foreground, background, cursor, ansi }` has three `Option<[u8; 3]>` fields and
   `ansi: [Option<[u8; 3]>; 16]`, indexed by OSC 4 color number; its default leaves every color
@@ -87,14 +100,33 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
   replaying later output. It preserves title eligibility from the redraw and produces no title
   change for viewers.
 - `synchronized_update_deadline() -> Option<Instant>`, `end_synchronized_update() -> ParsedOutput`.
+- `is_drawing() -> bool` reports whether an open synchronized update holds back a frame, as does
+  `ScreenView::synchronized_update`. An update opened after a frame holds nothing back until it
+  receives output. The parsed start and end of each update have the same effect across reads.
+  An update reopened after a tab-stop change still holds back the rest of its frame.
 
 **Daemon, agent actor** (`daemon/src/agent/actor.rs`):
 
-- `ParsedOutput { query_replies, title_change, viewer_output, native_activity, redraw_viewers,
-  status }`: replies are written to the run's terminal, viewer output goes to viewers, and
+- `feed_observing(&mut self, bytes, observe) -> ParsedOutput` reports status and complete frames in
+  output order, including synchronized frames within one read. Each frame reports whether the
+  cursor row was written and whether it started before the caller's input boundary. A menu can
+  be drawn away from the cursor row. `frame_has_current_cell_writes()` lets the observer check for
+  a fresh draw on any row rather than repeating a snapshot that carried over from earlier bytes.
+- `ParsedOutput { query_replies, title_change, cursor_row_cells_written, viewer_output, native_activity,
+  redraw_viewers, status }`: replies are written to the run's terminal, viewer output goes to viewers, and
   status goes to the state. `title_change` carries the CLI's own title. `native_activity`
   carries the batch's complete OSC 9;4 sequences in order, so a viewer replacing the batch with a
   redraw can still receive them.
+- `cursor_row_cells_written` reports cell writes and erasures on the cursor's current row from
+  output applied in this call. Cursor moves affect the repaint and leave this evidence clear.
+- `mark_pending_frame_earlier()` carries the older origin of an unfinished unit or synchronized
+  update. A later feed applies it and starts counting cell writes at its completion boundary,
+  including a new frame that follows the boundary within the same read.
+- `observe_paint(bool)` starts or stops tracking cells explicitly set by the CLI after a write
+  boundary. `has_painted(row, columns)` checks the whole range in a complete frame. The parser
+  handles unit and synchronized-frame endings in stream order, including when one read finishes
+  an old frame and carries a new one. Tracking starts at the old frame's ending and follows
+  the cells if they scroll.
 - `set_status_glyph(&mut self, glyph: Option<String>) -> Vec<u8>` sets or clears the glyph.
   When the glyph changes and the title is eligible, it returns a title sequence. It may
   repeat the title viewers already see if the CLI's title begins with the glyph and a space.
@@ -158,9 +190,19 @@ which replays at most `REDRAW_SCROLLBACK_ROWS` (1,000) scrollback rows. A redraw
 - `view() -> ScreenView`.
 
 **Rules** (`rules/src/state.rs`, `rules/src/input/`): `ScreenView { rows, cols, continues, cursor,
-cursor_visible, synchronized_update }` and `VisibleCell { text, column, bold, dim, inverse,
-colored, foreground }`, to find a CLI's input box and state on screen. `foreground` is the same number for
-cells of the same color.
+cursor_visible, synchronized_update }` and each cell's `text()`, `column`, and attributes identify
+a CLI's input box and state on screen. Cells with equal terminal foregrounds have the same
+`foreground` value. `observe_paint` tracks changes from a
+caller's output boundary. `painted_at`, `printed_space_at`, and `line_feed_at` report their order
+in the current observation after a complete frame. `output_frame_complete` also covers the case
+where only the start of a synchronized update has arrived.
+
+`Screen::frame_row_writes(row: usize) -> CursorRowWrites` reports cell writes and erasures on a
+zero-based viewport row in the observed complete frame. Writes follow their cells through
+scrolling. `Current` marks writes in a frame after
+the marked input boundary, `Earlier` marks writes in a frame that began before it, and `None`
+means the frame left the row untouched. Rules uses the row of a drawn caret when the terminal
+cursor is elsewhere.
 
 **Scenario tests** (`framework/tests`): a `Screen` per viewer, to check what a viewer would show.
 
@@ -170,8 +212,15 @@ limits it sets.
 ## Depends on
 
 - `alacritty_terminal` 0.26.0 from `framework/vendor/`, whose changes let a grid hand the rows its
-  scrollback lets go of to a `HistoryKeeper` and take rows back, and erase a cleared main screen
-  where it is (`vendor/README.md`). Scrolling back so shows no page that the CLI took off its screen.
+  scrollback lets go of to a `HistoryKeeper` and take rows back (`vendor/README.md`). A clear of
+  the main screen erases the page in place, preserving only its earlier scrollback.
+  The Screen queries the cursor row's damage as applied by the terminal parser.
+- `vte` 0.15.0, alacritty's parser, from `framework/vendor/`. Complete synchronized frames are
+  parsed from the incoming bytes. An open frame holds what it needs across reads in fixed-capacity
+  blocks starting at 4 KiB, with 2 MiB total capacity. It releases those blocks when the frame ends,
+  before a subsequent frame can allocate its own. The parser reports whether the current frame
+  holds output beyond its opening marker and tracks a partial frame resumed after a tab-stop change.
+- `arrayvec`, for single UTF-8 characters stored inside cells.
 - `base64`, for the words in status reports.
 - No Facade crate.
 
@@ -246,7 +295,8 @@ screen.
 each row continues the one above. `read` and `text` walk `AllRows`: the store's rows, alacritty's
 scrollback, then the visible screen (the alternate screen has no scrollback). A store row is built
 back a block at a time and cached while the walk stays in that block. Rows that wrap join into one
-line; blank cells at a line's end and empty lines at the end are left out.
+line; blank cells at a line's end and empty lines at the end are left out. A tab moves the cursor
+and draws nothing: the cell alacritty keeps it in is a space in views, reads, copies and redraws.
 
 ### redraw
 

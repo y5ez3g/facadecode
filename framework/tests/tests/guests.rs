@@ -58,7 +58,7 @@ fn a_guest_waits_for_the_reply_to_its_message() {
     let original = sent["data"]["id"].as_str().expect("the send receipt ID");
     let (inbox_id, _) = original.split_once('@').expect("the full message address");
     let guest_name = guest_row["name"].as_str().expect("the Guest's name");
-    let expected = format!("📨 Message {inbox_id} from {guest_name} ({guest_address})\n{request}");
+    let expected = format!("📨 Message {inbox_id} from {guest_name} ({guest_address})\n{request} ");
     assert!(
         wait_until(secs(10), || home.submitted_messages().contains(&expected)),
         "the fake terminal did not accept the Guest's message: {}",
@@ -306,15 +306,24 @@ fn a_guest_result_wait_returns_the_linked_reply_or_continues_by_the_same_id() {
                 },
             }),
         );
+        let pasted = format!("{request} ");
         assert!(
             wait_until(secs(10), || home
                 .submitted_messages()
                 .iter()
-                .any(|message| { message.lines().skip(1).eq([request]) })),
+                .any(|message| message.lines().skip(1).eq([pasted.as_str()]))),
             "the request did not reach the fake terminal: {}",
             home.screen(&ada_address)
         );
-        let inbox = ada.call("read_messages", json!({ "last": 1 }));
+        // The durable receipt is published after the fake CLI draws the empty box.
+        let mut inbox = Value::Null;
+        assert!(
+            wait_until(secs(10), || {
+                inbox = ada.call("read_messages", json!({ "last": 1 }));
+                inbox["status"] != "success" || inbox["data"]["messages"][0]["text"] == request
+            }),
+            "the submitted request did not become readable: {inbox}"
+        );
         assert_eq!(inbox["status"], "success", "{inbox}");
         let original = &inbox["data"]["messages"][0];
         assert_eq!(original["text"], request, "{inbox}");
@@ -722,7 +731,7 @@ fn a_started_agent_s_commands_act_for_it_not_for_the_guest_that_started_it() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message m1 from command line\nfrom-the-helper"],
+        ["📨 Message m1 from command line\nfrom-the-helper "],
         "the message is the command line's, not the Guest's"
     );
 }
@@ -892,6 +901,11 @@ fn a_member_and_what_waits_for_it_outlast_a_daemon_restart() {
             },
         }),
     );
+    let (guest_id, _) = address.split_once('@').expect("the Guest address");
+    assert!(
+        wait_until(secs(10), || waiting_for(&home, guest_id) == 1),
+        "the send must be saved before the daemon exits"
+    );
     let old = home.kill_daemon();
     assert!(
         wait_until(secs(10), || home
@@ -899,11 +913,17 @@ fn a_member_and_what_waits_for_it_outlast_a_daemon_restart() {
             .is_some_and(|hello| hello["pid"].as_i64() != Some(old as i64))),
         "no daemon took over"
     );
+    let early = sender.answer(sending, secs(5));
+    assert!(
+        early.is_none(),
+        "the replay answered before the Guest read: {early:?}"
+    );
     let read = member.call("read_messages", json!({ "timeout_seconds": 30 }));
     assert_eq!(
         read["data"]["messages"][0]["text"], "kept for the member",
         "{read}"
     );
+    assert_eq!(read["data"]["messages"].as_array().map(Vec::len), Some(1));
     let sent = sender.tool_answer(sending);
     assert_eq!(sent["status"], "success", "{sent}");
     assert_eq!(sent["data"]["delivery"], "read_by_recipient", "{sent}");
@@ -913,6 +933,43 @@ fn a_member_and_what_waits_for_it_outlast_a_daemon_restart() {
         [&json!(address)],
         "{kept:?}"
     );
+}
+
+/// Recovering a Guest's delivery keeps its saved deadline and message number.
+#[test]
+fn a_guest_s_unread_delivery_times_out_after_daemon_restart() {
+    let home = TestHome::new("member-deadline");
+    let ada = home.start_named_fake("ada", &[]);
+    let (mut member, record) = member(&home);
+    let address = record["address"].as_str().expect("the Guest address");
+    let (guest_id, machine) = address.split_once('@').expect("the Guest ID");
+    let mut sender = McpTestClient::open(&home, &ada.id);
+    let sending = sender.send(
+        "tools/call",
+        json!({
+            "name": "send_message",
+            "arguments": {
+                "to": address, "text": "the member does not read this in time",
+                "wait_for": "delivery", "timeout_seconds": 18,
+            },
+        }),
+    );
+    assert!(
+        wait_until(secs(10), || waiting_for(&home, guest_id) == 1),
+        "the send must be saved before the daemon exits"
+    );
+    let old = home.kill_daemon();
+    assert!(
+        home.wait_for_daemon_after(old, secs(10)).is_some(),
+        "no daemon took over"
+    );
+    let sent = sender.tool_answer(sending);
+    assert_eq!(sent["status"], "failure", "{sent}");
+    assert_eq!(sent["reason"], "timeout", "{sent}");
+    assert_eq!(sent["data"]["id"], format!("m1@{machine}"), "{sent}");
+    assert_eq!(waiting_for(&home, guest_id), 0, "{sent}");
+    let read = member.call("read_messages", json!({}));
+    assert_eq!(read["data"]["messages"], json!([]), "{read}");
 }
 
 /// A read delivers only the messages it returns: `last` takes the newest of the inbox, and the rest

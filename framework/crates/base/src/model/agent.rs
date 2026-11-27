@@ -198,9 +198,8 @@ pub enum ToolsReason {
     /// Its Facade server did not connect within 30 seconds of the run's start or resume, or of a
     /// daemon's recovery of the run.
     NotConnected,
-    /// Its CLI starts its servers only with its first turn or its panel of servers, and the run's
-    /// start could not have the panel start Facade's server before the first turn; the daemon's log
-    /// says why. The first turn starts it.
+    /// Startup did not confirm Facade's tools before the CLI's first turn. That turn may run
+    /// without them. The daemon's log records why.
     NotStarted,
     /// Its Facade server's last connection closed while the run went on.
     Disconnected,
@@ -230,9 +229,7 @@ impl ToolsReason {
         match self {
             ToolsReason::NotGiven => "Facade could not give them to its CLI",
             ToolsReason::NotConnected => "its Facade server did not connect within 30 seconds",
-            ToolsReason::NotStarted => {
-                "its CLI did not start its Facade server before its first turn"
-            }
+            ToolsReason::NotStarted => "its first turn may run without Facade's tools",
             ToolsReason::Disconnected => "its Facade server's connection closed",
             ToolsReason::Ended => "its CLI ended",
             ToolsReason::Unknown => "a reason this build does not recognize",

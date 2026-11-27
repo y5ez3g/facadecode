@@ -8,23 +8,38 @@
 mod paste;
 mod probe;
 
+use std::borrow::Cow;
+use std::ops::Range;
+
 use facade_base::model::{
     agent::WaitKind,
     terminal::{HiddenRows, InputInfo, InputState},
 };
-use facade_screen::{ScreenView, VisibleCell};
+use facade_screen::{CursorRowWrites, ScreenView, VisibleCell};
 use regex::Regex;
+use unicode_normalization::{UnicodeNormalization, is_nfc};
 
 use crate::{
     BoxInput, CountedScroll, Editor, EditorBand, EditorLiveNotice, EditorNoticeContext, EditorRail,
-    Frame, InputRule, Menu, Prompt, Scrolled,
+    Frame, InputRule, Menu, MenuLinePattern, Prompt, Question, Scrolled,
 };
 
 pub use paste::{
-    is_full_draft, is_legacy_split_paste, is_own_draft, is_own_paste_tail, is_same_draft,
-    settle_time, with_paste_text,
+    could_be_paste_prefix, draft_backspace_count, is_full_draft, is_legacy_split_paste,
+    is_own_draft, is_own_paste_tail, is_own_recovered_draft, is_paste_placeholder, is_same_draft,
+    settle_time, shows_original_text, shows_paste_end, shows_paste_placeholder, shows_whole,
+    with_paste_text,
 };
 pub use probe::{ProbeVerdict, restored, shape_of, space_taken, verdict_of};
+
+/// Canonical composition of terminal text. A cell can hold a base character and combining marks.
+pub fn canonical_text(text: &str) -> Cow<'_, str> {
+    if is_nfc(text) {
+        Cow::Borrowed(text)
+    } else {
+        Cow::Owned(text.nfc().collect())
+    }
+}
 
 /// Reads the input box `rule` describes from `view`. Never waits. An open synchronized update
 /// reads `unknown`. When the terminal cursor is hidden, a prompt-row rule that opts in uses a
@@ -53,6 +68,8 @@ pub fn read_draft(rule: &InputRule, view: &ScreenView) -> (InputInfo, Option<Str
 pub struct BoxReading {
     pub info: InputInfo,
     pub draft: Option<String>,
+    /// The byte offset in the cursor's draft row and the row relative to the draft's start.
+    pub draft_cursor: Option<(usize, usize)>,
     /// The reason given by a recognized interaction, when the rule knows it.
     pub wait_kind: Option<WaitKind>,
     /// Visible text ending at the caret of a full viewport that has no scroll markers.
@@ -60,25 +77,132 @@ pub struct BoxReading {
     pub paste_tail: Option<String>,
     /// The input's first row and the cursor, where the reader found the input.
     pub line: Option<InputLine>,
+    /// The visible draft and its logical end were painted during this paste.
+    pub paste_drawing: Option<PasteDrawing>,
     /// Unknown because the only input row may be a hint or a draft. A space typed and taken back
     /// tells them apart.
     pub unsure: bool,
 }
 
+/// The end of an input the CLI painted during a paste.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PasteDrawing {
+    pub final_spaces: usize,
+    pub final_line_breaks: usize,
+}
+
 impl BoxReading {
-    /// A reading without captured input geometry or probe evidence.
+    /// A reading without captured input geometry, paste evidence or probe evidence.
     pub fn new(info: InputInfo, draft: Option<String>) -> Self {
         Self {
             info,
             draft,
+            draft_cursor: None,
             wait_kind: None,
             paste_tail: None,
             line: None,
+            paste_drawing: None,
             unsure: false,
         }
     }
+
+    /// Reads the frame's writes at the caret found by the input rule. A CLI can draw its own
+    /// caret in the composer while its hardware cursor stays outside the box.
+    pub fn frame_writes(
+        &self,
+        screen: &facade_screen::Screen,
+        terminal_writes: CursorRowWrites,
+    ) -> CursorRowWrites {
+        self.line
+            .as_ref()
+            .filter(|line| line.cursor.1 != usize::from(screen.cursor().1))
+            .map_or(terminal_writes, |line| {
+                screen.frame_row_writes(line.cursor.1)
+            })
+    }
+
+    /// Joins displayed rows into a logical draft and maps the cursor to a byte offset in it.
+    /// Keep the paste's line breaks and the spaces it left at wraps. Ignore horizontal padding
+    /// at the very end, including the caret when the CLI draws those final paste spaces.
+    /// Otherwise keep the visible text, including placeholder numbers.
+    pub fn logical_draft<'a>(&'a self, paste: &'a str) -> Option<(Cow<'a, str>, usize)> {
+        if self.draft_hidden().is_some() {
+            return None;
+        }
+        let shown = self.draft.as_deref()?;
+        let (byte, row) = self.draft_cursor?;
+        let mut lines = shown.split('\n');
+        let before = lines.by_ref().take(row).map(str::len).sum::<usize>();
+        let line = lines.next()?;
+        let text = paste.trim_end_matches([' ', '\t']);
+        let padding = paste.len() - text.len();
+        let byte = if lines.next().is_none() && byte.saturating_sub(line.len()) <= padding {
+            byte.min(line.len())
+        } else {
+            byte
+        };
+        if !line.is_char_boundary(byte) {
+            return None;
+        }
+        if let Some(at) = caret_in_paste(shown, (byte, row), text) {
+            return Some((Cow::Borrowed(text), at));
+        }
+        // The cursor is already at a cell boundary. Map its complete prefix along with the
+        // rendered rows, keeping the original logical line breaks when the paste aligns.
+        let canonical_paste = canonical_text(text);
+        let canonical_shown = canonical_text(shown);
+        if matches!(canonical_paste, Cow::Owned(_)) || matches!(canonical_shown, Cow::Owned(_)) {
+            let prefix = canonical_text(&line[..byte]);
+            if canonical_shown
+                .split('\n')
+                .nth(row)?
+                .starts_with(prefix.as_ref())
+                && let Some(at) =
+                    caret_in_paste(&canonical_shown, (prefix.len(), row), &canonical_paste)
+            {
+                return Some((canonical_paste, at));
+            }
+        }
+        Some((Cow::Owned(shown.replace('\n', "")), before + byte))
+    }
+
+    /// The draft's rows out of sight, for telling a message's own draft: those its CLI marks, as
+    /// `info.hidden` gives them, or, where the screen cut the input above its first row without a
+    /// mark, one row above at least.
+    pub fn draft_hidden(&self) -> Option<HiddenRows> {
+        let cut = self.line.as_ref().is_some_and(|line| line.cut);
+        (self.info.hidden).or(cut.then_some(HiddenRows { above: 1, below: 0 }))
+    }
+
+    /// Whether nothing of the input was read, as in the middle of a frame. It says nothing about what
+    /// the input holds.
+    pub fn is_unread(&self) -> bool {
+        self.info.state == InputState::Unknown && self.line.is_none()
+    }
 }
 
+fn caret_in_paste(shown: &str, cursor: (usize, usize), paste: &str) -> Option<usize> {
+    let mut left = paste;
+    let mut caret = None;
+    for (row, shown) in shown.split('\n').enumerate() {
+        if row != 0 {
+            let trimmed = left.trim_start_matches([' ', '\t']);
+            if let Some(next) = trimmed
+                .strip_prefix("\r\n")
+                .or_else(|| trimmed.strip_prefix(['\r', '\n']))
+            {
+                left = next;
+            } else if !left.starts_with(shown) {
+                left = trimmed;
+            }
+        }
+        if row == cursor.1 {
+            caret = Some(paste.len() - left.len() + cursor.0);
+        }
+        left = left.strip_prefix(shown)?;
+    }
+    if left.is_empty() { caret } else { None }
+}
 /// An input's first row from the column its input starts at to its last cell that draws
 /// something, and the cursor.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +212,9 @@ pub struct InputLine {
     pub cells: Vec<LineCell>,
     /// A row of the input under the first draws something.
     pub rest: bool,
+    /// The screen cut the input above this row without a mark of its CLI's: the input's first rows
+    /// may be out of sight.
+    pub cut: bool,
     /// Column and row.
     pub cursor: (usize, usize),
 }
@@ -112,31 +239,152 @@ pub fn read_box_for_typing(
     view: &ScreenView,
     untouched_input: bool,
 ) -> BoxReading {
-    let screen = Screen::new(view, rule.menus());
+    read_box_in_frame(rule, view, untouched_input, BoxPaint::None, None).0
+}
+
+/// Reads a cleanup response only where the CLI has painted the displayed input since the write.
+pub fn read_box_after_paint(rule: &InputRule, screen: &facade_screen::Screen) -> BoxReading {
+    read_box_in_frame(rule, &screen.view(), false, BoxPaint::Cleanup(screen), None).0
+}
+
+enum BoxPaint<'a> {
+    None,
+    Paste(&'a facade_screen::Screen),
+    Cleanup(&'a facade_screen::Screen),
+}
+
+/// Reads the current frame with any input painting tracked from the paste's write.
+pub fn read_box_for_screen(
+    rule: &InputRule,
+    screen: &facade_screen::Screen,
+    untouched_input: bool,
+) -> BoxReading {
+    read_box_in_frame(
+        rule,
+        &screen.view(),
+        untouched_input,
+        paste_paint(screen),
+        None,
+    )
+    .0
+}
+
+fn paste_paint(screen: &facade_screen::Screen) -> BoxPaint<'_> {
+    if screen.observes_paint() {
+        BoxPaint::Paste(screen)
+    } else {
+        BoxPaint::None
+    }
+}
+
+/// Reads the input and its redraw evidence using the caller's input boundary. For an interaction,
+/// the flag covers the menu anchor. For a complete ordinary frame, it covers the borders, prompt
+/// and visible text. The caller observes frames in output order.
+pub fn read_box_with_redraw(
+    rule: &InputRule,
+    screen: &facade_screen::Screen,
+    untouched_input: bool,
+) -> (BoxReading, bool) {
+    read_box_in_frame(
+        rule,
+        &screen.view(),
+        untouched_input,
+        paste_paint(screen),
+        Some(screen),
+    )
+}
+
+fn read_box_in_frame(
+    rule: &InputRule,
+    view: &ScreenView,
+    untouched_input: bool,
+    paint: BoxPaint<'_>,
+    redraw: Option<&facade_screen::Screen>,
+) -> (BoxReading, bool) {
+    let mut screen = Screen::new(view, rule.menus());
+    let mut reading = screen.read(rule, view, untouched_input);
+    let cursor = screen.cursor;
+    let wrapped_cursor = reading.wrapped_padding_cursor(view, cursor);
+    let paste_drawing = match paint {
+        BoxPaint::Paste(paint) => reading.paste_drawing(view, paint, cursor),
+        BoxPaint::Cleanup(paint) => {
+            if !reading.painted(rule, view, paint, wrapped_cursor.is_some(), cursor) {
+                reading = unknown("the CLI has not redrawn the input box after the cleanup write");
+            }
+            None
+        }
+        BoxPaint::None => None,
+    };
     let Reading {
         state,
         evidence,
         hidden,
         draft,
+        draft_start,
         wait_kind,
         paste_tail,
         line,
         unsure,
-    } = screen.read(rule, view, untouched_input);
+        redraw_rows,
+        ..
+    } = reading;
     let info = InputInfo {
         state,
         evidence,
         mechanism: Some(rule.mechanism()),
         hidden,
     };
-    BoxReading {
-        info,
-        draft,
-        wait_kind,
-        paste_tail,
-        line,
-        unsure,
-    }
+    let draft_cursor = draft_start.and_then(|(left, top)| {
+        if let Some(cursor) = wrapped_cursor {
+            return Some(cursor);
+        }
+        let (column, row) = cursor;
+        if column < left
+            || (matches!(
+                rule,
+                InputRule::PromptRow {
+                    placeholder: None,
+                    ..
+                }
+            ) && row != top)
+        {
+            return None;
+        }
+        let before = view
+            .rows
+            .get(row)?
+            .iter()
+            .filter(|cell| (left..column).contains(&cell.column));
+        Some((
+            before.map(|cell| cell.text().len()).sum(),
+            row.checked_sub(top)?,
+        ))
+    });
+    let redrawn = redraw_rows.zip(redraw).is_some_and(|(rows, terminal)| {
+        let mut drawn = false;
+        for row in rows {
+            for cell in screen.row(row).iter().filter(|cell| draws(cell)) {
+                if !terminal.frame_printed_cell(row, cell.column) {
+                    return false;
+                }
+                drawn = true;
+            }
+        }
+        drawn
+    });
+    (
+        BoxReading {
+            info,
+            draft,
+            draft_cursor,
+            wait_kind,
+            paste_tail,
+            line,
+            paste_drawing,
+            unsure,
+        },
+        redrawn,
+    )
 }
 
 /// What a reader found, before the rule's mechanism is added.
@@ -146,18 +394,174 @@ struct Reading {
     hidden: Option<HiddenRows>,
     /// The draft as its rows draw it.
     draft: Option<String>,
+    /// Column and row of the first cell of the draft.
+    draft_start: Option<(usize, usize)>,
     wait_kind: Option<WaitKind>,
     paste_tail: Option<String>,
     line: Option<InputLine>,
     unsure: bool,
+    /// The rows whose printed glyphs can prove the recognized menu or framed composer.
+    redraw_rows: Option<Range<usize>>,
 }
 
 impl Reading {
+    /// A blank soft continuation places the caret in the previous logical line's padding.
+    /// A hard line or more text on the continuation has no such position.
+    fn wrapped_padding_cursor(
+        &self,
+        view: &ScreenView,
+        (column, row): (usize, usize),
+    ) -> Option<(usize, usize)> {
+        let ((_, top), draft) = self.draft_start.zip(self.draft.as_deref())?;
+        if row <= top || column == 0 {
+            return None;
+        }
+        let mut lines = draft.rsplit('\n');
+        let last_line = lines.next()?;
+        let last_offset = lines.count();
+        let last_row = top + last_offset;
+        let continuation = last_row + 1..=row;
+        if row <= last_row
+            || view.continues.get(row + 1) == Some(&true)
+            || !view
+                .continues
+                .get(continuation.clone())?
+                .iter()
+                .all(|&wraps| wraps)
+            || !view
+                .rows
+                .get(continuation)?
+                .iter()
+                .all(|cells| cells.iter().all(|cell| cell.text() == " "))
+        {
+            return None;
+        }
+        let trailing_cells = view
+            .rows
+            .get(last_row)?
+            .iter()
+            .rev()
+            .take_while(|cell| cell.text() == " ")
+            .count();
+        let padding = trailing_cells + (row - last_row - 1) * view.cols + column;
+        Some((last_line.len() + padding, last_offset))
+    }
+
+    fn painted(
+        &self,
+        rule: &InputRule,
+        view: &ScreenView,
+        screen: &facade_screen::Screen,
+        wrapped_padding: bool,
+        cursor: (usize, usize),
+    ) -> bool {
+        match self.state {
+            InputState::Draft => {
+                let Some(((start, top), draft)) = self.draft_start.zip(self.draft.as_deref())
+                else {
+                    return false;
+                };
+                if matches!(
+                    rule,
+                    InputRule::PromptRow {
+                        placeholder: None,
+                        ..
+                    }
+                ) && cursor.1 != top
+                    && !wrapped_padding
+                {
+                    return false;
+                }
+                draft.split('\n').enumerate().all(|(index, line)| {
+                    let row = top + index;
+                    let Some(cells) = view.rows.get(row) else {
+                        return false;
+                    };
+                    let mut bytes = line.len();
+                    let last = cells
+                        .iter()
+                        .skip_while(|cell| cell.column < start)
+                        .take_while(|cell| {
+                            let remains = bytes != 0;
+                            bytes = bytes.saturating_sub(cell.text().len());
+                            remains
+                        })
+                        .last();
+                    bytes == 0
+                        && screen
+                            .has_painted(row, start..last.map_or(start, |cell| cell.column) + 1)
+                })
+            }
+            InputState::Usable => {
+                let (column, row) = cursor;
+                // A bare prompt-row rule can locate its prompt independently of the cursor.
+                if let InputRule::PromptRow {
+                    prompt,
+                    placeholder: None,
+                    ..
+                } = rule
+                    && view
+                        .rows
+                        .iter()
+                        .rposition(|cells| joined(cells).starts_with(prompt))
+                        != Some(row)
+                {
+                    return false;
+                }
+                screen.has_painted(row, column..column + 1)
+            }
+            _ => true,
+        }
+    }
+
+    fn paste_drawing(
+        &self,
+        view: &ScreenView,
+        screen: &facade_screen::Screen,
+        cursor: (usize, usize),
+    ) -> Option<PasteDrawing> {
+        let ((start, top), draft) = self.draft_start.zip(self.draft.as_deref())?;
+        let mut end = None;
+        for (index, line) in draft.split('\n').enumerate() {
+            let row = top + index;
+            let cells = view.rows.get(row)?;
+            let mut bytes = line.len();
+            for cell in cells.iter().skip_while(|cell| cell.column < start) {
+                if bytes == 0 {
+                    break;
+                }
+                let text = cell.text();
+                bytes = bytes.saturating_sub(text.len());
+                // ConPTY can move over blanks between words without printing them. Every glyph
+                // still needs paint from this paste. The tail counts printed spaces separately.
+                if text != " " {
+                    end = Some((cell.column + 1, row, screen.painted_at(row, cell.column)?));
+                }
+            }
+            if bytes != 0
+                || (line.is_empty()
+                    && screen.line_feed_at(row).is_none()
+                    && !screen.has_painted(row, start..start + 1))
+            {
+                return None;
+            }
+        }
+        painted_paste_end(view, screen, cursor, start, end?)
+    }
+
     fn with_line(self, line: InputLine) -> Reading {
         Reading {
             line: Some(line),
             ..self
         }
+    }
+
+    /// The reading of an input the screen cut above its first row without a mark.
+    fn cut(mut self) -> Reading {
+        if let Some(line) = &mut self.line {
+            line.cut = true;
+        }
+        self
     }
 }
 
@@ -167,10 +571,19 @@ fn reading(state: InputState, evidence: impl Into<String>) -> Reading {
         evidence: evidence.into(),
         hidden: None,
         draft: None,
+        draft_start: None,
         wait_kind: None,
         paste_tail: None,
         line: None,
         unsure: false,
+        redraw_rows: None,
+    }
+}
+
+fn interaction(evidence: impl Into<String>, anchor: Range<usize>) -> Reading {
+    Reading {
+        redraw_rows: Some(anchor),
+        ..reading(InputState::Interaction, evidence)
     }
 }
 
@@ -192,11 +605,12 @@ fn line_of(
         row,
         start,
         rest,
+        cut: false,
         cursor,
         cells: from[..end]
             .iter()
             .map(|cell| LineCell {
-                text: cell.text.clone(),
+                text: cell.text().to_owned(),
                 dim: cell.dim,
                 colored: cell.colored,
             })
@@ -216,14 +630,12 @@ type Cells = [VisibleCell];
 
 /// A draft drawn on `lines`, each a row's cells after the input's margin. `marks` counts the rows
 /// its CLI marks scrolled out above and below.
-fn drafted(place: &str, marks: (Option<u32>, Option<u32>), lines: &[&Cells]) -> Reading {
-    let mut text = String::new();
-    for (index, line) in lines.iter().enumerate() {
-        if index > 0 {
-            text.push('\n');
-        }
-        text.push_str(joined(line).trim_end());
-    }
+fn drafted(
+    place: &str,
+    start: (usize, usize),
+    marks: (Option<u32>, Option<u32>),
+    lines: &[&Cells],
+) -> Reading {
     let hidden = match marks {
         (None, None) => None,
         (above, below) => Some(HiddenRows {
@@ -234,18 +646,86 @@ fn drafted(place: &str, marks: (Option<u32>, Option<u32>), lines: &[&Cells]) -> 
     let scrolled = if hidden.is_some() { ", scrolled" } else { "" };
     Reading {
         hidden,
-        draft: Some(text.trim_end().to_owned()),
+        draft: Some(draft_text(lines)),
+        draft_start: Some(start),
         ..reading(InputState::Draft, format!("{place} holds text{scrolled}"))
     }
 }
 
+fn draft_text(lines: &[&Cells]) -> String {
+    let mut text = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        if index > 0 {
+            text.push('\n');
+        }
+        text.push_str(joined(line).trim_end());
+    }
+    text.truncate(text.trim_end().len());
+    text
+}
+
+/// Counts printed blanks and actual line feeds after the last glyph. Soft wraps join the same
+/// logical line. Earlier padding and cursor motion supply neither witness.
+fn painted_paste_end(
+    view: &ScreenView,
+    screen: &facade_screen::Screen,
+    cursor: (usize, usize),
+    left: usize,
+    end: (usize, usize, u32),
+) -> Option<PasteDrawing> {
+    let (column, row) = cursor;
+    let (last_column, last_row, mut after) = end;
+    if row < last_row || (row == last_row && column.saturating_add(1) < last_column) {
+        return None;
+    }
+    let mut drawing = PasteDrawing::default();
+    let mut beginning = (last_column, last_row);
+    for following in last_row + 1..=row {
+        if !view.continues.get(following).copied()? {
+            after = screen
+                .line_feed_at(following)
+                .filter(|&order| order > after)?;
+            drawing.final_line_breaks += 1;
+            beginning = (left, following);
+        }
+    }
+    for current in beginning.1..=row {
+        let from = if current == beginning.1 {
+            beginning.0
+        } else {
+            0
+        };
+        let to = if current == row {
+            column + usize::from(cursor == view.cursor && screen.cursor_wrap_pending())
+        } else {
+            view.cols
+        };
+        for cell in view
+            .rows
+            .get(current)?
+            .iter()
+            .filter(|cell| (from..to).contains(&cell.column))
+        {
+            let Some(order) = screen
+                .printed_space_at(current, cell.column)
+                .filter(|&order| order > after)
+            else {
+                return Some(drawing);
+            };
+            after = order;
+            drawing.final_spaces += 1;
+        }
+    }
+    Some(drawing)
+}
+
 fn joined(cells: &Cells) -> String {
-    cells.iter().map(|cell| cell.text.as_str()).collect()
+    cells.iter().map(VisibleCell::text).collect()
 }
 
 /// A cell that draws something other than space.
 fn draws(cell: &VisibleCell) -> bool {
-    !cell.text.trim().is_empty()
+    !cell.text().trim().is_empty()
 }
 
 fn all_space(cells: &Cells) -> bool {
@@ -288,6 +768,15 @@ fn hint_like(cells: &Cells) -> bool {
             .all(|cell| cell.dim || colored(cell))
 }
 
+fn styled(cell: &VisibleCell) -> bool {
+    cell.dim || cell.colored
+}
+
+/// Text, all of it dim or colored, as a CLI that draws its input plain writes around it.
+fn styled_only(cells: &Cells) -> bool {
+    cells.iter().any(draws) && cells.iter().all(|cell| !draws(cell) || styled(cell))
+}
+
 /// `row 7` or `rows 5-7`, counted from 1.
 fn row_span(first: usize, last: usize) -> String {
     match first == last {
@@ -296,10 +785,18 @@ fn row_span(first: usize, last: usize) -> String {
     }
 }
 
-/// The number the one capture of `pattern` holds in `line`.
+/// The number the one capture of `pattern` holds in `line`, 1 where it matches without one.
 fn counted(pattern: &Regex, line: &str) -> Option<u32> {
     let found = pattern.captures(line)?;
-    found[1].parse().ok()
+    found
+        .get(1)
+        .map_or(Some(1), |number| number.as_str().parse().ok())
+}
+
+/// A complete terminal line and the screen row it starts on.
+struct LogicalLine<'a> {
+    row: usize,
+    text: Cow<'a, str>,
 }
 
 /// The screen as the readers look at it.
@@ -326,7 +823,7 @@ impl<'a> Screen<'a> {
         }
     }
 
-    fn read(mut self, rule: &InputRule, view: &ScreenView, untouched_input: bool) -> Reading {
+    fn read(&mut self, rule: &InputRule, view: &ScreenView, untouched_input: bool) -> Reading {
         if view.synchronized_update {
             return unknown("the CLI is in the middle of a synchronized update");
         }
@@ -403,7 +900,7 @@ impl<'a> Screen<'a> {
     /// starts at column 0, so its first cells' indexes are their columns.
     fn char(&self, y: usize, index: usize) -> &str {
         match self.cells.get(y).and_then(|row| row.get(index)) {
-            Some(cell) => &cell.text,
+            Some(cell) => cell.text(),
             None => " ",
         }
     }
@@ -428,32 +925,104 @@ impl<'a> Screen<'a> {
         self.cursor == (column, row)
     }
 
-    /// The row a menu or question of the CLI's shows its selected item or question on.
-    fn menu_row(&self, menu: &Menu) -> Option<usize> {
-        let row = |y: usize| self.lines[y].trim_end_matches(' ');
-        let below_matches =
-            |y: usize, pattern: &Regex| y + 1 < self.lines.len() && pattern.is_match(row(y + 1));
-        let hinted = |y: usize, pattern: &Regex, within: usize| {
-            (y + 1..self.lines.len())
-                .take(within)
-                .any(|next| pattern.is_match(row(next)))
+    fn logical_lines(&self) -> Vec<LogicalLine<'_>> {
+        let mut lines: Vec<LogicalLine<'_>> = Vec::with_capacity(self.lines.len());
+        for (row, text) in self.lines.iter().enumerate() {
+            if self.continues.get(row) == Some(&true) {
+                // A continuation at the top begins outside the visible screen.
+                if let Some(line) = lines.last_mut() {
+                    line.text.to_mut().push_str(text);
+                }
+            } else {
+                lines.push(LogicalLine {
+                    row,
+                    text: Cow::Borrowed(text),
+                });
+            }
+        }
+        lines
+    }
+
+    /// The last logical line consumed by a menu pattern starting at `start`.
+    fn menu_line_end(
+        &self,
+        pattern: &MenuLinePattern,
+        lines: &[LogicalLine<'_>],
+        start: usize,
+    ) -> Option<usize> {
+        let first = lines.get(start)?.text.as_ref();
+        let wrapped = match pattern {
+            MenuLinePattern::Regex(regex) => {
+                return regex.is_match(first.trim_end_matches(' ')).then_some(start);
+            }
+            MenuLinePattern::Wrapped(wrapped) => wrapped,
         };
-        (0..self.lines.len()).find(|&y| {
-            let line = row(y);
-            if !menu.selected.is_match(line) {
-                return false;
-            }
-            if let Some(not) = &menu.not_selected
-                && not.is_match(line)
+        let prefix = wrapped
+            .prefix
+            .find(first)
+            .filter(|prefix| prefix.start() == 0)?;
+        let first_text = first[prefix.end()..].trim_end_matches(' ');
+        if first_text.is_empty() && prefix.as_str().trim().is_empty() {
+            return None;
+        }
+        let mut expected = wrapped.text.strip_prefix(first_text)?;
+        let mut end = start;
+        // The display boundary determines the end, even after consuming the expected text.
+        for (index, line) in lines.iter().enumerate().skip(start + 1) {
+            let Some((indent, fragment)) = line.text.split_at_checked(wrapped.indent) else {
+                break;
+            };
+            let fragment = fragment.trim_end_matches(' ');
+            if fragment.is_empty()
+                || indent.bytes().any(|byte| byte != b' ')
+                || wrapped.stop_at_dim && self.dim_line(lines, index)
             {
-                return false;
+                break;
             }
-            let next_fits = menu.next.as_ref().is_none_or(|next| below_matches(y, next));
-            let hint_fits = menu
-                .hint
+            // Word wrapping omits the space at a word boundary and can also split a word.
+            expected = expected
+                .strip_prefix(' ')
+                .unwrap_or(expected)
+                .strip_prefix(fragment)?;
+            end = index;
+        }
+        expected.is_empty().then_some(end)
+    }
+
+    /// Every drawn cell of this logical line is dim, including its terminal continuations.
+    fn dim_line(&self, lines: &[LogicalLine<'_>], index: usize) -> bool {
+        let start = lines[index].row;
+        let end = lines
+            .get(index + 1)
+            .map_or(self.cells.len(), |line| line.row);
+        self.cells[start..end]
+            .iter()
+            .flatten()
+            .filter(|cell| draws(cell))
+            .all(|cell| cell.dim)
+    }
+
+    /// All screen rows of a menu or question's anchor, including continuations.
+    fn menu_rows(&self, menu: &Menu, lines: &[LogicalLine<'_>]) -> Option<Range<usize>> {
+        lines.iter().enumerate().find_map(|(start, line)| {
+            let end = self.menu_line_end(&menu.selected, lines, start)?;
+            if let Some(not) = &menu.not_selected
+                && not.is_match(line.text.trim_end_matches(' '))
+            {
+                return None;
+            }
+            let after = end + 1;
+            let next_fits = menu
+                .next
                 .as_ref()
-                .is_none_or(|hint| hinted(y, &hint.pattern, hint.within));
-            next_fits && hint_fits
+                .is_none_or(|next| self.menu_line_end(next, lines, after).is_some());
+            let hint_fits = menu.hint.as_ref().is_none_or(|hint| {
+                (after..lines.len())
+                    .take(hint.within)
+                    .any(|start| self.menu_line_end(&hint.pattern, lines, start).is_some())
+            });
+            (next_fits && hint_fits)
+                .then(|| line.row..lines.get(after).map_or(self.height(), |line| line.row))
         })
     }
 
@@ -461,17 +1030,22 @@ impl<'a> Screen<'a> {
     /// of the CLI's own shows, otherwise `unknown`.
     fn elsewhere(&self, why: impl Into<String>) -> Reading {
         let why = why.into();
+        if self.menus.is_empty() {
+            return unknown(why);
+        }
+        let lines = self.logical_lines();
         for menu in self.menus {
-            let Some(y) = self.menu_row(menu) else {
+            let Some(anchor) = self.menu_rows(menu, &lines) else {
                 continue;
             };
-            let what = match menu.next {
-                Some(_) => "a menu's selected item",
-                None => "a question",
+            let what = match (&menu.selected, &menu.next) {
+                (MenuLinePattern::Wrapped(_), _) => "a menu",
+                (_, Some(_)) => "a menu's selected item",
+                (_, None) => "a question",
             };
-            return reading(
-                InputState::Interaction,
-                format!("{why}; the CLI shows {what} at row {}", y + 1),
+            return interaction(
+                format!("{why}; the CLI shows {what} at row {}", anchor.start + 1),
+                anchor,
             );
         }
         unknown(why)
@@ -530,7 +1104,12 @@ impl<'a> Screen<'a> {
             };
             let from = usize::from(above.is_some());
             let to = lines.len() - usize::from(below.is_some());
-            return drafted(&place, (above, below), &lines[from..to]);
+            return drafted(
+                &place,
+                (column, prompt + from),
+                (above, below),
+                &lines[from..to],
+            );
         }
         if !rest_blank {
             return unknown(format!(
@@ -559,7 +1138,33 @@ impl<'a> Screen<'a> {
     ) -> Reading {
         let place = format!("{what} at {}", row_span(first + 1, first + lines.len()));
         let rest = lines[1..].iter().any(|line| !all_space(line));
-        drafted(&place, marks, lines).with_line(line_of(lines[0], first, column, rest, self.cursor))
+        drafted(&place, (column, first), marks, lines).with_line(line_of(
+            lines[0],
+            first,
+            column,
+            rest,
+            self.cursor,
+        ))
+    }
+
+    /// What shows of an input whose other rows do not, `lines` from row `first`: `draft` where the last
+    /// of them is the cursor's row with the cursor behind its text, as a paste leaves it, and no menu
+    /// shows; otherwise `none`.
+    fn as_pasted(
+        &self,
+        none: Reading,
+        first: usize,
+        lines: &[&Cells],
+        draft: impl FnOnce() -> Reading,
+    ) -> Reading {
+        let (column, cursor_row) = self.cursor;
+        let behind_text =
+            (self.row(cursor_row).iter()).all(|cell| cell.column < column || !draws(cell));
+        let pasted = first + lines.len() == cursor_row + 1 && behind_text && holds_writing(lines);
+        match none.state {
+            InputState::Unknown if pasted => draft(),
+            _ => none,
+        }
     }
 
     /// `frame`: input between two rules, with a prompt row unless it scrolled out.
@@ -594,7 +1199,8 @@ impl<'a> Screen<'a> {
             Scrolled::Rules(marks) => (None, Some(marks)),
             Scrolled::LastColumn { .. } | Scrolled::Unmarked(_) => (None, None),
         };
-        // Up from the cursor over wrapped rows to the prompt or a marked upper rule.
+        // Up from the cursor over wrapped rows to the prompt, or to the upper rule over a draft that
+        // scrolled.
         let upper = (0..=cursor_row)
             .rev()
             .find(|&y| prompt_at(y) || !wrapped(y))
@@ -609,11 +1215,19 @@ impl<'a> Screen<'a> {
             return missing();
         };
         let first = upper + 1;
+        if first > cursor_row {
+            return missing();
+        }
+        let upper_at = frame.upper.is_match(&self.lines[upper]);
+        let prompt_in_frame = upper_at && prompt_at(first);
         let above = rule_marks.and_then(|marks| counted(&marks.above, &self.lines[upper]));
-        if first > cursor_row
-            || !(!hidden_hardware_caret && above.is_some()
-                || prompt_at(first) && frame.upper.is_match(&self.lines[upper]))
-        {
+        // A complete frame must identify both rules and its prompt when the CLI hides the caret.
+        let unmarked = !hidden_hardware_caret
+            && frame.scrolls_unmarked
+            && above.is_none()
+            && upper_at
+            && !prompt_in_frame;
+        if !(prompt_in_frame || !hidden_hardware_caret && (above.is_some() || unmarked)) {
             return missing();
         }
         // Down over wrapped rows to the lower rule.
@@ -632,9 +1246,43 @@ impl<'a> Screen<'a> {
             return missing();
         }
         let below = below_at(lower);
-        if above.is_some() || below.is_some() {
+        if above.is_some() || below.is_some() || unmarked {
             let lines: Vec<&Cells> = (first..lower).map(|y| self.from(y, column)).collect();
-            return self.scrolled_draft(first, "the input frame", (above, below), &lines, column);
+            let draft =
+                || self.scrolled_draft(first, "the input frame", (above, below), &lines, column);
+            return match unmarked && below.is_none() {
+                true => self.as_pasted(missing(), first, &lines, || draft().cut()),
+                false => draft(),
+            };
+        }
+        let framed = |reading: Reading| Reading {
+            redraw_rows: matches!(reading.state, InputState::Usable | InputState::Draft)
+                .then_some(upper..lower + 1),
+            ..reading
+        };
+        if let Some(hint) = &frame.dim_cursor_hint
+            && lower == first + 1
+            && self.cursor_at(column, first)
+        {
+            let cells = self.from(first, column);
+            let dim_after_cursor = cells.split_first().is_some_and(|(cursor, rest)| {
+                cursor.column == column
+                    && cursor.inverse
+                    && draws(cursor)
+                    && rest
+                        .iter()
+                        .all(|cell| !draws(cell) || cell.dim && !cell.inverse)
+            });
+            if dim_after_cursor && joined(cells).trim_end() == hint.as_str() {
+                let line = line_of(self.row(first), first, column, false, self.cursor);
+                return framed(
+                    usable(format!(
+                        "the input frame at row {} shows its dim hint",
+                        first + 1
+                    ))
+                    .with_line(line),
+                );
+            }
         }
         if let Some(mode) = &frame.placeholder {
             let one_row = lower == first + 1;
@@ -646,7 +1294,7 @@ impl<'a> Screen<'a> {
             let shown = shown.trim_end();
             if one_row && footer && mode.texts.iter().any(|text| names_mode(shown, text)) {
                 let place = format!("the input frame at row {}", first + 1);
-                return match self.cursor_at(column, first) {
+                return framed(match self.cursor_at(column, first) {
                     true => usable(format!(
                         "{place} shows its mode placeholder above its empty-input footer"
                     )),
@@ -654,7 +1302,7 @@ impl<'a> Screen<'a> {
                         "{place} shows its mode placeholder, but the cursor is not where the \
                          input starts"
                     )),
-                };
+                });
             }
         }
         let input = self.after_prompt(
@@ -680,7 +1328,7 @@ impl<'a> Screen<'a> {
         {
             return unknown("the CLI is still preparing the input frame");
         }
-        input
+        framed(input)
     }
 
     /// `prompt`: a prompt row above a model line, or a scrolled input without the model line.
@@ -736,7 +1384,7 @@ impl<'a> Screen<'a> {
         let marked = |y: usize, mark: &str| {
             self.row(y)
                 .last()
-                .is_some_and(|cell| cell.column + 1 == self.cols && cell.dim && cell.text == mark)
+                .is_some_and(|cell| cell.column + 1 == self.cols && cell.dim && cell.text() == mark)
         };
         let (above, below) = match &rule.scrolled {
             Scrolled::LastColumn { above, below } if model.is_none() => {
@@ -745,7 +1393,7 @@ impl<'a> Screen<'a> {
             _ => (false, false),
         };
         if model.is_none() && !above && !below {
-            return missing_model();
+            return self.without_model_line(prompt, prompt_at, missing_model());
         }
         if !(prompt..end).contains(&cursor_row) {
             return if model.is_some() {
@@ -784,6 +1432,29 @@ impl<'a> Screen<'a> {
         )
     }
 
+    /// A prompt input whose CLI left its model line out, as one does where a draft does not fit
+    /// with it, from row `prompt`: a draft where its last row is the cursor's and holds text, and
+    /// only blank rows are under it but for the screen's last, where the CLI keeps its status, and no
+    /// menu shows; otherwise `none`. An empty input keeps its model line.
+    fn without_model_line(
+        &self,
+        prompt: usize,
+        prompt_at: impl Fn(usize) -> bool,
+        none: Reading,
+    ) -> Reading {
+        let cursor_row = self.cursor.1;
+        let under = cursor_row + 1;
+        let status = |y: usize| y > under && y + 1 == self.height() && !prompt_at(y);
+        let alone = (under..self.height()).all(|y| self.blank(y) || status(y));
+        if prompt > cursor_row || self.blank(cursor_row) || !alone {
+            return none;
+        }
+        let lines: Vec<&Cells> = (prompt..under).map(|y| self.from(y, 2)).collect();
+        self.as_pasted(none, prompt, &lines, || {
+            self.scrolled_draft(prompt, "the input", (None, None), &lines, 2)
+        })
+    }
+
     /// `editor`: rows under a status band, beside a rail, or between two rules.
     fn in_editor(&self, rule: &Editor, cursor_visible: bool) -> Reading {
         if let Some(rail) = &rule.rail {
@@ -809,12 +1480,31 @@ impl<'a> Screen<'a> {
             .zip(lower)
             .filter(|(upper, lower)| (1..=tallest).contains(&(lower - upper - 1)));
         let Some((upper, lower)) = rules else {
-            return self.elsewhere(format!(
+            let none = self.elsewhere(format!(
                 "no editor between two rules around the cursor at row {}",
                 cursor_row + 1
             ));
+            return self.cut_editor(rule, upper, lower, none);
         };
         let place = format!("the editor at {}", row_span(upper + 2, lower));
+        if let Some(question) = &rule.question
+            && let Some((row, certain)) = self.question_row(question, upper, lower)
+        {
+            return match certain {
+                true => interaction(
+                    format!(
+                        "{place} answers a question of the CLI's, as row {} shows",
+                        row + 1
+                    ),
+                    row..row + 1,
+                ),
+                false => unknown(format!(
+                    "{place} may answer a question of the CLI's, as row {} may show over its \
+                     footer",
+                    row + 1
+                )),
+            };
+        }
         let cursor_in_editor =
             self.own_cursor(cursor_row, column) || (rule.hardware_cursor && cursor_visible);
         if cursor_row == lower || !cursor_in_editor {
@@ -828,7 +1518,10 @@ impl<'a> Screen<'a> {
         }
         let lines: Vec<&Cells> = (upper + 1..lower).map(|y| self.row(y)).collect();
         if limit == Some(lines.len()) {
-            return self.full_editor(lower, column, lines, &place);
+            let at = self
+                .row(cursor_row)
+                .partition_point(|cell| cell.column < column);
+            return self.full_editor(lower, at, lines, &place);
         }
         let marks = match &rule.scrolled {
             Scrolled::Rules(marks) => (
@@ -958,7 +1651,7 @@ impl<'a> Screen<'a> {
         if !self.editor_notice_row_complete(row) {
             return None;
         }
-        let last = cells.iter().rposition(|cell| cell.text != " ")?;
+        let last = cells.iter().rposition(|cell| cell.text() != " ")?;
         let literal = &cells[..=last];
         (literal[0].column == 0 && literal.iter().all(|cell| cell.bold && cell.colored))
             .then(|| self.lines[row].trim_end_matches(' '))
@@ -1023,7 +1716,7 @@ impl<'a> Screen<'a> {
     fn editor_rail_bounds(&self, cursor_row: usize) -> Option<(usize, usize)> {
         let interior = |row| {
             self.row(row).first().is_some_and(|cell| {
-                cell.column == 0 && cell.text == "┃" && cell.colored && self.char(row, 1) == " "
+                cell.column == 0 && cell.text() == "┃" && cell.colored && self.char(row, 1) == " "
             })
         };
         if !interior(cursor_row) {
@@ -1037,7 +1730,7 @@ impl<'a> Screen<'a> {
                 && cells.iter().enumerate().all(|(column, cell)| {
                     cell.column == column
                         && cell.colored
-                        && cell.text == if column == 0 { glyph } else { fill }
+                        && cell.text() == if column == 0 { glyph } else { fill }
                 })
         };
         (cap(upper, "╻", "▄") && cap(lower, "╹", "▀")).then_some((upper, lower))
@@ -1067,7 +1760,7 @@ impl<'a> Screen<'a> {
                 cells
                     .iter()
                     .enumerate()
-                    .all(|(column, cell)| cell.column == column && cell.text == " ")
+                    .all(|(column, cell)| cell.column == column && cell.text() == " ")
             })
         };
         (self.lines[first].starts_with(&rail.fallback_prompt) && (first + 1..lower).all(wrapped))
@@ -1094,7 +1787,7 @@ impl<'a> Screen<'a> {
         let status_text = self
             .row(first - 1)
             .iter()
-            .skip_while(|cell| cell.text != " ")
+            .skip_while(|cell| cell.text() != " ")
             .nth(1);
         let (prompt, _) = split_row(first);
         if !cursor_visible
@@ -1109,7 +1802,8 @@ impl<'a> Screen<'a> {
         let end = (first + 1..self.height())
             .find(|&row| {
                 let (gutter, _) = split_row(row);
-                gutter.len() != start || !gutter.iter().all(|cell| cell.colored && cell.text == " ")
+                gutter.len() != start
+                    || !gutter.iter().all(|cell| cell.colored && cell.text() == " ")
             })
             .unwrap_or_else(|| self.height());
         if cursor_row >= end
@@ -1149,9 +1843,84 @@ impl<'a> Screen<'a> {
         let at = at.min(last.len());
         if self.cursor.1 + 1 == end && !last[at..].iter().any(written) && holds_writing(&lines) {
             lines[last_row] = &last[..at];
-            reading.paste_tail = drafted(place, (None, None), &lines).draft;
+            reading.paste_tail = Some(draft_text(&lines));
         }
         reading
+    }
+
+    /// The row that shows that the editor between these rules may answer a question of the CLI's,
+    /// and whether it shows that for certain: its keys under it; or, where they are out of sight, the
+    /// rule over the question, a blank row, the question and a blank row over it, for certain where
+    /// the footer is cut too, as the CLI cuts its footer first. Over a whole footer, an extension's
+    /// rows under the question or a footer of more rows may have taken the keys' place, and the CLI's
+    /// own input may stand under such rows as well.
+    fn question_row(
+        &self,
+        question: &Question,
+        upper: usize,
+        lower: usize,
+    ) -> Option<(usize, bool)> {
+        let shown = |y: usize| y < self.height() && !self.blank(y);
+        let keys = lower + 2;
+        if !shown(lower + 1) && shown(keys) && question.keys.is_match(&self.lines[keys]) {
+            return Some((keys, true));
+        }
+        // The screen's first row is the transcript's.
+        let top = (1..upper)
+            .rev()
+            .find(|&y| question.top.is_match(&self.lines[y]))?;
+        let asked = top + 2 < upper - 1 && !shown(top + 1) && shown(top + 2) && !shown(upper - 1);
+        let footer = (1..=question.footer_rows).all(|row| shown(lower + row));
+        asked.then_some((top, !footer))
+    }
+
+    /// A draft in an editor the screen has no room for, otherwise `none`. The CLI keeps the cursor's
+    /// row: it leaves out the rows after it, the lower rule with them, then the rows before it, the
+    /// upper rule with them, or the editor's first rows lie above the screen's top. Only the rows that
+    /// are the editor's however much was left out are read, and never as an empty input: an empty
+    /// editor always has its room.
+    fn cut_editor(
+        &self,
+        rule: &Editor,
+        upper: Option<usize>,
+        lower: Option<usize>,
+        none: Reading,
+    ) -> Reading {
+        let (column, cursor_row) = self.cursor;
+        let Some(least_rows) = rule.least_rows else {
+            return none;
+        };
+        let under = cursor_row + 1;
+        // The editor ends with the cursor's row: over its lower rule, the CLI's footer or the
+        // screen's end.
+        let ends = match lower {
+            Some(lower) => lower == under && upper.is_none(),
+            None => under == self.height() || styled_only(self.row(under)),
+        };
+        let kept = under.saturating_sub(least_rows);
+        let upper = upper.filter(|&upper| upper >= kept);
+        let first = upper.map_or(kept, |upper| upper + 1);
+        let lines: Vec<&Cells> = (first..under).map(|y| self.row(y)).collect();
+        let plain = lines
+            .iter()
+            .all(|line| !line.iter().any(|cell| draws(cell) && styled(cell)));
+        if !ends || !plain || !self.own_cursor(cursor_row, column) {
+            return none;
+        }
+        self.as_pasted(none, first, &lines, || {
+            let above = match (upper, &rule.scrolled) {
+                (Some(upper), Scrolled::Rules(marks)) => counted(&marks.above, &self.lines[upper]),
+                _ => None,
+            };
+            let place = format!("the cut editor at {}", row_span(first + 1, under));
+            let rest = lines[1..].iter().any(|line| !all_space(line));
+            let line = line_of(lines[0], first, 0, rest, self.cursor);
+            let draft = drafted(&place, (0, first), (above, None), &lines).with_line(line);
+            match upper {
+                Some(_) => draft,
+                None => draft.cut(),
+            }
+        })
     }
 
     fn editor_reading(
@@ -1178,7 +1947,7 @@ impl<'a> Screen<'a> {
                 ))
             }
         } else if holds_writing(lines) {
-            drafted(place, marks, lines)
+            drafted(place, (start, first), marks, lines)
         } else if lines.len() > 1 || !near_start {
             unknown(format!(
                 "{place} is empty, but the cursor is not where the input starts"
@@ -1214,23 +1983,24 @@ impl<'a> Screen<'a> {
         if !inside(cursor_row) || column < text_from {
             return missing();
         }
-        let border = (cursor_row + 1..self.height())
-            .find(|&y| !barred(y))
-            .unwrap_or(self.height());
-        if border >= self.height() || border < 2 {
+        let border = (cursor_row + 1..self.height()).find(|&y| !barred(y));
+        // Under the text, a blank box row, then the box's last row over the border. Where the screen
+        // ends within the box, the blank row is the last thing looked for.
+        let under = cursor_row + 1;
+        let pad = match border {
+            Some(border) => border.checked_sub(2).filter(|&pad| {
+                self.char(border, bar) == rule.corner
+                    && self.char(border, bar + 1) == rule.edge
+                    && pad > cursor_row
+                    && gap(pad)
+                    && inside(border - 1)
+                    && !all_space(self.from(border - 1, text_from))
+            }),
+            None => (under == self.height() || gap(under)).then_some(under),
+        };
+        let Some(pad) = pad else {
             return missing();
-        }
-        // Under the text, a blank box row, then the box's last row over the border.
-        let pad = border - 2;
-        let closed = self.char(border, bar) == rule.corner
-            && self.char(border, bar + 1) == rule.edge
-            && pad > cursor_row
-            && gap(pad)
-            && inside(border - 1)
-            && !all_space(self.from(border - 1, text_from));
-        if !closed {
-            return missing();
-        }
+        };
         // Up from the cursor over the box's text rows to the blank row that opens it.
         let top = (0..cursor_row)
             .rev()
@@ -1252,16 +2022,24 @@ impl<'a> Screen<'a> {
             };
         }
         let lines: Vec<&Cells> = (top + 1..pad).map(|y| self.from(y, text_from)).collect();
+        let placeholder = lines.len() == 1 && rule.placeholder.is_match(&joined(lines[0]));
+        let drafted = || drafted(&place, (text_from, top + 1), (None, None), &lines);
+        if border.is_none() {
+            return match placeholder {
+                true => missing(),
+                false => self.as_pasted(missing(), top + 1, &lines, drafted),
+            };
+        }
         let empty = |tail: &str| match lines.len() == 1 && self.cursor_at(text_from, top + 1) {
             true => usable(format!("{place} is empty{tail}")),
             false => unknown(format!(
                 "{place} is empty, but the cursor is not where the input starts"
             )),
         };
-        if lines.len() == 1 && rule.placeholder.is_match(&joined(lines[0])) {
+        if placeholder {
             empty(" but for its placeholder")
         } else if holds_writing(&lines) {
-            drafted(&place, (None, None), &lines)
+            drafted()
         } else {
             empty("")
         }
@@ -1346,7 +2124,7 @@ impl<'a> Screen<'a> {
         }
         if y + 1 == end && dim_draft.is_some_and(|pattern| pattern.is_match(joined(first).trim())) {
             let place = format!("the prompt at row {}", y + 1);
-            return drafted(&place, (None, None), &[first]).with_line(line_of(
+            return drafted(&place, (start, y), (None, None), &[first]).with_line(line_of(
                 self.row(y),
                 y,
                 start,
@@ -1375,13 +2153,28 @@ impl<'a> Screen<'a> {
             return unknown("no row starts with the prompt");
         };
         let place = format!("the prompt row at row {}", y + 1);
-        let typed = self.lines[y][prompt.len()..].trim();
+        let tail = &self.lines[y][prompt.len()..];
+        let typed = tail.trim();
         if typed.is_empty() {
             return usable(format!("{place} is empty"));
         }
-        Reading {
+        let start = self.lines[y].len() - tail.trim_start().len();
+        let mut bytes = 0;
+        let column = self.row(y).iter().find(|cell| {
+            let at = bytes;
+            bytes += cell.text().len();
+            at == start
+        });
+        let draft_start = column.map(|cell| (cell.column, y));
+        let reading = Reading {
             draft: Some(typed.to_owned()),
+            draft_start,
             ..reading(InputState::Draft, format!("{place} holds text"))
+        };
+        if let Some((start, _)) = draft_start {
+            reading.with_line(line_of(self.row(y), y, start, false, self.cursor))
+        } else {
+            reading
         }
     }
 }

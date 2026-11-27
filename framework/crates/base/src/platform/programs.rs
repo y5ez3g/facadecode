@@ -274,7 +274,9 @@ pub fn select_running_if_idle() -> anyhow::Result<Option<PathBuf>> {
     let framework = crate::paths::framework_dir()?;
     let live = || -> io::Result<bool> {
         Ok(service::live_holder(&framework, Service::Daemon)?.is_some()
-            || service::live_holder(&framework, Service::Keeper)?.is_some())
+            || service::live_holder(&framework, Service::Keeper)?.is_some()
+            || crate::startup::Attempt::current(&framework)
+                .is_some_and(|attempt| attempt.launching().unwrap_or(true)))
     };
     if live()? {
         return Ok(None);
@@ -290,29 +292,170 @@ pub fn select_running_if_idle() -> anyhow::Result<Option<PathBuf>> {
     Ok(Some(launcher))
 }
 
-/// Publishes a candidate after the running daemon admitted it. Selection and publication share
-/// the cold install lock.
+/// Selects the installed programs and commits one keeper candidate for a sleeping home.
+pub fn start_keeper() -> anyhow::Result<Option<crate::service::Candidate>> {
+    use crate::service::{self, Service};
+    use crate::startup::Attempt;
+
+    let bin = Bin::here()?;
+    let framework = crate::paths::framework_dir()?;
+    let Some(reservation) = Attempt::reserve(&framework)? else {
+        return Ok(None);
+    };
+    let attempt = &reservation.attempt;
+    let Some(lock) = bin.try_lock()? else {
+        return Ok(None);
+    };
+
+    let selected = (|| -> anyhow::Result<()> {
+        service::gate_for_test("startup-selecting-programs");
+        let build = crate::build_id();
+        if bin.should_select(&build)? {
+            bin.install_set(&crate::this_program()?, &build)?;
+            if crate::startup::live(&framework)? {
+                return Ok(());
+            }
+            bin.point_at(&build, &[])?;
+        }
+        Ok(())
+    })();
+    drop(lock);
+    if let Err(error) = selected {
+        let _ = attempt.launch_failed(&framework, "selecting programs", &format!("{error:#}"));
+        return Err(error);
+    }
+
+    if crate::startup::live(&framework)? {
+        return Ok(None);
+    }
+    attempt.record("launcher", "programs selected")?;
+    service::gate_for_test("startup-before-keeper-create");
+    let candidate = launch_selected(&bin, Service::Keeper, attempt, Some(&reservation.lease));
+    let (_, candidate) = match candidate {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            let _ = attempt.launch_failed(&framework, "starting the keeper", &format!("{error:#}"));
+            return Err(error);
+        }
+    };
+    service::mark_for_test(&format!("keeper-created-{}", candidate.pid()));
+    service::gate_for_test("startup-after-keeper-create");
+    attempt.candidate(candidate.pid())?;
+    Ok(Some(candidate))
+}
+
+/// Starts the daemon image from the installed selection in the already active attempt.
+pub fn start_daemon(
+    framework: &Path,
+    attempt: &crate::startup::Attempt,
+) -> anyhow::Result<(PathBuf, crate::service::Candidate)> {
+    launch_selected(
+        &Bin::here()?,
+        crate::service::Service::Daemon,
+        attempt,
+        None,
+    )
+    .inspect_err(|error| {
+        let _ = attempt.launch_failed(framework, "starting the daemon", &format!("{error:#}"));
+    })
+}
+
+fn launch_selected(
+    bin: &Bin,
+    service: crate::service::Service,
+    attempt: &crate::startup::Attempt,
+    lease: Option<&File>,
+) -> anyhow::Result<(PathBuf, crate::service::Candidate)> {
+    let launch = |build: &str| {
+        let start = |image: &Path| {
+            attempt.image(service, build, image)?;
+            crate::service::launch_with_startup(service, image, &[], Some(attempt), lease)
+                .with_context(|| {
+                    format!(
+                        "could not start {} from {}",
+                        service.command(),
+                        image.display()
+                    )
+                })
+        };
+        let image = bin.build(build)?.join(PROGRAMS[0]);
+        let held =
+            open_held(&image).with_context(|| format!("could not open {}", image.display()))?;
+        #[cfg(windows)]
+        if service == crate::service::Service::Daemon
+            && let Some((launcher, _pinned)) = bin.matching_daemon_launcher(build, &held)
+            && let Ok(candidate) = start(&launcher)
+        {
+            return Ok((launcher, candidate));
+        }
+        let candidate = start(&image);
+        drop(held);
+        Ok((image, candidate?))
+    };
+    let build = bin.current().context("no Facade build was published")?;
+    launch(&build).or_else(|error| {
+        if let Some(newer) = bin.current().filter(|newer| newer != &build) {
+            launch(&newer)
+        } else {
+            Err(error)
+        }
+    })
+}
+
+/// Checks and installs a candidate before asking the running relay connections to close.
+pub fn stage_for_takeover(program: &Path, build: &str) -> anyhow::Result<PathBuf> {
+    let bin = Bin::here()?;
+    let _lock = bin.lock()?;
+    takeover_eligible(&bin, build)?;
+    bin.install_set(program, build)
+}
+
+/// Publishes an installed candidate after the running daemon cleared its relay connections.
 pub fn select_for_takeover(program: &Path, build: &str, running: &[String]) -> anyhow::Result<()> {
     let bin = Bin::here()?;
-    let eligible = || -> anyhow::Result<bool> {
-        if bin.should_select(build)? {
-            return Ok(true);
-        }
-        ensure!(
-            bin.current().as_deref() == Some(build),
-            "Facade {build} was superseded. Run {}",
-            bin.0.join(PROGRAMS[0]).display()
-        );
-        Ok(false)
-    };
-    if eligible()? {
+    if takeover_eligible(&bin, build)? {
         let _lock = bin.lock()?;
-        if eligible()? {
+        if takeover_eligible(&bin, build)? {
             bin.install_set(program, build)?;
             bin.point_at(build, running)?;
         }
     }
     Ok(())
+}
+
+const CLEAN_END: &str = "clean-end";
+
+/// Records that this build drained its terminal output before the takeover.
+pub fn mark_clean_takeover(framework: &Path) -> io::Result<()> {
+    std::fs::write(framework.join(CLEAN_END), crate::build_id())
+}
+
+/// Takes the previous daemon's note before recovering its terminals.
+pub fn take_clean_end(framework: &Path) -> bool {
+    std::fs::remove_file(framework.join(CLEAN_END)).is_ok()
+}
+
+/// Checks that a cleanly ended daemon left a newer published build to start.
+#[cfg(windows)]
+pub fn clean_takeover_published(framework: &Path) -> bool {
+    let Ok(previous) = std::fs::read_to_string(framework.join(CLEAN_END)) else {
+        return false;
+    };
+    Bin(framework.join("bin"))
+        .current()
+        .is_some_and(|current| crate::takes_over(&current, &previous))
+}
+
+fn takeover_eligible(bin: &Bin, build: &str) -> anyhow::Result<bool> {
+    if bin.should_select(build)? {
+        return Ok(true);
+    }
+    ensure!(
+        bin.current().as_deref() == Some(build),
+        "Facade {build} was superseded. Run {}",
+        bin.0.join(PROGRAMS[0]).display()
+    );
+    Ok(false)
 }
 
 /// Points the launchers at build `build`. Where they pointed at another build, the build folders
@@ -381,6 +524,22 @@ impl Bin {
     }
 
     fn lock(&self) -> anyhow::Result<File> {
+        let file = self.open_lock()?;
+        file.lock()
+            .context("could not lock the installed programs")?;
+        Ok(file)
+    }
+
+    fn try_lock(&self) -> anyhow::Result<Option<File>> {
+        let file = self.open_lock()?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(file)),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+        }
+    }
+
+    fn open_lock(&self) -> anyhow::Result<File> {
         let framework = self
             .0
             .parent()
@@ -404,8 +563,6 @@ impl Bin {
             .truncate(false)
             .open(&path)
             .with_context(|| format!("could not open {}", path.display()))?;
-        file.lock()
-            .with_context(|| format!("could not lock {}", path.display()))?;
         Ok(file)
     }
 

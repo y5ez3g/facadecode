@@ -1,29 +1,31 @@
-//! The eight tools on an actor-authenticated daemon connection.
+//! The eight tools for a verified relay actor.
 
 use std::time::{Duration, Instant};
 
 use facade_base::address::selector::{self, MessageAddress};
 use facade_base::api_v1::daemon::{
-    AgentInspect, AgentKind, AgentList, AgentListArgs, AgentRef, AgentScreen, AgentStart,
-    AgentState, AgentStop, AgentTarget, AgentTargetArgs, AgentType, AgentTypeArgs, MachineList,
-    ScreenArgs, SingleMachineScope, StartArgs, StopArgs, StopItem, StopOutcome, StopSelection,
-    TerminalInput,
+    self as wire, AgentKind, AgentListArgs, AgentRef, AgentState, AgentTarget, AgentTargetArgs,
+    AgentTypeArgs, DaemonCall, ScreenArgs, SingleMachineScope, StartArgs, StopArgs, StopItem,
+    StopOutcome, StopSelection, TerminalInput,
 };
-use facade_base::api_v1::{self, NoArgs, Size, daemon_client::DaemonClient};
+use facade_base::api_v1::{NoArgs, Size};
 use facade_base::jsonrpc::decode_arguments;
 use facade_base::model::error::{ErrorBody, Reason};
-use facade_base::model::machine::{MachineIdentity, MachineQueryResult, MachineQueryStatus};
+use facade_base::model::machine::MachineIdentity;
 use facade_base::model::message::MessageRef;
 use facade_base::model::terminal::DEFAULT_TERMINAL_SIZE;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use super::daemon_calls::{CONNECT_TIMEOUT, failed, open_with};
+use super::daemon_calls::{CALL_TIMEOUT, call as daemon_call, query, result};
 use super::{
-    ActorIdentity, Relay, Tool, ToolCall, agent_tools, envelope, message_tools, optional,
-    terminal_tools, text, validate,
+    ActorIdentity, InboxAnswer, InboxOutput, Relay, Tool, ToolCall, agent_tools, envelope,
+    message_tools, optional, terminal_tools, text, validate,
 };
-use crate::messages::InboxRead;
+use crate::delivery::SendTurn;
+use crate::messages::{InboxRead, read_before_deadline};
+
+const EFFECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Serialize)]
 struct ListedAgent {
@@ -41,8 +43,20 @@ struct ListedAgent {
 
 #[derive(Serialize)]
 struct ListedMachine {
-    #[serde(flatten)]
-    machine: MachineQueryResult,
+    machine_id: String,
+    short_id: String,
+    name: String,
+    selector: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    build: Option<String>,
+    state: wire::MachineState,
+    status: wire::QueryStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_seen: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ssh_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     clis: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -58,64 +72,96 @@ struct ReadMessagesArgs {
     reply_to: Option<String>,
 }
 
-pub(super) fn dispatch(
-    relay: &Relay,
-    name: &str,
-    given: &Value,
-    call: &ToolCall,
-    meta: Option<&Value>,
-) -> Option<Value> {
-    let actor = match relay.verified.actor(relay, meta) {
-        Ok(actor) => actor,
-        Err(error) => return Some(envelope::refusal(&error)),
-    };
-    let (tool, arguments) = match validate(name, given) {
-        Ok(checked) => checked,
-        Err(failure) => return Some(failure),
-    };
-    match tool {
-        Tool::SendMessage => return message_tools::send_verified(relay, &actor, &arguments, call),
-        Tool::ReadMessages => return read(relay, &actor, arguments, call),
-        Tool::ListAgents => return Some(list(relay, &actor, call.arrived + CONNECT_TIMEOUT)),
-        _ => {}
-    }
-    let mut client = match open_with(
-        || (relay.verified.services.connect)(&actor.reference, None),
-        CONNECT_TIMEOUT,
-    ) {
-        Ok(client) => client,
-        Err(failure) => return Some(failure),
-    };
-    let client = &mut client;
-    Some(match tool {
-        Tool::StartAgent => start(client, &actor, &arguments, call),
-        Tool::StopAgent => stop(client, &arguments),
-        Tool::ReadScreen => screen(client, &arguments),
-        Tool::TypeText => type_into(client, &arguments, false),
-        Tool::PressKeys => type_into(client, &arguments, true),
-        Tool::SendMessage | Tool::ReadMessages | Tool::ListAgents => {
-            unreachable!("the tool was handled above")
-        }
-    })
+pub(super) enum ToolReply {
+    Result(Value),
+    Cancelled,
+    Answered,
 }
 
-fn start(
-    client: &mut DaemonClient,
+impl From<Value> for ToolReply {
+    fn from(result: Value) -> Self {
+        Self::Result(result)
+    }
+}
+
+pub(super) async fn dispatch(
+    relay: &Relay,
+    name: &str,
+    given: Value,
+    call: &ToolCall,
+    meta: Option<Value>,
+    send_turn: Option<SendTurn>,
+) -> ToolReply {
+    let actor = match relay.verified.actor(relay, meta.as_ref()).await {
+        Ok(actor) => actor,
+        Err(error) => return envelope::refusal(&error).into(),
+    };
+    let (tool, arguments) = match validate(name, &given) {
+        Ok(checked) => checked,
+        Err(failure) => return failure.into(),
+    };
+    drop((given, meta));
+    if matches!(tool, Tool::ReadMessages) && call.replay == super::lines::Replay::Interrupted {
+        return envelope::failure(
+            "unavailable",
+            "the inbox read's result is unknown; use last to read the latest messages",
+        )
+        .into();
+    }
+    let effect = match call.output.as_ref() {
+        Some(output)
+            if matches!(
+                tool,
+                Tool::TypeText | Tool::PressKeys | Tool::StartAgent | Tool::StopAgent
+            ) =>
+        {
+            match output.command().await {
+                Ok(room) => Some((output, room)),
+                Err(error) => return envelope::refusal(&error).into(),
+            }
+        }
+        _ => None,
+    };
+    let deadline = call.arrived + EFFECT_TIMEOUT;
+    let response = match tool {
+        Tool::SendMessage => {
+            return message_tools::send_verified(relay, &actor, arguments, call, send_turn).await;
+        }
+        Tool::ReadMessages => return read(relay, &actor, arguments, call).await,
+        Tool::ListAgents => list(relay, &actor, call.arrived + CALL_TIMEOUT).await,
+        Tool::StartAgent => start(relay, &actor, &arguments, call, deadline).await,
+        Tool::StopAgent => stop(relay, &actor, &arguments, deadline).await,
+        Tool::ReadScreen => screen(relay, &actor, &arguments).await,
+        Tool::TypeText => type_into(relay, &actor, &arguments, false, deadline).await,
+        Tool::PressKeys => type_into(relay, &actor, &arguments, true, deadline).await,
+    };
+    if let Some((output, room)) = effect {
+        room.send(output.line(response));
+        ToolReply::Answered
+    } else {
+        response.into()
+    }
+}
+
+async fn start(
+    relay: &Relay,
     actor: &ActorIdentity,
     arguments: &Map<String, Value>,
     call: &ToolCall,
+    deadline: Instant,
 ) -> Value {
     let (cols, rows) = DEFAULT_TERMINAL_SIZE;
     let mut size = Size { cols, rows };
     let mut folder = optional(arguments, "folder");
     let mut folder_is_default = false;
     if actor.kind == AgentKind::Managed {
-        match client.call::<AgentInspect>(AgentTargetArgs {
+        let inspect = DaemonCall::AgentInspect(AgentTargetArgs {
             target: AgentTarget::Reference(AgentRef {
                 machine_id: actor.reference.machine_id.clone(),
                 agent_id: actor.reference.agent_id.clone(),
             }),
-        }) {
+        });
+        match result!(daemon_call(relay, actor, inspect, None).await, Inspected) {
             Ok(inspected) => {
                 size = inspected.agent.size.unwrap_or(size);
                 if folder.is_none() {
@@ -123,7 +169,7 @@ fn start(
                     folder_is_default = true;
                 }
             }
-            Err(err) => return failed(&err, "nothing was started"),
+            Err(error) => return envelope::daemon_refusal(&error),
         }
     }
     let start = StartArgs {
@@ -143,33 +189,24 @@ fn start(
         call_id: Some(call.id.clone()),
         request_id: Some(call.request_id.clone()),
     };
-    match client.call_with_request_id::<AgentStart>(start, true) {
-        Ok((started, _)) => {
+    match result!(
+        daemon_call(relay, actor, DaemonCall::AgentStart(start), Some(deadline)).await,
+        Started
+    ) {
+        Ok(started) => {
             let agent = started.agent;
             envelope::success(json!({
                 "id": agent.address, "name": agent.name, "folder": agent.cwd,
                 "machine_id": agent.reference.machine_id,
             }))
         }
-        Err(err) => match err.downcast_ref::<api_v1::ErrorBody>() {
-            Some(error) => agent_tools::start_daemon_refused(error),
-            None => failed(
-                &err,
-                "whether the agent started is not known; check with list_agents",
-            ),
-        },
+        Err(error) => agent_tools::start_daemon_refused(&error),
     }
 }
 
-fn list(relay: &Relay, actor: &ActorIdentity, deadline: Instant) -> Value {
-    let mut client = match open_with(
-        || (relay.verified.services.connect)(&actor.reference, None),
-        deadline.saturating_duration_since(Instant::now()),
-    ) {
-        Ok(client) => client,
-        Err(failure) => return failure,
-    };
-    match client.call_until::<AgentList>(AgentListArgs { scope: None }, deadline) {
+async fn list(relay: &Relay, actor: &ActorIdentity, deadline: Instant) -> Value {
+    let op = DaemonCall::AgentList(AgentListArgs { scope: None });
+    match result!(query(relay, actor, op, deadline).await, Listed) {
         Ok(listed) => {
             let agents: Vec<_> = listed
                 .agents
@@ -185,29 +222,36 @@ fn list(relay: &Relay, actor: &ActorIdentity, deadline: Instant) -> Value {
                     started_at: entry.started_at,
                 })
                 .collect();
-            let mut discovered = relay
+            let mut discovered = if let Some(discover) = relay
                 .verified
                 .discover_clis
                 .as_ref()
                 .filter(|_| Instant::now() < deadline)
-                .map(|discover| discover(&actor.reference, &listed.machines, deadline))
-                .unwrap_or_default();
-            // Keep the MCP machine receipt's field order.
-            let machines: Vec<MachineQueryResult> =
-                match serde_json::from_value(json!(listed.machines)) {
-                    Ok(machines) => machines,
-                    Err(error) => return envelope::refusal(&ErrorBody::internal(error)),
-                };
-            let machines: Vec<_> = machines
+            {
+                discover(&actor.reference, &listed.machines, deadline).await
+            } else {
+                Default::default()
+            };
+            let machines: Vec<_> = listed
+                .machines
                 .into_iter()
                 .map(|machine| {
                     let mut row = ListedMachine {
-                        machine,
+                        machine_id: machine.machine_id,
+                        short_id: machine.short_id,
+                        name: machine.name,
+                        selector: machine.selector,
+                        build: machine.build,
+                        state: machine.state,
+                        status: machine.status,
+                        last_seen: machine.last_seen,
+                        ssh_error: machine.ssh_error,
+                        error: machine.error,
                         clis: None,
                         cli_error: None,
                     };
-                    if row.machine.status == MachineQueryStatus::Answered {
-                        match discovered.remove(&row.machine.machine_id) {
+                    if row.status == wire::QueryStatus::Answered {
+                        match discovered.remove(&row.machine_id) {
                             Some(Ok(clis)) => row.clis = Some(clis),
                             Some(Err(error)) => row.cli_error = Some(error),
                             None => {}
@@ -218,18 +262,24 @@ fn list(relay: &Relay, actor: &ActorIdentity, deadline: Instant) -> Value {
                 .collect();
             envelope::success(json!({ "agents": agents, "machines": machines }))
         }
-        Err(err) => failed(&err, "nothing was changed"),
+        Err(error) => envelope::daemon_refusal(&error),
     }
 }
 
-fn stop(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
+async fn stop(
+    relay: &Relay,
+    actor: &ActorIdentity,
+    arguments: &Map<String, Value>,
+    deadline: Instant,
+) -> Value {
     let agent = text(arguments, "agent");
     let selection = StopSelection::Targets {
         targets: vec![AgentTarget::Selector(agent.clone())],
     };
     let consequence =
         || format!("whether {agent} stopped is not confirmed; check with read_screen");
-    match client.call::<AgentStop>(StopArgs { selection }) {
+    let op = DaemonCall::AgentStop(StopArgs { selection });
+    match result!(daemon_call(relay, actor, op, Some(deadline)).await, Stopped) {
         Ok(stopped) => match stopped.items.as_slice() {
             [
                 StopItem {
@@ -246,11 +296,11 @@ fn stop(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
             ] => envelope::daemon_refusal(error),
             _ => envelope::failure("unavailable", consequence()),
         },
-        Err(err) => failed(&err, &consequence()),
+        Err(error) => envelope::daemon_refusal(&error),
     }
 }
 
-fn screen(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
+async fn screen(relay: &Relay, actor: &ActorIdentity, arguments: &Map<String, Value>) -> Value {
     let args = ScreenArgs {
         target: AgentTarget::Selector(text(arguments, "agent")),
         lines: arguments
@@ -258,7 +308,10 @@ fn screen(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
             .and_then(Value::as_u64)
             .and_then(|lines| u16::try_from(lines).ok()),
     };
-    match client.call::<AgentScreen>(args) {
+    match result!(
+        daemon_call(relay, actor, DaemonCall::AgentScreen(args), None).await,
+        Screen
+    ) {
         Ok(screen) => envelope::success(json!({
             "agent_id": screen.reference.agent_id,
             "address": screen.address,
@@ -270,11 +323,17 @@ fn screen(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
             "older_lines": screen.older_lines,
             "trimmed": screen.trimmed,
         })),
-        Err(err) => failed(&err, "nothing was changed"),
+        Err(error) => envelope::daemon_refusal(&error),
     }
 }
 
-fn type_into(client: &mut DaemonClient, arguments: &Map<String, Value>, press_keys: bool) -> Value {
+async fn type_into(
+    relay: &Relay,
+    actor: &ActorIdentity,
+    arguments: &Map<String, Value>,
+    press_keys: bool,
+    deadline: Instant,
+) -> Value {
     let agent = text(arguments, "agent");
     let input = if press_keys {
         TerminalInput::Keys {
@@ -286,14 +345,13 @@ fn type_into(client: &mut DaemonClient, arguments: &Map<String, Value>, press_ke
             enter: arguments.get("enter") == Some(&Value::Bool(true)),
         }
     };
-    match client.call::<AgentType>(AgentTypeArgs {
+    let op = DaemonCall::AgentType(AgentTypeArgs {
         target: AgentTarget::Selector(agent.clone()),
         input,
-    }) {
+    });
+    match result!(daemon_call(relay, actor, op, Some(deadline)).await, Typed) {
         Ok(_) => envelope::success(json!({})),
-        Err(err) => {
-            terminal_tools::input_failure(&err, &agent, |consequence| failed(&err, consequence))
-        }
+        Err(error) => terminal_tools::input_failure(&error, &agent),
     }
 }
 
@@ -308,77 +366,83 @@ fn string_items(arguments: &Map<String, Value>, key: &str) -> Vec<String> {
         .collect()
 }
 
-fn read(
+async fn read(
     relay: &Relay,
     actor: &ActorIdentity,
     arguments: Map<String, Value>,
     call: &ToolCall,
-) -> Option<Value> {
+) -> ToolReply {
     let cancel = relay.sends.read_cancel(&call.key);
     if cancel.is_requested() {
-        return None;
+        return ToolReply::Cancelled;
     }
     let args: ReadMessagesArgs = match decode_arguments(Value::Object(arguments)) {
         Ok(args) => args,
-        Err(error) => return Some(envelope::refusal(&error)),
+        Err(error) => return envelope::refusal(&error).into(),
     };
     let positive = args.timeout_seconds > 0;
     if positive && actor.receives_terminal_messages {
-        return Some(envelope::failure(
+        return envelope::failure(
             "unsupported",
             "read_messages cannot wait in this managed run. This call did not check your inbox. \
              End this turn so Facade can deliver incoming messages to your input.",
-        ));
+        )
+        .into();
     }
     let budget = if positive {
         Duration::from_secs(args.timeout_seconds)
     } else {
-        CONNECT_TIMEOUT
+        CALL_TIMEOUT
     };
     let deadline = call.arrived + budget;
     let timed_out = || inbox_timeout(args.reply_to.as_deref(), args.timeout_seconds);
     let parsed = parse_read(&args);
     let (after, reply_to) = match parsed {
         Ok(parsed) => parsed,
-        Err(error) => return Some(envelope::refusal(&error)),
+        Err(error) => return envelope::refusal(&error).into(),
     };
-    if positive && Instant::now() >= deadline {
-        return Some(timed_out());
+    if Instant::now() >= deadline {
+        return if positive {
+            timed_out()
+        } else {
+            envelope::refusal(&read_before_deadline())
+        }
+        .into();
     }
-    let mut client = match open_with(
-        || (relay.verified.services.connect)(&actor.reference, None),
-        deadline
-            .saturating_duration_since(Instant::now())
-            .min(CONNECT_TIMEOUT),
-    ) {
-        Ok(client) => client,
-        Err(failure) => return Some(failure),
-    };
-    let read = match inbox_read(&mut client, after, args.last, reply_to, positive, deadline) {
+    let read = match inbox_read(relay, actor, after, args.last, reply_to, positive, deadline).await
+    {
         Ok(read) => read,
         Err(error)
             if positive
                 && error.data.reason == Reason::Unavailable
                 && Instant::now() >= deadline =>
         {
-            return Some(timed_out());
+            return timed_out().into();
         }
-        Err(error) => return Some(envelope::refusal(&error)),
+        Err(error) => return envelope::refusal(&error).into(),
     };
-    let result = (relay.verified.services.read_inbox)(&actor.reference, read, cancel.clone());
+    let output = call
+        .output
+        .clone()
+        .map(|target| InboxOutput { target, sent: None });
+    let result =
+        (relay.verified.services.read_inbox)(&actor.reference, read, cancel.clone(), output).await;
     match result {
-        Ok(result)
+        Ok(InboxAnswer::Page(result))
             if positive
                 && result["data"]["messages"]
                     .as_array()
                     .is_some_and(Vec::is_empty) =>
         {
-            Some(timed_out())
+            timed_out().into()
         }
-        Ok(result) => Some(result),
-        Err(error) if error.data.reason == Reason::Cancelled && cancel.is_requested() => None,
-        Err(error) if positive && error.data.reason == Reason::ReplyTimeout => Some(timed_out()),
-        Err(error) => Some(envelope::refusal(&error)),
+        Ok(InboxAnswer::Page(result)) => result.into(),
+        Ok(InboxAnswer::Answered) => ToolReply::Answered,
+        Err(error) if error.data.reason == Reason::Cancelled && cancel.is_requested() => {
+            ToolReply::Cancelled
+        }
+        Err(error) if positive && error.data.reason == Reason::ReplyTimeout => timed_out().into(),
+        Err(error) => envelope::refusal(&error).into(),
     }
 }
 
@@ -418,69 +482,63 @@ fn parse_read(
     Ok((after, reply_to))
 }
 
-fn inbox_read(
-    client: &mut DaemonClient,
+async fn inbox_read(
+    relay: &Relay,
+    actor: &ActorIdentity,
     after: Option<MessageAddress<'_>>,
     last: Option<u16>,
     reply_to: Option<MessageAddress<'_>>,
     positive: bool,
     deadline: Instant,
 ) -> Result<InboxRead, ErrorBody> {
-    let local = client.hello_result.machine_id.clone();
-    let mut machines = None;
-    let mut resolve = |address| message_reference(client, &local, &mut machines, address, deadline);
-    let after = after.map(&mut resolve).transpose()?;
+    let local = &actor.reference.machine_id;
+    let qualified = after
+        .iter()
+        .chain(reply_to.iter())
+        .any(|address| address.machine.is_some());
+    let machines: Vec<MachineIdentity> = if qualified {
+        let op = DaemonCall::MachineList(NoArgs {});
+        result!(query(relay, actor, op, deadline).await, Machines)
+            .map_err(|error| envelope::tool_error(&error))?
+            .machines
+            .into_iter()
+            .map(|machine| MachineIdentity {
+                machine_id: machine.machine_id,
+                name: machine.name,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let resolve = |address| message_reference(local, &machines, address);
+    let after = after.map(resolve).transpose()?;
     if after
         .as_ref()
-        .is_some_and(|reference| reference.machine_id != local)
+        .is_some_and(|reference| &reference.machine_id != local)
     {
         return Err(ErrorBody::invalid_argument(
             "after takes a message from your inbox",
         ));
     }
+    let deadline = tokio::time::Instant::from_std(deadline);
     Ok(InboxRead {
         after: after.map(|reference| reference.message_id),
         last,
         reply_to: reply_to.map(resolve).transpose()?,
-        wait_until: positive.then(|| tokio::time::Instant::from_std(deadline)),
+        wait_until: positive.then_some(deadline),
+        admit_by: (!positive).then_some(deadline),
     })
 }
 
 fn message_reference(
-    client: &mut DaemonClient,
     local: &str,
-    machines: &mut Option<Vec<MachineIdentity>>,
+    machines: &[MachineIdentity],
     address: MessageAddress<'_>,
-    deadline: Instant,
 ) -> Result<MessageRef, ErrorBody> {
     let machine_id = match address.machine {
         None => local.to_string(),
         Some(selector) => {
-            if machines.is_none() {
-                let listed = client
-                    .call_until::<MachineList>(NoArgs {}, deadline)
-                    .map_err(|err| match err.downcast_ref::<api_v1::ErrorBody>() {
-                        Some(error) => envelope::tool_error(error),
-                        None => ErrorBody::new(
-                            Reason::Unavailable,
-                            format!("cannot list machines: {err:#}"),
-                        ),
-                    })?;
-                *machines = Some(
-                    listed
-                        .machines
-                        .into_iter()
-                        .map(|machine| MachineIdentity {
-                            machine_id: machine.machine_id,
-                            name: machine.name,
-                        })
-                        .collect(),
-                );
-            }
-            let mut matched = machines
-                .iter()
-                .flatten()
-                .filter(|machine| selector.matches(machine));
+            let mut matched = machines.iter().filter(|machine| selector.matches(machine));
             match (matched.next(), matched.next()) {
                 (Some(machine), None) => machine.machine_id.clone(),
                 (None, _) => {

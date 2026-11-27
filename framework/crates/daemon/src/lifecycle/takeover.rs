@@ -3,7 +3,8 @@
 //!
 //! 1. Check: the build must be newer and share a daemon API version. While the keeper holds CLIs,
 //!    the build must also support that keeper's negotiated API version.
-//! 2. Install the new build and point the launchers at it.
+//! 2. Install the build, settle the relay effects and await their closing confirmations. Point
+//!    the launchers at the build only after the relay cut is confirmed.
 //! 3. Drain: new calls answer `upgrading`; an attached terminal's keys go on; calls under way get
 //!    up to [`DRAIN_TIME`], but sends do not wait, as the store keeps their messages for the next
 //!    daemon; a message whose paste began is settled first.
@@ -23,11 +24,9 @@ use facade_base::api_v1::{
 use facade_base::model::error::Reason;
 use tokio::sync::watch;
 
+use super::relays::RelayFreeze;
 use super::{Lifecycle, LifecycleActivity};
 use crate::log;
-
-/// The note in `framework/` of a daemon that handed over cleanly: its screen logs hold every byte read.
-const CLEAN_END: &str = "clean-end";
 
 /// Whether the daemon before this one handed over cleanly, as its note said.
 static HANDED_OVER_CLEANLY: AtomicBool = AtomicBool::new(false);
@@ -35,7 +34,7 @@ static HANDED_OVER_CLEANLY: AtomicBool = AtomicBool::new(false);
 /// Takes the clean-end note of the daemon before, if it left one: each screen log is then whole,
 /// so recovery asks no CLI to redraw, and what the CLIs wrote meanwhile waits in their terminals.
 pub(crate) fn take_clean_end(framework: &Path) {
-    if std::fs::remove_file(framework.join(CLEAN_END)).is_ok() {
+    if facade_base::programs::take_clean_end(framework) {
         HANDED_OVER_CLEANLY.store(true, Ordering::SeqCst);
     }
 }
@@ -85,20 +84,21 @@ impl Lifecycle {
         if let Some(answer) = under_way.as_ref() {
             return Ok(answer.clone());
         }
-        let answer = Self::prepare_takeover(&args, activity.as_ref()).await?;
+        let (answer, relays) = self.prepare_takeover(&args, activity.as_ref()).await?;
         *under_way = Some(answer.clone());
         // Draining from before the answer: a client's hello after it meets no daemon serving on.
         self.draining.store(true, Ordering::SeqCst);
-        tokio::spawn(self.clone().hand_over(args.build, activity));
+        tokio::spawn(self.clone().hand_over(args.build, activity, relays));
         Ok(answer)
     }
 
     /// Checks the build and the protocols, installs the build and points the launchers at it.
     /// A step that fails leaves the running Facade as it was.
     async fn prepare_takeover(
+        &self,
         args: &DaemonUpgradeArgs,
         activity: &impl LifecycleActivity,
-    ) -> Result<DaemonUpgradeResult, ErrorBody> {
+    ) -> Result<(DaemonUpgradeResult, RelayFreeze), ErrorBody> {
         let ours = facade_base::build_id();
         if !facade_base::takes_over(&args.build, &ours) {
             return Err(operation_error(
@@ -160,16 +160,22 @@ impl Lifecycle {
             .chain([ours.clone()])
             .collect();
         let (program, build) = (args.program.clone(), args.build.clone());
-        crate::blocking(move || {
-            facade_base::programs::select_for_takeover(Path::new(&program), &build, &builds)
+        let installed = crate::blocking(move || {
+            facade_base::programs::stage_for_takeover(Path::new(&program), &build)
         })
         .await
-        .map_err(|error| {
-            operation_error(
-                Reason::Unavailable,
-                format!("could not install {}: {}", args.program, error.message),
-            )
-        })?;
+        .map_err(|error| install_error(args, &error))?;
+        let relays = self
+            .relays
+            .prepare(&args.build)
+            .await
+            .map_err(crate::api::project_error)?;
+        let build = args.build.clone();
+        crate::blocking(move || {
+            facade_base::programs::select_for_takeover(&installed, &build, &builds)
+        })
+        .await
+        .map_err(|error| install_error(args, &error))?;
         log(
             "info",
             &format!(
@@ -178,15 +184,23 @@ impl Lifecycle {
                 facade_base::model::agent::agents_word(running)
             ),
         );
-        Ok(DaemonUpgradeResult {
-            from: ours,
-            agent_count: running as u64,
-        })
+        Ok((
+            DaemonUpgradeResult {
+                from: ours,
+                agent_count: running as u64,
+            },
+            relays,
+        ))
     }
 
     /// Drains, notes the clean end, tells every connection past hello that `build` takes over,
     /// writes the keys attached terminals sent until they answered, and exits.
-    async fn hand_over(self: Arc<Self>, build: String, activity: Arc<impl LifecycleActivity>) {
+    async fn hand_over(
+        self: Arc<Self>,
+        build: String,
+        activity: Arc<impl LifecycleActivity>,
+        _relays: RelayFreeze,
+    ) {
         crate::gate_for_test("upgrade-draining");
         let drain_deadline = tokio::time::Instant::now() + DRAIN_TIME;
         // A paste that began is settled first, its agent reading meanwhile, and no other begins:
@@ -204,7 +218,7 @@ impl Lifecycle {
             .await
             && let Ok(framework) = facade_base::paths::framework_dir()
         {
-            let _ = std::fs::write(framework.join(CLEAN_END), facade_base::build_id());
+            let _ = facade_base::programs::mark_clean_takeover(&framework);
         }
         crate::gate_for_test("upgrade-quiet");
         self.closing_to.send_replace(Some(build));
@@ -218,4 +232,14 @@ impl Lifecycle {
         crate::gate_for_test("upgrade-before-end");
         self.finish_and_exit(activity.as_ref()).await
     }
+}
+
+fn install_error(
+    args: &DaemonUpgradeArgs,
+    error: &facade_base::model::error::ErrorBody,
+) -> ErrorBody {
+    operation_error(
+        Reason::Unavailable,
+        format!("could not install {}: {}", args.program, error.message),
+    )
 }

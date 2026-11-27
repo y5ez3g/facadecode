@@ -61,11 +61,7 @@ impl SelectionView {
                 if is_spacer(cell) {
                     continue;
                 }
-                if cell.c == '\t' {
-                    text.push(' ');
-                } else {
-                    text.push_str(&cell_text(cell));
-                }
+                text.push_str(cell_text(cell).as_str());
             }
             if !wraps(row, self.cols) {
                 text.truncate(text.trim_end_matches(' ').len());

@@ -152,6 +152,7 @@ Remove-Item -LiteralPath $env:FACADE_HOME -Recurse -Force
 | `crates/facade` | `facade` | The `facade` program: its commands, `attach`, the hooks, and the entry points of both services |
 | `tests` | `facade-scenarios` | Scenario tests, the test CLI `facade-fakecli`, and the stress test `facade-stress` |
 | `vendor/alacritty_terminal` | `alacritty_terminal` | The terminal emulator, with the changes [vendor/README.md](vendor/README.md) lists |
+| `vendor/vte` | `vte` | The terminal emulator's parser, with the changes [vendor/README.md](vendor/README.md) lists |
 | `vendor/conpty` | — | Microsoft's ConPTY package for Windows, `conpty.dll` and `OpenConsole.exe`, which every Windows build carries |
 | `protocol` | — | The daemon and keeper protocols, generated from `crates/base` by its test `protocol_files.rs`: do not edit |
 | `rules` | — | One rule file for each CLI |

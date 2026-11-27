@@ -301,7 +301,7 @@ a message on another machine includes the machine.
 | win32-input-mode | The console host's input mode, `CSI ?9001h`, in which keys travel as key records | — |
 | key-down record | A key press in win32-input-mode's form, `CSI <vk>;<sc>;<char>;1;<cs>;<rc>_` | — |
 | console input record | An input event as a Windows console holds it: a key, or a change of size | — |
-| console typing | A wait for each UTF-16 code unit before submission, and key-down records for characters above U+FFFF, for a CLI that reads console input records | — |
+| console typing | A wait for each UTF-16 code unit before submission, key-down records for characters above U+FFFF, and the key that breaks a line in the CLI's input for each line break where its rule names one, for a CLI that reads console input records | — |
 | wrapper | A script that starts a CLI's real program, such as npm's `.cmd` shim, Pi's `pi.cmd` or Muse Code's PowerShell script; Facade starts the program directly where it can | launcher |
 
 ## Naming rules

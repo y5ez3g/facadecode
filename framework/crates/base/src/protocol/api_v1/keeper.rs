@@ -11,6 +11,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::process::ProcessIdentity;
+
 use super::frame::{size_input, size_input_schema};
 use super::versions::decode_hello_offer;
 use super::{
@@ -53,6 +55,9 @@ pub struct HelloResult {
     pub api_version: ApiVersion,
     pub build: String,
     pub agents: Vec<HeldAgent>,
+    /// Accepts a process identity in `stop` and keeps the receipt locally.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stop_receipts: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -103,6 +108,9 @@ pub struct StartResult {
 #[serde(deny_unknown_fields)]
 pub struct StopArgs {
     pub agent_id: String,
+    /// For a creator's first stop, the exact process to record before it is stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator_stop: Option<ProcessIdentity>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

@@ -28,6 +28,7 @@ use windows_sys::Win32::System::IO::{
     CancelIoEx, CreateIoCompletionPort, GetOverlappedResult, GetQueuedCompletionStatus, OVERLAPPED,
     PostQueuedCompletionStatus,
 };
+use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::Win32::System::Pipes::{GetNamedPipeServerProcessId, WaitNamedPipeW};
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CreateEventW, GetCurrentProcess, INFINITE, OpenProcess, OpenProcessToken,
@@ -35,7 +36,21 @@ use windows_sys::Win32::System::Threading::{
 };
 
 const INPUT_KEY: usize = 1;
+const STARTUP_KEY: usize = usize::MAX;
 const READ_BYTES: usize = 64 * 1024;
+
+/// The local daemon's monotonic clock, in nanoseconds on the same QPC time base.
+pub(crate) fn monotonic_now() -> u64 {
+    let (mut count, mut frequency) = (0, 0);
+    // SAFETY: both calls take an output pointer to an i64.
+    unsafe {
+        QueryPerformanceCounter(&raw mut count);
+        QueryPerformanceFrequency(&raw mut frequency);
+    }
+    let count = u128::try_from(count).unwrap_or(0);
+    let frequency = u128::try_from(frequency).unwrap_or(1).max(1);
+    u64::try_from(count * 1_000_000_000 / frequency).unwrap_or(u64::MAX)
+}
 
 /// No console window for the only program the relay starts.
 pub(crate) fn no_window(command: &mut Command) {
@@ -72,12 +87,35 @@ impl Events {
         Ok((Self { port, next_key: 2 }, Input(Cursor::new(Vec::new()))))
     }
 
+    pub(crate) fn startup_waker(&self) -> impl FnOnce() + Send + 'static {
+        let port = Arc::clone(&self.port);
+        move || {
+            // SAFETY: the port is owned by the callback until the notification is posted.
+            unsafe {
+                PostQueuedCompletionStatus(port.as_raw_handle(), 0, STARTUP_KEY, ptr::null_mut())
+            };
+        }
+    }
+
+    /// Posts a marker after the stdin chunks already queued. The relay loop is the only reader
+    /// of the port. Its next wait that reaches the marker returns with neither stream ready.
+    pub(crate) fn mark_ready_input_end(&self) -> io::Result<()> {
+        // SAFETY: the port is live and the null operation carries no data to free.
+        if unsafe { PostQueuedCompletionStatus(self.port.as_raw_handle(), 0, 0, ptr::null_mut()) }
+            == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
     /// Arms one daemon read, then waits for that read, the CLI, or the reconnect deadline.
     pub(crate) fn wait(
         &mut self,
         mut input: Option<&mut Input>,
         mut stream: Option<&mut Stream>,
         timeout: Option<Duration>,
+        waiting_for_startup: bool,
     ) -> io::Result<(bool, bool)> {
         if let Some(stream) = stream.as_mut()
             && let Err(error) = stream.start_read()
@@ -106,6 +144,9 @@ impl Events {
             };
             let error = (success == 0).then(io::Error::last_os_error);
             if operation.is_null() {
+                if key == STARTUP_KEY && !waiting_for_startup {
+                    continue;
+                }
                 return match error {
                     Some(error) if error.raw_os_error() == i32::try_from(WAIT_TIMEOUT).ok() => {
                         Ok((false, false))
@@ -161,7 +202,7 @@ fn read_input(mut input: File, port: &OwnedHandle) {
 /// One overlapped daemon pipe. Reads join the loop's port; writes and the hello block on their
 /// own event, just as Unix writes and the hello block on the socket.
 pub(crate) struct Stream {
-    pipe: OwnedHandle,
+    transport: OpeningStream,
     key: usize,
     read: Box<OVERLAPPED>,
     read_event: OwnedHandle,
@@ -170,8 +211,15 @@ pub(crate) struct Stream {
     ready: Option<io::Result<u32>>,
 }
 
-impl Stream {
-    pub(crate) fn connect(path: &Path, events: &mut Events) -> io::Result<Self> {
+/// The authenticated pipe before its event reads are attached to the relay loop.
+pub(crate) struct OpeningStream {
+    pipe: OwnedHandle,
+    pub(crate) peer_pid: u32,
+    until: Option<Instant>,
+}
+
+impl OpeningStream {
+    pub(crate) fn connect(path: &Path, until: Option<Instant>) -> io::Result<Self> {
         let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
         let pipe = loop {
             // SAFETY: path is terminated; no security attributes or template are supplied.
@@ -194,23 +242,43 @@ impl Stream {
                 return Err(error);
             }
             // SAFETY: path is terminated and remains valid through the blocking wait.
-            if unsafe { WaitNamedPipeW(path.as_ptr(), INFINITE) } == 0 {
+            let wait = until.map_or(INFINITE, |until| {
+                u32::try_from(until.saturating_duration_since(Instant::now()).as_millis())
+                    .unwrap_or(INFINITE - 1)
+            });
+            if unsafe { WaitNamedPipeW(path.as_ptr(), wait) } == 0 {
                 return Err(io::Error::last_os_error());
             }
         };
-        authenticate(&pipe)?;
+        let peer_pid = authenticate(&pipe)?;
+        Ok(Self {
+            pipe,
+            peer_pid,
+            until,
+        })
+    }
+}
+
+impl Stream {
+    pub(crate) fn attach(mut transport: OpeningStream, events: &mut Events) -> io::Result<Self> {
         let key = events.next_key;
         events.next_key += 1;
         // SAFETY: both handles are live; each connection receives its own completion key.
         if unsafe {
-            CreateIoCompletionPort(pipe.as_raw_handle(), events.port.as_raw_handle(), key, 0)
+            CreateIoCompletionPort(
+                transport.pipe.as_raw_handle(),
+                events.port.as_raw_handle(),
+                key,
+                0,
+            )
         }
         .is_null()
         {
             return Err(io::Error::last_os_error());
         }
+        transport.until = None;
         Ok(Self {
-            pipe,
+            transport,
             key,
             read: Box::default(),
             // SAFETY: the unnamed event is owned until the pending read has completed.
@@ -233,7 +301,7 @@ impl Stream {
         // drop, which cancels the read and waits before releasing either box.
         let success = unsafe {
             ReadFile(
-                self.pipe.as_raw_handle(),
+                self.transport.pipe.as_raw_handle(),
                 self.buffer.as_mut_ptr(),
                 u32::try_from(READ_BYTES).unwrap_or(u32::MAX),
                 ptr::null_mut(),
@@ -249,7 +317,9 @@ impl Stream {
         self.reading = true;
         Ok(())
     }
+}
 
+impl OpeningStream {
     fn transfer(&self, bytes: *mut u8, length: usize, write: bool) -> io::Result<usize> {
         // SAFETY: no name or security attributes; the new event is owned for this operation.
         let event = owned(unsafe { CreateEventW(ptr::null(), 1, 0, ptr::null()) })?;
@@ -286,6 +356,38 @@ impl Stream {
                 return Err(error);
             }
         }
+        if success == 0
+            && let Some(until) = self.until
+        {
+            let millis = u32::try_from(until.saturating_duration_since(Instant::now()).as_millis())
+                .unwrap_or(INFINITE - 1);
+            // SAFETY: both event and operation are live until cancellation and completion.
+            let waited = unsafe {
+                windows_sys::Win32::System::Threading::WaitForSingleObject(
+                    event.as_raw_handle(),
+                    millis,
+                )
+            };
+            if waited != windows_sys::Win32::Foundation::WAIT_OBJECT_0 {
+                let error = if waited == WAIT_TIMEOUT {
+                    io::ErrorKind::TimedOut.into()
+                } else {
+                    io::Error::last_os_error()
+                };
+                let mut drained = 0;
+                // SAFETY: cancellation is drained before the operation or buffer leaves scope.
+                unsafe {
+                    CancelIoEx(self.pipe.as_raw_handle(), &raw const operation);
+                    GetOverlappedResult(
+                        self.pipe.as_raw_handle(),
+                        &raw const operation,
+                        &raw mut drained,
+                        1,
+                    );
+                }
+                return Err(error);
+            }
+        }
         let mut count = 0;
         // SAFETY: the operation belongs to this pipe and its event is still live.
         if unsafe {
@@ -303,6 +405,22 @@ impl Stream {
     }
 }
 
+impl Read for OpeningStream {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.transfer(bytes.as_mut_ptr(), bytes.len(), false)
+    }
+}
+
+impl Write for OpeningStream {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.transfer(bytes.as_ptr().cast_mut(), bytes.len(), true)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 impl Read for Stream {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         if let Some(result) = self.ready.take() {
@@ -314,13 +432,13 @@ impl Read for Stream {
             target.copy_from_slice(source);
             return Ok(count);
         }
-        self.transfer(bytes.as_mut_ptr(), bytes.len(), false)
+        self.transport.read(bytes)
     }
 }
 
 impl Write for Stream {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.transfer(bytes.as_ptr().cast_mut(), bytes.len(), true)
+        self.transport.write(bytes)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -334,10 +452,10 @@ impl Drop for Stream {
             // SAFETY: the read's storage and pipe are still live. Waiting for cancellation is
             // required before freeing that storage. Its queued packet is ignored by its old key.
             unsafe {
-                CancelIoEx(self.pipe.as_raw_handle(), &raw const *self.read);
+                CancelIoEx(self.transport.pipe.as_raw_handle(), &raw const *self.read);
                 let mut bytes = 0;
                 GetOverlappedResult(
-                    self.pipe.as_raw_handle(),
+                    self.transport.pipe.as_raw_handle(),
                     &raw const *self.read,
                     &raw mut bytes,
                     1,
@@ -347,7 +465,7 @@ impl Drop for Stream {
     }
 }
 
-fn authenticate(pipe: &OwnedHandle) -> io::Result<()> {
+fn authenticate(pipe: &OwnedHandle) -> io::Result<u32> {
     let mut pid = 0;
     // SAFETY: pipe is live and pid is writable.
     if unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle(), &raw mut pid) } == 0 {
@@ -370,7 +488,7 @@ fn authenticate(pipe: &OwnedHandle) -> io::Result<()> {
             "the Facade at this pipe is another user's",
         ));
     }
-    Ok(())
+    Ok(pid)
 }
 
 fn token_user(process: HANDLE) -> io::Result<Vec<usize>> {

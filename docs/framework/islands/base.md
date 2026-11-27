@@ -17,9 +17,21 @@ to speak of, so every other crate can depend on it and it depends on none of the
   their owner alone.
 - `framework/keeper.lock` and `framework/daemon.lock`, and the record in each. Both services use the same
   30-day retention policy for their own log in `framework/logs/`.
+- `framework/startup/` holds local startup attempts, with progress and outcomes tied to a generation and
+  the PID and birth of the service. Startup order verifies the live candidates, seals the previous
+  attempt and issues a claim. A separate inherited file reference keeps the claim until the Keeper
+  takes its lock, even if the launcher ends first. The `programs.lock` section selects and publishes
+  the program set after the claim.
+- `framework/clean-end` holds the departing daemon's build ID after a clean takeover drain.
+  Base owns the note's path, format and access. Daemon Lifecycle determines when the terminal
+  output has drained and when recovery consumes the note.
 - `framework/bin/`: each build's `facade` and `facade-mcp` in a folder named after the build, with the
   ConPTY package in its `conpty/` on Windows, and the two launchers that point at the current
   build: symbolic links on Unix, copies on Windows.
+  Windows starts the daemon through the published launcher when it holds the selected image's
+  bytes. Base pins the launcher under the programs lock and compares the open files. Its hold
+  lasts through process creation. If the launcher is unavailable or cannot start, Base tries
+  the pinned versioned image.
 - The process-wide `FORK_LOCK`, under which children start.
 - Reading `facade.json`. Nothing in framework writes it.
 - The instructions and tool definitions a model reads.
@@ -40,6 +52,14 @@ to speak of, so every other crate can depend on it and it depends on none of the
   and keeper support sets each begin at `[1]`. Daemon hello lists operations and topics available
   to that caller. The external MCP relay keeps its own `relay:1` boundary. Its authenticated
   in-process actor uses daemon API v1.
+- Waking callers, the startup Keeper link and the Keeper's initial supervision use the same local monotonic
+  budget. Base publishes one window per generation. Verified progress survives changes of service identity.
+  Only a completed stage renews the 75-second progress window, within the original 180-second limit.
+  Base seals an accepted candidate and its generation when both reporting services and the creation
+  reference are gone. A caller following a candidate reads that candidate's outcome. A new caller
+  seeking readiness takes queued accepted failures in order, then general startup failures, before
+  another claim. A busy startup-order lock leaves the waiter's deadline and cancellation checks active.
+  Each outcome remains readable. Reporting it acknowledges only that dispatch.
 - Each endpoint follows its own formal compatibility window. See [Daemon takeover](../../../framework/protocol/DAEMON.md#daemon-takeover).
 - The files in `framework/protocol/` are exactly what the types generate; the `protocol_files` test
   fails on any difference.
@@ -97,6 +117,14 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 - `random_u64()`.
 
 **The keeper and the daemon** (services)
+
+- `programs::start_keeper()` selects the programs and commits one keeper candidate for a sleeping
+  home. `programs::start_daemon(framework, attempt)` starts the selected daemon build and records
+  each attempted image path in the supplied startup attempt.
+- `programs::mark_clean_takeover(framework)` records the departing daemon's build ID.
+  `programs::take_clean_end(framework)` consumes the note and reports whether it removed it.
+  On Windows, the keeper uses `programs::clean_takeover_published(framework)` to check for a
+  published build newer than the one in the note. The check leaves the note available for recovery.
 - `service`: `create_private_home`, `lock_home(framework, Service)`, `lock_record`, `live_holder`,
   `launch(service, program, words) -> Candidate` and `Candidate::into_process() ->
   ServiceProcess`, `StartupChannel`, `RestartBackoff`, `close_inherited(keep)`,
@@ -110,8 +138,18 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   and `AsHandle` and `exit` on `ProcessObservation`.
 - `terminal`: `PtyMaster`, the side of a terminal Facade holds (a PTY master on Unix; on Windows a
   pseudo console's input, output and signal pipe ends and the CLI's job); `PtyIo`, how the daemon
-  reads and writes one, with `stop_reading` and `let_go_before_stop`; `PASTE_BYTES_PER_MS`;
-  `key_down_records`; `test_terminal`.
+  reads and writes one, with `stop_reading` and `let_go_before_stop`. A caller can ask `write` for the
+  readable output prefix at the start of its native write. An overlapped write records this position
+  once, when it is issued. `queued_output_bytes()` counts, without waiting, the output that reached
+  Facade's end and has not been read; no read holds output that this count misses. On Windows the
+  `PtyIo` is the output pipe's only reader. It keeps just a zero-byte read under way, which completes
+  once output waits and takes none; a sized read then takes waiting bytes and completes at once, so
+  `PeekNamedPipe` gives the count. On Unix it uses a zero-timeout poll for hangup and `FIONREAD` for
+  the byte count. A closed peer can still leave bytes; the end comes once none is left.
+  `stop_reading` leaves no read under way, and output not read stays for the next reader.
+  `PASTE_BYTES_PER_MS` estimates paste time.
+  `KeyRecord` and `key_down_records` encode console keys. `KeyRecord::press_len` and
+  `key_down_records_len` count the encoded bytes. `test_terminal` gives tests both sides of a terminal.
 - `terminal_lines::{LineSender, LineReceiver}` carry keeper lines and their optional terminal.
   Unix uses `descriptors::{send_line, DescriptorLines}` to associate a descriptor with its frame.
   On Windows the authenticated link carries the resource in the `terminal` member.
@@ -182,9 +220,9 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   `call_until` uses the caller's absolute deadline for request writes and response reads on the
   negotiated connection. Existing calls can use `call_with_request_id` to recover an interrupted
   start or send. Shell captures its launch environment.
-- `programs::{install_running, current_build, point_launchers_at, launcher}`;
-  `service::{create_private_home, launch, live_holder}` to start the keeper;
-  `unix_process::calling_program()` for a hook's CLI.
+- `programs::{install_running, current_build, point_launchers_at, launcher, start_keeper}` manages
+  the installed services. `service::{create_private_home, live_holder}` prepares the home and
+  observes services. `unix_process::calling_program()` identifies a hook's CLI.
 - `ssh` prepares the selected-home administration bootstrap and SSH arguments for Shell. It resolves the SSH account
   and the source IP observed by the remote sshd. Dedicated keys live in the Facade home's `framework/ssh/` folder,
   with owner-only access to the private file. `SshKeyProof` checks the dedicated key used by an independent

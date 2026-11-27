@@ -83,7 +83,14 @@ and the independent daemon and keeper API version sets. The running Orchestrator
 set and the live keeper's negotiated version before replacement. A refusal can identify running agents that
 block replacement. After acceptance, Facade waits for the requested build to answer a fresh hello.
 
-`facade daemon --detach` is the background entry for an editor or relay. The caller confirms readiness with hello.
+`facade daemon --detach` returns success once it verifies that a living daemon holds its service lock.
+The editor or relay confirms readiness with its own hello. An ordinary waking command follows the same
+startup attempt until hello, and `facade start -d` returns the agent ID after starting the agent.
+The startup deadline is the earlier of 75 seconds without progress and 180 seconds from the first claim.
+For a proved startup attempt, that deadline already applies when the caller opens its first hello.
+An explicit caller deadline still applies. Slow starts report the current startup stage on standard error.
+An exit before readiness preserves its startup stage, reason and service log for the next command seeking
+readiness. Lock-only detach can return for a living successor while that earlier diagnosis is pending.
 The installer's `facade daemon --takeover` entry selects an eligible program set in a sleeping home and leaves
 services asleep. For a running service, it applies the build order and the existing daemon and Keeper admission,
 then waits for a compatible hello from the installed build. `--install-only` can select while the services sleep.

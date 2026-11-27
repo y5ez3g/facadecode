@@ -16,8 +16,13 @@ pub(crate) struct Lines {
 impl Lines {
     /// Reads once from `stream`, blocking until it has something; `Ok(0)` once it ended.
     pub(crate) fn fill(&mut self, stream: &mut impl Read) -> io::Result<usize> {
+        self.fill_up_to(stream, MAX_READ_BYTES)
+    }
+
+    /// Reads one chunk without crossing a byte boundary in the stream.
+    pub(crate) fn fill_up_to(&mut self, stream: &mut impl Read, limit: usize) -> io::Result<usize> {
         let start = self.unread.len();
-        self.unread.resize(start + MAX_READ_BYTES, 0);
+        self.unread.resize(start + MAX_READ_BYTES.min(limit), 0);
         let read = loop {
             match stream.read(self.unread.get_mut(start..).unwrap_or_default()) {
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => {}

@@ -503,7 +503,10 @@ The workspace host's [activation](../../../extension/src/extension.ts#L11) selec
 [Orchestrator connection](../../../extension/src/host/framework/index.ts#L77) for the resolved home. On activation
 or a home switch, the extension offers its bundled program set for selection. The home keeps an equal or higher
 selection. A higher bundled build installs from the extension files and can take over after normal admission.
-Commands use the selected home launcher. After hello,
+Commands use the selected home launcher. After background start, the bundled observer waits on the reported startup
+ticket or follows the authenticated lock holder for an older launcher. It provides the accepted daemon PID and its
+monotonic deadline, or the startup stage, error and log. The editor checks that PID and deadline against its own
+hello response before using the connection. After hello,
 it opens the workspace state, installs the machine and agent watches and connects them to the Panel. The
 [agent view](../../../extension/src/host/framework/agents.ts#L76) projects observed running Managed Agents and
 reconciles confirmed records with workspace members and Pins. Opening a terminal uses Attach (6.3). [Deactivation](../../../extension/src/host/framework/index.ts#L215)

@@ -78,6 +78,8 @@ pub struct ParsedOutput {
     pub query_replies: Vec<u8>,
     /// The title the CLI set, if it set one; empty when it reset the title.
     pub title_change: Option<String>,
+    /// Output applied by this call wrote or erased cells on the cursor's current row.
+    pub cursor_row_cells_written: bool,
     /// The output for viewers: whole characters and sequences, with the status glyph in titles
     /// and queries taken out.
     pub viewer_output: Vec<u8>,
@@ -90,6 +92,37 @@ pub struct ParsedOutput {
     pub status: Vec<StatusEvent>,
 }
 
+/// What a complete frame wrote on the cursor's row or another requested row.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CursorRowWrites {
+    None,
+    /// The input was drawn in a frame that began before the marked boundary.
+    Earlier,
+    Current,
+}
+
+/// A report or complete frame in the order the terminal produced it.
+pub enum InputEvent<'a> {
+    /// An OSC report's start can precede this feed. A full terminal reset has no report offset.
+    Status {
+        event: &'a StatusEvent,
+        start: Option<i64>,
+        /// The report arrived inside an open synchronized update.
+        sync_open: bool,
+    },
+    Frame(&'a Screen, CursorRowWrites),
+}
+
+type InputObserver<'a> = dyn FnMut(InputEvent<'_>) + 'a;
+
+fn frame_writes(written: bool, earlier: bool) -> CursorRowWrites {
+    match (written, earlier) {
+        (true, true) => CursorRowWrites::Earlier,
+        (true, false) => CursorRowWrites::Current,
+        (false, _) => CursorRowWrites::None,
+    }
+}
+
 /// One agent's terminal, without a window. It only computes; the one time it uses is the deadline
 /// alacritty puts on a synchronized update.
 pub struct Screen {
@@ -97,10 +130,13 @@ pub struct Screen {
     status_glyph: Option<String>,
     title_negotiation: TitleNegotiation,
     deferred_status_title: bool,
+    earlier_frame: bool,
+    sync_ended_between_reads: bool,
     splitter: Splitter,
     modes: KeptModes,
     tab_stops: TabStops,
     scrollback: Scrollback,
+    paint_waits_for_frame: bool,
 }
 
 impl Screen {
@@ -116,8 +152,11 @@ impl Screen {
             status_glyph: None,
             title_negotiation: TitleNegotiation::default(),
             deferred_status_title: false,
+            earlier_frame: false,
+            sync_ended_between_reads: false,
             splitter: Splitter::default(),
             modes: KeptModes::default(),
+            paint_waits_for_frame: false,
             tab_stops: TabStops::new(size.cols),
             scrollback,
         }
@@ -199,6 +238,21 @@ impl Screen {
 
     /// Takes output the CLI wrote.
     pub fn feed(&mut self, bytes: &[u8]) -> ParsedOutput {
+        self.feed_observing(bytes, None)
+    }
+
+    /// Takes output and lets a reader see each complete frame, including changes away from the
+    /// cursor row.
+    pub fn feed_observing(
+        &mut self,
+        bytes: &[u8],
+        mut observe: Option<&mut InputObserver<'_>>,
+    ) -> ParsedOutput {
+        self.terminal.reset_damage();
+        if std::mem::take(&mut self.sync_ended_between_reads) {
+            self.terminal.mark_input_boundary();
+        }
+        let earlier_sync = self.earlier_frame && self.is_drawing();
         let rows = self.rows();
         let filtered = sequences::filter(
             &mut self.splitter,
@@ -208,15 +262,38 @@ impl Screen {
             self.terminal.title.as_deref().is_some_and(title_has_text),
             &mut self.title_negotiation,
             self.status_glyph.as_deref(),
+            observe.is_some() || self.paint_waits_for_frame,
         );
+        let mut earlier_through = if earlier_sync {
+            filtered.sync_ended_at
+        } else if self.earlier_frame {
+            filtered.carried_unit_ended_at
+        } else {
+            None
+        };
         let mut status = Vec::new();
         let mut left_alternate = false;
         let mut parsed_to = 0;
+        let mut new_frame = false;
         // alacritty parses up to each mark, so that the screen sees its state right there.
-        for (at, mark) in filtered.marks {
+        for (at, start, mark) in filtered.marks {
             let on_alternate = self.on_alternate_screen();
-            self.terminal.parse(&bytes[parsed_to..at]);
+            let begins_update =
+                mark == Mark::BeginSync && self.synchronized_update_deadline().is_none();
+            self.parse_output(bytes, parsed_to, at, &mut earlier_through, &mut observe);
             parsed_to = at;
+            if (begins_update
+                || matches!(
+                    mark,
+                    Mark::Status(StatusEvent::Report(_) | StatusEvent::ShellPrompt)
+                ))
+                && let Some(observe) = observe.as_deref_mut()
+            {
+                if !self.is_drawing() && self.terminal.cells_written_since_input_boundary() {
+                    new_frame |= self.observe_frame(observe, self.earlier_frame);
+                }
+                self.terminal.mark_input_boundary();
+            }
             // A tab stop goes where the cursor is: the frame an open synchronized update holds back
             // is drawn first, and the update opened again after, so that a redraw still waits.
             let tab_stop = matches!(mark, Mark::SetTabStop | Mark::ClearTabStop);
@@ -226,9 +303,29 @@ impl Screen {
             }
             left_alternate |= on_alternate && !self.on_alternate_screen();
             match mark {
+                Mark::CarriedUnitEnd => self.finish_preexisting_frame(true),
+                Mark::BeginSync => {}
+                Mark::EndSync => {
+                    self.finish_preexisting_frame(true);
+                    if !self.is_drawing()
+                        && let Some(observe) = &mut observe
+                    {
+                        new_frame |= self.observe_frame(observe, self.earlier_frame);
+                        self.terminal.reset_damage();
+                        self.terminal.mark_input_boundary();
+                    }
+                }
                 Mark::SwitchScreen => {}
                 Mark::Reset => {
                     self.tab_stops = TabStops::new(self.size().cols);
+                    if let Some(observe) = observe.as_deref_mut() {
+                        self.terminal.mark_input_boundary();
+                        observe(InputEvent::Status {
+                            event: &StatusEvent::Reset,
+                            start,
+                            sync_open: self.synchronized_update_deadline().is_some(),
+                        });
+                    }
                     status.push(StatusEvent::Reset);
                 }
                 Mark::SetTabStop => self.set_tab_stop(true),
@@ -239,27 +336,114 @@ impl Screen {
                         // Queued with alacritty's replies, so that they keep the queries' order.
                         self.terminal.reply(program_status::STATUS_REPLY);
                     }
+                    if let Some(observe) = observe.as_deref_mut() {
+                        observe(InputEvent::Status {
+                            event: &event,
+                            start,
+                            sync_open: self.synchronized_update_deadline().is_some(),
+                        });
+                    }
                     status.push(event);
                 }
             }
             if held_frame {
-                self.terminal.parse(b"\x1b[?2026h");
+                self.terminal.reopen_update();
             }
         }
         let on_alternate = self.on_alternate_screen();
-        self.terminal.parse(&bytes[parsed_to..]);
+        self.parse_output(
+            bytes,
+            parsed_to,
+            bytes.len(),
+            &mut earlier_through,
+            &mut observe,
+        );
         left_alternate |= on_alternate && !self.on_alternate_screen();
+        if let Some(observe) = observe
+            && !self.is_drawing()
+            && !self.has_unfinished_unit()
+        {
+            self.observe_frame(observe, self.earlier_frame);
+        }
         let requests = self.terminal.take_requests();
         let mut viewer_output = filtered.viewer_output;
         viewer_output.extend(self.take_deferred_status_title());
         ParsedOutput {
             query_replies: requests.replies,
             title_change: requests.title,
+            cursor_row_cells_written: self.take_input_drawing() || new_frame,
             viewer_output,
             native_activity: filtered.native_activity,
             redraw_viewers: left_alternate,
             status,
         }
+    }
+
+    /// The pending frame's bytes precede the input whose response the caller is observing.
+    pub fn mark_pending_frame_earlier(&mut self) {
+        self.earlier_frame = self.is_drawing() || self.has_unfinished_unit();
+        if !self.earlier_frame {
+            self.terminal.mark_input_boundary();
+        }
+    }
+
+    /// Whether this frame printed the cell after the caller's input boundary, across reads.
+    pub fn frame_printed_cell(&self, row: usize, column: usize) -> bool {
+        self.frame_follows_input_boundary() && self.terminal.term.frame_printed_cell(row, column)
+    }
+
+    /// Whether this frame belongs on the current side of the caller's input boundary.
+    pub fn frame_follows_input_boundary(&self) -> bool {
+        !self.earlier_frame
+    }
+
+    /// Classifies cell writes on a viewport row while observing the current frame.
+    pub fn frame_row_writes(&self, row: usize) -> CursorRowWrites {
+        frame_writes(
+            self.terminal.term.row_cells_written_in_scope(row),
+            self.earlier_frame,
+        )
+    }
+
+    fn observe_frame(&self, observe: &mut InputObserver<'_>, earlier: bool) -> bool {
+        let writes = frame_writes(
+            self.terminal.cursor_row_written_since_input_boundary(),
+            earlier,
+        );
+        observe(InputEvent::Frame(self, writes));
+        writes == CursorRowWrites::Current
+    }
+
+    /// Parse any earlier frame up to its boundary before counting the later cell writes.
+    fn parse_output(
+        &mut self,
+        bytes: &[u8],
+        mut start: usize,
+        end: usize,
+        earlier_through: &mut Option<usize>,
+        observe: &mut Option<&mut InputObserver<'_>>,
+    ) {
+        if let Some(boundary) = earlier_through.take_if(|boundary| *boundary <= end) {
+            self.terminal.parse(&bytes[start..boundary]);
+            if !self.terminal.holds_output_back() {
+                if let Some(observe) = observe {
+                    self.observe_frame(observe, true);
+                }
+                self.earlier_frame = false;
+                self.terminal.reset_damage();
+                self.terminal.mark_input_boundary();
+            }
+            start = boundary;
+        }
+        self.terminal.parse(&bytes[start..end]);
+    }
+
+    fn take_input_drawing(&mut self) -> bool {
+        if self.earlier_frame {
+            self.mark_pending_frame_earlier();
+            return false;
+        }
+        self.terminal.cursor_row_cells_written()
     }
 
     fn set_tab_stop(&mut self, stop: bool) {
@@ -269,12 +453,20 @@ impl Screen {
 
     /// Ends an open synchronized update, and gives what the output it held back produced.
     pub fn end_synchronized_update(&mut self) -> ParsedOutput {
+        self.terminal.reset_damage();
+        self.sync_ended_between_reads = true;
         let on_alternate = self.on_alternate_screen();
-        self.terminal.end_update();
+        if self.synchronized_update_deadline().is_some() {
+            self.terminal.end_update();
+            // An update that ended at its timeout can still be shown to viewers.
+            self.terminal.term.discard_observed_paint();
+            self.finish_preexisting_frame(!self.has_unfinished_unit());
+        }
         let requests = self.terminal.take_requests();
         ParsedOutput {
             query_replies: requests.replies,
             title_change: requests.title,
+            cursor_row_cells_written: self.take_input_drawing(),
             viewer_output: self.take_deferred_status_title(),
             redraw_viewers: on_alternate && !self.on_alternate_screen(),
             ..ParsedOutput::default()
@@ -287,17 +479,85 @@ impl Screen {
         self.terminal.update_deadline()
     }
 
+    /// Whether an open synchronized update holds a frame back: what shows is the one before it. An
+    /// update opened after a frame, with nothing in it yet, holds none.
+    pub fn is_drawing(&self) -> bool {
+        self.terminal.holds_output_back()
+    }
+
     /// Whether a checkpoint taken now holds the whole state: the main screen shows, nothing is
     /// half-written and no synchronized update is open. The checkpoint's redraw followed by the
     /// later output then rebuilds the screen.
     pub fn at_clean_point(&self) -> bool {
-        let open_update = self.synchronized_update_deadline().is_some();
-        !(self.on_alternate_screen() || self.has_unfinished_unit() || open_update)
+        !self.on_alternate_screen() && self.output_frame_complete()
+    }
+
+    /// Whether no control sequence or synchronized update is open, even if it holds no text yet.
+    pub fn output_frame_complete(&self) -> bool {
+        !self.has_unfinished_unit() && self.synchronized_update_deadline().is_none()
     }
 
     /// Whether output has stopped inside a character, escape sequence or string.
     pub fn has_unfinished_unit(&self) -> bool {
         self.splitter.is_inside_unit()
+    }
+
+    /// Starts or stops tracking which cells the CLI paints from this point on. A synchronized
+    /// frame or control sequence open at the boundary cannot supply the next observation.
+    pub fn observe_paint(&mut self, enabled: bool) {
+        self.paint_waits_for_frame = enabled && !self.output_frame_complete();
+        self.terminal.term.observe_paint(enabled);
+    }
+
+    fn finish_preexisting_frame(&mut self, between_units: bool) {
+        if self.paint_waits_for_frame
+            && between_units
+            && self.synchronized_update_deadline().is_none()
+        {
+            self.terminal.term.discard_observed_paint();
+            self.paint_waits_for_frame = false;
+        }
+    }
+
+    /// Whether this screen is tracking output for an active input.
+    pub fn observes_paint(&self) -> bool {
+        self.terminal.term.observes_paint()
+    }
+
+    /// Whether the CLI painted the entire range since the boundary, in the visible frame.
+    pub fn has_painted(&self, row: usize, columns: std::ops::Range<usize>) -> bool {
+        !self.paint_waits_for_frame
+            && self.output_frame_complete()
+            && self.terminal.term.has_painted(row, columns)
+    }
+
+    /// When the CLI painted a cell in this observation, in output order.
+    pub fn painted_at(&self, row: usize, column: usize) -> Option<u32> {
+        if self.paint_waits_for_frame || !self.output_frame_complete() {
+            return None;
+        }
+        self.terminal.term.painted_at(row, column)
+    }
+
+    /// When the CLI last printed a space here in this observation.
+    pub fn printed_space_at(&self, row: usize, column: usize) -> Option<u32> {
+        if self.paint_waits_for_frame || !self.output_frame_complete() {
+            return None;
+        }
+        self.terminal.term.printed_space_at(row, column)
+    }
+
+    /// When a line feed advanced to this row in this observation.
+    pub fn line_feed_at(&self, row: usize) -> Option<u32> {
+        if self.paint_waits_for_frame || !self.output_frame_complete() {
+            return None;
+        }
+        self.terminal.term.line_feed_at(row)
+    }
+
+    /// Whether the insertion point is already past the last cell, waiting to wrap.
+    pub fn cursor_wrap_pending(&self) -> bool {
+        self.terminal.grid().cursor.input_needs_wrap
     }
 
     /// Whether pasted text must be bracketed.

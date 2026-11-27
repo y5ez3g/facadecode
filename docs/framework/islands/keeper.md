@@ -18,6 +18,7 @@ runs as `facade keeper`.
 - **The daemon's link**: the one proved connection on the keeper's socket.
 - **Files:**
   - `<home>/framework/keeper.lock`;
+  - `<home>/framework/runs/<agent>/creator-stop`, the accepted process identity for a creator stop.
   - the socket `keeper-<key>.sock` in the socket folder, at the path
     `facade_base::paths::keeper_socket` gives, removed when the keeper exits; on Windows the named
     pipe at that path, `\\.\pipe\facade-framework-keeper-<key>`, which goes with the process.
@@ -40,8 +41,12 @@ runs as `facade keeper`.
   the CLI's. A forked CLI stays unreaped until its group is dealt with, so its IDs cannot be reused.
 - The keeper sends `changed` after the associated start, stop or sync response, and only on a link
   that completed `hello`.
-- The daemon always starts from the launcher, `framework/bin/facade daemon`, so it runs whichever build
-  the launcher points at.
+- Base starts the selected daemon build. On Windows it can use the stable launcher after
+  verifying that it holds that build's bytes.
+- On Windows the keeper starts a published takeover immediately when it still holds a CLI, has
+  authenticated the departing daemon's first ping, observes its process exit with code 0, and
+  Base confirms a published build newer than the one in the clean-end note. Other restarts
+  follow the usual backoff.
 - The keeper exits when no daemon runs and it holds no CLI, and never otherwise except on
   SIGTERM or SIGINT. On Windows it has no console, so nothing asks it to end; it is ended only by
   `TerminateProcess`.
@@ -70,11 +75,12 @@ runs as `facade keeper`.
 - `facade keeper` calls `facade_keeper::serve() -> anyhow::Result<()>`. This is the crate's only
   public item.
 
-**Whoever starts it**, through `facade_base::service::launch(Service::Keeper, <launcher>)`:
+**Whoever starts it**
 
 - A command that cannot reach the daemon and finds no daemon or keeper running
-  (`crates/facade/src/daemon_client.rs`).
-- The daemon, when its keeper ended (`crates/daemon/src/runs/keeper_link`).
+  uses `facade_base::programs::start_keeper()` (`crates/facade/src/daemon_client.rs`).
+- The daemon uses `facade_base::service::launch` with the published `facade` launcher when it
+  replaces an ended keeper (`crates/daemon/src/runs/keeper_link`).
 - Both read the startup report on `FACADE_STARTUP_CHANNEL`: `started`, `contention` or
   `failed <reason>`.
 
@@ -92,7 +98,10 @@ runs as `facade keeper`.
   the first byte of the line. On Windows, the top-level `terminal` member names handles already
   duplicated into the authenticated receiver's process. The receiver closes unused copies.
 
-**Programs it starts:** `framework/bin/facade daemon`, and the CLIs `agent.start` names.
+**Programs it starts**
+
+- The selected daemon build through `facade_base::programs::start_daemon(framework, attempt)`.
+- The CLIs named by `agent.start`.
 
 **Environment it reads:** `FACADE_STARTUP_CHANNEL`, and `FACADE_HOME` through
 `facade_base::paths`.
@@ -103,16 +112,17 @@ runs as `facade keeper`.
   - protocol uses `api_v1` for JSON-RPC and errors and `api_v1::keeper` for version negotiation and typed
     operations;
   - platform:
-    - `service` (locks, peer proof, `launch`, `StartupChannel`, inherited descriptors, private
+    - `service` (locks, peer proof, `StartupChannel`, inherited descriptors, private
       home);
     - `descriptors` (lines with descriptors);
     - `unix_process` (birth, group signals, process observation, child exits);
-    - `limits`, `paths`, `programs::launcher`;
+    - `limits`, `paths`, `programs::start_daemon`;
   - `log` (writes a line and prunes the service's own log), `time`.
 - **On Windows:** `sockets::server_pipe`, `service::authenticate_client`,
   `terminal_lines::{PeerProcess, add_terminal, take_terminal, PreparedTerminal, InvalidTerminalEnvelope}`,
   `terminal::PtyMaster`,
-  `unix_process::WaitPacket`, `programs::{quoted_command, bin_dir, CONPTY_FOLDER}`.
+  `unix_process::WaitPacket`, `programs::{quoted_command, bin_dir, CONPTY_FOLDER,
+  clean_takeover_published}`.
 - **Third party:** `serde`, `serde_json`, `anyhow`; on Unix `nix`, `libc`, `signal-hook`; on Windows
   `windows-sys`.
 - **The ConPTY package** (`framework/vendor/conpty/`): `build.rs` selects `win-x64` for Windows
@@ -181,10 +191,13 @@ its terminal copy when the operation calls for one. When an input line exceeds
 - **`agent.start`:** opens the PTY (`terminal.rs`), spawns the CLI and reads its birth. A CLI
   whose birth cannot be read is killed and the start fails.
 - **`agent.stop`:**
-  1. SIGHUP to the group, then SIGKILL after `STOP_TIMEOUT` (3 seconds) or as soon as the CLI ends,
+  1. A caller that uses `creator_stop` supplies the held process identity. The Keeper persists the
+     acceptance of that first stop before it signals the CLI. The daemon retires it with the run
+     folders on resume or removal.
+  2. SIGHUP to the group, then SIGKILL after `STOP_TIMEOUT` (3 seconds) or as soon as the CLI ends,
      whichever comes first.
-  2. A repeated stop keeps the first deadline.
-  3. A SIGKILL that fails is tried again after 100 ms.
+  3. A repeated stop keeps the first deadline.
+  4. A SIGKILL that fails is tried again after 100 ms.
 - **`agent.sync`:** checks the CLI's PID and birth. It gives a copy of the master to whichever side
   lacks it, closes a redundant incoming copy, and returns `not_found` when neither side has one.
   When the daemon gives the keeper a terminal for a CLI that already ended, the keeper acknowledges
@@ -202,13 +215,14 @@ as closing a terminal does.
 `Supervisor` (`supervisor.rs`) is either watching a daemon or waiting to start the next one.
 `due(now)` tells the loop what is owed.
 
-- **Watchdog:** the daemon pings once a second from its hello on. After `PING_TIMEOUT` (15 seconds)
-  without a ping, counted from the start of watching until the first ping, the keeper sends
-  SIGKILL.
-- **Restart:** once the daemon ended, a keeper holding CLIs starts the next one after a delay. The
-  delay starts at 0.5 seconds and doubles up to 30 seconds; it starts over after a daemon that ran
-  60 seconds. A daemon that cannot be started counts as one that ended at once. A keeper holding
-  no CLI exits instead.
+- **Watchdog:** a daemon started in a known startup attempt has its shared startup budget until
+  its first authenticated ping within that budget. A daemon without a recognized startup record has the usual
+  `PING_TIMEOUT` (15 seconds) from the start of watching. After its first ping the same process
+  stays on the 15-second watchdog, including across reconnects. The daemon pings once a second.
+- **Restart:** after retaining the startup result of the daemon that ended, a keeper holding CLIs
+  schedules the next daemon from the complete selected program set. The usual delay starts at
+  0.5 seconds and doubles up to 30 seconds. It starts over after a daemon that ran 60 seconds.
+  A daemon that cannot be started counts as one that ended at once. A keeper holding no CLI exits.
 - **How the end is seen:** SIGCHLD for a daemon the keeper forked. For a daemon it found running,
   a process descriptor, or, where the system gives none, only its silence.
 
@@ -218,9 +232,9 @@ as closing a terminal does.
   masters. The next daemon says hello, learns from the response which CLIs the keeper holds, and
   gets each master back with `agent.sync`.
 - **A new build takes over.** The old daemon installs the new build, points the launcher at it,
-  drains and exits. A keeper holding CLIs treats that as an ordinary end and starts the launcher's
-  daemon, which is the new build. A keeper holding none exits, and the next command starts a new
-  keeper from the launcher. A keeper keeps running its own build until it exits.
+  drains and exits. A keeper holding CLIs schedules the selected daemon build. A keeper holding
+  none exits, and the next command starts a keeper from the selected build. A keeper keeps running
+  its own build until it exits.
 - **Another proved daemon connects.** It becomes the daemon being watched, and its connection
   replaces the old one. A daemon the keeper forked and no longer watches is still reaped when it
   exits.

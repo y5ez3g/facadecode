@@ -3,7 +3,7 @@
 //! exponential backoff once a daemon ends.
 
 use std::os::fd::BorrowedFd;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use facade_base::process::ProcessIdentity;
@@ -13,10 +13,16 @@ use nix::sys::signal::Signal;
 use nix::unistd::Pid;
 
 use crate::log;
-use crate::runtime::{MAX_RESTART_DELAY, MIN_RESTART_DELAY, PING_TIMEOUT, RESTART_DELAY_RESET};
+use facade_base::startup::Attempt;
+
+use crate::runtime::{
+    self, MAX_RESTART_DELAY, MIN_RESTART_DELAY, PING_TIMEOUT, RESTART_DELAY_RESET,
+};
 
 pub(super) struct Supervisor {
     phase: Phase,
+    framework: PathBuf,
+    startup: Option<Attempt>,
     /// Wait before the next start; doubles after each end, up to [`MAX_RESTART_DELAY`].
     backoff: Duration,
     /// Daemons the keeper forked that another daemon has since replaced. They are reaped when
@@ -26,13 +32,15 @@ pub(super) struct Supervisor {
 
 enum Phase {
     /// A daemon is up (or believed up) and being watched.
-    Up(Watched),
+    Up(Box<Watched>),
     /// No daemon; the next one starts at this instant.
     Down(Instant),
 }
 
 struct Watched {
     process: ProcessIdentity,
+    startup: Option<Attempt>,
+    report: Option<service::StartupReport>,
     how: Notice,
     /// Start of watching; the watchdog counts from here until the first ping.
     from: Instant,
@@ -63,13 +71,20 @@ pub(super) enum Due {
 impl Supervisor {
     /// The state a new keeper begins in: watching the daemon that holds `framework/daemon.lock` (that
     /// daemon started this keeper), or about to start one.
-    pub(super) fn new(framework: &Path, now: Instant) -> Supervisor {
-        let phase = match service::live_holder(framework, Service::Daemon) {
+    pub(super) fn new(framework: &Path, now: Instant, startup: Option<Attempt>) -> Supervisor {
+        let mut phase = match service::live_holder(framework, Service::Daemon) {
             Ok(Some(process)) => observe(process, now),
             _ => Phase::Down(now),
         };
+        let startup = startup.or_else(|| Attempt::current(framework));
+        if let Phase::Up(watched) = &mut phase {
+            (watched.startup, watched.last_ping) =
+                runtime::watched_startup(startup.clone(), &watched.process, now);
+        }
         Supervisor {
             phase,
+            framework: framework.to_path_buf(),
+            startup,
             backoff: MIN_RESTART_DELAY,
             retired: Vec::new(),
         }
@@ -112,6 +127,10 @@ impl Supervisor {
             self.retired.push(pid);
         }
         self.phase = observe(process.clone(), now);
+        if let Phase::Up(watched) = &mut self.phase {
+            (watched.startup, watched.last_ping) =
+                runtime::watched_startup(Attempt::current(&self.framework), process, now);
+        }
     }
 
     /// The daemon's pid if the keeper forked it and it is still being watched.
@@ -120,29 +139,52 @@ impl Supervisor {
         matches!(watched.how, Notice::Sigchld).then(|| Pid::from_raw(watched.process.pid as i32))
     }
 
-    /// Starts the daemon through the launcher, so whichever build the launcher points at runs.
+    /// Starts the complete selected daemon image.
     pub(super) fn launch(&mut self, now: Instant) -> anyhow::Result<()> {
-        let launcher = facade_base::programs::launcher("facade")?;
-        let pid = service::launch(Service::Daemon, &launcher, &[])?.pid();
+        let startup = match self.startup.take().filter(Attempt::can_continue) {
+            Some(attempt) => attempt,
+            None => Attempt::begin(&self.framework)?,
+        };
+        let (launcher, candidate) = facade_base::programs::start_daemon(&self.framework, &startup)?;
+        let (process, report) = candidate.into_parts();
+        let pid = process.pid();
+        let _ = startup.record("keeper", "daemon process created");
+        self.startup = Some(startup.clone());
         // A daemon that died instantly has no birth to read. The keeper is still its parent and
         // reaps it by pid, so an empty birth is harmless here.
         let birth = unix_process::birth(pid)?.unwrap_or_default();
+        let process = ProcessIdentity { pid, birth };
+        let _ = startup.daemon_created(&process);
         log(
             "info",
             &format!("started daemon {pid} from {}", launcher.display()),
         );
-        self.phase = Phase::Up(Watched {
-            process: ProcessIdentity { pid, birth },
+        self.phase = Phase::Up(Box::new(Watched {
+            process,
+            startup: Some(startup),
+            report: Some(report),
             how: Notice::Sigchld,
             from: now,
             last_ping: None,
             killed: false,
-        });
+        }));
         Ok(())
     }
 
     pub(super) fn ping(&mut self, now: Instant) {
         if let Phase::Up(watched) = &mut self.phase {
+            if watched.last_ping.is_none() {
+                if !runtime::admit_first_ping(watched.startup.as_ref(), &watched.process) {
+                    return;
+                }
+                log(
+                    "info",
+                    &format!(
+                        "first authenticated ping from daemon {}",
+                        watched.process.pid
+                    ),
+                );
+            }
             watched.last_ping = Some(now);
         }
     }
@@ -151,12 +193,26 @@ impl Supervisor {
     pub(super) fn deadline(&self) -> Option<Instant> {
         match &self.phase {
             Phase::Up(watched) if watched.killed => None,
-            Phase::Up(watched) => Some(watched.last_ping.unwrap_or(watched.from) + PING_TIMEOUT),
+            Phase::Up(watched) => Some(match (watched.last_ping, &watched.startup) {
+                (Some(ping), _) => ping + PING_TIMEOUT,
+                (None, Some(attempt)) => attempt.status().0.deadline(),
+                (None, None) => watched.from + PING_TIMEOUT,
+            }),
             Phase::Down(at) => Some(*at),
         }
     }
 
     pub(super) fn due(&self, now: Instant) -> Due {
+        if self.watched().is_some_and(|watched| {
+            !watched.killed
+                && watched.last_ping.is_none()
+                && watched
+                    .startup
+                    .as_ref()
+                    .is_some_and(|attempt| attempt.status().0.exhausted())
+        }) {
+            return Due::Watchdog;
+        }
         match self.deadline() {
             Some(at) if at <= now && self.is_up() => Due::Watchdog,
             Some(at) if at <= now => Due::Start,
@@ -204,6 +260,38 @@ impl Supervisor {
         })
     }
 
+    pub(super) fn waited_for_startup(&self) -> bool {
+        self.watched()
+            .is_some_and(|watched| watched.startup.is_some() && watched.last_ping.is_none())
+    }
+
+    pub(super) fn report_end(&mut self, how: &str, restarting: bool) {
+        let Phase::Up(watched) = &mut self.phase else {
+            return;
+        };
+        let Some(attempt) = &watched.startup else {
+            return;
+        };
+        let report = watched
+            .report
+            .as_mut()
+            .and_then(|report| report.read(Duration::ZERO));
+        let reason = match &report {
+            Some(service::Report::Failed(error)) => error.as_str(),
+            Some(service::Report::Contention) => return,
+            _ => how,
+        };
+        if restarting {
+            let _ = attempt.fail_daemon(
+                &watched.process,
+                self.framework.join("logs/daemon.log"),
+                reason,
+            );
+        } else {
+            let _ = attempt.finish(&self.framework, &watched.process, reason);
+        }
+    }
+
     /// The daemon is gone. The next start waits the current backoff, which resets first if the
     /// daemon had been up for [`RESTART_DELAY_RESET`], and doubles afterwards.
     pub(super) fn ended(&mut self, now: Instant) {
@@ -245,11 +333,13 @@ fn observe(process: ProcessIdentity, now: Instant) -> Phase {
             Notice::Pings
         }
     };
-    Phase::Up(Watched {
+    Phase::Up(Box::new(Watched {
         process,
+        startup: None,
+        report: None,
         how,
         from: now,
         last_ping: None,
         killed: false,
-    })
+    }))
 }

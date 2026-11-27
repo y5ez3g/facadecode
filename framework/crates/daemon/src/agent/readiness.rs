@@ -10,17 +10,17 @@ use tokio::time::Instant;
 use super::{ESCAPE_DELAY, START_TIMEOUT};
 use crate::ToolsGiven;
 
-const TEXT_TIMEOUT: Duration = Duration::from_secs(2);
-const PANEL_TIMEOUT: Duration = Duration::from_secs(10);
 const SCREEN_STILL: Duration = Duration::from_secs(1);
 const SELECTION_TIMEOUT: Duration = Duration::from_secs(10);
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Keys readiness wants pressed, which the actor hands to the typist.
 pub(crate) enum Press {
-    /// Text pasted, without Enter, as the person.
-    Text(String),
-    /// Keys by name.
+    /// The tools command, pasted before its startup deadline.
+    ToolCommand { text: String, deadline: Instant },
+    /// A single key for preparing the tools, with the same deadline.
+    ToolKey { key: String, deadline: Instant },
+    /// Keys in the trust answer.
     Keys(Vec<String>),
 }
 
@@ -29,6 +29,8 @@ pub(crate) struct StartView<'a> {
     pub(crate) screen: &'a Screen,
     /// The input as the rule reads the screen now.
     pub(crate) input: InputState,
+    /// Draft text from the input box, if the rule could read its rows.
+    pub(crate) draft: Option<&'a str>,
     /// The CLI works on a turn.
     pub(crate) works: bool,
     /// The start's bound; None while the CLI asks a question of its own.
@@ -43,8 +45,6 @@ pub(crate) struct StartView<'a> {
 pub(crate) struct StartStep {
     /// When to look again; the actor also looks whenever the CLI draws.
     pub(crate) wake: Option<Instant>,
-    /// The keys and calls held meanwhile go on now, in the order they came.
-    pub(crate) release_held: bool,
     /// Readying the tools failed: they stay unavailable until their server connects.
     pub(crate) tools_not_started: bool,
     /// Facade answered the CLI's trust question.
@@ -87,6 +87,9 @@ impl Readiness {
                 rule,
                 phase: ToolPhase::Input,
                 deadline,
+                startup_deadline: deadline,
+                issued: false,
+                command_issued: false,
             });
         }
         if allow_auto_trust {
@@ -114,16 +117,13 @@ impl Readiness {
     ) -> StartStep {
         let mut result = StartStep {
             wake: None,
-            release_held: false,
             tools_not_started: false,
             answered: false,
         };
         if let Some(mut tools) = self.tools.take() {
             tools.advance(now, view, press, &mut result, &self.agent_id);
-            if matches!(tools.phase, ToolPhase::Done) {
-                result.release_held = true;
-            } else {
-                result.wake = Some(tools.wake(now));
+            if !matches!(tools.phase, ToolPhase::Done) {
+                result.wake = tools.wake();
                 self.tools = Some(tools);
             }
         }
@@ -140,6 +140,86 @@ impl Readiness {
         result
     }
 
+    /// Validates the pending stroke against the actor's current complete frame.
+    pub(super) fn tool_write_matches(
+        &self,
+        screen: &Screen,
+        input: InputState,
+        draft: Option<&str>,
+        composer_allowed: bool,
+    ) -> bool {
+        let Some(tools) = &self.tools else {
+            return false;
+        };
+        match tools.phase {
+            ToolPhase::Text => composer_allowed && input == InputState::Usable,
+            ToolPhase::Panel => composer_allowed && tools.shows_command(screen, input, draft),
+            ToolPhase::Drain => tools.ready_panel(screen),
+            _ => false,
+        }
+    }
+
+    /// Whether the visible panel is one the start has opened and is still observing.
+    pub(super) fn in_tool_panel(&self, screen: &Screen) -> bool {
+        self.tools.as_ref().is_some_and(|tools| {
+            (matches!(tools.phase, ToolPhase::Drain)
+                || (matches!(tools.phase, ToolPhase::Panel) && tools.issued))
+                && shows(screen, &tools.rule.opened)
+        })
+    }
+
+    /// Gives a new question to the person, retaining the ordering of a close already issued.
+    pub(super) fn interrupt_tools_for_question(&mut self) -> bool {
+        let Some(tools) = &self.tools else {
+            return false;
+        };
+        if matches!(
+            tools.phase,
+            ToolPhase::Input | ToolPhase::Pause | ToolPhase::Done
+        ) || (matches!(tools.phase, ToolPhase::Drain) && tools.issued)
+        {
+            return false;
+        }
+        let mut reason = String::from("its CLI began waiting for a person during tool preparation");
+        if tools.command_issued
+            && (matches!(tools.phase, ToolPhase::Text)
+                || (matches!(tools.phase, ToolPhase::Panel) && !tools.issued))
+        {
+            reason.push_str(&format!(
+                ", and some or all of {} may remain in its input",
+                tools.rule.text
+            ));
+        }
+        facade_base::log::write(
+            "daemon",
+            "warn",
+            &format!(
+                "#{}: {reason}. Its first turn may run without Facade's tools",
+                self.agent_id
+            ),
+        );
+        self.tools = None;
+        true
+    }
+
+    /// The system took the current startup stroke. It must drain in terminal order.
+    pub(super) fn tool_write_issued(&mut self) {
+        if let Some(tools) = &mut self.tools {
+            tools.issued = true;
+            tools.command_issued |= matches!(tools.phase, ToolPhase::Text);
+        }
+    }
+
+    /// Starts the panel close interval when the terminal has written the whole close key.
+    pub(super) fn tool_write_arrived(&mut self, written_at: Instant) {
+        if let Some(tools) = &mut self.tools
+            && tools.issued
+            && matches!(tools.phase, ToolPhase::Drain)
+        {
+            tools.wait(ToolPhase::Pause, written_at + ESCAPE_DELAY);
+        }
+    }
+
     /// Whether keys and calls wait now, `input` being the input as read now.
     pub(crate) fn holds_input(&self, input: InputState) -> bool {
         self.tools.as_ref().is_some_and(|tools| {
@@ -148,7 +228,7 @@ impl Readiness {
     }
 
     /// Whether the tool startup is still watching for the composer, before typing anything.
-    pub(crate) fn waiting_for_input(&self) -> bool {
+    pub(super) fn waiting_for_input(&self) -> bool {
         self.tools
             .as_ref()
             .is_some_and(|tools| matches!(tools.phase, ToolPhase::Input))
@@ -156,7 +236,7 @@ impl Readiness {
 
     /// Lets the person type when the probe is only watching. A confirmed native question
     /// already allows keys and can still be followed by the tool probe.
-    pub(crate) fn yield_to_input(&mut self, input: InputState) -> bool {
+    pub(super) fn yield_to_input(&mut self, input: InputState) -> bool {
         if self.waiting_for_input() && input != InputState::Interaction {
             self.tools = None;
             return true;
@@ -175,11 +255,16 @@ impl Readiness {
     }
 }
 
-// Deadlines live beside the phases, so that each phase changes only the wait it owns.
+// Text echo and panel readiness share the startup deadline. The close drains through its receipt.
 struct ToolStart {
     rule: &'static ReadyTools,
     phase: ToolPhase,
     deadline: Instant,
+    startup_deadline: Instant,
+    /// Whether the system has already taken the most recent stroke.
+    issued: bool,
+    /// Whether any part of the tools command may remain in the composer.
+    command_issued: bool,
 }
 
 enum ToolPhase {
@@ -195,14 +280,11 @@ impl ToolStart {
     fn wait(&mut self, phase: ToolPhase, deadline: Instant) {
         self.phase = phase;
         self.deadline = deadline;
+        self.issued = false;
     }
 
-    fn wake(&self, now: Instant) -> Instant {
-        if matches!(self.phase, ToolPhase::Drain) {
-            self.deadline.min(now + ESCAPE_DELAY)
-        } else {
-            self.deadline
-        }
+    fn wake(&self) -> Option<Instant> {
+        (!(matches!(self.phase, ToolPhase::Drain) && self.issued)).then_some(self.deadline)
     }
 
     fn advance(
@@ -214,15 +296,22 @@ impl ToolStart {
         agent_id: &str,
     ) {
         let outcome = match self.phase {
-            ToolPhase::Input => self.input(now, view, press, result),
+            ToolPhase::Input => self.input(now, view, press),
             ToolPhase::Text => self.text(now, view, press),
             ToolPhase::Panel => self.panel(now, view, press),
-            ToolPhase::Drain => {
-                if !view.typing || now >= self.deadline {
-                    self.wait(ToolPhase::Pause, now + ESCAPE_DELAY);
-                }
-                None
+            ToolPhase::Drain if !self.issued && now >= self.deadline => {
+                self.phase = ToolPhase::Done;
+                Some(Err(
+                    "its startup deadline passed before it could close the panel".into(),
+                ))
             }
+            ToolPhase::Drain if self.issued && !view.typing => {
+                self.phase = ToolPhase::Done;
+                Some(Err(
+                    "its tool panel close key failed to reach the terminal".into()
+                ))
+            }
+            ToolPhase::Drain => None,
             ToolPhase::Pause => {
                 if now >= self.deadline {
                     self.phase = ToolPhase::Done;
@@ -239,7 +328,7 @@ impl ToolStart {
                     (
                         "warn",
                         format!(
-                            "#{agent_id}: its tools are not started before its first turn: {why}"
+                            "#{agent_id}: {why}. Its first turn may run without Facade's tools"
                         ),
                     )
                 }
@@ -253,27 +342,29 @@ impl ToolStart {
         now: Instant,
         view: &StartView<'_>,
         press: &mut dyn FnMut(Press) -> Result<(), String>,
-        result: &mut StartStep,
     ) -> Option<Result<String, String>> {
-        if view.input == InputState::Interaction {
-            result.release_held = true;
-        }
-        if view.input == InputState::Interaction
-            || (view.input == InputState::Unknown && view.start_bound.is_none_or(|end| now < end))
+        let input = if view.screen.output_frame_complete() {
+            view.input
+        } else {
+            InputState::Unknown
+        };
+        if input == InputState::Interaction
+            || (input == InputState::Unknown && view.start_bound.is_none_or(|end| now < end))
         {
             self.deadline = bounded(view, now + START_TIMEOUT);
             return None;
         }
         // A draft read while the CLI still draws may be half of a redraw: judged once the screen is
         // still, or once the start's time is up.
-        if view.input == InputState::Draft
+        if input == InputState::Draft
             && now < still_at(now, view)
             && view.start_bound.is_none_or(|end| now < end)
         {
             self.deadline = bounded(view, still_at(now, view));
             return None;
         }
-        let failure = match view.input {
+        let deadline = view.start_bound.unwrap_or(self.startup_deadline);
+        let failure = match input {
             InputState::Unknown => {
                 format!(
                     "its input showed nothing it could read within {} seconds of its start",
@@ -283,9 +374,15 @@ impl ToolStart {
             InputState::Usable if view.works => {
                 "it was working when its input first showed empty".into()
             }
-            InputState::Usable => match press(Press::Text(self.rule.text.clone())) {
+            InputState::Usable if now >= deadline => {
+                "its input first showed empty at the startup deadline".into()
+            }
+            InputState::Usable => match press(Press::ToolCommand {
+                text: self.rule.text.clone(),
+                deadline,
+            }) {
                 Ok(()) => {
-                    self.wait(ToolPhase::Text, bounded(view, now + TEXT_TIMEOUT));
+                    self.wait(ToolPhase::Text, deadline);
                     return None;
                 }
                 Err(why) => why,
@@ -302,33 +399,45 @@ impl ToolStart {
         view: &StartView<'_>,
         press: &mut dyn FnMut(Press) -> Result<(), String>,
     ) -> Option<Result<String, String>> {
-        if shows(view.screen, &self.rule.typed) {
-            if let Err(why) = press(Press::Keys(vec!["Enter".into()])) {
-                self.phase = ToolPhase::Done;
-                return Some(Err(why));
-            }
-            self.wait(ToolPhase::Panel, bounded(view, now + PANEL_TIMEOUT));
-            return None;
-        }
         if now < self.deadline {
+            if !view.typing
+                && view.screen.output_frame_complete()
+                && self.shows_command(view.screen, view.input, view.draft)
+            {
+                if let Err(why) = press(Press::ToolKey {
+                    key: "Enter".into(),
+                    deadline: self.deadline,
+                }) {
+                    self.phase = ToolPhase::Done;
+                    return Some(Err(why));
+                }
+                self.wait(ToolPhase::Panel, self.deadline);
+            }
             return None;
         }
-        let failed = format!(
-            "{} did not show alone in its input, so Enter was not pressed",
-            self.rule.text
-        );
-        let keys = vec!["Backspace".into(); self.rule.text.chars().count()];
-        let reason = match press(Press::Keys(keys)) {
-            Err(why) => {
-                self.phase = ToolPhase::Done;
-                format!("{failed}, and it could not be taken back: {why}")
-            }
-            Ok(()) => {
-                self.wait(ToolPhase::Drain, bounded(view, now + TEXT_TIMEOUT));
-                format!("{failed} and it was taken back")
-            }
-        };
-        Some(Err(reason))
+        Some(Err(self.unsubmitted_command()))
+    }
+
+    fn shows_command(&self, screen: &Screen, input: InputState, draft: Option<&str>) -> bool {
+        input == InputState::Draft
+            && draft == Some(self.rule.text.as_str())
+            && shows(screen, &self.rule.typed)
+    }
+
+    fn ready_panel(&self, screen: &Screen) -> bool {
+        shows(screen, &self.rule.opened) && shows(screen, &self.rule.ready)
+    }
+
+    fn unsubmitted_command(&mut self) -> String {
+        self.phase = ToolPhase::Done;
+        let text = &self.rule.text;
+        let mut reason = format!("the startup deadline passed before {text} was submitted");
+        if self.command_issued {
+            reason.push_str(&format!(
+                ", and some or all of {text} may remain in its input"
+            ));
+        }
+        reason
     }
 
     fn panel(
@@ -337,23 +446,33 @@ impl ToolStart {
         view: &StartView<'_>,
         press: &mut dyn FnMut(Press) -> Result<(), String>,
     ) -> Option<Result<String, String>> {
-        let ready = shows(view.screen, &self.rule.ready);
-        if !ready && now < self.deadline {
+        if now >= self.deadline {
+            if !self.issued {
+                return Some(Err(self.unsubmitted_command()));
+            }
+            self.phase = ToolPhase::Done;
+            return Some(Err(
+                "its panel did not show its tools ready by the startup deadline".into(),
+            ));
+        }
+        if view.typing || !view.screen.output_frame_complete() || !self.ready_panel(view.screen) {
             return None;
         }
-        self.phase = ToolPhase::Done;
-        let mut suffix = String::new();
-        if ready || shows(view.screen, &self.rule.opened) {
-            match press(Press::Keys(vec![self.rule.close.clone()])) {
-                Ok(()) => self.wait(ToolPhase::Drain, bounded(view, now + TEXT_TIMEOUT)),
-                Err(why) => suffix = format!(", and its panel could not be closed: {why}"),
-            }
-        }
-        Some(if ready {
-            Ok(format!("its tools showed ready{suffix}"))
-        } else {
-            Err(format!("its panel did not show its tools ready{suffix}"))
-        })
+        Some(Ok(
+            match press(Press::ToolKey {
+                key: self.rule.close.clone(),
+                deadline: self.deadline,
+            }) {
+                Ok(()) => {
+                    self.wait(ToolPhase::Drain, self.deadline);
+                    "its tools showed ready".into()
+                }
+                Err(why) => {
+                    self.phase = ToolPhase::Done;
+                    format!("its tools showed ready, and its panel could not be closed: {why}")
+                }
+            },
+        ))
     }
 }
 
@@ -477,11 +596,116 @@ fn bounded(view: &StartView<'_>, deadline: Instant) -> Instant {
 }
 
 fn shows(screen: &Screen, pattern: &Pattern) -> bool {
-    for row in screen.view().rows {
-        let text: String = row.iter().map(|cell| cell.text.as_str()).collect();
-        if pattern.is_match(text.trim_end()) {
-            return true;
+    super::with_screen_view(screen, |view| {
+        view.rows.iter().any(|row| {
+            let text: String = row.iter().map(|cell| cell.text()).collect();
+            pattern.is_match(text.trim_end())
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_late_tool_panel_keeps_the_persons_keys_until_it_is_ready_or_the_start_ends() {
+        let rule = facade_rules::find("agy").unwrap();
+        for (echoes, finishes) in [(true, true), (true, false), (false, false)] {
+            let mut readiness = Readiness::new(rule, "a1");
+            let mut screen = Screen::new(80, 24, 0);
+            let mut presses = Vec::new();
+            let started = Instant::now();
+            readiness.begin(started, ToolsGiven::Injected, false);
+            let mut step = |elapsed, input, frame: &str| {
+                screen.feed(format!("\x1b[2J\x1b[H{frame}").as_bytes());
+                let now = started + Duration::from_secs(elapsed);
+                let view = StartView {
+                    screen: &screen,
+                    input,
+                    draft: frame.strip_prefix("> "),
+                    works: false,
+                    start_bound: (input != InputState::Interaction)
+                        .then_some(started + START_TIMEOUT),
+                    drawn_at: Some(now),
+                    typing: false,
+                };
+                let before = presses.len();
+                let result = readiness.step(now, &view, &mut |press| {
+                    match press {
+                        Press::ToolCommand { text, deadline } => {
+                            assert_eq!(deadline, started + START_TIMEOUT);
+                            presses.push(text);
+                        }
+                        Press::ToolKey { key, deadline } => {
+                            assert_eq!(deadline, started + START_TIMEOUT);
+                            presses.push(key);
+                        }
+                        Press::Keys(keys) => presses.extend(keys),
+                    }
+                    Ok(())
+                });
+                if presses.len() != before {
+                    readiness.tool_write_issued();
+                    readiness.tool_write_arrived(now);
+                }
+                (result, readiness.holds_input(input))
+            };
+
+            step(1, InputState::Usable, "> ");
+            let (echo, holds) = step(4, InputState::Usable, "> ");
+            assert!(
+                !echo.tools_not_started,
+                "the command can still echo by the bound"
+            );
+            assert!(holds);
+            if !echoes {
+                let (expired, holds) = step(START_TIMEOUT.as_secs(), InputState::Usable, "> ");
+                assert!(expired.tools_not_started);
+                assert!(!holds, "a missing command releases the person at the bound");
+                assert_eq!(presses, ["/mcp"]);
+                continue;
+            }
+            step(5, InputState::Draft, "> /mcp");
+            step(
+                6,
+                InputState::Interaction,
+                "MCP Servers\r\n  ⋯ facade_facade",
+            );
+            let (waiting, holds) = step(
+                16,
+                InputState::Interaction,
+                "MCP Servers\r\n  ⋯ facade_facade",
+            );
+            assert!(
+                !waiting.tools_not_started,
+                "the panel is still starting its tools"
+            );
+            assert!(holds, "the person's first turn still waits");
+            assert_eq!(waiting.wake, Some(started + START_TIMEOUT));
+            let (elapsed, row) = if finishes {
+                (18, "  ✓ facade_facade")
+            } else {
+                (START_TIMEOUT.as_secs(), "  ⋯ facade_facade")
+            };
+            let (settled, _) = step(
+                elapsed,
+                InputState::Interaction,
+                &format!("MCP Servers\r\n{row}"),
+            );
+            assert_eq!(settled.tools_not_started, !finishes);
+            if !finishes {
+                assert_eq!(
+                    presses,
+                    ["/mcp", "Enter"],
+                    "leave an unready panel to the person"
+                );
+                continue;
+            }
+            step(elapsed, InputState::Usable, "> ");
+            let (_, holds) = step(elapsed + 1, InputState::Usable, "> ");
+            assert!(!holds, "the held keys can follow the panel's close");
+            assert_eq!(presses, ["/mcp", "Enter", "Escape"]);
         }
     }
-    false
 }

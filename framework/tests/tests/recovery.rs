@@ -1270,16 +1270,8 @@ fn a_blocked_log_open_keeps_exit_drain_and_the_socket_pending() {
     // Exactly 4 MiB crossed the terminal before log opening blocks: the producer can exit without
     // pending PTY bytes.
     drop(wire);
-    let store = rusqlite::Connection::open(home.path.join("framework/facade.db")).unwrap();
-    assert!(wait_until(secs(5), || store
-        .query_row(
-            "SELECT exit_at FROM agents WHERE agent_id=?1",
-            [&id],
-            |row| row.get::<_, Option<String>>(0)
-        )
-        .unwrap()
-        .is_some()));
-    // The daemon marks this once its exit has begun with the drain and the blocked writer counted.
+    // The keeper has reported the exit. While the log open blocks the actor, exit saving waits
+    // for the actor to observe it. Both pending jobs must keep the daemon awake.
     home.wait_for_gate("exit-drain-and-writer-counted");
     std::thread::sleep(secs(7));
     assert!(
@@ -1305,6 +1297,15 @@ fn a_blocked_log_open_keeps_exit_drain_and_the_socket_pending() {
             }
         }
     });
+    let store = rusqlite::Connection::open(home.path.join("framework/facade.db")).unwrap();
+    assert!(wait_until(secs(5), || store
+        .query_row(
+            "SELECT exit_at FROM agents WHERE agent_id=?1",
+            [&id],
+            |row| row.get::<_, Option<String>>(0)
+        )
+        .unwrap()
+        .is_some()));
     home.wait_for_idle_exit();
     drain.join().unwrap();
 }

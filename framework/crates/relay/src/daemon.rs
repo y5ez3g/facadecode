@@ -1,19 +1,21 @@
 //! The relay's link to the daemon: it connects, checks that the daemon runs as the relay's own
 //! user before it says anything, says hello, and responds to `closing`.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::Instant;
 
 #[cfg(windows)]
-use crate::windows::{Events, Stream};
+use crate::windows::{Events, OpeningStream, Stream};
 #[cfg(unix)]
 use nix::unistd::Uid;
 
 use crate::jsonrpc::{self, Message};
 use crate::lines::Lines;
+use crate::startup::Ticket;
 
 /// The version of the relay contract, the part of the daemon protocol the relay speaks.
 const RELAY_CONTRACT: u32 = 1;
@@ -21,6 +23,7 @@ const RELAY_CONTRACT: u32 = 1;
 const CLOSING_RESPONSE: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"closing\",\"params\":{}}\n";
 
 /// What the hello tells the daemon about the relay's process, which the CLI started.
+#[derive(Clone)]
 pub(crate) struct RelayHelloParams {
     /// Its words after its program.
     pub(crate) args: Vec<String>,
@@ -61,25 +64,36 @@ pub(crate) struct DaemonLink {
     pub(crate) stream: Stream,
     /// What the daemon sent that is no whole line yet.
     pub(crate) lines: Lines,
+    pub(crate) request_context: bool,
 }
 
-impl DaemonLink {
-    /// Connects to the daemon at `socket` and says `hello`, blocking until the daemon responds.
+pub(crate) struct OpeningLink {
+    #[cfg(unix)]
+    stream: UnixStream,
+    #[cfg(windows)]
+    stream: OpeningStream,
+    lines: Lines,
+    request_context: bool,
+}
+
+impl OpeningLink {
+    /// Connects to the daemon at the socket and completes the MCP hello.
     /// Fails, saying why, where no daemon listens there, it runs as another user, or it refuses
     /// the hello, as it does before the agent is listed; the relay then tries again. Where no one
     /// listens, the error's kind is `NotFound` or `ConnectionRefused`.
     pub(crate) fn open(
         socket: &Path,
         hello: &RelayHelloParams,
-        #[cfg(windows)] events: &mut Events,
-    ) -> io::Result<DaemonLink> {
+        startup: Option<(&Path, &Ticket)>,
+        until: Option<Instant>,
+    ) -> io::Result<OpeningLink> {
         let at = socket.display();
         let fail = |what: String| io::Error::other(what);
         // Its kind tells the relay whether anyone listens there.
         #[cfg(unix)]
         let connection = UnixStream::connect(socket);
         #[cfg(windows)]
-        let connection = Stream::connect(socket, events);
+        let connection = OpeningStream::connect(socket, until);
         let mut stream = connection.map_err(|err| {
             io::Error::new(err.kind(), format!("cannot reach Facade at {at}: {err}"))
         })?;
@@ -90,6 +104,26 @@ impl DaemonLink {
         if user != Uid::current() {
             return Err(fail(format!("the Facade at {at} is another user's")));
         }
+        if let Some((framework, expected)) = startup {
+            #[cfg(unix)]
+            let pid = peer_pid(&stream)?;
+            #[cfg(windows)]
+            let pid = stream.peer_pid;
+            if !expected.lock_matches(framework, pid) {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "the daemon at the socket differs from the startup candidate",
+                ));
+            }
+        }
+        #[cfg(unix)]
+        if let Some(until) = until {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            stream.set_write_timeout(Some(left))?;
+        }
         stream
             .write_all(&hello.to_line())
             .map_err(|err| fail(format!("cannot say hello to Facade at {at}: {err}")))?;
@@ -97,6 +131,14 @@ impl DaemonLink {
         let response = loop {
             if let Some(line) = lines.next_line() {
                 break line;
+            }
+            if let Some(until) = until {
+                let left = until.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return Err(io::ErrorKind::TimedOut.into());
+                }
+                #[cfg(unix)]
+                stream.set_read_timeout(Some(left))?;
             }
             match lines.fill(&mut stream) {
                 Ok(0) => return Err(fail(format!("Facade at {at} closed before it responded"))),
@@ -116,21 +158,75 @@ impl DaemonLink {
                 said.trim_end()
             )));
         }
-        Ok(DaemonLink { stream, lines })
+        if let Some((framework, expected)) = startup {
+            #[cfg(unix)]
+            let pid = peer_pid(&stream)?;
+            #[cfg(windows)]
+            let pid = stream.peer_pid;
+            if !expected.lock_matches(framework, pid) {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "the daemon changed while the relay was saying hello",
+                ));
+            }
+        }
+        #[cfg(unix)]
+        if until.is_some() {
+            stream.set_read_timeout(None)?;
+            stream.set_write_timeout(None)?;
+        }
+        if until.is_some_and(|until| Instant::now() >= until) {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        let request_context = jsonrpc::supports_request_context(&response);
+        Ok(OpeningLink {
+            stream,
+            lines,
+            request_context,
+        })
     }
 
+    /// Takes the proved link into the original relay loop before any queued MCP work is sent.
+    pub(crate) fn attach(
+        self,
+        startup: Option<(&Path, &Ticket)>,
+        #[cfg(windows)] events: &mut Events,
+    ) -> io::Result<DaemonLink> {
+        if let Some((framework, expected)) = startup {
+            #[cfg(unix)]
+            let pid = peer_pid(&self.stream)?;
+            #[cfg(windows)]
+            let pid = self.stream.peer_pid;
+            if !expected.lock_matches(framework, pid) || expected.expired() {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "the startup socket no longer belongs to the current candidate",
+                ));
+            }
+        }
+        #[cfg(unix)]
+        let stream = self.stream;
+        #[cfg(windows)]
+        let stream = Stream::attach(self.stream, events)?;
+        Ok(DaemonLink {
+            stream,
+            lines: self.lines,
+            request_context: self.request_context,
+        })
+    }
+}
+
+impl DaemonLink {
     /// Responds to the daemon's `closing`.
     pub(crate) fn respond_to_closing(&mut self) -> io::Result<()> {
         self.stream.write_all(CLOSING_RESPONSE)
     }
 }
 
-/// Runs `facade daemon --detach` from the relay's own folder, as a client does where no daemon
-/// listens, and blocks until it returns, which takes up to 10 seconds while Facade starts. Its
-/// output goes to standard error: standard output carries MCP.
-pub(crate) fn start_facade() -> Result<(), String> {
+/// Runs the background entry from the relay's own folder, returning its lock ticket.
+pub(crate) fn start_facade() -> io::Result<Option<Ticket>> {
     let program = std::env::current_exe()
-        .map_err(|err| format!("cannot find facade-mcp's own folder: {err}"))?
+        .map_err(|err| io::Error::other(format!("cannot find facade-mcp's own folder: {err}")))?
         .with_file_name(if cfg!(windows) {
             "facade.exe"
         } else {
@@ -139,19 +235,52 @@ pub(crate) fn start_facade() -> Result<(), String> {
     let mut command = Command::new(&program);
     #[cfg(windows)]
     crate::windows::no_window(&mut command);
-    let status = command
+    let mut child = command
         .args(["daemon", "--detach"])
+        .env("FACADE_STARTUP_REPORT", "1")
         .stdin(Stdio::null())
-        .stdout(io::stderr())
-        .status()
-        .map_err(|err| format!("cannot run {}: {err}", program.display()))?;
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|err| io::Error::other(format!("cannot run {}: {err}", program.display())))?;
+    let mut stdout = String::new();
+    let read = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("missing startup output pipe"))?
+        .take(16 * 1024 + 1)
+        .read_to_string(&mut stdout);
+    let status = child.wait().map_err(|err| {
+        io::Error::other(format!("could not wait for {}: {err}", program.display()))
+    })?;
+    read.map_err(|err| {
+        io::Error::other(format!(
+            "could not read {}'s startup report: {err}",
+            program.display()
+        ))
+    })?;
     if !status.success() {
-        return Err(format!(
+        return Err(io::Error::other(format!(
             "{} daemon --detach failed: {status}",
             program.display()
-        ));
+        )));
     }
-    Ok(())
+    for line in stdout
+        .lines()
+        .filter(|line| !line.starts_with("facade-startup-locked "))
+    {
+        eprintln!("{line}");
+    }
+    Ok(Ticket::from_stdout(&stdout))
+}
+
+#[cfg(unix)]
+fn peer_pid(stream: &UnixStream) -> io::Result<u32> {
+    use nix::sys::socket::{getsockopt, sockopt};
+    #[cfg(target_os = "linux")]
+    let pid = getsockopt(stream, sockopt::PeerCredentials)?.pid();
+    #[cfg(target_os = "macos")]
+    let pid = getsockopt(stream, sockopt::LocalPeerPid)?;
+    u32::try_from(pid).map_err(|_| io::Error::other("the daemon socket has no peer process"))
 }
 
 /// The user the process at the other end of `stream` runs as.

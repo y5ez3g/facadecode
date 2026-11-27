@@ -407,6 +407,7 @@ version = "0.1.6"
 dependencies = [
  "anyhow",
  "base64",
+ "junction",
  "libc",
  "nix",
  "schemars",
@@ -453,6 +454,7 @@ name = "facade-relay"
 version = "0.1.6"
 dependencies = [
  "nix",
+ "serde_json",
  "sha2",
  "windows-sys 0.61.2",
 ]
@@ -470,6 +472,8 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
+ "unicode-normalization",
+ "unicode-segmentation",
  "unicode-width",
 ]
 
@@ -480,6 +484,7 @@ dependencies = [
  "anyhow",
  "crossterm",
  "facade-base",
+ "facade-daemon",
  "facade-rules",
  "facade-screen",
  "libc",
@@ -487,6 +492,7 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "sha2",
+ "tokio",
  "toml",
  "windows-sys 0.61.2",
 ]
@@ -496,6 +502,7 @@ name = "facade-screen"
 version = "0.1.6"
 dependencies = [
  "alacritty_terminal",
+ "arrayvec",
  "base64",
 ]
 
@@ -615,6 +622,16 @@ name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+
+[[package]]
+name = "junction"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cde48f36530cbd91b65f050101e6c056d6eb743cea2a8f0f19beef69c6742ff8"
+dependencies = [
+ "scopeguard",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "libc"
@@ -1176,6 +1193,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinyvec"
+version = "1.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+
+[[package]]
 name = "tokio"
 version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1255,6 +1278,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
+
+[[package]]
 name = "unicode-segmentation"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1287,8 +1319,6 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vte"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
 dependencies = [
  "arrayvec",
  "bitflags",

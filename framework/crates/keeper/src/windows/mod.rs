@@ -27,6 +27,8 @@ use self::console::ConPty;
 use self::link::{Inbound, Link, Listener};
 use self::port::Port;
 use self::supervisor::{Due, Supervisor};
+use facade_base::startup::Attempt;
+
 use crate::{log, prune_log_if_due};
 
 /// Back-off after the wait itself fails, so a lasting failure cannot spin the CPU.
@@ -53,7 +55,7 @@ pub(super) struct Keeper {
 impl Keeper {
     /// Sets up the keeper once it owns the keeper lock: the completion port, the first instance
     /// of its pipe, and the daemon it finds running.
-    pub(super) fn bind(framework: PathBuf) -> anyhow::Result<Keeper> {
+    pub(super) fn bind(framework: PathBuf, startup: Option<Attempt>) -> anyhow::Result<Keeper> {
         let mut port = Port::new()?;
         let socket = facade_base::paths::keeper_socket()?;
         let listener = Listener::open(&socket, &mut port)?;
@@ -66,7 +68,10 @@ impl Keeper {
             ),
         );
         let now = Instant::now();
-        let supervisor = Supervisor::new(&framework, &mut port, now);
+        if let Some(attempt) = &startup {
+            attempt.record("keeper", "keeper listener bound")?;
+        }
+        let supervisor = Supervisor::new(&framework, &mut port, now, startup);
         Ok(Keeper {
             framework,
             socket,
@@ -123,8 +128,12 @@ impl Keeper {
         } else if self.link.as_ref().is_some_and(|link| link.key() == key) {
             self.read_link();
         } else if self.supervisor.is_end(key) {
-            let how = self.supervisor.how_it_ended();
-            self.daemon_gone(&how, Instant::now());
+            let code = self.supervisor.exit_code();
+            let how = code.map_or_else(
+                || "ended".into(),
+                |code| format!("ended with code {}", code as i32),
+            );
+            self.daemon_gone(&how, Instant::now(), code == Some(0));
         } else if let Some((agent, cli)) = self.clis.iter().find(|(_, cli)| cli.key() == key) {
             let (agent, exit) = (agent.clone(), cli.exit());
             self.cli_ended(&agent, exit);
@@ -256,10 +265,16 @@ impl Keeper {
                 let pid = self.supervisor.pid();
                 log(
                     "warn",
-                    &format!("daemon {pid} sent no ping for 15 seconds; ending it"),
+                    &if self.supervisor.waited_for_startup() {
+                        format!(
+                            "daemon {pid} did not finish its first keeper ping before the startup deadline"
+                        )
+                    } else {
+                        format!("daemon {pid} sent no ping for 15 seconds; ending it")
+                    },
                 );
                 if self.supervisor.kill() {
-                    self.daemon_gone("was ended by the watchdog", now);
+                    self.daemon_gone("was ended by the watchdog", now, false);
                 }
             }
             Due::Start => {
@@ -277,23 +292,24 @@ impl Keeper {
     fn start_daemon(&mut self, now: Instant) {
         if let Err(err) = self.supervisor.launch(&mut self.port, now) {
             log("error", &format!("could not start the daemon: {err:#}"));
-            self.supervisor.ended(now);
+            self.supervisor.ended(now, false);
         }
     }
 
     /// The daemon is gone. With no CLI to look after the keeper has nothing left to do and exits;
     /// otherwise a new daemon is scheduled.
-    fn daemon_gone(&mut self, how: &str, now: Instant) {
+    fn daemon_gone(&mut self, how: &str, now: Instant, clean_exit: bool) {
         let pid = self.supervisor.pid();
+        self.supervisor.report_end(how, !self.clis.is_empty());
         if self.clis.is_empty() {
             self.exit(&format!("daemon {pid} {how} and no CLI is held"));
         }
-        self.supervisor.ended(now);
         let held = self.clis.len();
         log(
             "warn",
             &format!("daemon {pid} {how}; the keeper holds {held} CLIs and starts another"),
         );
+        self.supervisor.ended(now, clean_exit);
     }
 
     fn exit(&self, why: &str) -> ! {

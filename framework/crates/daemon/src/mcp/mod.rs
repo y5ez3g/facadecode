@@ -1,8 +1,7 @@
 //! The MCP server the daemon runs behind each relay. A relay, `facade-mcp`, opens with a hello that
 //! says what its MCP client gave its process: its words, its environment and its folder. After it,
 //! every line is an MCP JSON-RPC message, answered here. Each tool call acts for the actor the daemon
-//! verified for the relay's connection, and its daemon calls go over a connection bound to that
-//! actor.
+//! verified for the relay's connection, using the daemon's operation admission and dispatch.
 
 mod addresses;
 mod agent_tools;
@@ -12,6 +11,7 @@ mod in_flight;
 mod inbox_page;
 mod lines;
 mod message_tools;
+mod replies;
 mod result_files;
 mod schema;
 mod terminal_tools;
@@ -19,15 +19,22 @@ pub(crate) mod verified;
 mod verified_tools;
 
 use std::collections::BTreeMap;
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::future::poll_fn;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::task::Poll;
 use std::time::Instant;
 
+use crate::delivery::SendOrder;
+use crate::lifecycle::RelayLink;
+use crate::server::Outbox;
 use facade_base::jsonrpc::decode_arguments;
 use facade_base::model::error::{ErrorBody, Reason};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
 pub(crate) use inbox_page::project_inbox;
+pub(crate) use replies::{InboxAnswer, InboxOutput};
 pub(crate) use result_files::{clean_results, results_folder};
 pub(crate) use verified::{ActorIdentity, ActorServices, DiscoverClis, ReadReply};
 
@@ -41,29 +48,16 @@ pub(crate) struct Initialization {
     pub(crate) acquire: Option<AcquirePresence>,
 }
 
-/// Resolves the managed instructions and any presence acquisition for a successful initialize.
-pub(crate) type ManagedInstructions =
-    Box<dyn Fn(Option<&str>) -> Result<Initialization, ErrorBody> + Send + Sync>;
-
 #[derive(Clone, Copy)]
 pub(crate) enum CatalogEvent {
     Listed,
     Reconnect,
 }
 
-/// Prepares a lease if the daemon verifies that the event shows the run's tools are available.
-pub(crate) type Ready = Box<
-    dyn Fn(Option<&str>, CatalogEvent) -> anyhow::Result<Option<AcquirePresence>> + Send + Sync,
->;
-
 /// The version of the relay contract this daemon speaks, as a relay's hello names it.
 pub(crate) const RELAY_CONTRACT: u32 = 1;
 
 /// The response to a line whose answering failed unexpectedly.
-pub(crate) fn internal_error() -> Value {
-    lines::internal_error()
-}
-
 /// A relay's hello. Its fields are the relay contract's.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -110,7 +104,7 @@ impl RelayHelloParams {
     }
 }
 
-/// One relay connection, shared by the blocking tasks that answer its lines.
+/// One relay connection, shared by the tasks that answer its lines.
 pub(crate) struct Relay {
     hello: RelayHelloParams,
     /// The relay's process and when it started: together they name its calls at every daemon.
@@ -120,6 +114,7 @@ pub(crate) struct Relay {
     verified: verified::Verified,
     /// Its `send_message` and `read_messages` calls not yet answered.
     sends: in_flight::Sends,
+    send_order: Arc<SendOrder>,
     /// The leases held by the open transport. Closing takes the entire value.
     presence: Mutex<Option<Presence>>,
 }
@@ -150,6 +145,7 @@ impl Relay {
             birth,
             verified: verified::Verified::new(services),
             sends: in_flight::Sends::default(),
+            send_order: Arc::default(),
             presence: Mutex::new(Some(Presence::default())),
         }
     }
@@ -169,27 +165,68 @@ impl Relay {
         self.hello.reconnect
     }
 
-    /// Notes or cancels a call as its line is read, before it waits for a thread. True where the
-    /// line needs nothing more, as a cancellation does.
-    pub(crate) fn notice(&self, line: &[u8]) -> bool {
-        lines::notice(self, line)
+    /// Reads a line and applies any cancellation before the next line is taken.
+    pub(crate) fn take(
+        self: &Arc<Self>,
+        line: &[u8],
+        arrived: Instant,
+        outbox: Outbox,
+        link: Arc<RelayLink>,
+    ) -> Option<crate::server::RelayResponse> {
+        let request = lines::prepare(self, line, arrived)?;
+        let id = request.id();
+        let relay = self.clone();
+        Some(Box::pin(async move {
+            let response = {
+                let responding = lines::respond(&relay, request, Some((outbox, link)));
+                tokio::pin!(responding);
+                poll_fn(|cx| {
+                    match catch_unwind(AssertUnwindSafe(|| responding.as_mut().poll(cx))) {
+                        Ok(polled) => polled.map(Ok),
+                        Err(panic) => Poll::Ready(Err(panic)),
+                    }
+                })
+                .await
+            };
+            match response {
+                Ok(answer) => answer.map(lines::Response::into_line),
+                Err(_) => {
+                    if let Some(key) = id
+                        .as_ref()
+                        .and_then(|id| serde_json::from_str::<Value>(id.get()).ok())
+                    {
+                        relay.sends.finish(&key.to_string());
+                    }
+                    Some(lines::internal_error(id))
+                }
+            }
+        }))
     }
 
-    /// The response to `line`, which arrived at `arrived`: none for a notification or a response. It
-    /// waits on the daemon, so it runs in a blocking task.
-    pub(crate) fn respond_verified(&self, line: &[u8], arrived: Instant) -> Option<Value> {
-        lines::respond(self, line, arrived)
+    pub(crate) async fn settle_cancelled(&self) {
+        self.sends.settle_cancelled().await;
     }
 
-    /// Holds verified catalog presence until the relay's connection ends. Runs in a blocking task.
-    pub(crate) fn hold_verified_presence(&self, event: CatalogEvent) {
+    #[cfg(test)]
+    fn respond_verified(&self, line: &[u8], arrived: Instant) -> Option<Value> {
+        let request = lines::prepare(self, line, arrived)?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let reply = runtime.block_on(lines::respond(self, request, None))?;
+        Some(serde_json::from_slice(&reply.into_line()).unwrap())
+    }
+
+    /// Holds verified catalog presence until the relay's connection ends.
+    pub(crate) async fn hold_verified_presence(&self, event: CatalogEvent) {
         {
             let presence = self.presence.lock().unwrap_or_else(PoisonError::into_inner);
             if presence.as_ref().is_none_or(|open| open.listed.is_some()) {
                 return;
             }
         }
-        if let Some(acquire) = self.verified.prepare_presence(self, event) {
+        if let Some(acquire) = self.verified.prepare_presence(self, event).await {
             self.acquire_presence(PresenceStage::Listed, acquire);
         }
     }
@@ -276,22 +313,26 @@ struct ToolCall {
     id: String,
     /// Its JSON-RPC ID as JSON text, as the client's cancellation names it.
     key: String,
-    /// When its line arrived, before it waited for a thread. Tool deadlines start here.
+    /// When its line arrived. Tool deadlines start here.
     arrived: Instant,
+    replay: lines::Replay,
     /// The request ID it goes to the daemon with, where the model gives none: the relay's process
     /// and the call's ID, the same at every daemon, so that a call the relay gives the next daemon
     /// repeats what the first did.
     request_id: String,
+    output: Option<replies::ReplyTarget>,
 }
 
 impl ToolCall {
-    fn of(relay: &Relay, id: &Value, arrived: Instant) -> ToolCall {
+    fn of(relay: &Relay, id: &Value, arrived: Instant, replay: lines::Replay) -> ToolCall {
         let key = id.to_string();
         ToolCall {
             id: id.as_str().map_or_else(|| key.clone(), str::to_string),
             request_id: format!("facade-{}-{}-{key}", relay.pid, relay.birth),
             key,
             arrived,
+            replay,
+            output: None,
         }
     }
 }
@@ -390,16 +431,22 @@ impl Relay {
             reconnect: false,
         };
         let services = ActorServices {
-            authenticate: Box::new(|_, _, _| Err(ErrorBody::internal("unit tests have no daemon"))),
-            connect: Box::new(|_, _| anyhow::bail!("unit tests have no daemon")),
-            read_inbox: Box::new(|_, _, _| Err(ErrorBody::internal("unit tests have no daemon"))),
+            authenticate: Box::new(|_, _, _| {
+                Box::pin(async { Err(ErrorBody::internal("unit tests have no daemon")) })
+            }),
+            call: Box::new(|_, _, _, _| Box::pin(async { panic!("unit tests have no daemon") })),
+            read_inbox: Box::new(|_, _, _, _| {
+                Box::pin(async { Err(ErrorBody::internal("unit tests have no daemon")) })
+            }),
             managed_instructions: Box::new(|_| {
-                Ok(Initialization {
-                    instructions: None,
-                    acquire: None,
+                Box::pin(async {
+                    Ok(Initialization {
+                        instructions: None,
+                        acquire: None,
+                    })
                 })
             }),
-            ready: Box::new(|_, _| anyhow::bail!("unit tests have no daemon")),
+            ready: Box::new(|_, _| Box::pin(async { anyhow::bail!("unit tests have no daemon") })),
         };
         Relay::of_verified(hello, 7, "1".to_string(), services)
     }

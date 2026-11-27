@@ -140,7 +140,7 @@ fn a_send_repeated_by_its_request_id_answers_its_message_and_types_it_once() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message m1 from command line\nhello"],
+        ["📨 Message m1 from command line\nhello "],
         "typed once"
     );
     // Two agents' relays, both run by this test's process, give their first calls the same
@@ -328,7 +328,7 @@ fn calls_with_one_request_id_at_once_keep_one_message_and_both_answer_it() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message m1 from command line\nonce"]
+        ["📨 Message m1 from command line\nonce "]
     );
     assert_eq!(
         read_ids(&home, &worker.id, json!({ "last": 10 })),
@@ -886,29 +886,26 @@ fn a_cancel_at_the_beginning_of_a_paste_wins_or_loses_whole() {
 #[test]
 fn a_cancelled_send_whose_paste_began_goes_on() {
     let home = TestHome::new("relcancelbegun");
-    let worker = home.start_named_fake("worker", &[("FAKECLI_IGNORE_ENTER", "1")]);
+    home.start_facade_with(&[("FACADE_TEST_GATES", "message-enter")]);
+    let worker = home.start_named_fake("worker", &[]);
     let mut person = connect(&home);
     let sending = person.send(
         "call",
         json!({ "op": "agent.send", "args": { "to": "worker", "text": "already pasting" } }),
     );
-    // The fake CLI shows a paste of more than one line as a placeholder, as Claude Code does.
-    assert!(
-        wait_until(secs(10), || home
-            .screen("worker")
-            .contains("[Pasted text #1")),
-        "{}",
-        home.screen("worker")
-    );
-    person.write(&json!({ "jsonrpc": "2.0", "method": "cancel", "params": { "id": sending } }));
+    home.wait_for_gate("message-enter");
+    let cancelled = person.request("cancel", json!({ "id": sending }));
+    home.release_gate("message-enter");
+    assert_eq!(cancelled["result"], json!({}), "{cancelled}");
     let answer = person
         .wait_for_response(sending, secs(40))
         .expect("an answer");
-    assert_ne!(error_reason(&answer), "cancelled", "{answer}");
+    assert_eq!(facts(&answer), (&json!("m1"), &json!("success"), None));
     assert_eq!(
         answer["result"]["message"]["delivery"]["text_written"], "full",
         "{answer}"
     );
+    assert_eq!(typed(&home, "already pasting"), 1);
     assert_eq!(
         read_ids(&home, &worker.id, json!({ "last": 1 })),
         ["m1"],

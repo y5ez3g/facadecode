@@ -71,11 +71,23 @@ pub(crate) struct Splitter {
 }
 
 impl Splitter {
-    /// Calls `each` with every piece `bytes` completes, and the offset in `bytes` just after it.
-    pub(crate) fn split(&mut self, bytes: &[u8], mut each: impl FnMut(usize, Piece<'_>)) {
+    /// Calls `each` with every piece `bytes` completes and its ending offset. Returns where a unit
+    /// already under way first came to an end.
+    pub(crate) fn split(
+        &mut self,
+        bytes: &[u8],
+        mut each: impl FnMut(usize, Piece<'_>),
+    ) -> Option<usize> {
+        let mut carried = self.is_inside_unit();
+        let mut ended_at = None;
         for (at, &byte) in bytes.iter().enumerate() {
             self.take(byte, &mut |piece| each(at + 1, piece));
+            if carried && !self.is_inside_unit() {
+                ended_at = Some(at + 1);
+                carried = false;
+            }
         }
+        ended_at
     }
 
     /// Whether a unit has started and not ended.

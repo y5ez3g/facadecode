@@ -1429,6 +1429,34 @@ fn a_newer_build_s_command_takes_over_while_agents_run() {
     );
 }
 
+/// The daemon of a newer build lets go of the terminals it took over as their runs end.
+#[test]
+fn agents_a_newer_build_took_over_leave_no_handle_of_their_terminals() {
+    const MANY: usize = 12;
+    let home = TestHome::new("takeoverends");
+    home.start_facade_with(&[]);
+    let agents = home.start_plain(MANY);
+    let older = home.daemon_pid();
+    let program = program_of_build(&home, &newer());
+    let run = |args: &[&str]| {
+        let ran = home
+            .command(&program)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(ran.status.success(), "{args:?}: {}", stderr(&ran));
+    };
+    run(&["list"]);
+    assert_ne!(home.daemon_pid(), older, "the newer build's daemon serves");
+    let running = home.daemon_handles();
+    for agent in &agents {
+        run(&["stop", agent]);
+    }
+    // Ten handles may come and go with the daemon's threads.
+    home.expect_daemon_handles(running - MANY * TERMINAL_HANDLES + 10);
+}
+
 /// A call on a connection that said hello before the drain is refused as `upgrading` and does
 /// nothing; a command repeats it at the next daemon, which does it once.
 #[test]
@@ -1476,7 +1504,7 @@ fn a_call_made_while_the_daemon_before_drains_is_refused_and_repeated_at_the_nex
     let typed = || {
         home.submitted_messages()
             .iter()
-            .filter(|submitted| submitted.ends_with("during the drain"))
+            .filter(|submitted| submitted.ends_with("during the drain "))
             .count()
             == 1
     };
@@ -1539,7 +1567,7 @@ fn a_message_entered_as_a_newer_facade_takes_over_is_settled_by_the_daemon_befor
     let typed = || {
         home.submitted_messages()
             .iter()
-            .filter(|submitted| submitted.ends_with("entered as it takes over"))
+            .filter(|submitted| submitted.ends_with("entered as it takes over "))
             .count()
             == 1
     };
@@ -1636,7 +1664,7 @@ fn a_message_waiting_as_the_daemon_before_drains_is_typed_by_the_next_daemon_alo
     let typed = || {
         home.submitted_messages()
             .iter()
-            .filter(|submitted| submitted.ends_with("waits through the drain"))
+            .filter(|submitted| submitted.ends_with("waits through the drain "))
             .count()
             == 1
     };
@@ -2084,7 +2112,7 @@ fn sends_waiting_through_a_takeover_are_typed_once_and_answered() {
         home.submitted_messages()
             .iter()
             .flat_map(|submitted| submitted.lines())
-            .filter(|line| *line == text)
+            .filter(|line| line.trim_end() == text)
             .count()
     };
     assert!(
@@ -2481,7 +2509,7 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
     }
     let message_id = receipt["message"]["message_id"].as_str().unwrap();
     let original =
-        format!("📨 Message {message_id} from command line\nreceipt before the live takeover");
+        format!("📨 Message {message_id} from command line\nreceipt before the live takeover ");
     assert_eq!(
         home.submitted_messages().as_slice(),
         std::slice::from_ref(&original)
@@ -2501,12 +2529,13 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
     assert_eq!(fresh["message"]["text"], fresh_text, "{fresh}");
     let fresh_id = fresh["message"]["message_id"].as_str().unwrap();
     assert_ne!(fresh["id"], receipt["id"], "{fresh}");
+    let submitted = home.submitted_messages();
+    assert_eq!(submitted.len(), 2, "{submitted:?}");
+    assert_eq!(submitted[0], original);
+    // The supplied peer may use a version of the terminal rules without completion padding.
     assert_eq!(
-        home.submitted_messages(),
-        [
-            original,
-            format!("📨 Message {fresh_id} from command line\n{fresh_text}")
-        ]
+        submitted[1].strip_suffix(' ').unwrap_or(&submitted[1]),
+        format!("📨 Message {fresh_id} from command line\n{fresh_text}")
     );
     assert_eq!(process_identity(agent.pid), agent.process);
     println!(
@@ -2672,7 +2701,7 @@ fn a_v4_store_keeps_its_routes_sessions_and_receipts_when_reopened() {
     assert!(local.submitted_messages().is_empty());
 
     let db = Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-    assert_eq!(schema(&db), 6);
+    assert_eq!(schema(&db), facade_daemon::STORE_SCHEMA_VERSION);
     assert_eq!(migrated_columns(&db), 2);
     let saved: (i64, i64, String) = db
         .query_row(
@@ -2829,6 +2858,430 @@ fn an_older_build_s_command_and_server_work_with_the_running_facade() {
     assert_eq!(home.hello_result().unwrap()["build"], CURRENT);
 }
 
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the test gates of debug builds")]
+fn relay_keeps_the_original_answers_to_a_committed_read_and_key_during_upgrade() {
+    let home = TestHome::new("relay-effects");
+    home.start_facade_with(&[("FACADE_TEST_GATES", "mcp-inbox-answer,before-type-input")]);
+    let key_log = home.project.join("keys");
+    let reader = home.start_named_fake("reader", &[]);
+    let target = home.start_named_fake("target", &[("FAKECLI_KEYS", key_log.to_str().unwrap())]);
+    home.release_gate("before-type-input");
+    home.run_facade_ok(&["type", "reader", "hold the inbox"]);
+    assert!(wait_until(secs(10), || home
+        .screen("reader")
+        .contains("hold the inbox")));
+    for kind in ["reached", "release"] {
+        std::fs::remove_file(
+            home.path
+                .join(format!("framework/{kind}-before-type-input")),
+        )
+        .unwrap();
+    }
+    home.run_facade_ok(&["send", "reader", "the committed page"]);
+    let old_relay = std::env::var_os("FACADE_TEST_PREVIOUS_MCP").map(PathBuf::from);
+    let open = |agent| match &old_relay {
+        Some(program) => McpTestClient::open_from(&home, agent, program),
+        None => McpTestClient::open_configured(&home, agent),
+    };
+    let mut inbox = open(&reader.id);
+    let mut console = open(&target.id);
+    inbox.write(r#"{"jsonrpc":"2.0","id":"\u0070age","method":"tools/call","params":{"name":"read_messages","arguments":{}}}"#);
+    home.wait_for_gate("mcp-inbox-answer");
+    let key = json!({
+        "jsonrpc": "2.0", "id": "key", "method": "tools/call",
+        "params": { "name": "press_keys", "arguments": { "agent": target.address, "keys": ["X"] } },
+    });
+    console.write(
+        &key.to_string()
+            .replacen(r#""id":"key""#, r#""id":"\u006bey""#, 1),
+    );
+    home.wait_for_gate("before-type-input");
+    let build = newer();
+    let replacement = program_of_build(&home, &build);
+    let requesting = home
+        .command(&replacement)
+        .arg("list")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate("upgrade-relay-preparing");
+    home.release_gate("before-type-input");
+    home.release_gate("mcp-inbox-answer");
+    let replaced = requesting.wait_with_output().unwrap();
+    assert!(replaced.status.success(), "{}", stderr(&replaced));
+    assert_eq!(home.hello_result().unwrap()["build"], build);
+    assert_eq!(
+        inbox.call("read_messages", json!({}))["data"]["messages"],
+        json!([])
+    );
+    let (pages, _) = inbox.close(secs(10));
+    let page: Vec<_> = pages
+        .iter()
+        .filter(|answer| answer["id"] == "page")
+        .collect();
+    assert_eq!(page.len(), 1, "{pages:?}");
+    assert_eq!(
+        page[0]["result"]["structuredContent"]["data"]["messages"][0]["text"],
+        "the committed page"
+    );
+    let (keys, _) = console.close(secs(10));
+    let key: Vec<_> = keys.iter().filter(|answer| answer["id"] == "key").collect();
+    assert_eq!(key.len(), 1, "{keys:?}");
+    assert_eq!(key[0]["result"]["structuredContent"]["status"], "success");
+    assert_eq!(
+        std::fs::read(&key_log)
+            .unwrap()
+            .iter()
+            .filter(|byte| **byte == b'X')
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_relay_v1_confirms_closing_with_equivalent_json() {
+    let home = TestHome::new("relay-closing-v1");
+    let agent = home.start_named_fake("agent", &[]);
+    let mut relay = McpTestClient::relay_configured(&home, &agent.id);
+    let replacement = newer();
+    let program = program_of_build(&home, &replacement);
+    let mut requester = connect(&home);
+    let request = requester.send(
+        "call",
+        json!({ "op": "daemon.upgrade", "args": {
+            "build": replacement, "program": program,
+            "daemon_api_versions": [1], "keeper_api_versions": [1],
+        } }),
+    );
+    let closing = relay
+        .wait_for_frame(secs(8), |frame| frame["method"] == "closing")
+        .expect("the old daemon sent closing");
+    assert_eq!(closing["params"]["build"], replacement);
+    relay.write(r#"  { "params" : {}, "method" : "clo\u0073ing", "jsonrpc" : "2.0" }  "#);
+    let upgraded = requester.wait_for_response(request, secs(8)).unwrap();
+    assert!(upgraded.get("result").is_some(), "{upgraded}");
+}
+
+fn connect_relay_peer(local: &TestHome, remote: &TestHome) -> (DaemonTestClient, DaemonTestClient) {
+    let binaries = test_binaries();
+    install_machine_ssh(
+        &[("sender", local), ("recipient", remote)],
+        &binaries.facade,
+    );
+    let local_connection = connect(local);
+    let remote_connection = connect(remote);
+    for (home, name) in [(local, "sender"), (remote, "recipient")] {
+        let hello = home.hello_result().unwrap();
+        let id = hello["machine_id"].as_str().unwrap().replace('-', "");
+        home.run_facade_ok(&["machine", "rename", &id, name]);
+    }
+    local.run_facade_ok(&[
+        "machine",
+        "add",
+        "--home",
+        remote.path.to_str().unwrap(),
+        "recipient",
+    ]);
+    (local_connection, remote_connection)
+}
+
+#[test]
+fn a_remote_relay_send_keeps_its_order_without_holding_up_handover() {
+    let local = TestHome::new("relay-remote-origin");
+    let remote = TestHome::new("relay-remote-recipient");
+    let _connections = connect_relay_peer(&local, &remote);
+    let sender = local.start_named_fake("sender", &[]);
+    let follower = local.start_named_fake("follower", &[]);
+    let worker = remote.start_named_fake("worker", &[]);
+    remote.run_facade_ok(&["type", &worker.address, "hold the remote delivery"]);
+    assert!(wait_until(secs(8), || remote
+        .screen(&worker.address)
+        .contains("❯ hold the remote delivery")));
+
+    let mut relay = McpTestClient::open_configured(&local, &sender.id);
+    let text = "saved remotely before takeover";
+    let waiting = relay.send(
+        "tools/call",
+        json!({
+            "name": "send_message", "arguments": {
+                "to": worker.address, "text": text, "wait_for": "delivery", "timeout_seconds": 30,
+            },
+        }),
+    );
+    let db = rusqlite::Connection::open(remote.path.join("framework/facade.db")).unwrap();
+    let mut saved = None;
+    assert!(wait_until(secs(8), || {
+        saved = db
+            .query_row(
+                "SELECT number, request_id FROM messages WHERE text = ?1 AND status = 'pending'",
+                [text],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .ok();
+        saved.is_some()
+    }));
+    let (number, request_id) = saved.expect("the peer saved the request");
+
+    let cancelled = relay.send("tools/call", json!({
+        "name": "send_message", "arguments": { "to": follower.address, "text": "cancel before its turn" },
+    }));
+    let next = relay.send("tools/call", json!({
+        "name": "send_message", "arguments": { "to": follower.address, "text": "following send" },
+    }));
+    assert!(
+        relay.answer(next, secs(1)).is_none(),
+        "the earlier peer request still owns its turn"
+    );
+    relay.write(&json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": cancelled}}).to_string());
+    assert!(relay.request("ping", json!({})).get("result").is_some());
+    let replacement = newer();
+    let program = program_of_build(&local, &replacement);
+    let upgraded = local.command(&program).arg("list").output().unwrap();
+    assert!(upgraded.status.success(), "{}", stderr(&upgraded));
+    assert_eq!(local.hello_result().unwrap()["build"], replacement);
+    let cancelled = relay
+        .answer(cancelled, secs(5))
+        .expect("cancelled send answer");
+    assert_eq!(cancelled["error"]["code"], -32800, "{cancelled}");
+    remote.run_facade_ok(&["type", &worker.address, "--key", "Ctrl+C"]);
+    let answer = relay
+        .answer(waiting, secs(30))
+        .expect("the peer request is answered");
+    assert_eq!(relay.tool_answer(next)["status"], "success");
+    let local_db = rusqlite::Connection::open(local.path.join("framework/facade.db")).unwrap();
+    let saved_to_follower: i64 = local_db
+        .query_row(
+            "SELECT count(*) FROM messages WHERE \"to\" = ?1",
+            [&follower.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(saved_to_follower, 1, "only the uncancelled send was saved");
+    let mut receipts = db
+        .prepare("SELECT number, withdrawn FROM messages WHERE request_id = ?1")
+        .unwrap();
+    let receipts = receipts
+        .query_map([request_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(receipts.len(), 1, "{receipts:?}");
+    assert_eq!(receipts[0].0, number);
+    if receipts[0].1 {
+        // A disconnected v1 peer leaves a withdrawal receipt and clears its message text.
+        assert_ne!(
+            answer["result"]["structuredContent"]["status"], "success",
+            "{answer}"
+        );
+    }
+}
+
+#[test]
+fn a_remote_start_replayed_after_its_deadline_answers_only_a_saved_receipt() {
+    let local = TestHome::new("relay-start-origin");
+    let remote = TestHome::new("relay-start-destination");
+    let _connections = connect_relay_peer(&local, &remote);
+    let sender = local.start_named_fake("sender", &[]);
+    let now = facade_base::unix_process::monotonic_now();
+    let past = now.saturating_sub(31_000_000_000);
+    let start = |relay: &mut McpTestClient, id: u64, at: u64, replay: &str, name: &str| {
+        relay.write(&json!({
+            "relay_request": { "first_line_ns": at, "replay": replay, "cancelled": false },
+            "request": { "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+                "name": "start_agent", "arguments": {
+                    "machine": "recipient", "cli": "fake", "name": name, "folder": remote.project,
+                },
+            } },
+        }).to_string());
+    };
+    let mut relay = McpTestClient::relay_configured(&local, &sender.id);
+    start(&mut relay, 90, now, "first", "already-started");
+    let db = rusqlite::Connection::open(remote.path.join("framework/facade.db")).unwrap();
+    let mut original = None;
+    assert!(
+        wait_until(secs(10), || {
+            original = db
+                .query_row(
+                    "SELECT agent_id, request_id FROM agents WHERE name = 'already-started'",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .ok();
+            original.is_some()
+        }),
+        "the start was saved on the destination"
+    );
+    let (agent_id, request_id) = original.unwrap();
+    drop(relay);
+
+    let mut relay = McpTestClient::relay_configured(&local, &sender.id);
+    start(&mut relay, 90, past, "interrupted", "already-started");
+    let repeated = relay
+        .answer(90, secs(8))
+        .expect("the expired retry's answer");
+    let repeated = &repeated["result"]["structuredContent"];
+    assert_eq!(repeated["status"], "success", "{repeated}");
+    assert_eq!(
+        repeated["data"]["id"],
+        format!("{agent_id}@recipient"),
+        "{repeated}"
+    );
+    start(&mut relay, 91, past, "interrupted", "too-late");
+    let missing = relay.tool_answer(91);
+    assert_eq!(missing["reason"], "timeout", "{missing}");
+    let saved: (i64, String) = db
+        .query_row("SELECT count(*), request_id FROM agents", [], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(
+        saved,
+        (1, request_id),
+        "the expired requests made no new start"
+    );
+}
+
+#[test]
+fn a_relay_that_has_not_confirmed_closing_keeps_the_old_daemon_selected() {
+    let home = TestHome::new("relay-confirmation");
+    let agent = home.start_named_fake("agent", &[]);
+    let daemon = home.daemon_pid();
+    let mut relay = McpTestClient::relay_configured(&home, &agent.id);
+    let replacement = newer();
+    let program = program_of_build(&home, &replacement);
+    let mut requester = connect(&home);
+    let before = home.hello_result().unwrap();
+    let refused = requester.call(
+        "daemon.upgrade",
+        json!({
+            "build": replacement, "program": program,
+            "daemon_api_versions": [1], "keeper_api_versions": [1],
+        }),
+    );
+    assert_eq!(
+        refused["error"]["data"]["reason"], "unavailable",
+        "{refused}"
+    );
+    assert_eq!(home.daemon_pid(), daemon);
+    assert_eq!(home.hello_result().unwrap()["build"], before["build"]);
+    relay.write(r#"{"jsonrpc":"2.0","method":"closing","params":{}}"#);
+    drop(relay);
+    home.run_facade_ok(&["send", "agent", "still serving", "-w"]);
+    let replaced = home
+        .command(&program)
+        .arg("list")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(replaced.status.success(), "{}", stderr(&replaced));
+    assert_eq!(home.hello_result().unwrap()["build"], replacement);
+    assert_ne!(home.daemon_pid(), daemon);
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the test gates of debug builds")]
+fn relay_replays_sends_in_order_and_applies_a_late_cancel_to_the_old_receipt() {
+    let home = TestHome::new("relay-order-cancel");
+    home.start_facade_with(&[(
+        "FACADE_TEST_GATES",
+        "mcp-send-before-resolve,upgrade-before-end",
+    )]);
+    let sender = home.start_named_fake("sender", &[]);
+    let target = home.start_named_fake("target", &[]);
+    home.run_facade_ok(&["type", "target", "keep all delivery waiting"]);
+    assert!(wait_until(secs(10), || home
+        .screen("target")
+        .contains("keep all delivery waiting")));
+    let mut relay = McpTestClient::open_configured(&home, &sender.id);
+    let mut other = McpTestClient::open_configured(&home, &sender.id);
+    // Save this call before preparing closing. Later, its ID is cancelled while the old daemon
+    // is about to exit, so only the replay can apply that cancellation.
+    let send = |to: &str, text: &str, wait: bool| {
+        let arguments = if wait {
+            json!({"to": to, "text": text, "wait_for": "delivery", "timeout_seconds": 30})
+        } else {
+            json!({"to": to, "text": text})
+        };
+        json!({"name": "send_message", "arguments": arguments})
+    };
+    let first = relay.send("tools/call", send("target", "first in relay order", false));
+    home.wait_for_gate("mcp-send-before-resolve");
+    let second = relay.send(
+        "tools/call",
+        send(&target.address, "second in relay order", false),
+    );
+    let cancel = other.send(
+        "tools/call",
+        send("target", "never paste this late cancel", true),
+    );
+    let mut number = None;
+    let saved = || {
+        let db = rusqlite::Connection::open(home.path.join("framework/facade.db")).unwrap();
+        number = db
+            .query_row(
+                "SELECT number FROM messages WHERE text = 'never paste this late cancel'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .ok();
+        number.is_some()
+    };
+    assert!(
+        wait_until(secs(10), saved),
+        "another relay can save past a blocked one"
+    );
+    let replacement = program_of_build(&home, &newer());
+    let requesting = home
+        .command(&replacement)
+        .arg("list")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    home.wait_for_gate("upgrade-before-end");
+    other.write(&json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": cancel}}).to_string());
+    home.release_gate("mcp-send-before-resolve");
+    home.release_gate("upgrade-before-end");
+    let replaced = requesting.wait_with_output().unwrap();
+    assert!(replaced.status.success(), "{}", stderr(&replaced));
+    let cancelled = other
+        .answer(cancel, secs(15))
+        .expect("cancelled send answer");
+    assert_eq!(cancelled["error"]["code"], -32800, "{cancelled}");
+    let db = rusqlite::Connection::open(home.path.join("framework/facade.db")).unwrap();
+    assert!(
+        db.query_row(
+            "SELECT withdrawn FROM messages WHERE number = ?1",
+            [number.unwrap()],
+            |row| row.get::<_, bool>(0)
+        )
+        .unwrap()
+    );
+    drop(db);
+    let received = [relay.tool_answer(first), relay.tool_answer(second)];
+    for receipt in &received {
+        assert_eq!(receipt["status"], "success", "{receipt}");
+    }
+    home.run_facade_ok(&["type", "target", "--key", "Ctrl+C"]);
+    assert!(wait_until(secs(10), || home.submitted_messages().len() == 2));
+    let received: Vec<_> = home
+        .submitted_messages()
+        .iter()
+        .map(|message| message.lines().last().unwrap().to_string())
+        .collect();
+    // Each single-line message paste includes one trailing space in the terminal.
+    assert_eq!(
+        received,
+        ["first in relay order ", "second in relay order "]
+    );
+}
+
 /// Messages sent without pause through facade-mcp and `facade send` while a newer Facade takes over
 /// are all answered and typed once each. One agent holds a draft, and a message to it from each way
 /// of sending waits through the takeover. Every CLI and the keeper keep their processes, and a new
@@ -2977,7 +3430,7 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
             .filter(|entry| {
                 entry["text"]
                     .as_str()
-                    .is_some_and(|typed| typed.ends_with(&format!("\n{text}")))
+                    .is_some_and(|typed| typed.ends_with(&format!("\n{text} ")))
             })
             .count()
     };
@@ -3200,6 +3653,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         .output()
         .unwrap();
     assert!(launched.status.success(), "{}", stderr(&launched));
+    assert!(wait_until(LOADED_TIMEOUT, || home.hello_result().is_some()));
     let mut previous = DaemonTestClient::open(&home);
     let before = previous.hello("terminal", DAEMON_API_VERSIONS, json!({}));
     assert_eq!(before["result"]["api_version"], 1, "{before}");

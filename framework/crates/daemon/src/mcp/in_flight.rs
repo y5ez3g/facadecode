@@ -1,126 +1,57 @@
-//! The message tool calls of one relay that were read and not yet answered, by their JSON-RPC ID
-//! as JSON text, which the client's `notifications/cancelled` names.
-//!
-//! A cancellation withdraws a call's message where its paste has not begun. Before the call is
-//! written to the daemon, nothing is written. After that, the call's own daemon connection carries a
-//! `cancel` naming it, behind the call. The reader of the client's lines cancels at once: the table
-//! is locked only to note or find a call, never while anything is written to a daemon, so a
-//! cancellation never waits behind the calls under way.
+//! The message tools a relay read and has not answered, keyed by JSON-RPC ID.
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use facade_base::api_v1::{daemon::cancel_line, daemon_client::DaemonClient};
-use facade_base::paths::ClientSocket;
 use tokio::sync::watch;
 
 use crate::Cancel;
 
-/// A call under way.
 #[derive(Default)]
-struct Pending {
-    cancelled: bool,
-    /// The daemon connection its call went out on, and the call's request ID there.
-    written: Option<(ClientSocket, u64)>,
-    read: Option<watch::Sender<bool>>,
-}
-
-#[derive(Default)]
-pub(super) struct Sends(Mutex<HashMap<String, Pending>>);
+pub(super) struct Sends(Mutex<HashMap<String, watch::Sender<bool>>>);
 
 impl Sends {
-    fn table(&self) -> MutexGuard<'_, HashMap<String, Pending>> {
+    fn table(&self) -> MutexGuard<'_, HashMap<String, watch::Sender<bool>>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Notes call `key` as its line is read, until [`Sends::finish`].
-    pub(super) fn note(&self, key: String) {
-        self.table().insert(
-            key,
-            Pending {
-                read: Some(watch::Sender::new(false)),
-                ..Pending::default()
-            },
-        );
+    pub(super) fn note(&self, key: String, cancelled: bool) {
+        self.table().insert(key, watch::Sender::new(cancelled));
     }
 
     pub(super) fn read_cancel(&self, key: &str) -> Cancel {
         self.table()
             .get(key)
-            .and_then(|pending| pending.read.as_ref())
-            .map_or_else(Cancel::default, |read| Cancel::of(read.subscribe()))
+            .map_or_else(Cancel::default, |signal| Cancel::of(signal.subscribe()))
     }
 
-    /// Cancels call `key` for its client. A call already written gets a `cancel` on its connection;
-    /// one being written is cancelled by its own thread once it is. A call already answered stays.
+    /// The reader wakes the named call before taking another MCP line.
     pub(super) fn cancel(&self, key: &str) {
-        let written = {
-            let mut table = self.table();
-            let Some(pending) = table.get_mut(key) else {
-                return;
-            };
-            pending.cancelled = true;
-            if let Some(read) = &pending.read {
-                read.send_replace(true);
-            }
-            match &pending.written {
-                Some((connection, id)) => connection.try_clone().ok().map(|copy| (copy, *id)),
-                None => None,
-            }
-        };
-        if let Some((mut connection, id)) = written {
-            // A connection that ended has no call left to withdraw.
-            let _ = connection.write_all(&cancel_line(id));
+        if let Some(signal) = self.table().get(key) {
+            signal.send_replace(true);
         }
     }
 
-    /// Writes call `key` to the daemon with `write`, which answers the call's request ID on
-    /// `client`; nothing where the client cancelled it first. A call never noted, as in tests, is
-    /// written.
-    pub(super) fn write(
-        &self,
-        key: &str,
-        client: &mut DaemonClient,
-        write: impl FnOnce(&mut DaemonClient) -> anyhow::Result<u64>,
-    ) -> Option<anyhow::Result<u64>> {
-        let cancelled = self.table().get(key).map(|pending| pending.cancelled);
-        match cancelled {
-            None => return Some(write(client)),
-            Some(true) => return None,
-            Some(false) => {}
-        }
-        // Tests hold a call here, as a daemon slow to read its line would.
-        facade_base::service::gate_for_test("mcp-writing-send");
-        let written = write(client);
-        let Ok(id) = written else {
-            return Some(written);
-        };
-        // Noted under the lock: a cancellation that came while the call was written is sent here,
-        // after the call, and a later one by `cancel`. Either way it follows the call.
-        let copy = client.writer.try_clone().ok();
-        let cancelled_meanwhile = match self.table().get_mut(key) {
-            Some(pending) => {
-                pending.written = copy.map(|copy| (copy, id));
-                pending.cancelled
-            }
-            None => false,
-        };
-        if cancelled_meanwhile {
-            let _ = client.writer.write_all(&cancel_line(id));
-        }
-        Some(Ok(id))
-    }
-
-    /// Whether the client cancelled call `key`.
+    #[cfg(test)]
     pub(super) fn cancelled(&self, key: &str) -> bool {
-        self.table()
-            .get(key)
-            .is_some_and(|pending| pending.cancelled)
+        self.read_cancel(key).is_requested()
     }
 
-    /// Ends call `key`, answered or withdrawn.
     pub(super) fn finish(&self, key: &str) {
         self.table().remove(key);
+    }
+
+    /// No more lines arrive before the cut. Each cancellation's original call owns its
+    /// settlement, even if it is waiting for its turn to inspect a saved receipt.
+    pub(super) async fn settle_cancelled(&self) {
+        let cancelled: Vec<_> = self
+            .table()
+            .values()
+            .filter(|signal| *signal.borrow())
+            .map(watch::Sender::subscribe)
+            .collect();
+        for mut done in cancelled {
+            let _ = done.wait_for(|_| false).await;
+        }
     }
 }

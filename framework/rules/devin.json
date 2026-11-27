@@ -24,6 +24,7 @@
 		]
 	},
 	"paste": {
+		"bracketed": true,
 		"enter_ms": 100,
 		"placeholders": [
 			{ "pattern": "^\\[Pasted text #\\d+ \\+(\\d+) lines?\\]$", "count": "lines_after_first", "spaced": true },

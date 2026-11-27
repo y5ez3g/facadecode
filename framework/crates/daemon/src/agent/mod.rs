@@ -10,6 +10,7 @@
 
 mod actor;
 mod glyph;
+mod input_gate;
 mod person;
 mod readiness;
 mod screen;
@@ -35,11 +36,12 @@ use facade_base::{
     model::agent::{AgentRef, AgentsUpdate, ManagedAgent},
     model::terminal::InputInfo,
 };
-use facade_screen::{Screen, TerminalColors};
+use facade_screen::{Screen, ScreenView, TerminalColors, VisibleCell};
 use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::time::Instant;
 
 use crate::messages::{DeliveryHandle, PromptWatch};
+use crate::store::DraftProof;
 use crate::waits::Trouble;
 use crate::{Sender, ToolsGiven};
 
@@ -62,11 +64,46 @@ pub(crate) type WatchdogSink = Box<dyn Fn(ManagedAgent, Trouble) + Send>;
 
 /// The pause after an Escape, so that the CLI does not read it with the next key as Alt.
 const ESCAPE_DELAY: Duration = Duration::from_millis(50);
+/// The longest a CLI takes to draw what it read: what the input shows is waited for this long. On
+/// 2026-11-24 the slowest of 59 messages to a CLI on a machine starting ten others took 2.5 seconds.
+const SLOWEST_DRAW: Duration = Duration::from_millis(2500);
 /// How long a run's start may take before its CLI should show its input.
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 
 // The screen log sizes its largest record by what one feed takes; a read never brings more.
 const _: () = assert!(terminal::MAX_READ_BYTES <= screen::MAX_FEED_BYTES);
+
+static VIEW_STORAGE: Mutex<Vec<ScreenView>> = Mutex::new(Vec::new());
+
+/// Releases the row storage after all managed runs have settled.
+pub(crate) fn release_view_storage() {
+    let idle = std::mem::take(&mut *VIEW_STORAGE.lock().unwrap());
+    drop(idle);
+}
+
+/// Keeps a few ordinary views' row allocations for subsequent input and state readings. A
+/// reader fills its own storage and runs without the pool lock.
+fn with_screen_view<T>(screen: &Screen, read: impl FnOnce(&ScreenView) -> T) -> T {
+    const RETAINED_VIEWS: usize = 4;
+    const RETAINED_VIEW_BYTES: usize = 160 * 1024;
+
+    let mut view = VIEW_STORAGE.lock().unwrap().pop().unwrap_or_default();
+    screen.refresh_view(&mut view);
+    let result = read(&view);
+    let bytes = view.rows.capacity() * size_of::<Vec<VisibleCell>>()
+        + view.rows.iter().map(Vec::capacity).sum::<usize>() * size_of::<VisibleCell>()
+        + view.continues.capacity();
+    if bytes <= RETAINED_VIEW_BYTES {
+        for row in &mut view.rows {
+            row.clear();
+        }
+        let mut returned = VIEW_STORAGE.lock().unwrap();
+        if returned.len() < RETAINED_VIEWS {
+            returned.push(view);
+        }
+    }
+    result
+}
 
 /// What was said to an agent, and who said it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,7 +125,8 @@ pub(crate) enum Input {
     /// without typing it again.
     BegunPaste {
         messages: Vec<MessageTyping>,
-        previous_text: String,
+        previous_text: Option<String>,
+        draft: Option<DraftProof>,
     },
 }
 
@@ -97,13 +135,14 @@ impl Input {
         matches!(self, Self::Typed(typing) if typing.is_sequence())
     }
 
-    /// The most bytes this input writes into the terminal.
-    pub(crate) fn most_bytes(&self) -> usize {
+    /// The most bytes this input writes into the terminal, as the `console` takes them where the
+    /// CLI reads console input records.
+    pub(crate) fn most_bytes(&self, console: Option<facade_rules::ConsoleTyping>) -> usize {
         match self {
             Input::Raw(keys) => keys.len(),
-            Input::Typed(typing) => typing.most_bytes(),
-            Input::Message(message) => message.most_bytes(),
-            // What is left of a begun paste is its Enter.
+            Input::Typed(typing) => typing.most_bytes(console),
+            Input::Message(message) => message.most_bytes(console),
+            // A begun paste is either submitted or cleared by the typist.
             Input::BegunPaste { .. } => 1,
         }
     }
@@ -132,6 +171,9 @@ pub(crate) enum InputRejection {
     /// The waiting input is full, or a resize waits to take effect: the input comes back, to send
     /// again once [`AgentHandle::input_room_changed`] fires.
     Backpressured(Input),
+    /// The input takes more of the terminal than all the room there is, these many bytes: it never
+    /// fits.
+    TooLarge(usize),
 }
 
 /// What the actor is asked to do.
@@ -228,9 +270,11 @@ pub(crate) enum AgentCommand {
     Remove {
         reply: oneshot::Sender<()>,
     },
-    /// Holds the messages of a run's start behind its prompt until [`AgentCommand::StartPrompt`].
-    /// `ready` is told once the tools settle or a live initializer can use the native startup path.
+    /// Holds the messages of a run's start behind its prompt until [`AgentCommand::StartPrompt`]
+    /// and reserves room for the prompt's rendered text.
+    /// The ready signal follows settled tools or a live initializer that can use native startup.
     AwaitPrompt {
+        text: String,
         ready: oneshot::Sender<()>,
     },
     /// The start prompt of run `run`, typed before every waiting message, or None where none comes.
@@ -347,6 +391,7 @@ pub(crate) fn spawn_with_trust(
         settled,
         output,
         rule: start.rule.clone(),
+        start_prompt: None,
         run_change: Arc::new(tokio::sync::Mutex::new(())),
         tools: tools.clone(),
     };
@@ -377,6 +422,7 @@ struct Record {
     incident: u64,
     installed_run: u64,
     title: Option<String>,
+    observed_end: bool,
 }
 
 impl Shared {
@@ -387,6 +433,7 @@ impl Shared {
                 incident: 0,
                 installed_run: FIRST_RUN,
                 title: None,
+                observed_end: false,
             }),
             run: AtomicU64::new(FIRST_RUN),
         }
@@ -404,6 +451,7 @@ pub(crate) struct AgentHandle {
     settled: watch::Receiver<bool>,
     output: watch::Receiver<()>,
     rule: Option<String>,
+    start_prompt: Option<u64>,
     run_change: Arc<tokio::sync::Mutex<()>>,
     tools: Arc<watch::Sender<ToolsConnections>>,
 }
@@ -422,6 +470,7 @@ impl AgentHandle {
             settled: watch::channel(false).1,
             output: watch::channel(()).1,
             rule: None,
+            start_prompt: None,
             run_change: Arc::new(tokio::sync::Mutex::new(())),
             tools: Arc::new(watch::channel(ToolsConnections::new(FIRST_RUN, false)).0),
         }
@@ -439,6 +488,21 @@ impl AgentHandle {
     pub(crate) fn prompt_result_facts(&self) -> (ManagedAgent, u64) {
         let record = self.shared.record.lock().unwrap();
         (record.info.clone(), record.incident)
+    }
+
+    pub(crate) fn with_start_prompt(mut self, prompt: Option<u64>) -> Self {
+        self.start_prompt = prompt;
+        self
+    }
+
+    /// The prompt the installed run could still owe, if it was the original start.
+    pub(crate) fn start_prompt(&self) -> Option<u64> {
+        self.start_prompt.filter(|_| self.run() == FIRST_RUN)
+    }
+
+    pub(crate) fn observed_exit(&self) -> Option<ManagedAgent> {
+        let record = self.shared.record.lock().unwrap();
+        record.observed_end.then(|| record.info.clone())
     }
 
     /// The full title supplied by the terminal, for the caller to project.

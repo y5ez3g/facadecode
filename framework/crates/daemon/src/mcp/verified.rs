@@ -1,20 +1,24 @@
-//! The actor-bound connection used by the normal MCP endpoint.
+//! The actor and daemon operations of a relay.
 
 use std::collections::BTreeMap;
-use std::sync::{Mutex, PoisonError};
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Instant;
 
+use facade_base::api_v1;
 use facade_base::api_v1::daemon as wire;
 use facade_base::api_v1::daemon::AgentKind;
-use facade_base::api_v1::daemon_client::DaemonClient;
 use facade_base::model::agent::AgentRef;
 use facade_base::model::error::ErrorBody;
 use serde_json::Value;
+use tokio::sync::Mutex;
 
-use super::{AcquirePresence, CatalogEvent, Initialization, ManagedInstructions, Ready, Relay};
+use super::{AcquirePresence, CatalogEvent, InboxAnswer, InboxOutput, Initialization, Relay};
 use crate::{
     Cancel,
+    delivery::SendControl,
     messages::{InboxRead, ReplyRead},
+    service::CallResult,
 };
 
 #[derive(Clone)]
@@ -24,34 +28,81 @@ pub(crate) struct ActorIdentity {
     pub(crate) receives_terminal_messages: bool,
 }
 
+pub(crate) type ActorFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
 pub(crate) type Authenticate = Box<
-    dyn Fn(Option<&str>, Option<&Value>, Option<&str>) -> Result<ActorIdentity, ErrorBody>
+    dyn for<'a> Fn(
+            Option<&'a str>,
+            Option<&'a Value>,
+            Option<&'a str>,
+        ) -> ActorFuture<'a, Result<ActorIdentity, ErrorBody>>
         + Send
         + Sync,
 >;
 
-pub(crate) type ActorConnect =
-    Box<dyn Fn(&AgentRef, Option<Instant>) -> anyhow::Result<Option<DaemonClient>> + Send + Sync>;
+pub(crate) type ActorCall = Box<
+    dyn for<'a> Fn(
+            &'a AgentRef,
+            wire::DaemonCall,
+            SendControl,
+            Cancel,
+        ) -> ActorFuture<'a, Result<CallResult, api_v1::ErrorBody>>
+        + Send
+        + Sync,
+>;
 
-pub(crate) type ReadInbox =
-    Box<dyn Fn(&AgentRef, InboxRead, Cancel) -> Result<Value, ErrorBody> + Send + Sync>;
+pub(crate) type ReadInbox = Box<
+    dyn for<'a> Fn(
+            &'a AgentRef,
+            InboxRead,
+            Cancel,
+            Option<InboxOutput>,
+        ) -> ActorFuture<'a, Result<InboxAnswer, ErrorBody>>
+        + Send
+        + Sync,
+>;
 
-pub(crate) type ReadReply =
-    Box<dyn Fn(&AgentRef, ReplyRead, Cancel) -> Result<Option<Value>, ErrorBody> + Send + Sync>;
+pub(crate) type ReadReply = Box<
+    dyn for<'a> Fn(
+            &'a AgentRef,
+            ReplyRead,
+            Cancel,
+            Option<InboxOutput>,
+        ) -> ActorFuture<'a, Result<InboxAnswer, ErrorBody>>
+        + Send
+        + Sync,
+>;
 
 pub(crate) type DiscoverClis = Box<
-    dyn Fn(
-            &AgentRef,
-            &[wire::MachineQuery],
+    dyn for<'a> Fn(
+            &'a AgentRef,
+            &'a [wire::MachineQuery],
             Instant,
-        ) -> BTreeMap<String, Result<Vec<String>, String>>
+        ) -> ActorFuture<'a, BTreeMap<String, Result<Vec<String>, String>>>
+        + Send
+        + Sync,
+>;
+
+/// The instructions for the verified run and its prepared initialize lease.
+pub(crate) type ManagedInstructions = Box<
+    dyn for<'a> Fn(Option<&'a str>) -> ActorFuture<'a, Result<Initialization, ErrorBody>>
+        + Send
+        + Sync,
+>;
+
+/// Prepares catalog presence for a verified run without joining a Guest.
+pub(crate) type Ready = Box<
+    dyn for<'a> Fn(
+            Option<&'a str>,
+            CatalogEvent,
+        ) -> ActorFuture<'a, anyhow::Result<Option<AcquirePresence>>>
         + Send
         + Sync,
 >;
 
 pub(crate) struct ActorServices {
     pub(crate) authenticate: Authenticate,
-    pub(crate) connect: ActorConnect,
+    pub(crate) call: ActorCall,
     pub(crate) read_inbox: ReadInbox,
     pub(crate) managed_instructions: ManagedInstructions,
     pub(crate) ready: Ready,
@@ -80,32 +131,26 @@ impl Verified {
         }
     }
 
-    pub(super) fn initialize(
+    pub(super) async fn initialize(
         &self,
         relay: &Relay,
         client_name: Option<&str>,
     ) -> Result<Initialization, ErrorBody> {
         {
-            let mut connection = self
-                .connection
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut connection = self.connection.lock().await;
             if connection.actor.is_none() {
                 connection.client_name = client_name.map(str::to_string);
             }
         }
-        (self.services.managed_instructions)(credential(relay))
+        (self.services.managed_instructions)(credential(relay)).await
     }
 
-    pub(super) fn actor(
+    pub(super) async fn actor(
         &self,
         relay: &Relay,
         meta: Option<&Value>,
     ) -> Result<ActorIdentity, ErrorBody> {
-        let mut connection = self
-            .connection
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut connection = self.connection.lock().await;
         if let Some(actor) = &connection.actor {
             return Ok(actor.clone());
         }
@@ -113,17 +158,18 @@ impl Verified {
             credential(relay),
             meta,
             connection.client_name.as_deref(),
-        )?;
+        )
+        .await?;
         connection.actor = Some(actor.clone());
         Ok(actor)
     }
 
-    pub(super) fn prepare_presence(
+    pub(super) async fn prepare_presence(
         &self,
         relay: &Relay,
         event: CatalogEvent,
     ) -> Option<AcquirePresence> {
-        match (self.services.ready)(credential(relay), event) {
+        match (self.services.ready)(credential(relay), event).await {
             Ok(acquire) => acquire,
             // The callback can inspect private run material. Keep it out of logs.
             Err(_) => {

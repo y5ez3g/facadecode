@@ -9,16 +9,28 @@
 		"mechanism": "prompt",
 		"prompt": "›",
 		"alternate_prompt": "»",
-		"model_line": "^ {2}\\S.*? · (?:[~/]|[A-Za-z]:\\\\)",
+		"model_line": "^ {2}\\S.*? · (?:[~/]|[A-Za-z]:\\\\|…\\s*$)",
 		"wrapped_footer_hint": "^(?: {2}(?:(?:← for agents · )?\\? for shortcuts(?: {2,}\\S.*)?|tab to queue message)| {20,}⚠ (?:1 warning|(?:[2-9]|[1-9][0-9]+) warnings) · f2 to view)$",
 		"scrolled": { "position": "last_column", "above": "↑", "below": "↓" },
 		"menus": [
 			{ "selected": "^› \\d+\\. \\S", "next": "^ {2}\\d+\\. \\S", "hint": { "pattern": "^ {2}(?:Press )?[Ee]nter\\b", "within": 10 } },
+			{
+				"selected": { "prefix": "^ {2}", "text": "Giving this request a little extra thought", "indent": 2, "stop_at_dim": true },
+				"hint": {
+					"pattern": { "prefix": "^(?:› | {2})[12]\\. ", "text": "Dismiss and keep waiting", "indent": 5 },
+					"within": 30
+				}
+			},
 			{ "selected": "^› 1\\. Update now \\(runs .+$", "hint": { "pattern": "^ {2}enter continue · esc skip *$", "within": 5 } }
 		]
 	},
 	"paste": {
+		"bracketed": true,
+		"backspace_unit": "legacy_grapheme",
+		"backspace_single_code_points": "^[\\u{0E31}\\u{0E34}-\\u{0E3A}\\u{0E47}-\\u{0E4E}]$",
 		"enter_ms": 80,
+		"submit_clear_ms": 2526,
+		"retry_submit_ms": 2526,
 		"tab_while_working": true,
 		"placeholders": [
 			{ "pattern": "^\\[PastedContent(\\d+)chars?\\]$", "count": "chars" },
@@ -44,5 +56,5 @@
 			]
 		}
 	},
-	"console": { "per_char_ms": 3, "records_above_bmp": true }
+	"console": { "per_char_ms": 3, "records_above_bmp": true, "line_break": "shift_enter" }
 }

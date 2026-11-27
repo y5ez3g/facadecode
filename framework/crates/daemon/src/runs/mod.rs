@@ -65,6 +65,8 @@ pub(crate) struct StopAccepted {
     pub(crate) id: String,
     pub(crate) run: u64,
     pub(crate) caller: Option<AgentRef>,
+    /// An older Keeper acknowledges its stop on the link only. Save that positive evidence.
+    pub(crate) save_creator_stop: Option<ProcessIdentity>,
 }
 
 /// What the runs tell the daemon.
@@ -208,8 +210,11 @@ impl Runs {
     }
 
     /// Finds the keeper that started this daemon, waiting up to 10 seconds for it to accept.
-    pub(crate) async fn find_keeper_at_startup(&self) -> anyhow::Result<FoundKeeper> {
-        self.link.find_at_startup().await
+    pub(crate) async fn find_keeper_at_startup(
+        &self,
+        startup: &facade_base::startup::DaemonProgress,
+    ) -> anyhow::Result<FoundKeeper> {
+        self.link.find_at_startup(startup).await
     }
 
     /// Keeps the keeper link for the daemon's life, in a task of its own: hands the startup
@@ -299,12 +304,11 @@ impl Runs {
     }
 
     /// Verifies a relay credential, waiting for its run to be installed if it is starting.
-    /// Call on a blocking worker with no daemon lock held.
-    pub(crate) fn verify_credential(
+    pub(crate) async fn verify_credential(
         &self,
         credential: &str,
     ) -> Result<Option<RunIdentity>, ErrorBody> {
-        tokio::runtime::Handle::current().block_on(self.link.verify_credential(credential))
+        self.link.verify_credential(credential).await
     }
 
     /// Asks the keeper to stop agent `id`'s run, waiting up to 10 seconds for a ready keeper.
@@ -314,12 +318,17 @@ impl Runs {
         id: &str,
         run: u64,
         caller: Option<AgentRef>,
+        by_creator: bool,
     ) -> Result<bool, ErrorBody> {
-        self.link.stop(id, run, caller).await
+        self.link.stop(id, run, caller, by_creator).await
     }
 
     pub(crate) fn confirm_stop(&self, stop: StopAccepted) {
         self.link.confirm_stop(stop);
+    }
+
+    pub(crate) fn creator_stopped(&self, id: &str, recovered: Option<&ProcessIdentity>) -> bool {
+        self.link.creator_stopped(id, recovered)
     }
 
     /// Records a run's first exit and hands it to the run's [`ExitSink`] once no lock is held.
@@ -347,9 +356,18 @@ impl Runs {
         }
     }
 
-    /// Keeps the task saving agent `id`'s exit, which a resume waits for.
-    pub(crate) fn keep_exit_task(&self, id: &str, task: JoinHandle<()>) {
-        self.exit_tasks.lock().unwrap().insert(id.to_string(), task);
+    /// Keeps the task saving agent `id`'s exit, which a resume waits for. The caller holds the agent
+    /// list lock and checks `listed` under it. Removal takes the agent off the list before it
+    /// calls `remove`; a task received after that goes on without anyone waiting for it.
+    pub(crate) fn keep_exit_task(
+        &self,
+        id: &str,
+        task: JoinHandle<()>,
+        listed: impl FnOnce() -> bool,
+    ) {
+        if listed() {
+            self.exit_tasks.lock().unwrap().insert(id.to_string(), task);
+        }
     }
 
     /// Waits up to `timeout` for agent `id`'s ended run to be done with: its exit saved, its
@@ -377,13 +395,15 @@ impl Runs {
     }
 
     /// Lets go of agent `id`'s run once its exit is saved and its output drained, and of Facade's
-    /// plugin where it was the last run to use it.
-    pub(crate) fn release(&self, id: &str) {
+    /// plugin where it was the last run to use it. Reports whether it released a run.
+    pub(crate) fn release(&self, id: &str) -> bool {
         // Retire the exited run's workspace profile before the keeper path releases a resume.
         crate::blocking_in_place(|| self.preparation.retire_projection(id));
-        if self.link.release(id) {
-            self.preparation.plugin_released(id);
+        if !self.link.release(id) {
+            return false;
         }
+        self.preparation.plugin_released(id);
+        true
     }
 
     /// Stops a run whose agent could not be listed or committed; it goes with its exit.
@@ -391,8 +411,10 @@ impl Runs {
         self.link.abandon(id);
     }
 
-    /// Agent `id` was removed: its run is let go of now if it ended, else when it ends.
+    /// Agent `id` was removed: its run is let go of now if it ended, else when it ends. Nothing
+    /// waits for the task saving its exit any more.
     pub(crate) fn remove(&self, id: &str) {
+        self.exit_tasks.lock().unwrap().remove(id);
         if self.link.remove(id) {
             self.preparation.plugin_released(id);
         }
@@ -487,10 +509,11 @@ impl Runs {
         rule: Option<&str>,
         cwd: &Path,
         exits: ExitSink,
+        stopped_by: Option<AgentRef>,
     ) -> std::io::Result<()> {
         let running = exit.is_none();
         self.link
-            .register_recovered(held, master, exit, number, exits)?;
+            .register_recovered(held, master, exit, number, exits, stopped_by)?;
         if running {
             self.preparation.plugin_used(&held.agent_id, rule, cwd);
         }
@@ -531,4 +554,55 @@ impl Runs {
 
 fn credential_digest(credential: &str) -> [u8; 32] {
     Sha256::digest(credential.as_bytes()).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn runs(test: &str) -> (Runs, crate::test_folder::TestFolder) {
+        let home = crate::test_folder::TestFolder::new(test);
+        let source = home.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("facade"), "facade").unwrap();
+        let held = Arc::new(Held::open(&source.join("facade"), "test").unwrap());
+        let runs = Runs::new(&home.join("framework"), held, mpsc::unbounded_channel().0);
+        (runs, home)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn verifying_a_relay_credential_uses_the_daemon_runtime() {
+        let (runs, _home) = runs("runs-verify-credential");
+        let result = runs
+            .verify_credential("unknown-test-credential")
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    /// A removed agent leaves nothing of its runs: not the task that saved its exit either.
+    #[tokio::test]
+    async fn a_removed_agent_s_exit_task_goes_with_it() {
+        let (runs, _home) = runs("runs-remove");
+        runs.keep_exit_task("a1", tokio::spawn(async {}), || true);
+        runs.remove("a1");
+        assert!(runs.exit_tasks.lock().unwrap().is_empty());
+    }
+
+    /// An exit that comes in after its agent was taken off the list leaves no task behind.
+    #[tokio::test]
+    async fn an_exit_task_after_its_agent_s_removal_is_not_kept() {
+        let (runs, _home) = runs("runs-late-exit");
+        let mut agents = std::collections::HashSet::from(["a1"]);
+        let ended = *agents.get("a1").unwrap();
+        agents.remove(ended);
+        runs.remove(ended);
+        let (saved, finished) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            saved.send(()).unwrap();
+        });
+        runs.keep_exit_task(ended, task, || agents.contains(ended));
+        assert!(runs.exit_tasks.lock().unwrap().is_empty());
+        finished.await.expect("the exit was still saved");
+    }
 }

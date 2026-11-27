@@ -139,6 +139,7 @@ impl LocalMouseInput {
                 Key::Application(b'A') => self.wheel(Arrow::Up, down),
                 Key::Application(b'B') => self.wheel(Arrow::Down, down),
                 Key::Application(_) => None,
+                Key::Ordinary(arrow) => self.wheel(arrow, down),
                 Key::Win32(arrow, true) => {
                     let tick = self.wheel(arrow, down);
                     self.wheel_key = tick.map(|_| arrow);
@@ -287,6 +288,8 @@ enum Arrow {
 enum Key {
     /// A cursor key in its application form, by its final byte.
     Application(u8),
+    /// An ordinary Up or Down that Windows Terminal can emit for the wheel.
+    Ordinary(Arrow),
     /// A record of an arrow key that a terminal's bytes can stand for, and whether it goes down.
     Win32(Arrow, bool),
 }
@@ -303,6 +306,19 @@ fn cursor_key(bytes: &[u8]) -> Cursor {
     {
         let key = Key::Application(last);
         return Cursor::Key { length: 3, key };
+    }
+    if cfg!(windows)
+        && let [0x1b, b'[', direction @ (b'A' | b'B'), ..] = bytes
+    {
+        let arrow = if *direction == b'A' {
+            Arrow::Up
+        } else {
+            Arrow::Down
+        };
+        return Cursor::Key {
+            length: 3,
+            key: Key::Ordinary(arrow),
+        };
     }
     if SS3.starts_with(bytes) || starts_arrow_record(bytes) {
         return Cursor::Incomplete;
@@ -439,6 +455,20 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_ordinary_arrows_can_carry_the_wheel() {
+        assert_eq!(cursor_keys("a\x1b[Ab", NONE, true), ("ab".into(), 1));
+        assert_eq!(
+            cursor_keys("\x1b[A", UP, true),
+            ("\x1b[A".into(), 0),
+            "a pressed Up goes to the CLI in its original form"
+        );
+        assert_eq!(cursor_keys("\x1b[B", NONE, false), (String::new(), -1));
+        let down = Arrows { down: true, ..NONE };
+        assert_eq!(cursor_keys("\x1b[B", down, true), ("\x1b[B".into(), 0));
+    }
+
     #[test]
     fn the_other_cursor_keys_reach_the_cli_as_it_asked_for_them() {
         let others = "\x1bOC\x1bOD\x1bOH\x1bOF";
@@ -448,8 +478,10 @@ mod tests {
             ("\x1b[C\x1b[D\x1b[H\x1b[F".into(), 0)
         );
         // F1, a modified arrow key, ordinary keys and Escape are no cursor keys of the wheel.
-        let keys = "\x1bOP\x1b[1;2A\x1b[A\x1bxé\x1b";
+        let keys = "\x1bOP\x1b[1;2A\x1bxé\x1b";
         assert_eq!(cursor_keys(keys, NONE, false), (keys.into(), 0));
+        #[cfg(not(windows))]
+        assert_eq!(cursor_keys("\x1b[A", NONE, false), ("\x1b[A".into(), 0));
     }
 
     #[test]

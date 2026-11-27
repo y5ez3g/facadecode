@@ -1439,7 +1439,7 @@ fn resuming_a_saved_session_after_removal_creates_a_new_agent() {
         .unwrap();
     }
     let file = home.folder().join("after.args");
-    home.run_facade_ok(&["daemon", "--detach"]);
+    home.start_facade_with(&[]);
     let mut wire = DaemonTestClient::open(&home);
     let hello = wire.request(
         "hello",

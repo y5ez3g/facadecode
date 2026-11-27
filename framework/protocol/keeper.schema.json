@@ -301,6 +301,10 @@
           "items": {
             "$ref": "#/$defs/HeldAgent"
           }
+        },
+        "stop_receipts": {
+          "type": "boolean",
+          "description": "Accepts a process identity in `stop` and keeps the receipt locally."
         }
       },
       "required": [
@@ -480,6 +484,26 @@
       ],
       "description": "A recorded CLI exit. Without a code or signal, its status is unavailable; do not treat it as\nexit code zero."
     },
+    "ProcessIdentity": {
+      "type": "object",
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The process ID."
+        },
+        "birth": {
+          "type": "string",
+          "description": "The process's birth value."
+        }
+      },
+      "required": [
+        "pid",
+        "birth"
+      ],
+      "description": "A process ID with the process's birth value. The birth value tells a process apart from a later\none given the same ID: on Linux, its start time from `/proc/<pid>/stat`; on macOS, its start\ntime in seconds and microseconds; on Windows, its creation time in 100-nanosecond intervals."
+    },
     "ProtocolMismatchDetails": {
       "type": "object",
       "properties": {
@@ -580,6 +604,10 @@
       "properties": {
         "agent_id": {
           "type": "string"
+        },
+        "creator_stop": {
+          "description": "For a creator's first stop, the exact process to record before it is stopped.",
+          "$ref": "#/$defs/ProcessIdentity"
         }
       },
       "required": [

@@ -25,6 +25,12 @@ pub(crate) enum TitleNegotiation {
 /// A place in the output where the screen must look at its state, just after the piece.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Mark {
+    /// The start of a synchronized frame.
+    BeginSync,
+    /// The end of a synchronized frame, where a reader can inspect the applied screen.
+    EndSync,
+    /// An unfinished unit left by an earlier read has finished.
+    CarriedUnitEnd,
     /// The CLI switched between the main and the alternate screen.
     SwitchScreen,
     /// `ESC c`: a full reset.
@@ -46,13 +52,18 @@ pub(crate) struct Filtered {
     pub(crate) viewer_output: Vec<u8>,
     /// Complete OSC 9;4 activity sequences kept in the viewer output.
     pub(crate) native_activity: Vec<u8>,
-    /// Each mark, with the offset in the output just after it.
-    pub(crate) marks: Vec<(usize, Mark)>,
+    /// Each mark with its end offset, and for OSC status reports the offset of their opening ESC.
+    pub(crate) marks: Vec<(usize, Option<i64>, Mark)>,
+    /// Where the first complete ESU ended, including one begun in a previous call.
+    pub(crate) sync_ended_at: Option<usize>,
+    /// Where a carried character or control sequence ended.
+    pub(crate) carried_unit_ended_at: Option<usize>,
 }
 
 /// Splits `bytes` into what viewers get and where the screen must look, and follows the modes in
 /// `modes`. Adds the glyph to eligible titles and omits a blank title over no title.
 /// `rows` bounds the scrolling region.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn filter(
     splitter: &mut Splitter,
     modes: &mut KeptModes,
@@ -61,12 +72,22 @@ pub(crate) fn filter(
     mut cli_has_title: bool,
     title_negotiation: &mut TitleNegotiation,
     status_glyph: Option<&str>,
+    watch_frames: bool,
 ) -> Filtered {
     let mut filtered = Filtered {
         viewer_output: Vec::with_capacity(bytes.len()),
         ..Filtered::default()
     };
-    splitter.split(bytes, |offset, piece| {
+    let carried_unit_ended_at = splitter.split(bytes, |offset, piece| {
+        if watch_frames && matches!(piece, Piece::Csi(sequence) if sequence == b"\x1b[?2026h") {
+            filtered.marks.push((offset, None, Mark::BeginSync));
+        }
+        if matches!(piece, Piece::Csi(sequence) if sequence == b"\x1b[?2026l") {
+            filtered.sync_ended_at.get_or_insert(offset);
+            if watch_frames {
+                filtered.marks.push((offset, None, Mark::EndSync));
+            }
+        }
         if matches!(piece, Piece::String(bytes) if bytes == TITLE_NEGOTIATION_RESET) {
             *title_negotiation = TitleNegotiation::Unasked;
             return;
@@ -109,9 +130,22 @@ pub(crate) fn filter(
         }
         filtered.viewer_output.extend_from_slice(bytes);
         if let Some(mark) = mark {
-            filtered.marks.push((offset, mark));
+            let start = match (&mark, piece) {
+                (Mark::Status(_), Piece::String(raw)) => Some(offset as i64 - raw.len() as i64),
+                _ => None,
+            };
+            filtered.marks.push((offset, start, mark));
         }
     });
+    filtered.carried_unit_ended_at = carried_unit_ended_at;
+    if watch_frames && let Some(at) = carried_unit_ended_at {
+        let index = filtered
+            .marks
+            .partition_point(|(position, _, _)| *position <= at);
+        filtered
+            .marks
+            .insert(index, (at, None, Mark::CarriedUnitEnd));
+    }
     filtered
 }
 

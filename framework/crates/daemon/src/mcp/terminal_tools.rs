@@ -58,22 +58,13 @@ fn key_strings(arguments: &Map<String, Value>) -> Vec<String> {
 }
 
 /// What input that did not all go in answers: cut off partway, or refused with nothing typed.
-pub(super) fn input_failure(
-    err: &anyhow::Error,
-    agent: &str,
-    failed: impl FnOnce(&str) -> Value,
-) -> Value {
-    match err.downcast_ref::<ErrorBody>() {
-        Some(error) if error.data.reason == "partial_input" => {
-            let mut refusal = envelope::daemon_refusal(error);
-            refusal["message"] = json!(format!(
-                "{}; only part of the input reached {agent}; read its screen before typing again",
-                error.message
-            ));
-            refusal
-        }
-        _ => failed(&format!(
-            "whether the input reached {agent} is not known; read its screen before typing again"
-        )),
+pub(super) fn input_failure(error: &ErrorBody, agent: &str) -> Value {
+    let mut refusal = envelope::daemon_refusal(error);
+    if error.data.reason == "partial_input" {
+        refusal["message"] = json!(format!(
+            "{}; only part of the input reached {agent}; read its screen before typing again",
+            error.message
+        ));
     }
+    refusal
 }

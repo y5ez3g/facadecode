@@ -6,6 +6,7 @@ use facade_base::model::message::{
     Delivery, DeliveryFailure, DeliveryStatus, FACADE, Message, PromptOutcome, StartOutcome,
     TextWritten, start_result_text,
 };
+use facade_base::process::ProcessExit;
 use facade_base::{
     model::agent::{AgentRef, ManagedAgent},
     model::message::AgentDeliverStartResultArgs,
@@ -18,9 +19,49 @@ use super::{
     warn,
 };
 use crate::blocking_in_place;
-use crate::store::Settlement;
+use crate::store::{Settlement, Store};
 
 impl Messages {
+    /// Saves an exit with its local notice or the result owed by its failed first prompt.
+    pub(crate) fn record_exit(
+        &self,
+        store: &Store,
+        id: &str,
+        exit: &ProcessExit,
+        first_prompt: Option<u64>,
+        notice: Option<Message>,
+        due: &Due,
+    ) -> anyhow::Result<bool> {
+        let mut open = self.deliveries.lock();
+        if let Some(number) = first_prompt
+            && let Some(prompt) = open.agents.get(&number)
+        {
+            // The actor has settled any prompt it has typed. A recovered paste can still be
+            // pending when its new daemon first learns the run ended.
+            let outcome = if prompt.pasted {
+                Outcome::Failed {
+                    reason: DeliveryFailure::Ended,
+                    text_written: TextWritten::Unknown,
+                    enter_written: None,
+                }
+            } else {
+                Outcome::untyped(DeliveryFailure::Ended)
+            };
+            self.deliveries
+                .settle_open(&mut open.agents, &[number], outcome);
+            anyhow::ensure!(
+                !open.agents.contains_key(&number),
+                "could not save the prompt result"
+            );
+        }
+        let (saved, notice) = store.record_exit(id, exit, notice.as_ref())?;
+        if let Some(notice) = notice {
+            self.deliveries
+                .hand_local_result(&mut open.agents, notice, due);
+        }
+        Ok(saved)
+    }
+
     /// Ends the deliveries among `numbers` still open, as `outcome` says.
     pub(crate) fn settle(&self, numbers: &[u64], outcome: Outcome) {
         self.deliveries.settle(numbers, outcome);
@@ -46,9 +87,9 @@ impl Messages {
                 .is_some_and(|delivery| delivery.pasted)
             {
                 let timeout = Outcome::untyped(DeliveryFailure::Timeout);
-                return self
-                    .deliveries
+                self.deliveries
                     .settle_open(&mut open.agents, &[number], timeout);
+                return;
             }
         }
         if !ended_by(settled, Instant::now() + RESPONSE_GRACE).await {
@@ -67,18 +108,24 @@ async fn ended_by(settled: &mut watch::Receiver<Option<Settled>>, until: Instant
 }
 
 impl Deliveries {
-    pub(super) fn settle(&self, numbers: &[u64], outcome: Outcome) {
+    pub(super) fn settle(&self, numbers: &[u64], outcome: Outcome) -> bool {
         if numbers.is_empty() {
-            return;
+            return true;
         }
         let mut open = self.lock();
-        self.settle_open(&mut open.agents, numbers, outcome);
+        self.settle_open(&mut open.agents, numbers, outcome)
     }
 
     /// Ends the open deliveries among `numbers` as `outcome` says, `open` held: writes them and the
     /// results they owe in one transaction, tells their sends, and withdraws those the outcome
-    /// takes back. One whose inbox went is told nothing: dropping it closes its send's channel.
-    pub(super) fn settle_open(&self, open: &mut OpenMap, numbers: &[u64], outcome: Outcome) {
+    /// takes back. A confirmed erase can also make a settled notice readable. Returns false
+    /// if a required store commit failed and its proof must be kept.
+    pub(super) fn settle_open(
+        &self,
+        open: &mut OpenMap,
+        numbers: &[u64],
+        outcome: Outcome,
+    ) -> bool {
         let cleaned_paste = matches!(outcome, Outcome::Withdrawn { .. });
         let ending: Vec<u64> = numbers
             .iter()
@@ -88,8 +135,8 @@ impl Deliveries {
                     .is_some_and(|delivery| !cleaned_paste || delivery.pasted)
             })
             .collect();
-        if ending.is_empty() {
-            return;
+        if ending.is_empty() && !cleaned_paste {
+            return true;
         }
         let at = facade_base::time::iso_now();
         let delivery = outcome.delivery(&at);
@@ -98,7 +145,10 @@ impl Deliveries {
         let mut withdrawals: Vec<u64> = ending
             .iter()
             .copied()
-            .filter(|number| outcome.withdraws(open[number].pasted))
+            .filter(|number| {
+                let delivery = &open[number];
+                delivery.message.from != FACADE && outcome.withdraws(delivery.pasted)
+            })
             .collect();
         let due = Due::now();
         let mut failures = Vec::new();
@@ -107,7 +157,12 @@ impl Deliveries {
             for &number in &ending {
                 let prompt = &open[&number];
                 if let Some(owed) = &prompt.owes {
-                    let (agent, incident) = owed.incident.clone().unwrap_or_else(|| (owed.agent)());
+                    let (agent, incident) = match &owed.incident {
+                        Some(facts) if delivery.reason != Some(DeliveryFailure::Ended) => {
+                            facts.clone()
+                        }
+                        _ => (owed.agent)(),
+                    };
                     results.push((
                         number,
                         result_message(&prompt.message, &delivery, owed, agent, &at, &due),
@@ -118,7 +173,8 @@ impl Deliveries {
         }
         let recorded = blocking_in_place(|| {
             if cleaned_paste {
-                self.table.settle_cleaned_paste(&writes, &results)
+                self.table
+                    .settle_cleaned_paste(&writes, &results, &withdrawals, numbers)
             } else if withdrawals.is_empty() {
                 self.table.settle_messages(&writes, &results)
             } else {
@@ -143,15 +199,22 @@ impl Deliveries {
             Ok(written) => written,
             Err(err) => {
                 warn(&format!("{err:#}"));
-                if cleaned_paste {
-                    return;
+                if cleaned_paste
+                    || results.iter().any(|(_, result)| {
+                        result
+                            .result
+                            .as_ref()
+                            .is_some_and(|outcome| outcome.agent.exit.is_some())
+                    })
+                {
+                    return false;
                 }
                 // The sends still learn what happened. After a restart the table shows what it
                 // last wrote, and the prompts among them still owe their results.
                 withdrawals.clear();
                 Settlement {
                     settled: ending.clone(),
-                    results: Vec::new(),
+                    ..Settlement::default()
                 }
             }
         };
@@ -185,7 +248,12 @@ impl Deliveries {
                 self.updated(&message);
             }
         }
+        for mut notice in written.cleaned_notices {
+            self.identify(&mut notice);
+            self.updated(&notice);
+        }
         self.hand_on(open, results, &written.results, &due);
+        true
     }
 
     /// Hands results for the prompts the table settled to the daemon. Local results are already
@@ -220,14 +288,18 @@ impl Deliveries {
                 continue;
             }
             result.message_ref = None;
-            let settled = Deliveries::open(open, result.clone(), false, false, None);
-            self.updated(&result);
-            let _ = self.results.send(PostedResult::Local {
-                message: result,
-                deadline: due.instant,
-                settled,
-            });
+            self.hand_local_result(open, result, due);
         }
+    }
+
+    fn hand_local_result(&self, open: &mut OpenMap, message: Message, due: &Due) {
+        let settled = Deliveries::open(open, message.clone(), false, false, None);
+        self.updated(&message);
+        let _ = self.results.send(PostedResult::Local {
+            message,
+            deadline: due.instant,
+            settled,
+        });
     }
 }
 

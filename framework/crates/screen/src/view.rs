@@ -7,13 +7,12 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
 use crate::Screen;
-use crate::read::{cell_text, is_spacer, wraps};
+use crate::read::{CellText, cell_text, is_spacer, wraps};
 
 /// A cell as drawn. A wide character spans two columns, and its spacer is not listed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VisibleCell {
-    /// What the cell draws, combining characters included; a space when empty.
-    pub text: String,
+    text: CellText,
     /// The cell's first column.
     pub column: usize,
     pub bold: bool,
@@ -25,8 +24,36 @@ pub struct VisibleCell {
     pub foreground: u32,
 }
 
+impl VisibleCell {
+    /// Builds a cell with the supplied text and attributes, giving colored and default cells
+    /// distinct foregrounds.
+    pub fn new(
+        text: &str,
+        column: usize,
+        bold: bool,
+        dim: bool,
+        inverse: bool,
+        colored: bool,
+    ) -> Self {
+        Self {
+            text: CellText::of(text),
+            column,
+            bold,
+            dim,
+            inverse,
+            colored,
+            foreground: u32::from(colored),
+        }
+    }
+
+    /// What the cell draws, combining characters included; a space when empty.
+    pub fn text(&self) -> &str {
+        self.text.as_str()
+    }
+}
+
 /// The screen as drawn, with the cursor.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScreenView {
     /// Each visible row's cells, from the top.
     pub rows: Vec<Vec<VisibleCell>>,
@@ -39,7 +66,7 @@ pub struct ScreenView {
     pub cursor: (usize, usize),
     /// Whether the cursor is shown.
     pub cursor_visible: bool,
-    /// Whether a synchronized update is open, so that the rows are still the previous frame.
+    /// Whether a synchronized update holds a frame back, so that the rows are still the one before.
     pub synchronized_update: bool,
 }
 
@@ -51,8 +78,9 @@ fn foreground(color: Color) -> u32 {
     }
 }
 
-fn visible_cells(row: &Row<Cell>, cols: usize) -> Vec<VisibleCell> {
-    let mut cells = Vec::with_capacity(cols);
+fn visible_cells(row: &Row<Cell>, cols: usize, cells: &mut Vec<VisibleCell>) {
+    cells.clear();
+    cells.reserve(cols);
     for column in 0..cols {
         let cell = &row[Column(column)];
         if is_spacer(cell) {
@@ -69,30 +97,33 @@ fn visible_cells(row: &Row<Cell>, cols: usize) -> Vec<VisibleCell> {
             foreground: foreground(cell.fg),
         });
     }
-    cells
 }
 
 impl Screen {
     /// The visible rows with how their cells are drawn, and the cursor.
     pub fn view(&self) -> ScreenView {
+        let mut view = ScreenView::default();
+        self.refresh_view(&mut view);
+        view
+    }
+
+    /// Replaces the view's contents, reusing its row storage.
+    pub fn refresh_view(&self, view: &mut ScreenView) {
         let grid = self.terminal.grid();
-        let (cols, height) = (grid.columns(), grid.screen_lines() as i32);
+        let (cols, height) = (grid.columns(), grid.screen_lines());
         let oldest = -(grid.history_size() as i32);
-        let mut rows = Vec::new();
-        let mut continues = Vec::new();
-        for line in 0..height {
-            rows.push(visible_cells(&grid[Line(line)], cols));
-            continues.push(line > oldest && wraps(&grid[Line(line - 1)], cols));
+        view.rows.resize_with(height, Vec::new);
+        view.continues.resize(height, false);
+        for (y, row) in view.rows.iter_mut().enumerate() {
+            let line = y as i32;
+            visible_cells(&grid[Line(line)], cols, row);
+            view.continues[y] = line > oldest && wraps(&grid[Line(line - 1)], cols);
         }
         let (column, row) = self.cursor();
-        ScreenView {
-            rows,
-            cols,
-            continues,
-            cursor: (column.into(), row.into()),
-            cursor_visible: self.terminal.has(TermMode::SHOW_CURSOR),
-            synchronized_update: self.synchronized_update_deadline().is_some(),
-        }
+        view.cols = cols;
+        view.cursor = (column.into(), row.into());
+        view.cursor_visible = self.terminal.has(TermMode::SHOW_CURSOR);
+        view.synchronized_update = self.is_drawing();
     }
 }
 
@@ -110,7 +141,7 @@ mod tests {
             .take(6)
             .map(|cell| {
                 (
-                    cell.text.as_str(),
+                    cell.text(),
                     cell.column,
                     cell.dim,
                     cell.inverse,
@@ -131,6 +162,8 @@ mod tests {
             "the wide character's spacer is left out and the next cell keeps its column"
         );
         assert_eq!(view.rows[0].len(), 9, "ten columns less one spacer");
+        assert_eq!(view.rows[0][0].foreground, view.rows[0][1].foreground);
+        assert_ne!(view.rows[0][0].foreground, view.rows[0][3].foreground);
         assert_eq!(
             (view.cursor, view.cursor_visible, view.synchronized_update),
             ((0, 1), false, false)
@@ -140,9 +173,19 @@ mod tests {
         let view = screen.view();
         assert!(view.cursor_visible && view.synchronized_update);
         assert!(
-            view.rows[1].iter().all(|cell| cell.text == " "),
+            view.rows[1].iter().all(|cell| cell.text() == " "),
             "an open synchronized update shows the frame before it"
         );
+    }
+
+    #[test]
+    fn a_view_keeps_every_combining_character_and_the_next_column() {
+        let mut screen = Screen::new(10, 2, 0);
+        let combined = "é\u{323}\u{30a}";
+        screen.feed(format!("{combined}x").as_bytes());
+        let view = screen.view();
+        assert_eq!(view.rows[0][0].text(), combined);
+        assert_eq!((view.rows[0][1].column, view.rows[0][1].text()), (1, "x"));
     }
 
     #[test]

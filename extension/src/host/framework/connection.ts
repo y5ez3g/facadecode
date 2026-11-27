@@ -9,7 +9,7 @@ import {
 } from '../../base/frameworkProtocol';
 import { messageOf } from '../../base/errors';
 import type { Disposable, Event } from '../../core/ports';
-import { Connection, connectDaemonSocket, errorOf, startDaemon, unavailable, type DaemonOptions } from './rpc';
+import { Connection, connectDaemonSocket, errorOf, startDaemon, unavailable, waitForStartup, type DaemonOptions, type StartupTicket } from './rpc';
 import {
 	DaemonError, type AttachListener, type AttachWatchArgs, type EditorCalls, type EditorTopic,
 	type OrchestratorLink, type RawInputArgs, type ResizeAttach, type WatchListener
@@ -26,6 +26,8 @@ const RETRY_MS = 500;
 /** How long a call waits for the connection to come back, or for the new daemon after an `upgrading` refusal. */
 const RECONNECT_WAIT_MS = 30_000;
 const MACHINE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+const monotonicMs = () => Number(process.hrtime.bigint()) / 1_000_000;
 
 function incompatible(message: string, cause?: DaemonError): DaemonError {
 	return new DaemonError(message, 'protocol_incompatible', { reason: 'protocol_incompatible' }, cause?.code, { cause });
@@ -199,15 +201,34 @@ class Link implements OrchestratorLink {
 
 	private async reach(waitMs = Infinity): Promise<void> {
 		let started = false;
-		let deadline = Date.now() + waitMs;
+		let ticket: StartupTicket | undefined;
+		let expectedPid: number | undefined;
+		let deadline = monotonicMs() + waitMs;
+		const follow = async (startup: StartupTicket | undefined) => {
+			const found = await waitForStartup(this.options, startup, this.stop.signal);
+			deadline = Number(found.deadlineNs) / 1_000_000;
+			return found.pid;
+		};
 		while (!this.lost) {
-			const attempt = await this.attempt(deadline);
+			if (expectedPid !== undefined && monotonicMs() >= deadline) {
+				throw unavailable('The Orchestrator startup deadline elapsed before the editor could say hello.');
+			}
+			const attempt = await this.attempt(deadline, expectedPid !== undefined);
 			if (this.lost) {
 				if (attempt.kind === 'ready') { attempt.connection.close(); }
 				break;
 			}
 			if (attempt.kind === 'ready') {
 				if (attempt.connection.active) {
+					if (expectedPid !== undefined && monotonicMs() >= deadline) {
+						attempt.connection.close();
+						throw unavailable('The Orchestrator startup deadline elapsed before the editor could say hello.');
+					}
+					if (expectedPid !== undefined && attempt.hello.pid !== expectedPid) {
+						attempt.connection.close();
+						expectedPid = await follow(ticket);
+						continue;
+					}
 					this.install(attempt.connection, attempt.hello);
 					return;
 				}
@@ -215,21 +236,30 @@ class Link implements OrchestratorLink {
 			} else if (!started && attempt.absent) {
 				// The launcher waits for a live keeper and starts one if it exited without CLIs.
 				started = true;
-				await startDaemon(this.options, '--detach');
-				deadline = Date.now() + waitMs;
+				ticket = await startDaemon(this.options, '--detach', this.stop.signal);
+				if (this.options.startupObserverProgram) {
+					expectedPid = await follow(ticket);
+					continue;
+				}
+				deadline = monotonicMs() + waitMs;
+			} else if (expectedPid !== undefined && attempt.absent) {
+				expectedPid = await follow(ticket);
+				continue;
 			}
-			const remaining = deadline - Date.now();
+			const remaining = deadline - monotonicMs();
 			if (remaining <= 0) {
 				const reason = attempt.kind === 'wait' ? attempt.reason : 'the socket closed during hello';
-				throw unavailable(`The Orchestrator did not respond within ${waitMs / 1000} seconds: ${reason}`);
+				throw unavailable(expectedPid === undefined
+					? `The Orchestrator did not respond within ${waitMs / 1000} seconds: ${reason}`
+					: `The Orchestrator startup deadline elapsed: ${reason}`);
 			}
 			await timeout(Math.min(RETRY_MS, remaining), this.stop.signal).catch(() => undefined);
 		}
 		throw this.lost;
 	}
 
-	private async attempt(deadline: number): Promise<Attempt> {
-		const reached = await connectDaemonSocket(this.options.home, Math.min(CONNECT_WAIT_MS, Math.max(0, deadline - Date.now())));
+	private async attempt(deadline: number, starting: boolean): Promise<Attempt> {
+		const reached = await connectDaemonSocket(this.options.home, Math.min(CONNECT_WAIT_MS, Math.max(0, deadline - monotonicMs())));
 		if (!reached.socket) {
 			return { kind: 'wait', ...reached };
 		}
@@ -246,7 +276,8 @@ class Link implements OrchestratorLink {
 		try {
 			if (this.lost) { throw this.lost; }
 			const params: DaemonHelloParams = { api_versions: [...DAEMON_API_VERSIONS], build: this.options.build, kind: 'ide' };
-			const result = await connection.ask('hello', params, Math.min(HELLO_WAIT_MS, Math.max(0, deadline - Date.now())));
+			const remaining = Math.max(0, deadline - monotonicMs());
+			const result = await connection.ask('hello', params, starting ? remaining : Math.min(HELLO_WAIT_MS, remaining));
 			const hello = verifyHello(result, params.api_versions);
 			accepted = true;
 			return { kind: 'ready', connection, hello };

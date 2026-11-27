@@ -26,13 +26,13 @@ use tokio::sync::{mpsc, oneshot, watch};
 use crate::agent::{self, ActorStart, AgentCommand, AgentHandle, Kept, ScreenStart, StateStart};
 use crate::command_line::{self, Configured};
 use crate::lifecycle::Work;
-use crate::messages::{self, OwedResult, PromptWatch};
+use crate::messages::{self, Due, OwedResult, PromptWatch};
 use crate::runs::{ExitSink, FirstRead, RunExit, RunKind, RunRequest};
 use crate::store::{AgentRecord, CreationSource, InitialLaunch, RelayRunRecord, RemovalCause};
 use crate::windows::Destination;
 use crate::{
-    Daemon, Sender, StartKey, agent_number, an_hour_ago, blocking, gate_for_test, log,
-    pause_for_test,
+    Daemon, Sender, StartKey, agent_number, an_hour_ago, blocking, effect_time_left, gate_for_test,
+    log, pause_for_test,
 };
 
 /// The exit wait once the keeper took `agent.stop`, its 3 seconds before SIGKILL included.
@@ -99,6 +99,7 @@ pub(crate) struct StartOrigin {
     pub(crate) caller: Caller,
     pub(crate) sender: Sender,
     pub(crate) launch: LaunchOrigin,
+    pub(crate) deadline: Option<std::time::Instant>,
 }
 
 impl StartOrigin {
@@ -313,6 +314,7 @@ impl Daemon {
                 );
                 return Ok(answer);
             } else {
+                effect_time_left(origin.deadline)?;
                 let (answer, answered) = watch::channel(None);
                 starting.insert(key.clone(), answered);
                 Ok(StartUnderWay {
@@ -388,6 +390,7 @@ impl Daemon {
         origin: StartOrigin,
         session: Option<String>,
     ) -> Result<Started, ErrorBody> {
+        effect_time_left(origin.deadline)?;
         gate_for_test("before-start-run");
         let (settings, mut configured, destination) = self
             .check_local_start(&args, origin.launch == LaunchOrigin::Agent)
@@ -395,6 +398,7 @@ impl Daemon {
         if let Some(session) = session.as_deref() {
             command_line::check_session(&configured, session)?;
         }
+        effect_time_left(origin.deadline)?;
         let Some(branch) = args.worktree.as_deref() else {
             return self
                 .start_in(args, origin, &settings, configured, destination, session)
@@ -626,8 +630,10 @@ impl Daemon {
             cli: info.cli.clone(),
             cwd: info.cwd.clone(),
             pid: started.pid,
+            run_birth: Some(started.process.birth.clone()),
             created_at: info.created_at.clone(),
             exit: None,
+            creator_stop: false,
             rule: rule.map(|rule| rule.cli.clone()),
             session: info.session.clone(),
             windows: info.windows.clone(),
@@ -740,7 +746,8 @@ impl Daemon {
         };
         let handle =
             match agent::spawn_with_trust(actor, rx, tx, self.changes.clone(), allow_auto_trust) {
-                Ok(handle) => handle,
+                Ok(handle) => handle
+                    .with_start_prompt(kept.as_ref().map(|(prompt, _)| messages::number(prompt))),
                 Err(err) => {
                     release_name();
                     self.runs.remove_folders(&id);
@@ -756,7 +763,7 @@ impl Daemon {
         // ahead of it.
         let mut watch_prompt = None;
         let prompt = match kept {
-            Some((prompt, owed)) => {
+            Some((mut prompt, owed)) => {
                 let owes = owed.clone().map(|reference| {
                     let agent = handle.clone();
                     let started_prompt = PromptWatch::new(messages::number(&prompt));
@@ -767,8 +774,18 @@ impl Daemon {
                 });
                 let settled = self.messages.deliver_prompt(prompt.clone(), owes);
                 let (ready, started) = oneshot::channel();
-                handle.send(AgentCommand::AwaitPrompt { ready }).await;
-                Some((prompt, owed, settled, started))
+                if prompt.from_name.is_none() && prompt.from_machine_id.is_none() {
+                    prompt.from_name = self.get_agent(&prompt.from).map(|agent| agent.info().name);
+                }
+                // The text the actor charges is the text it will paste once the start settles.
+                let text = self.message_text(&prompt);
+                handle
+                    .send(AgentCommand::AwaitPrompt {
+                        text: text.clone(),
+                        ready,
+                    })
+                    .await;
+                Some((prompt, owed, settled, started, text))
             }
             None => None,
         };
@@ -792,10 +809,11 @@ impl Daemon {
             );
         }
         let (prompt, result) = match prompt {
-            Some((prompt, owed, settled, started)) => {
+            Some((prompt, owed, settled, started, text)) => {
                 tokio::spawn(self.clone().send_start_prompt(
                     handle.clone(),
                     prompt.clone(),
+                    text,
                     settled,
                     started,
                 ));
@@ -871,9 +889,11 @@ impl Daemon {
         self: &Arc<Self>,
         agent: &AgentHandle,
         caller: &Caller,
+        deadline: Option<std::time::Instant>,
     ) -> Result<(StopResult, AgentLabel), ErrorBody> {
         let _changing = agent.lock_run_change().await;
         gate_for_test("before-stop-run");
+        effect_time_left(deadline)?;
         let stopped_by = match caller {
             Caller::Agent { agent, .. } => Some(crate::api::agent_ref(agent.clone())),
             _ => None,
@@ -909,8 +929,9 @@ impl Daemon {
         if !agent.send(AgentCommand::LetGoBeforeStop { reply }).await || let_go.await.is_err() {
             return Err(agent_stopped(&id));
         }
-        let (run, _) = agent.installed_record();
-        let running = self.runs.stop(&id, run, stopped_by).await?;
+        let (run, info) = agent.installed_record();
+        let by_creator = stopped_by.is_some() && stopped_by == info.creator_ref();
+        let running = self.runs.stop(&id, run, stopped_by, by_creator).await?;
         match tokio::time::timeout(STOP_TIMEOUT, exit.wait_for(Option::is_some)).await {
             Ok(Ok(exit)) => Ok(StopResult {
                 exit: exit.clone().expect("a recorded exit"),
@@ -957,12 +978,39 @@ impl Daemon {
         let saving = self.lifecycle.begin(Work::ExitCommit);
         let writer = id.clone();
         let task = tokio::spawn(async move {
+            let mut observed = agent.exit();
+            let _ = observed.wait_for(Option::is_some).await;
             pause_for_test("before-exit-commit");
+            let notice = daemon
+                .creator_end_notice(&agent)
+                .filter(|_| !daemon.runs.creator_stopped(&id, None));
+            let first_prompt = agent.start_prompt();
             let mut delay = Duration::from_millis(500);
-            loop {
-                let (store, saved, exited) = (daemon.store.clone(), id.clone(), exit.clone());
-                match blocking(move || store.record_exit(&saved, &exited)).await {
-                    Ok(()) => break,
+            let saved = loop {
+                let (recorder, saved, exited) = (daemon.clone(), id.clone(), exit.clone());
+                let due = Due::now();
+                let local = notice
+                    .as_ref()
+                    .filter(|(creator, _)| creator.machine_id == daemon.machine_id)
+                    .map(|(creator, notice)| daemon.local_notice(creator, notice, &due));
+                let result = match local.transpose() {
+                    Ok(local) => {
+                        blocking(move || {
+                            recorder.messages.record_exit(
+                                &recorder.store,
+                                &saved,
+                                &exited,
+                                first_prompt,
+                                local,
+                                &due,
+                            )
+                        })
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                match result {
+                    Ok(saved) => break saved,
                     Err(error) => {
                         daemon.lifecycle.delay_exit(&format!(
                             "could not save the exit of {id}: {}",
@@ -972,14 +1020,33 @@ impl Daemon {
                         delay = (delay * 2).min(Duration::from_secs(30));
                     }
                 }
+            };
+            if saved
+                && let Some((creator, notice)) = notice
+                && creator.machine_id != daemon.machine_id
+            {
+                daemon.route_notice(creator, notice);
             }
             daemon.lifecycle.clear_exit_delay();
             let mut settled = agent.settled();
             let _ = settled.wait_for(|settled| *settled).await;
-            daemon.runs.release(&id);
+            daemon.release_ended_run(&id).await;
             drop(saving);
         });
-        self.runs.keep_exit_task(&writer, task);
+        let agents = self.agents.lock().unwrap();
+        self.runs
+            .keep_exit_task(&writer, task, || agents.contains_key(&writer));
+    }
+
+    /// Releases a run and gives unused display and database storage back once all runs settled.
+    pub(crate) async fn release_ended_run(&self, id: &str) {
+        if self.runs.release(id) && self.runs.busy().is_none() {
+            agent::release_view_storage();
+            let store = self.store.clone();
+            if let Err(error) = blocking(move || store.release_cache()).await {
+                log("warn", &error.message);
+            }
+        }
     }
 
     /// Removes an agent: stops it first, then deletes its record with its inbox in one transaction,
@@ -1022,6 +1089,16 @@ impl Daemon {
         cause: RemovalCause,
     ) -> Result<(), ErrorBody> {
         let id = agent.id().to_string();
+        if !self
+            .runs
+            .previous_run_ended(&id, PREVIOUS_RUN_TIMEOUT)
+            .await
+        {
+            return Err(ErrorBody::new(
+                Reason::Unavailable,
+                format!("{id}'s ended run is still being saved; try again"),
+            ));
+        }
         self.runs.end_session_following(&id).await;
         let (store, deleted) = (self.store.clone(), id.clone());
         blocking(move || store.delete_listed(&deleted, cause, an_hour_ago)).await?;
@@ -1253,24 +1330,21 @@ impl Daemon {
             )
             .await?;
         gate_for_test("before-restart-commit");
-        let (store, committed, pid) = (self.store.clone(), id.clone(), started.pid);
+        let (store, committed) = (self.store.clone(), id.clone());
         let started_at = facade_base::time::iso_now();
         let launch_command = prepared.launch_command.clone();
-        let relay = RelayRunRecord {
-            process: started.process.clone(),
-            version: 3,
-            digest: started
-                .credential
-                .as_ref()
-                .map(|credential| credential.digest),
-        };
+        let process = started.process.clone();
+        let digest = started
+            .credential
+            .as_ref()
+            .map(|credential| credential.digest);
         if let Err(error) = blocking(move || {
             store.record_restart(
                 &committed,
-                pid,
+                &process,
                 yolo,
                 Some(&started_at),
-                Some(&relay),
+                digest.as_ref(),
                 launch_command.as_deref(),
             )
         })

@@ -7,6 +7,7 @@ use facade_base::address::{
     selector::{self as addresses, MachineSelector},
 };
 use facade_base::api_v1::{self, ApiVersion, daemon as wire};
+use facade_base::model::agent::ManagedAgent;
 use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::model::machine::MachineQueryResult;
 use facade_base::sockets::{ServerReader, ServerWriter};
@@ -29,6 +30,14 @@ use crate::{Daemon, SavedConnection, SavedSsh, blocking_in_place};
 pub(crate) enum MachineStream {
     Incoming(MachineGreeting, WorkGuard),
     Foreground(FrontConnection, WorkGuard),
+}
+
+pub(crate) fn agent_caller(info: &ManagedAgent) -> wire::Caller {
+    wire::Caller::Agent {
+        agent: api::wire_ref(&info.reference()),
+        root: api::wire_ref(&root_of(info)),
+        yolo: info.yolo,
+    }
 }
 
 pub(crate) async fn follow_network(
@@ -124,7 +133,7 @@ impl Daemon {
         client: &Client,
         args: wire::MachineConnectArgs,
     ) -> Result<(wire::MachineConnectResult, MachineStream), api_v1::ErrorBody> {
-        if client.verified_actor.is_some() || client.kind != wire::ClientKind::Terminal {
+        if client.kind != wire::ClientKind::Terminal {
             return Err(api::error(
                 "refused",
                 "only a terminal client can open an SSH connection",
@@ -282,22 +291,6 @@ impl Daemon {
     /// Derives the caller from the local connection's accepted identity.
     pub(crate) fn local_caller(&self, client: &Client) -> Result<wire::Caller, ErrorBody> {
         use wire::Caller;
-        if let Some(actor) = client.verified_actor.as_ref() {
-            let agent = &actor.reference;
-            let info = self
-                .get_agent(&agent.agent_id)
-                .filter(|_| self.machine_id == agent.machine_id)
-                .map(|agent| agent.info())
-                .filter(|info| info.process == facade_base::process::ProcessState::Running)
-                .ok_or_else(|| {
-                    ErrorBody::new(Reason::CallerUnavailable, "this agent's run has ended")
-                })?;
-            return Ok(Caller::Agent {
-                agent: agent.clone(),
-                root: api::wire_ref(&root_of(&info)),
-                yolo: info.yolo,
-            });
-        }
         let machine_id = self.machine_id.clone();
         match client.kind {
             wire::ClientKind::Terminal => Ok(Caller::Terminal { machine_id }),

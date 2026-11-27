@@ -8,6 +8,7 @@
 	"input": {
 		"mechanism": "frame",
 		"probe_unstyled_hint": true,
+		"dim_cursor_hint": "Press up to edit queued messages",
 		"prompt": "❯",
 		"gap": "\u00a0",
 		"upper": "^(?:─+|─{3} [^─]+ ─+)$",
@@ -40,7 +41,12 @@
 		]
 	},
 	"paste": {
+		"bracketed": true,
+		"backspace_unit": "grapheme",
 		"enter_ms": 80,
+		"submit_clear_ms": 1147,
+		"retry_submit_ms": 1147,
+		"legacy_split_prefixes": ["📨 Message from ", "📨 Message "],
 		"placeholders": [
 			{ "pattern": "^\\[Pastedtext#\\d+\\+(\\d+)lines?\\]$", "count": "lines_after_first" },
 			{ "pattern": "^\\[Pastedtext#\\d+\\]$", "count": "single_line" }

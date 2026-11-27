@@ -183,6 +183,100 @@ fn a_full_reset_and_a_shell_prompt_end_reports_in_the_order_they_come() {
 }
 
 #[test]
+fn only_applied_cell_writes_count_on_the_cursor_row() {
+    let mut screen = Screen::new(80, 24, 0);
+    assert!(
+        !screen
+            .feed(b"\x1b]2;first title\x07")
+            .cursor_row_cells_written
+    );
+    assert!(screen.feed(b"input").cursor_row_cells_written);
+    assert!(!screen.feed(b"\x1b[1;6H").cursor_row_cells_written);
+    assert!(
+        !screen
+            .feed(b"\x1b7\x1b[7;1Hprogress\x1b8")
+            .cursor_row_cells_written
+    );
+    assert!(!screen.feed(b"\x1b]2;next").cursor_row_cells_written);
+    assert!(!screen.feed(b" title\x07").cursor_row_cells_written);
+    assert!(!screen.feed(b"\x1b[?2026h\x1b[2K").cursor_row_cells_written);
+    assert!(screen.feed(b"\x1b[?2026l").cursor_row_cells_written);
+    assert!(screen.feed(b"\x1b[2K").cursor_row_cells_written);
+    assert!(!screen.feed(b"\x1b[?2026hframe").cursor_row_cells_written);
+    assert!(screen.end_synchronized_update().cursor_row_cells_written);
+}
+
+#[test]
+fn printed_glyphs_follow_frames_and_input_boundaries_across_reads() {
+    let mut screen = Screen::new(16, 5, 0);
+    screen.feed(b"ab");
+    screen.feed(b"cd");
+    assert!((0..4).all(|column| screen.frame_printed_cell(0, column)));
+
+    screen.mark_pending_frame_earlier();
+    screen.feed(b"ef");
+    assert!((0..4).all(|column| !screen.frame_printed_cell(0, column)));
+    let mut frames = Vec::new();
+    screen.feed_observing(
+        b"gh\x1b[?2026hij\x1b[?2026lkl",
+        Some(&mut |event| {
+            if let InputEvent::Frame(screen, _) = event {
+                frames.push(
+                    (0..12)
+                        .filter(|&column| screen.frame_printed_cell(0, column))
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }),
+    );
+    assert_eq!(frames, [vec![4, 5, 6, 7], vec![8, 9], vec![10, 11]]);
+}
+
+#[test]
+fn input_frames_and_reports_keep_their_output_order() {
+    let mut screen = Screen::new(40, 5, 0);
+    let mut observed = Vec::new();
+    let mut observe = |event: InputEvent<'_>| match event {
+        InputEvent::Status { .. } => observed.push(String::from("status")),
+        InputEvent::Frame(screen, CursorRowWrites::Current) => {
+            observed.push(screen.text(1).join("\n"))
+        }
+        InputEvent::Frame(_, _) => {}
+    };
+    let parsed = screen.feed_observing(
+        b"old\x1b]7501;state=idle\x07\x1b[?2026h\r\x1b[2Kdraft\x1b[?2026l\
+          \x1b[?2026h\r\x1b[2Kempty\x1b[?2026l",
+        Some(&mut observe),
+    );
+    assert!(parsed.cursor_row_cells_written);
+    assert_eq!(observed, ["old", "status", "draft", "empty"]);
+}
+
+#[test]
+fn only_completed_frames_can_follow_a_report() {
+    let mut screen = Screen::new(40, 5, 0);
+    let mut observed = Vec::new();
+    let mut observe = |event: InputEvent<'_>| match event {
+        InputEvent::Status { .. } => observed.push(String::from("status")),
+        InputEvent::Frame(screen, CursorRowWrites::Current) => {
+            observed.push(screen.text(1).join("\n"))
+        }
+        InputEvent::Frame(_, _) => {}
+    };
+    let parsed = screen.feed_observing(b"old\x1b]7501;state=idle\x07\x1b[1;2H", Some(&mut observe));
+    assert!(
+        parsed.cursor_row_cells_written,
+        "the report does not erase write evidence"
+    );
+    screen.feed_observing(
+        b"\x1b[?2026h\r\x1b[2Knew\x1b]7501;state=idle\x07",
+        Some(&mut observe),
+    );
+    screen.feed_observing(b"\x1b[?2026l", Some(&mut observe));
+    assert_eq!(observed, ["old", "status", "status", "new"]);
+}
+
+#[test]
 fn a_synchronized_update_is_one_frame() {
     let mut screen = Screen::new(20, 5, 0);
     screen.feed(b"\x1b[?2026hhalf");
@@ -195,6 +289,121 @@ fn a_synchronized_update_is_one_frame() {
     screen.feed(b" frame\x1b[?2026l");
     assert!(screen.synchronized_update_deadline().is_none());
     assert_eq!(screen.text(5), vec!["half frame"]);
+}
+
+/// An update that begins across reads, behind the end of another, holds no frame back while
+/// nothing is in it.
+#[test]
+fn an_empty_update_that_begins_across_reads_holds_no_frame_back() {
+    let mut screen = Screen::new(20, 5, 0);
+    screen.feed(b"one\x1b[?2026h\x1b[Htwo");
+    screen.feed(b"\x1b[?2026l\x1b[?202");
+    screen.feed(b"6h");
+    assert_eq!(screen.text(5), vec!["two"]);
+    assert!(screen.synchronized_update_deadline().is_some());
+    assert!(!screen.is_drawing(), "the new update holds nothing yet");
+}
+
+#[test]
+fn a_compound_start_holds_output_through_a_later_start() {
+    let output = b"\x1b[?25;2026h\x1b[Htwo\x1b[?2026h";
+    for cut in 0..=output.len() {
+        let mut screen = Screen::new(20, 5, 0);
+        screen.feed(b"one");
+        screen.feed(&output[..cut]);
+        screen.feed(&output[cut..]);
+        assert_eq!(screen.text(5), vec!["one"], "cut at {cut}");
+        assert!(screen.is_drawing(), "cut at {cut}");
+    }
+}
+
+/// However a CLI's output comes in pieces, an update that holds nothing yet holds no frame back,
+/// and one that holds output does.
+#[test]
+fn an_update_holds_a_frame_back_however_its_output_comes_in_pieces() {
+    let empty = b"one\x1b[?2026h\x1b[Htwo\x1b[?2026l\x1b[?2026h".as_slice();
+    let held = b"one\x1b[?2026h\x1b[Htwo\x1b[?2026l\x1b[?2026h\x1b[Hthree".as_slice();
+    for (output, drawing) in [(empty, false), (held, true)] {
+        for cut in 0..=output.len() {
+            let mut screen = Screen::new(20, 5, 0);
+            screen.feed(&output[..cut]);
+            screen.feed(&output[cut..]);
+            assert_eq!(screen.text(5), vec!["two"], "cut at {cut}");
+            assert!(
+                screen.synchronized_update_deadline().is_some(),
+                "cut at {cut}"
+            );
+            assert_eq!(screen.is_drawing(), drawing, "cut at {cut}");
+        }
+    }
+}
+
+/// A CLI may open its next update as it ends one: the frame it drew shows until output comes.
+#[test]
+fn an_update_with_nothing_in_it_holds_no_frame_back() {
+    let mut screen = Screen::new(20, 5, 0);
+    screen.feed(b"one\x1b[?2026h");
+    assert!(screen.synchronized_update_deadline().is_some());
+    assert!(!screen.is_drawing() && !screen.view().synchronized_update);
+    screen.feed(b"");
+    assert!(!screen.is_drawing());
+    screen.feed(b"\x1b[Htwo");
+    assert!(screen.is_drawing() && screen.view().synchronized_update);
+    assert_eq!(screen.text(5), vec!["one"]);
+    screen.feed(b"!\x1b[?2026l\x1b[?2026h");
+    assert!(screen.synchronized_update_deadline().is_some() && !screen.is_drawing());
+    assert_eq!(screen.text(5), vec!["two!"]);
+    // Another start behind output that is held back opens none anew.
+    screen.feed(b"\x1b[Hthree\x1b[?2026h");
+    assert!(screen.is_drawing());
+    screen.feed(b"\x1b[?2026l");
+    assert!(!screen.is_drawing());
+    assert_eq!(screen.text(5), vec!["three"]);
+    // A tab stop shows the frame up to it: the update opened again goes on with that frame.
+    screen.feed(b"\x1b[?2026h\x1b[Hfour\x1bH");
+    assert!(screen.synchronized_update_deadline().is_some() && screen.is_drawing());
+}
+
+#[test]
+fn paint_observation_begins_after_any_open_frame() {
+    let mut screen = Screen::new(20, 5, 0);
+    screen.feed(b"\x1b[?2026hold");
+    screen.observe_paint(true);
+    screen.feed(b"\x1b[?2026l");
+    assert!(!screen.has_painted(0, 0..3));
+
+    screen.feed(b"\x1b[?2026h\rnew");
+    assert!(!screen.has_painted(0, 0..3));
+    screen.end_synchronized_update();
+    assert!(!screen.has_painted(0, 0..3));
+
+    screen.feed(b"\x1b[?2026h\rnew\x1b[?2026l");
+    assert!(screen.has_painted(0, 0..3));
+    assert!(!screen.has_painted(1, 0..1));
+}
+
+#[test]
+fn a_new_synchronized_frame_survives_the_old_frame_ending_in_the_same_read() {
+    for split in [true, false] {
+        let mut screen = Screen::new(20, 5, 0);
+        screen.feed(b"> hello\x1b[?2026h\x1b7\x1b[3;1H*\x1b8");
+        screen.observe_paint(true);
+        let close = b"\x1b[?2026l";
+        let frame = b"\x1b[?2026h\r\x1b[K> hel\x1b[?2026l";
+        if split {
+            screen.feed(close);
+            screen.feed(frame);
+        } else {
+            screen.feed(&[close.as_slice(), frame].concat());
+        }
+        assert_eq!(screen.view().cursor, (5, 0));
+        assert_eq!(screen.view().rows[2][0].text(), "*");
+        assert!(
+            screen.has_painted(0, 2..5),
+            "split before the new frame: {split}"
+        );
+        assert!(!screen.has_painted(2, 0..1), "the old frame is excluded");
+    }
 }
 
 #[test]
@@ -559,6 +768,31 @@ fn viewer_redraws_write_the_glyph_and_a_checkpoint_keeps_the_cli_title() {
 }
 
 #[test]
+fn frame_writes_follow_printed_rows_through_scrolling() {
+    for (scroll, row) in [
+        (&b"\x1b[4;1H\n\x1b[2;4H"[..], 1),
+        (&b"\x1b[1;1H\x1bM\x1b[4;4H"[..], 3),
+    ] {
+        for fresh in [false, true] {
+            let mut screen = Screen::new(8, 4, 0);
+            screen.feed(b"\x1b[3;3Hx");
+            screen.mark_pending_frame_earlier();
+            if fresh {
+                screen.feed(b"\x1b[3;3Hx");
+            }
+            screen.feed(scroll);
+            let view = screen.view();
+            assert_eq!(view.rows[row][2].text(), "x");
+            assert_eq!(
+                screen.frame_row_writes(row) == crate::CursorRowWrites::Current,
+                fresh
+            );
+            assert_eq!(screen.frame_printed_cell(row, 2), fresh);
+        }
+    }
+}
+
+#[test]
 fn a_redraw_with_all_scrollback_restores_every_retained_row() {
     let mut screen = Screen::new(20, 3, 2000);
     for n in 0..1500 {
@@ -877,6 +1111,71 @@ fn a_redraw_inside_an_unfinished_sequence_continues_correctly() {
     for (prefix, suffix) in cases {
         assert_redraw_continuation(&prefix, suffix, 40, 8, b"");
         assert_redraw_continuation(&prefix, suffix, 40, 8, b"\x1b[?1049h\x1b[33mold");
+    }
+}
+
+/// A tab only moves the cursor, so readers and viewers get what the screen shows without it. The
+/// terminal itself keeps the tab in the blank cell it started at.
+#[test]
+fn a_tab_kept_in_a_cell_draws_nothing() {
+    let cases: [(&[u8], &[u8]); 6] = [
+        (b"a\tb", b"a\x1b[9Gb"),
+        // To a row's end, as Antigravity moves there to erase it.
+        (
+            b"  Line 2 of the message\r\t\t\x1b[K\x08",
+            b"  Line 2 of the message\x1b[17G\x1b[K\x08",
+        ),
+        // From cells that draw without a character.
+        (
+            b"\x1b[7m          \x1b[0m\r\tX",
+            b"\x1b[7m          \x1b[0m\x1b[9GX",
+        ),
+        (
+            b"\x1b[44;4m          \x1b[0m\r\tX",
+            b"\x1b[44;4m          \x1b[0m\x1b[9GX",
+        ),
+        // Past a row's last drawn cell.
+        (b"end\t\t", b"end\x1b[17G"),
+        // In rows that scrolled out of the screen.
+        (
+            b"\ta\r\n\tb\r\n\tc\r\n\td\r\n\te\r\n\tf",
+            b"\x1b[9Ga\r\n\x1b[9Gb\r\n\x1b[9Gc\r\n\x1b[9Gd\r\n\x1b[9Ge\r\n\x1b[9Gf",
+        ),
+    ];
+    for (tabbed, moved) in cases {
+        let shown = String::from_utf8_lossy(tabbed).into_owned();
+        let screen_after = |output: &[u8]| {
+            let mut screen = Screen::new(24, 4, 100);
+            screen.feed(output);
+            screen
+        };
+        let (tabbed, moved) = (screen_after(tabbed), screen_after(moved));
+        assert_eq!(tabbed.view(), moved.view(), "{shown:?}");
+        assert_eq!(tabbed.text(50), moved.text(50), "{shown:?}");
+        assert_eq!(tabbed.read(50), moved.read(50), "{shown:?}");
+        assert_eq!(
+            tabbed.selection_view(0).text((1, 1), (24, 4)),
+            moved.selection_view(0).text((1, 1), (24, 4)),
+            "{shown:?}"
+        );
+        let redraws = |screen: &Screen| {
+            [
+                screen.redraw(false, true),
+                screen.redraw_in_viewport(false, true),
+                screen.redraw_in_viewport_update(),
+                screen.redraw_for_attach(false, true),
+                screen.redraw_for_attach(true, true),
+                screen.redraw_scrollback_view(0),
+                screen.redraw_with_all_scrollback(),
+            ]
+        };
+        let given = redraws(&tabbed);
+        assert_eq!(given, redraws(&moved), "{shown:?}");
+        for redraw in [&given[0], &given[6]] {
+            let copy = screen_after(redraw);
+            assert_eq!(copy.view(), tabbed.view(), "{shown:?}");
+            assert_eq!(copy.text(50), tabbed.text(50), "{shown:?}");
+        }
     }
 }
 

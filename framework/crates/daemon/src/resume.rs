@@ -702,6 +702,7 @@ impl Daemon {
             (Ok(agent), None) => agent,
             (Err(error), Some(session)) if error.data.reason == Reason::NotFound => {
                 let origin = StartOrigin {
+                    deadline: None,
                     caller: caller.clone(),
                     sender: sender_from(caller, None),
                     launch: LaunchOrigin::Person,

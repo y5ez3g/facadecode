@@ -8,12 +8,15 @@
 //! start, its arguments as a JSON list; `FAKECLI_ENV` names a JSON output file for the variables
 //! listed in `FAKECLI_ENV_KEYS` (comma-separated); `FAKECLI_IGNORE_INPUT=1` makes it read no input, so
 //! its terminal's input fills up; `FAKECLI_IGNORE_ENTER=1` makes it keep its draft on Enter, as a
-//! CLI does that does not take it. `FAKECLI_HOOKS=1` makes it run hooks given as arguments
+//! CLI does that does not take it; `FAKECLI_IGNORE_FIRST_ENTER=1` skips only the first Enter.
+//! `FAKECLI_HOOKS=1` makes it run hooks given as arguments
 //! instead, as Antigravity runs them (`run_hooks`). On Windows `FAKECLI_IGNORE_CLOSE=<file>` makes
 //! it hold its console's closing up and start a child outside the console, writing the child's
 //! process ID to `<file>`. `FAKECLI_KEYLOG=<file>` notes when each read of input arrives and when
 //! the frame it drew is written (`note_key_time`). `FAKECLI_READ_GATE=<file>` holds input reads
 //! until the test creates the file.
+//! `FAKECLI_UNANNOUNCED_PASTE=1` accepts bracketed paste without reporting the mode, as seen by
+//! a daemon that lost that output in a crash.
 //! `FAKECLI_COMPOSER_GATE=<file>` lets keys through while keeping the composer hidden until the test
 //! creates the file. `FAKECLI_CURSOR_TRUST=1` shows Cursor's workspace question before its composer.
 //! For the stress test, `--flood` writes a line every 10 milliseconds until the agent stops.
@@ -59,7 +62,10 @@
 //!
 //! `FAKECLI_LOOK=muse` shows a long paste as Muse 1.4.20 does, `[Pasted Content <n> chars]`.
 //! `FAKECLI_CODEX_INPUT=working` draws a Codex input, accepts Tab as submission,
-//! and reports Working before the first prompt arrives.
+//! and reports Working before the first prompt arrives. On Windows `FAKECLI_CONSOLE_KEYS=1` makes it
+//! read its keys as a console gives them, as Codex does there, not as terminal sequences: it knows no
+//! paste, its Enter submits, Shift+Enter breaks the line, and it shows a draft of more lines than one
+//! as a placeholder for its characters.
 //!
 //! Hints: `FAKECLI_HINT=<text>` draws `<text>` in color where an empty input starts, the cursor
 //! before it, as Muse 1.4.20 draws a hint once a turn has ended: not until `FAKECLI_TURN_MS`
@@ -183,6 +189,11 @@ impl SessionHook {
             let mut shell = shell_command(&command);
             #[cfg(windows)]
             let mut shell = match self.stand_in {
+                StandIn::Claude => {
+                    let mut shell = std::process::Command::new(facade_scenarios::shell());
+                    shell.arg("-c").arg(command);
+                    shell
+                }
                 StandIn::Codex => {
                     let mut shell = std::process::Command::new(facade_scenarios::powershell());
                     shell.args(["-NoProfile", "-Command", command]);
@@ -262,6 +273,8 @@ fn base64(bytes: &[u8]) -> String {
 
 struct FakeCli {
     codex_input: bool,
+    /// It reads its keys as a console gives them.
+    console_keys: bool,
     transcript: Vec<String>,
     wrap_transcript: bool,
     draft: Vec<InputSegment>,
@@ -402,6 +415,9 @@ impl FakeCli {
         self.draft
             .iter()
             .map(|piece| match piece {
+                InputSegment::Text(text) if self.console_keys && text.contains('\n') => {
+                    format!("[Pasted Content {} chars]", text.chars().count())
+                }
                 InputSegment::Text(text) => text.clone(),
                 InputSegment::Paste { number, text } if self.native.is_some() => self
                     .native
@@ -1164,11 +1180,12 @@ fn shell_command(command: &str) -> std::process::Command {
     }
 }
 
-/// The CLI a copy of the test CLI stands for on Windows, by its name.
+/// The CLI the fixture stands for on Windows, by its name or explicit look.
 #[cfg(windows)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StandIn {
     None,
+    Claude,
     Codex,
     Muse,
     Agy,
@@ -1194,7 +1211,7 @@ impl StandIn {
             StandIn::Codex => codex_session_hooks(arguments),
             StandIn::Muse => muse_session_hooks(arguments),
             StandIn::Agy => agy_title_command(arguments),
-            StandIn::None => None,
+            StandIn::Claude | StandIn::None => None,
         }
     }
 }
@@ -1720,9 +1737,14 @@ fn run() -> anyhow::Result<()> {
         .skip(1)
         .map(|word| word.to_string_lossy().into_owned())
         .collect();
-    #[cfg(windows)]
-    let stand_in = StandIn::of(&std::env::current_exe()?);
     let claude = std::env::var("FAKECLI_LOOK").as_deref() == Ok("claude");
+    #[cfg(windows)]
+    let stand_in = if claude {
+        // Claude receives POSIX-quoted hook commands on Windows too.
+        StandIn::Claude
+    } else {
+        StandIn::of(&std::env::current_exe()?)
+    };
     let native = std::env::var("FAKECLI_LOOK")
         .ok()
         .and_then(|look| Native::of(&look));
@@ -1804,6 +1826,7 @@ fn run() -> anyhow::Result<()> {
     let agy = std::env::var("FAKECLI_LOOK").is_ok_and(|look| look == "agy");
     let mut app = FakeCli {
         codex_input,
+        console_keys: std::env::var("FAKECLI_CONSOLE_KEYS").is_ok_and(|v| v == "1"),
         claude,
         native,
         omp_band: native == Some(Native::Omp) && !omp_configures_pi(&arguments),
@@ -1891,7 +1914,9 @@ fn run() -> anyhow::Result<()> {
     // A console gives its input as key presses unless asked for terminal sequences; a CLI that reads
     // bytes, pastes included, asks for them.
     #[cfg(windows)]
-    terminal_input()?;
+    if !app.console_keys {
+        terminal_input()?;
+    }
     let mut out = std::io::stdout();
     if let Some(file) = std::env::var_os("FAKECLI_SCREEN_FILE") {
         for line in std::fs::read_to_string(file)?.lines() {
@@ -1899,7 +1924,9 @@ fn run() -> anyhow::Result<()> {
             app.printed += 1;
         }
     }
-    let _ = out.write_all(b"\x1b[?2004h");
+    if std::env::var_os("FAKECLI_UNANNOUNCED_PASTE").is_none() {
+        let _ = out.write_all(b"\x1b[?2004h");
+    }
     app.draw(&mut out);
 
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
@@ -1915,6 +1942,8 @@ fn run() -> anyhow::Result<()> {
     let ignores = |key: &str| ignored.split(',').any(|each| each.trim() == key);
     let (ignore_space, ignore_backspace) = (ignores("space"), ignores("backspace"));
     let takes_enter = std::env::var("FAKECLI_IGNORE_ENTER").is_err();
+    let mut ignore_first_enter = std::env::var_os("FAKECLI_IGNORE_FIRST_ENTER").is_some();
+    let console_keys = app.console_keys;
     let read_gate = std::env::var_os("FAKECLI_READ_GATE").map(std::path::PathBuf::from);
     std::thread::spawn(move || {
         if !reads_input {
@@ -1927,6 +1956,19 @@ fn run() -> anyhow::Result<()> {
         if let Some(gate) = read_gate {
             while !gate.is_file() {
                 std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        if console_keys {
+            loop {
+                let Ok(event) = crossterm::event::read() else {
+                    return;
+                };
+                let Some(bytes) = console_key(event) else {
+                    continue;
+                };
+                if tx.send(bytes).is_err() {
+                    return;
+                }
             }
         }
         let mut stdin = std::io::stdin();
@@ -2013,6 +2055,8 @@ fn run() -> anyhow::Result<()> {
                     app.menu = None;
                     dirty = true;
                 }
+                LINE_BREAK if app.console_keys => app.push_text("\n"),
+                b'\r' | b'\n' if ignore_first_enter => ignore_first_enter = false,
                 b'\r' | b'\n' if takes_enter => app.submit(),
                 b'\t' if app.codex_input && app.menu.is_none() => app.submit(),
                 0x7f | 0x08 if ignore_backspace => {}
@@ -2145,6 +2189,28 @@ fn write_whole(file: &std::path::Path, text: &str) -> std::io::Result<()> {
     partial.push(".partial");
     std::fs::write(&partial, text)?;
     std::fs::rename(&partial, file)
+}
+
+/// What the fake CLI's input loop reads for a Shift+Enter of the console.
+const LINE_BREAK: u8 = 0x0e;
+
+/// The byte a console's key press is in the fake CLI's input, for the keys it takes.
+fn console_key(event: crossterm::event::Event) -> Option<Vec<u8>> {
+    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+    let Event::Key(key) = event else {
+        return None;
+    };
+    if key.kind != KeyEventKind::Press {
+        return None;
+    }
+    Some(match key.code {
+        KeyCode::Char(c) => c.to_string().into_bytes(),
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => vec![LINE_BREAK],
+        KeyCode::Enter => vec![b'\r'],
+        KeyCode::Tab => vec![b'\t'],
+        KeyCode::Backspace => vec![0x7f],
+        _ => return None,
+    })
 }
 
 /// Asks the console for its input as terminal sequences (`ENABLE_VIRTUAL_TERMINAL_INPUT`), as a CLI

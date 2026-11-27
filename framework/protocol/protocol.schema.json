@@ -1824,6 +1824,11 @@
         },
         {
           "type": "string",
+          "const": "interaction_after_write",
+          "description": "A question or menu appeared after delivery input reached the terminal and before the\nCLI showed that it took the message."
+        },
+        {
+          "type": "string",
           "const": "unsupported",
           "description": "The recipient's CLI has no rule to read its input by, so Facade types no message into it."
         }
@@ -6551,7 +6556,7 @@
         {
           "type": "string",
           "const": "not_started",
-          "description": "Its CLI starts its servers only with its first turn or its panel of servers, and the run's\nstart could not have the panel start Facade's server before the first turn; the daemon's log\nsays why. The first turn starts it."
+          "description": "Startup did not confirm Facade's tools before the CLI's first turn. That turn may run\nwithout them. The daemon's log records why."
         },
         {
           "type": "string",

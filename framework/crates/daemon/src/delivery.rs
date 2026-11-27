@@ -3,7 +3,11 @@
 //! and the results messages write go the same way. Input of any kind reaches an agent through
 //! [`Daemon::hand_input`].
 
+mod order;
+
 use std::borrow::Cow;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,7 +28,7 @@ use facade_base::{
     model::machine::{ExecutionOutcome, MachineIdentity},
     model::message::MessageRef,
 };
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{OwnedRwLockReadGuard, mpsc, oneshot, watch};
 use tokio::time::Instant;
 
 use crate::agent::{
@@ -32,21 +36,66 @@ use crate::agent::{
 };
 use crate::api;
 use crate::command_replies::{Answer, CommandWait};
-use crate::lifecycle::Work;
+use crate::lifecycle::{RelayLink, Work};
 use crate::machine_service::machine_address_part;
 use crate::messages::{self, Due, Earlier, Outcome, Posted, PostedResult, Settled};
 use crate::operations::{check_request_id, request_words};
 use crate::records::{OperationTarget, Reach};
 use crate::service::{Forwarded, sender_from};
-use crate::store::SendRoute;
+use crate::store::{SendRoute, SendRouteBinding};
 use crate::{
-    Cancel, Daemon, HUMAN, MAX_TERMINAL_SEND, Sender, delivery_limit, gate_for_test, log,
+    Cancel, Daemon, MAX_TERMINAL_SEND, Sender, delivery_limit, gate_for_test, log,
     send_route_cutoff,
 };
+
+pub(crate) use order::{SendAdmission, SendOrder, SendTurn};
+
+type SendFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+type LocalReceipt = (SendOutcome, Option<MessageRef>, Option<AgentLabel>);
+type DeliveryFuture<'a> = SendFuture<'a, Result<LocalReceipt, SendFailure>>;
+type ReceiptFuture<'a> = SendFuture<'a, Result<wire::SendResult, ErrorBody>>;
 
 struct SendOrigin<'a> {
     machine: &'a str,
     sender: Sender,
+    admission: Option<SendAdmission>,
+    relay: Option<Arc<RelayLink>>,
+    binding: Option<RelaySave<'a>>,
+}
+
+type SaveTurn<'a> = (tokio::sync::MutexGuard<'a, ()>, OwnedRwLockReadGuard<()>);
+
+struct RelaySave<'a> {
+    _turn: SaveTurn<'a>,
+    route: SendRouteBinding,
+}
+
+#[derive(Default)]
+pub(crate) struct SendControl {
+    pub(crate) deadline: Option<std::time::Instant>,
+    pub(crate) admission: Option<SendAdmission>,
+    pub(crate) relay: Option<Arc<RelayLink>>,
+}
+
+async fn send_effect(
+    relay: Option<&RelayLink>,
+    until: Instant,
+    cancel: &mut Cancel,
+) -> Result<Option<OwnedRwLockReadGuard<()>>, ErrorBody> {
+    let Some(relay) = relay else { return Ok(None) };
+    tokio::select! {
+        biased;
+        () = cancel.requested() => Err(send_cancelled_before_save()),
+        () = tokio::time::sleep_until(until) => Err(send_before_deadline()),
+        admitted = relay.effect() => admitted.map(Some),
+    }
+}
+
+fn send_cancelled_before_save() -> ErrorBody {
+    ErrorBody::new(
+        Reason::Cancelled,
+        "the send was cancelled before it was saved",
+    )
 }
 
 fn log_repeat(message: &Message, request_id: &str) {
@@ -170,6 +219,46 @@ pub(crate) fn render_start_result(
 }
 
 impl Daemon {
+    /// The store serializes its transactions. MCP contenders wait for their turn on the
+    /// runtime before entering a blocking store section.
+    async fn send_store_turn(
+        &self,
+        relay: Option<&RelayLink>,
+    ) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+        if relay.is_some() {
+            Some(self.relay_send_store.lock().await)
+        } else {
+            None
+        }
+    }
+
+    /// Neither the store turn nor the handover permit is held while waiting for the other.
+    async fn send_save_turn(
+        &self,
+        relay: Option<&RelayLink>,
+        until: Instant,
+        cancel: &mut Cancel,
+    ) -> Result<Option<SaveTurn<'_>>, ErrorBody> {
+        let Some(relay) = relay else { return Ok(None) };
+        loop {
+            let store = tokio::select! {
+                biased;
+                () = cancel.requested() => return Err(send_cancelled_before_save()),
+                () = tokio::time::sleep_until(until) => return Err(send_before_deadline()),
+                store = self.relay_send_store.lock() => store,
+            };
+            if let Some(effect) = relay.try_effect()? {
+                send_time_left(until)?;
+                if cancel.is_requested() {
+                    return Err(send_cancelled_before_save());
+                }
+                return Ok(Some((store, effect)));
+            }
+            drop(store);
+            drop(send_effect(Some(relay), until, cancel).await?);
+        }
+    }
+
     /// Projects durable machine IDs into the references read on this machine's terminal.
     pub(crate) fn message_text(&self, message: &Message) -> String {
         self.render_message_text(message, false)
@@ -310,6 +399,15 @@ impl Daemon {
                     return Err(ErrorBody::new(Reason::Ended, format!("{id} ended")));
                 }
                 Err(InputRejection::Backpressured(back)) => input = back,
+                Err(InputRejection::TooLarge(bytes)) => {
+                    return Err(ErrorBody::new(
+                        Reason::CapacityExceeded,
+                        format!(
+                            "input is limited to 1 MiB a call; in agent {id}'s terminal this \
+                             input takes {bytes} bytes"
+                        ),
+                    ));
+                }
             }
             match (&wait, cancel.as_mut()) {
                 (InputWait::Refuse, _) => {
@@ -339,11 +437,25 @@ impl Daemon {
     pub(crate) async fn route_send(
         self: &Arc<Self>,
         caller: &Caller,
+        args: wire::SendArgs,
+        incoming: Option<Forwarded>,
+        cancel: Cancel,
+        control: SendControl,
+    ) -> Result<wire::SendResult, ErrorBody> {
+        // Admission uses the addressing and storage state. Release that frame before waiting
+        // for terminal delivery, retaining only the saved receipt and what settles it.
+        let receipt = Box::pin(self.admit_send(caller, args, incoming, cancel, control)).await?;
+        receipt.await
+    }
+
+    async fn admit_send<'a>(
+        self: &'a Arc<Self>,
+        caller: &'a Caller,
         mut args: wire::SendArgs,
         incoming: Option<Forwarded>,
         mut cancel: Cancel,
-        send_deadline: Option<std::time::Instant>,
-    ) -> Result<wire::SendResult, ErrorBody> {
+        control: SendControl,
+    ) -> Result<ReceiptFuture<'a>, ErrorBody> {
         if args.allow_unsupported_receipt && !matches!(caller, Caller::Terminal { .. }) {
             return Err(ErrorBody::refused(
                 "only a terminal can request an unsupported delivery receipt",
@@ -388,7 +500,7 @@ impl Daemon {
                     left
                 };
                 let now = Instant::now();
-                let cutoff = send_deadline.map(Instant::from_std);
+                let cutoff = control.deadline.map(Instant::from_std);
                 let bound = |until: Instant| cutoff.map_or(until, |cutoff| cutoff.min(until));
                 let due = bound(now + window);
                 // Leave part of the peer exchange for settlement and the receipt, just as for a
@@ -405,11 +517,14 @@ impl Daemon {
             && args.wait_for.is_some()
             && let wire::AgentTarget::Selector(target) = &args.to
             && let Ok(Some(address)) = addresses::parse_command_reply_address(target)
-            && let Some(result) = self
+        {
+            let _effect = send_effect(control.relay.as_deref(), due.instant, &mut cancel).await?;
+            if let Some(result) = self
                 .send_command_reply(caller, &args, address, due.instant, cancel.clone())
                 .await?
-        {
-            return Ok(result);
+            {
+                return Ok(Box::pin(async move { Ok(result) }));
+            }
         }
         let command_request = args.wait_for == Some(wire::SendWait::Result) && terminal;
         if command_request && args.request_id.is_none() {
@@ -417,6 +532,7 @@ impl Daemon {
                 "a command-line reply wait needs a request ID",
             ));
         }
+        let mut binding = None;
         let (recipient, sender, replay) = if let Some(call) = incoming {
             let recipient = match &args.to {
                 wire::AgentTarget::Reference(reference)
@@ -446,6 +562,7 @@ impl Daemon {
             let target = target.trim_matches(facade_base::settings::is_space);
             let table = self.store.message_table();
             let retained = if let Some(request) = request {
+                let _store = self.send_store_turn(control.relay.as_deref()).await;
                 crate::blocking_in_place(|| {
                     table.send_target(&sender.from, request, target, send_route_cutoff)
                 })
@@ -456,8 +573,22 @@ impl Daemon {
             let (route, replay) = match retained {
                 Some(route) => (route, true),
                 None => {
+                    if control.deadline.is_some() {
+                        if cancel.is_requested() {
+                            return Err(send_cancelled_before_save());
+                        }
+                        send_time_left(due.instant)?;
+                    }
                     self.check_message_sender(caller)?;
-                    let reply = self.original_reply(caller, args.reply_to.as_ref())?;
+                    let reply = if args.reply_to.is_some() {
+                        let _store = self.send_store_turn(control.relay.as_deref()).await;
+                        self.original_reply(caller, args.reply_to.as_ref())?
+                    } else {
+                        None
+                    };
+                    if control.relay.is_some() {
+                        gate_for_test("mcp-send-before-resolve");
+                    }
                     let resolving = self.addressed_agent(
                         caller,
                         args.to.clone(),
@@ -465,9 +596,13 @@ impl Daemon {
                             allow_unsupported_receipt: args.allow_unsupported_receipt,
                         },
                     );
-                    let recipient = tokio::time::timeout_at(due.instant, resolving)
-                        .await
-                        .map_err(|_| send_before_deadline())??;
+                    let recipient = tokio::select! {
+                        biased;
+                        () = cancel.requested() => return Err(send_cancelled_before_save()),
+                        result = tokio::time::timeout_at(due.instant, resolving) => {
+                            result.map_err(|_| send_before_deadline())??
+                        }
+                    };
                     if let Some((_, original)) = &reply
                         && original != &recipient
                     {
@@ -480,16 +615,46 @@ impl Daemon {
                         reply: reply.map(|(message, _)| message),
                     };
                     if let Some(request) = request {
-                        crate::blocking_in_place(|| {
-                            table.keep_send_target(
-                                &sender.from,
-                                request,
-                                target,
-                                &route,
-                                send_route_cutoff,
-                            )
-                        })
-                        .map_err(ErrorBody::internal)?
+                        let turn = self
+                            .send_save_turn(control.relay.as_deref(), due.instant, &mut cancel)
+                            .await?;
+                        match turn {
+                            Some(turn) if route.recipient.machine_id == self.machine_id => {
+                                // Recheck after the lookup. An earlier attempt with this ID may
+                                // have saved while the address was being resolved.
+                                let retained = crate::blocking_in_place(|| {
+                                    table.send_target(
+                                        &sender.from,
+                                        request,
+                                        target,
+                                        send_route_cutoff,
+                                    )
+                                })
+                                .map_err(ErrorBody::internal)?;
+                                if let Some(retained) = retained {
+                                    (retained, true)
+                                } else {
+                                    binding = Some(RelaySave {
+                                        _turn: turn,
+                                        route: SendRouteBinding {
+                                            target: target.into(),
+                                            route: route.clone(),
+                                        },
+                                    });
+                                    (route, false)
+                                }
+                            }
+                            _turn => crate::blocking_in_place(|| {
+                                table.keep_send_target(
+                                    &sender.from,
+                                    request,
+                                    target,
+                                    &route,
+                                    send_route_cutoff,
+                                )
+                            })
+                            .map_err(ErrorBody::internal)?,
+                        }
                     } else {
                         (route, false)
                     }
@@ -517,10 +682,18 @@ impl Daemon {
         };
         let allow_reply_hint = matches!(caller, Caller::Agent { .. }) && args.reply_to.is_none();
         if recipient.machine_id != self.machine_id {
+            drop(binding);
+            // The peer answers after delivery. Keep this connection's order until that answer.
+            let _order = control.admission;
             let target = &recipient.machine_id;
-            let routed =
-                tokio::time::timeout_at(due.instant, self.ensure_machine_route(target, caller))
-                    .await;
+            let route = self.ensure_machine_route(target, caller);
+            let routed = tokio::select! {
+                biased;
+                () = cancel.requested() => {
+                    return Err(if replay { send_unconfirmed() } else { send_cancelled_before_save() });
+                }
+                result = tokio::time::timeout_at(due.instant, route) => result,
+            };
             match routed {
                 Ok(Ok(())) => {}
                 _ if replay => return Err(send_unconfirmed()),
@@ -536,6 +709,7 @@ impl Daemon {
                     "the send was cancelled before it was forwarded",
                 ));
             }
+            drop(send_effect(control.relay.as_deref(), due.instant, &mut cancel).await?);
             let retry = args.request_id.is_some();
             let forward = |left: Duration, from_name| {
                 let call = api::call::<wire::AgentSend>(wire::SendArgs {
@@ -619,35 +793,47 @@ impl Daemon {
                 message_id: result.message.message_id.clone(),
             };
             result.id = self.message_address(&message)?;
-            return finish_command_send(result, message, command_wait, until, cancel).await;
+            return Ok(Box::pin(finish_command_send(
+                result,
+                message,
+                command_wait,
+                until,
+                cancel,
+            )));
         }
         let origin = SendOrigin {
             machine: caller.machine_id(),
             sender,
+            admission: control.admission,
+            relay: control.relay,
+            binding,
         };
-        let (sent, candidate, label) = self
+        let delivery = self
             .send_to_agent(caller, &recipient, args, origin, due, cancel.clone())
             .await?;
-        let candidate = candidate.filter(|_| allow_reply_hint);
-        let expected_reply_to = if forwarded {
-            candidate
-        } else {
-            self.checked_reply_hint(caller, &recipient, candidate)
-        };
-        let reference = MessageRef {
-            machine_id: self.machine_id.clone(),
-            message_id: sent.message.message_id.clone(),
-        };
-        let result = wire::SendResult {
-            id: self.message_address(&reference)?,
-            message: self.public_message(sent.message)?,
-            recipient: label.map(api::wire_label),
-            repeated: sent.repeated,
-            withdrawn: sent.withdrawn,
-            expected_reply_to: expected_reply_to.map(api::wire_message_ref),
-            reply: None,
-        };
-        finish_command_send(result, reference, command_wait, until, cancel).await
+        Ok(Box::pin(async move {
+            let (sent, candidate, label) = delivery.await?;
+            let candidate = candidate.filter(|_| allow_reply_hint);
+            let expected_reply_to = if forwarded {
+                candidate
+            } else {
+                self.checked_reply_hint(caller, &recipient, candidate)
+            };
+            let reference = MessageRef {
+                machine_id: self.machine_id.clone(),
+                message_id: sent.message.message_id.clone(),
+            };
+            let result = wire::SendResult {
+                id: self.message_address(&reference)?,
+                message: self.public_message(sent.message)?,
+                recipient: label.map(api::wire_label),
+                repeated: sent.repeated,
+                withdrawn: sent.withdrawn,
+                expected_reply_to: expected_reply_to.map(api::wire_message_ref),
+                reply: None,
+            };
+            finish_command_send(result, reference, command_wait, until, cancel).await
+        }))
     }
 
     async fn send_command_reply(
@@ -935,39 +1121,70 @@ impl Daemon {
         (reference == candidate && &original_sender == recipient).then_some(candidate)
     }
 
-    async fn send_to_agent(
-        self: &Arc<Self>,
+    async fn send_to_agent<'a>(
+        self: &'a Arc<Self>,
         caller: &Caller,
         recipient: &AgentRef,
         args: wire::SendArgs,
         origin: SendOrigin<'_>,
         due: Due,
         mut cancel: Cancel,
-    ) -> Result<(SendOutcome, Option<MessageRef>, Option<AgentLabel>), SendFailure> {
-        let inbox = origin.sender.from.clone();
-        let machine = origin.machine;
+    ) -> Result<DeliveryFuture<'a>, SendFailure> {
+        let SendOrigin {
+            sender,
+            machine,
+            admission,
+            relay,
+            binding,
+        } = origin;
+        let inbox = sender.from.clone();
         let wait_for = args.wait_for;
         let wait_inbox = wait_for == Some(wire::SendWait::Inbox);
         let notify_failure = wait_inbox && matches!(caller, Caller::Agent { .. });
         let call_until = due.instant;
         if let Some(request_id) = args.request_id.as_deref() {
             check_request_id(request_id)?;
-            if let Some(earlier) = self.messages.find_request(
-                machine,
-                &inbox,
-                &recipient.agent_id,
-                request_id,
-                None,
-            )? {
+            let earlier = {
+                let _store = if binding.is_none() {
+                    self.send_store_turn(relay.as_deref()).await
+                } else {
+                    None
+                };
+                self.messages.find_request(
+                    machine,
+                    &inbox,
+                    &recipient.agent_id,
+                    request_id,
+                    None,
+                )?
+            };
+            if let Some(earlier) = earlier {
+                drop(admission);
+                if let Some(binding) = binding {
+                    // A receipt from before route retention can still name this exact recipient.
+                    crate::blocking_in_place(|| {
+                        self.store.message_table().keep_send_target(
+                            &inbox,
+                            request_id,
+                            &binding.route.target,
+                            &binding.route.route,
+                            send_route_cutoff,
+                        )
+                    })
+                    .map_err(ErrorBody::internal)?;
+                }
                 let label = self
                     .get_agent(&recipient.agent_id)
                     .filter(|agent| Reach::from(caller).reaches(&agent.info()))
                     .map(|agent| self.agent_label(&agent))
                     .transpose()?;
-                let (sent, reply) = self
-                    .repeat_send(earlier, request_id, wait_for, call_until, cancel)
-                    .await?;
-                return Ok((sent, reply, label));
+                let request_id = request_id.to_owned();
+                return Ok(Box::pin(async move {
+                    let (sent, reply) = self
+                        .repeat_send(earlier, &request_id, wait_for, call_until, cancel)
+                        .await?;
+                    Ok((sent, reply, label))
+                }));
             }
         }
         let to = self.local_target(
@@ -1011,27 +1228,30 @@ impl Daemon {
             );
             return Err(self.with_agent_error(&to, error).into());
         }
+        let turn = if binding.is_none() {
+            self.send_save_turn(relay.as_deref(), due.instant, &mut cancel)
+                .await?
+        } else {
+            None
+        };
         if args.wait_for.is_some() {
             send_time_left(due.instant)?;
             if cancel.is_requested() {
-                return Err(ErrorBody::new(
-                    Reason::Cancelled,
-                    "the send was cancelled before it was saved",
-                )
-                .into());
+                return Err(send_cancelled_before_save().into());
             }
         }
-        let (due, background) = if wait_inbox {
+        let background = if wait_inbox || admission.is_some() {
             let work = self.lifecycle.begin(Work::Send).ok_or_else(|| {
                 ErrorBody::new(
                     Reason::Unavailable,
                     "Facade is exiting before the send was saved",
                 )
             })?;
-            (Due::now(), Some(work))
+            Some(work)
         } else {
-            (due, None)
+            None
         };
+        let due = if wait_inbox { Due::now() } else { due };
         let message = Message {
             from_machine_id: (machine != self.machine_id).then(|| machine.to_string()),
             reply_to_machine_id: reply.as_ref().map(|reference| reference.machine_id.clone()),
@@ -1039,28 +1259,35 @@ impl Daemon {
                 && matches!(caller, Caller::Terminal { .. }),
             from_window: None,
             ..pending_message(
-                origin.sender,
+                sender,
                 to.id(),
                 args.text,
                 reply.map(|reference| reference.message_id),
                 Some(due.at.clone()),
             )
         };
-        let (message, mut settled) =
-            match self
-                .messages
-                .post(message, args.request_id.as_deref(), None, notify_failure)?
-            {
-                Posted::New(message, settled) => (message, settled),
-                // A call with the same ID kept its message first: this one joins it.
-                Posted::Earlier(earlier) => {
-                    let request_id = args.request_id.as_deref().unwrap_or_default();
+        let saved = self.messages.post_with_route(
+            message,
+            args.request_id.as_deref(),
+            None,
+            notify_failure,
+            binding.as_ref().map(|binding| &binding.route),
+        )?;
+        drop((binding, turn));
+        let (message, mut settled) = match saved {
+            Posted::New(message, settled) => (message, settled),
+            // A call with the same ID kept its message first: this one joins it.
+            Posted::Earlier(earlier) => {
+                drop(admission);
+                let request_id = args.request_id.unwrap_or_default();
+                return Ok(Box::pin(async move {
                     let (sent, reply) = self
-                        .repeat_send(earlier, request_id, wait_for, call_until, cancel)
+                        .repeat_send(earlier, &request_id, wait_for, call_until, cancel)
                         .await?;
-                    return Ok((sent, reply, Some(self.agent_label(&to)?)));
-                }
-            };
+                    Ok((sent, reply, Some(self.agent_label(&to)?)))
+                }));
+            }
+        };
         log(
             "info",
             &format!(
@@ -1070,20 +1297,50 @@ impl Daemon {
                 request_words(args.request_id.as_deref())
             ),
         );
-        if let Some(work) = background {
+        let handoff = if to.is_guest() {
+            drop(admission);
+            None
+        } else {
+            admission.map(|turn| turn.saved(to.id()))
+        };
+        let background = background.map(|work| {
             let daemon = self.clone();
             let agent = to.clone();
             let deliver = message.clone();
+            let mut settled = settled.clone();
+            let deadline = due.instant;
             tokio::spawn(async move {
                 let _work = work;
-                daemon
-                    .deliver_message(&agent, &deliver, &mut settled, due.instant)
-                    .await;
+                let hand = async {
+                    let _turn = match handoff {
+                        Some(turn) => {
+                            let Some(turn) = turn.until(deadline).await else {
+                                return false;
+                            };
+                            Some(turn)
+                        }
+                        None => None,
+                    };
+                    daemon.hand_to_typist(&agent, &deliver, deadline).await
+                };
+                let handed = agent.is_guest()
+                    || tokio::select! {
+                        handed = hand => handed,
+                        _ = settled.wait_for(Option::is_some) => false,
+                    };
+                if handed || settled.borrow().is_none() {
+                    daemon
+                        .messages
+                        .settle_by_deadline(messages::number(&deliver), &mut settled, deadline)
+                        .await;
+                }
                 if notify_failure {
                     daemon.report_send_failure(&deliver, settled.borrow().clone());
                 }
-            });
-            return Ok((
+            })
+        });
+        if wait_inbox {
+            let receipt = (
                 SendOutcome {
                     message,
                     repeated: false,
@@ -1092,49 +1349,59 @@ impl Daemon {
                 },
                 None,
                 Some(self.agent_label(&to)?),
-            ));
+            );
+            return Ok(Box::pin(async move { Ok(receipt) }));
         }
-        let number = messages::number(&message);
-        {
-            let delivered = self.deliver_message(&to, &message, &mut settled, due.instant);
-            tokio::pin!(delivered);
-            tokio::select! {
-                () = &mut delivered => {}
-                // A cancel withdraws the message while its paste has not begun; once it began, the
-                // delivery goes on.
-                () = cancel.requested() => {
-                    if self.messages.withdraw(number) {
-                        log(
-                            "info",
-                            &format!(
-                                "{}, #{inbox}'s to #{}, was withdrawn by its send's cancel before \
-                                 its paste began",
-                                message.message_id,
-                                to.id()
-                            ),
-                        );
+        Ok(Box::pin(async move {
+            let number = messages::number(&message);
+            {
+                let delivered = async {
+                    if let Some(task) = background {
+                        let _ = task.await;
                     } else {
-                        delivered.await;
+                        self.deliver_message(&to, &message, &mut settled, due.instant)
+                            .await;
+                    }
+                };
+                tokio::pin!(delivered);
+                tokio::select! {
+                    () = &mut delivered => {}
+                    // A cancel withdraws the message while its paste has not begun; once it began, the
+                    // delivery goes on.
+                    () = cancel.requested() => {
+                        if self.messages.withdraw(number) {
+                            log(
+                                "info",
+                                &format!(
+                                    "{}, #{inbox}'s to #{}, was withdrawn by its send's cancel before \
+                                     its paste began",
+                                    message.message_id,
+                                    to.id()
+                                ),
+                            );
+                        } else {
+                            delivered.await;
+                        }
                     }
                 }
             }
-        }
-        gate_for_test("before-send-answer");
-        let answer = settled.borrow().clone();
-        let (message, withdrawn, expected_reply_to) =
-            settled_answer(answer, to.id(), &message.message_id).map_err(|error| {
-                self.with_agent_error(&to, self.admitted_send_error(error, &message, wait_for))
-            })?;
-        Ok((
-            SendOutcome {
-                message,
-                repeated: false,
-                withdrawn,
-                window_delivery: None,
-            },
-            expected_reply_to,
-            Some(self.agent_label(&to)?),
-        ))
+            gate_for_test("before-send-answer");
+            let answer = settled.borrow().clone();
+            let (message, withdrawn, expected_reply_to) =
+                settled_answer(answer, to.id(), &message.message_id).map_err(|error| {
+                    self.with_agent_error(&to, self.admitted_send_error(error, &message, wait_for))
+                })?;
+            Ok((
+                SendOutcome {
+                    message,
+                    repeated: false,
+                    withdrawn,
+                    window_delivery: None,
+                },
+                expected_reply_to,
+                Some(self.agent_label(&to)?),
+            ))
+        }))
     }
 
     /// Reports the settlement of an Inbox send marked at admission for its verified sender.
@@ -1255,8 +1522,9 @@ impl Daemon {
         let (message, withdrawn, expected_reply_to) = match settled {
             // A guest's message waits with no deadline for its next turn.
             Some(mut settled)
-                if wait_for != Some(wire::SendWait::Inbox)
-                    && message.delivery.deadline.is_some() =>
+                if cancel.is_requested()
+                    || (wait_for != Some(wire::SendWait::Inbox)
+                        && message.delivery.deadline.is_some()) =>
             {
                 let number = messages::number(&message);
                 let delivery = async {
@@ -1282,7 +1550,14 @@ impl Daemon {
                         }
                     }
                 };
-                if wait_for.is_some() {
+                if let Some(wait) = wait_for {
+                    // Only delivery and result waits reserve time for settlement.
+                    let until = match wait {
+                        wire::SendWait::Inbox => until,
+                        wire::SendWait::Delivery | wire::SendWait::Result => {
+                            until + messages::RESPONSE_GRACE * 2
+                        }
+                    };
                     tokio::time::timeout_at(until, delivery)
                         .await
                         .map_err(|_| {
@@ -1340,6 +1615,7 @@ impl Daemon {
         self: Arc<Self>,
         agent: AgentHandle,
         prompt: Message,
+        text: String,
         mut settled: watch::Receiver<Option<Settled>>,
         started: oneshot::Receiver<()>,
     ) {
@@ -1352,25 +1628,11 @@ impl Daemon {
         if started {
             gate_for_test("before-prompt-delivery");
             let due = Due::now();
-            // The creator's name as it is now: a start from an agent's terminal can come before
-            // that agent is listed.
-            let from_name = match prompt.from.as_str() {
-                HUMAN => None,
-                creator if prompt.from_machine_id.is_none() => {
-                    self.get_agent(creator).map(|creator| creator.info().name)
-                }
-                _ => None,
-            };
             let typing = self
                 .messages
-                .begin_prompt(number, &due.at, from_name)
+                .begin_prompt(number, &due.at, prompt.from_name)
                 .map(|begun| {
-                    MessageTyping::start_prompt(
-                        self.message_text(&begun),
-                        number,
-                        due.instant,
-                        submission_of(&begun),
-                    )
+                    MessageTyping::start_prompt(text, number, due.instant, submission_of(&begun))
                 });
             let prompt_command = AgentCommand::StartPrompt {
                 run: agent::FIRST_RUN,
@@ -1491,7 +1753,11 @@ impl Daemon {
         deadline: tokio::time::Instant,
         mut settled: watch::Receiver<Option<Settled>>,
     ) -> Option<Settled> {
-        gate_for_test("before-result-delivery");
+        gate_for_test(if message.result.is_some() {
+            "before-result-delivery"
+        } else {
+            "before-end-notice-delivery"
+        });
         let to = self.get_agent(&message.to)?;
         if to.is_guest() || self.hand_to_typist(&to, &message, deadline).await {
             self.messages
@@ -1666,11 +1932,11 @@ fn send_unconfirmed() -> ErrorBody {
     error
 }
 
+pub(crate) const SEND_BEFORE_DEADLINE: &str =
+    "the delivery time expired before the message was sent";
+
 fn send_before_deadline() -> ErrorBody {
-    ErrorBody::new(
-        Reason::Unavailable,
-        "the delivery time expired before the message was sent",
-    )
+    ErrorBody::new(Reason::Unavailable, SEND_BEFORE_DEADLINE)
 }
 
 #[cfg(test)]

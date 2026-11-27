@@ -15,6 +15,7 @@ pub mod programs;
 pub mod service;
 pub mod sockets;
 pub mod ssh;
+pub mod startup;
 pub mod system;
 pub mod terminal;
 pub mod terminal_lines;
@@ -40,7 +41,7 @@ pub mod modules {
     pub use super::descriptors;
     pub use super::{
         clipboard, console, desktop, files, install, limits, programs, service, sockets, ssh,
-        system, terminal, terminal_lines, unix_process,
+        startup, system, terminal, terminal_lines, unix_process,
     };
 }
 

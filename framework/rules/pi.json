@@ -12,13 +12,19 @@
 			{ "downloading": "^ fd not found\\. Downloading\\.{3}$", "finished": "^ (?:fd installed to |Warning: Failed to download fd:)" },
 			{ "downloading": "^ ripgrep not found\\. Downloading\\.{3}$", "finished": "^ (?:ripgrep installed to |Warning: Failed to download ripgrep:)" }
 		],
-		"scrolled": { "position": "rules", "above": "^─{2,} ↑ (\\d+) more ─+$", "below": "^─+ ↓ (\\d+) more ─+$" },
+		"scrolled": { "position": "rules", "above": "^─{2,} (?:(?:\\S.*? ─+ )?↑ (\\d+) more|\\S) ─+$", "below": "^─+ ↓ (\\d+) more ─+$" },
 		"most_rows": 5,
 		"most_share": 0.3,
+		"least_rows": 3,
+		"question": { "top": "^─+$", "keys": "^ \\S+ submit(?: {2}|\\s*$)", "footer_rows": 2 },
 		"menus": [{ "selected": "^ ?→ \\S", "next": "^ {2,4}\\S", "hint": { "pattern": "[Ee]scape/[Cc]trl\\+[Cc]", "within": 40 } }]
 	},
 	"paste": {
+		"bracketed": true,
 		"enter_ms": 80,
+		"submit_clear_ms": 514,
+		"backspace_unit": "grapheme",
+		"retry_submit_ms": 514,
 		"placeholders": [
 			{ "pattern": "^\\[paste#\\d+\\+(\\d+)lines?\\]$", "count": "lines" },
 			{ "pattern": "^\\[paste #\\d+ (\\d+) chars?\\]$", "count": "visible_utf16", "spaced": true }

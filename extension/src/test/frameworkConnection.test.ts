@@ -144,6 +144,165 @@ suite('Framework connection (ARCHITECTURE-1.4)', () => {
 		} finally { home.remove(); }
 	});
 
+	test('picks up the native startup window after detach returns at the lock (ARCHITECTURE-6.1)', async () => {
+		const previousNow = process.hrtime.bigint;
+		const ticket = { generation: '0000000000001020', pid: welcome.pid + 1, birth: 'original-daemon' };
+		let now = 0;
+		let observed = 0;
+		const hellos: number[] = [];
+		const closed: number[] = [];
+		const modules: Record<string, unknown> = {
+			'../../base/async': { timeout: async (milliseconds: number) => { now += milliseconds; } },
+		};
+		const load = withModules(modules);
+		const rpc = load<typeof import('../host/framework/rpc')>(require.resolve('../host/framework/rpc'));
+		modules['./rpc'] = {
+			...rpc,
+			startDaemon: async (_options: unknown, mode: string) => {
+				assert.strictEqual(mode, '--detach');
+				now = 2000;
+				return ticket;
+			},
+			waitForStartup: async (_options: unknown, handed: typeof ticket) => {
+				assert.deepStrictEqual(handed, ticket);
+				observed++;
+				now = 15000;
+				return { pid: observed === 1 ? ticket.pid : welcome.pid, deadlineNs: 180_000_000_000n };
+			},
+			connectDaemonSocket: async () => now < 15000
+				? { absent: true, reason: 'still opening the store' }
+				: { socket: {} },
+			Connection: class {
+				active = true;
+				async ask(method: string, _params: unknown, remaining: number) {
+					assert.strictEqual(method, 'hello');
+					hellos.push(remaining);
+					return welcome;
+				}
+				close() { this.active = false; closed.push(observed); }
+			},
+		};
+		const { connectOrchestrator } = load<typeof import('../host/framework/connection')>(require.resolve('../host/framework/connection'));
+		const options = { home: 'isolated', program: 'selected', startupObserverProgram: 'bundled', build, log: () => {} };
+		process.hrtime.bigint = () => BigInt(now) * 1_000_000n;
+		try {
+			const link = await connectOrchestrator(options);
+			try {
+				assert.strictEqual(observed, 2, 'the successor needs a fresh native check');
+				assert.deepStrictEqual(hellos, [165000, 165000]);
+				assert.deepStrictEqual(closed, [1], 'the socket opened for the previous candidate is discarded');
+				assert.strictEqual(now, 15000);
+			} finally {
+				link.dispose();
+			}
+		} finally {
+			process.hrtime.bigint = previousNow;
+		}
+	});
+
+	test('reports the failed accepted startup from the native observer', async () => {
+		const ticket = { generation: '0000000000001020', pid: welcome.pid, birth: 'original-daemon' };
+		const modules: Record<string, unknown> = {};
+		const load = withModules(modules);
+		const rpc = load<typeof import('../host/framework/rpc')>(require.resolve('../host/framework/rpc'));
+		const failure = new Error('opening the store: file is not a database');
+		modules['./rpc'] = {
+			...rpc,
+			startDaemon: async () => ticket,
+			waitForStartup: async (_opts: unknown, original: typeof ticket) => {
+				assert.deepStrictEqual(original, ticket);
+				throw failure;
+			},
+			connectDaemonSocket: async () => ({ absent: true, reason: 'recovering' })
+		};
+		const { connectOrchestrator } = load<typeof import('../host/framework/connection')>(require.resolve('../host/framework/connection'));
+		await assert.rejects(connectOrchestrator({
+			home: 'isolated', program: 'selected', startupObserverProgram: 'bundled', build, log: () => {}
+		}), (error: unknown) => error === failure);
+	});
+
+	test('uses the same monotonic deadline for editor hello across wall-clock changes', async () => {
+		const previousWall = Date.now;
+		const previousTick = process.hrtime.bigint;
+		const ticket = { generation: '0000000000001020', pid: welcome.pid, birth: 'candidate' };
+		for (const { delta, elapsed } of [
+			{ delta: 3_600_000, elapsed: 500 },
+			{ delta: -3_600_000, elapsed: 1_500 },
+		]) {
+			const modules: Record<string, unknown> = {};
+			const load = withModules(modules);
+			const rpc = load<typeof import('../host/framework/rpc')>(require.resolve('../host/framework/rpc'));
+			let wall = 10_000_000;
+			let monotonic = 20_000;
+			let observing = false;
+			Date.now = () => wall;
+			process.hrtime.bigint = () => BigInt(monotonic) * 1_000_000n;
+			modules['./rpc'] = {
+				...rpc,
+				startDaemon: async () => ticket,
+				waitForStartup: async () => {
+					observing = true;
+					return { pid: welcome.pid, remainingMs: 1_000, expiresAt: wall + 1_000,
+						deadlineNs: BigInt(monotonic + 1_000) * 1_000_000n };
+				},
+				connectDaemonSocket: async () => observing
+					? { socket: {} }
+					: { absent: true, reason: 'opening the store' },
+				Connection: class {
+					active = true;
+					async ask() {
+						wall += delta;
+						monotonic += elapsed;
+						return welcome;
+					}
+					close() { this.active = false; }
+				},
+			};
+			const { connectOrchestrator } = load<typeof import('../host/framework/connection')>(require.resolve('../host/framework/connection'));
+			try {
+				const connection = connectOrchestrator({
+					home: 'isolated', program: 'selected', startupObserverProgram: 'bundled', build, log: () => {}
+				});
+				if (elapsed < 1_000) {
+					(await connection).dispose();
+				} else {
+					await assert.rejects(connection, /startup deadline elapsed/);
+				}
+			} finally {
+				Date.now = previousWall;
+				process.hrtime.bigint = previousTick;
+			}
+		}
+	});
+
+	test('uses the bundled observer when the installed launcher cannot return a ticket', async () => {
+		const modules: Record<string, unknown> = {};
+		const load = withModules(modules);
+		const rpc = load<typeof import('../host/framework/rpc')>(require.resolve('../host/framework/rpc'));
+		let observed = false;
+		modules['./rpc'] = {
+			...rpc,
+			startDaemon: async () => undefined,
+			waitForStartup: async (_opts: unknown, ticket: unknown) => {
+				assert.strictEqual(ticket, undefined);
+				observed = true;
+				return { pid: welcome.pid, deadlineNs: process.hrtime.bigint() + 75_000_000_000n };
+			},
+			connectDaemonSocket: async () => observed
+				? { socket: {} }
+				: { absent: true, reason: 'waiting for the older daemon' },
+			Connection: class {
+				active = true;
+				async ask() { return welcome; }
+				close() { this.active = false; }
+			}
+		};
+		const { connectOrchestrator } = load<typeof import('../host/framework/connection')>(require.resolve('../host/framework/connection'));
+		const connected = await connectOrchestrator({
+			home: 'isolated', program: 'old-selected', startupObserverProgram: 'bundled', build, log: () => {}
+		});
+		try { assert.ok(observed); } finally { connected.dispose(); }
+	});
 	test('uses the exact daemon socket name', () => {
 		const home = 'D:\\Facade home\\\u4f60\u597d';
 		if (process.platform === 'win32') {

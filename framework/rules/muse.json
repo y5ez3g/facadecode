@@ -9,13 +9,18 @@
 		"mechanism": "frame",
 		"prompt": "❯",
 		"gap": " ",
-		"upper": "^(?:─+|─{2} [^─]+ ─+)$",
+		"upper": "^(?:─+|─{2} [^─]+ ─+|─{2} [^─]+… *)$",
 		"lower": "^─+$",
 		"scrolled": { "position": "rows", "above": "^↑ (\\d+) more lines?$", "below": "^↓ (\\d+) more lines?$" },
+		"scrolls_unmarked": true,
 		"menus": [{ "selected": "^⟩ \\d+ +\\S", "next": "^ {2}\\d+ +\\S" }]
 	},
 	"paste": {
+		"bracketed": true,
+		"backspace_unit": "grapheme",
 		"enter_ms": 250,
+		"submit_clear_ms": 1782,
+		"retry_submit_ms": 1782,
 		"placeholders": [
 			{ "pattern": "^\\[PastedContent(\\d+)chars?\\]$", "count": "chars" },
 			{ "pattern": "^\\[PastedContent(\\d+)chars?\\]$", "count": "chars", "after_first_character": true }
@@ -41,5 +46,5 @@
 		"work": { "args": ["--disable-approval", "--disable-sandbox"] },
 		"startup": { "args": ["--trust-workspace"] }
 	},
-	"console": { "per_char_ms": 1, "records_above_bmp": true }
+	"console": { "per_char_ms": 1, "records_above_bmp": true, "line_break": "shift_enter" }
 }

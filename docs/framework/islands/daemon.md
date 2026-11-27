@@ -11,8 +11,9 @@ public `run()` entry point.
 - `framework/facade.db`, including the record and message counters, run identity, launch options, creation
   source, Guest snapshots, saved SSH arguments and remembered routes. Earlier window and membership
   records stay in the store. The extension owns current workspace membership and Pins.
-- The transactions that commit a start with its prompt, settle a message, and remove an agent with
-  its inbox. A record removal keeps the reason needed to distinguish expiry from explicit removal.
+- The transactions that commit a start with its prompt, record a run's exit with its local creator
+  notice, settle a message, and remove an agent with its inbox. A record removal keeps the reason
+  needed to distinguish expiry from explicit removal.
 - The target and checked reply reference for a send with an internal request ID. The origin
   recovers both after a restart. The recipient looks for the original receipt before it checks
   whether a new message can be sent.
@@ -67,7 +68,12 @@ public `run()` entry point.
 
 - [Daemon operations and topics](../../../framework/protocol/DAEMON.md) use JSON-RPC API v1. Each
   connection negotiates its supported version and gets the operation and topic directory for its
-  client kind. Internal MCP calls use the actor proved by the independent relay connection.
+  client kind. MCP calls use a typed asynchronous dispatch with the same operation registry and
+  the actor proved by the relay connection. The caller's permissions come from the installed run
+  record verified for that call.
+- On Windows, the daemon keeps two Tokio workers for asynchronous work. The blocking pool has
+  up to ten threads and returns idle threads after 150 ms. Its SQLite connection uses a 128 KiB
+  page cache target with WAL and FULL synchronization.
 - A terminal can request takeover by a newer build. The daemon checks the target daemon's
   supported API separately from the version negotiated with the keeper holding its CLIs.
   A compatible takeover hands each PTY back to the new daemon through `agent.sync`.
@@ -154,14 +160,14 @@ the live route. [Start transaction](../../../framework/crates/daemon/src/store/m
 
 ### Opening and upgrading a store
 
-The current database schema is `user_version = 6`. SQLite reserves this number for the application.
+The current database schema is `user_version = 7`. SQLite reserves this number for the application.
 The daemon and Keeper negotiate their API versions independently.
 
 Fresh stores initialize in their own transaction. The open path first refuses a nonempty development
 schema missing `saved_connections` before normal WAL setup. It disables checkpoint-on-close for that
 connection to preserve the existing database and WAL.
 
-Versions below 6 enter one migration transaction. For a version below 3, the daemon first snapshots known
+Versions below 7 enter one migration transaction. For a version below 3, the daemon first snapshots known
 machine names, adds normalized SSH arguments and last-seen timestamps, and creates the remembered-route and
 send-route tables and private receipt field. It adds Guest YOLO at version 0. Below 2 it adds the message
 withdrawal field and replaces the request index. Then it adds the agent start, launch, authentication and
@@ -169,10 +175,16 @@ removal fields. For agents missing launch choices it snapshots configured model 
 with empty original arguments.
 
 Below 4 it adds nullable `agents.launch_command`. Below 5 it adds `messages.command_line_reply` with
-default false. Below 6 it adds `messages.notify_failure` with default false. Both additions preserve existing
-messages, numbers and receipt keys. The migration writes `user_version` in the same transaction. A failed
-migration rolls back and open fails. Version 6 or higher proceeds to normal reads. A newer layout may reach
-the ordinary writers if those reads succeed.
+default false. Below 6 it adds `messages.notify_failure` with default false. Below 7 it adds nullable
+`agents.creator_stop`, `messages.paste_header` and `messages.paste_draft`. The daemon uses
+`creator_stop` to keep an older Keeper's positive acknowledgement for the installed process ID and
+birth. A supporting Keeper saves its own acceptance in the run folder. When recovery adopts an
+uncommitted resume, it saves the Keeper's process ID and birth together so a later recovery can
+match that run's stop receipt. Relay credentials continue to require their own evidence.
+Version 6 reads and writes its known columns and can reopen a stopped version 7 home. It uses
+version 6 notice behavior.
+The migration writes `user_version` in the same transaction. A failed migration rolls back and open fails.
+Version 7 or higher proceeds to normal reads. A newer layout may reach the ordinary writers if those reads succeed.
 Recovery keeps unreadable agent rows and reserves their IDs. Keep a consistent backup of the whole stopped home
 and its workspace state before a format change. Opening a migrated store with older code has no general rollback
 guarantee. Use the backup if the change's approved rollback procedure requires it.
@@ -221,10 +233,12 @@ old messages and receipts, and prunes the daemon log.
 
 A managed agent with an agent creator earns one notice after the serving daemon observes a continuous
 30-second wait for permission, an answer or login, or a continuous 30-second error. A replacement daemon
-starts a fresh observation interval. A natural exit, a crash or a stop
-from another caller earns a notice at once. The creator must still be live. Recovery allows the next
-incident to earn a notice. An initial message failure and its startup trouble share one receipt.
-A Guest receives its notices through `read_messages`.
+starts a fresh observation interval. A natural exit, a crash or a stop from another caller earns a notice
+for the live creator. The exit and the local inbox notice commit together. A failed first prompt that
+reports the exit writes the same exit with its reserved result. When recovery first discovers an exit,
+it settles any first prompt and uses the same exit transaction. Recovery uses the Keeper's receipt
+for that process or an older Keeper's saved acknowledgement to attribute a stop to the creator. An
+exit without that evidence earns the usual notice. A Guest receives its notices through `read_messages`.
 
 ### agent
 
@@ -233,9 +247,62 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
 - **Owns:** one actor per agent the daemon started (a guest has a handle with no actor). The actor holds the terminal (a `PtyIo`), the input waiting for it, the screen and its screen log, the state, the typist, the viewers and the start of each run. The agent's record (`AgentInfo`) is shared with its handles under a leaf lock; only the actor changes it while it runs. `framework/screens/<id>/`: one folder per agent, deleted through `Screens`.
 - **Keeps:**
   - Input and exits reach only the run they name. Each run has a number, starting at `FIRST_RUN`; `WriteInput`, `ProcessExited` and `StartPrompt` for any other run are refused as ended or dropped. An exit of a run whose terminal is not installed yet waits until it is.
-  - Automatic input never interleaves (RULES 1.10): messages wait behind the start prompt; while the start readies the tools, calls wait, and so do keys once the tool startup owns the input ([readiness](#readiness)), and are then released in the order they came; the person's Enter waits, with the keys after it, until the input can be read.
+  - Automatic input never interleaves (RULES 1.10). Messages wait behind the start prompt and
+    tool startup. Calls wait while the startup watches for a usable input box. Keys also wait
+    once the startup owns the input ([readiness](#readiness)). Held keys and calls go on in the
+    order they came, after prior startup strokes, ordered sequences and the person's Enter.
+    Enter can hold later input until the terminal shows where it went.
   - An ordered input sequence enters the typist once. Earlier accepted input runs first. Later calls and raw Attach input wait until the sequence's last write.
+  - The person's keys wait for a message from its paste until a complete reading shows the paste has
+    left, and while it is erased. A menu or question of the CLI's own takes the keys immediately.
+    Before the submission key reaches the terminal, the hold budget is the time to read the paste,
+    the settle time and `SLOWEST_DRAW`. Once the submission key reaches the terminal, a hold still
+    in effect lasts up to the CLI's `submit_clear_ms`. A rule without this value uses `SLOWEST_DRAW`.
+    Held keys go on as far apart as they came, for at most `ESCAPE_DELAY`. Mouse events, focus
+    changes, key releases and standalone modifiers do not wait for a message.
+  - A current-run `Blocked` report or a completed interaction frame releases the delivery hold
+    on the person's keys and suspends automatic paste, submission, retry and erasure. An active
+    report must be withdrawn before a completed ordinary input frame can reopen delivery. The
+    frame shows an empty box or the same owned draft. The actor observes reports and frames in
+    output order, even when one read contains several of them.
+  - A message's paste, probe, submission key and erasing wait for the person's queued keys, the rest of a paste or escape sequence they started, and what the input has yet to show of their keys in order. Text leaves a draft. Enter or another key that can clear it leaves an empty input. A slow CLI that still shows an earlier line has yet to show the next one. What never shows is waited for until neither a key went in nor the input changed for `SLOWEST_DRAW`.
+  - A person's Enter can prove delivery from two frames in output order. After the paste is issued,
+    a complete frame shows the whole message. A complete frame on the Enter's side of the output
+    then writes or erases cells on the input cursor's row and reads empty. Buffered frames can prove
+    this sequence after reads resume. An interaction frame discards a pending draft as evidence.
+    A new complete draft can start another sequence before the delivery deadline. Missing evidence
+    at that deadline leaves delivery unconfirmed.
+    Base samples the readable prefix on issue of the paste, Enter and first following edit.
+    Terminal splits its reads at those positions. The actor applies all output. Screen carries a
+    pending character, sequence or synchronized frame across the Enter boundary. The write receipt
+    accounts for the key even when its frames arrived before it. The first following edit ends the
+    interval that can confirm the Enter. Frames already in that prefix still count, including an
+    empty frame waiting to be read. Issued Enters retain their output boundaries in input order
+    as later Enters wait or go on. An incomplete control sequence has a provisional boundary
+    until it is classified. A completed terminal report removes that boundary, and any editing
+    key that follows it has its own byte position. An unclassified escape sequence in the input box
+    defers probes, automatic submission and cleanup. The actor preserves the sequence's original
+    input context through later frames, including menus. An active probe keeps arriving keys and
+    calls in their original order until it settles. The actor then gives the released keys to
+    Person for classification. A confirmed editing key disowns the paste. A completed terminal
+    report lifts the provisional restriction. A sequence still incomplete at the input wait
+    bound counts as an edit. A subsequent empty input allows new delivery. Messages waiting
+    during classification still reach their original deadlines.
+    An already visible interaction takes the Escape itself. The actor offers confirmed frames
+    to the typist before retiring their Enter. Later keys wait within the paste's hold limit.
+    A native wait also interrupts an unfinished proof. A complete frame after withdrawal must show
+    the original draft again. A report that began after the most recent edit's write boundary, or a
+    complete menu frame whose anchor was printed after that boundary, can establish where that
+    edit went. A subsequent Enter can start another proof for the same delivery.
   - Every screen change goes into the screen log before the screen takes it.
+  - Input and state readings can reuse screen-view row allocations. The daemon keeps up to four
+    reusable views, each with up to 160 KiB of storage. It refreshes a borrowed view before a read
+    and drops its cell contents before returning the storage.
+  - The actor releases an ended run's terminal engine and closes its screen log after output has
+    drained and the last viewer has left. Released screens share a read-only blank screen until
+    a caller needs their saved content.
+    When the last managed run settles, the daemon releases its unused view storage and SQLite
+    pager memory.
   - A question taller than the screen, such as Kiro's trust-all-tools warning, pushes its top into
     the scrollback, where the CLI's redraw after the answer cannot reach. When the person or Facade
     answers a question of the CLI's own before anything was said in a new session, the actor erases
@@ -265,8 +332,14 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     A dedicated Shell viewer signals the watched run's terminal exit independently of queued screen changes.
     Inspect includes the authenticated client kind and source machine of shell and editor viewers.
   - A CLI waiting for the person or reporting an error is published at once; other changes of the record within 200 ms go out together.
-  - At most `MAX_INPUT_BYTES` (1 MiB) of input waits; more is refused with the input given back.
-  - Quiet replies only once no read is under way and what the last reads brought went through the screen log; `LetGoBeforeStop` lets go of the signal pipe and nothing else.
+  - At most `MAX_INPUT_BYTES` (1 MiB) of input waits, counted as the CLI's terminal takes it.
+    The first prompt reserves room for its rendered text before the agent is listed. Later
+    messages use the remaining room. The actor gives back input that must wait for room and
+    refuses input that is too large to fit on its own.
+  - Quiet replies once issued input has drained and the last reads have gone through the screen
+    log. At clean takeover, a first paste still awaiting issue releases its durable reservation.
+    Recovery can offer that message again under its original deadline. `LetGoBeforeStop` releases
+    the signal pipe.
 - **Never does:** touch the database; know other agents; decide when a run starts or ends; type into a terminal that is not Facade's.
 - **Interface:**
   - `spawn(ActorStart, rx, tx, changes) -> anyhow::Result<AgentHandle>`. `ActorStart` carries the
@@ -297,10 +370,25 @@ Only the actor publishes the record.
 
 The terminal, as a `PtyIo`, and the input waiting for it.
 
-- **Owns:** the `PtyIo` (none between runs or once the terminal closed), the input queue, the last output read, whether the CLI's side closed, the bytes written so far and when.
-- **Keeps:** Input is written in order, at most 64 KiB at a time; a read takes at most 64 KiB. The count of bytes written never resets, across runs too: the typist finds its own bytes by it. Letting go of the terminal drops the queued input. `ready` can be cancelled safely. A write under way is given the same head of the queue until it returns; clearing the queue keeps those bytes. `stop_reading` leaves no read under way.
+- **Owns:** the `PtyIo` (none between runs or once the run's output ended), the input queue, the last output read, the bytes written so far and when.
+- **Keeps:** Input is written in order, at most 64 KiB at a time; a read takes at most 64 KiB. The count of bytes written never resets, across runs too: the typist finds its own bytes by it. Letting go of the terminal, as a read that finds the end of its output does, drops the queued input and the last output. `ready` can be cancelled safely. A write under way is given the same head of the queue until it returns; clearing the queue keeps those bytes. `stop_reading` leaves no read under way.
+- An automatic intent can reach the system after earlier accepted input drains. Before the first
+  write attempt, the terminal advances through the ready output prefix and returns it to the actor
+  for revalidation. The actor owns the unissued intent and its original deadline. `DeliveryIssued`
+  registers the system's delivery range. `ToolWriteIssued` gives the actual offset of a startup
+  stroke at system handoff, and `ToolWriteExpired` identifies an unissued stroke that reached
+  its deadline. `Wrote` confirms
+  pending writes. Framed input keeps its ordered suffix. Independent
+  erase keys beyond the range accepted by the system return to the typist for admission again.
 - **Never does:** parse output, decide what input may wait, or select a submission key.
-- **Interface:** `new(Option<PtyMaster>)`, `install(PtyMaster)`, `detach()`, `stop_reading() -> Option<usize>` (async), `let_go_before_stop()`; `ready(TerminalWait) -> TerminalEvent` (`Read`, `Closed`, `Wrote`, `WriteFailed`), `read_now() -> Option<usize>`, `output() -> &[u8]`; `push(&[u8])`, `clear()`, `queued()`, `written()`, `written_at()`; `is_open()`, `is_closed()`, `set_size(cols, rows)`.
+- **Interface**
+  - Lifecycle — `new(Option<PtyMaster>)`, `install(PtyMaster)`, `detach()`,
+    `stop_reading()` (async), `let_go_before_stop()`, `is_open()`, `is_closed()`
+    and `set_size(cols, rows)`.
+  - `ready` and `ready_with_input` return `Read`, `Closed`, `Wrote`, `DeliveryIssued`,
+    `ToolWriteIssued`, `ToolWriteExpired`, `ReadFailed` or `WriteFailed`, or request a probe check.
+    Read the last output with `read_now() -> Option<usize>` and `output() -> &[u8]`.
+    Input methods are `push(&[u8])`, `clear()`, `queued()`, `written()` and `written_at()`.
 
 #### screen
 
@@ -328,8 +416,13 @@ The terminal, as a `PtyIo`, and the input waiting for it.
   - Under `background_report`, a `working` report with matching words becomes idle evidence.
   - Under `background_correction`, a `working` report is narrowed to idle evidence while the screen
     matches the rule's idle anchors. The rule applies regardless of the CLI's installed version.
-  - Under `answers_ask`, a reported question reads as done while the CLI's input, empty or with a draft, is on
-    the screen.
+  - Under `answers_ask`, a reported question becomes done when a complete frame prints the
+    ordinary composer's borders, prompt and visible text after the report and input boundary.
+    The actor supplies reports and frames in output order. State keeps the completed report as
+    done across handover. For an `answers_ask` run with native reports, recovery uses the same
+    whole-composer evidence before delivery. The actor puts replayed paint and any open frame on
+    the earlier side of the boundary before consuming live output. A question still awaiting
+    composer evidence after recovery requests one redraw. Permission reports keep their own wait.
   - A start and the tools' connection get 30 seconds each. Time the CLI spends asking a question does not count.
   - For a CLI that defers its tool catalog, a live authenticated initializer keeps the tools `Connecting`
     without adding a startup overlay or tools timeout. Native startup keeps its own deadline. The initial
@@ -337,7 +430,7 @@ The terminal, as a `PtyIo`, and the input waiting for it.
     native startup deadline if it fails. The typist still checks whether it can write the prompt safely.
   - Only `keep` writes the state file, through a private temporary file and a rename. What the screen shows is read again, never kept.
 - **Never does:** touch the terminal; change the agent's record; publish.
-- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(kind: Option<WaitKind>, now)`, `shows_input(shown)`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connections(connections: ToolsConnections)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
+- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take_event(event, sync_open)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(kind: Option<WaitKind>, now)`, `observe_question_composer(redrawn)`, `native_wait()`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connections(connections: ToolsConnections)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
 
 #### glyph
 
@@ -360,32 +453,124 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
 
 `Typist`: types calls and messages into the input box, one at a time, and settles each message.
 
-- **Owns:** the calls and messages waiting, the paste under way, where its bytes are in the terminal, its pauses, and what it submitted; the probe under way, and what this run's probes found of each row they tried (`probed`).
-- The actor allows unstyled hint probes for automatic delivery to a freshly launched input. Up, Down and a
-  final Enter sent directly to a recognized native menu before the input box appears keep the probe available.
-  Other external input, starting with a session, recovery, resume and an unconfirmed paste leave plain writing
-  on the normal draft path. External input that arrives during an unstyled hint probe waits for its Space and
-  Backspace to finish.
+- **Owns.** The calls and messages waiting, the paste in the input until the input holds none of it,
+  where its bytes are in the terminal, its pauses, and what it submitted. It also owns the probe
+  under way and the findings for the rows probed in this run (`probed`).
+- The actor allows unstyled hint probes for automatic delivery to a freshly launched input. Up,
+  Down and a final Enter sent through Attach or a named key call to a recognized startup menu before
+  the input box appears keep the probe available. A complete ordinary box drawn over that menu
+  lets the first probe run. Terminal reports, including reports received in pieces, preserve this
+  eligibility. Other keys, starting with a session, recovery, resume and an unconfirmed paste
+  leave plain writing on the normal draft path.
 - **Keeps:**
   - Each call goes in whole and in order; a pause counts from when its bytes reached the terminal.
   - `DeliveryHandle::begin_paste` records the paste before the typist writes the complete message in one paste.
-  - The submission key goes once the input box shows this paste alone and stays still for the CLI's settle time.
+    Automatic delivery takes its paste brackets from the CLI rule, including after a daemon restart.
+    A direct text call follows the screen's bracketed paste mode.
+  - The actor holds a revocable intent for each automatic paste, Kiro's expansion Tab, submission
+    and erase. A native wait or complete interaction frame pauses those writes and releases the
+    delivery hold on human keys. A later ordinary composer frame reopens the input after the native
+    wait clears.
+    Under `answers_ask`, a fresh complete ordinary frame can settle the native question itself.
+    The terminal reads the finite prefix of output already available before it tries an automatic
+    write. The actor uses those bytes to check the intent again.
+    The typist changes the delivery phase only when the system takes the first write.
+  - An ordinary message paste carries one trailing ASCII space when the message ends in a non-whitespace
+    character. The stored message and initial prompt use their original text.
+  - The submission key goes over a complete reading of the draft once it has shown for the CLI's settle
+    time. A live paste into a verified empty input owns what appears while the typist is its only writer.
+    Console input needs the visible draft painted after the first paste write, with a logical
+    ending or a paste marker. The typist takes that evidence from Rules, including the written
+    tail when a changed last glyph needs a following space or line break. Recovery matches
+    the text or paste placeholder. An external edit ends automatic submission and cleanup authority.
+    A person's Enter can still prove that they submitted the whole message. Unread frames keep
+    settle time running. A readable change restarts the wait.
     Codex queues an ordinary message with Tab while Working. The start prompt and recovered pastes use Enter.
-  - For Kiro's collapsed paste, the typist can press Tab once after writing its fresh bracketed paste, with the same person-input generation and the native disclosure visible. The CLI must draw after each write and earlier person input must be settled. The typist applies the normal whitespace comparison to the full revealed draft before Enter. An unconfirmed reveal leaves the draft to the person. Recovered collapsed pastes retain the existing refusal.
-  - A message is delivered once its submission key reaches the terminal. When the deadline expires before
-    submission, the typist can withdraw the message after the screen confirms it cleared its own draft.
+  - For Kiro's collapsed paste, the typist can press Tab once after writing its fresh bracketed
+    paste, with the same person-input generation and the native disclosure visible. The CLI must
+    draw after each write and earlier person input must be settled. The typist applies the normal
+    whitespace comparison to the full revealed draft before Enter. An unconfirmed reveal leaves
+    the draft to the person. Recovered collapsed pastes retain the existing refusal.
+  - What the typist put into the input box is its own from the paste through submission or cleanup.
+    No other paste or probe begins meanwhile. After the submission key goes in, the typist keeps
+    that ownership until a complete frame reads as an empty input. A menu, question, unread frame
+    or cropped draft keeps the paste under the typist's care.
+    Cleanup keeps the last paste number it observed through a menu or an ambiguous row.
+  - Automatic Enter, Tab and erase keys use the terminal's output boundary at write issue. A complete
+    empty frame after the submission boundary and before any external editing key can confirm
+    delivery. Before settling, the actor drains the finite PTY prefix sampled when the empty frame
+    is considered. A disconnected peer is read through EOF, with write boundaries retained until
+    the receipt has been settled. A read error stops input and the pending receipt fails. The actor
+    waits through an unfinished update. A redraw of this draft or its same-numbered paste marker
+    invalidates the pending empty frame. A person's Enter applies the same finite-prefix check to
+    the whole-message evidence described under the actor. Evidence established before an edit
+    remains available.
+  - Repeating the submission key requires the current draft to have been drawn after that key's
+    write boundary and still belong to the typist. The CLI rule can allow up to three submission keys
+    at its retry interval. A fully readable changed draft with an established erase range can be
+    erased once and pasted again after a complete frame drawn empty after the erase write boundary.
+    Both actions use the original deadline and hold limit.
+  - A native Question report that begins after the paste or submission key reached the terminal,
+    or a complete question or menu frame after that write, records `interaction_after_write`
+    when it precedes proof of delivery. The receipt says the paste or key may have answered the
+    CLI's question and tells the sender to check the terminal.
+  - After its deadline the typist can erase only a draft whose ownership and erase range it can
+    establish. It follows the erase until a complete reading shows that the paste left the input.
+    Short writes leave their unsent keys under the same gate. A key that may edit the draft
+    suspends the tail until a report or fully redrawn menu accounts for it. After withdrawal, a
+    fresh composer frame must show the owned remainder before the tail can pass the gate.
+    Before passing a possible edit, the actor revokes persisted recovery evidence. When the
+    CLI is waiting, the live cleanup stays available for revalidation by later output.
+    A deadline in an unread frame can wait for a complete frame within the existing grace.
+    A receipt is given
+    once, by two `RESPONSE_GRACE` after the deadline, and says what is known then; erasing later changes none.
   - The start prompt is pasted alone; a paste an earlier daemon began is never typed again.
-  - The wait before submission counts the paste rate from `PASTE_BYTES_PER_MS`. With console typing, characters above U+FFFF go as key-down records and the wait adds `per_char` for each UTF-16 code unit.
-  - When the first row may be a hint or a draft, `probe` types a Space where input starts. After each key reaches
-    the terminal it reads the row every 100 ms for up to two seconds. Two equal readings settle the row. If the
-    screen still shows the frame from before Space or the space that Backspace is clearing, the probe keeps
-    waiting for that key's echo within its deadline. It presses Backspace only once the input shows that Space
-    went in, no menu or question shows and the person has typed nothing since the probe began. It checks that
-    Backspace restored the input.
-    Nothing else is typed during the probe, and a failed check ends it without further keys. The typist keeps
-    the finding for that row until the CLI's next run.
+  - With console typing, characters above U+FFFF go as key-down records, a text's line breaks as presses of the rule's line break key, a key-down and a key-up record each, where it names one, and the wait before a call's Enter adds `per_char` for each UTF-16 code unit.
+  - An input whose row may be a hint or a draft (it reads unsure) is probed once a run by its child
+    `probe`. The probe types a Space where the input starts. Space and Backspace pass the same
+    output check at system handoff. The actor reads the available prefix, compares the current
+    complete ordinary box with the probe's input, and checks for native waits. A complete ordinary
+    input drawn after withdrawal of a native wait can authorize a probe while delivery still needs
+    a proved empty box. A frame already open at withdrawal cannot supply that probe's evidence.
+    A confirmed hint provides the empty reading.
+  - From the write receipt for Space or Backspace, the probe checks the row every 100 ms and waits
+    up to two seconds for that key's redraw. Two matching complete readings can establish whether
+    the original row was a hint or a draft. The probe settles when the input is restored or the
+    key's echo budget expires, releasing the person's queued input. Backspace requires evidence of
+    the space while the probe is active.
+  - An open synchronized update cannot authorize a write. A resize clears pending approval so an
+    unissued key uses the new box. An unissued Space that loses its box is withdrawn, and the row
+    can still be probed when the ordinary box returns. Backspace needs a complete frame drawn after
+    Space that shows its original position and the space, with no question, menu or intervening
+    external edit. The probe checks that Backspace restored the input before offering delivery.
+    An unread draw or menu supplies no authority to erase. New output sends an unissued erase
+    back to the actor for a fresh reading of the available prefix. The row's verdict stays with
+    this run.
 - **Never does:** write the terminal (it hands its bytes to the actor); read the screen except through the reading the actor gives it; take the person's keys; touch the database.
-- **Interface:** the daemon builds `Typing::text(text, enter, sender)`, `Typing::keys(names)` and `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses `new(agent, rule, console_typing, DeliveryHandle)`, `push`, `deliver`, `deliver_first`, `finish_paste`, `fail_ended`, `fail_all(written, why)`, `hold_pastes()`, and `step(now, written, queued, modes, typed, read, read_screen) -> Step { write, wake }`, where `typed` counts the person's writes and `read_screen` reads the input as the screen shows it; for probes, `recall(reading)` (a row a probe found a hint reads as an empty input, a draft as a draft), `want_probe()` (the start waits on an unsure input) and `clear_probes()` (a new run starts); it reads `take_submitted()`, `take_entered()`, `held_bytes()`, `paste_rule()`, `busy()`, `pasting()`, `types_calls()`, `reads_input()`, `probing()`. Through `DeliveryHandle` it asks `still_to_type(number)`, records `begin_paste(numbers)` and `settle(numbers, outcome)`.
+- **Interface.** The daemon builds `Typing::text(text, enter, sender)`, `Typing::keys(names)` and
+  `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses
+  `new(agent, rule, console_typing, DeliveryHandle)`, `push`, `deliver`, `deliver_first`, `finish_paste`,
+  `fail_prompt(prompt, reason)`, `fail_all(written, why)`, `hold_pastes()`, and
+  `step(now, written, queued, modes, writes, observe) -> Step { write, wake, delivery, tool_start_deadline }`.
+  The startup deadline accompanies the stroke that the actor will offer to the terminal.
+  `tool_write_issued(offset)` establishes the stroke's receipt position at handoff. A terminal
+  query reply can use the queue while the stroke awaits handoff. `note_tool_write(written, written_at)`
+  uses Terminal's byte progress to return the write time once for that stroke. The actor gives
+  Readiness this time before the typist advances to another receipt. `withdraw_tool_writes` drops
+  startup calls still waiting in the typist and the receipt for a revoked actor intent.
+  The `writes` argument (`BoxWrites`) tells the typist whether it may write into the input box on
+  its own. The `observe`
+  callback gives the current reading, the current native wait and complete-frame requirements
+  in `InputObservation`. It also gives the draft proved submitted by the person's Enter in
+  output order. Evidence can come from earlier frames in the same read. A pending observation
+  after an interaction can retain the original delivery deadline. The actor calls
+  `input_edited()` where the person's keys may change the input. For probes, `recall(reading)`
+  uses a prior probe's result, `want_probe()`
+  requests a probe and `clear_probes()` starts a run with fresh probe evidence. The actor reads
+  `take_submitted()`, `take_entered()`, `held_bytes()`, `console()`, `paste_rule()`, `busy()`,
+  `pasting()`, `occupies_input()`, `paste_hold_until()`, `types_calls()`, `reads_input()` and
+  `probing()`. Through `DeliveryHandle` it asks `still_to_type(number)`, records
+  `begin_paste(numbers)` and settles a delivery with `settle(numbers, outcome)`.
 
 #### viewers
 
@@ -405,43 +590,87 @@ question stays available for the person.
 
 The tool startup has two parts, the same for every rule with `ReadyTools`.
 
-- **Before it owns the input** it only waits for the input box. The person's first raw key ends it for
-  that run. The tools then count as not started, and what was held is released before the key is
-  taken. The startup types nothing afterwards. The next run tries again. While the CLI shows a
-  recognized question, keys and calls are let through and the startup goes on after it. Otherwise calls and
-  messages wait and do not end it. Focus reports are not keys. Any other raw input
-  counts as one, such as the Up or Down a terminal app makes of its wheel. So an early key can skip a CLI's automatic tool
-  startup. The tools still read available once their relay connects.
-- **Once it types**, keys and calls wait until it is done. It pastes its text only into an empty input
-  of a CLI at rest, and presses Enter only once that text shows alone. After 2 seconds without that
-  it takes its text back with one Backspace per character. The panel has 10 seconds. It is closed if
-  it shows ready or open. Then what was held is released.
-
-Keys go into the terminal's queue and calls to the typist, so a released call can reach the CLI after a later key.
+- **Before it owns the input** it watches for the composer. Person classifies complete keys,
+  focus and mouse reports, key releases and standalone modifiers, and holds incomplete sequences
+  for classification. Up or Down from a terminal app's mouse wheel arrives as a key. The actor
+  yields passive startup to the first complete key when no recognized question owns the input.
+  Calls and messages wait while startup watches the composer. A recognized question takes keys
+  and calls, and startup can go on after it. The actor releases held input in its accepted order.
+  The tools count as not started after the person takes over, and become available once the
+  relay connects. The next run tries startup again.
+- **Once it owns the input** the actor holds keys and calls through the startup strokes. The
+  startup pastes its command into the complete, empty input of a CLI at rest. When the startup
+  finishes or yields, the actor releases held input in its accepted order.
 
 - **Owns:** the rule's `ReadyTools` and `TrustQuestion`, how far each has got, and when each wait ends.
-- **Keeps:** A bounded startup wait stays within the start's 30 seconds. Enter goes once the rule's text shows alone in the input box. Each key of the trust answer waits for the screen to be still for 1 second. The trusting answer goes once per run while it is selected.
+- **Keeps:** The startup deadline for a usable box also bounds the command echo and panel phases. The command must show alone in a complete input frame before Enter. The open panel must show the tools ready in a complete frame before Escape. The actor validates the current complete composer for the command and Enter, and the open ready panel for Escape. It reads the available terminal output before attempting each stroke. A question releases the person and withdraws unissued startup strokes. The same deadline fences each handoff. At the deadline the typist and actor withdraw unissued startup strokes, and the start reports any possible remaining command and that the first turn may lack the tools. An issued close key's interval starts at the write time recorded by Terminal. The actor waits for confirmation and releases the person's input as soon as that interval has elapsed. Each key of the trust answer waits for the screen to be still for 1 second. The trusting answer goes once per run while it is selected.
 - **Never does:** type (it hands each `Press` to the actor, which gives it to the typist); read the terminal; hold input; change the state.
-- **Interface:** `new(rule, id)`, `begin(started, tools, allow_auto_trust) -> Option<Instant>`, `end()`, `step(now, &StartView, press) -> StartStep { wake, release_held, tools_not_started }`, `holds_input(InputState)`, `waiting_for_input()`, `yield_to_input(InputState)`,
-  `readies_tools()`, `is_under_way()`.
+- **Interface:** `new(rule, id)`, `begin(started, tools, allow_auto_trust) -> Option<Instant>`, `end()`,
+  `step(now, &StartView, press) -> StartStep`, `tool_write_matches(screen, input, draft, composer_allowed)`,
+  `tool_write_issued()`, `tool_write_arrived(written_at)`, `holds_input(InputState)`,
+  `waiting_for_input()`, `yield_to_input(InputState)`, `readies_tools()` and `is_under_way()`.
+  The actor gives the composer to the person's complete key using Person's classification.
 
 ### messages
 
 Post assigns a message number in the SQLite transaction that keeps it. The receiving machine owns
-delivery state. A managed terminal confirms delivery when the submission key reaches it. A Guest confirms
-delivery by taking the message from its inbox. Both use the same deadline.
+delivery state. A managed terminal confirms delivery when the CLI takes the message out of the
+input after submission. A Guest confirms delivery by taking the message from its inbox.
+Both use the same deadline.
 
 A managed terminal sees `📨 Message mN from <sender>` above the body. Replies append
 ` · in reply to mN`, with a machine selector when the original message is remote. A command-line
 sender has a `#c` address only while waiting for a reply. A notice begins with `🔔` followed by its
 text. Its record number is available in the inbox.
 
-When a daemon recovers an already begun paste, it checks the draft against the message formats
-before and after the header change. An older Claude draft may show part of the header before its
-paste placeholder. Recovery recognizes that visible prefix with the matching placeholder. It keeps
-the original deadline and submits the existing draft once. If both formats
-still match at the deadline and their lengths differ, recovery leaves the text in the input and
-reports unconfirmed submission.
+At paste start, the daemon records the header version alongside the paste number. Version 1 puts the
+message number before the sender and omits the number on notices. Recovery uses the stored format
+to compare the rendered draft with the paste. Older or revoked observations provide no authority
+to press a key. A Claude draft from an older run can show a typed header prefix before its
+paste placeholder. The recovery reader recognizes the prefix and matching placeholder as one
+draft for comparison with the saved proof.
+
+Recovery requires a matching digest of the full draft the original typist saw after writing it.
+The digest includes the logical text in Unicode NFC, the placeholder number where shown, and
+the caret's byte offset in that text. Reads also recognize existing v7 raw-byte proofs. Moving or
+rewrapping the box preserves the proof. Final horizontal padding maps to a single caret position
+at the end of the text. The typist counts cleanup keys from the original paste using the editor's
+deletion unit from Rules. A matching draft may be submitted within its original deadline or
+cleared afterward if the cleanup count is known. The actor revokes the observation before
+allowing other input to write.
+
+The local `paste_draft` blob keeps its 32-byte digest and appends five bytes when cleanup begins,
+including when the confirmed Backspace count is zero. Before a PTY write that could contain
+cleanup keys, the actor commits a marker for the outstanding write. A checked offer releases its
+marker if the final check defers the write or the offer is canceled before system issue. The
+terminal's returned byte count advances the confirmed count. After a confirmed partial write,
+the remaining Backspaces require a complete repaint of the current draft after the write
+boundary. The typist checks the saved digest and the exact literal prefix and caret left by the
+confirmed keys.
+Canonical spellings of a combining character match at the same logical caret. Without a
+recorded deletion unit, the typist issues at most one Backspace per grapheme before reading
+again. Each additional batch needs the confirmed write progress and a complete repaint
+showing the exact remaining prefix at its end. Reading the cleared box ends cleanup.
+A recovered plan with zero confirmed writes also needs a current complete input frame. The actor
+drains available terminal output within its existing bounds before checking the box. An outstanding
+write or an unreadable box leaves the cleanup intent waiting for more evidence.
+At takeover, a live drain that shows a freshly painted empty input can also finish cleanup.
+When a saved cleanup needs a redraw, the actor temporarily changes the row count. This lets a
+bottom-aligned input move so a terminal that emits only changed cells can send the current box.
+First the actor reads the output already available. A read stopped by its bound or by a full
+log leaves the resize and paint tracking to a later step, so a frame drawn earlier cannot
+authorize cleanup. The actor then saves the size it requests for that paste, sends the resize,
+and tracks fresh paint. Another daemon recovering the same paste chooses a different size.
+The changed size stays in effect until the first cleanup write goes out, recovery of the draft
+ends, or the requested terminal size changes. An edit that revokes cleanup restores the requested
+size before the actor releases the person's keys. A complete painted frame and the saved draft
+proof authorize cleanup in either case.
+
+The delivery receipt settles on its original deadline and graces. An unresolved cleanup stays
+in the v7 field across receipt settlement, inbox history expiry, and daemon takeover. A complete
+reading that shows the paste has left the input, an edit from another writer, or the end of the
+run retires its cleanup. Recovery resumes the cleanup of a settled message without reopening its
+receipt or repasting the message.
 
 An explicit inbox-only send returns after storage commits, and delivery continues on its background deadline.
 For a send from an authenticated agent, the original admission stores `notify_failure` with the sender and
@@ -459,9 +688,12 @@ request. If the source is a peer, confirmation goes back along an authenticated 
 the private reply receipt. The persisted original remains identifiable after the waiter ends.
 
 - Post serializes the first terminal paste, inbox settlement and withdrawal under its delivery
-  lock. A read takes only pending messages whose paste has yet to begin. An explicit history page
-  can also include previously delivered messages. The selector and optional reply filter run
-  before applying the limit. The client projects complete messages and returns the prefix Post
+  lock. A read takes pending messages whose paste has yet to begin and Facade notices proved
+  unsubmitted. That proof can be a known unissued submission key or a confirmed erase of the
+  original draft. The daemon records a completed erase and makes the notice readable in the same
+  transaction, including when the automatic delivery receipt already settled. An explicit history
+  page can also include delivered messages and unconfirmed notices. The selector and optional
+  reply filter run before applying the limit. The client projects complete messages and returns the prefix Post
   must settle. Post commits that prefix and the results it owes together.
 - A send without a reply reference can overlap a Guest waiting for a specific reply. When the
   deadline withdraws that send, its receipt can carry the reference. The sending machine checks
@@ -473,6 +705,8 @@ the private reply receipt. The persisted original remains identifiable after the
   The recipient retains the original receipt, including withdrawals and settlements from removed
   inboxes, for one hour. The origin retains the stable target for that hour plus the delivery
   budget, so the earlier binding covers a receipt dated at the destination.
+  A local MCP send commits its route and message number in the same transaction. Cross-machine
+  sends keep their route before forwarding.
   A private receipt is available to retry lookup. Inbox and history queries only see visible mail.
 - `MessageTable` gives Post the stored records and the settlement transaction. The actor submits
   paste and delivery facts through `DeliveryHandle`, and relays read through `Messages::read_inbox`.
@@ -497,7 +731,7 @@ runs, each run's terminal and exit, its files and plugin, and the session its CL
     where the daemon commits the session first and replies on `committed: oneshot::Sender<bool>`.
   - Exits to the actor: `ExitSink = Arc<dyn Fn(RunExit) + Send + Sync>`, given per run;
     `RunExit { run, exit, stopped }`.
-  - Startup: `find_keeper_at_startup() -> FoundKeeper` (`Absent` or `Connected { build, held }`),
+  - Startup: `find_keeper_at_startup(startup) -> FoundKeeper` (`Absent` or `Connected { build, held }`),
     then `serve_keeper()`.
   - Start and resume, in this order: `reserve_start() -> StartReservation`,
     `reservation.wait_for_keeper()` and `prepare_managed(RunRequest, address, context)`.
@@ -510,7 +744,7 @@ runs, each run's terminal and exit, its files and plugin, and the session its CL
     `prepared.let_go_of_plugin()`.
   - Stop and end: `stop(id) -> Result<bool, ErrorBody>` (true: it was running and the keeper was
     asked); `record_exit(id, exit) -> ExitRecorded { known, committed }`, called with the agent list
-    locked; `keep_exit_task(id, task)`; `release(id)`; `abandon(id)`; `remove(id)`;
+    locked; `keep_exit_task(id, task, listed)`; `release(id)`; `abandon(id)`; `remove(id)`;
     `remove_folders(id)`.
   - Sessions: `follow_session(id, run, committed, output, FirstRead::{Now, AfterOutput})`,
     `end_session_following(id)`, `read_session(id)`, `has_unsaved_session(id)`, `captures(id)`.
@@ -526,7 +760,9 @@ the run uses the plugin of its folder. `record_exit` records the exit in keeper_
 preparation the run ended, so its session is read once more. A run let go of by `release`,
 `remove` or its exit as a cleanup run is let go of as a plugin user too. `previous_run_ended` waits,
 under one deadline, for the exit-saving task, the last session read, and keeper_link letting go of
-the run.
+the run. The daemon holds the agent list lock while `keep_exit_task` checks the list and keeps
+the exit-saving task. Removal first takes the agent off the list, then `remove` releases any
+task already kept for it. The task can still finish saving the exit.
 
 #### keeper_link
 
@@ -546,7 +782,11 @@ The keeper connection, the run registry, and starts not yet registered.
   A start or stop waits up to 10 seconds for a ready keeper, and each request up to 10 seconds for
   its response. The keeper is pinged every second. Lock order: the registry, then pending starts;
   the connection lock is a leaf. Runs proves the keeper's process and birth against its lock before
-  offering its supported API versions. It rejects the whole frame if a required terminal is absent or
+  offering its supported API versions. For the first connection, reaching the Keeper socket,
+  proving it and completing hello on that connection share the daemon's startup deadline.
+  The first session is admitted, and starts pinging, after the daemon rechecks the deadline and the
+  Keeper's lock identity. Running calls use their ordinary response timers.
+  It rejects the whole frame if a required terminal is absent or
   a terminal arrives on a reply or notification that cannot carry one. The registry's copy
   of a run's terminal lets go before any `agent.stop` for that run (a stop, an abandoned start, a stop
   sent again); `agent.sync` passes each copy as it is.
@@ -668,22 +908,31 @@ record and retires its inbox. Its sends use the same creation-tree and delivery 
 
 ### lifecycle
 
-`lifecycle/` owns work counts and guards, idle exit, a newer build's takeover, the `framework/clean-end`
-note and `framework/logs/daemon.log`. The keeper points the daemon's standard error at the log.
-`log_file.rs` prunes lines after 30 days and returns up to 200 lines to the person's clients.
+`lifecycle/` owns work counts and guards, idle exit, a newer build's takeover, the decision that
+terminal output has drained cleanly, and `framework/logs/daemon.log`. The keeper points the
+daemon's standard error at the log. `log_file.rs` prunes lines after 30 days and returns up to 200
+lines to the person's clients. Base owns the shared `framework/clean-end` note.
+[Base ownership](base.md#owns)
 
 - `begin(Work)` counts the work until its guard drops. The idle decision uses the same lock to
   exclude new work. After 30 idle seconds it asks the server to pause acceptance, informs compatible
   machines of the idle exit, and waits for screen writers and exit commits before removing the socket.
   A long-lived machine watch or foreground connection counts while active. Takeover settlement
   waits for the existing calls and run changes it can complete.
-- `take_over(UpgradeArgs, activity)` checks and installs the new build before marking the daemon
-  as draining. It settles pastes and work, asks the actors to go quiet, records a clean end when
-  they all do, and sends `closing`. After connections drain it settles work and asks the actors
-  to go quiet again before exiting. The keeper holds the terminals throughout.
+- `take_over(UpgradeArgs, activity)` checks and stages the build. It freezes MCP effects and waits
+  for the relay connections to confirm `closing` and settle earlier cancellations. Each `closing`
+  follows committed read and input responses in the same outbox. The daemon allows three seconds
+  for this preparation. If it expires, the original launcher stays selected and the daemon resumes
+  admitting effects. Once a connection queues `closing`, it stays sealed until it reconnects.
+  After confirmation, takeover selects the launcher, settles pastes and work, asks the actors to go
+  quiet, records the clean end through Base's `programs::mark_clean_takeover` when all actors
+  quiesce, and sends `closing` to ordinary API clients. The keeper holds the terminals throughout.
 - The parent implements `LifecycleActivity` to report activity, screen writes and keeper details,
-  and to send paste and quiet commands to actors. The parent takes the clean-end note at startup
-  and uses that fact to select how it recovers screens.
+  and to send paste and quiet commands to actors. The new daemon consumes the clean-end note
+  through Base's `programs::take_clean_end` after taking `daemon.lock` and before connecting to the
+  keeper. The result selects how it recovers screens.
+- The Windows MSVC executable requests the segment heap in its embedded manifest so the heap can
+  return idle pages after message bursts and groups of terminal exits.
 
 ### server
 
@@ -716,9 +965,11 @@ trait and writes responses and watch changes back, without knowing what any oper
     terminal end release that viewer.
   - A machine hello or connect hands the same buffered reader and writer to the machine session
     after its response is flushed. The old connection releases its watches before the handoff.
-  - Once a newer Facade takes over, every connection past `hello` gets a `closing` notification;
-    what the client sent before its response, or within 0.2 seconds, still runs; then its reading
-    ends.
+  - During takeover, ordinary API clients get `closing` and have up to 0.2 seconds to answer. An
+    MCP relay shares one outbox for its responses and `closing`. Reads reserve room for the full
+    response before recording delivery. Text and keys reserve room before typing and retain it
+    through the full or partial input receipt. The relay connection continues reading through the
+    acknowledgement so the daemon can settle cancellations that arrived before it.
   - While the daemon decides to exit, arriving connections are closed before `hello`.
   - Once base reports `termination_requested`, it removes the daemon socket and exits.
 - **Never does:** decide what a hello, operation, topic or relay means; call the agent list,
@@ -727,7 +978,7 @@ trait and writes responses and watch changes back, without knowing what any oper
   - `bind() -> Result<DaemonListener>`; `serve(listener: DaemonListener, service: Arc<S>, closing:
     watch::Receiver<bool>, paused: watch::Sender<bool>)`: accepts clients, pausing while
     `closing` is true and saying so in `paused`; `serve_connection(service, socket: ServerSocket)`: one
-    connection, also the daemon's own in-process MCP server's.
+    connection.
   - `trait Service`, implemented by the daemon:
     - `hello(HelloParams, api_version, peer_pid) -> (HelloResult, Client, Hold)` runs after the
       server selects a supported API version and checks the client kind.
@@ -737,19 +988,27 @@ trait and writes responses and watch changes back, without knowing what any oper
       the independent terminal-exit receiver.
     - `resize_viewer(&Client, viewer, Size, Option<TerminalColors>) -> Result<()>` receives
       only the viewer number resolved by the server from the connection's watch.
-    - `relay(params, peer_pid) -> Result<(Value, Arc<dyn RelayLines>)>`: the relay hello's response
-      and what serves its MCP lines.
+    - `relay(params, peer_pid) -> Result<RelayHandshake>` provides the hello response, the MCP line
+      handler and the connection's takeover state.
     - `machine_hello` and `machine_connect` authorize a session and return its response and
       handoff state. `serve_machine` takes that state with the stream's existing halves.
     - `closing() -> watch::Receiver<Option<String>>`: the build taking over.
     - `draining() -> Option<ErrorBody>`: the error a new hello, call or watch gets during a
       takeover; an attached terminal's keys and size, and `daemon.upgrade`, still run.
     - `work() -> Option<Work>`: counts a connection; None closes it.
-  - `trait RelayLines`: `notice(line) -> bool`, `respond(line, arrived) -> Option<Value>` (blocking,
-    run on a blocking thread), `failed() -> Value` (the response when answering panicked),
-    `ended(closing_answered)`.
-  - `Client` carries the connection's client kind, selected API version and the actor verified
-    by the daemon's private MCP connection.
+  - `RelayLines::take(line, arrived, outbox)` decodes a line, applies cancellations in receive order,
+    and supplies async response work. A relay's local sends reach save, a previous receipt or refusal
+    in receive order. Local delivery continues if the relay connection closes, and delivery and
+    reply waits can proceed independently. A forwarded send keeps its relay's turn until the peer's
+    final answer. That wait leaves the local save and handover permits free. A cancelled send can
+    check its existing receipt and settle the withdrawal while an earlier send still owns the turn.
+  - The original relay arrival bounds new effects. A start or send can still answer an existing
+    receipt. A forwarded start with a request ID and zero `time_left_ms` checks that ID's receipt
+    at the destination, within a separate transport budget. An older peer may reject the expired
+    forward, in which case the original start's outcome remains unknown. An inbox uses its granted
+    reply room after reselecting the page and checks its deadline just before marking it read. A
+    terminal call checks its deadline before the typist queues its first bytes.
+  - `Client` carries the kind and selected API version of an ordinary daemon API connection.
   - `Watch { snapshot, changes }`. `WatchChange::Ended(ErrorBody)` reports a remote watch failure.
     `WatchChange::Disconnect` cuts off a client that fell too far behind.
   - `WhenFull::{Refuse, Wait}`: input without room fails at once (a request ID) or waits until its
@@ -762,8 +1021,9 @@ its daemon connection with the `relay:1` handshake. MCP negotiates its own date-
 `protocolVersion` during `initialize`. Initialization and tool discovery are available before a
 Guest is listed. The first tool call locks the identity of its connection.
 Runs generate a private, unpredictable credential for each new run and Rules put it in that launch's
-MCP arguments. The verifier waits for that run's installation and uses its keeper PID, birth and run
-generation. A verified CLI-native session can also identify a matching live run. A run recovered
+MCP arguments. Authentication, initialization and tool discovery await that run's installation on
+the daemon runtime and verify its keeper PID, birth and run generation. A verified CLI-native
+session can also identify a matching live run. A run recovered
 from protocol 2 may keep its earlier recognition rules until that run ends. Resume has a new
 credential scope even when it uses the same Agent ID.
 
@@ -773,10 +1033,10 @@ as does a connection whose run is still unknown. For other verified runs the par
 managed instructions from the installed record and checks the run again before returning the text.
 It uses the same address, creation source and run context as launch preparation.
 
-The parent hands the verified actor to the private daemon connection. Only the validated process
-can bring a run's tools online. The connection rechecks the run when it sends a new request. A
-waiting inbox read also ends with its bound run, and Post checks the bound actor while it settles
-the available page.
+The daemon dispatches tools for the verified actor through its typed operation registry. The
+validated process brings a run's tools online. The daemon rechecks the run for each new request.
+A waiting inbox read ends with its bound run, and Post checks the bound actor while it settles
+the available page. When a run ends, the daemon releases its tools readiness guard.
 
 One table defines the eight tools served by `tools/list` and dispatched by `tools/call`. The
 catalog is sent as shipped, and a verified connection reports tools ready when it serves the list.

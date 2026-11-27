@@ -265,7 +265,7 @@ export interface Delivery {
 }
 
 /** Why a message was not delivered. */
-export type DeliveryFailure = 'ended' | 'input_draft' | 'input_interaction' | 'input_unknown' | 'timeout' | 'submission_unconfirmed' | 'unsupported';
+export type DeliveryFailure = 'ended' | 'input_draft' | 'input_interaction' | 'input_unknown' | 'timeout' | 'submission_unconfirmed' | 'interaction_after_write' | 'unsupported';
 
 /** The state of a message's delivery. */
 export type DeliveryStatus = 'pending' | 'success' | 'failure';

@@ -22,10 +22,12 @@ mod wake;
 #[cfg(windows)]
 mod windows;
 
+use std::fs::File;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
 use facade_base::service::{self, Locked, Service, StartupChannel};
+use facade_base::startup::Attempt;
 
 #[cfg(unix)]
 use keeper::Keeper;
@@ -38,7 +40,8 @@ use windows::Keeper;
 /// startup channel: `started`, `contention` when another keeper owns the home, or `failed`.
 pub fn serve() -> anyhow::Result<()> {
     let channel = StartupChannel::take();
-    match prepare(channel.as_ref()) {
+    let lease = service::take_startup_lease();
+    match prepare(channel.as_ref(), lease) {
         Ok(Some(keeper)) => {
             if let Some(channel) = channel {
                 channel.started();
@@ -67,13 +70,27 @@ pub fn serve() -> anyhow::Result<()> {
 /// Everything before the keeper can report `started`: nothing inherited but the startup channel,
 /// the private home, the keeper lock, and a listening socket. None when another keeper holds the
 /// lock.
-fn prepare(channel: Option<&StartupChannel>) -> anyhow::Result<Option<Keeper>> {
-    service::close_inherited(channel)?;
+fn prepare(
+    channel: Option<&StartupChannel>,
+    lease: Option<File>,
+) -> anyhow::Result<Option<Keeper>> {
+    service::close_inherited(channel, lease.as_ref())?;
+    service::gate_for_test("startup-before-keeper-lock");
     let framework = service::create_private_home()?;
+    let startup = Attempt::inherited(&framework);
+    if lease.is_some()
+        && let Some(attempt) = &startup
+    {
+        attempt.accept_keeper_candidate()?;
+    }
     if let Locked::Contended = service::lock_home(&framework, Service::Keeper)? {
         return Ok(None);
     }
-    Keeper::bind(framework).map(Some)
+    if let Some(attempt) = &startup {
+        attempt.record("keeper", "keeper lock acquired")?;
+    }
+    drop(lease);
+    Keeper::bind(framework, startup).map(Some)
 }
 
 /// Writes a line to the keeper's log.

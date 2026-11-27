@@ -2955,7 +2955,7 @@
       "assertion": "New terminal input cancels the pending probe and a draft-safe send leaves the person’s draft intact.",
       "stage": "pr",
       "existing_tests": [
-        "framework/tests/tests/probes.rs:269",
+        "framework/tests/tests/probes.rs:283",
         "framework/tests/tests/probes.rs",
         "framework/crates/rules/tests/input/codex.json",
         "framework/crates/daemon/src/agent/typist/mod.rs:2270"
@@ -2963,7 +2963,7 @@
       "test": {
         "runner": "framework-scenario",
         "target": "probes",
-        "name": "the_person_s_key_during_a_probe_stops_it_before_its_backspace"
+        "name": "the_person_s_key_during_a_probe_follows_its_backspace"
       }
     },
     {

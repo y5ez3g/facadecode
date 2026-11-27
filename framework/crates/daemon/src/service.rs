@@ -33,13 +33,13 @@ use facade_base::{
 };
 use facade_rules::LaunchOrigin;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::io::BufReader;
 use tokio::sync::{oneshot, watch};
 
 use crate::agent::{AgentCommand, AgentHandle, Input, MAX_INPUT_BYTES, Typing, TypingAnswer};
 use crate::api;
-use crate::delivery::InputWait;
+use crate::delivery::{InputWait, SendControl};
 use crate::lifecycle::{Work, WorkGuard};
 use crate::machine_service::MachineStream;
 use crate::network_operations::{
@@ -47,9 +47,9 @@ use crate::network_operations::{
 };
 use crate::operations::StartOrigin;
 use crate::records::{self, LookupCandidate, OperationTarget, Reach};
-use crate::server::{self, Client, RelayLines, WhenFull};
+use crate::server::{self, Client, WhenFull};
 use crate::store::CreationSource;
-use crate::{Cancel, Daemon, Sender, blocking_in_place};
+use crate::{Cancel, Daemon, Sender, blocking_in_place, effect_time_left};
 
 const INSPECT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -64,11 +64,45 @@ enum StopRoute {
     Live,
 }
 
+/// Results shared by the ordinary API and the MCP tools. Other operations already produce their
+/// protocol response, and a remote response can carry fields this build does not know yet.
+pub(crate) enum CallResult {
+    Listed(wire::AgentListResult),
+    Started(Box<wire::StartResult>),
+    Stopped(wire::BatchStopResult),
+    Inspected(Box<wire::InspectResult>),
+    Screen(wire::ScreenText),
+    Typed(wire::TypeResult),
+    Sent(Box<wire::SendResult>),
+    Machines(wire::MachineListResult),
+    Wire(Value),
+}
+
+impl CallResult {
+    fn serialized(result: impl Serialize) -> Self {
+        Self::Wire(value_of(result))
+    }
+
+    fn into_wire(self) -> Value {
+        match self {
+            Self::Listed(result) => value_of(result),
+            Self::Started(result) => value_of(result),
+            Self::Stopped(result) => value_of(result),
+            Self::Inspected(result) => value_of(result),
+            Self::Screen(result) => value_of(result),
+            Self::Typed(result) => value_of(result),
+            Self::Sent(result) => value_of(result),
+            Self::Machines(result) => value_of(result),
+            Self::Wire(result) => result,
+        }
+    }
+}
+
 enum AgentAction {
     Inspect,
     Remove,
     Screen(Option<u16>),
-    Type(wire::TerminalInput),
+    Type(wire::TerminalInput, Option<Instant>),
     Rename(String),
 }
 
@@ -78,7 +112,7 @@ impl AgentAction {
             Self::Inspect => (wire::AgentInspect::NAME, OperationTarget::Inspect),
             Self::Remove => (wire::AgentRemove::NAME, OperationTarget::Remove),
             Self::Screen(_) => (wire::AgentScreen::NAME, OperationTarget::ReadScreen),
-            Self::Type(_) => (wire::AgentType::NAME, OperationTarget::Type),
+            Self::Type(..) => (wire::AgentType::NAME, OperationTarget::Type),
             Self::Rename(_) => (wire::AgentRename::NAME, OperationTarget::Rename),
         }
     }
@@ -91,7 +125,7 @@ impl AgentAction {
             Self::Screen(lines) => {
                 api::call::<wire::AgentScreen>(wire::ScreenArgs { target, lines })
             }
-            Self::Type(input) => {
+            Self::Type(input, _) => {
                 api::call::<wire::AgentType>(wire::AgentTypeArgs { target, input })
             }
             Self::Rename(name) => api::call::<wire::AgentRename>(wire::RenameArgs { target, name }),
@@ -150,7 +184,6 @@ impl server::Service for Daemon {
         let client = Client {
             kind: hello.kind,
             api_version,
-            verified_actor: None,
         };
         Ok((result, client, ()))
     }
@@ -163,11 +196,7 @@ impl server::Service for Daemon {
         cancel: Cancel,
     ) -> Result<Value, api_v1::ErrorBody> {
         let caller = self.local_caller(client).map_err(api::project_error)?;
-        let send_deadline = client
-            .verified_actor
-            .as_ref()
-            .and_then(|actor| actor.send_deadline);
-        self.run_api_call(&caller, call, when_full, cancel, None, send_deadline)
+        self.run_api_call(&caller, call, when_full, cancel, None, None)
             .await
     }
 
@@ -219,7 +248,7 @@ impl server::Service for Daemon {
         self: &Arc<Self>,
         params: Value,
         peer_pid: Option<u32>,
-    ) -> Result<(Value, Arc<dyn RelayLines>), api_v1::ErrorBody> {
+    ) -> Result<crate::server::RelayHandshake, api_v1::ErrorBody> {
         self.accept_relay(params, peer_pid)
             .await
             .map_err(api::project_error)
@@ -248,30 +277,69 @@ impl Daemon {
         incoming: Option<Forwarded>,
         send_deadline: Option<Instant>,
     ) -> Result<Value, api_v1::ErrorBody> {
-        let work = if matches!(call, wire::DaemonCall::AgentSend(_)) {
-            Work::Send
-        } else {
-            Work::Call
-        };
-        let Some(_active) = self.lifecycle.begin(work) else {
-            return Err(api::error("unavailable", "Facade is exiting"));
-        };
-        if let wire::DaemonCall::DaemonUpgrade(args) = call {
-            if incoming.is_some() || !matches!(caller, Caller::Terminal { .. }) {
-                return Err(api::error(
-                    "refused",
-                    "only a local terminal can upgrade the daemon",
-                ));
-            }
-            return self
-                .lifecycle
-                .take_over(args, self.clone())
-                .await
-                .map(value_of);
+        self.call_with_result(
+            caller,
+            call,
+            when_full,
+            cancel,
+            incoming,
+            SendControl {
+                deadline: send_deadline,
+                ..SendControl::default()
+            },
+        )
+        .await
+        .map(CallResult::into_wire)
+    }
+
+    pub(crate) fn call_with_result<'a>(
+        self: &'a Arc<Self>,
+        caller: &'a Caller,
+        call: wire::DaemonCall,
+        when_full: WhenFull,
+        cancel: Cancel,
+        incoming: Option<Forwarded>,
+        send: SendControl,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<CallResult, api_v1::ErrorBody>> + Send + 'a>>
+    {
+        if let wire::DaemonCall::AgentSend(args) = call {
+            return Box::pin(async move {
+                let Some(_active) = self.lifecycle.begin(Work::Send) else {
+                    return Err(api::error("unavailable", "Facade is exiting"));
+                };
+                self.route_send(caller, args, incoming, cancel, send)
+                    .await
+                    .map(|result| CallResult::Sent(Box::new(result)))
+                    .map_err(api::project_error)
+            });
         }
-        self.dispatch_api_call(caller, call, when_full, cancel, incoming, send_deadline)
-            .await
-            .map_err(api::project_error)
+        Box::pin(async move {
+            let Some(_active) = self.lifecycle.begin(Work::Call) else {
+                return Err(api::error("unavailable", "Facade is exiting"));
+            };
+            if let wire::DaemonCall::DaemonUpgrade(args) = call {
+                if incoming.is_some() || !matches!(caller, Caller::Terminal { .. }) {
+                    return Err(api::error(
+                        "refused",
+                        "only a local terminal can upgrade the daemon",
+                    ));
+                }
+                return self
+                    .lifecycle
+                    .take_over(args, self.clone())
+                    .await
+                    .map(CallResult::serialized);
+            }
+            let deadline = send.deadline.or_else(|| {
+                incoming
+                    .as_ref()
+                    .and_then(|forward| forward.remaining)
+                    .map(|left| Instant::now() + left)
+            });
+            self.dispatch_api_call(caller, call, when_full, cancel, incoming, deadline)
+                .await
+                .map_err(api::project_error)
+        })
     }
 
     async fn dispatch_api_call(
@@ -281,29 +349,34 @@ impl Daemon {
         when_full: WhenFull,
         cancel: Cancel,
         incoming: Option<Forwarded>,
-        send_deadline: Option<Instant>,
-    ) -> Result<Value, ErrorBody> {
+        deadline: Option<Instant>,
+    ) -> Result<CallResult, ErrorBody> {
         use wire::DaemonCall::*;
         let forwarded = incoming.is_some();
         match call {
             AgentList(args) => {
                 let scope = args.scope.unwrap_or(wire::Scope::Reachable);
                 let result = self.list_scoped_agents(caller, scope).await?;
-                Ok(value_of(result))
+                Ok(CallResult::Listed(result))
             }
             AgentStop(args) => {
                 let result = if forwarded {
-                    self.stop_forwarded(caller, args.selection, cancel).await?
+                    self.stop_forwarded(caller, args.selection, cancel, deadline)
+                        .await?
                 } else {
-                    self.stop_selection(caller, args.selection, cancel).await?
+                    self.stop_selection(caller, args.selection, cancel, deadline)
+                        .await?
                 };
-                Ok(value_of(result))
+                Ok(CallResult::Stopped(result))
             }
             AgentResumeList(args) => self
                 .api_resume_candidates(caller, args, forwarded)
                 .await
-                .map(value_of),
-            AgentResume(args) => self.api_resume(caller, args, forwarded).await.map(value_of),
+                .map(CallResult::serialized),
+            AgentResume(args) => self
+                .api_resume(caller, args, forwarded)
+                .await
+                .map(CallResult::serialized),
             AgentStart(args) => {
                 if forwarded && matches!(args.scope, Some(wire::SingleMachineScope::Machine { .. }))
                 {
@@ -311,12 +384,11 @@ impl Daemon {
                         "a forwarded start needs local scope",
                     ));
                 }
-                self.start_request(caller, args, incoming, cancel).await
+                self.start_request(caller, args, incoming, cancel, deadline)
+                    .await
+                    .map(|result| CallResult::Started(Box::new(result)))
             }
-            AgentSend(args) => self
-                .route_send(caller, args, incoming, cancel, send_deadline)
-                .await
-                .map(value_of),
+            AgentSend(_) => unreachable!("sends own their wait before general dispatch"),
             AgentInspect(args) => {
                 self.agent_operation(
                     caller,
@@ -364,7 +436,7 @@ impl Daemon {
             AgentType(args) => {
                 self.agent_operation(
                     caller,
-                    AgentAction::Type(args.input),
+                    AgentAction::Type(args.input, deadline),
                     args.target,
                     when_full,
                     cancel,
@@ -372,9 +444,18 @@ impl Daemon {
                 )
                 .await
             }
-            CliList(args) => self.cli_list_request(caller, args, forwarded).await,
-            LocationList(args) => self.location_request(caller, args, forwarded).await,
-            DaemonStatus(args) => self.status_request(caller, args, forwarded).await,
+            CliList(args) => self
+                .cli_list_request(caller, args, forwarded)
+                .await
+                .map(CallResult::Wire),
+            LocationList(args) => self
+                .location_request(caller, args, forwarded)
+                .await
+                .map(CallResult::Wire),
+            DaemonStatus(args) => self
+                .status_request(caller, args, forwarded)
+                .await
+                .map(CallResult::Wire),
             MachineList(_) => {
                 let disclose = matches!(caller, Caller::Terminal { .. } | Caller::Ide { .. });
                 let machines: Vec<_> = self
@@ -382,11 +463,11 @@ impl Daemon {
                     .into_iter()
                     .map(|machine| api::project_machine(machine, disclose))
                     .collect();
-                Ok(json!({ "machines": machines }))
+                Ok(CallResult::Machines(wire::MachineListResult { machines }))
             }
             MachineRemove(args) => {
                 require_person(caller)?;
-                Ok(value_of(self.remove_machine(args).await?))
+                Ok(CallResult::serialized(self.remove_machine(args).await?))
             }
             MachineRename(args) => {
                 require_person(caller)?;
@@ -402,15 +483,18 @@ impl Daemon {
                                 args,
                                 None,
                             )
-                            .await;
+                            .await
+                            .map(CallResult::Wire);
                     }
                 }
-                Ok(value_of(self.rename_local_machine(args.name).await?))
+                Ok(CallResult::serialized(
+                    self.rename_local_machine(args.name).await?,
+                ))
             }
             DaemonLog(args) => {
                 require_person(caller)?;
                 let lines = args.lines.unwrap_or(crate::lifecycle::MAX_LOG_LINES);
-                Ok(value_of(wire::LogResult {
+                Ok(CallResult::serialized(wire::LogResult {
                     lines: blocking_in_place(|| crate::lifecycle::last_lines(lines))?,
                 }))
             }
@@ -427,7 +511,7 @@ impl Daemon {
                 } else {
                     Default::default()
                 };
-                Ok(value_of(
+                Ok(CallResult::serialized(
                     records
                         .into_iter()
                         .map(|record| wire::AgentLookupCandidate {
@@ -450,7 +534,7 @@ impl Daemon {
                         matches!(caller, Caller::Terminal { .. }),
                     )
                     .await?;
-                Ok(value_of(
+                Ok(CallResult::serialized(
                     records
                         .into_iter()
                         .map(crate::resume::ResumeCandidate::into_wire)
@@ -459,12 +543,12 @@ impl Daemon {
             }
             InternalAttachResize(args) if forwarded => {
                 self.resize_forwarded_viewer(caller, args).await?;
-                Ok(json!({}))
+                Ok(CallResult::serialized(api_v1::EmptyResult {}))
             }
             InternalDeliverStartResult(args) if forwarded => {
                 self.accept_start_result(caller, args, incoming.and_then(|call| call.remaining))
                     .await?;
-                Ok(json!({}))
+                Ok(CallResult::serialized(api_v1::EmptyResult {}))
             }
             InternalDeliverWaitNotice(args) if forwarded => {
                 self.deliver_wait_notice(
@@ -473,16 +557,16 @@ impl Daemon {
                     incoming.and_then(|call| call.remaining),
                 )
                 .await?;
-                Ok(json!({}))
+                Ok(CallResult::serialized(api_v1::EmptyResult {}))
             }
             InternalDeliverNotice(args) if forwarded => {
                 self.deliver_notice(caller, args, incoming.and_then(|call| call.remaining))
                     .await?;
-                Ok(value_of(api_v1::EmptyResult {}))
+                Ok(CallResult::serialized(api_v1::EmptyResult {}))
             }
             InternalCommandReply(args) if forwarded => {
                 self.accept_command_reply(caller, args)?;
-                Ok(value_of(api_v1::EmptyResult {}))
+                Ok(CallResult::serialized(api_v1::EmptyResult {}))
             }
             _ => Err(ErrorBody::refused(
                 "the operation is unavailable on this connection",
@@ -495,6 +579,7 @@ impl Daemon {
         caller: &Caller,
         selection: wire::StopSelection,
         cancel: Cancel,
+        deadline: Option<Instant>,
     ) -> Result<wire::BatchStopResult, ErrorBody> {
         let mut items = Vec::new();
         let machines = match selection {
@@ -528,6 +613,7 @@ impl Daemon {
                                 reference,
                                 StopRoute::Explicit,
                                 cancel.clone(),
+                                deadline,
                             )
                             .await
                         }
@@ -563,7 +649,13 @@ impl Daemon {
                         continue;
                     }
                     let result = self
-                        .stop_selected(caller, reference.clone(), StopRoute::Live, cancel.clone())
+                        .stop_selected(
+                            caller,
+                            reference.clone(),
+                            StopRoute::Live,
+                            cancel.clone(),
+                            deadline,
+                        )
                         .await;
                     items.push(self.stop_item(target, Some(reference), Some(agent), result));
                 }
@@ -582,6 +674,7 @@ impl Daemon {
         caller: &Caller,
         selection: wire::StopSelection,
         cancel: Cancel,
+        deadline: Option<Instant>,
     ) -> Result<wire::BatchStopResult, ErrorBody> {
         if !matches!(&selection, wire::StopSelection::Targets { targets }
             if targets.iter().all(|target| matches!(target, wire::AgentTarget::Reference(reference)
@@ -591,7 +684,8 @@ impl Daemon {
                 "a forwarded stop needs exact references on this machine",
             ));
         }
-        self.stop_selection(caller, selection, cancel).await
+        self.stop_selection(caller, selection, cancel, deadline)
+            .await
     }
 
     async fn stop_selected(
@@ -600,6 +694,7 @@ impl Daemon {
         reference: AgentRef,
         route: StopRoute,
         cancel: Cancel,
+        deadline: Option<Instant>,
     ) -> Result<(ProcessExit, AgentLabel), ErrorBody> {
         if cancel.is_requested() {
             return Err(ErrorBody::new(
@@ -624,7 +719,14 @@ impl Daemon {
                 },
             });
             let response = self
-                .forward_call(&reference.machine_id, caller, call, from_name, None, None)
+                .forward_call(
+                    &reference.machine_id,
+                    caller,
+                    call,
+                    from_name,
+                    None,
+                    effect_time_left(deadline)?,
+                )
                 .await?;
             let (exit, mut label) = api::stop_receipt(response)?;
             self.project_agent_label(&reference, &mut label)?;
@@ -633,7 +735,7 @@ impl Daemon {
         let agent = self.local_target(caller, &reference, OperationTarget::Stop)?;
         let address = self.agent_address(&reference)?;
         let (result, label) = self
-            .stop(&agent, caller)
+            .stop(&agent, caller, deadline)
             .await
             .map_err(|error| self.with_agent_error(&agent, error))?;
         if result.already_ended {
@@ -679,7 +781,8 @@ impl Daemon {
         mut args: wire::StartArgs,
         incoming: Option<Forwarded>,
         cancel: Cancel,
-    ) -> Result<Value, ErrorBody> {
+        deadline: Option<Instant>,
+    ) -> Result<wire::StartResult, ErrorBody> {
         let by_model = matches!(caller, Caller::Agent { .. });
         if by_model && !args.args.is_empty() {
             return Err(ErrorBody::invalid_argument(
@@ -701,27 +804,36 @@ impl Daemon {
             && let Some(machine) = self.machine_for(machine.as_deref())?
             && machine != self.machine_id
         {
-            self.ensure_machine_route(&machine, caller).await?;
             args.env = Some(launch_color_environment(colors.as_ref()).unwrap_or_default());
             if args.folder_is_default {
                 args.folder = None;
             }
-            let start_result = if by_model && args.prompt.is_some() {
-                Some(wire::MessageRef {
-                    message_id: self.messages.reserve_result()?.message_id,
-                    machine_id: self.machine_id.clone(),
-                })
-            } else {
-                None
-            };
+            if effect_time_left(deadline).is_ok() {
+                self.ensure_machine_route(&machine, caller).await?;
+            }
+            let has_key = args.request_id.is_some();
+            let start_result =
+                if by_model && args.prompt.is_some() && effect_time_left(deadline).is_ok() {
+                    Some(wire::MessageRef {
+                        message_id: self.messages.reserve_result()?.message_id,
+                        machine_id: self.machine_id.clone(),
+                    })
+                } else {
+                    None
+                };
             let call = api::call::<wire::AgentStart>(args);
-            let result = self
-                .forward_call(&machine, caller, call, name, start_result, None)
-                .await?;
+            let result = match effect_time_left(deadline) {
+                Ok(time_left) => {
+                    self.forward_call(&machine, caller, call, name, start_result, time_left)
+                        .await?
+                }
+                Err(_) if has_key => self.forward_start_receipt(&machine, caller, call).await?,
+                Err(error) => return Err(error),
+            };
             let mut result: wire::StartResult = decode_arguments(result)?;
             result.agent.address =
                 self.agent_address(&api::agent_ref(result.agent.reference.clone()))?;
-            return Ok(value_of(result));
+            return Ok(result);
         }
         let start_result = incoming.as_ref().and_then(|call| call.start_result.clone());
         if let Some(result) = &start_result
@@ -744,6 +856,20 @@ impl Daemon {
                 .map(crate::presence::launch_colors)
                 .unwrap_or_default(),
         );
+        let origin = StartOrigin {
+            caller: caller.clone(),
+            sender: sender_from(caller, name),
+            deadline,
+            launch: if by_model {
+                LaunchOrigin::Agent
+            } else {
+                LaunchOrigin::Person
+            },
+        };
+        if effect_time_left(deadline).is_err() {
+            // A keyed retry after its deadline can read a receipt without preparing a launch.
+            return self.public_start(self.start(args, origin).await?);
+        }
         let caller_folder = if let Caller::Agent { agent, .. } = caller
             && agent.machine_id == self.machine_id
         {
@@ -763,15 +889,6 @@ impl Daemon {
         args.folder = Some(folder);
         args.env = env;
 
-        let origin = StartOrigin {
-            caller: caller.clone(),
-            sender: sender_from(caller, name),
-            launch: if by_model {
-                LaunchOrigin::Agent
-            } else {
-                LaunchOrigin::Person
-            },
-        };
         // Once a start has a run, let it install even if its call is cancelled.
         if cancel.is_requested() {
             return Err(ErrorBody::new(
@@ -779,9 +896,7 @@ impl Daemon {
                 "the start was cancelled before it ran",
             ));
         }
-        Ok(value_of(
-            self.public_start(self.start(args, origin).await?)?,
-        ))
+        self.public_start(self.start(args, origin).await?)
     }
 
     async fn agent_operation(
@@ -792,11 +907,11 @@ impl Daemon {
         when_full: WhenFull,
         cancel: Cancel,
         incoming: Option<Forwarded>,
-    ) -> Result<Value, ErrorBody> {
+    ) -> Result<CallResult, ErrorBody> {
         let (operation, capability) = action.operation();
         let sequence = matches!(
             action,
-            AgentAction::Type(wire::TerminalInput::Sequence { .. })
+            AgentAction::Type(wire::TerminalInput::Sequence { .. }, _)
         );
         let reference = if incoming.is_some() {
             match target {
@@ -817,6 +932,10 @@ impl Daemon {
         if reference.machine_id != self.machine_id {
             self.ensure_machine_route(&reference.machine_id, caller)
                 .await?;
+            let time_left = match &action {
+                AgentAction::Type(_, deadline) => effect_time_left(*deadline)?,
+                _ => None,
+            };
             let name = sender_from(caller, self.caller_name(caller)).from_name;
             let result = self
                 .forward_call(
@@ -825,7 +944,7 @@ impl Daemon {
                     action.call(&reference),
                     name,
                     None,
-                    None,
+                    time_left,
                 )
                 .await
                 .map_err(|mut error| {
@@ -837,27 +956,29 @@ impl Daemon {
                     }
                     error
                 })?;
-            return self.project_remote_response(operation, &reference, result);
+            return self
+                .project_remote_response(operation, &reference, result)
+                .map(CallResult::Wire);
         }
         let agent = self.local_target(caller, &reference, capability)?;
         let address = self.agent_address(&reference)?;
-        let result: Result<Value, ErrorBody> = async {
+        let result: Result<CallResult, ErrorBody> = async {
             let result = match action {
-                AgentAction::Inspect => value_of(
+                AgentAction::Inspect => CallResult::Inspected(Box::new(
                     self.inspect(&agent, matches!(caller, Caller::Terminal { .. }))
                         .await?,
-                ),
+                )),
                 AgentAction::Remove => {
                     self.remove(&agent).await?;
-                    value_of(wire::RemoveResult {
+                    CallResult::serialized(wire::RemoveResult {
                         reference: api::wire_ref(&reference),
                         address,
                     })
                 }
                 AgentAction::Screen(lines) => {
-                    value_of(self.read_screen_of(&agent, lines, address).await?)
+                    CallResult::Screen(self.read_screen_of(&agent, lines, address).await?)
                 }
-                AgentAction::Type(input) => {
+                AgentAction::Type(input, deadline) => {
                     let label = if matches!(input, wire::TerminalInput::Raw { .. }) {
                         None
                     } else {
@@ -872,15 +993,16 @@ impl Daemon {
                         sender_from(caller, from_name),
                         when_full,
                         cancel,
+                        deadline,
                     )
                     .await?;
-                    value_of(wire::TypeResult {
+                    CallResult::Typed(wire::TypeResult {
                         agent: label.map(api::wire_label),
                     })
                 }
                 AgentAction::Rename(name) => {
                     let (renamed, previous_name) = self.rename(&agent, &name).await?;
-                    value_of(wire::RenameResult {
+                    CallResult::serialized(wire::RenameResult {
                         agent: self.public_agent(renamed)?,
                         previous_name: Some(previous_name),
                     })
@@ -1297,11 +1419,17 @@ impl Daemon {
         sender: Sender,
         when_full: WhenFull,
         cancel: Cancel,
+        deadline: Option<Instant>,
     ) -> Result<(), ErrorBody> {
         crate::gate_for_test("before-type-input");
+        effect_time_left(deadline)?;
         let typing_bytes = input.typing_bytes();
-        let (input, typed) = input_of(input, sender)?;
-        if typing_bytes.unwrap_or_else(|| input.most_bytes()) > MAX_INPUT_BYTES {
+        let (mut input, typed) = input_of(input, sender)?;
+        if let Input::Typed(typing) = &mut input {
+            typing.start_by(deadline.map(tokio::time::Instant::from_std));
+        }
+        // As the published preflight counts it; the agent counts the bytes its terminal takes.
+        if typing_bytes.unwrap_or_else(|| input.most_bytes(None)) > MAX_INPUT_BYTES {
             return Err(ErrorBody::new(
                 Reason::CapacityExceeded,
                 "input is limited to 1 MiB a call",

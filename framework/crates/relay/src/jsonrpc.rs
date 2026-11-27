@@ -4,6 +4,8 @@
 
 use std::fmt::Write;
 
+use serde_json::Value;
+
 /// What a line is, by its top-level `id` and `method`.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Message<'a> {
@@ -33,6 +35,57 @@ pub(crate) fn read(line: &[u8]) -> Message<'_> {
         },
         (None, None) => Message::Other,
     }
+}
+
+/// A request ID by value. String escapes in a response or cancellation may differ from the
+/// original request's spelling. An invalid ID remains identifiable by its raw bytes.
+#[derive(PartialEq, Eq)]
+pub(crate) enum Id {
+    Value(Value),
+    Invalid(Vec<u8>),
+}
+
+impl Id {
+    pub(crate) fn read(token: &[u8]) -> Self {
+        match serde_json::from_slice(token) {
+            Ok(value @ (Value::String(_) | Value::Number(_))) => Self::Value(value),
+            _ => Self::Invalid(token.to_vec()),
+        }
+    }
+}
+
+/// The cancellation notification's ID, with the same interpretation as MCP in the daemon.
+pub(crate) fn cancelled_id(line: &[u8], method: &[u8]) -> Option<Id> {
+    if method != br#""notifications/cancelled""#
+        && serde_json::from_slice::<String>(method).ok().as_deref()
+            != Some("notifications/cancelled")
+    {
+        return None;
+    }
+    let notification: Value = serde_json::from_slice(line).ok()?;
+    cancellation_id(&notification)
+}
+
+/// Cancellation notifications in a batch. The relay forwards the batch unchanged.
+pub(crate) fn batch_cancellations(line: &[u8]) -> impl Iterator<Item = Id> {
+    serde_json::from_slice::<Vec<Value>>(line)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|entry| entry.get("id").is_none() && entry["method"] == "notifications/cancelled")
+        .filter_map(|entry| cancellation_id(&entry))
+}
+
+fn cancellation_id(notification: &Value) -> Option<Id> {
+    let id = notification.get("params")?.get("requestId")?;
+    (id.is_string() || id.is_number()).then(|| Id::Value(id.clone()))
+}
+
+/// The daemon's optional support for request context and safe planned replay.
+pub(crate) fn supports_request_context(hello: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(hello)
+        .ok()
+        .and_then(|hello| hello.get("result")?.get("request_context")?.as_bool())
+        .unwrap_or(false)
 }
 
 /// `text` as a JSON string.

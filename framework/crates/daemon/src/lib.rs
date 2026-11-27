@@ -58,15 +58,16 @@ mod waits;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use facade_base::api_v1::{ApiVersion, daemon as wire};
 use facade_base::model::agent::AgentsUpdate;
-use facade_base::model::error::ErrorBody;
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::model::machine::new_boot_id;
 use facade_base::process::ProcessState;
 use facade_base::programs::Held;
 use facade_base::service::{self as base_service, Locked, StartupChannel};
+use facade_base::startup::DaemonProgress;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
@@ -80,6 +81,9 @@ use records::Records;
 use runs::{FoundKeeper, RunEvent, Runs};
 use store::Store;
 use windows::Windows;
+
+#[doc(hidden)]
+pub use store::SCHEMA_VERSION as STORE_SCHEMA_VERSION;
 
 #[cfg(test)]
 pub(crate) use testing::test_folder;
@@ -201,6 +205,25 @@ pub(crate) enum ToolsGiven {
     NotGiven,
 }
 
+pub(crate) fn effect_deadline_passed() -> ErrorBody {
+    ErrorBody::new(
+        Reason::OperationTimeout,
+        "the call's deadline passed before it could take effect",
+    )
+}
+
+/// Time left to begin the effect itself. Request-key receipt lookups may outlive this budget.
+pub(crate) fn effect_time_left(deadline: Option<Instant>) -> Result<Option<Duration>, ErrorBody> {
+    deadline
+        .map(|deadline| {
+            deadline
+                .checked_duration_since(Instant::now())
+                .filter(|left| !left.is_zero())
+                .ok_or_else(effect_deadline_passed)
+        })
+        .transpose()
+}
+
 /// A call's cancellation, which its client's `cancel` asks for. A closed connection asks for none.
 #[derive(Clone, Default)]
 pub(crate) struct Cancel(Option<watch::Receiver<bool>>);
@@ -293,6 +316,7 @@ pub(crate) struct Daemon {
     claimed_sessions: Mutex<HashMap<SessionKey, String>>,
     screens: Screens,
     messages: Arc<Messages>,
+    relay_send_store: tokio::sync::Mutex<()>,
     command_replies: command_replies::CommandReplies,
     runs: Runs,
     records: Records,
@@ -411,21 +435,40 @@ pub fn offline_machine_name() -> Option<String> {
 /// the foreground.
 pub fn run() -> anyhow::Result<()> {
     let mut channel = StartupChannel::take();
-    base_service::close_inherited(channel.as_ref())
+    base_service::close_inherited(channel.as_ref(), None)
         .map_err(|err| failed(&mut channel, err.into()))?;
     facade_base::limits::raise_open_files();
-    let workers = std::thread::available_parallelism()
-        .map_or(4, |n| n.get())
-        .clamp(2, 16);
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let workers = if cfg!(windows) {
+        2
+    } else {
+        std::thread::available_parallelism()
+            .map_or(4, |n| n.get())
+            .clamp(2, 16)
+    };
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder
         .worker_threads(workers)
         .thread_name("facade-worker")
-        .enable_all()
+        .enable_all();
+    #[cfg(windows)]
+    builder
+        .max_blocking_threads(10)
+        .thread_keep_alive(Duration::from_millis(150));
+    let runtime = builder
         .build()
         .map_err(|err| failed(&mut channel, err.into()))?;
     runtime.block_on(async {
-        let started = start_and_serve(&mut channel).await;
-        started.map_err(|err| failed(&mut channel, err))
+        let mut progress = None;
+        start_and_serve(&mut channel, &mut progress)
+            .await
+            .map_err(|err| {
+                if let (Some(progress), Ok(framework)) =
+                    (progress, facade_base::paths::framework_dir())
+                {
+                    let _ = progress.failed(&framework, &format!("{err:#}"));
+                }
+                failed(&mut channel, err)
+            })
     })
 }
 
@@ -437,13 +480,17 @@ fn failed(channel: &mut Option<StartupChannel>, err: anyhow::Error) -> anyhow::E
     err
 }
 
-async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result<()> {
+async fn start_and_serve(
+    channel: &mut Option<StartupChannel>,
+    startup: &mut Option<DaemonProgress>,
+) -> anyhow::Result<()> {
     let framework = base_service::create_private_home()?;
     // The lock comes before the store, the keeper and the socket: a daemon that does not get it
     // changes nothing.
     match base_service::lock_home(&framework, base_service::Service::Daemon)? {
         Locked::Held => {
             pause_for_test("after-daemon-lock");
+            *startup = Some(DaemonProgress::start(&framework)?);
             gate_for_test("after-daemon-lock");
             #[cfg(debug_assertions)]
             if framework.join("die-after-lock").exists() {
@@ -464,12 +511,14 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
             return Ok(());
         }
     }
+    let startup = startup.as_ref().expect("the daemon holds its lock");
     lifecycle::take_clean_end(&framework);
     let program = facade_base::programs::install_running()?;
     let held = Arc::new(Held::open(&program, &facade_base::build_id())?);
     let (run_events, run_events_rx) = mpsc::unbounded_channel::<RunEvent>();
     let runs = Runs::new(&framework, held.clone(), run_events);
-    let held_agents = match runs.find_keeper_at_startup().await? {
+    startup.advance("connecting to the keeper")?;
+    let held_agents = match runs.find_keeper_at_startup(startup).await? {
         FoundKeeper::Connected { build, held } => {
             // The launchers every run names point at this build once the keeper is found; the
             // folder of the build it runs from stays.
@@ -481,6 +530,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
             Vec::new()
         }
     };
+    startup.advance("opening the store")?;
     let progress = recovery::RecoveryProgress::start();
     let opened = {
         let framework = framework.clone();
@@ -491,6 +541,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         tokio::task::spawn_blocking(move || Store::open(&framework, &ids)).await??
     };
     progress.advance();
+    startup.advance("store opened")?;
     let store = opened.store.clone();
     let records = Records::new(store.number_table());
     let readable: std::collections::HashSet<String> = opened
@@ -532,6 +583,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         results: mcp::results_folder(&framework),
         watch_ends: Mutex::default(),
         messages,
+        relay_send_store: tokio::sync::Mutex::default(),
         command_replies: command_replies::CommandReplies::default(),
         runs,
         records,
@@ -544,18 +596,38 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         store,
     });
     daemon.sweep(SystemTime::now());
+    startup.advance("recovering the home")?;
     gate_for_test("before-recovery");
     let recovered_prompts = opened
         .records
         .iter()
         .filter_map(|record| record.prompt)
         .collect::<HashSet<_>>();
-    daemon
-        .recover(held_agents, opened.records, &opened.agent_ids, &progress)
-        .await?;
-    daemon.expire_agents(&kept_since(SystemTime::now())).await;
+    let recovered_exits = {
+        let recovering = daemon.recover(held_agents, opened.records, &opened.agent_ids, &progress);
+        tokio::pin!(recovering);
+        let mut count = progress.count();
+        let mut updates = tokio::time::interval(Duration::from_millis(250));
+        loop {
+            tokio::select! {
+                result = &mut recovering => break result?,
+                _ = updates.tick() => {
+                    let advanced = progress.count();
+                    if advanced > count {
+                        count = advanced;
+                        startup.advance(&format!("recovering the home ({count} steps completed)"))?;
+                    }
+                }
+            }
+        }
+    };
+    startup.advance("records recovered")?;
     daemon.restore_guests()?;
     daemon.take_up_messages(&recovered_prompts).await?;
+    for (exit, agent) in recovered_exits {
+        daemon.settle_exit(agent.id().to_string(), exit, agent);
+    }
+    daemon.expire_agents(&kept_since(SystemTime::now())).await;
     // A plugin whose runs ended while no daemon ran goes now.
     let users = daemon
         .agents()
@@ -594,9 +666,6 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         daemon.clone(),
         network_events_rx,
     ));
-    if let Some(channel) = channel.take() {
-        channel.started();
-    }
     let (closing, closed) = watch::channel(false);
     let (paused, observed_paused) = watch::channel(false);
     tokio::spawn(
@@ -605,7 +674,14 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
             .clone()
             .exit_when_idle(daemon.clone(), closing, observed_paused),
     );
-    server::serve(listener, daemon, closed, paused).await
+    server::serve(listener, daemon, closed, paused, || {
+        startup.ready()?;
+        if let Some(channel) = channel.take() {
+            channel.started();
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// Handles what runs report, as it comes: a run's first exit, and a session its CLI reported,
@@ -613,7 +689,15 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
 async fn follow_runs(daemon: Arc<Daemon>, mut events: mpsc::UnboundedReceiver<RunEvent>) {
     while let Some(event) = events.recv().await {
         match event {
-            RunEvent::StopAccepted(stop) => daemon.runs.confirm_stop(stop),
+            RunEvent::StopAccepted(stop) => {
+                if let Some(process) = &stop.save_creator_stop
+                    && let Err(error) =
+                        blocking_in_place(|| daemon.store.record_creator_stop(&stop.id, process))
+                {
+                    log("warn", &format!("{error:#}"));
+                }
+                daemon.runs.confirm_stop(stop);
+            }
             RunEvent::Exited { id, exit } => daemon.record_exit(&id, exit),
             RunEvent::Session {
                 id,

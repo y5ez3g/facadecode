@@ -1,6 +1,5 @@
 //! A probe of an input whose first row may be a hint or a draft: a space typed where the input
-//! starts, the input read once drawn still, then Backspace and the input read again. The typist
-//! runs it and types nothing else meanwhile.
+//! starts, the input read once drawn still, then Backspace and the input read again.
 
 use std::time::Duration;
 
@@ -12,7 +11,7 @@ use tokio::time::Instant;
 
 /// How often a probe reads the input while it waits for it to be drawn still.
 pub(super) const PROBE_READ: Duration = Duration::from_millis(100);
-/// How long a probe waits for the input to be drawn still after each key.
+/// How long to establish a verdict for an echo after its key reached the terminal.
 const PROBE_STILL: Duration = Duration::from_secs(2);
 
 /// The key a probe pressed last.
@@ -25,17 +24,23 @@ enum Pressed {
 /// A probe under way.
 pub(super) struct Probe {
     before: InputLine,
-    /// The person's writes when the probe read the input: Backspace goes only while they are this.
-    typed: u64,
     pressed: Pressed,
+    /// When its last key was written.
+    since: Instant,
+    /// The space echo deadline.
+    echo_deadline: Instant,
+    /// A complete input frame already showed the space, even if an offered erase was revoked.
+    space_seen: bool,
     /// The last reading and when it was taken.
     last: Option<(Instant, BoxReading)>,
+    /// A complete frame that drew its input after this key's write boundary.
+    frame: Option<BoxReading>,
     verdict: ProbeVerdict,
 }
 
 /// What a probe does next.
 pub(super) enum Next {
-    /// Reads the input again then.
+    /// Reads the input again then, or when another frame arrives.
     Wait(Instant),
     /// Presses Backspace.
     Backspace,
@@ -44,13 +49,16 @@ pub(super) enum Next {
 }
 
 impl Probe {
-    /// A probe of `line`, whose space is written now; `typed` counts the person's writes so far.
-    pub(super) fn new(line: InputLine, typed: u64) -> Probe {
+    /// A probe of `line`, whose space is queued now.
+    pub(super) fn new(line: InputLine, now: Instant) -> Probe {
         Probe {
             before: line,
-            typed,
             pressed: Pressed::Space,
+            since: now,
+            echo_deadline: now + PROBE_STILL,
+            space_seen: false,
             last: None,
+            frame: None,
             verdict: ProbeVerdict::Other,
         }
     }
@@ -60,103 +68,135 @@ impl Probe {
         &self.before.cells
     }
 
-    /// One step at `now`. The input is read every [`PROBE_READ`] after the key reached the terminal
-    /// at `written_at`. Two agreeing readings settle the redraw. The frame before the key can stay
-    /// on screen until its echo, so that frame keeps the probe waiting up to [`PROBE_STILL`].
+    #[cfg(test)]
+    pub(super) fn echo_deadline(&self) -> Instant {
+        self.echo_deadline
+    }
+
+    /// Begins the echo budget when the terminal takes the key.
+    pub(super) fn wrote_key(&mut self, now: Instant) {
+        if self.pressed == Pressed::Space {
+            self.echo_deadline = now + PROBE_STILL;
+        }
+        self.since = now;
+    }
+
+    pub(super) fn saw_frame(&mut self, reading: BoxReading) {
+        self.frame = Some(reading);
+    }
+
+    pub(super) fn erasing(&self) -> bool {
+        self.pressed == Pressed::Backspace
+    }
+
+    /// The space still belongs at the input that prompted the probe.
+    pub(super) fn can_write_space(&self, reading: &BoxReading) -> bool {
+        reading.unsure && reading.line.as_ref() == Some(&self.before)
+    }
+
+    /// Rechecks a pending erase with the complete current frame. If it cannot go now,
+    /// resume watching for our space at the original echo deadline.
+    pub(super) fn recheck_erase(&mut self, reading: Option<&BoxReading>) -> bool {
+        let allowed = reading.is_some_and(|reading| space_taken(&self.before, reading));
+        if allowed {
+            self.frame = None;
+        } else {
+            self.pressed = Pressed::Space;
+            self.last = None;
+        }
+        allowed
+    }
+
+    /// A verdict needs two matching complete readings. Backspace needs a current reading that
+    /// shows the space at its original position. An unconfirmed key ends the probe at its deadline.
     pub(super) fn next(
         &mut self,
         agent: &str,
         now: Instant,
-        written_at: Instant,
-        typed: u64,
         read_screen: &dyn Fn() -> BoxReading,
     ) -> Next {
-        let deadline = written_at + PROBE_STILL;
-        let after_space = self.pressed == Pressed::Space;
-        let wake_at = |at: Instant| {
-            if after_space { at.min(deadline) } else { at }
+        let deadline = match self.pressed {
+            Pressed::Space => self.echo_deadline,
+            Pressed::Backspace => self.since + PROBE_STILL,
         };
-        let due = self.last.as_ref().map_or(written_at, |(at, _)| *at) + PROBE_READ;
-        let wake = wake_at(due);
-        if now < wake {
-            return Next::Wait(wake);
+        let due = self.last.as_ref().map_or(self.since, |(at, _)| *at) + PROBE_READ;
+        if now < due.min(deadline) {
+            return Next::Wait(due.min(deadline));
         }
         let reading = read_screen();
-        // Still readings need a full read interval and a visible row. A synchronized update can
-        // hide the row until the whole frame is drawn.
+        let ordinary = reading.info.state != InputState::Interaction
+            && !reading.is_unread()
+            && self.frame.as_ref().is_some_and(|frame| {
+                frame.info.state == reading.info.state && frame.line == reading.line
+            });
         let still = now >= due
-            && reading.line.is_some()
             && self.last.as_ref().is_some_and(|(_, last)| {
                 last.info.state == reading.info.state && last.line == reading.line
             });
-        let waiting_for_echo = typed == self.typed
-            && reading.info.state != InputState::Interaction
-            && match self.pressed {
-                Pressed::Space => reading.line.as_ref() == Some(&self.before),
-                Pressed::Backspace => space_taken(&self.before, &reading),
+        let ready = ordinary && (still || now >= deadline);
+        let shows_space = space_taken(&self.before, &reading);
+        if self.pressed == Pressed::Space && ready && shows_space {
+            self.verdict = if still {
+                verdict_of(&self.before, &reading)
+            } else {
+                ProbeVerdict::Other
             };
-        if (!still || waiting_for_echo) && now < deadline {
+            self.space_seen = true;
+            self.pressed = Pressed::Backspace;
+            self.since = now;
+            self.last = None;
+            self.frame = None;
+            return Next::Backspace;
+        }
+        let empty_after_space =
+            ordinary && self.space_seen && !shows_space && reading.info.state == InputState::Usable;
+        let put_back = self.pressed == Pressed::Backspace
+            && ready
+            && !shows_space
+            && restored(self.verdict, &self.before, &reading);
+        if (empty_after_space && still) || (!empty_after_space && put_back) {
+            let verdict = if put_back && still {
+                self.verdict
+            } else {
+                ProbeVerdict::Other
+            };
+            let what = match verdict {
+                ProbeVerdict::Hint => "a hint",
+                ProbeVerdict::Draft => "a draft",
+                ProbeVerdict::Other => "neither a hint nor a draft for sure",
+            };
+            let before = shape_of(Some(&self.before));
+            log(
+                agent,
+                "info",
+                &format!("a probe found the input's row {what}: {before}"),
+            );
+            return Next::Done(verdict);
+        }
+        if now >= deadline {
+            let pending = match self.pressed {
+                Pressed::Space => "the probe space did not show at its input position",
+                Pressed::Backspace => "the probe backspace did not visibly restore the input",
+            };
+            let before = shape_of(Some(&self.before));
+            let after = shape_of(reading.line.as_ref());
+            log(
+                agent,
+                "info",
+                &format!("{pending}; before {before}; after {after}"),
+            );
+            return Next::Done(ProbeVerdict::Other);
+        }
+        if empty_after_space && now < due && self.last.is_some() {
+            return Next::Wait(due.min(deadline));
+        }
+        if ordinary {
             self.last = Some((now, reading));
-            return Next::Wait(wake_at(now + PROBE_READ));
         }
-        let before = shape_of(Some(&self.before));
-        let after = shape_of(reading.line.as_ref());
-        match self.pressed {
-            Pressed::Space => {
-                if typed != self.typed {
-                    log(
-                        agent,
-                        &format!(
-                            "a probe pressed no Backspace: the person typed after its space; before {before}; after {after}"
-                        ),
-                    );
-                    return Next::Done(ProbeVerdict::Other);
-                }
-                if reading.info.state == InputState::Interaction
-                    || !space_taken(&self.before, &reading)
-                {
-                    log(
-                        agent,
-                        &format!(
-                            "a probe pressed no Backspace: its space did not show where the input starts, or a menu or question showed; before {before}; after {after}"
-                        ),
-                    );
-                    return Next::Done(ProbeVerdict::Other);
-                }
-                self.verdict = if still {
-                    verdict_of(&self.before, &reading)
-                } else {
-                    ProbeVerdict::Other
-                };
-                self.pressed = Pressed::Backspace;
-                self.last = None;
-                Next::Backspace
-            }
-            Pressed::Backspace => {
-                if !still || !restored(self.verdict, &self.before, &reading) {
-                    log(
-                        agent,
-                        &format!(
-                            "a probe pressed nothing more: its Backspace did not put the input back as it was; before {before}; after {after}"
-                        ),
-                    );
-                    return Next::Done(ProbeVerdict::Other);
-                }
-                let what = match self.verdict {
-                    ProbeVerdict::Hint => "a hint",
-                    ProbeVerdict::Draft => "a draft",
-                    ProbeVerdict::Other => "neither a hint nor a draft for sure",
-                };
-                log(
-                    agent,
-                    &format!("a probe found the input's row {what}: {before}"),
-                );
-                Next::Done(self.verdict)
-            }
-        }
+        Next::Wait((now + PROBE_READ).min(deadline))
     }
 }
 
-fn log(agent: &str, message: &str) {
-    facade_base::log::write("daemon", "info", &format!("#{agent}: {message}"));
+fn log(agent: &str, level: &str, message: &str) {
+    facade_base::log::write("daemon", level, &format!("#{agent}: {message}"));
 }

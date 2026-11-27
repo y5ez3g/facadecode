@@ -40,7 +40,6 @@ impl Service for Hellos {
         let client = Client {
             kind: hello.kind,
             api_version,
-            verified_actor: None,
         };
         Ok((result, client, ()))
     }
@@ -106,7 +105,7 @@ impl Service for Hellos {
         self: &Arc<Self>,
         _: Value,
         _: Option<u32>,
-    ) -> Result<(Value, Arc<dyn RelayLines>), ErrorBody> {
+    ) -> Result<RelayHandshake, ErrorBody> {
         Err(ErrorBody::invalid_argument("no relays"))
     }
 

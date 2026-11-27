@@ -40,6 +40,7 @@
 		]
 	},
 	"paste": {
+		"bracketed": true,
 		"enter_ms": 120,
 		"tab_to_expand": "^[1-9][0-9]* lines ▸   Press Tab to expand$",
 		"placeholders": [

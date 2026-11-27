@@ -454,6 +454,13 @@ impl Delivery {
     /// held #a2's input until the deadline; Facade never types over a draft; nothing was typed`. It
     /// says no more than `text_written` and `enter_written`.
     pub fn failure_words(&self, to: &str) -> String {
+        if self.reason == Some(DeliveryFailure::InteractionAfterWrite) {
+            let (typed, submitted) = input_facts(self);
+            return format!(
+                "{}. {typed} {submitted} Check the recipient's terminal",
+                self.failure_reason(to)
+            );
+        }
         let typed = match (self.text_written, self.enter_written) {
             (TextWritten::None, _) => "nothing was typed",
             (TextWritten::Partial, _) => "part of it was typed",
@@ -496,6 +503,10 @@ impl Delivery {
             DeliveryFailure::SubmissionUnconfirmed => {
                 format!("Facade could not confirm by the deadline that {to}'s CLI took the message")
             }
+            DeliveryFailure::InteractionAfterWrite => format!(
+                "{to}'s CLI opened a question or menu after Facade wrote delivery input. \
+                 The paste or submission key may have been taken as an answer"
+            ),
             DeliveryFailure::Unsupported => format!(
                 "Facade types no messages into {to}'s CLI: it has no rule to read its input by"
             ),
@@ -540,6 +551,9 @@ pub enum DeliveryFailure {
     /// Its paste began, but the recipient's CLI did not take the message before the deadline. A
     /// paste its terminal had not taken whole by then still goes in, and no Enter follows it.
     SubmissionUnconfirmed,
+    /// A question or menu appeared after delivery input reached the terminal and before the
+    /// CLI showed that it took the message.
+    InteractionAfterWrite,
     /// The recipient's CLI has no rule to read its input by, so Facade types no message into it.
     Unsupported,
     /// A reason this build does not recognize.
@@ -1022,6 +1036,37 @@ mod tests {
             failed(SubmissionUnconfirmed, TextWritten::Unknown, None),
             "Facade could not confirm by the deadline that #a2's CLI took the message; what of it \
              was typed is not known"
+        );
+    }
+
+    #[test]
+    fn a_question_after_delivery_input_warns_the_sender_what_may_have_happened() {
+        let delivery = Delivery {
+            status: DeliveryStatus::Failure,
+            reason: Some(DeliveryFailure::InteractionAfterWrite),
+            text_written: TextWritten::Full,
+            enter_written: Some(false),
+            deadline: None,
+            delivered_via: None,
+            delivered_at: None,
+        };
+        let words = delivery.failure_words("#a2");
+        let notice = send_failure_text("m1", "#a2", &delivery, false);
+        for message in [words, notice] {
+            assert!(
+                message.contains(
+                    "#a2's CLI opened a question or menu after Facade wrote delivery input"
+                )
+            );
+            assert!(
+                message.contains("The paste or submission key may have been taken as an answer")
+            );
+            assert!(message.contains("The submission key was not pressed"));
+            assert!(message.contains("Check the recipient's terminal"));
+        }
+        assert_eq!(
+            serde_json::to_value(delivery.reason).unwrap(),
+            serde_json::json!("interaction_after_write")
         );
     }
 

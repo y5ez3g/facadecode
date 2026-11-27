@@ -1,5 +1,7 @@
 //! Reading inboxes, and messages leaving them.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -11,8 +13,8 @@ use facade_base::model::message::{MAX_MESSAGE_IDS, MessagesWatchArgs};
 use facade_base::{
     model::machine::WindowRef,
     model::message::{
-        DEFAULT_MESSAGES_LIMIT, Delivery, DeliveryStatus, MAX_MESSAGES_LIMIT, Message,
-        MessagesSnapshot,
+        DEFAULT_MESSAGES_LIMIT, Delivery, DeliveryFailure, DeliveryStatus, FACADE,
+        MAX_MESSAGES_LIMIT, Message, MessagesSnapshot, TextWritten,
     },
 };
 use tokio::sync::broadcast::error::RecvError;
@@ -34,6 +36,8 @@ pub(crate) struct InboxRead {
     pub(crate) last: Option<u16>,
     pub(crate) reply_to: Option<MessageRef>,
     pub(crate) wait_until: Option<Instant>,
+    /// A snapshot also has a budget for acquiring room for its reply.
+    pub(crate) admit_by: Option<Instant>,
 }
 
 /// Selection for the first reply from the recipient of a specific send.
@@ -41,6 +45,26 @@ pub(crate) struct ReplyRead {
     pub(crate) original: MessageRef,
     pub(crate) sender: AgentRef,
     pub(crate) wait_until: Instant,
+}
+
+/// An inbox page may become delivered only once the client has room for its complete answer.
+pub(crate) enum InboxSelection<T, Room> {
+    Ready {
+        count: usize,
+        result: T,
+        enqueue: Option<Box<dyn FnOnce() + Send>>,
+    },
+    Wait(Pin<Box<dyn Future<Output = Result<Room, ErrorBody>> + Send>>),
+}
+
+impl<T, Room> InboxSelection<T, Room> {
+    pub(crate) fn ready(count: usize, result: T) -> Self {
+        Self::Ready {
+            count,
+            result,
+            enqueue: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -54,13 +78,14 @@ enum ReadMode {
 impl Messages {
     /// Projects whole messages before committing the delivered prefix. A waiting read subscribes
     /// before checking so a post can wake it even if it arrives while the check is in progress.
-    pub(crate) async fn read_inbox<T>(
+    pub(crate) async fn read_inbox<T, Room: Send>(
         &self,
         owner: &str,
         is_guest: bool,
         mut read: InboxRead,
         cancel: Cancel,
-        project: impl Fn(&MessagesSnapshot) -> Result<(usize, T), ErrorBody> + Send,
+        project: impl Fn(&MessagesSnapshot, Option<Room>) -> Result<InboxSelection<T, Room>, ErrorBody>
+        + Send,
     ) -> Result<T, ErrorBody> {
         read.wait_until = read.wait_until.map(Due::inbox_wait);
         self.read_selected(owner, is_guest, read, None, cancel, project)
@@ -68,13 +93,14 @@ impl Messages {
     }
 
     /// Takes one complete matching reply within the send's remaining time.
-    pub(crate) async fn read_first_reply<T>(
+    pub(crate) async fn read_first_reply<T, Room: Send>(
         &self,
         owner: &str,
         is_guest: bool,
         read: ReplyRead,
         cancel: Cancel,
-        project: impl Fn(&MessagesSnapshot) -> Result<(usize, T), ErrorBody> + Send,
+        project: impl Fn(&MessagesSnapshot, Option<Room>) -> Result<InboxSelection<T, Room>, ErrorBody>
+        + Send,
     ) -> Result<T, ErrorBody> {
         let inbox = InboxRead {
             reply_to: Some(read.original),
@@ -85,14 +111,15 @@ impl Messages {
             .await
     }
 
-    async fn read_selected<T>(
+    async fn read_selected<T, Room: Send>(
         &self,
         owner: &str,
         is_guest: bool,
         read: InboxRead,
         sender: Option<&AgentRef>,
         mut cancel: Cancel,
-        project: impl Fn(&MessagesSnapshot) -> Result<(usize, T), ErrorBody> + Send,
+        project: impl Fn(&MessagesSnapshot, Option<Room>) -> Result<InboxSelection<T, Room>, ErrorBody>
+        + Send,
     ) -> Result<T, ErrorBody> {
         if read.after.is_some() && read.last.is_some() {
             return Err(ErrorBody::invalid_argument("give after or last, not both"));
@@ -112,12 +139,16 @@ impl Messages {
         let mut reply_wait = None;
         let deliveries = &self.deliveries;
         let limit = usize::from(DEFAULT_MESSAGES_LIMIT);
+        let mut room = None;
 
         'read: loop {
-            {
+            let reservation = {
                 let mut open = deliveries.lock();
                 if cancel.is_requested() {
                     return Err(read_cancelled());
+                }
+                if read.admit_by.is_some_and(|until| until <= Instant::now()) {
+                    return Err(read_before_deadline());
                 }
                 if wait
                     .as_ref()
@@ -150,19 +181,38 @@ impl Messages {
                         next_cursor,
                         ..MessagesSnapshot::default()
                     };
-                    let (count, result) = project(&snapshot)?;
-                    if cancel.is_requested() {
-                        return Err(read_cancelled());
+                    match project(&snapshot, room.take())? {
+                        InboxSelection::Ready {
+                            count,
+                            result,
+                            enqueue,
+                        } => {
+                            if cancel.is_requested() {
+                                return Err(read_cancelled());
+                            }
+                            if read.admit_by.is_some_and(|until| until <= Instant::now()) {
+                                return Err(read_before_deadline());
+                            }
+                            let prefix = snapshot.messages.get_mut(..count).ok_or_else(|| {
+                                ErrorBody::internal(
+                                    "inbox projection returned more than its candidate page",
+                                )
+                            })?;
+                            deliveries.deliver_read(
+                                &mut open.agents,
+                                prefix,
+                                &at,
+                                ReadMode::Unstarted,
+                            )?;
+                            drop(open);
+                            if let Some(enqueue) = enqueue {
+                                enqueue();
+                            }
+                            return Ok(result);
+                        }
+                        InboxSelection::Wait(reservation) => Some(reservation),
                     }
-                    let prefix = snapshot.messages.get_mut(..count).ok_or_else(|| {
-                        ErrorBody::internal(
-                            "inbox projection returned more than its candidate page",
-                        )
-                    })?;
-                    deliveries.deliver_read(&mut open.agents, prefix, &at, ReadMode::Unstarted)?;
-                    return Ok(result);
-                }
-                if is_guest
+                } else if is_guest
                     && reply_wait.is_none()
                     && let Some((until, _)) = &wait
                     && let Some(reference) = &read.reply_to
@@ -185,9 +235,36 @@ impl Messages {
                             .insert(owner.to_owned(), Arc::downgrade(&waiting));
                         reply_wait = Some(waiting);
                     }
+                    None
+                } else {
+                    None
                 }
+            };
+
+            if let Some(reservation) = reservation {
+                let granted =
+                    if let Some(until) = wait.as_ref().map(|(until, _)| *until).or(read.admit_by) {
+                        tokio::select! {
+                            biased;
+                            () = cancel.requested() => return Err(read_cancelled()),
+                            () = tokio::time::sleep_until(until) => {
+                                if wait.is_some() { break 'read; }
+                                return Err(read_before_deadline());
+                            }
+                            ready = reservation => ready?,
+                        }
+                    } else {
+                        tokio::select! {
+                            biased;
+                            () = cancel.requested() => return Err(read_cancelled()),
+                            ready = reservation => ready?,
+                        }
+                    };
+                room = Some(granted);
+                continue;
             }
 
+            drop(room.take());
             let Some((until, changes)) = &mut wait else {
                 break;
             };
@@ -206,7 +283,10 @@ impl Messages {
             }
         }
         drop(reply_wait);
-        project(&MessagesSnapshot::default()).map(|(_, result)| result)
+        match project(&MessagesSnapshot::default(), room)? {
+            InboxSelection::Ready { result, .. } => Ok(result),
+            InboxSelection::Wait(_) => Err(ErrorBody::internal("an empty page waits for room")),
+        }
     }
 
     /// Finds the marked command request in the original recipient's local mailbox.
@@ -446,7 +526,16 @@ impl Deliveries {
     ) -> Result<(), ErrorBody> {
         let mut delivered = Vec::new();
         for message in messages.iter_mut() {
-            if message.delivery.status == DeliveryStatus::Success {
+            let delivery = &message.delivery;
+            let unsubmitted_notice = message.from == FACADE
+                && (delivery.enter_written == Some(false)
+                    || (delivery.reason == Some(DeliveryFailure::Timeout)
+                        && delivery.text_written == TextWritten::Full));
+            if delivery.status == DeliveryStatus::Success
+                || (matches!(mode, ReadMode::Unstarted)
+                    && delivery.status == DeliveryStatus::Failure
+                    && !unsubmitted_notice)
+            {
                 continue;
             }
             let typing = match mode {
@@ -490,6 +579,13 @@ impl Deliveries {
 
 fn read_cancelled() -> ErrorBody {
     ErrorBody::new(Reason::Cancelled, "the inbox read was cancelled")
+}
+
+pub(crate) fn read_before_deadline() -> ErrorBody {
+    ErrorBody::new(
+        Reason::Unavailable,
+        "the inbox read expired before Facade could take it",
+    )
 }
 
 fn stored_number(id: &str) -> Option<u64> {

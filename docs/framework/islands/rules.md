@@ -67,8 +67,8 @@ files in `framework/rules/`. It is a library; it starts no program.
   the file a start's command resolved to. On Windows, Pi's and Muse Code's installers' wrappers
   start the CLI's own program; everything else is as base's `programs::direct_command` has it.
 - `console_typing(rule) -> Option<ConsoleTyping>`, for the typist: on Windows, for a CLI that reads
-  console input records, the wait before submission for each UTF-16 code unit typed and whether
-  characters above U+FFFF go as key-down records.
+  console input records, the wait before submission for each UTF-16 code unit typed, whether
+  characters above U+FFFF go as key-down records and the key a line break goes as.
 - The input, state, sessions and wiring functions listed under each child below.
 - `session_meta_keys`: the keys in which CLI tool calls name their sessions.
 - `managed_instructions_from_hook(cli)` identifies the rules whose managed runs get their
@@ -144,14 +144,14 @@ Rust regular expressions.
 | `arguments` | how the CLI reads its arguments, and the options and keys Facade sets itself |
 | `choices` | the arguments that give a model and an effort |
 | `input` | the layout of the input box: `frame`, `prompt`, `editor`, `box` or `prompt_row` |
-| `paste` | the settle time, submission key policy, and visible controls for a pasted message |
+| `paste` | the settle time, submission key policy, time to show an empty input after submission, and visible controls and placeholders for a pasted message |
 | `session` | `capture` (`session_start` or `none`) and the `resume` arguments with `${session_id}` |
 | `status` | how Facade reads the CLI's state from its screen or a report's words |
 | `status_glyph` | the CLI's glyph for viewer titles once the CLI has reported its state. The `working` list holds one or more glyph frames, each shown for `frame_ms` milliseconds. The `resting` glyph is for Starting after a report, Idle, Just done, Waiting for you and Error. Every glyph must be nonempty, and `frame_ms` must be positive |
 | `ready_tools` | what to type so the CLI starts Facade's tools before its first turn |
 | `mcp` | the session key in MCP metadata or the relay environment, and whether a run gets its instructions from a hook or extension |
 | `yolo` | `work` controls for native permissions, `startup` controls for YOLO agent starts, optional `off_args` for explicit consent mode, and the trust question to answer |
-| `console` | on Windows, for a CLI that reads console input records: `per_char_ms`, the wait before submission for each UTF-16 code unit, and `records_above_bmp` |
+| `console` | on Windows, for a CLI that reads console input records: `per_char_ms`, the wait before submission for each UTF-16 code unit, `records_above_bmp`, and `line_break`, the key that puts a line break in the CLI's input, for a CLI whose Enter submits |
 
 **Adding a CLI.** Write `framework/rules/<cli>.json` and add it to `FILES` in `lib.rs`; its place there
 is its place in `facade`'s lists. With a rule file alone, Facade starts the CLI and reads its
@@ -225,8 +225,10 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     and an open synchronized update. For automatic delivery the daemon also supplies whether the
     input is untouched.
   - Each mechanism (`frame`, `prompt`, `editor`, `box`, `prompt_row`) knows only the layout its CLI was recorded drawing. Any other screen reads `unknown`, or `interaction` when one of the rule's menus or questions shows.
-  - Menu patterns match physical rows after removing trailing ASCII spaces. Leading columns,
-    adjacency and hint ranges still distinguish native menus from composer text.
+  - Menu patterns match logical lines. Terminal-wrapped rows are joined before matching, and
+    regular expressions see the lines without trailing ASCII spaces. Patterns for exact text
+    can also account for continuation indentation the CLI draws itself. Leading columns,
+    adjacency and hint ranges distinguish native menus from composer text.
   - Claude's theme chooser shows its heading, the `/theme` help and a selected native theme.
     Kiro shows a login question with a selected Yes or No, and Cursor shows its login hint
     below the Cursor Agent splash title. Those login notices also report authentication waits.
@@ -239,7 +241,26 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     For `rows` (Muse Code and Antigravity), one capture in each pattern counts the hidden rows
     from separate marker rows inside the frame. For `rules` (Claude Code and Pi), the patterns
     capture counts from the upper and lower border rules. A frame with a marked upper rule can
-    start on a continuation row.
+    start on a continuation row. A mark without a number counts as one: Pi draws its status on the
+    upper rule, before the count, and leaves the count out where both do not fit.
+  - Where the screen has no room for Pi's whole `editor`, as queued messages take it or the window is
+    small, Pi cuts the editor short: it keeps the cursor's row and leaves out the lower rule first,
+    then the upper rule and the rows under it. The reader then takes the rows up to the cursor that
+    are the editor's however much was cut (`least_rows`, a rule among them included) as a draft, and
+    nothing as empty. The cursor has to be Pi's own, behind the text, over Pi's footer, the lower
+    rule or the screen's end, and no menu shows. Without the upper rule among those rows, rows may
+    be out of sight above: `InputLine::cut` says so, and `BoxReading::draft_hidden` counts one row
+    there for telling a message's own draft. `hidden` stays empty, as Pi marks nothing.
+  - Pi asks some questions with an editor of its own, between two rules like its input's. Such an
+    editor is an interaction, never an input. `question` describes the row of `keys` that stands under
+    it. Where the keys are out of sight, the rule over the question (`top`), a blank row, the question
+    and a blank row over the editor tell it: an interaction where the footer's `footer_rows` are cut
+    as well, as Pi cuts its footer first, and unknown over a whole footer, never usable. Over a whole
+    footer, an extension's rows or a footer of more rows may have taken the keys' place, and Pi's own
+    input can stand under such rows too.
+  - Muse Code's frame also scrolls without a mark (`scrolls_unmarked`), its prompt row with the
+    draft's first rows. A frame without its prompt row is then a draft cut above, as Pi's cut editor
+    is, where it ends in the cursor's row, behind the text, and no menu shows.
   - Frames can specify an indent and a second prompt glyph. Cursor and Kiro anchor their prompt
     rows at the cursor and read wrapped rows using that prompt's margin.
   - Kiro's colored initialization and working hints at the composer cursor read `unknown` without
@@ -291,7 +312,9 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - Codex's `prompt` input accepts `›` and its `alternate_prompt`, `»` at Ultra effort.
     The updater menu reads `interaction` when the selected `Update now` row has the
     `enter continue · esc skip` footer within five rows. This also covers the wrapped option
-    in the 120-column recording.
+    in the 120-column recording. The extra-thought menu matches its complete
+    `Giving this request a little extra thought` title and `Dismiss and keep waiting` option
+    across both terminal wrapping and continuation rows.
     A wrapped footer can end with a shortcuts row that may include aligned status, the
     `tab to queue message` hint, or a standalone warning count ending in `f2 to view` with at least
     20 leading spaces. When a draft hides the hint, a colored model label identifies the
@@ -301,15 +324,37 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     and last input rows. When the model line is absent, those glyphs anchor the scrolled composer.
     The draft omits the glyphs and the reading reports one hidden row for each marked side.
   - OpenCode's box has one space between the bar and the text below `narrow_below` (44 columns),
-    and two spaces from that width.
+    and two spaces from that width. Where the screen ends within the box, its rows up to the cursor
+    are a draft, and nothing as empty. The cursor has to be behind the text, over a blank row of the
+    box or the screen's end, and no menu shows.
+  - In a narrow window, Muse Code ends the title in its frame's upper rule with `…`, and Codex draws
+    `…` in its model line in place of the folder.
+  - Where a draft does not fit with Codex's model line, Codex leaves the model line out and marks
+    nothing. Its input from the prompt row down to the cursor's row is then a draft, never an empty
+    input: the cursor stands behind the text of the input's last row, the rows under it are blank but
+    for the screen's last, where Codex keeps its status, and no menu shows.
   - An open synchronized update reads `unknown`. A reader using the terminal cursor's position
-    returns `unknown` when that position is off screen. While that cursor is hidden, those readers
-    require an inverse cell at its position to read `usable` or `draft`.
-  - Colored text alone where the input starts could be a hint or a draft. Claude can also draw hints without styling. For automatic delivery to a fresh input that has received no external edits, the reader marks a single unstyled row at the input start as `unknown` and unsure. Ordinary input reads identify that writing as a draft. A dim hint, or a mode placeholder shown above its footer, counts as empty only while the cursor is where the input starts.
+    returns `unknown` when that position is off screen. While that cursor is hidden, readers
+    require an inverse cell at its position unless the rule identifies a drawn caret or permits
+    a hidden caret in a complete frame.
+  - Colored text alone where the input starts could be a hint or a draft. Claude can also draw hints without styling. For automatic delivery to a fresh input that has received no external edits, the reader marks a single unstyled row at the input start as `unknown` and unsure. Ordinary input reads identify that writing as a draft. A dim hint or a mode placeholder shown above its footer counts as empty while the cursor is where the input starts.
+    A frame rule's `dim_cursor_hint` gives the full text of a single-row hint with its first glyph inverted by the cursor and its remaining glyphs dim.
   - A probe is judged from two readings, before its key and after, never from the time between them: whether its space went in by the cursor and the text, what the row was by the text alone, and whether Backspace put the box back by every cell and the cursor.
   - The evidence names the rows, never the draft's text. The draft's text leaves `read_draft` only as its second value and is never saved.
-  - A message's own draft is its full text or the CLI's placeholder for a paste of that size. Whitespace is ignored because wrapping and indentation draw it differently. A draft scrolled out above only has to show the text's end.
-  - Kiro's `tab_to_expand` cue matches the colored single-row disclosure at its native caret. It offers Tab to reveal a paste. The resulting draft must show the full text for confirmation, with the usual whitespace handling.
+  - The shape check compares the full text or the CLI's placeholder for a paste of that size.
+    Literal comparisons match canonically equivalent Unicode text, including a cell whose base
+    character carries combining marks. Whitespace is ignored because wrapping and indentation
+    draw it differently. A draft scrolled out above only has to show the text's end. The typist
+    uses the shape alongside its evidence of draft ownership.
+  - `paste.bracketed` says the CLI enables bracketed paste on all screens where Facade can deliver a message.
+  - `paste.backspace_unit` records how the editor deletes literal text. It accepts `grapheme`,
+    `legacy_grapheme` and `code_point`. `paste.backspace_single_code_points` records any characters
+    the editor deletes individually at the end. If no unit is recorded, one key per grapheme
+    is safe. After confirmed keys, Rules can compare the observed box with literal remainders of
+    the original paste and its canonical spellings under either deletion unit.
+  - Kiro's `tab_to_expand` cue matches the colored single-row disclosure at its native caret.
+    It offers Tab to reveal a paste. The resulting draft must show the full text for
+    confirmation, with the usual whitespace handling.
   - OpenCode's `[Pasted ~N lines]` counts the lines after trimming whitespace from both ends of the paste.
     Claude Code's `[Pasted text #N]` matches a paste with no line break.
     Antigravity's `[Pasted text #N M chars]` counts Unicode scalar values, including line breaks.
@@ -318,21 +363,74 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
 - **Never does:** decide when to type, write terminal input, read CLI reports, hooks or session files, or keep state between readings.
 - **Interface** (re-exported from `facade_rules`):
   - `read_box(&InputRule, &ScreenView) -> BoxReading` gives the reading, the draft's text,
-    the input's first row, any recognized wait kind, and whether the reading is unsure.
-    The `InputLine` includes the input's starting column and cursor, its cells and styling,
-    and whether the box has more rows.
-  - `read_box_for_typing(&InputRule, &ScreenView, bool) -> BoxReading` lets automatic delivery
-    consider an unstyled probe when the daemon reports untouched input and the CLI's rule allows it.
+    its cursor within the draft rows when located, the input's first row, any recognized wait kind, and whether the
+    reading is unsure. `BoxReading::logical_draft(paste)` joins display wraps and maps the caret
+    to an offset in the logical text, including when the cells and paste have equivalent Unicode
+    spellings. Final spaces or tabs in the paste are presentation padding for this comparison.
+    A caret on a blank soft continuation can be in that padding.
+    The `InputLine` includes the
+    input's starting column and cursor, its cells and styling, and whether the box has more rows.
+    `BoxReading::draft_hidden() -> Option<HiddenRows>` gives the draft's rows out of sight for
+    telling a message's own draft: the marked ones of `info.hidden`, or one row above where the
+    screen cut the input without a mark (`InputLine::cut`).
+    `BoxReading::is_unread() -> bool` reports an `Unknown` reading with no first row, as in the
+    middle of a frame. An unsure reading has its first row, which a probe compares.
+    A full unmarked editor viewport may also return `paste_tail`, the displayed text ending at
+    its caret. It retains the unknown input state. The daemon can use the tail only to verify
+    an active paste that began in an observed empty box.
+    `BoxReading::new(info, draft)` builds a reading without the geometry or paste evidence.
+    `frame_writes` uses Screen's cell-write evidence at the input caret it located, including a
+    caret that the CLI drew away from the terminal cursor.
+  - `read_box_for_typing(&InputRule, &ScreenView, bool) -> BoxReading` considers an unstyled
+    row ambiguous when the daemon reports untouched input and the CLI's rule allows a probe.
+    Inspection reports the ambiguity, and delivery can probe the row.
+  - `read_box_with_redraw(&InputRule, &Screen, bool) -> (BoxReading, bool)` adds whether the
+    recognized input was drawn after the caller's input boundary. Its input flag has the same
+    meaning as in `read_box_for_typing`. The returned flag covers the menu anchor in an interaction
+    and both borders, the prompt and visible text in a complete ordinary frame.
+    The actor supplies complete frames in output order.
+  - `read_box_after_paint(&InputRule, &Screen) -> BoxReading` requires the cells making up the
+    visible draft, or the start of a confirmed empty input, to have been painted since the actor's
+    last write boundary.
   - `read_draft(&InputRule, &ScreenView) -> (InputInfo, Option<String>)` gives the input state,
     evidence, mechanism and scrolled rows along with the draft's text. `read_input` gives
-    `InputInfo` alone. The actor uses ordinary readings for inspect, readiness, state and
+    `InputInfo` alone. The actor uses ordinary readings for readiness, state and
     tracking when the CLI takes a person's draft.
   - `with_paste_text(&PasteRule, draft, pastes) -> String`: the agent actor uses it to give back the pasted text behind each placeholder in a draft the person submits.
   - For the typist:
+    - `PasteRule::brackets_delivery() -> bool` selects whether to wrap automatic delivery in paste brackets.
     - `is_own_draft(&PasteRule, draft, text, hidden) -> bool` matches the message in the input box before submission.
-    - `is_legacy_split_paste(&PasteRule, draft, prefix, pasted) -> bool` matches an older daemon's visible typed prefix and the paste placeholder during recovery.
+    - `is_own_paste_tail(shown, text) -> bool` compares a nonempty viewport tail with the
+      same paste's suffix, ignoring layout whitespace.
+    - `is_own_recovered_draft(&PasteRule, draft, text, hidden) -> bool` also recognizes historical
+      layouts declared by `paste.legacy_split_prefixes`. The rule verifies the visible typed prefix
+      and the placeholder for the remaining paste.
+    - `PasteRule::shows_tab_to_expand(&BoxReading) -> bool` recognizes the native disclosure.
+    - `is_full_draft(draft, text, hidden) -> bool` compares the fully revealed draft with the
+      paste, allowing layout whitespace differences.
     - `settle_time(&PasteRule, text) -> Duration` gives the base wait plus the wait for each line.
+    - `PasteRule::submit_clear_time() -> Option<Duration>` gives the hold limit once the submission key
+      reaches the terminal. For the built-in CLIs, `submit_clear_ms` is the larger p99.9 time
+      from key write to complete empty input measured under load while idle and while working,
+      rounded up to a millisecond.
+    - `PasteRule::retry_submit_time() -> Option<Duration>` gives the wait before checking a retained
+      draft for another submission. Enable it where a submission key on an empty input is harmless.
+      The built-in CLIs with retry enabled use the same measured duration for both rules.
     - `is_same_draft(draft, seen, text, hidden) -> bool` compares the observed drafts, including the placeholder's paste number.
+    - `is_paste_placeholder(&PasteRule, draft)` identifies any configured paste marker.
+      `shows_paste_placeholder(&PasteRule, draft, text)` additionally checks its size against the paste.
+      The typist uses its observed marker to retain the paste's identity.
+    - `shows_paste_end(&BoxReading, text)` identifies the logical end for incremental input.
+      `read_box_for_screen` attaches evidence from cells painted since the paste began. Soft
+      wraps join one logical line. Painted horizontal blanks, including Unicode spaces, and
+      line feeds can prove the tail after the last glyph. The reader compares canonical text
+      using the draft summary's logical layout rules. A unique visible suffix and its painted
+      tail can locate the original last glyph with the start of the draft scrolled out.
+      The blank count starts after the actual final grapheme, including a retained zero-width one.
+      The caller establishes ownership of the box.
+    - `draft_backspace_count(&PasteRule, &BoxReading)` gives the observed size of a complete
+      plain draft with the cursor at the end, including trailing cells. The caller establishes ownership.
+    - `shows_whole(draft, text, hidden) -> bool`: a draft shows all of a message, alone or among other text. A placeholder or a scrolled draft does not.
     - `PasteRule::submission_key(working) -> Key` selects Tab for Codex while Working and Enter otherwise.
   - For the typist's probe, each from the row before its key and the reading after:
     - `space_taken(&InputLine, &BoxReading) -> bool`: whether its space went in: the cursor one column on, the row its space ahead of the text it held, or its space alone.
@@ -354,7 +452,7 @@ Reads a CLI's screen for evidence of its state (`state.rs`). A rule can also hav
     - `turn_error` (OpenCode, over its input box): when a turn's model call failed, the error stands just over that turn's summary. It reads as `Error` with the CLI's words. A turn that produced words shows a rate in its summary, so it never reads as an error.
     - `background_correction` (Codex, around its input prompt): reads `Idle` when, over the prompt, a dim footer counts the commands still running in the background, drawn exactly as the CLI draws it or cut off at the screen's right edge, and over that stands the dim summary of a finished turn. The daemon uses this to correct Codex's `working` report regardless of the installed version.
     - `background_report` (Claude Code, in a report's words) gives the daemon a `background` pattern. A `working` report whose words match the pattern reads as `idle`.
-    - `frame_transcript` (Muse Code, around its input frame): `Working` while the working line stands over the frame, with at most a usage warning or queued input between them. `Idle` under the CLI's header, a question it answered, or the end of an earlier conversation. The reader skips indented text and blank paragraph breaks when it looks for the answer marker. Where no frame is drawn, `Blocked(Auth)` while all of its sign-in choices show, and `Blocked(Permission)` while its question about trusting the workspace shows. Part of a frame on the screen reads as None. Muse Code reports an answer that asks the person something as a question, although its turn has ended. With `answers_ask`, that report counts as done while the CLI's input is on the screen.
+    - `frame_transcript` (Muse Code, around its input frame): `Working` while the working line stands over the frame, with at most a usage warning or queued input between them. `Idle` under the CLI's header, a question it answered, or the end of an earlier conversation. The reader skips indented text and blank paragraph breaks when it looks for the answer marker. Where no frame is drawn, `Blocked(Auth)` while all of its sign-in choices show, and `Blocked(Permission)` while its question about trusting the workspace shows. Part of a frame on the screen reads as None. Muse Code reports an answer that asks the person something as a question, although its turn has ended. With `answers_ask`, the actor can settle that report when a complete later frame redraws the ordinary composer.
   - To check rule files, the layer reads `COUNT` (`${count}`) and `PLURAL` (`${s}`): a footer must contain `COUNT` exactly once, and no placeholder other than these two.
 
 ### sessions

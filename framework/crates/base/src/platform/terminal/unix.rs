@@ -5,8 +5,11 @@ use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 
 use nix::fcntl::{FcntlArg, OFlag};
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
+
+use super::WriteObservation;
 
 /// The PTY master.
 #[derive(Debug)]
@@ -77,9 +80,13 @@ pub(super) struct Io(AsyncFd<File>);
 /// A master reads EIO once the CLI's side closed: that is the end of its output.
 fn end_of_output(read: io::Result<usize>) -> io::Result<usize> {
     match read {
-        Err(error) if error.raw_os_error() == Some(libc::EIO) => Ok(0),
+        Err(error) if is_end(&error) => Ok(0),
         read => read,
     }
+}
+
+fn is_end(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(libc::EIO)
 }
 
 impl Io {
@@ -107,14 +114,66 @@ impl Io {
         end_of_output(self.0.get_ref().read(buf))
     }
 
-    pub(super) async fn stop_reading(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
-        Ok(0)
+    pub(super) fn queued_output_bytes(&self) -> io::Result<usize> {
+        let mut fds = [PollFd::new(self.0.get_ref().as_fd(), PollFlags::POLLIN)];
+        let ready = poll(&mut fds, PollTimeout::ZERO)?;
+        if fds[0]
+            .revents()
+            .is_some_and(|flags| flags.contains(PollFlags::POLLHUP))
+        {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        // Darwin's output queue can also contain flow-stopped bytes.
+        if cfg!(target_os = "macos") && ready == 0 {
+            return Ok(0);
+        }
+        self.output_byte_count()
     }
 
-    pub(super) async fn write(&self, bytes: &[u8]) -> io::Result<usize> {
+    fn output_byte_count(&self) -> io::Result<usize> {
+        let mut bytes: libc::c_int = 0;
+        // The Darwin PTY master reads the tty output queue. FIONREAD measures the CLI's input.
+        #[cfg(target_os = "macos")]
+        nix::ioctl_read_bad!(queued, libc::TIOCOUTQ, libc::c_int);
+        #[cfg(not(target_os = "macos"))]
+        nix::ioctl_read_bad!(queued, libc::FIONREAD, libc::c_int);
+        // SAFETY: the descriptor stays open and bytes is writable count storage.
+        unsafe { queued(self.0.get_ref().as_raw_fd(), &mut bytes) }.map_err(|error| {
+            let error = io::Error::from(error);
+            if is_end(&error) {
+                io::ErrorKind::UnexpectedEof.into()
+            } else {
+                error
+            }
+        })?;
+        usize::try_from(bytes).map_err(|_| io::Error::other("invalid queued terminal byte count"))
+    }
+
+    pub(super) async fn stop_reading(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    pub(super) async fn write(
+        &self,
+        bytes: &[u8],
+        check: Option<WriteObservation<'_>>,
+    ) -> io::Result<Option<usize>> {
         loop {
             let mut ready = self.0.writable().await?;
-            match ready.try_io(|file| file.get_ref().write(bytes)) {
+            let attempt = |file: &AsyncFd<File>| {
+                let before = check.and_then(|_| self.output_byte_count().ok());
+                if check.is_some_and(|check| !check.permits(before)) {
+                    return Ok(None);
+                }
+                let n = file.get_ref().write(bytes)?;
+                if n > 0
+                    && let Some(check) = check
+                {
+                    check.issued(before);
+                }
+                Ok(Some(n))
+            };
+            match ready.try_io(attempt) {
                 Ok(written) => return written,
                 // A full PTY master can go on reporting writable while a write would block, as
                 // Linux 7.0's does: wait a moment before trying again rather than spin.
@@ -178,5 +237,40 @@ impl TestCli {
 
     pub(super) fn size(&self) -> (u16, u16) {
         size_of_terminal(self.0.as_fd()).unwrap_or((0, 0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::OnceLock;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn the_master_counts_cli_output_with_other_input_pending() {
+        let (master, mut cli) = test_terminal(80, 24).unwrap();
+        let io = Io::new(&master).unwrap();
+        assert_eq!(io.write(b"x", None).await.unwrap(), Some(1));
+        let mut fds = [PollFd::new(cli.0.as_fd(), PollFlags::POLLIN)];
+        assert_eq!(poll(&mut fds, PollTimeout::from(5_000_u16)).unwrap(), 1);
+        assert!(fds[0].revents().unwrap().contains(PollFlags::POLLIN));
+        assert_eq!(io.queued_output_bytes().unwrap(), 0);
+
+        let output = b"the CLI frame";
+        cli.write_output(output).unwrap();
+        let _readable = tokio::time::timeout(Duration::from_secs(5), io.0.readable())
+            .await
+            .expect("the frame is readable at the PTY master")
+            .unwrap();
+        assert_eq!(io.queued_output_bytes().unwrap(), output.len());
+
+        let prefix = OnceLock::new();
+        assert_eq!(
+            io.write(b"\r", Some(WriteObservation::Prefix(&prefix)))
+                .await
+                .unwrap(),
+            Some(1)
+        );
+        assert_eq!(prefix.into_inner(), Some(Some(output.len())));
     }
 }

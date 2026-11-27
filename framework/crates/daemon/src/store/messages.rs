@@ -32,6 +32,11 @@ use super::{Store, log};
 /// What a message not yet delivered satisfies. `messages_undelivered` holds the messages it
 /// selects, and a query that repeats it uses that index.
 const UNDELIVERED: &str = "status != 'success'";
+/// A timeout after writing the full text records a paste confirmed cleared before consumption.
+const UNSUBMITTED_NOTICE: &str = "\"from\" = 'facade' AND status = 'failure' \
+    AND (enter_written = 0 OR (reason = 'timeout' AND text_written = 'full'))";
+/// The paste headers with the message number before the sender and no number on notices.
+const PASTE_HEADER: i64 = 1;
 
 /// The columns a message is read from and written to, in order.
 const COLUMNS: &str = "number, \"from\", from_name, \"to\", text, reply_to, at, status, reason, \
@@ -115,10 +120,116 @@ pub(super) fn migrate_failure_notices(connection: &Connection) -> rusqlite::Resu
         .execute_batch("ALTER TABLE messages ADD COLUMN notify_failure INTEGER NOT NULL DEFAULT 0;")
 }
 
+pub(super) fn migrate_paste_evidence(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "ALTER TABLE messages ADD COLUMN paste_header INTEGER;
+         ALTER TABLE messages ADD COLUMN paste_draft BLOB;",
+    )
+}
+
+pub(crate) type DraftDigest = [u8; 32];
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CleanupProgress {
+    pub(crate) written: u32,
+    pub(crate) writing: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DraftProof {
+    pub(crate) digest: DraftDigest,
+    pub(crate) cleanup: Option<CleanupProgress>,
+}
+
+impl DraftProof {
+    pub(crate) fn observed(digest: DraftDigest) -> Self {
+        Self {
+            digest,
+            cleanup: None,
+        }
+    }
+
+    /// Bare digests remain 32 bytes. The optional tail records cleanup for this observation.
+    fn encode(self) -> Vec<u8> {
+        let mut bytes = self.digest.to_vec();
+        if let Some(cleanup) = self.cleanup {
+            bytes.push(if cleanup.writing { 2 } else { 1 });
+            bytes.extend_from_slice(&cleanup.written.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn decode(bytes: &[u8]) -> Option<Self> {
+        let (digest, tail) = bytes.split_at_checked(32)?;
+        let mut proof = Self::observed(digest.try_into().ok()?);
+        proof.cleanup = match tail {
+            [] => None,
+            [kind @ (1 | 2), count @ ..] => Some(CleanupProgress {
+                written: u32::from_le_bytes(count.try_into().ok()?),
+                writing: *kind == 2,
+            }),
+            _ => return None,
+        };
+        Some(proof)
+    }
+}
+
+pub(crate) struct KeptPaste {
+    pub(crate) messages: Vec<Message>,
+    pub(crate) current_header: bool,
+    pub(crate) draft: Option<DraftProof>,
+}
+
 /// The first recipient and checked reply of a send, retained by its originating machine.
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct SendRoute {
     pub(crate) recipient: AgentRef,
     pub(crate) reply: Option<MessageRef>,
+}
+
+/// A locally resolved route that becomes durable with its first message.
+pub(crate) struct SendRouteBinding {
+    pub(crate) target: String,
+    pub(crate) route: SendRoute,
+}
+
+fn keep_send_route(
+    connection: &Connection,
+    sender: &str,
+    request_id: &str,
+    target: &str,
+    route: &SendRoute,
+    route_cutoff: impl FnOnce() -> String,
+) -> rusqlite::Result<(SendRoute, bool)> {
+    let inserted = connection.execute(
+        "INSERT INTO send_routes
+        (sender,request_id,target,machine_id,agent_id,reply_message_id,reply_machine_id,at)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(sender,request_id,target) DO UPDATE SET
+        at=excluded.at, machine_id=excluded.machine_id, agent_id=excluded.agent_id,
+        reply_message_id=excluded.reply_message_id, reply_machine_id=excluded.reply_machine_id
+        WHERE at < ?9",
+        params![
+            sender,
+            request_id,
+            target,
+            route.recipient.machine_id,
+            route.recipient.agent_id,
+            route.reply.as_ref().map(|reply| &reply.message_id),
+            route.reply.as_ref().map(|reply| &reply.machine_id),
+            facade_base::time::iso_now(),
+            route_cutoff()
+        ],
+    )?;
+    if inserted != 0 {
+        return Ok((route.clone(), false));
+    }
+    let retained = connection.query_row(
+        "SELECT machine_id, agent_id, reply_message_id, reply_machine_id FROM send_routes
+        WHERE sender = ?1 AND request_id = ?2 AND target = ?3",
+        params![sender, request_id, target],
+        read_send_route,
+    )?;
+    Ok((retained, true))
 }
 
 fn read_send_route(row: &Row<'_>) -> rusqlite::Result<SendRoute> {
@@ -192,11 +303,12 @@ pub(crate) struct Gone {
     pub(crate) to: String,
 }
 
-/// What a settlement wrote: the messages it settled, and the results their settlement wrote.
+/// What a settlement wrote, including notices made readable after their automatic attempt ended.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Settlement {
     pub(crate) settled: Vec<u64>,
     pub(crate) results: Vec<u64>,
+    pub(crate) cleaned_notices: Vec<Message>,
 }
 
 /// A read of eligible pending mail, or of history as well when paging or reading the tail.
@@ -501,6 +613,12 @@ fn write_result(connection: &Connection, prompt: u64, result: &Message) -> rusql
     }) else {
         return Ok(false);
     };
+    // A result that tells the creator how the run ended also commits that run's exit.
+    if let Some(outcome) = &result.result
+        && let (Some(exit), Some(pid)) = (&outcome.agent.exit, outcome.agent.pid)
+    {
+        super::write_exit(connection, &outcome.agent.agent_id, Some(pid), exit)?;
+    }
     clear_result_debt(connection, prompt)?;
     if machine_id != local_machine(connection)? {
         return Ok(true);
@@ -521,7 +639,7 @@ fn clear_result_debt(connection: &Connection, prompt: u64) -> rusqlite::Result<(
     Ok(())
 }
 
-fn recipient_there(connection: &Connection, recipient: &str) -> rusqlite::Result<bool> {
+pub(super) fn recipient_there(connection: &Connection, recipient: &str) -> rusqlite::Result<bool> {
     connection.query_row(
         "SELECT EXISTS (SELECT 1 FROM agents WHERE agent_id = ?1 AND exit_at IS NULL) \
          OR EXISTS (SELECT 1 FROM guests WHERE agent_id = ?1)",
@@ -583,7 +701,10 @@ pub(crate) struct MessageTable(Arc<Store>);
 
 enum Withdrawal<'a> {
     Unstarted(&'a [u64]),
-    CleanedPaste,
+    CleanedPaste {
+        withdraw: &'a [u64],
+        batch: &'a [u64],
+    },
 }
 
 impl MessageTable {
@@ -683,22 +804,12 @@ impl MessageTable {
         route: &SendRoute,
         route_cutoff: impl FnOnce() -> String,
     ) -> anyhow::Result<(SendRoute, bool)> {
-        self.0.transaction(|| "save the original send recipient".into(), |connection| {
-            let inserted = connection.execute("INSERT INTO send_routes
-                (sender,request_id,target,machine_id,agent_id,reply_message_id,reply_machine_id,at)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(sender,request_id,target) DO UPDATE SET
-                at=excluded.at, machine_id=excluded.machine_id, agent_id=excluded.agent_id,
-                reply_message_id=excluded.reply_message_id, reply_machine_id=excluded.reply_machine_id
-                WHERE at < ?9",
-                params![sender, request_id, target, route.recipient.machine_id, route.recipient.agent_id,
-                    route.reply.as_ref().map(|reply| &reply.message_id),
-                    route.reply.as_ref().map(|reply| &reply.machine_id),
-                    facade_base::time::iso_now(), route_cutoff()])?;
-            let route = connection.query_row("SELECT machine_id, agent_id, reply_message_id, reply_machine_id FROM send_routes
-                WHERE sender = ?1 AND request_id = ?2 AND target = ?3", params![sender,request_id,target],
-                read_send_route)?;
-            Ok((route, inserted == 0))
-        })
+        self.0.transaction(
+            || "save the original send recipient".into(),
+            |connection| {
+                keep_send_route(connection, sender, request_id, target, route, route_cutoff)
+            },
+        )
     }
 
     /// Takes the next number and writes `message` under it, in one transaction, with `request`,
@@ -709,29 +820,46 @@ impl MessageTable {
         message: &Message,
         request: Option<RequestId>,
         notify_failure: bool,
+        binding: Option<&SendRouteBinding>,
     ) -> anyhow::Result<Kept> {
-        self.0.transaction(
-            || "save a message".to_string(),
-            |transaction| {
-                if let Some(request) = request
-                    && let Some(earlier) = find_request(
-                        transaction,
-                        message.from_machine_id.as_deref(),
-                        &message.from,
-                        &message.to,
-                        request,
-                    )?
-                {
-                    return Ok(Kept::Earlier(earlier));
-                }
-                let number = take_number(transaction)?;
-                write(transaction, number, message, request, notify_failure)?;
-                Ok(Kept::New(Message {
-                    message_id: format!("m{number}"),
-                    ..message.clone()
-                }))
-            },
-        )
+        self.0
+            .transaction(
+                || "save a message".to_string(),
+                |transaction| {
+                    if let Some(binding) = binding {
+                        let request = request.expect("a route binding belongs to a request ID");
+                        let (pinned, _) = keep_send_route(
+                            transaction,
+                            &message.from,
+                            request.id,
+                            &binding.target,
+                            &binding.route,
+                            crate::send_route_cutoff,
+                        )?;
+                        if pinned != binding.route {
+                            return Ok(None);
+                        }
+                    }
+                    if let Some(request) = request
+                        && let Some(earlier) = find_request(
+                            transaction,
+                            message.from_machine_id.as_deref(),
+                            &message.from,
+                            &message.to,
+                            request,
+                        )?
+                    {
+                        return Ok(Some(Kept::Earlier(earlier)));
+                    }
+                    let number = take_number(transaction)?;
+                    write(transaction, number, message, request, notify_failure)?;
+                    Ok(Some(Kept::New(Message {
+                        message_id: format!("m{number}"),
+                        ..message.clone()
+                    })))
+                },
+            )?
+            .ok_or_else(|| anyhow::anyhow!("the retained send route changed before saving"))
     }
 
     /// The message this caller kept for `to` with the same request ID within its hour.
@@ -850,7 +978,7 @@ impl MessageTable {
         Ok(changed == 1)
     }
 
-    /// Records, in one transaction, that the paste of `numbers` begins, named by its first.
+    /// Records the paste named by its first number and the header format it uses.
     pub(crate) fn begin_paste(&self, numbers: &[u64]) -> anyhow::Result<()> {
         let Some(first) = numbers.first() else {
             return Ok(());
@@ -860,8 +988,73 @@ impl MessageTable {
             |transaction| {
                 for number in numbers {
                     transaction.execute(
-                        "UPDATE messages SET paste = ?1 WHERE number = ?2 AND withdrawn = 0 AND private_receipt = 0",
-                        params![*first as i64, *number as i64],
+                        "UPDATE messages SET paste = ?1, paste_header = ?3 \
+                         WHERE number = ?2 AND withdrawn = 0 AND private_receipt = 0",
+                        params![*first as i64, *number as i64, PASTE_HEADER],
+                    )?;
+                }
+                Ok(())
+            },
+        )
+    }
+
+    /// Records the rendered draft of a paste after its writes have reached the terminal.
+    pub(crate) fn observe_paste(&self, paste: u64, draft: &DraftDigest) -> anyhow::Result<bool> {
+        let changed = self.0.with(
+            || format!("save the draft of paste #m{paste}"),
+            |connection| {
+                connection.execute(
+                    "UPDATE messages SET paste_draft = ?2
+                     WHERE number = ?1 AND paste = ?1 AND status = 'pending' AND withdrawn = 0",
+                    params![paste as i64, draft.as_slice()],
+                )
+            },
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// Changes the cleanup progress of the same observation. A revoked observation stays revoked.
+    pub(crate) fn record_cleanup(&self, paste: u64, proof: DraftProof) -> anyhow::Result<bool> {
+        let changed = self.0.with(
+            || format!("save cleanup progress of paste #m{paste}"),
+            |connection| {
+                connection.execute(
+                    "UPDATE messages SET paste_draft = ?2
+                     WHERE number = ?1 AND paste = ?1 AND substr(paste_draft, 1, 32) = ?3",
+                    params![paste as i64, proof.encode(), proof.digest.as_slice()],
+                )
+            },
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// Revokes a saved observation before anything else edits the terminal draft.
+    pub(crate) fn forget_paste_draft(&self, paste: u64) -> anyhow::Result<()> {
+        self.0.with(
+            || format!("forget the draft of paste #m{paste}"),
+            |connection| {
+                connection.execute(
+                    "UPDATE messages SET paste_draft = NULL WHERE number = ?1 AND paste_draft IS NOT NULL",
+                    [paste as i64],
+                )?;
+                Ok(())
+            },
+        )
+    }
+
+    /// Releases a paste the daemon knows was never issued. Pending messages keep their deadlines.
+    pub(crate) fn release_unissued_paste(&self, numbers: &[u64]) -> anyhow::Result<()> {
+        let Some(first) = numbers.first() else {
+            return Ok(());
+        };
+        self.0.transaction(
+            || format!("release #m{first}'s unissued paste"),
+            |transaction| {
+                for number in numbers {
+                    transaction.execute(
+                        "UPDATE messages SET paste = NULL WHERE number = ?1 AND paste = ?2 \
+                         AND status = 'pending' AND withdrawn = 0 AND private_receipt = 0",
+                        params![*number as i64, *first as i64],
                     )?;
                 }
                 Ok(())
@@ -897,17 +1090,23 @@ impl MessageTable {
         )
     }
 
-    /// Post uses this after the terminal confirms clearing its own paste before Enter.
+    /// Settles a confirmed erase and retires its saved observation in the same transaction.
+    /// A settled Facade notice may become readable once this proof rules out consumption.
     pub(crate) fn settle_cleaned_paste(
         &self,
         settled: &[(u64, &Delivery)],
         results: &[(u64, Message)],
+        withdrawals: &[u64],
+        batch: &[u64],
     ) -> anyhow::Result<Settlement> {
         self.write_deliveries(
             settled,
             "status = 'pending'",
             results,
-            Withdrawal::CleanedPaste,
+            Withdrawal::CleanedPaste {
+                withdraw: withdrawals,
+                batch,
+            },
         )
     }
 
@@ -922,14 +1121,14 @@ impl MessageTable {
         self.write_deliveries(read, UNDELIVERED, results, Withdrawal::Unstarted(&[]))
     }
 
-    /// Commits only still-pending messages whose terminal paste has yet to begin.
+    /// Commits unstarted deliveries and notices whose automatic submission did not occur.
     pub(crate) fn record_unstarted_reads(
         &self,
         read: &[(u64, &Delivery)],
     ) -> anyhow::Result<Settlement> {
         self.write_deliveries(
             read,
-            "status = 'pending' AND paste IS NULL",
+            &format!("(status = 'pending' AND paste IS NULL) OR ({UNSUBMITTED_NOTICE})"),
             &[],
             Withdrawal::Unstarted(&[]),
         )
@@ -948,9 +1147,10 @@ impl MessageTable {
                 let mut written = Settlement::default();
                 for (number, delivery) in deliveries {
                     let (withdraw, eligible) = match withdrawal {
-                        Withdrawal::CleanedPaste => {
-                            (true, "status = 'pending' AND paste IS NOT NULL")
-                        }
+                        Withdrawal::CleanedPaste { withdraw, .. } => (
+                            withdraw.contains(number),
+                            "status = 'pending' AND paste IS NOT NULL",
+                        ),
                         Withdrawal::Unstarted(numbers) if numbers.contains(number) => {
                             (true, "status = 'pending' AND paste IS NULL")
                         }
@@ -969,6 +1169,31 @@ impl MessageTable {
                     if withdraw {
                         hide_withdrawal(transaction, *number)?;
                     }
+                }
+                if let Withdrawal::CleanedPaste { batch, .. } = withdrawal
+                    && let Some(&paste) = batch.first()
+                {
+                    // Refine the outcome of an automatic notice without changing the known key
+                    // write or settling a sender again. Both facts survive a daemon replacement.
+                    let mut cleared = transaction.prepare(&format!(
+                        "UPDATE messages SET reason = 'timeout', text_written = 'full' \
+                         WHERE number = ?1 AND paste = ?2 AND \"from\" = 'facade' AND status = 'failure' \
+                         AND reason = 'submission_unconfirmed' AND withdrawn = 0 AND private_receipt = 0 \
+                         RETURNING {COLUMNS}"
+                    ))?;
+                    for &number in batch {
+                        if let Some(notice) = cleared
+                            .query_row(params![number as i64, paste as i64], read_message)
+                            .optional()?
+                        {
+                            written.cleaned_notices.push(notice.message);
+                        }
+                    }
+                    transaction.execute(
+                        "UPDATE messages SET paste_draft = NULL WHERE number = ?1 AND paste = ?1 \
+                         AND paste_draft IS NOT NULL",
+                        [paste as i64],
+                    )?;
                 }
                 Ok(written)
             },
@@ -1120,18 +1345,21 @@ impl MessageTable {
             sender.map(|sender| &sender.agent_id),
             sender.map(|sender| &sender.machine_id),
         ];
-        let eligible = "\"to\" = ?1 AND number > ?2 \
+        let eligible = format!(
+            "\"to\" = ?1 AND number > ?2 \
             AND ((status = 'pending' AND paste IS NULL AND (deadline IS NULL OR deadline > ?3)) \
-                 OR (?4 AND status = 'success')) \
+                 OR ({UNSUBMITTED_NOTICE}) \
+                 OR (?4 AND (status = 'success' OR (\"from\" = 'facade' AND status = 'failure')))) \
             AND (?5 IS NULL OR (reply_to = ?5 AND COALESCE(reply_to_machine_id, ?6) = ?7)) \
-            AND (?8 IS NULL OR (\"from\" = ?8 AND from_machine_id IS NULLIF(?9, (SELECT machine_id FROM machine))))";
+            AND (?8 IS NULL OR (\"from\" = ?8 AND from_machine_id IS NULLIF(?9, (SELECT machine_id FROM machine))))"
+        );
         match page.last {
             Some(last) => self.select_messages(
                 &format!("number IN (SELECT number FROM messages WHERE withdrawn = 0 AND private_receipt = 0 AND ({eligible}) ORDER BY number DESC LIMIT {last})"),
                 None,
                 values,
             ),
-            None => self.select_messages(eligible, Some(page.limit), values),
+            None => self.select_messages(&eligible, Some(page.limit), values),
         }
     }
 
@@ -1146,9 +1374,41 @@ impl MessageTable {
         self.select("status = 'pending'", None, [])
     }
 
-    /// The messages of paste `paste`, whatever became of each, by number.
-    pub(crate) fn paste_messages(&self, paste: u64) -> anyhow::Result<Vec<Message>> {
-        self.select_messages("paste = ?1", None, [paste as i64])
+    /// Cleanup can outlive the delivery receipt. Only the paste's first message holds its proof.
+    pub(crate) fn settled_cleanups(&self) -> anyhow::Result<Vec<(String, u64)>> {
+        self.0.with(
+            || "read cleanups whose deliveries have settled".to_string(),
+            |connection| {
+                let mut query = connection.prepare(
+                    "SELECT \"to\", number FROM messages WHERE number = paste AND status != 'pending' \
+                     AND withdrawn = 0 AND length(paste_draft) = 37",
+                )?;
+                query.query_map([], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)))?.collect()
+            },
+        )
+    }
+
+    /// The messages of a paste, by number, with the recorded format and observed draft.
+    pub(crate) fn paste_messages(&self, paste: u64) -> anyhow::Result<KeptPaste> {
+        let messages = self.select_messages("paste = ?1", None, [paste as i64])?;
+        let (current_header, draft) = self.0.with(
+            || format!("read the header of paste #m{paste}"),
+            |connection| {
+                Ok(connection.query_row(
+                    "SELECT COALESCE(paste_header = ?2, 0), paste_draft FROM messages WHERE number = ?1",
+                    params![paste as i64, PASTE_HEADER],
+                    |row| {
+                        let draft: Option<Vec<u8>> = row.get(1)?;
+                        Ok((row.get(0)?, draft.as_deref().and_then(DraftProof::decode)))
+                    },
+                ).optional()?.unwrap_or_default())
+            },
+        )?;
+        Ok(KeptPaste {
+            messages,
+            current_header,
+            draft,
+        })
     }
 
     /// Whether message `number` is kept.
@@ -1182,7 +1442,12 @@ impl MessageTable {
                     "DELETE FROM messages WHERE (withdrawn OR private_receipt) AND at < ?1",
                     [since],
                 )?;
-                delete_returning(connection, "at < ?1", before)
+                delete_returning(
+                    connection,
+                    "at < ?1 AND (paste IS NULL OR paste NOT IN (SELECT number FROM messages \
+                        WHERE number = paste AND withdrawn = 0 AND length(paste_draft) = 37))",
+                    before,
+                )
             },
         )
     }
@@ -1267,6 +1532,82 @@ mod tests {
             delivered_via: Some(DeliveredVia::ReadByRecipient),
             delivered_at: Some(at.into()),
         }
+    }
+
+    #[test]
+    fn cleanup_progress_survives_reopen_and_cannot_restore_revoked_draft_evidence() {
+        let framework = Framework::new("cleanup-progress");
+        let digest = [7; 32];
+        let mut proof = DraftProof::observed(digest);
+        {
+            let store = framework.open();
+            store.insert_message(&message(0, "a2"), None).unwrap();
+            let table = store.message_table();
+            table.begin_paste(&[1]).unwrap();
+            assert!(table.observe_paste(1, &digest).unwrap());
+            assert_eq!(table.paste_messages(1).unwrap().draft, Some(proof));
+            proof.cleanup = Some(CleanupProgress {
+                written: 0,
+                writing: true,
+            });
+            assert!(table.record_cleanup(1, proof).unwrap());
+        }
+        let store = framework.open();
+        let table = store.message_table();
+        assert_eq!(table.paste_messages(1).unwrap().draft, Some(proof));
+        proof.cleanup = Some(CleanupProgress {
+            written: 5,
+            writing: false,
+        });
+        assert!(table.record_cleanup(1, proof).unwrap());
+        assert_eq!(table.paste_messages(1).unwrap().draft, Some(proof));
+        table.forget_paste_draft(1).unwrap();
+        assert!(!table.record_cleanup(1, proof).unwrap());
+        assert_eq!(table.paste_messages(1).unwrap().draft, None);
+        assert_eq!(DraftProof::decode(&[7; 36]), None);
+    }
+
+    #[test]
+    fn a_settled_cleanup_keeps_its_paste_until_the_observation_is_revoked() {
+        let framework = Framework::new("settled-cleanup");
+        let store = framework.open();
+        for _ in 0..2 {
+            store.insert_message(&message(0, "a2"), None).unwrap();
+        }
+        let table = store.message_table();
+        table.begin_paste(&[1, 2]).unwrap();
+        let digest = [8; 32];
+        assert!(table.observe_paste(1, &digest).unwrap());
+        let proof = DraftProof {
+            digest,
+            cleanup: Some(CleanupProgress::default()),
+        };
+        assert!(table.record_cleanup(1, proof).unwrap());
+        assert!(table.settled_cleanups().unwrap().is_empty());
+        let delivery = failure(DeliveryFailure::SubmissionUnconfirmed);
+        table
+            .settle_messages(&[(1, &delivery), (2, &delivery)], &[])
+            .unwrap();
+        drop((table, store));
+
+        let table = framework.open().message_table();
+        let expire = || {
+            table
+                .expire_messages("9999", String::new, String::new)
+                .unwrap()
+        };
+        assert_eq!(table.settled_cleanups().unwrap(), [("a2".into(), 1)]);
+        assert!(table.pending_messages().unwrap().is_empty());
+        assert!(
+            expire().is_empty(),
+            "expiry cannot discard an active cleanup"
+        );
+        let kept = table.paste_messages(1).unwrap();
+        assert_eq!(kept.draft, Some(proof));
+        assert_eq!(numbers(&kept.messages), ["m1", "m2"]);
+        table.forget_paste_draft(1).unwrap();
+        assert!(table.settled_cleanups().unwrap().is_empty());
+        assert_eq!(expire().len(), 2);
     }
 
     #[test]
@@ -1409,11 +1750,41 @@ mod tests {
                  SELECT RAISE(ABORT, 'refused'); END;",
             )
             .unwrap();
+        let message = message(0, "a2");
+        let request = RequestId {
+            id: "routed",
+            since: "2000-01-01T00:00:00.000Z",
+            caller_window_id: None,
+        };
+        let binding = SendRouteBinding {
+            target: "worker".into(),
+            route: SendRoute {
+                recipient: AgentRef {
+                    machine_id: "local".into(),
+                    agent_id: "a2".into(),
+                },
+                reply: None,
+            },
+        };
+        let routes = store.message_table();
+        let retained = || {
+            routes
+                .send_target(
+                    &message.from,
+                    request.id,
+                    &binding.target,
+                    crate::send_route_cutoff,
+                )
+                .unwrap()
+        };
         assert!(
-            store
-                .message_table()
-                .insert_message(&message(0, "a2"), None, false)
+            routes
+                .insert_message(&message, Some(request), false, Some(&binding))
                 .is_err()
+        );
+        assert!(
+            retained().is_none(),
+            "a failed message leaves no route or number"
         );
         store
             .connection
@@ -1422,14 +1793,15 @@ mod tests {
             .execute_batch("DROP TRIGGER refuse")
             .unwrap();
         assert_eq!(
-            store
-                .insert_message(&message(0, "a2"), None)
+            routes
+                .insert_message(&message, Some(request), false, Some(&binding))
                 .unwrap()
                 .into_message()
                 .message_id,
             "m2",
             "the refused message took no number"
         );
+        assert!(retained().is_some_and(|route| route == binding.route));
     }
 
     /// Every field of a message, its delivery and its paste survive a reopen.
@@ -1467,7 +1839,7 @@ mod tests {
                 .into_message(),
             store
                 .message_table()
-                .insert_message(&from_elsewhere, None, true)
+                .insert_message(&from_elsewhere, None, true, None)
                 .unwrap()
                 .into_message(),
         ];
@@ -1523,7 +1895,7 @@ mod tests {
             }
         );
         assert_eq!(
-            numbers(&store.message_table().paste_messages(1).unwrap()),
+            numbers(&store.message_table().paste_messages(1).unwrap().messages),
             ["m1", "m2"],
             "a paste's messages, whatever became of each"
         );
@@ -1700,7 +2072,8 @@ mod tests {
             settled,
             Settlement {
                 settled: vec![1],
-                results: vec![1]
+                results: vec![1],
+                ..Settlement::default()
             }
         );
         assert_eq!(owed(&store, 1), None, "the prompt owes nothing more");
@@ -1714,7 +2087,8 @@ mod tests {
             read,
             Settlement {
                 settled: vec![1],
-                results: vec![]
+                results: vec![],
+                ..Settlement::default()
             },
             "a later read delivers the prompt with no second result"
         );
@@ -1800,7 +2174,7 @@ mod tests {
             let number = super::number_of(&kept);
             match went {
                 true => drop(store.delete("a1", crate::an_hour_ago).unwrap()),
-                false => store.record_exit("a1", &exit).unwrap(),
+                false => drop(store.record_exit("a1", &exit, None).unwrap()),
             }
             let reference = owed_number.unwrap();
             let owed_result = result(&reference, &kept, &timeout);
@@ -1811,7 +2185,8 @@ mod tests {
                 settled,
                 Settlement {
                     settled: vec![number],
-                    results: vec![]
+                    results: vec![],
+                    ..Settlement::default()
                 },
                 "{caller}"
             );

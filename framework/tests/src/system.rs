@@ -484,6 +484,66 @@ fn all_processes() -> Vec<i32> {
     }
 }
 
+/// How many handles process `pid` holds open, or on Unix descriptors.
+#[cfg(target_os = "linux")]
+pub fn open_handles(pid: i32) -> usize {
+    std::fs::read_dir(format!("/proc/{pid}/fd"))
+        .expect("the process runs")
+        .count()
+}
+#[cfg(target_os = "macos")]
+pub fn open_handles(pid: i32) -> usize {
+    const ROOM: usize = 4096;
+    // SAFETY: proc_fdinfo is plain data, valid with every byte zero.
+    let mut descriptors: [libc::proc_fdinfo; ROOM] = unsafe { std::mem::zeroed() };
+    // SAFETY: proc_pidinfo writes at most the size given into `descriptors`.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDLISTFDS,
+            0,
+            (&raw mut descriptors).cast(),
+            std::mem::size_of_val(&descriptors) as libc::c_int,
+        )
+    };
+    let open = written.max(0) as usize / std::mem::size_of::<libc::proc_fdinfo>();
+    assert!((1..ROOM).contains(&open), "{open} descriptors of {pid}");
+    open
+}
+#[cfg(windows)]
+pub fn open_handles(pid: i32) -> usize {
+    use windows_sys::Win32::System::Threading::{
+        GetProcessHandleCount, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    let mut open = 0u32;
+    with_process(pid, PROCESS_QUERY_LIMITED_INFORMATION, |process| {
+        // SAFETY: the process's handle is open and `open` is written.
+        unsafe { GetProcessHandleCount(process, &mut open) };
+    });
+    assert!(open > 0, "no handles of {pid}");
+    open as usize
+}
+
+/// The memory process `pid` has for itself alone, in bytes, with what it allocated and never touched:
+/// what Windows counts against the system's commit limit.
+#[cfg(windows)]
+pub fn private_memory(pid: i32) -> usize {
+    use windows_sys::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX,
+    };
+    use windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
+    // SAFETY: PROCESS_MEMORY_COUNTERS_EX is plain data, valid with every byte zero.
+    let mut counters: PROCESS_MEMORY_COUNTERS_EX = unsafe { std::mem::zeroed() };
+    counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
+    let size = counters.cb;
+    with_process(pid, PROCESS_QUERY_LIMITED_INFORMATION, |process| {
+        // SAFETY: the process's handle is open and the system writes at most `size` bytes.
+        unsafe { GetProcessMemoryInfo(process, (&raw mut counters).cast(), size) };
+    });
+    assert!(counters.PrivateUsage > 0, "no memory of {pid}");
+    counters.PrivateUsage
+}
+
 /// The program process `pid` runs, where it can be opened.
 #[cfg(windows)]
 pub fn program_of(pid: i32) -> Option<PathBuf> {

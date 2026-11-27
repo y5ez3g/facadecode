@@ -94,11 +94,15 @@ delivery. Either path gives the CLI the prompt with its 📨 header (2.1), under
 caller does not need to compensate for CLI differences. Start that delivery budget when the CLI process starts, not
 after waiting indefinitely for ready. Where a CLI's first turn could not use the Facade tools - Antigravity, which
 starts a folder's plugin servers only with its first turn or its MCP panel - its start types what readies them before
-any other input. Once its input first reads empty, within thirty seconds, it types `/mcp`, then Enter once that alone
-shows in the input, within two seconds; then Escape as soon as the panel shows the server ready, or after ten seconds
-while the panel is still open. It is given up, typing nothing, where the input first reads anything else or nothing
-within those thirty seconds, or the CLI is working, and Enter is not pressed where `/mcp` does not show alone: the
-person's own first turn then starts the tools for the turns after it. Its creation prompt goes after that, as its first
+any other input. The start has up to thirty seconds to read an empty input box, see its own `/mcp` alone in that box,
+and see Facade's server ready in the open panel. The allowance starts again when a CLI startup question is answered.
+The complete command frame allows Enter, and the complete ready panel allows Escape. Each stroke uses the
+current screen and CLI status after the available terminal output is read. A CLI question takes priority over
+starting the tools. The startup deadline also applies at system handoff. At the deadline the start withdraws unissued strokes and leaves
+any remaining draft or panel to the person. It releases the person's keys and reports that their first turn may
+run without Facade's tools. An Escape already handed to the system must finish and its key interval must pass
+before more input. A draft or a
+working CLI at the start also ends preparation. Its creation prompt goes after that, as its first
 message, its budget starting as that preparation is done or given up - never sooner because the start answered, which it
 does once the process runs (MCP-2.3). A window reloaded during the preparation skips what is left of it, as it is kept
 in memory alone: the prompt goes as the input allows, and that first turn may lack the tools. Until that prompt is

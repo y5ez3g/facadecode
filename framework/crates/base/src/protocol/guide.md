@@ -145,8 +145,10 @@ environment. Daemon status gives the home, settings path, build, PIDs and local 
 `agent.send` delivers to an eligible managed agent or Guest.
 The public receipt identifies the assigning machine in a message address such as
 `m42@devbox`. Replies can carry an address or a full message reference. Each reply target
-is verified at entry. Terminal delivery is confirmed when the submission key reaches
-the terminal. The receipt field `delivery.enter_written` reports that write.
+is verified at entry. Terminal delivery is confirmed by a complete empty frame drawn
+after the submission write is issued and before a key that could edit the input.
+The receipt field
+`delivery.enter_written` reports whether the submission key reached the terminal.
 Codex uses Tab to queue ordinary messages while Working. Initial prompts and recovered
 drafts use Enter, as does ordinary delivery outside that Codex path. A Guest can read
 complete messages inline.
@@ -198,6 +200,9 @@ and the input facts. Successful delivery leaves the number unused. A managed age
 an agent creator can also report 30 seconds of continuous waiting or Error, or an observed
 end, through the creator's Facade inbox. An effective stop by the creator is reported in
 the stop call. A startup delivery failure and its watchdog incident share one notification.
+The inbox keeps a Facade notice under its original message number after the automatic delivery
+deadline. `read_messages` can take a notice whose submission did not occur. A history read with
+`last` or `after` can also show a notice whose submission remains unconfirmed.
 
 ### YOLO and creation trees
 
@@ -210,8 +215,8 @@ verifies callers before reading their records or delivering their operations.
 
 The shared local socket accepts a separate relay handshake before daemon API admission.
 It identifies the verified local process using relay contract 1. Once accepted, the stream
-carries MCP JSON-RPC. A verified internal `kind:"mcp"` actor negotiates the daemon API
-independently. Direct external `kind:"mcp"` hello is refused.
+carries MCP JSON-RPC. The daemon verifies the actor before dispatching typed calls in the same
+process. Direct external `kind:"mcp"` hello is refused.
 
 ```jsonl relay
 {"jsonrpc":"2.0","id":1,"method":"hello","params":{"relay":1,"args":["--guest","codex"],"env":{},"cwd":null,"reconnect":false}}
@@ -219,6 +224,20 @@ independently. Direct external `kind:"mcp"` hello is refused.
 {"jsonrpc":"2.0","method":"closing","params":{"build":"1.0.1+example"}}
 {"jsonrpc":"2.0","method":"closing","params":{}}
 ```
+
+The daemon can advertise `request_context:true` in the hello result. A relay using that capability
+wraps a request as `{"relay_request":{"first_line_ns":0,"replay":"first","cancelled":false},"request":{...}}`.
+`first_line_ns` is the local monotonic timestamp in nanoseconds when the relay first read the
+complete request. `replay` is `first` for a new request, `planned` after a negotiated and confirmed
+closing, or `interrupted` after an unconfirmed disconnect. The relay sends any pending cancellation
+in the same replay frame. Older relays continue to send ordinary MCP lines. Responses preserve the
+request's ID token, including its original JSON escaping.
+
+For planned handover, the daemon queues the replies for committed inbox pages and terminal inputs
+before `closing`. A relay outputs and flushes preceding replies before acknowledging `closing`.
+The original daemon settles the cancellations it received before that acknowledgement. It can
+refuse the handover if the relay cannot confirm in time. After an unexpected disconnect, an
+interrupted inbox read reports that its result is unknown. Use `last` to retrieve recent history.
 
 ### Text and keys
 

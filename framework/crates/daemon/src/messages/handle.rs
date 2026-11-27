@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 use facade_base::model::{agent::ManagedAgent, message::DeliveryFailure};
 
 use super::{Deliveries, Outcome, PromptNotice, PromptWatch, warn};
+use crate::store::{DraftDigest, DraftProof};
 use crate::{blocking_in_place, pause_for_test};
 
 /// What a typist may ask of the messages: whether a message is still to be typed, leave to paste
@@ -57,9 +58,44 @@ impl DeliveryHandle {
         Some(granted)
     }
 
+    pub(crate) fn observe_paste(&self, number: u64, draft: &DraftDigest) -> bool {
+        blocking_in_place(|| self.0.table.observe_paste(number, draft)).unwrap_or_else(|err| {
+            warn(&format!("{err:#}"));
+            false
+        })
+    }
+
+    pub(crate) fn forget_paste_draft(&self, number: u64) -> bool {
+        blocking_in_place(|| self.0.table.forget_paste_draft(number))
+            .inspect_err(|err| warn(&format!("{err:#}")))
+            .is_ok()
+    }
+
+    pub(crate) fn record_cleanup(&self, number: u64, proof: DraftProof) -> bool {
+        blocking_in_place(|| self.0.table.record_cleanup(number, proof)).unwrap_or_else(|err| {
+            warn(&format!("{err:#}"));
+            false
+        })
+    }
+
+    /// Returns a durably reserved paste to the pending messages when no bytes were issued.
+    pub(crate) fn release_unissued_paste(&self, numbers: &[u64]) -> bool {
+        let mut open = self.0.lock();
+        if let Err(err) = blocking_in_place(|| self.0.table.release_unissued_paste(numbers)) {
+            warn(&format!("{err:#}; retaining the paste reservation"));
+            return false;
+        }
+        for number in numbers {
+            if let Some(delivery) = open.agents.get_mut(number) {
+                delivery.pasted = false;
+            }
+        }
+        true
+    }
+
     /// Ends the deliveries among `numbers` still open, as `outcome` says.
-    pub(crate) fn settle(&self, numbers: &[u64], outcome: Outcome) {
-        self.0.settle(numbers, outcome);
+    pub(crate) fn settle(&self, numbers: &[u64], outcome: Outcome) -> bool {
+        self.0.settle(numbers, outcome)
     }
 
     /// Gives a due incident to the startup prompt under the paste fence. A paste already in

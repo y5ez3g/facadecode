@@ -117,6 +117,15 @@ mod tests {
         (folder, dir)
     }
 
+    #[test]
+    fn released_screens_share_the_read_only_placeholder() {
+        let first = LoggedScreen::released(PathBuf::new(), "a1");
+        let second = LoggedScreen::released(PathBuf::new(), "a2");
+        assert!(!first.is_held() && !second.is_held());
+        assert_eq!((first.screen().cols(), first.screen().rows()), (2, 1));
+        assert!(std::ptr::eq(first.screen(), second.screen()));
+    }
+
     /// Copies an agent folder, so each simulated crash recovers from the same files.
     fn copy_dir(from: &Path, to: &Path) {
         let _ = std::fs::remove_dir_all(to);

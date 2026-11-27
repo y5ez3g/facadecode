@@ -63,6 +63,20 @@ macro_rules! operations {
             $( $marker($args), )*
         }
 
+        impl DaemonCall {
+            /// Checks a typed call's audience and constraints on decoded arguments.
+            pub fn authorize(&self, kind: ClientKind) -> Result<(), ErrorBody> {
+                let (name, access) = match self {
+                    $( Self::$marker(_) => (
+                        $marker::NAME,
+                        EntryAccess { local: $local, forwarded: $forwarded },
+                    ), )*
+                };
+                require_access(name, access, kind)?;
+                validate_call(self)
+            }
+        }
+
         pub fn visit_operations(visitor: &mut impl DaemonOperationVisitor) {
             $( visitor.operation::<$marker>(EntryAccess { local: $local, forwarded: $forwarded }); )*
         }
@@ -246,6 +260,39 @@ mod tests {
                 "{:?}",
                 operation_names(kind)
             );
+        }
+    }
+
+    #[test]
+    fn typed_calls_have_the_same_access_and_decoded_argument_checks() {
+        let log = LogArgs { lines: None };
+        let raw = AgentTypeArgs {
+            target: AgentTarget::Selector("a1".into()),
+            input: TerminalInput::Raw { raw: "a".into() },
+        };
+        let pairs = [
+            (
+                DaemonCall::DaemonLog(log.clone()),
+                CallParams {
+                    op: DaemonLog::NAME.into(),
+                    args: serde_json::to_value(log).unwrap(),
+                },
+            ),
+            (
+                DaemonCall::AgentType(raw.clone()),
+                CallParams {
+                    op: AgentType::NAME.into(),
+                    args: serde_json::to_value(raw).unwrap(),
+                },
+            ),
+        ];
+        for (typed, wire) in pairs {
+            for kind in [ClientKind::Mcp, ClientKind::Terminal] {
+                assert_eq!(
+                    typed.authorize(kind).err(),
+                    decode_call(wire.clone(), kind).err()
+                );
+            }
         }
     }
 }

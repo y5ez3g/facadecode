@@ -529,6 +529,10 @@ missing, migration reads the machine's setting once and saves the value.
 with the same filter, or use `last` to select recent messages. Each returned inbox message has its full text in
 `data.messages`.
 
+When automatic delivery of a Facade notice expires, the inbox keeps its original message number.
+`read_messages` can take a notice whose submission did not occur. Use `last` or `after` to inspect
+notices whose submission remains unconfirmed.
+
 ### 7.3 Start on the selected machine
 
 **The target machine supplies the available CLI entries and creates the worktree a start asks for.**

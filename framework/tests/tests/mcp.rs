@@ -122,11 +122,12 @@ fn a_matching_read_finds_a_reply_already_typed_into_a_managed_terminal() {
     );
     assert_eq!(replied["status"], "success", "{replied}");
     assert_eq!(replied["data"]["delivery"], "typed_into_input", "{replied}");
+    let pasted = format!("{text} ");
     assert!(
         wait_until(secs(10), || home
             .submitted_messages()
             .iter()
-            .any(|message| { message.lines().skip(1).eq([text]) })),
+            .any(|message| message.lines().skip(1).eq([pasted.as_str()]))),
         "the reply did not reach the fake terminal: {}",
         home.screen(&ada.address)
     );
@@ -991,7 +992,7 @@ fn a_start_and_send_from_an_agent_s_terminal_come_from_the_command_line() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message m1 from command line\nfrom the boss"]
+        ["📨 Message m1 from command line\nfrom the boss "]
     );
     let child = wire.call("agent.inspect", json!({ "target": "child" }));
     assert_eq!(
@@ -2243,6 +2244,7 @@ fn an_antigravity_start_cut_before_its_record_leaves_no_plugin() {
             plugin.join("mcp_config.json").exists(),
             "{point}: the start placed the plugin"
         );
+        let original = process_identity(daemon);
         kill_process(daemon);
         // The keeper replaces a daemon that ends once it runs the agent; before that, the next
         // command starts one.
@@ -2250,6 +2252,8 @@ fn an_antigravity_start_cut_before_its_record_leaves_no_plugin() {
             home.wait_for_daemon_after(daemon, secs(30))
                 .expect("a replacement daemon");
         } else {
+            // A detach can accept the current lock holder until the process actually exits.
+            assert!(wait_until(LOADED_TIMEOUT, || !alive(&original)));
             home.start_facade_with(&[]);
         }
         assert!(home.agents().is_empty(), "{point}: {:?}", home.agents());
@@ -2478,6 +2482,222 @@ fn a_delayed_mcp_send_withdraws_its_message_by_the_original_deadline() {
     assert_eq!(std::fs::read(&keys).unwrap(), expected);
 }
 
+#[test]
+fn a_relay_replay_past_its_first_deadline_answers_only_an_existing_receipt() {
+    let home = TestHome::new("relay-original-deadline");
+    let from = home.start_named_fake("from", &[]);
+    let to = home.start_named_fake("to", &[]);
+    type_draft(&home, &to.id, "hold delivery");
+    let mut relay = McpTestClient::relay_configured(&home, &from.id);
+    let launch = |relay: &mut McpTestClient, id: u64, at: u64, replay: &str, text: &str| {
+        relay.write(
+            &json!({
+                "relay_request": { "first_line_ns": at, "replay": replay, "cancelled": false },
+                "request": { "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+                    "name": "send_message", "arguments": { "to": to.address, "text": text },
+                } },
+            })
+            .to_string(),
+        );
+        relay.tool_answer(id)
+    };
+    let now = facade_base::unix_process::monotonic_now();
+    let past = now.saturating_sub(31_000_000_000);
+    let refused = launch(&mut relay, 90, past, "planned", "past deadline");
+    assert_eq!(refused["reason"], "timeout", "{refused}");
+    let original = launch(&mut relay, 91, now, "first", "saved before deadline");
+    assert_eq!(original["status"], "success", "{original}");
+    // The same business ID uses the retained receipt even when the caller's deadline elapsed.
+    let mut reconnect = McpTestClient::relay_configured(&home, &from.id);
+    let repeated = launch(&mut reconnect, 91, past, "planned", "saved before deadline");
+    assert_eq!(repeated["status"], "success", "{repeated}");
+    assert_eq!(original["data"]["id"], repeated["data"]["id"]);
+    let mut recipient = McpTestClient::open_configured(&home, &to.id);
+    let page = recipient.call("read_messages", json!({}));
+    assert_eq!(
+        page["data"]["messages"].as_array().unwrap().len(),
+        1,
+        "{page}"
+    );
+    assert_eq!(page["data"]["messages"][0]["text"], "saved before deadline");
+}
+
+#[test]
+fn a_relay_replay_past_its_first_deadline_writes_no_keys() {
+    let home = TestHome::new("relay-key-deadline");
+    let keys = home.project.join("keys");
+    let from = home.start_named_fake("from", &[]);
+    let to = home.start_named_fake("to", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
+    let mut relay = McpTestClient::relay_configured(&home, &from.id);
+    let now = facade_base::unix_process::monotonic_now();
+    let press = |relay: &mut McpTestClient, id: u64, at: u64, key: &str| {
+        relay.write(
+            &json!({
+                "relay_request": { "first_line_ns": at, "replay": "planned", "cancelled": false },
+                "request": { "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+                    "name": "press_keys", "arguments": { "agent": to.address, "keys": [key] },
+                } },
+            })
+            .to_string(),
+        );
+        relay.tool_answer(id)
+    };
+    let late = press(&mut relay, 90, now.saturating_sub(31_000_000_000), "X");
+    let within = press(&mut relay, 91, now, "Y");
+    assert_eq!(within["status"], "success", "{within}");
+    assert!(wait_until(secs(10), || std::fs::read(&keys)
+        .is_ok_and(|data| data.contains(&b'Y'))));
+    assert_eq!(std::fs::read(keys).unwrap(), b"Y");
+    assert_eq!(late["reason"], "timeout", "{late}");
+}
+
+#[test]
+fn a_batch_cancellation_is_carried_on_the_first_replay() {
+    check_replayed_batch_cancellation(false);
+}
+
+#[cfg(windows)]
+#[test]
+fn a_batch_that_spans_ready_input_chunks_cancels_before_the_first_replay() {
+    check_replayed_batch_cancellation(true);
+}
+
+fn check_replayed_batch_cancellation(split: bool) {
+    use facade_base::sockets::{DaemonListener, ServerSocket};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufStream};
+
+    async fn read(stream: &mut BufStream<ServerSocket>) -> Value {
+        let mut line = String::new();
+        assert_ne!(stream.read_line(&mut line).await.unwrap(), 0);
+        facade_scenarios::serde_json::from_str(&line).unwrap()
+    }
+
+    async fn write(stream: &mut BufStream<ServerSocket>, line: Value) {
+        stream
+            .write_all(format!("{line}\n").as_bytes())
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+    }
+
+    async fn accept(listener: &mut DaemonListener, reconnect: bool) -> BufStream<ServerSocket> {
+        let mut stream = BufStream::new(listener.accept().await.unwrap());
+        let hello = read(&mut stream).await;
+        assert_eq!(hello["params"]["reconnect"], reconnect);
+        stream
+    }
+
+    async fn welcome(stream: &mut BufStream<ServerSocket>) {
+        write(
+            stream,
+            json!({"jsonrpc":"2.0","id":1,"result":{"relay":1,"request_context":true}}),
+        )
+        .await;
+    }
+
+    let home = TestHome::new("relay-cancelled-recipient");
+    let sender = home.start_named_fake("sender", &[]);
+    let worker = home.start_named_fake("worker", &[]);
+    let endpoint = TestHome::new("relay-batch-closing");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let text = "an unsaved and cancelled replay";
+    let request = json!({
+        "jsonrpc":"2.0", "id":"send", "method":"tools/call",
+        "params":{"name":"send_message","arguments":{"to":worker.address,"text":text}},
+    });
+    let batch = json!([
+        {"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"send"}},
+        {"jsonrpc":"2.0","id":42,"method":"tools/list", "params":{
+            "padding":" ".repeat(if split { 96 * 1024 } else { 0 })
+        }}
+    ]);
+    let padding = json!({"jsonrpc":"2.0","method":"notifications/initialized",
+        "params":{"padding":" ".repeat(256 * 1024)}});
+    let input = format!("{batch}\n{padding}\n");
+    let phase = std::cell::Cell::new("open the listener");
+    let replay = runtime.block_on(async {
+        tokio::time::timeout(secs(15), async {
+            let mut listener = DaemonListener::bind(&endpoint.daemon_socket()).unwrap();
+            let mut relay = tokio::process::Command::from(endpoint.command(&test_binaries().mcp));
+            let mut relay = relay
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::inherit())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let mut cli = relay.stdin.take().unwrap();
+            phase.set("take the first hello");
+            let mut old = accept(&mut listener, false).await;
+            welcome(&mut old).await;
+            phase.set("take the first request");
+            cli.write_all(format!("{request}\n").as_bytes())
+                .await
+                .unwrap();
+            assert_eq!(read(&mut old).await["request"], request);
+            write(
+                &mut old,
+                json!({"jsonrpc":"2.0","method":"closing","params":{"build":"next"}}),
+            )
+            .await;
+            phase.set("take the closing acknowledgement");
+            assert_eq!(read(&mut old).await["method"], "closing");
+            if !split {
+                // Filling the pipe lets the stdin reader take the batch before disconnect.
+                phase.set("send the batch while closing");
+                cli.write_all(input.as_bytes()).await.unwrap();
+                cli.flush().await.unwrap();
+            }
+            drop(old);
+            phase.set("take the reconnect hello");
+            let mut next = accept(&mut listener, true).await;
+            if split {
+                // The Windows stdin thread queues multiple chunks while hello blocks replay.
+                // The trailing padding forces the complete batch through the pipe first.
+                phase.set("queue all chunks before accepting the reconnect");
+                cli.write_all(input.as_bytes()).await.unwrap();
+                cli.flush().await.unwrap();
+            }
+            welcome(&mut next).await;
+            phase.set("take the replay");
+            let replay = read(&mut next).await;
+            assert_eq!(replay["request"], request);
+            assert_eq!(replay["relay_request"]["replay"], "planned");
+            assert_eq!(read(&mut next).await, batch);
+            relay.kill().await.unwrap();
+            replay
+        })
+        .await
+        .unwrap_or_else(|_| panic!("timed out while the fixture tried to {}", phase.get()))
+    });
+    assert_eq!(replay["relay_request"]["cancelled"], true, "{replay}");
+
+    let mut recipient = McpTestClient::relay_configured(&home, &sender.id);
+    recipient.write(&replay.to_string());
+    let cancelled = recipient
+        .wait_for_frame(secs(8), |frame| frame["id"] == "send")
+        .expect("the cancelled replay was answered");
+    assert_eq!(cancelled["error"]["code"], -32800, "{cancelled}");
+    recipient.write(&batch.to_string());
+    let refused = recipient
+        .wait_for_frame(secs(8), |frame| frame["error"]["code"] == -32600)
+        .expect("the daemon still refuses batches");
+    assert!(refused["id"].is_null());
+    let db = rusqlite::Connection::open(home.path.join("framework/facade.db")).unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT COUNT(*) FROM messages WHERE text = ?1",
+            [text],
+            |row| row.get::<_, u32>(0)
+        )
+        .unwrap(),
+        0
+    );
+}
+
 /// Over a relay connection, a `send_message` its client cancels while its message waits is
 /// withdrawn, and answered all the same, so that every request has one answer: MCP has the client
 /// ignore it.
@@ -2548,9 +2768,11 @@ fn a_send_cancelled_over_a_relay_connection_is_withdrawn_and_answered() {
     );
     assert_eq!(sent["status"], "success", "{sent}");
     assert!(
-        home.submitted_messages()
+        wait_until(secs(10), || home
+            .submitted_messages()
             .iter()
-            .any(|message| message.contains(after))
+            .any(|message| message.contains(after))),
+        "the test CLI logged the next submission"
     );
     assert!(!String::from_utf8_lossy(&std::fs::read(keys).unwrap()).contains(text));
     assert!(

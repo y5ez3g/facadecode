@@ -20,6 +20,8 @@ use crate::cli::{Cli, exit_unknown};
 use crate::link::{Inbound, Link};
 use crate::supervisor::{Due, Supervisor};
 use crate::wake::Wake;
+use facade_base::startup::Attempt;
+
 use crate::{log, prune_log_if_due};
 
 /// Back-off after `poll` itself fails, so a lasting failure cannot spin the CPU.
@@ -55,7 +57,7 @@ impl Keeper {
     /// Sets up the keeper once it owns the keeper lock: signal handling, the open-files limit the
     /// CLIs will inherit, and the socket (any file already at that path is left over from a dead
     /// keeper, since this one holds the lock).
-    pub(super) fn bind(framework: PathBuf) -> anyhow::Result<Keeper> {
+    pub(super) fn bind(framework: PathBuf, startup: Option<Attempt>) -> anyhow::Result<Keeper> {
         facade_base::limits::raise_open_files();
         // SAFETY: SIG_IGN installs no handler code.
         unsafe {
@@ -76,7 +78,10 @@ impl Keeper {
             ),
         );
         let now = Instant::now();
-        let supervisor = Supervisor::new(&framework, now);
+        if let Some(attempt) = &startup {
+            attempt.record("keeper", "keeper listener bound")?;
+        }
+        let supervisor = Supervisor::new(&framework, now, startup);
         Ok(Keeper {
             framework,
             socket,
@@ -265,7 +270,13 @@ impl Keeper {
                 let pid = self.supervisor.pid();
                 log(
                     "warn",
-                    &format!("daemon {pid} sent no ping for 15 seconds; sending SIGKILL"),
+                    &if self.supervisor.waited_for_startup() {
+                        format!(
+                            "daemon {pid} did not finish its first keeper ping before the startup deadline"
+                        )
+                    } else {
+                        format!("daemon {pid} sent no ping for 15 seconds; sending SIGKILL")
+                    },
                 );
                 if self.supervisor.kill() {
                     self.daemon_gone("was ended by the watchdog", now);
@@ -294,6 +305,7 @@ impl Keeper {
     /// otherwise a new daemon is scheduled.
     fn daemon_gone(&mut self, how: &str, now: Instant) {
         let pid = self.supervisor.pid();
+        self.supervisor.report_end(how, !self.clis.is_empty());
         if self.clis.is_empty() {
             self.exit(&format!("daemon {pid} {how} and no CLI is held"));
         }

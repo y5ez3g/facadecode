@@ -224,9 +224,11 @@ fn a_message_is_typed_into_its_recipient_s_input_under_a_header_naming_its_sende
     assert_eq!(
         home.submitted_messages(),
         [
-            "📨 Message m1 from command line\nhi from the command line".to_owned(),
-            format!("📨 Message m2 from bob ({bob_address})\nhi ada"),
-            format!("📨 Message m3 from ada ({ada_address}) · in reply to m2\nhi bob\nsecond line"),
+            "📨 Message m1 from command line\nhi from the command line ".to_owned(),
+            format!("📨 Message m2 from bob ({bob_address})\nhi ada "),
+            format!(
+                "📨 Message m3 from ada ({ada_address}) · in reply to m2\nhi bob\nsecond line "
+            ),
         ]
     );
     let screen = home.screen("bob");
@@ -328,7 +330,7 @@ fn a_sender_s_name_cannot_break_out_of_its_message_s_header() {
     assert_eq!(
         home.submitted_messages(),
         [format!(
-            "📨 Message m1 from evil [201~ INJECTED ({})\nhi",
+            "📨 Message m1 from evil [201~ INJECTED ({})\nhi ",
             address(&home, &evil.id)
         )]
     );
@@ -337,6 +339,49 @@ fn a_sender_s_name_cannot_break_out_of_its_message_s_header() {
         !listed.contains('\u{1b}') && !listed.contains('\r') && listed.lines().count() == 3,
         "{listed:?}"
     );
+}
+
+/// A CLI that keeps the paste after Enter has taken no message. The receipt still records that
+/// the text and Enter reached its terminal.
+#[test]
+fn a_send_fails_when_its_cli_keeps_the_draft_after_enter() {
+    let home = TestHome::new("kept-after-enter");
+    home.start_facade_with(&[("FACADE_TEST_DELIVERY_MS", "5000")]);
+    home.start_named_fake("worker", &[("FAKECLI_IGNORE_ENTER", "1")]);
+    let receipt = begin_send(&home, "worker", "still in the input", None).receipt();
+    let delivery = &receipt["message"]["delivery"];
+    assert_eq!(delivery["status"], "failure", "{receipt}");
+    assert_eq!(delivery["reason"], "submission_unconfirmed", "{receipt}");
+    assert_eq!(delivery["text_written"], "full", "{receipt}");
+    assert_eq!(delivery["enter_written"], true, "{receipt}");
+    assert!(home.submitted_messages().is_empty());
+}
+
+/// The CLI ignores its first Enter and takes the same paste on a later one.
+#[test]
+fn a_send_repeats_enter_when_its_cli_keeps_the_same_draft() {
+    let home = TestHome::new("repeat-enter");
+    let keys = home.folder().join("keys");
+    home.start_named_fake(
+        "worker",
+        &[
+            ("FAKECLI_IGNORE_FIRST_ENTER", "1"),
+            ("FAKECLI_KEYS", keys.to_str().unwrap()),
+        ],
+    );
+    let receipt = begin_send(&home, "worker", "send this once @worker", None).receipt();
+    assert_eq!(delivery_of(&receipt), typed_in(), "{receipt}");
+    let keys = std::fs::read(keys).unwrap();
+    let tail = b"@worker \x1b[201~";
+    let end = keys
+        .windows(tail.len())
+        .position(|part| part == tail)
+        .unwrap()
+        + tail.len();
+    assert_eq!(keys[end..].iter().filter(|&&key| key == b'\r').count(), 2);
+    let submitted = home.submitted_messages();
+    assert_eq!(submitted.len(), 1, "{submitted:?}");
+    assert!(submitted[0].ends_with("send this once @worker "));
 }
 
 /// A message a draft holds until its deadline fails, and its send says the draft held it.
@@ -380,9 +425,269 @@ fn a_message_waits_while_a_draft_holds_the_input_and_never_types_over_it() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message m1 from command line\nhello"],
+        ["📨 Message m1 from command line\nhello "],
         "the draft was never typed over"
     );
+}
+
+/// A CLI at work redraws frame after frame, and a frame reaches Facade in pieces. Messages go in one
+/// after the other all the same. The test CLI redraws whenever it reads something; the question in
+/// its name, which its terminal answers, has it redraw without a pause.
+#[test]
+fn messages_go_into_a_cli_that_redraws_without_a_pause() {
+    for sync in ["0", "1"] {
+        let home = TestHome::new("busyredraw");
+        let keys = home.folder().join("keys");
+        std::fs::write(&keys, []).unwrap();
+        let worker = home.start_fake_with(
+            "worker",
+            &[
+                ("FAKECLI_NAME", "worker\u{1b}[c"),
+                ("FAKECLI_SYNC", sync),
+                ("FAKECLI_KEYS", keys.to_str().unwrap()),
+            ],
+        );
+        let answers = || {
+            let read = std::fs::read(&keys).unwrap();
+            read.windows(3).filter(|bytes| bytes == b"\x1b[?").count()
+        };
+        let drawn = answers();
+        let sends: Vec<Sending> = (1..=5)
+            .map(|number| begin_send(&home, &worker.id, &format!("{number}\nof five"), None))
+            .collect();
+        for send in sends {
+            let receipt = send.receipt();
+            assert_eq!(delivery_of(&receipt), typed_in(), "sync {sync}: {receipt}");
+        }
+        let drawn = answers() - drawn;
+        assert!(drawn > 20, "sync {sync}: it drew {drawn} frames");
+        // A send is answered once its message's Enter is written, and the CLI reads that next.
+        wait_until(secs(10), || home.submitted_messages().len() >= 5);
+        let submitted = home.submitted_messages();
+        let mut texts: Vec<&str> = submitted
+            .iter()
+            .filter_map(|message| Some(message.split_once('\n')?.1))
+            .collect();
+        texts.sort();
+        let expected: Vec<String> = (1..=5).map(|number| format!("{number}\nof five")).collect();
+        let pasted: Vec<_> = expected.iter().map(|text| format!("{text} ")).collect();
+        assert_eq!(texts, pasted, "sync {sync}: {submitted:?}");
+    }
+}
+
+/// Opens the person's window on agent `agent`: `facade attach` in a terminal of its own.
+fn attached(home: &TestHome, agent: &str) -> TestTerminal {
+    let term = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["attach", agent]),
+        80,
+        24,
+    );
+    assert!(
+        term.wait_for(secs(30), |text| text.contains('❯')),
+        "{}",
+        term.text()
+    );
+    term
+}
+
+/// Starts a send of `text` to the paused agent `to` and waits until its paste, message `number`,
+/// has begun: the CLI has not read it.
+fn begin_paste(home: &TestHome, to: &str, text: &str, number: u64) -> Sending {
+    let send = begin_send(home, to, text, None);
+    assert!(
+        wait_until(secs(30), || kept(home, number)
+            .is_some_and(|kept| kept.4.is_some())),
+        "#m{number}'s paste has not begun: {:?}",
+        kept(home, number)
+    );
+    send
+}
+
+/// What a terminal reports with nothing typed does not stop a message that is going in: the wheel,
+/// a mouse move, the focus, a modifier alone and a key let go. An attached terminal's focus reports
+/// come the same way.
+#[test]
+fn a_message_goes_in_whatever_the_person_s_terminal_reports_meanwhile() {
+    let home = TestHome::new("sendreports");
+    let worker = home.start_named_fake("worker", &[]);
+    let term = attached(&home, "worker");
+    let mut wire = connect(&home);
+    let reports = [
+        ("the wheel", "\x1b[<64;6;8M"),
+        ("a mouse move", "\x1b[<35;6;8M"),
+        ("the focus", "\x1b[O\x1b[I"),
+        (
+            "a modifier alone",
+            "\x1b[16;42;0;1;16;1_\x1b[16;42;0;0;0;1_",
+        ),
+        ("a key let go", "\x1b[13;28;13;0;0;1_"),
+        ("the focus of an attached terminal", ""),
+    ];
+    for (index, (what, report)) in reports.into_iter().enumerate() {
+        pause_process(worker.pid);
+        let send = begin_paste(&home, "worker", what, index as u64 + 1);
+        if report.is_empty() {
+            term.send(b"\x1b[O\x1b[I");
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        } else {
+            type_raw(&mut wire, &worker.id, report);
+        }
+        resume_process(worker.pid);
+        let receipt = send.receipt();
+        assert_eq!(delivery_of(&receipt), typed_in(), "{what}: {receipt}");
+        // Its Enter is written, and the CLI reads that and empties its input next.
+        assert!(
+            wait_until(secs(30), || home.submitted_messages().len() > index
+                && home.inspect_agent("worker")["input"]["state"] == "usable"),
+            "{what}: {}",
+            home.screen("worker")
+        );
+    }
+    let messages: Vec<String> = (1..=reports.len())
+        .map(|number| {
+            format!(
+                "📨 Message m{number} from command line\n{} ",
+                reports[number - 1].0
+            )
+        })
+        .collect();
+    assert_eq!(home.submitted_messages(), messages);
+}
+
+/// A message that waits behind the person's draft goes in once they submit it, though their Enter
+/// key comes up, and their terminal reports its focus, while it goes in.
+#[test]
+fn a_message_goes_in_behind_the_draft_the_person_submits() {
+    let home = TestHome::new("sendbehind");
+    let worker = home.start_named_fake("worker", &[]);
+    let term = attached(&home, "worker");
+    let mut wire = connect(&home);
+    term.send(b"my own prompt");
+    assert!(
+        term.wait_for(secs(10), |text| text.contains("❯ my own prompt")),
+        "{}",
+        term.text()
+    );
+    let send = begin_send(&home, "worker", "hello", None);
+    wait_pending(&home, 1);
+    term.send(b"\r");
+    for _ in 0..12 {
+        type_raw(&mut wire, &worker.id, "\x1b[13;28;13;0;0;1_");
+        term.send(b"\x1b[I");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let receipt = send.receipt();
+    assert_eq!(delivery_of(&receipt), typed_in(), "{receipt}");
+    wait_until(secs(30), || home.submitted_messages().len() >= 2);
+    assert_eq!(
+        home.submitted_messages(),
+        ["my own prompt", "📨 Message m1 from command line\nhello "]
+    );
+}
+
+/// What the person types while a message goes in follows it: the message is submitted alone, and
+/// their text is their own draft afterwards, every key in order, Ctrl+C with its effect.
+#[test]
+fn text_typed_while_a_message_goes_in_stays_the_person_s_own() {
+    let home = TestHome::new("sendtyped");
+    let keys = home.folder().join("keys");
+    let worker = home.start_named_fake("worker", &[("FAKECLI_KEYS", keys.to_str().unwrap())]);
+    let mut wire = connect(&home);
+    let inspected = wire.call_ok("agent.inspect", json!({ "target": worker.id }));
+    let target = &inspected["agent"]["reference"];
+    let paused_at = std::time::Instant::now();
+    pause_process(worker.pid);
+    let send = begin_paste(&home, "worker", "hello", 1);
+    // Typing calls on one connection reach this target in order. Send the burst before
+    // polling for replies so the CLI can resume within the paste's bounded hold.
+    // The CSI-u Escape stays a separate key even when the CLI reads it together with Enter.
+    let requests = [
+        "w", "r", "o", "n", "g", "\x03", "m", "i", "n", "e", "\x1b[27u",
+    ]
+    .map(|key| {
+        let raw = facade_base::base64::encode(key.as_bytes());
+        wire.send(
+            "call",
+            json!({ "op": "agent.type", "args": {
+                "target": target, "input": { "kind": "raw", "raw": raw }
+            } }),
+        )
+    });
+    for id in requests {
+        let typed = wire
+            .wait_for_response(id, LOADED_TIMEOUT)
+            .expect("the agent accepted a key");
+        assert!(typed["result"].is_object(), "{typed}");
+    }
+    let paused_for = paused_at.elapsed();
+    resume_process(worker.pid);
+    let receipt = send.receipt();
+    assert_eq!(
+        delivery_of(&receipt),
+        typed_in(),
+        "{receipt}\nCLI paused for {paused_for:?}, keys read: {:?}\n{}",
+        std::fs::read_to_string(&keys),
+        home.screen("worker")
+    );
+    assert!(
+        wait_for_screen_text(&home, "worker", "❯ mine"),
+        "{}",
+        home.screen("worker")
+    );
+    let message = "📨 Message m1 from command line\nhello ";
+    assert_eq!(home.submitted_messages(), [message], "the message alone");
+    assert!(
+        wait_until(secs(5), || std::fs::read(&keys)
+            .unwrap()
+            .ends_with(b"\rwrong\x03mine\x1b[27u")),
+        "{:?}",
+        String::from_utf8_lossy(&std::fs::read(&keys).unwrap())
+    );
+    type_raw(&mut wire, &worker.id, "\r");
+    assert!(
+        wait_until(secs(5), || home.submitted_messages().len() == 2),
+        "{}",
+        home.screen("worker")
+    );
+    assert_eq!(home.submitted_messages(), [message, "mine"]);
+}
+
+/// Messages keep going in between the lines a person types and submits, each alone, and every line
+/// is submitted as it was typed.
+#[test]
+fn messages_and_a_person_s_lines_go_in_one_at_a_time() {
+    let home = TestHome::new("sendlines");
+    home.start_named_fake("worker", &[]);
+    let term = attached(&home, "worker");
+    let sends: Vec<Sending> = (0..12)
+        .map(|n| begin_send(&home, "worker", &format!("message {n}"), None))
+        .collect();
+    let lines: Vec<String> = (0..4).map(|n| format!("line {n} of mine")).collect();
+    for line in &lines {
+        for key in line.bytes() {
+            term.send(&[key]);
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+        term.send(b"\r");
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+    for send in sends {
+        let receipt = send.receipt();
+        assert_eq!(delivery_of(&receipt), typed_in(), "{receipt}");
+    }
+    wait_until(secs(30), || home.submitted_messages().len() >= 16);
+    let submitted = home.submitted_messages();
+    let typed: Vec<&String> = submitted
+        .iter()
+        .filter(|text| !text.starts_with("📨"))
+        .collect();
+    assert_eq!(typed, lines.iter().collect::<Vec<_>>(), "{submitted:?}");
+    let messages = submitted
+        .iter()
+        .filter(|text| text.starts_with("📨") && !text.contains("of mine"))
+        .count();
+    assert_eq!(messages, 12, "{submitted:?}");
 }
 
 /// Reading a message that waits for the input delivers it: its sender learns it was read, and it is
@@ -430,8 +735,8 @@ fn a_read_delivers_a_waiting_message_so_it_is_never_typed() {
     assert_eq!(
         home.submitted_messages(),
         [
-            "📨 Message m1 from command line\nnot for a1",
-            "📨 Message m3 from command line\nnext"
+            "📨 Message m1 from command line\nnot for a1 ",
+            "📨 Message m3 from command line\nnext "
         ]
     );
     assert!(
@@ -492,7 +797,7 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
     assert_eq!(sent["status"], "success", "{sent}");
     assert_eq!(
         home.submitted_messages(),
-        [format!("📨 Message m1 from Neo ({worker_address})\nhi")],
+        [format!("📨 Message m1 from Neo ({worker_address})\nhi ")],
         "a message carries its sender's name when it was sent"
     );
     let blank = home.run_facade(&["rename", "a1", " "]);
@@ -593,7 +898,7 @@ fn a_command_in_an_agent_s_terminal_acts_as_the_command_line() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message m1 from command line\nfrom a terminal"]
+        ["📨 Message m1 from command line\nfrom a terminal "]
     );
 }
 
@@ -639,8 +944,8 @@ fn shell_send_saves_behind_a_draft_and_waits_for_delivery_when_requested() {
     assert_eq!(
         home.submitted_messages(),
         [
-            "📨 Message m1 from command line\nsaved behind the draft",
-            "📨 Message m2 from command line\nwaited for delivery",
+            "📨 Message m1 from command line\nsaved behind the draft ",
+            "📨 Message m2 from command line\nwaited for delivery ",
         ]
     );
 }
@@ -660,12 +965,16 @@ fn shell_receives_only_the_first_linked_reply_from_the_managed_recipient() {
 
     let request = "请检查构建\n\n  Keep the indentation.";
     let shell = send_in_background(&home, &["worker", request, "-r"]);
+    // The fake CLI records Enter before the daemon sees the confirming frame and saves delivery.
+    let mut inbox = Vec::new();
     assert!(
-        wait_until(secs(10), || !home.submitted_messages().is_empty()),
+        wait_until(secs(10), || {
+            inbox = read_messages(&mut worker_tools, json!({"last": 1}));
+            !inbox.is_empty()
+        }),
         "{}",
         home.daemon_log()
     );
-    let inbox = read_messages(&mut worker_tools, json!({"last": 1}));
     assert_eq!(inbox.len(), 1, "{inbox:?}");
     let original = &inbox[0];
     assert_eq!(original["id"], "m1", "{original}");
@@ -674,7 +983,7 @@ fn shell_receives_only_the_first_linked_reply_from_the_managed_recipient() {
     assert_eq!(
         home.submitted_messages(),
         [format!(
-            "📨 Message m1 from command line (#c1@desk)\n{request}"
+            "📨 Message m1 from command line (#c1@desk)\n{request} "
         )]
     );
 
@@ -871,10 +1180,10 @@ fn a_result_wait_that_times_out_after_delivery_reports_both_facts() {
     assert_eq!(home.submitted_messages().len(), 1);
 }
 
-/// A paste into a CLI that never reads its input fails by its deadline without Enter. Input
-/// already waiting for the terminal keeps the first paste queued on Unix. The second message
-/// waits behind the first and withdraws without typing. If the CLI starts reading again, the
-/// next message goes in only after the first paste is erased.
+/// A delivery to a CLI that never reads its input fails by its deadline without Enter. Saturated
+/// Unix input leaves the first paste unissued, while ConPTY accepts it into the host. The second
+/// message withdraws without typing. If the CLI starts reading again, the next message goes in
+/// only after any paste that reached the terminal is erased.
 #[test]
 fn a_message_to_a_cli_that_reads_no_input_fails_within_30_seconds_and_is_never_submitted() {
     let home = TestHome::new("sendunread");
@@ -927,20 +1236,19 @@ fn a_message_to_a_cli_that_reads_no_input_fails_within_30_seconds_and_is_never_s
         ),
         "m1 delivery: {delivery}, m2 receipt: {behind}"
     );
-    // A pseudo console's host reads its input whether or not the CLI does, so on Windows all of the
-    // paste is accepted by the host and no Enter is written.
     #[cfg(unix)]
-    let written = (json!("unknown"), None);
+    let first = (json!(true), json!("timeout"), json!("none"));
     #[cfg(windows)]
-    let written = (json!("full"), Some(&json!(false)));
+    let first = (Value::Null, json!("submission_unconfirmed"), json!("full"));
     assert_eq!(
         (
+            &sent["withdrawn"],
             &delivery["reason"],
             &delivery["text_written"],
-            delivery.get("enter_written")
+            &delivery["enter_written"],
         ),
-        (&json!("submission_unconfirmed"), &written.0, written.1),
-        "{delivery}"
+        (&first.0, &first.1, &first.2, &json!(false)),
+        "{sent}"
     );
     assert!(home.submitted_messages().is_empty());
     a_late_paste_is_erased_before_the_next_message();
@@ -983,7 +1291,7 @@ fn a_late_paste_is_erased_before_the_next_message() {
         .is_empty()));
     assert_eq!(
         home.submitted_messages(),
-        [format!("📨 Message m2 from command line\n{second_text}")]
+        [format!("📨 Message m2 from command line\n{second_text} ")]
     );
 
     let keys = std::fs::read(keys).unwrap();
@@ -1221,7 +1529,7 @@ fn a_message_waiting_when_its_daemon_crashes_is_typed_once_by_the_next() {
     assert_eq!(delivery_of(&receipt), typed_in(), "{receipt}");
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message m1 from command line\nhello"],
+        ["📨 Message m1 from command line\nhello "],
         "typed once"
     );
     let time = |field: &Value| facade_base::time::parse_iso_time(field.as_str().unwrap()).unwrap();
@@ -1310,7 +1618,7 @@ fn a_paste_in_the_input_when_its_daemon_crashes_gets_its_enter_from_the_next() {
     assert_eq!(delivery_of(&receipt), typed_in(), "{receipt}");
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message m1 from command line\nhello"],
+        ["📨 Message m1 from command line\nhello "],
         "submitted once"
     );
     assert!(
@@ -1350,8 +1658,8 @@ fn a_paste_in_the_input_when_its_daemon_crashes_goes_before_the_message_behind_i
         assert_eq!(delivery_of(&receipt), typed_in(), "{receipt}");
     }
     let pasted = [
-        format!("📨 Message m1 from command line\n{long}"),
-        format!("📨 Message m2 from command line\n{short}"),
+        format!("📨 Message m1 from command line\n{long} "),
+        format!("📨 Message m2 from command line\n{short} "),
     ];
     assert_eq!(home.submitted_messages(), pasted, "each once, in order");
 }
@@ -1423,9 +1731,43 @@ fn a_message_read_when_its_daemon_crashes_is_never_typed_by_the_next() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message m2 from command line\nnext"],
+        ["📨 Message m2 from command line\nnext "],
         "the read message is never typed"
     );
+}
+
+#[test]
+#[cfg_attr(not(debug_assertions), ignore = "uses the test pause of debug builds")]
+fn the_relay_reports_the_interrupted_read_and_leaves_the_rest_unread() {
+    let home = TestHome::new("relay-restart-read");
+    home.start_facade_with(&[("FACADE_TEST_PAUSE_AT", "after-read-commit")]);
+    let worker = home.start_named_fake("worker", &[]);
+    type_draft(&home, "worker", "my draft");
+    let old_send = begin_send(&home, "worker", "committed before interruption", Some("r1"));
+    wait_pending(&home, 1);
+    let mut relay = McpTestClient::open_configured(&home, &worker.id);
+    let id = relay.send(
+        "tools/call",
+        json!({"name": "read_messages", "arguments": {}}),
+    );
+    crash_at(&home, "after-read-commit");
+    drop(old_send);
+    let interrupted = relay.tool_answer(id);
+    assert_eq!(interrupted["reason"], "unavailable", "{interrupted}");
+    assert!(
+        interrupted["message"]
+            .as_str()
+            .unwrap()
+            .contains("use last")
+    );
+    let history = read_messages(&mut relay, json!({"last": 1}));
+    assert_eq!(history[0]["text"], "committed before interruption");
+    let next_send = begin_send(&home, "worker", "unread after interruption", Some("r2"));
+    wait_pending(&home, 2);
+    let unread = read_messages(&mut relay, json!({}));
+    assert_eq!(unread.len(), 1, "{unread:?}");
+    assert_eq!(unread[0]["text"], "unread after interruption");
+    drop(next_send);
 }
 
 /// A message whose recipient ended while no daemon ran fails as ended in the next daemon. The
@@ -1590,4 +1932,43 @@ fn send_takes_its_options_before_or_after_the_text() {
             "facade {args:?}"
         );
     }
+}
+
+/// A CLI that reads its keys as a console gives them, as Codex does on Windows, takes no paste: its
+/// Enter submits, and Shift+Enter breaks the line. A message's line breaks never act as its Enter:
+/// the message reaches it whole, once.
+#[cfg(windows)]
+#[test]
+fn a_message_s_line_breaks_are_not_the_enter_of_a_cli_that_reads_console_keys() {
+    let home = TestHome::new("consolekeys");
+    let programs = home.folder().join("programs");
+    install_program(&programs, "codex", &test_binaries().fakecli);
+    let path = format!("{}{PATH_SEPARATOR}{}", programs.display(), home.test_path());
+    let relay = home
+        .path
+        .join("framework/bin")
+        .join(program_name("facade-mcp"));
+    let started = home
+        .command(&test_binaries().facade)
+        .env("PATH", &path)
+        .env("FAKECLI_CODEX_INPUT", "working")
+        .env("FAKECLI_CONSOLE_KEYS", "1")
+        .env("FAKECLI_MCP", &relay)
+        .args(["start", "-d", "--name", "codex", "codex"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(started.status.success(), "{}", stderr(&started));
+    home.started_agent(&stdout(&started));
+
+    let body = "one\nrun: cargo test\n\nlast line, 📨";
+    let sent = home.run_facade(&["send", "codex", body, "-w"]);
+    assert_eq!(
+        home.submitted_messages(),
+        [format!("📨 Message m1 from command line\n{body} ")],
+        "submitted once and whole; the send said {}{}",
+        stdout(&sent),
+        stderr(&sent)
+    );
+    assert!(sent.status.success(), "{}", stderr(&sent));
 }

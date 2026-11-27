@@ -297,8 +297,14 @@ impl Session {
             op: O::NAME.into(),
             args: serde_json::to_value(args).expect("protocol value must serialize"),
         };
-        self.request(expected, methods::CALL, params, terminal)
-            .await
+        self.request(
+            expected,
+            methods::CALL,
+            params,
+            terminal,
+            Some(RESPONSE_WAIT),
+        )
+        .await
     }
 
     async fn request(
@@ -307,6 +313,7 @@ impl Session {
         method: &str,
         params: impl Serialize,
         terminal: Option<PtyMaster>,
+        timeout: Option<Duration>,
     ) -> Response {
         let number = self.sequence.fetch_add(1, Ordering::Relaxed);
         let (sender, receiver) = oneshot::channel();
@@ -329,7 +336,12 @@ impl Session {
             };
             return Err(CallError::Unsent(body));
         }
-        match tokio::time::timeout(RESPONSE_WAIT, receiver).await {
+        let Some(timeout) = timeout else {
+            return receiver
+                .await
+                .unwrap_or_else(|_| Err(CallError::Unknown(disconnected())));
+        };
+        match tokio::time::timeout(timeout, receiver).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(CallError::Unknown(disconnected())),
             // Keep the expectation until the reply arrives or the connection closes.
@@ -398,6 +410,7 @@ impl KeeperClient {
     pub fn ping(self: &Arc<Self>) {
         let connection = Arc::clone(self);
         tokio::spawn(async move {
+            crate::gate_for_test("before-first-keeper-ping");
             let mut closed = connection.closed();
             while !*closed.borrow() {
                 let _ = connection
@@ -414,10 +427,17 @@ impl KeeperClient {
         expected: &ProcessIdentity,
         events: mpsc::UnboundedSender<RunEvent>,
         wakeup: watch::Sender<u64>,
+        startup: Option<&facade_base::startup::DaemonProgress>,
     ) -> Result<Arc<Self>, ConnectError> {
         let address = facade_base::paths::keeper_socket()
             .map_err(|error| ConnectError::Unreachable(format!("{error:#}")))?;
-        let socket = ClientSocket::connect(address).map_err(|error| {
+        let socket = match startup {
+            Some(startup) => {
+                facade_base::paths::connect_client_until(&address, startup.budget().deadline())
+            }
+            None => ClientSocket::connect(address),
+        }
+        .map_err(|error| {
             ConnectError::Unreachable(format!("could not connect to the keeper: {error}"))
         })?;
         let identity = service::authenticate_server(&socket, framework, Service::Keeper)
@@ -428,7 +448,12 @@ impl KeeperClient {
                 "keeper {pid} is not the keeper this daemon was following"
             )));
         }
-        let connection = Self::hello(socket, identity, events, wakeup).await?;
+        if let Some(startup) = startup {
+            startup
+                .advance("keeper link authenticated")
+                .map_err(connection_io)?;
+        }
+        let connection = Self::hello(socket, identity, events, wakeup, startup.is_some()).await?;
         facade_base::log::write(
             "daemon",
             "info",
@@ -446,6 +471,7 @@ impl KeeperClient {
         identity: ProcessIdentity,
         events: mpsc::UnboundedSender<RunEvent>,
         wakeup: watch::Sender<u64>,
+        starting: bool,
     ) -> Result<Self, ConnectError> {
         let pid = identity.pid;
         let session = Session::open(stream, &identity, events, wakeup)?;
@@ -459,6 +485,7 @@ impl KeeperClient {
                     api_versions: offer,
                 },
                 None,
+                (!starting).then_some(RESPONSE_WAIT),
             )
             .await
             .map_err(|error| {
@@ -607,9 +634,15 @@ mod tests {
         });
         let (events, _) = mpsc::unbounded_channel();
         assert!(
-            KeeperClient::hello(client, identity, events, tokio::sync::watch::channel(0).0)
-                .await
-                .is_err()
+            KeeperClient::hello(
+                client,
+                identity,
+                events,
+                tokio::sync::watch::channel(0).0,
+                false
+            )
+            .await
+            .is_err()
         );
         assert!(
             matches!(peer_task.await.unwrap(), Ok(Ok(0))),

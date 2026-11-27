@@ -23,6 +23,7 @@ pub mod paths;
 pub mod process;
 pub mod settings;
 pub mod start;
+pub mod stop_receipt;
 pub mod time;
 
 pub use build::{

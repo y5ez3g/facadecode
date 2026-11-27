@@ -1941,7 +1941,7 @@ impl Display {
                 .rows
                 .iter()
                 .flatten()
-                .all(|cell| cell.text.trim().is_empty() && !cell.inverse);
+                .all(|cell| cell.text().trim().is_empty() && !cell.inverse);
         let grid = shared.grid();
         let grid_fits = fits(grid, shared.capacity);
         if title_changed && (waiting_for_view || !grid_fits) {

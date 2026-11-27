@@ -112,7 +112,12 @@ struct Harness {
     messages: Arc<crate::messages::Messages>,
 }
 
-fn record(process: ProcessState, exit: Option<ProcessExit>, cols: u16, rows: u16) -> ManagedAgent {
+pub(super) fn record(
+    process: ProcessState,
+    exit: Option<ProcessExit>,
+    cols: u16,
+    rows: u16,
+) -> ManagedAgent {
     ManagedAgent {
         address: None,
         label: None,
@@ -585,10 +590,11 @@ fn the_pastes_before_an_enter_go_with_it_within_the_input_limit() {
     let pasted = |text: &[u8]| [PASTE_START, text, PASTE_END].concat();
     let mut keys = PersonKeys::default();
     assert_eq!(
-        keys.enter(&[pasted(b"one\rtwo"), b" and ".to_vec(), pasted(b"three")].concat()),
+        keys.read(&[pasted(b"one\rtwo"), b" and ".to_vec(), pasted(b"three")].concat())
+            .enter,
         None
     );
-    let Enter { at, pastes } = keys.enter(b"!\r").expect("an Enter");
+    let Enter { at, pastes } = keys.read(b"!\r").enter.expect("an Enter");
     assert_eq!(
         (at, pastes),
         (1, vec!["one\rtwo".to_string(), "three".to_string()])
@@ -596,7 +602,7 @@ fn the_pastes_before_an_enter_go_with_it_within_the_input_limit() {
     // Four bytes and the longest paste but three come to one byte over the limit.
     let long = vec![b'x'; MAX_INPUT_BYTES - 3];
     let keys_with_long = [pasted(b"four"), pasted(&long), b"\r".to_vec()].concat();
-    let Enter { pastes, .. } = keys.enter(&keys_with_long).expect("an Enter");
+    let Enter { pastes, .. } = keys.read(&keys_with_long).enter.expect("an Enter");
     let sizes: Vec<usize> = pastes.iter().map(String::len).collect();
     assert_eq!(
         sizes,
@@ -604,13 +610,117 @@ fn the_pastes_before_an_enter_go_with_it_within_the_input_limit() {
         "the earliest paste makes room"
     );
     assert_eq!(
-        keys.enter(b"\r"),
+        keys.read(b"\r").enter,
         Some(Enter {
             at: 0,
             pastes: Vec::new()
         }),
         "the next Enter starts with none"
     );
+}
+
+/// Input is counted as the CLI's terminal takes it. Codex on Windows takes each line break as a
+/// press of Shift+Enter, two records of 18 bytes, so a text of 28,339 lines of one character,
+/// 1,048,555 bytes in its paste brackets, fits the 1 MiB that may wait, and one more line never
+/// does: it is refused, not queued. The same text goes to a CLI that takes it as it is.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread")]
+async fn input_that_takes_more_of_a_console_than_all_the_room_is_refused() {
+    let lines = |count: usize| Typing::text("a\n".repeat(count), false, Sender::person()).unwrap();
+    let home = home("consoleroom");
+    let codex = Harness::start_by_rule(
+        &home,
+        record(ProcessState::Running, None, 80, 24),
+        b"",
+        Some("codex"),
+        ScreenStart::New,
+    );
+    for (count, bytes) in [(30_000, 1_110_012), (28_340, 1_048_592)] {
+        let refused = codex.type_call(lines(count)).await.err();
+        assert!(
+            matches!(refused, Some(InputRejection::TooLarge(taken)) if taken == bytes),
+            "{count} lines: {refused:?}"
+        );
+    }
+    assert!(codex.type_call(lines(28_339)).await.is_ok());
+    codex.stop().await;
+
+    let home = self::home("plainroom");
+    let plain = Harness::start(
+        &home,
+        record(ProcessState::Running, None, 80, 24),
+        ScreenStart::New,
+    );
+    assert!(plain.type_call(lines(30_000)).await.is_ok());
+    plain.stop().await;
+}
+
+/// The first prompt's terminal bytes take room before ordinary messages wait behind it.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread")]
+async fn the_start_prompt_reserves_encoded_input_room_before_other_messages() {
+    let home = home("startpromptroom");
+    let harness = Harness::start_by_rule(
+        &home,
+        record(ProcessState::Running, None, 80, 24),
+        b"",
+        Some("codex"),
+        ScreenStart::New,
+    );
+    let text = format!("{}{}end", "😀".repeat(7_000), "\n".repeat(539));
+    facade_base::model::message::check_message_text(&text).unwrap();
+    let (ready, _started) = oneshot::channel();
+    harness
+        .send(AgentCommand::AwaitPrompt {
+            text: text.clone(),
+            ready,
+        })
+        .await;
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let send = async |input| {
+        let (reply, taken) = oneshot::channel();
+        harness
+            .send(AgentCommand::WriteInput {
+                input,
+                run: FIRST_RUN,
+                reply,
+            })
+            .await;
+        taken.await.unwrap()
+    };
+    let message = || {
+        let number = crate::messages::number(
+            &crate::messages::tests::post_new(
+                &harness.messages,
+                crate::messages::tests::message(0, "a1"),
+            )
+            .0,
+        );
+        Input::Message(MessageTyping::new(
+            text.clone(),
+            number,
+            deadline,
+            Submission {
+                text: text.clone(),
+                sender: Sender::person(),
+            },
+        ))
+    };
+    assert!(send(message()).await.is_ok());
+    assert!(send(message()).await.is_ok());
+    let Err(InputRejection::Backpressured(waiting)) = send(message()).await else {
+        panic!("a third waiting message and the first prompt exceed 1 MiB");
+    };
+
+    harness
+        .send(AgentCommand::StartPrompt {
+            run: FIRST_RUN,
+            prompt: None,
+        })
+        .await;
+    assert!(send(waiting).await.is_ok(), "the prompt gave back its room");
+    harness.stop().await;
 }
 
 /// Text goes in as a terminal pastes it in the CLI's modes, its Enter after a pause; keys go in
@@ -910,9 +1020,13 @@ impl Harness {
     }
 
     async fn round_trip(&self) {
+        self.inspect().await;
+    }
+
+    async fn inspect(&self) -> Inspection {
         let (reply, answered) = oneshot::channel();
         self.send(AgentCommand::Inspect { reply }).await;
-        answered.await.unwrap();
+        answered.await.unwrap()
     }
 
     async fn watch_screen(&self, viewer: u64) -> (ViewerSnapshot, viewers::ViewerReceiver) {
@@ -1566,7 +1680,10 @@ async fn a_start_prompt_waits_for_the_tools_and_messages_sent_meanwhile_wait_beh
     let (ready, mut settled) = oneshot::channel();
     handle
         .mailbox()
-        .send(AgentCommand::AwaitPrompt { ready })
+        .send(AgentCommand::AwaitPrompt {
+            text: "fix it".into(),
+            ready,
+        })
         .await
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -1656,7 +1773,7 @@ async fn a_start_prompt_waits_for_the_tools_and_messages_sent_meanwhile_wait_beh
         status(prompt_number),
         facade_base::model::message::DeliveryStatus::Success
     );
-    let paste = b"\x1b[200~a message\x1b[201~";
+    let paste = b"\x1b[200~a message \x1b[201~";
     assert_eq!(harness.cli_reads(paste.len()), paste, "then the message");
     assert_eq!(
         status(message_number),
@@ -1875,9 +1992,10 @@ async fn a_start_readies_antigravity_s_tools_before_its_first_turn() {
     harness.agy_panel(true);
     assert_eq!(harness.cli_reads(1), b"\x1b");
     harness.agy_input("");
+    let paste = "\x1b[200~📨 hello \x1b[201~".as_bytes();
     assert_eq!(
-        String::from_utf8(harness.cli_reads("📨 hello".len())).unwrap(),
-        "📨 hello",
+        harness.cli_reads(paste.len()),
+        paste,
         "the message goes in after"
     );
     harness.stop().await;
@@ -1903,9 +2021,8 @@ async fn a_start_waits_for_a_draft_that_is_a_redraw_to_go() {
 }
 
 /// The start types nothing where the input first reads anything but empty, as a draft or a
-/// question of the CLI's, or the CLI is working; and where `/mcp` does not show alone, it
-/// presses no Enter and takes `/mcp` back. Each leaves the tools not started, an error, until
-/// the first turn starts them.
+/// question of the CLI's, or the CLI is working. A completion beside `/mcp` leaves its command
+/// unsubmitted. The start reports that the first turn may run without the tools.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_start_readies_no_tools_over_other_input_or_a_turn_and_says_so() {
     let home = home("readynothing");
@@ -1917,7 +2034,8 @@ async fn a_start_readies_no_tools_over_other_input_or_a_turn_and_says_so() {
         .write_all(b"\x1b]7501;state=working\x07")
         .unwrap();
     working.agy_input("");
-    let mut joined = antigravity(&home.join("joined"));
+    let started = Instant::now() - START_TIMEOUT + Duration::from_secs(8);
+    let mut joined = antigravity_started(&home.join("joined"), started);
     joined.agy_input("");
     assert_eq!(joined.cli_reads(4), b"/mcp");
     // A completion shows beside it.
@@ -1929,10 +2047,12 @@ async fn a_start_readies_no_tools_over_other_input_or_a_turn_and_says_so() {
                 .is_empty()
         );
     }
-    assert_eq!(
-        joined.cli_reads_within(5, READY_TYPED + Duration::from_secs(2)),
-        b"\x7f\x7f\x7f\x7f",
-        "taken back, no Enter"
+    let until_expired = START_TIMEOUT.saturating_sub(started.elapsed());
+    assert!(
+        joined
+            .cli_reads_within(1, until_expired + Duration::from_secs(1))
+            .is_empty(),
+        "the command and completion stay available to the person"
     );
     let not_started = (
         ManagedAgentState::Error,
@@ -2161,14 +2281,14 @@ async fn the_hold_ends_at_the_start_s_bound() {
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// A panel that does not show the tools ready within its wait is closed then, but only while it
-/// still shows: once someone else closed it, the key could stop a turn of theirs.
+/// An unready panel releases the person's keys at the startup bound and reports the outcome.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_panel_that_shows_no_ready_tools_is_closed_at_its_wait_only_while_it_shows() {
+async fn an_unready_tools_panel_releases_the_person_at_the_startup_deadline() {
     let home = home("readybound");
+    let started = Instant::now() - START_TIMEOUT + Duration::from_secs(8);
     let (mut open, mut closed) = (
-        antigravity(&home.join("open")),
-        antigravity(&home.join("closed")),
+        antigravity_started(&home.join("open"), started),
+        antigravity_started(&home.join("closed"), started),
     );
     for harness in [&mut open, &mut closed] {
         harness.agy_input("");
@@ -2178,26 +2298,32 @@ async fn a_panel_that_shows_no_ready_tools_is_closed_at_its_wait_only_while_it_s
     }
     open.agy_panel(false);
     closed.agy_input("");
-    // Each wait ends READY_SHOWN after its Enter, with the tools not started, after any Escape.
-    // The test waits for that outcome, not for a time: on a loaded machine the actor's timer
-    // and the screen reader lag.
+    for harness in [&mut open, &mut closed] {
+        harness.type_bytes(b"hi").await.unwrap();
+        assert!(
+            harness
+                .cli_reads_within(1, Duration::from_millis(200))
+                .is_empty(),
+            "held while the tool panel can still become ready"
+        );
+    }
     let not_started = (
         ManagedAgentState::Error,
         Some(facade_base::model::agent::ToolsReason::NotStarted),
     );
-    for harness in [&open, &closed] {
+    for harness in [&mut open, &mut closed] {
         assert!(
-            tools_read_within(harness, not_started, READY_SHOWN + Duration::from_secs(60)).await,
+            tools_read_within(
+                harness,
+                not_started,
+                START_TIMEOUT.saturating_sub(started.elapsed()) + Duration::from_secs(10)
+            )
+            .await,
             "{:?}",
             tools_now(harness)
         );
+        assert_eq!(harness.cli_reads(2), b"hi");
     }
-    assert_eq!(open.cli_reads(1), b"\x1b");
-    assert!(
-        closed
-            .cli_reads_within(1, Duration::from_millis(500))
-            .is_empty()
-    );
     for harness in [open, closed] {
         harness.stop().await;
     }
@@ -2299,21 +2425,8 @@ impl Harness {
     /// cursor, its selection on the answer that trusts or on the one that refuses, which it
     /// shows first.
     fn claude_trust(&mut self, trusting: bool) {
-        let (refuse, trust) = if trusting {
-            ("  ", "❯ ")
-        } else {
-            ("❯ ", "  ")
-        };
-        let question = format!(
-            " Accessing workspace:\r\n\r\n /work/probe\r\n\r\n Quick safety check: Is this a \
-             project you created or one you trust? (Like your own\r\n code, a \
-             well-known open source project, or work from your team).\r\n\r\n Claude Code'll \
-             be able to read, edit, and execute files here.\r\n\r\n \
-             {refuse}No, exit\r\n {trust}Yes, I trust this folder\r\n\r\n Enter to confirm · \
-             Esc to cancel"
-        );
         self.cli
-            .write_all(format!("\x1b[2J\x1b[H\x1b[?25l{question}").as_bytes())
+            .write_all(claude_trust_frame(trusting).as_bytes())
             .unwrap();
     }
 
@@ -2446,16 +2559,83 @@ async fn a_quiet_agent_presses_no_key_of_its_start() {
     std::fs::remove_dir_all(&home).unwrap();
 }
 
+/// A CLI at work draws frame after frame, each in two pieces: the message it shows gets its Enter
+/// all the same, and no Backspace.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_gets_its_enter_while_its_cli_draws_frame_after_frame() {
+    for (name, opens, closes) in [
+        ("busysync", "\x1b[?2026h", "\x1b[?2026l"),
+        ("busyplain", "", ""),
+    ] {
+        let home = home(name);
+        let mut harness = claude(&home, false);
+        harness.plain_claude_input("", "");
+        let message = harness
+            .queue_probe_message("a message", Duration::from_secs(20))
+            .await;
+        let paste = b"\x1b[200~a message \x1b[201~";
+        assert_eq!(harness.cli_reads(paste.len()), paste);
+        let border = "─".repeat(80);
+        let until = Instant::now() + Duration::from_secs(3);
+        let mut read = Vec::new();
+        let mut frames = 0;
+        while read.is_empty() && Instant::now() < until {
+            frames += 1;
+            let first = format!("{opens}\x1b[2J\x1b[Hworking {frames}");
+            harness.cli.write_all(first.as_bytes()).unwrap();
+            read.extend(harness.cli_reads_within(1, Duration::from_millis(10)));
+            let rest = format!("\r\n{border}\r\n❯\u{a0}a message\r\n{border}\x1b[3;12H{closes}");
+            harness.cli.write_all(rest.as_bytes()).unwrap();
+            read.extend(harness.cli_reads_within(1, Duration::from_millis(20)));
+        }
+        assert_eq!(read, b"\r", "{name}: {frames} frames drawn");
+        harness.plain_claude_input("", "");
+        let crate::messages::Settled::Kept(message) = probe_message_settled(message).await else {
+            panic!("the message is kept");
+        };
+        assert_eq!(
+            message.delivery.status,
+            facade_base::model::message::DeliveryStatus::Success
+        );
+        harness.stop().await;
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+}
+
+const SHOW_CURSOR: &[u8] = b"\x1b[?25h";
 const CLAUDE_PLAIN_HINT: &str = r#"Try "refactor <filepath>""#;
 
+/// Claude Code's workspace trust question, with the cursor hidden.
+pub(super) fn claude_trust_frame(trusting: bool) -> String {
+    let (refuse, trust) = if trusting {
+        ("  ", "❯ ")
+    } else {
+        ("❯ ", "  ")
+    };
+    format!(
+        "\x1b[2J\x1b[H\x1b[?25l Accessing workspace:\r\n\r\n /work/probe\r\n\r\n Quick safety \
+         check: Is this a project you created or one you trust? (Like your own\r\n code, a \
+         well-known open source project, or work from your team).\r\n\r\n Claude Code'll \
+         be able to read, edit, and execute files here.\r\n\r\n \
+         {refuse}No, exit\r\n {trust}Yes, I trust this folder\r\n\r\n Enter to confirm · \
+         Esc to cancel"
+    )
+}
+
+/// A complete frame of Claude Code's plain input with the cursor between before and after.
+pub(super) fn plain_claude_frame(before: &str, after: &str) -> String {
+    // Repeat the border glyph with CSI REP so two frames fit in a Darwin PTY without a read.
+    let border = "─\x1b[79b";
+    let column = 3 + before.chars().count();
+    format!(
+        "\x1b[?2004h\x1b[2J\x1b[H{border}\r\n❯\u{a0}{before}{after}\r\n{border}\x1b[2;{column}H"
+    )
+}
+
 impl Harness {
-    /// Draws Claude Code's plain input with the cursor between `before` and `after`.
+    /// Draws Claude Code's plain input with the cursor between before and after.
     fn plain_claude_input(&mut self, before: &str, after: &str) {
-        let border = "─".repeat(80);
-        let column = 3 + before.chars().count();
-        let frame = format!(
-            "\x1b[?2004h\x1b[2J\x1b[H{border}\r\n❯\u{a0}{before}{after}\r\n{border}\x1b[2;{column}H"
-        );
+        let frame = plain_claude_frame(before, after);
         self.cli.write_all(frame.as_bytes()).unwrap();
     }
 
@@ -2532,6 +2712,8 @@ async fn a_claude_draft_matching_a_probed_hint_holds_the_next_message() {
     let mut harness = claude(&home, false);
     let hint = CLAUDE_PLAIN_HINT;
     harness.plain_claude_input("", hint);
+    assert!(harness.shows(hint, Duration::from_secs(5)).await);
+    let unprobed = harness.inspect().await.input;
     let first = harness
         .queue_probe_message("first message", Duration::from_secs(15))
         .await;
@@ -2539,7 +2721,7 @@ async fn a_claude_draft_matching_a_probed_hint_holds_the_next_message() {
     harness.plain_claude_input(" ", "");
     assert_eq!(harness.cli_reads(1), b"\x7f");
     harness.plain_claude_input("", hint);
-    let paste = b"\x1b[200~first message\x1b[201~";
+    let paste = b"\x1b[200~first message \x1b[201~";
     assert_eq!(harness.cli_reads(paste.len()), paste);
     harness.plain_claude_input("first message", "");
     assert_eq!(harness.cli_reads(1), b"\r");
@@ -2551,6 +2733,7 @@ async fn a_claude_draft_matching_a_probed_hint_holds_the_next_message() {
         first.delivery.status,
         facade_base::model::message::DeliveryStatus::Success
     );
+    assert_eq!(unprobed.state, InputState::Unknown, "{}", unprobed.evidence);
 
     // The person types the same text and presses Home. The CLI draws the same row and cursor.
     let edit = format!("{hint}\x1b[H");
@@ -2561,56 +2744,707 @@ async fn a_claude_draft_matching_a_probed_hint_holds_the_next_message() {
         .queue_probe_message("second message", Duration::from_secs(3))
         .await;
     assert_plain_draft_held(&mut harness, second, hint).await;
+    let edited = harness.inspect().await.input;
+    assert_eq!(edited.state, InputState::Draft, "{}", edited.evidence);
     harness.stop().await;
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_key_during_a_plain_claude_hint_probe_waits_for_its_backspace() {
-    let home = home("claudehintpersonkey");
-    let mut harness = claude(&home, false);
-    harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
-    let message = harness
-        .queue_probe_message("a message", Duration::from_secs(5))
-        .await;
-    assert_eq!(harness.cli_reads(1), b" ");
+fn finish_probe_before_key(harness: &mut Harness, echo: bool) {
+    harness.nothing_reaches_the_cli(Duration::from_millis(150), "the Space echo is pending");
+    if echo {
+        harness.plain_claude_input(" ", "");
+        assert_eq!(harness.cli_reads(1), b"\x7f");
+        harness.nothing_reaches_the_cli(Duration::from_millis(150), "the erase echo is pending");
+        harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+    }
+    assert_eq!(harness.cli_reads(1), b"x", "Space echoed: {echo}");
+    if !echo {
+        harness.plain_claude_input(" ", "");
+        harness.nothing_reaches_the_cli(Duration::from_millis(150), "the probe already expired");
+    }
+}
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_during_a_plain_claude_hint_probe_waits_for_its_resolution() {
+    for echo in [true, false] {
+        let home = home("claudehintpersonkey");
+        let mut harness = claude(&home, false);
+        harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+        let message = harness
+            .queue_probe_message("a message", Duration::from_secs(5))
+            .await;
+        assert_eq!(harness.cli_reads(1), b" ");
+
+        harness.type_bytes(b"x").await.unwrap();
+        finish_probe_before_key(&mut harness, echo);
+        harness.plain_claude_input("x", "");
+        assert_plain_draft_held(&mut harness, message, "x").await;
+        harness.stop().await;
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_during_a_plain_claude_hint_probe_waits_and_replies() {
+    for echo in [true, false] {
+        let home = home("claudehintcall");
+        let mut harness = claude(&home, false);
+        harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+        let message = harness
+            .queue_probe_message("a message", Duration::from_secs(10))
+            .await;
+        assert_eq!(harness.cli_reads(1), b" ");
+
+        let answer = harness
+            .type_call(Typing::keys(&["x".into()]).unwrap())
+            .await
+            .unwrap();
+        finish_probe_before_key(&mut harness, echo);
+        answered(answer).await.unwrap();
+        assert!(harness.messages.withdraw(1));
+        assert!(matches!(
+            probe_message_settled(message).await,
+            crate::messages::Settled::Cancelled
+        ));
+        harness.stop().await;
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+}
+
+/// What a terminal reports with nothing typed: the wheel, a move and a click of the mouse, the older
+/// mouse report, the focus, a key let go and a modifier alone, as win32-input-mode and as the kitty
+/// keyboard encoding report them.
+const REPORTS: [&[u8]; 10] = [
+    b"\x1b[<64;20;8M",
+    b"\x1b[<35;20;8M",
+    b"\x1b[<0;20;8M\x1b[<0;20;8m",
+    b"\x1b[M #(",
+    b"\x1b[I",
+    b"\x1b[O",
+    b"\x1b[13;28;13;0;0;1_",
+    b"\x1b[16;42;0;1;16;1_\x1b[16;42;0;0;0;1_",
+    b"\x1b[97;1:3u",
+    b"\x1b[57441;2u",
+];
+
+impl Harness {
+    /// Queues a message of `text` and reads its paste off the terminal.
+    async fn message_pasted(
+        &mut self,
+        text: &str,
+    ) -> watch::Receiver<Option<crate::messages::Settled>> {
+        let message = self
+            .queue_probe_message(text, Duration::from_secs(20))
+            .await;
+        self.cli_reads_paste(text);
+        message
+    }
+
+    fn cli_reads_paste(&mut self, text: &str) {
+        let paste = format!("\x1b[200~{text} \x1b[201~");
+        let read = self.cli_reads(paste.len());
+        assert_eq!(String::from_utf8_lossy(&read), paste);
+    }
+
+    fn nothing_reaches_the_cli(&mut self, time: Duration, why: &str) {
+        let read = self.cli_reads_within(1, time);
+        assert!(read.is_empty(), "{why}: {read:?}");
+    }
+}
+
+async fn assert_delivered(outcome: watch::Receiver<Option<crate::messages::Settled>>) {
+    let settled = probe_message_settled(outcome).await;
+    let crate::messages::Settled::Kept(message) = settled else {
+        panic!("the message is delivered: {settled:?}");
+    };
+    assert_eq!(
+        message.delivery.status,
+        facade_base::model::message::DeliveryStatus::Success,
+        "{message:?}"
+    );
+}
+
+/// A message waits while the person's paste has only begun: the CLI has part of its start, and a
+/// paste of the message's would go into the middle of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_waits_while_the_person_s_paste_has_only_begun() {
+    let home = home("splitstart");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let begun = b"\x1b[20";
+    harness.type_bytes(begun).await.unwrap();
+    assert_eq!(harness.cli_reads(begun.len()), begun);
+    let _message = harness
+        .queue_probe_message("a message", Duration::from_secs(20))
+        .await;
+    harness.nothing_reaches_the_cli(
+        Duration::from_millis(500),
+        "the rest of the paste's start is on its way",
+    );
+    harness.stop().await;
+}
+
+/// Keys after a person's Enter over a message wait no longer than for the message's paste, though
+/// it is not known yet whether the CLI took what the Enter went over.
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_after_a_person_s_enter_over_a_message_wait_no_longer_than_for_its_paste() {
+    let home = home("enterbound");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let _message = harness.message_pasted("a message").await;
+    harness.type_bytes(b"!").await.unwrap();
+    assert_eq!(
+        harness.cli_reads(1),
+        b"!",
+        "the paste holds keys up to its bound"
+    );
+    harness.plain_claude_input("a message!", "");
+    harness.type_bytes(b"\r").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.type_bytes(b"y").await.unwrap();
+    let next = harness.cli_reads_within(1, Duration::from_millis(3000));
+    assert_eq!(next, b"y", "no key waits past the paste's bound");
+    harness.stop().await;
+}
+
+/// An Enter of the person's over a message delivers nothing where a key of theirs that may empty
+/// the input went after it before the CLI showed the input empty.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_enter_over_a_message_and_then_ctrl_c_deliver_nothing() {
+    let home = home("enterctrlc");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let message = harness.message_pasted("a message").await;
+    harness.type_bytes(b"!").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"!");
+    harness.plain_claude_input("a message!", "");
+    harness.type_bytes(b"\r").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.type_bytes(b"\x03").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"\x03");
+    harness.plain_claude_input("", "");
+    let settled = probe_message_settled(message).await;
+    let (crate::messages::Settled::Kept(message) | crate::messages::Settled::Withdrawn(message)) =
+        settled
+    else {
+        panic!("the message ends: {settled:?}");
+    };
+    assert_eq!(
+        (message.delivery.status, message.delivery.reason),
+        (
+            facade_base::model::message::DeliveryStatus::Failure,
+            Some(facade_base::model::message::DeliveryFailure::SubmissionUnconfirmed)
+        ),
+        "{message:?}"
+    );
+    harness.stop().await;
+}
+
+/// What the person's terminal reports by itself goes through at once while a message goes in, and
+/// the message is submitted all the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_terminal_s_own_reports_neither_wait_for_a_message_nor_stop_it() {
+    let home = home("reports");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    for (number, report) in REPORTS.into_iter().enumerate() {
+        let text = format!("message {number}");
+        let message = harness.message_pasted(&text).await;
+        harness.type_bytes(report).await.unwrap();
+        assert_eq!(harness.cli_reads(report.len()), report);
+        harness.plain_claude_input(&text, "");
+        assert_eq!(
+            harness.cli_reads(1),
+            b"\r",
+            "Enter after {:?}",
+            String::from_utf8_lossy(report)
+        );
+        harness.plain_claude_input("", "");
+        assert_delivered(message).await;
+    }
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// What the person types while a message goes in waits until the CLI took the message, so that
+/// Enter submits the message alone, and then follows it in the order it came.
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_typed_while_a_message_goes_in_follow_it_once_the_cli_took_it() {
+    let home = home("keysfollow");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let message = harness.message_pasted("a message").await;
+    for keys in [&b"x"[..], b"\x1b[<64;20;8M", b"y"] {
+        harness.type_bytes(keys).await.unwrap();
+    }
+    harness.plain_claude_input("a message", "");
+    assert_eq!(
+        harness.cli_reads(1),
+        b"\r",
+        "Enter goes over the message alone"
+    );
+    harness.type_bytes(b"z").await.unwrap();
+    harness.nothing_reaches_the_cli(
+        Duration::from_millis(200),
+        "the input still shows the message, so the CLI may not have read its Enter",
+    );
+    harness.plain_claude_input("", "");
+    assert_eq!(harness.cli_reads(14), b"x\x1b[<64;20;8Myz");
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// The keys held for one message go before the next one's paste, which waits until the person's
+/// own draft is gone.
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_held_for_a_message_go_before_the_message_behind_it() {
+    let home = home("keysbetween");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let first = harness.message_pasted("first").await;
+    let second = harness
+        .queue_probe_message("second", Duration::from_secs(20))
+        .await;
     harness.type_bytes(b"x").await.unwrap();
-    harness.plain_claude_input(" ", "");
-    assert_eq!(harness.cli_reads(1), b"\x7f", "Backspace goes first");
-    harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
-    let key = harness.cli_reads(1);
-    assert_eq!(key, b"x", "the person's key follows cleanup");
-    harness.plain_claude_input(std::str::from_utf8(&key).unwrap(), "");
-    assert_plain_draft_held(&mut harness, message, "x").await;
+    harness.plain_claude_input("first", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_eq!(harness.cli_reads(1), b"x");
+    harness.nothing_reaches_the_cli(
+        Duration::from_millis(100),
+        "the input does not show the person's key yet",
+    );
+    harness.plain_claude_input("x", "");
+    harness.nothing_reaches_the_cli(Duration::from_millis(600), "the person's draft");
+    harness.plain_claude_input("", "");
+    harness.cli_reads_paste("second");
+    harness.plain_claude_input("second", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_delivered(first).await;
+    assert_delivered(second).await;
     harness.stop().await;
     std::fs::remove_dir_all(&home).unwrap();
 }
 
+/// Held keys go on as separate as they came: an Escape let go with the key after it would reach the
+/// CLI as Alt and that key.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_call_held_for_a_plain_claude_hint_probe_runs_after_withdrawal() {
-    let home = home("claudehintcall");
+async fn held_keys_go_on_as_far_apart_as_they_came() {
+    let home = home("keysapart");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let message = harness.message_pasted("a message").await;
+    for keys in [&b"x"[..], b"\x1b", b"\x03", b"y"] {
+        harness.type_bytes(keys).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+    }
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    let mut came = Vec::new();
+    for key in [&b"x"[..], b"\x1b", b"\x03", b"y"] {
+        assert_eq!(harness.cli_reads(1), key, "in the order they came");
+        came.push(std::time::Instant::now());
+    }
+    for pair in came.windows(2) {
+        assert!(
+            pair[1] - pair[0] >= Duration::from_millis(30),
+            "a pause between them: {:?}",
+            pair[1] - pair[0]
+        );
+    }
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A menu or question of the CLI's own takes the person's keys at once, held ones first.
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_for_a_question_do_not_wait_for_a_message() {
+    use facade_base::model::message::{DeliveryFailure, DeliveryStatus};
+
+    let home = home("keysquestion");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let message = harness.message_pasted("a message").await;
+    harness.type_bytes(b"x").await.unwrap();
+    harness.nothing_reaches_the_cli(Duration::from_millis(50), "the message goes in");
+    harness.claude_trust(false);
+    assert!(harness.shows("Yes, I trust", Duration::from_secs(5)).await);
+    harness.type_bytes(b"\x1b[B").await.unwrap();
+    assert_eq!(harness.cli_reads(4), b"x\x1b[B");
+    // They went to the question: the message is still alone in the input behind it.
+    harness.cli.write_all(SHOW_CURSOR).unwrap();
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    let crate::messages::Settled::Kept(message) = probe_message_settled(message).await else {
+        panic!("the written paste has a retained receipt");
+    };
+    assert_eq!(message.delivery.status, DeliveryStatus::Failure);
+    assert_eq!(
+        message.delivery.reason,
+        Some(DeliveryFailure::InteractionAfterWrite)
+    );
+    assert_eq!(message.delivery.text_written, TextWritten::Full);
+    assert_eq!(message.delivery.enter_written, Some(true));
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// Keys wait only so long for a message the CLI never shows.
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_wait_a_bounded_time_for_a_message_the_cli_never_shows() {
+    let home = home("keysbound");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let _message = harness.message_pasted("a message").await;
+    harness.type_bytes(b"x").await.unwrap();
+    harness.nothing_reaches_the_cli(Duration::from_secs(1), "the message may still show");
+    assert_eq!(harness.cli_reads(1), b"x", "let go at the bound");
+    harness.type_bytes(b"y").await.unwrap();
+    assert_eq!(
+        harness.cli_reads_within(1, Duration::from_secs(1)),
+        b"y",
+        "nothing waits for this message any more"
+    );
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A person who restores and submits the original message delivers it
+/// when the CLI draws an empty frame with only Enter between the draft and the empty frame.
+/// An intervening key still goes at the paste's bound, leaving the submission unconfirmed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_person_s_enter_over_a_message_that_stayed_in_the_input_delivers_it() {
+    for intervening_key in [false, true] {
+        let home = home("enterover");
+        let mut harness = claude(&home, false);
+        harness.plain_claude_input("", "");
+        let message = harness.message_pasted("a message").await;
+        harness.type_bytes(b"!").await.unwrap();
+        assert_eq!(harness.cli_reads(1), b"!", "let go at the bound");
+        harness.type_bytes(b"\x7f").await.unwrap();
+        assert_eq!(harness.cli_reads(1), b"\x7f");
+        harness.plain_claude_input("a message", "");
+        harness.type_bytes(b"\r").await.unwrap();
+        if intervening_key {
+            harness.type_bytes(b"y").await.unwrap();
+            assert_eq!(harness.cli_reads(2), b"\ry", "the paste's bound is over");
+        } else {
+            assert_eq!(harness.cli_reads(1), b"\r");
+        }
+        harness.plain_claude_input("", "");
+        if intervening_key {
+            let crate::messages::Settled::Kept(kept) = probe_message_settled(message).await else {
+                panic!("a message whose paste began is kept");
+            };
+            assert_eq!(
+                kept.delivery.reason,
+                Some(facade_base::model::message::DeliveryFailure::SubmissionUnconfirmed)
+            );
+        } else {
+            assert_delivered(message).await;
+        }
+        harness.stop().await;
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+}
+
+/// A person may submit a draft they edited. The resulting text cannot confirm the original message.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_person_s_enter_over_an_edited_message_does_not_confirm_the_original() {
+    use facade_base::model::message::{DeliveryFailure, DeliveryStatus};
+
+    let home = home("enterover-edited");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let message = harness.message_pasted("a message").await;
+    harness.type_bytes(b"!").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"!", "let go at the bound");
+    harness.plain_claude_input("a message!", "");
+    harness.type_bytes(b"\r").await.unwrap();
+    assert_eq!(
+        harness.cli_reads(1),
+        b"\r",
+        "the person can submit their draft"
+    );
+    harness.plain_claude_input("", "");
+    let crate::messages::Settled::Kept(message) = probe_message_settled(message).await else {
+        panic!("the edited paste has a receipt");
+    };
+    assert_eq!(message.delivery.status, DeliveryStatus::Failure);
+    assert_eq!(
+        message.delivery.reason,
+        Some(DeliveryFailure::SubmissionUnconfirmed)
+    );
+    assert_eq!(message.delivery.text_written, TextWritten::Full);
+    assert_eq!(message.delivery.enter_written, Some(false));
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// Keys held for a message go with a run that ends, and a run that takes its place gets none.
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_held_for_a_message_end_with_their_run() {
+    let home = home("keysend");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let message = harness.message_pasted("a message").await;
+    harness.type_bytes(b"x").await.unwrap();
+    harness.end_run(FIRST_RUN, 0).await;
+    let crate::messages::Settled::Kept(ended) = probe_message_settled(message).await else {
+        panic!("a message whose paste began is kept");
+    };
+    assert_eq!(
+        ended.delivery.reason,
+        Some(facade_base::model::message::DeliveryFailure::Ended)
+    );
+    harness.prepare_restart(FIRST_RUN + 1, 80, 24).await;
+    let (master, mut next) = raw_terminal(80, 24);
+    harness.install(FIRST_RUN + 1, master).await;
+    harness.type_for(FIRST_RUN + 1, b"y").await.unwrap();
+    assert_eq!(
+        next.reads_within(2, Duration::from_millis(500)),
+        b"y",
+        "the next run gets its own keys alone"
+    );
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// Before a newer Facade takes over, the keys held for a message reach the terminal.
+#[tokio::test(flavor = "multi_thread")]
+async fn held_keys_reach_the_terminal_before_a_takeover() {
+    let home = home("keystakeover");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let _message = harness.message_pasted("a message").await;
+    for keys in [&b"x"[..], b"\x1b", b"y"] {
+        harness.type_bytes(keys).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+    let (reply, quiet) = oneshot::channel();
+    harness.send(AgentCommand::Quiesce { reply }).await;
+    tokio::time::timeout(Duration::from_secs(5), quiet)
+        .await
+        .expect("the agent goes quiet")
+        .unwrap();
+    assert_eq!(
+        harness.cli_reads_within(3, Duration::from_millis(500)),
+        b"x\x1by"
+    );
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// Keys held for a message stay before a size the person gives after them, and keys after the size
+/// stay behind them.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_size_between_held_keys_keeps_their_order() {
+    let home = home("keyssize");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let message = harness.message_pasted("a message").await;
+    harness.type_bytes(b"x").await.unwrap();
+    harness.send(AgentCommand::ResizeTerminal(80, 30)).await;
+    harness.type_bytes(b"y").await.unwrap();
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_eq!(harness.cli_reads(2), b"xy");
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A message waits for what the person just typed to show: until then the input still reads empty.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_waits_for_keys_the_cli_has_not_drawn() {
+    let home = home("keysundrawn");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    harness.type_bytes(b"x").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"x");
+    let message = harness
+        .queue_probe_message("a message", Duration::from_secs(20))
+        .await;
+    harness.nothing_reaches_the_cli(Duration::from_millis(100), "the key is not drawn");
+    harness.plain_claude_input("x", "");
+    harness.nothing_reaches_the_cli(Duration::from_millis(600), "the person's draft");
+    harness.plain_claude_input("", "");
+    harness.cli_reads_paste("a message");
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A slow CLI still draws the line the person submitted, and then empties its input for it, while
+/// their next line is on its way: a message waits for that one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_waits_for_a_line_on_its_way_behind_the_one_shown() {
+    let home = home("keysonway");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    harness.type_bytes(b"one").await.unwrap();
+    assert_eq!(harness.cli_reads(3), b"one");
+    harness.plain_claude_input("one", "");
+    let message = harness
+        .queue_probe_message("a message", Duration::from_secs(20))
+        .await;
+    harness.nothing_reaches_the_cli(Duration::from_millis(100), "the person's draft");
+    harness.type_bytes(b"\r").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.type_bytes(b"two").await.unwrap();
+    assert_eq!(harness.cli_reads(3), b"two");
+    for shown in ["one", ""] {
+        harness.plain_claude_input(shown, "");
+        harness.nothing_reaches_the_cli(Duration::from_millis(200), "two is on its way");
+    }
+    harness.plain_claude_input("two", "");
+    harness.nothing_reaches_the_cli(Duration::from_millis(200), "the person's draft");
+    harness.type_bytes(b"\r").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    harness.cli_reads_paste("a message");
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// An Enter of the person's that is held until its draft shows goes before a message's paste.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_waits_for_the_enter_the_person_pressed_with_their_text() {
+    let home = home("enterfirst");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    harness.type_bytes(b"abc\r").await.unwrap();
+    let message = harness
+        .queue_probe_message("a message", Duration::from_secs(20))
+        .await;
+    assert_eq!(harness.cli_reads(4), b"abc\r");
+    harness.plain_claude_input("", "");
+    harness.cli_reads_paste("a message");
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A message's paste never lands between the pieces of a paste of the person's.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_waits_for_the_rest_of_the_person_s_paste() {
+    let home = home("pastepieces");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    let (first, rest) = (b"\x1b[200~one ", b"two\x1b[201~");
+    harness.type_bytes(first).await.unwrap();
+    assert_eq!(harness.cli_reads(first.len()), first);
+    let message = harness
+        .queue_probe_message("a message", Duration::from_secs(20))
+        .await;
+    harness.nothing_reaches_the_cli(Duration::from_millis(100), "the paste goes on");
+    harness.type_bytes(rest).await.unwrap();
+    assert_eq!(harness.cli_reads(rest.len()), rest);
+    harness.plain_claude_input("one two", "");
+    harness.nothing_reaches_the_cli(Duration::from_millis(600), "the person's draft");
+    harness.plain_claude_input("", "");
+    harness.cli_reads_paste("a message");
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A message waiting behind the person's draft goes in as soon as the CLI took the draft.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_follows_the_person_s_submission_at_once() {
+    let home = home("aftersubmission");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", "");
+    harness.type_bytes(b"hi").await.unwrap();
+    assert_eq!(harness.cli_reads(2), b"hi");
+    harness.plain_claude_input("hi", "");
+    let message = harness
+        .queue_probe_message("a message", Duration::from_secs(20))
+        .await;
+    harness.nothing_reaches_the_cli(Duration::from_millis(600), "the person's draft");
+    harness.type_bytes(b"\r").await.unwrap();
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    let paste = b"\x1b[200~a message \x1b[201~";
+    assert_eq!(
+        harness.cli_reads_within(paste.len(), Duration::from_millis(250)),
+        paste,
+        "the empty input shows that the CLI took the person's Enter"
+    );
+    harness.plain_claude_input("a message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", "");
+    assert_delivered(message).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A report before the first message leaves a fresh run's hint to the probe: nothing was typed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_report_before_the_first_message_leaves_the_hint_to_the_probe() {
+    let reports: &[&[&[u8]]] = &[&[b"\x1b[I"], &[b"\x1b", b"[", b"O"]];
+    for packets in reports {
+        let home = home("reportbeforehint");
+        let mut harness = claude(&home, false);
+        harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+        for packet in *packets {
+            harness.type_bytes(packet).await.unwrap();
+            assert_eq!(harness.cli_reads(packet.len()), *packet);
+        }
+        let message = harness
+            .queue_probe_message("a message", Duration::from_secs(20))
+            .await;
+        assert_eq!(
+            harness.cli_reads(1),
+            b" ",
+            "the hint is probed after {packets:?}"
+        );
+        harness.plain_claude_input(" ", "");
+        assert_eq!(harness.cli_reads(1), b"\x7f");
+        harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+        harness.cli_reads_paste("a message");
+        harness.plain_claude_input("a message", "");
+        assert_eq!(harness.cli_reads(1), b"\r");
+        harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+        assert_delivered(message).await;
+        harness.stop().await;
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_report_in_the_same_packet_as_a_key_leaves_the_first_draft_alone() {
+    let home = home("reportandkeybeforehint");
     let mut harness = claude(&home, false);
     harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
-    let message = harness
-        .queue_probe_message("a message", Duration::from_secs(10))
-        .await;
-    assert_eq!(harness.cli_reads(1), b" ");
-
-    let answer = harness
-        .type_call(Typing::keys(&["x".into()]).unwrap())
-        .await
-        .unwrap();
-    assert!(harness.messages.withdraw(1));
-    assert!(matches!(
-        probe_message_settled(message).await,
-        crate::messages::Settled::Cancelled
-    ));
-    harness.plain_claude_input(" ", "");
-    assert_eq!(harness.cli_reads(1), b"\x7f");
+    let input = b"\x1b[Ix";
+    harness.type_bytes(input).await.unwrap();
+    assert_eq!(harness.cli_reads(input.len()), input);
     harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
-    assert_eq!(harness.cli_reads(1), b"x");
-    answered(answer).await.unwrap();
+    let message = harness
+        .queue_probe_message("a message", Duration::from_secs(3))
+        .await;
+    assert_plain_draft_held(&mut harness, message, CLAUDE_PLAIN_HINT).await;
     harness.stop().await;
     std::fs::remove_dir_all(&home).unwrap();
 }
@@ -2750,7 +3584,12 @@ async fn an_ended_run_is_in_its_record_before_its_waiting_prompt_learns_it_ended
     let home = home("endedorder");
     let harness = claude(&home, false);
     let (ready, mut started) = oneshot::channel();
-    harness.send(AgentCommand::AwaitPrompt { ready }).await;
+    harness
+        .send(AgentCommand::AwaitPrompt {
+            text: "fix it".into(),
+            ready,
+        })
+        .await;
     // The actor has taken the command and its start's work is done: it waits for the next one,
     // the record free.
     let (reply, inspected) = oneshot::channel();
@@ -2802,6 +3641,469 @@ async fn an_ended_run_is_in_its_record_before_its_waiting_prompt_learns_it_ended
     std::fs::remove_dir_all(&home).unwrap();
 }
 
+/// A recovered title changes the screen's status without showing whether cleanup reached the box.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_status_only_read_after_a_crash_does_not_repeat_issued_cleanup() {
+    recover_after_cleanup_write(CleanupRecovery {
+        written: 5,
+        redraw: "hello",
+        expected_keys: 0,
+        ..CleanupRecovery::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_redrawn_literal_draft_gets_only_the_confirmed_cleanup_difference() {
+    recover_after_cleanup_write(CleanupRecovery::default()).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_confirmed_partial_cleanup_survives_the_receipt_grace() {
+    recover_after_cleanup_write(CleanupRecovery {
+        redraw_after_ms: 420,
+        ..CleanupRecovery::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_draw_outside_the_input_box_cannot_authorize_more_backspaces() {
+    recover_after_cleanup_write(CleanupRecovery {
+        outside_draw: true,
+        ..CleanupRecovery::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_crash_before_the_write_receipt_leaves_the_remaining_draft_alone() {
+    recover_after_cleanup_write(CleanupRecovery {
+        confirm_write: false,
+        expected_keys: 0,
+        ..CleanupRecovery::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unissued_cleanup_waits_for_a_full_composer_frame() {
+    recover_after_cleanup_write(CleanupRecovery {
+        written: 0,
+        redraw: "hello",
+        expected_keys: 5,
+        outside_draw: true,
+        ..CleanupRecovery::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_confirmed_unicode_short_write_keeps_its_character_count() {
+    recover_after_cleanup_write(CleanupRecovery {
+        text: "héllo",
+        redraw: "hél",
+        redraw_after_ms: 420,
+        ..CleanupRecovery::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_next_complete_composer_frame_follows_an_unfinished_title() {
+    for coalesced in [false, true] {
+        recover_after_cleanup_write(CleanupRecovery {
+            unfinished_title: Some(coalesced),
+            ..CleanupRecovery::default()
+        })
+        .await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pi_recovery_uses_the_editors_grapheme_boundaries() {
+    for (text, confirm_write, expected_keys) in [
+        ("hello\u{e9}!", true, 5),
+        ("helloe\u{301}!", true, 5),
+        ("helloe\u{301}!", false, 0),
+    ] {
+        recover_after_cleanup_write(CleanupRecovery {
+            cli_rule: "pi",
+            text,
+            redraw: "hello",
+            redraw_after_ms: 420,
+            confirm_write,
+            initial_keys: Some(7),
+            expected_keys,
+            ..CleanupRecovery::default()
+        })
+        .await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pi_recovery_matches_a_canonically_equivalent_redrawn_prefix() {
+    for (text, redraw) in [
+        ("he\u{301}llo!", "h\u{e9}ll"),
+        ("h\u{e9}llo!", "he\u{301}ll"),
+    ] {
+        recover_after_cleanup_write(CleanupRecovery {
+            cli_rule: "pi",
+            text,
+            redraw,
+            redraw_after_ms: 420,
+            initial_keys: Some(6),
+            expected_keys: 4,
+            ..CleanupRecovery::default()
+        })
+        .await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unknown_editor_finishes_a_combining_remainder_after_redraw() {
+    for (text, written) in [("hello\u{e9}!?", 2), ("hello\u{e9}", 0)] {
+        recover_after_cleanup_write(CleanupRecovery {
+            text,
+            written,
+            redraw: "helloe\u{301}",
+            redraw_after_ms: 420,
+            expected_keys: 6,
+            after_redraw: Some(("h", 1)),
+            ..CleanupRecovery::default()
+        })
+        .await;
+    }
+}
+
+struct CleanupRecovery<'a> {
+    cli_rule: &'a str,
+    text: &'a str,
+    initial_keys: Option<usize>,
+    written: usize,
+    confirm_write: bool,
+    redraw_after_ms: u64,
+    outside_draw: bool,
+    unfinished_title: Option<bool>,
+    redraw: &'a str,
+    expected_keys: usize,
+    after_redraw: Option<(&'a str, usize)>,
+}
+
+impl Default for CleanupRecovery<'_> {
+    fn default() -> Self {
+        Self {
+            cli_rule: "fake",
+            text: "hello",
+            initial_keys: None,
+            written: 2,
+            confirm_write: true,
+            redraw_after_ms: 100,
+            outside_draw: false,
+            unfinished_title: None,
+            redraw: "hel",
+            expected_keys: 3,
+            after_redraw: None,
+        }
+    }
+}
+
+async fn recover_after_cleanup_write(case: CleanupRecovery<'_>) {
+    use super::terminal::{Terminal, TerminalEvent, TerminalWait};
+    use super::typist::{BoxWrites, InputObservation, Modes, Typist};
+    use crate::messages::tests::{message, messages, post_new};
+
+    let CleanupRecovery {
+        cli_rule,
+        text,
+        initial_keys,
+        written,
+        confirm_write,
+        redraw_after_ms,
+        outside_draw,
+        unfinished_title,
+        redraw,
+        expected_keys,
+        after_redraw,
+    } = case;
+    let wire = format!("{text} ");
+    // The first Backspace deletes the delivery's transport space before the message body.
+    let written = if written == 0 { 0 } else { written + 1 };
+    let (redraw, expected_keys) = if written == 0 {
+        (
+            format!("{redraw} "),
+            expected_keys + usize::from(expected_keys != 0),
+        )
+    } else {
+        (redraw.to_owned(), expected_keys)
+    };
+    let home = home("issued-cleanup");
+    let (master, mut cli) = raw_terminal(80, 24);
+    let mut terminal = Terminal::new(Some(master.try_clone().unwrap())).unwrap();
+    let post = messages().0;
+    let (message, mut settled) = post_new(&post, message(0, "a1"));
+    let number = crate::messages::number(&message);
+    let start = Instant::now();
+    let typing = |deadline| {
+        MessageTyping::new(
+            text.into(),
+            number,
+            deadline,
+            Submission {
+                text: text.into(),
+                sender: Sender::person(),
+            },
+        )
+    };
+    let rule = facade_rules::find(cli_rule).unwrap().unwrap();
+    let border = "─".repeat(80);
+    let draw = |text: &str| {
+        if cli_rule == "pi" {
+            format!(
+                "\x1b[1;1H\x1b[K{border}\x1b[3;1H\x1b[K{border}\x1b[2;1H\x1b[K{text}\x1b[7m \x1b[27m\x1b[D"
+            )
+        } else {
+            format!("\r\x1b[K❯ {text}")
+        }
+    };
+    let mut old = Typist::new("a1", Some(rule), None, post.delivery_handle());
+    let mut screen = Screen::new(80, 24, SCROLLBACK_ROWS);
+    let modes = Modes {
+        bracketed_paste: true,
+        application_cursor_keys: false,
+        working: false,
+        reveal_ready: false,
+    };
+    let step = |old: &mut Typist, now, terminal: &mut Terminal, screen: &Screen| {
+        let written = terminal.written();
+        old.note_erasure_write(written);
+        let step = old.step(now, written, written, modes, BoxWrites::Allowed, &|| {
+            InputObservation {
+                current: facade_rules::read_box(&rule.input, &screen.view()),
+                native_wait: None,
+                waits_for_frame: false,
+                can_probe: true,
+                submitted: None,
+                after_write: false,
+                empty_after_write: None,
+                awaiting_after_interaction: false,
+            }
+        });
+        if let Some(kind) = step.delivery {
+            old.delivery_issued(kind, written, step.write.len());
+        }
+        step.write
+    };
+    let deadline = start + Duration::from_secs(1);
+    old.deliver(typing(deadline));
+    screen.feed(draw("").as_bytes());
+    let paste = step(&mut old, start, &mut terminal, &screen);
+    assert_eq!(paste, format!("\x1b[200~{wire}\x1b[201~").as_bytes());
+    terminal.push(&paste);
+    assert!(matches!(
+        terminal
+            .ready(TerminalWait::WriteOnly, |offset, count| old
+                .before_write(offset, count))
+            .await,
+        TerminalEvent::Wrote
+    ));
+    assert_eq!(cli.reads_within(paste.len(), Duration::from_secs(5)), paste);
+
+    screen.feed(draw(&wire).as_bytes());
+    assert!(
+        step(
+            &mut old,
+            start + Duration::from_millis(1),
+            &mut terminal,
+            &screen
+        )
+        .is_empty()
+    );
+    let cleanup = step(&mut old, deadline, &mut terminal, &screen);
+    assert_eq!(
+        cleanup,
+        vec![0x7f; initial_keys.unwrap_or_else(|| text.chars().count()) + 1]
+    );
+    if written != 0 {
+        terminal.push(&cleanup[..written]);
+        assert!(matches!(
+            terminal
+                .ready(TerminalWait::WriteOnly, |offset, count| old
+                    .before_write(offset, count))
+                .await,
+            TerminalEvent::Wrote
+        ));
+        if confirm_write {
+            old.wrote(terminal.written());
+        }
+        assert_eq!(
+            cli.reads_within(written, Duration::from_secs(5)),
+            cleanup[..written]
+        );
+    }
+    let saved = post.paste_messages(number).unwrap().draft.unwrap();
+    let progress = saved.cleanup.unwrap();
+    assert_eq!(progress.writing, !confirm_write);
+    assert_eq!(
+        progress.written as usize,
+        if confirm_write { written } else { 0 }
+    );
+    assert!(settled.borrow().is_none());
+    drop((terminal, old));
+
+    // The CLI has taken the write, but the screen log still shows the full old draft.
+    if outside_draw {
+        // A partial repaint was in the old snapshot, before the new actor could read the box.
+        screen.feed(draw(&redraw).as_bytes());
+    }
+    if unfinished_title.is_some() {
+        screen.feed(b"\x1b]2;old title");
+        assert!(screen.has_unfinished_unit());
+    }
+    let dir = home.join("screens").join("a1");
+    let (tx, rx) = mpsc::channel(MAX_QUEUED_COMMANDS);
+    let start = ActorStart {
+        colors: TerminalColors::default(),
+        info: record(ProcessState::Running, None, 80, 24),
+        master: Some(master),
+        screen: ScreenStart::Recovered {
+            restart_size: None,
+            handed_over_cleanly: false,
+            screen: Box::new(screen),
+            log: None,
+        },
+        untouched_input: false,
+        rule: Some(cli_rule.into()),
+        captures: false,
+        launch_command: None,
+        observed_loss: false,
+        deliveries: post.delivery_handle(),
+        state: StateStart {
+            file: super::state::state_file(&dir),
+            kept: Kept::default(),
+            started: Instant::now(),
+        },
+    };
+    let handle = spawn(start, rx, tx, broadcast::channel(16).0).unwrap();
+    let (reply, taken) = oneshot::channel();
+    handle
+        .mailbox()
+        .send(AgentCommand::WriteInput {
+            input: Input::BegunPaste {
+                messages: vec![typing(Instant::now())],
+                previous_text: None,
+                draft: Some(saved),
+            },
+            run: FIRST_RUN,
+            reply,
+        })
+        .await
+        .unwrap();
+    assert!(taken.await.unwrap().is_ok());
+    match unfinished_title {
+        None => cli.write_all(b"\x1b]2;working\x07").unwrap(),
+        Some(false) => cli.write_all(b"\x07").unwrap(),
+        Some(true) => {}
+    }
+    assert_eq!(
+        cli.reads_within(5, Duration::from_millis(redraw_after_ms)),
+        b"",
+        "a title alone cannot show the old backspaces' effect"
+    );
+
+    if redraw_after_ms == 100 {
+        assert!(settled.borrow().is_none(), "the receipt still has time");
+    } else {
+        tokio::time::timeout(Duration::from_secs(5), settled.wait_for(Option::is_some))
+            .await
+            .expect("the receipt settles before the redraw")
+            .unwrap();
+    }
+    if outside_draw {
+        cli.write_all(b"\x1b7\x1b[20;1H*\x1b8").unwrap();
+        assert_eq!(
+            cli.reads_within(5, Duration::from_millis(180)),
+            b"",
+            "painting another row cannot make the cached input box current"
+        );
+        cli.write_all(format!("\x1b[1;3Hhe\x1b[1;{}H", 3 + redraw.len()).as_bytes())
+            .unwrap();
+        assert_eq!(
+            cli.reads_within(5, Duration::from_millis(40)),
+            b"",
+            "a partial redraw of the input cannot borrow the last letter from the snapshot"
+        );
+    }
+    let id = format!("m{number}");
+    let delivery = || post.message(&id).unwrap().delivery;
+    let receipt_before_redraw = settled.borrow().is_some().then(delivery);
+    let close = if unfinished_title == Some(true) {
+        "\x07"
+    } else {
+        ""
+    };
+    cli.write_all(format!("{close}{}", draw(&redraw)).as_bytes())
+        .unwrap();
+    if expected_keys == 0 {
+        assert!(cli.reads_within(5, Duration::from_millis(40)).is_empty());
+    } else {
+        assert_eq!(
+            cli.reads_within(expected_keys, Duration::from_secs(5)),
+            vec![0x7f; expected_keys],
+        );
+    }
+    if let Some((remaining, keys)) = after_redraw {
+        cli.write_all(b"\x1b]2;cleanup in progress\x07").unwrap();
+        assert!(cli.reads_within(1, Duration::from_millis(100)).is_empty());
+        cli.write_all(draw(&redraw).as_bytes()).unwrap();
+        assert!(
+            cli.reads_within(1, Duration::from_millis(100)).is_empty(),
+            "a repaint of the old text cannot confirm the new keys' effect"
+        );
+        cli.write_all(draw(remaining).as_bytes()).unwrap();
+        assert_eq!(
+            cli.reads_within(keys, Duration::from_secs(5)),
+            vec![0x7f; keys],
+            "the current drawing proves the rest of the same paste"
+        );
+    }
+    let empty = draw("");
+    if cli_rule == "pi" && receipt_before_redraw.is_some() {
+        // Split the redraw before it can paint the empty box.
+        let prefix = "\x1b[1;";
+        let rest = empty.strip_prefix(prefix).unwrap();
+        cli.write_all(prefix.as_bytes()).unwrap();
+        assert!(cli.reads_within(5, Duration::from_millis(100)).is_empty());
+        assert!(post.paste_messages(number).unwrap().draft.is_some());
+        cli.write_all(rest.as_bytes()).unwrap();
+    } else {
+        cli.write_all(empty.as_bytes()).unwrap();
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while post.paste_messages(number).unwrap().draft.is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("a complete empty frame retires the saved cleanup");
+    tokio::time::timeout(Duration::from_secs(5), settled.wait_for(Option::is_some))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(cli.reads_within(5, Duration::from_millis(100)).is_empty());
+    if let Some(before) = receipt_before_redraw {
+        assert_eq!(before, delivery());
+    }
+    Harness {
+        handle,
+        cli,
+        dir,
+        messages: post,
+    }
+    .stop()
+    .await;
+}
+
 /// A message the typist is typing, its paste begun, fails as ended only once the agent's record
 /// shows the run ended, as a waiting start prompt does. Here a reader holds the record while
 /// the run ends: the message learns nothing until it lets go.
@@ -2838,7 +4140,7 @@ async fn an_ended_run_is_in_its_record_before_a_message_being_typed_learns_it_en
         })
         .await;
     assert!(taken.await.unwrap().is_ok());
-    let paste = b"\x1b[200~a message\x1b[201~";
+    let paste = b"\x1b[200~a message \x1b[201~";
     assert_eq!(harness.cli_reads(paste.len()), paste);
     // The CLI does not draw the draft: the typist waits for it, the message being typed. The
     // actor waits for its next command.
@@ -2954,8 +4256,6 @@ fn viewer_bytes(change: &ViewerChange) -> usize {
 
 // Timing bounds remain behavioral expectations, independent of the module's private constants.
 const REDRAW_NUDGE_TIMEOUT: Duration = Duration::from_millis(200);
-const READY_TYPED: Duration = Duration::from_secs(2);
-const READY_SHOWN: Duration = Duration::from_secs(10);
 const TRUST_STILL: Duration = Duration::from_secs(1);
 const TRUST_SELECTED: Duration = Duration::from_secs(10);
 const TRUST_GONE: Duration = Duration::from_secs(5);

@@ -363,7 +363,7 @@ impl TestTerminal {
             .rows
             .into_iter()
             .map(|row| {
-                let text: String = row.iter().map(|cell| cell.text.as_str()).collect();
+                let text: String = row.iter().map(|cell| cell.text()).collect();
                 text.trim_end().to_string()
             })
             .collect()

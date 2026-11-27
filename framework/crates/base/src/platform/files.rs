@@ -81,7 +81,8 @@ pub fn link_config_entry(original: &Path, alias: &Path) -> io::Result<()> {
     #[cfg(windows)]
     {
         if std::fs::metadata(original)?.is_dir() {
-            std::os::windows::fs::symlink_dir(original, alias)
+            // Directory junctions can be created without symbolic-link privileges.
+            junction::create(original, alias)
         } else {
             std::fs::hard_link(original, alias)
                 .or_else(|_| std::os::windows::fs::symlink_file(original, alias))
@@ -195,4 +196,41 @@ pub fn folder_key(path: &Path) -> String {
     return path.to_string_lossy().into_owned();
     #[cfg(windows)]
     windows::folder_key(path)
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use std::fs;
+    use std::io::ErrorKind;
+
+    use crate::test_folder::TestFolder;
+
+    #[test]
+    fn a_directory_config_alias_is_a_junction_and_run_cleanup_leaves_the_target() {
+        let folder = TestFolder::new("config-junction");
+        let original = folder.join("roaming");
+        let run = folder.join("run");
+        let alias = run.join("config");
+        fs::create_dir_all(original.join("preferences")).unwrap();
+        fs::create_dir(&run).unwrap();
+        let marker = "preferences/original.txt";
+        fs::write(original.join(marker), "the user's settings").unwrap();
+
+        super::link_config_entry(&original, &alias).unwrap();
+        assert!(junction::exists(&alias).unwrap());
+        assert_eq!(
+            fs::read_to_string(alias.join(marker)).unwrap(),
+            "the user's settings"
+        );
+
+        fs::remove_dir_all(&run).unwrap();
+        assert_eq!(
+            fs::symlink_metadata(&alias).unwrap_err().kind(),
+            ErrorKind::NotFound
+        );
+        assert_eq!(
+            fs::read_to_string(original.join(marker)).unwrap(),
+            "the user's settings"
+        );
+    }
 }

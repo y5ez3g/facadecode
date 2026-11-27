@@ -3,9 +3,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import call, patch
 
 from catalog import AcceptanceError, NATIVE_SSH_CASE
-from check_real_ssh_route import INPUT, PROGRAMS, REFUSE_UNKNOWN_MACHINE, SUCCESS_MARKER, ssh_success, verified_ssh
+from check_real_ssh_route import (
+    INPUT, PROGRAMS, REFUSE_UNKNOWN_MACHINE, SUCCESS_MARKER, ssh_success, verified_ssh, wait_for_daemon_status,
+)
 from evidence import digest
 from native_framework import hash_file, source_identity
 
@@ -50,6 +53,26 @@ def observations(scope):
         'commands': [{'label': label, 'status': status, 'argv': argv, 'stderr': stderr}
                      for label, status, argv, stderr in commands],
     }
+
+
+class NativeSshReadiness(unittest.TestCase):
+    @patch('check_real_ssh_route.query')
+    def test_retries_status_while_the_daemon_starts(self, query):
+        endpoint = Path('/tmp/route-origin.sock')
+        ready = {'machine_id': 'origin-id'}, {}
+        query.side_effect = [FileNotFoundError, ConnectionRefusedError, TimeoutError, ready]
+        self.assertEqual(wait_for_daemon_status('origin', endpoint), ready)
+        self.assertEqual(query.call_args_list, [call(endpoint, 'daemon.status', {})] * 4)
+
+    @patch('native_framework.time')
+    @patch('check_real_ssh_route.query', side_effect=FileNotFoundError)
+    def test_reports_the_unreachable_daemon_at_timeout(self, query, clock):
+        endpoint = Path('/tmp/route-peer.sock')
+        clock.monotonic.side_effect = [0, 0, 21]
+        message = r'timed out waiting for the peer daemon to answer daemon\.status at .*route-peer\.sock'
+        with self.assertRaisesRegex(AssertionError, message):
+            wait_for_daemon_status('peer', endpoint)
+        query.assert_called_once_with(endpoint, 'daemon.status', {})
 
 
 class NativeSshEvidence(unittest.TestCase):

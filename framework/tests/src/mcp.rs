@@ -91,6 +91,19 @@ impl McpTestClient {
         McpTestClient::spawn(home, Self::configured_command(home, agent))
     }
 
+    /// Runs another build's relay with the active CLI's generated configuration.
+    pub fn open_from(home: &TestHome, agent: &str, program: &std::path::Path) -> McpTestClient {
+        let configured = Self::configured_command(home, agent);
+        let mut command = home.command(program);
+        command.args(configured.get_args());
+        command.envs(
+            configured
+                .get_envs()
+                .filter_map(|(key, value)| Some((key, value?))),
+        );
+        McpTestClient::spawn(home, command)
+    }
+
     /// Speaks the relay wire protocol with the same private configuration as a running CLI.
     pub fn relay_configured(home: &TestHome, agent: &str) -> McpTestClient {
         let command = Self::configured_command(home, agent);
@@ -203,7 +216,7 @@ impl McpTestClient {
             .read_line(&mut answered)
             .expect("the answer to the relay's hello");
         let answered: Value = serde_json::from_str(&answered).unwrap_or_default();
-        assert_eq!(answered["result"], json!({ "relay": 1 }), "{answered}");
+        assert_eq!(answered["result"]["relay"], 1, "{answered}");
         let input = stream.try_clone().expect("the connection's other end");
         McpTestClient::initialize(Server::Daemon(stream), Box::new(input), output)
     }
@@ -272,6 +285,15 @@ impl McpTestClient {
 
     /// Waits for the answer to request `id`.
     pub fn answer(&self, id: u64, timeout: Duration) -> Option<Value> {
+        self.wait_for_frame(timeout, |frame| frame["id"] == id)
+    }
+
+    /// Waits for an answer or a notification matching the predicate.
+    pub fn wait_for_frame(
+        &self,
+        timeout: Duration,
+        matches: impl Fn(&Value) -> bool,
+    ) -> Option<Value> {
         let mut found = None;
         wait_until(timeout, || {
             found = self
@@ -279,7 +301,7 @@ impl McpTestClient {
                 .lock()
                 .unwrap()
                 .iter()
-                .find(|answer| answer["id"] == id)
+                .find(|frame| matches(frame))
                 .cloned();
             found.is_some()
         });

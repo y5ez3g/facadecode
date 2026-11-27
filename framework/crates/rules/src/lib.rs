@@ -25,6 +25,7 @@ use facade_base::key_input::Key;
 use facade_base::model::agent::WaitKind;
 use facade_base::model::terminal::InputMechanism;
 use facade_base::system::{SYSTEM, System};
+use facade_base::terminal::KeyRecord;
 use regex::Regex;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
@@ -36,9 +37,12 @@ pub use compose::{
 };
 pub use formats::shell_word;
 pub use input::{
-    BoxReading, InputLine, LineCell, ProbeVerdict, is_full_draft, is_legacy_split_paste,
-    is_own_draft, is_own_paste_tail, is_same_draft, read_box, read_box_for_typing, read_draft,
-    read_input, restored, settle_time, shape_of, space_taken, verdict_of, with_paste_text,
+    BoxReading, InputLine, LineCell, PasteDrawing, ProbeVerdict, canonical_text,
+    could_be_paste_prefix, draft_backspace_count, is_full_draft, is_legacy_split_paste,
+    is_own_draft, is_own_paste_tail, is_own_recovered_draft, is_paste_placeholder, is_same_draft,
+    read_box, read_box_after_paint, read_box_for_screen, read_box_for_typing, read_box_with_redraw,
+    read_draft, read_input, restored, settle_time, shape_of, shows_original_text, shows_paste_end,
+    shows_paste_placeholder, shows_whole, space_taken, verdict_of, with_paste_text,
 };
 pub use sessions::{
     Reported, SESSION_FILE, SESSION_VARIABLES, SavedSession, SessionFile, WriteFailure,
@@ -161,8 +165,8 @@ pub struct McpRule {
 }
 
 /// What a run's start types to ready the CLI's tools: `text` once the input first reads empty,
-/// Enter once the input shows it alone, then `close` once the screen shows the tools `ready`, or
-/// once the wait ends while the panel still shows `opened`. Patterns match a screen line without
+/// Enter once the input shows it alone, then `close` once the open panel shows the tools `ready`.
+/// The startup allowance bounds the waits for these frames. Patterns match a screen line without
 /// its trailing spaces.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -189,6 +193,25 @@ pub struct ConsoleRule {
     /// Characters above U+FFFF go as win32-input-mode key-down records: the CLI loses them
     /// otherwise.
     pub records_above_bmp: bool,
+    /// The key that puts a line break in the CLI's input. A message's line breaks go as that key
+    /// where the CLI submits on Enter and tells a pasted Enter from a typed one only by time.
+    #[serde(default)]
+    line_break: Option<LineBreakKey>,
+}
+
+/// A key that puts a line break in a CLI's input.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum LineBreakKey {
+    ShiftEnter,
+}
+
+impl LineBreakKey {
+    fn record(self) -> KeyRecord {
+        match self {
+            Self::ShiftEnter => KeyRecord::SHIFT_ENTER,
+        }
+    }
 }
 
 /// How the typist types into a CLI where it reads console input records.
@@ -199,6 +222,8 @@ pub struct ConsoleTyping {
     /// Characters above U+FFFF go as key-down records
     /// ([`facade_base::terminal::key_down_records`]).
     pub records_above_bmp: bool,
+    /// The key a line break goes as, pressed, for a CLI whose Enter submits.
+    pub line_break: Option<KeyRecord>,
 }
 
 /// How to type into `rule`'s CLI where it reads console input records: Some only on Windows, for a
@@ -212,14 +237,18 @@ pub fn console_typing(rule: &Rule) -> Option<ConsoleTyping> {
     Some(ConsoleTyping {
         per_char: Duration::from_millis(console.per_char_ms),
         records_above_bmp: console.records_above_bmp,
+        line_break: console.line_break.map(LineBreakKey::record),
     })
 }
 
-/// How the CLI takes a pasted message: what its input shows of a paste, and how long the message
-/// shows there before submitting it.
+/// How the CLI takes a pasted message: its terminal mode, what its input shows, and how long
+/// the CLI takes to settle the draft and to show an empty input after submission.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PasteRule {
+    /// The CLI enables bracketed paste on every screen where Facade can deliver a message.
+    #[serde(default)]
+    bracketed: bool,
     /// How long a message shows as the input's own draft before submission, in milliseconds.
     #[serde(default)]
     pub enter_ms: u64,
@@ -229,12 +258,38 @@ pub struct PasteRule {
     /// How much longer for each line of the message, in milliseconds.
     #[serde(default)]
     pub line_ms: u64,
+    /// The measured upper bound from the submission key to an empty input, in milliseconds.
+    #[serde(default)]
+    submit_clear_ms: Option<u64>,
+    /// Delay before repeating a submission key proven harmless on an empty input.
+    #[serde(default)]
+    retry_submit_ms: Option<u64>,
+    /// The CLI can draw the paste in pieces on Windows even without console input settings.
+    #[serde(default)]
+    check_paste_end_on_windows: bool,
     /// What the input shows in place of a long paste.
     #[serde(default)]
     pub placeholders: Vec<PastePlaceholder>,
+    /// Prefixes a previous build typed before it pasted the rest of a delivery.
+    #[serde(default)]
+    legacy_split_prefixes: Vec<String>,
+    /// The editor's deletion unit for a literal draft, where it has been established.
+    #[serde(default)]
+    backspace_unit: Option<BackspaceUnit>,
+    /// Characters the editor deletes individually when they end a draft.
+    #[serde(default)]
+    backspace_single_code_points: Option<Pattern>,
     /// The exact single-row label offering Tab to reveal a collapsed paste.
     #[serde(default)]
     pub tab_to_expand: Option<Pattern>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum BackspaceUnit {
+    CodePoint,
+    Grapheme,
+    LegacyGrapheme,
 }
 
 /// What the input shows in place of a long paste, such as `[Pasted text #1 +3 lines]`.
@@ -362,9 +417,16 @@ pub struct Frame {
     /// A mode's text drawn in an empty input, known by the footer under the frame.
     #[serde(default)]
     pub placeholder: Option<ModePlaceholder>,
+    /// A single-row dim hint whose first glyph is under the CLI's inverted cursor.
+    #[serde(default)]
+    pub(crate) dim_cursor_hint: Option<String>,
     /// The CLI can draw a hint in the same style as a draft in a fresh input.
     #[serde(default)]
     pub probe_unstyled_hint: bool,
+    /// The CLI also scrolls a draft taller than its frame without a mark, its prompt row with the
+    /// draft's first rows.
+    #[serde(default)]
+    pub(crate) scrolls_unmarked: bool,
     /// A hidden terminal cursor supplies its position inside the complete input frame.
     #[serde(default)]
     pub(crate) hidden_cursor_in_frame: bool,
@@ -411,7 +473,29 @@ pub struct Editor {
     /// The editor is at most this many rows tall, or this share of the screen where that is more.
     pub most_rows: usize,
     pub most_share: f64,
+    /// The rows the CLI keeps of its editor, rules included, where the screen has no room for it
+    /// all. Pi 1.4.0's full-screen layout keeps three: `minSize` of the editor at line 16 of
+    /// pi-coding-agent's `dist/modes/interactive/chat-viewport.js`.
+    #[serde(default)]
+    pub(crate) least_rows: Option<usize>,
+    #[serde(default)]
+    pub(crate) question: Option<Question>,
     pub menus: Vec<Menu>,
+}
+
+/// A question the CLI asks with an editor of its own, in place of its input: a rule, the question,
+/// the editor and the keys that answer it, with a blank row between each two. Pi 1.4.0 draws it in
+/// pi-coding-agent's `dist/modes/interactive/components/extension-editor.js`, lines 37 to 68.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Question {
+    /// The rule over the question.
+    pub(crate) top: Pattern,
+    /// The row of the keys, the first of them where they wrap.
+    pub(crate) keys: Pattern,
+    /// How many rows the CLI's own footer has, right under its input. The CLI cuts them before the
+    /// keys.
+    pub(crate) footer_rows: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -611,7 +695,8 @@ pub enum Scrolled {
     Unmarked(EditorHeight),
 }
 
-/// Each pattern's one capture counts the hidden rows on that side.
+/// Each pattern's one capture counts the hidden rows on that side. A mark without a number, the
+/// capture left out, counts as one.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CountedScroll {
@@ -626,17 +711,17 @@ pub struct ModePlaceholder {
     pub footer: Pattern,
 }
 
-/// A menu or question the CLI draws in place of its input: its selected row and the row under it,
-/// or a hint row that only its questions have within so many rows.
+/// A menu or question drawn in place of the CLI's input, identified by an anchor line and any
+/// required lines below it.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Menu {
-    pub selected: Pattern,
-    /// A selected row never matches this.
+    pub selected: MenuLinePattern,
+    /// The anchor's first logical line never matches this.
     #[serde(default)]
     pub not_selected: Option<Pattern>,
     #[serde(default)]
-    pub next: Option<Pattern>,
+    pub next: Option<MenuLinePattern>,
     #[serde(default)]
     pub hint: Option<Hint>,
 }
@@ -644,8 +729,30 @@ pub struct Menu {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hint {
-    pub pattern: Pattern,
+    pub pattern: MenuLinePattern,
+    /// How many logical lines after the anchor may start the hint.
     pub within: usize,
+}
+
+/// Match a terminal's logical line, or exact text a CLI lays out on successive lines itself.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum MenuLinePattern {
+    Regex(Pattern),
+    Wrapped(WrappedMenuText),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WrappedMenuText {
+    /// The prefix at the start of the first line, including indentation and any option marker.
+    pub prefix: Pattern,
+    pub text: String,
+    /// The number of spaces the CLI adds to each manually continued line.
+    pub indent: usize,
+    /// The CLI starts a separate hint or explanation with dim text at the same indentation.
+    #[serde(default)]
+    pub stop_at_dim: bool,
 }
 
 /// A regular expression of a rule file, compiled as the file is read.
@@ -800,6 +907,26 @@ fn is_literal(arg: &str) -> bool {
 }
 
 impl PasteRule {
+    /// Whether automatic delivery uses paste brackets.
+    pub fn brackets_delivery(&self) -> bool {
+        self.bracketed
+    }
+
+    /// How long this CLI has to show an empty input after its submission key reaches it.
+    pub fn submit_clear_time(&self) -> Option<Duration> {
+        self.submit_clear_ms.map(Duration::from_millis)
+    }
+
+    /// How long to wait before repeating a submission key over the same draft.
+    pub fn retry_submit_time(&self) -> Option<Duration> {
+        self.retry_submit_ms.map(Duration::from_millis)
+    }
+
+    /// Whether delivery on this platform must see the end of the paste before submitting.
+    pub fn checks_paste_end(&self) -> bool {
+        cfg!(windows) && self.check_paste_end_on_windows
+    }
+
     /// Which key submits a checked message draft.
     pub fn submission_key(&self, working: bool) -> Key {
         if working && self.tab_while_working {
@@ -973,6 +1100,16 @@ impl Editor {
         }
         if self.most_rows == 0 {
             return Err("most_rows must be positive".into());
+        }
+        if self.least_rows.is_some_and(|least| least < 3) {
+            return Err("least_rows must hold a row between two rules".into());
+        }
+        if self
+            .question
+            .as_ref()
+            .is_some_and(|question| question.footer_rows == 0)
+        {
+            return Err("question.footer_rows must be positive".into());
         }
         match &self.scrolled {
             Scrolled::Rules(marks) => marks.check()?,
@@ -1317,6 +1454,42 @@ mod tests {
     }
 
     #[test]
+    fn a_console_cli_s_line_breaks_go_as_the_key_its_rule_names() {
+        for cli in ["codex", "muse"] {
+            let rule = find(cli).unwrap().unwrap();
+            let named = rule.console.as_ref().unwrap().line_break;
+            assert_eq!(named, Some(LineBreakKey::ShiftEnter), "{cli}");
+            let typing = console_typing(rule);
+            if SYSTEM == System::Windows {
+                assert_eq!(
+                    typing.unwrap().line_break,
+                    Some(KeyRecord::SHIFT_ENTER),
+                    "{cli}"
+                );
+            } else {
+                assert_eq!(
+                    typing, None,
+                    "{cli}: elsewhere it reads the terminal's bytes"
+                );
+            }
+        }
+        // A rule that names none keeps the terminal's carriage return.
+        let codex = FILES[1].1;
+        let without = Rule::parse(
+            "codex",
+            &codex.replacen(", \"line_break\": \"shift_enter\"", "", 1),
+        )
+        .unwrap();
+        assert_eq!(without.console.as_ref().unwrap().line_break, None);
+        assert!(console_typing(&without).is_none_or(|typing| typing.line_break.is_none()));
+        let refused = refusal(
+            "codex",
+            &codex.replacen("\"shift_enter\"", "\"meta_enter\"", 1),
+        );
+        assert!(refused.contains("unknown variant"), "{refused}");
+    }
+
+    #[test]
     fn every_rule_file_reads_with_its_name_and_a_unique_program() {
         let names: Vec<&str> = rules()
             .unwrap()
@@ -1364,6 +1537,13 @@ mod tests {
                 find(raw).unwrap().is_none(),
                 "{raw} is a program without a rule"
             );
+        }
+    }
+
+    #[test]
+    fn every_ruled_cli_enables_bracketed_paste_on_its_delivery_screens() {
+        for rule in rules().unwrap() {
+            assert!(rule.paste.brackets_delivery(), "{}", rule.cli);
         }
     }
 
@@ -1517,6 +1697,13 @@ mod tests {
                 &pi.replacen("\"most_share\": 0.3", "\"most_share\": 1.5", 1)
             )
             .contains("most_share")
+        );
+        assert!(
+            refusal(
+                "pi",
+                &pi.replacen("\"least_rows\": 3", "\"least_rows\": 2", 1)
+            )
+            .contains("least_rows")
         );
         assert!(
             refusal("pi", &pi.replacen("\"within\": 40", "\"within\": 0", 1)).contains("positive")
