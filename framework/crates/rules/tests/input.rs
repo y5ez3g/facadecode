@@ -325,6 +325,26 @@ fn qoder_waits_for_its_resumed_composer() {
 }
 
 #[test]
+fn devin_reads_its_startup_theme_question_with_the_confirmation_footer() {
+    let input = &find("devin").unwrap().unwrap().input;
+    let question = concat!(
+        "\x1b[?25l Detected dark theme but configured for light. Switch?\r\n\r\n",
+        " ❭ 1 Yes, switch theme\r\n",
+        "   2 No, keep current\r\n",
+        "   3 Yes, always auto-detect\r\n",
+        "   4 No, don't ask again\r\n\r\n",
+    );
+    let mut screen = facade_screen::Screen::new(120, 24, 0);
+    screen.feed(question.as_bytes());
+    assert_eq!(read_input(input, &screen.view()).state, InputState::Unknown);
+    screen.feed(" ↑↓ select · ↵ confirm".as_bytes());
+    assert_eq!(
+        read_input(input, &screen.view()).state,
+        InputState::Interaction
+    );
+}
+
+#[test]
 fn qoder_reads_either_terminal_setup_choice_as_interaction() {
     let rule = find("qoder").unwrap().unwrap();
     let screens: [serde_json::Value; 2] = recorded("qoder-startup").try_into().unwrap();

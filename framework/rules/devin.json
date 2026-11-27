@@ -19,6 +19,10 @@
 		"scrolled": { "position": "rows", "above": "^\\^ (\\d+) more above$", "below": "^v (\\d+) more below$" },
 		"menus": [
 			{ "selected": "^ *[*●•✱] Do you trust the authors of this directory\\?" },
+			{
+				"selected": "^ *Detected dark theme but configured for light\\. Switch\\?$",
+				"hint": { "pattern": "^ *↑↓ select · ↵ confirm$", "within": 7 }
+			},
 			{ "selected": "^ *[›>] +[0-9]+\\.? +\\S", "next": "^ +[0-9]+\\.? +\\S" },
 			{ "selected": "^ *[○●] /\\S", "next": "^ +/\\S" }
 		]

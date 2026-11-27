@@ -232,9 +232,10 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
   - Claude's theme chooser shows its heading, the `/theme` help and a selected native theme.
     Kiro shows a login question with a selected Yes or No, and Cursor shows its login hint
     below the Cursor Agent splash title. Those login notices also report authentication waits.
-    Kiro trust and Devin's `✱` trust question are also interactions. Kiro's option menus read as
-    interactions by the footer below their selected `❯` row, so its trust-all-tools warning does at
-    any window height.
+    Kiro trust and Devin's `✱` trust question are also interactions. Devin's startup theme choice
+    reads as an interaction when its question and confirmation footer are visible.
+    Kiro's option menus read as interactions by the footer below their selected `❯` row, so its
+    trust-all-tools warning does at any window height.
     When the workspace trust heading scrolls away, the selected workspace choice and the nearby
     `esc to exit` footer identify the question.
   - Frame, editor and prompt rules use a `scrolled` object that identifies the scroll layout by `position`.
