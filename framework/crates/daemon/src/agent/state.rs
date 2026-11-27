@@ -127,7 +127,7 @@ impl StateTracker {
         reading.wake = [
             held_until,
             starting.then_some(start_deadline),
-            (tools_pending && !self.question.open)
+            (tools_pending && self.question.kind.is_none())
                 .then(|| self.question.deadline(self.tools_since)),
         ]
         .into_iter()
@@ -136,11 +136,11 @@ impl StateTracker {
 
         let result = if let Some((state, detail)) = urgent(current) {
             (state, detail)
-        } else if self.question.open {
+        } else if let Some(kind) = self.question.kind {
             (
                 ManagedAgentState::WaitingForYou,
                 Some(StateDetail {
-                    kind: Some(WaitKind::Unknown),
+                    kind: Some(kind),
                     ..Default::default()
                 }),
             )
@@ -316,7 +316,7 @@ impl StateTracker {
 
     /// Counts Enter as requesting work unless it answers the CLI's own question.
     pub(crate) fn asked(&mut self) {
-        self.saved.counts_turns |= !self.question.open;
+        self.saved.counts_turns |= self.question.kind.is_none();
     }
 
     /// The last visible submitted line and its sender.
@@ -324,12 +324,12 @@ impl StateTracker {
         self.saved.said.as_ref()
     }
 
-    /// Updates whether the input box is occupied by a CLI question.
-    pub(crate) fn asks(&mut self, asking: bool, now: Instant) {
-        if self.question.open && !asking {
+    /// Updates the reason for a CLI interaction, or clears the wait when it goes away.
+    pub(crate) fn asks(&mut self, kind: Option<WaitKind>, now: Instant) {
+        if self.question.kind.is_some() && kind.is_none() {
             self.question.answered = Some(now);
         }
-        self.question.open = asking;
+        self.question.kind = kind;
     }
 
     /// The CLI reports answers that ask the person something as native questions.
@@ -357,13 +357,16 @@ impl StateTracker {
 
     /// Startup deadline, suspended until the CLI's current question is answered.
     pub(crate) fn start_bound(&self) -> Option<Instant> {
-        (!self.question.open).then(|| self.question.deadline(self.started))
+        self.question
+            .kind
+            .is_none()
+            .then(|| self.question.deadline(self.started))
     }
 
     /// Whether the native startup allows the Typist to take the first prompt.
     pub(super) fn native_prompt_ready(&self, not_ready: bool) -> bool {
         (self.evidence.shown || not_ready)
-            && !self.question.open
+            && self.question.kind.is_none()
             && !matches!(self.evidence.current(), Some(EvidenceState::Blocked { .. }))
     }
 
@@ -422,7 +425,7 @@ impl StateTracker {
                 Connection::Listed => return (ToolsState::Available, None),
                 Connection::Initialized => return (ToolsState::Connecting, None),
                 Connection::Lost => Some(ToolsReason::Disconnected),
-                Connection::Pending if self.question.open => None,
+                Connection::Pending if self.question.kind.is_some() => None,
                 Connection::Pending if self.saved.tools_not_started => {
                     Some(ToolsReason::NotStarted)
                 }
@@ -475,7 +478,7 @@ fn urgent(evidence: Option<&EvidenceState>) -> Option<(ManagedAgentState, Option
 
 #[derive(Default)]
 struct Question {
-    open: bool,
+    kind: Option<WaitKind>,
     answered: Option<Instant>,
 }
 impl Question {
@@ -870,7 +873,7 @@ mod tests {
     fn native_wait_follows_the_runs_own_report() {
         let now = Instant::now();
         let mut agent = tracker(None, now);
-        agent.asks(true, now);
+        agent.asks(Some(WaitKind::Unknown), now);
         assert_eq!(state(&mut agent, now).0, ManagedAgentState::WaitingForYou);
         assert_eq!(agent.native_wait(), None);
 
@@ -1373,7 +1376,7 @@ mod tests {
             None,
             None,
         );
-        agent.asks(true, now);
+        agent.asks(Some(WaitKind::Unknown), now);
         let late = now + START_TIMEOUT + Duration::from_secs(5);
         let reading = agent.read(late, Viewing::Unwatched);
         let waits = Some(StateDetail {
@@ -1389,7 +1392,7 @@ mod tests {
                 None
             )
         );
-        agent.asks(false, late);
+        agent.asks(None, late);
         let reading = agent.read(late, Viewing::Unwatched);
         assert_eq!(
             (reading.state, reading.tools, reading.wake),
@@ -1406,13 +1409,43 @@ mod tests {
             "the tools' bound ran from the answer"
         );
         agent.take(vec![report("state=blocked:kind=permission")]);
-        agent.asks(true, late + START_TIMEOUT);
+        agent.asks(Some(WaitKind::Auth), late + START_TIMEOUT);
         let reading = agent.read(late + START_TIMEOUT, Viewing::Unwatched);
         assert_eq!(
             reading.detail.and_then(|detail| detail.kind),
             Some(WaitKind::Permission),
             "what the CLI reports goes first"
         );
+    }
+
+    #[test]
+    fn a_sign_in_interaction_explains_an_idle_cli_s_wait() {
+        let now = Instant::now();
+        let mut agent = tracker(Some("fake"), now);
+        agent.take(vec![report("state=idle")]);
+        agent.asks(Some(WaitKind::Auth), now);
+        assert_eq!(
+            state(&mut agent, now),
+            (
+                ManagedAgentState::WaitingForYou,
+                detail(Some(WaitKind::Auth), None, None, None)
+            )
+        );
+
+        agent.take(vec![report("state=error")]);
+        assert_eq!(state(&mut agent, now), (ManagedAgentState::Error, None));
+
+        agent.take(vec![report("state=idle")]);
+        agent.asks(Some(WaitKind::Unknown), now);
+        assert_eq!(
+            state(&mut agent, now),
+            (
+                ManagedAgentState::WaitingForYou,
+                detail(Some(WaitKind::Unknown), None, None, None)
+            )
+        );
+        agent.asks(None, now);
+        assert_eq!(state(&mut agent, now), (ManagedAgentState::Idle, None));
     }
 
     /// A run whose start could not ready its tools has them not started, but nothing is decided
@@ -1429,14 +1462,14 @@ mod tests {
             None,
         );
         agent.tools_not_started();
-        agent.asks(true, now);
+        agent.asks(Some(WaitKind::Unknown), now);
         let reading = agent.read(now, Viewing::Unwatched);
         assert_eq!(
             (reading.tools, reading.tools_reason),
             (ToolsState::Connecting, None),
             "while the CLI asks"
         );
-        agent.asks(false, now);
+        agent.asks(None, now);
         let reading = agent.read(now, Viewing::Unwatched);
         assert_eq!(
             (reading.tools, reading.tools_reason),
@@ -1501,9 +1534,9 @@ mod tests {
             );
         }
         let mut answered = start();
-        answered.asks(true, now);
+        answered.asks(Some(WaitKind::Unknown), now);
         answered.asked();
-        answered.asks(false, now);
+        answered.asks(None, now);
         assert_eq!(
             turn(&mut answered, now),
             ManagedAgentState::Idle,

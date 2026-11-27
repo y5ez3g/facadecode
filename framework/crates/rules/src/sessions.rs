@@ -17,7 +17,7 @@ mod history;
 mod kiro_settings;
 
 pub use history::{SavedSession, list_sessions, session_for_id};
-pub(crate) use history::{copilot_config_dir, kiro_profile, qoder_config_dir};
+pub(crate) use history::{kiro_profile, qoder_config_dir};
 pub(crate) use kiro_settings::kiro_config_root;
 
 use std::collections::BTreeMap;
@@ -237,12 +237,33 @@ pub fn session_from_hook(input: &[u8]) -> Option<Option<Reported>> {
         serde_json::Value::String(text) => picked_id(text)?,
         _ => return None,
     };
-    let saved_in = input
+    let saved_in = hook_transcript(&input);
+    Some(picked.map(|id| Reported { id, saved_in }))
+}
+
+/// The session of Qoder's main conversation, reported when a prompt is submitted after folder
+/// trust. It becomes resumable once its transcript exists.
+pub fn session_from_prompt(cli: &str, input: &[u8]) -> Option<Reported> {
+    let input: serde_json::Value = serde_json::from_slice(input).ok()?;
+    if cli != "qoder"
+        || input["hook_event_name"] != "UserPromptSubmit"
+        || input.get("agent_id").is_some()
+    {
+        return None;
+    }
+    let id = input["session_id"].as_str().filter(|id| is_uuid(id))?;
+    Some(Reported {
+        id: id.to_ascii_lowercase(),
+        saved_in: Some(hook_transcript(&input)?),
+    })
+}
+
+fn hook_transcript(input: &serde_json::Value) -> Option<PathBuf> {
+    input
         .get("transcript_path")
         .and_then(|path| path.as_str())
         .filter(|path| is_one_absolute_path(path))
-        .map(PathBuf::from);
-    Some(picked.map(|id| Reported { id, saved_in }))
+        .map(PathBuf::from)
 }
 
 /// The session file update the input of Antigravity's title command asks for, read like
@@ -536,6 +557,48 @@ mod tests {
         ] {
             assert_eq!(hook(&ignored), None, "{ignored}");
         }
+    }
+
+    #[test]
+    fn qoder_reports_the_main_session_from_a_prompt_with_a_transcript() {
+        let transcript = match SYSTEM {
+            System::Unix => {
+                "/home/test/.qoder/projects/-work/86da4482-2bae-4a45-b193-a5664c19826a.jsonl"
+            }
+            System::Windows => {
+                "C:/test/.qoder/projects/-work/86da4482-2bae-4a45-b193-a5664c19826a.jsonl"
+            }
+        };
+        let mut input = serde_json::json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": ID,
+            "transcript_path": transcript,
+            "cwd": "/work",
+            "workspace_dirs": ["/work"],
+            "permission_mode": "yolo",
+            "prompt": "Local session capture check.",
+        });
+        let payload = input.to_string();
+        assert_eq!(
+            session_from_prompt("qoder", payload.as_bytes()),
+            Some(Reported {
+                id: ID.into(),
+                saved_in: Some(transcript.into())
+            })
+        );
+        assert_eq!(session_from_hook(payload.as_bytes()), None);
+        assert_eq!(session_from_prompt("claude", payload.as_bytes()), None);
+        input["transcript_path"] = serde_json::Value::Null;
+        assert_eq!(
+            session_from_prompt("qoder", input.to_string().as_bytes()),
+            None
+        );
+        input["transcript_path"] = transcript.into();
+        input["agent_id"] = "subagent".into();
+        assert_eq!(
+            session_from_prompt("qoder", input.to_string().as_bytes()),
+            None
+        );
     }
 
     #[test]

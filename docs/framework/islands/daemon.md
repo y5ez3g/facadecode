@@ -251,8 +251,7 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     tool startup. Calls wait while the startup watches for a usable input box. Keys also wait
     once the startup owns the input ([readiness](#readiness)). Held keys and calls go on in the
     order they came, after prior startup strokes, ordered sequences and the person's Enter.
-    Enter can hold later input until the terminal shows where it went. Where a probe occupies the
-    input, the person's key or call takes priority.
+    Enter can hold later input until the terminal shows where it went.
   - An ordered input sequence enters the typist once. Earlier accepted input runs first. Later calls and raw Attach input wait until the sequence's last write.
   - The person's keys wait for a message from its paste until a complete reading shows the paste has
     left, and while it is erased. A menu or question of the CLI's own takes the keys immediately.
@@ -412,6 +411,7 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 - **Owns:** what the CLI reported and its screen showed, the turn, a question the CLI asks, the tools' connection, how the run ended, what was last said to the agent, and the file `framework/screens/<id>/state`.
 - **Keeps:**
   - One state, by a fixed order: `Ended`; the CLI's own `WaitingForYou` or `Error`; a question in place of the input box (`WaitingForYou`); tools unavailable (`Error`); `JustDone`; `Working`; `Starting`; `Idle`; a failed start (`Error`); else `Unknown`.
+  - A recognized input interaction supplies its wait kind when known. Other input interactions use `unknown`.
   - Work that stops reads `Working` for 1 more second; a turn someone asked for that ends unwatched reads `JustDone` until a terminal shows the agent.
   - Under `background_report`, a `working` report with matching words becomes idle evidence.
   - Under `background_correction`, a `working` report is narrowed to idle evidence while the screen
@@ -430,7 +430,7 @@ The terminal, as a `PtyIo`, and the input waiting for it.
     native startup deadline if it fails. The typist still checks whether it can write the prompt safely.
   - Only `keep` writes the state file, through a private temporary file and a rename. What the screen shows is read again, never kept.
 - **Never does:** touch the terminal; change the agent's record; publish.
-- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take_event(event, sync_open)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(asking, now)`, `observe_question_composer(redrawn)`, `native_wait()`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connections(connections: ToolsConnections)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
+- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take_event(event, sync_open)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(kind: Option<WaitKind>, now)`, `observe_question_composer(redrawn)`, `native_wait()`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connections(connections: ToolsConnections)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
 
 #### glyph
 
@@ -453,10 +453,14 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
 
 `Typist`: types calls and messages into the input box, one at a time, and settles each message.
 
-- **Owns:** the calls and messages waiting, the paste in the input until that holds nothing of it, where its bytes are in the terminal, its pauses, and what it submitted; the probe under way, and what this run's probes found of each row they tried (`probed`).
-- The actor allows unstyled hint probes for automatic delivery to a freshly launched input. Starting with a
-  session, recovery, resume, an unconfirmed paste or accepting external input leaves plain writing on the
-  normal draft path. A person's key or ordered input call takes the input from an active probe.
+- **Owns.** The calls and messages waiting, the paste in the input until the input holds none of it,
+  where its bytes are in the terminal, its pauses, and what it submitted. It also owns the probe
+  under way and the findings for the rows probed in this run (`probed`).
+- The actor allows unstyled hint probes for automatic delivery to a freshly launched input. Up,
+  Down and a final Enter sent through Attach or a named key call to a recognized native menu before
+  the input box appears keep the probe available. Other external input, starting with a session,
+  recovery, resume and an unconfirmed paste leave plain writing on the normal draft path. External
+  input that arrives during an active unstyled hint probe waits for its Space and Backspace.
 - **Keeps:**
   - Each call goes in whole and in order; a pause counts from when its bytes reached the terminal.
   - `DeliveryHandle::begin_paste` records the paste before the typist writes the complete message in one paste.
@@ -480,6 +484,11 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     A person's Enter can still prove that they submitted the whole message. Unread frames keep
     settle time running. A readable change restarts the wait.
     Codex queues an ordinary message with Tab while Working. The start prompt and recovered pastes use Enter.
+  - For Kiro's collapsed paste, the typist can press Tab once after writing its fresh bracketed
+    paste, with the same person-input generation and the native disclosure visible. The CLI must
+    draw after each write and earlier person input must be settled. The typist applies the normal
+    whitespace comparison to the full revealed draft before Enter. An unconfirmed reveal leaves
+    the draft to the person. Recovered collapsed pastes retain the existing refusal.
   - What the typist put into the input box is its own from the paste through submission or cleanup.
     No other paste or probe begins meanwhile. After the submission key goes in, the typist keeps
     that ownership until a complete frame reads as an empty input. A menu, question, unread frame
@@ -515,35 +524,26 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
     once, by two `RESPONSE_GRACE` after the deadline, and says what is known then; erasing later changes none.
   - The start prompt is pasted alone; a paste an earlier daemon began is never typed again.
   - With console typing, characters above U+FFFF go as key-down records, a text's line breaks as presses of the rule's line break key, a key-down and a key-up record each, where it names one, and the wait before a call's Enter adds `per_char` for each UTF-16 code unit.
-  - An input whose row may be a hint or a draft (it reads unsure) is probed once a run, by its child
-    `probe`. The probe types a space where the input starts. The first Space and both kinds of
-    Backspace pass the same output check at system handoff. The actor reads the available prefix,
-    compares the current complete ordinary box with the probe's input, and checks for native
-    waits. A complete ordinary input drawn after withdrawal of a native wait can authorize
-    a probe while delivery still needs a proved empty box. A frame already open at withdrawal
-    cannot supply that probe's evidence. A confirmed hint provides the empty reading.
-    An open synchronized update cannot authorize a write. A resize clears pending
-    approval so any unissued key uses the new box. An unissued Space that loses its box is
-    withdrawn and reported. The row can still
-    be probed when the ordinary box returns. Its echo budget runs from the write
-    receipt and includes the console input time, the CLI's settle time and the rule's
-    submission-clear time. Two matching complete readings can establish whether it was a hint
-    or a draft. If the space is still unseen at the deadline, the daemon reports that uncertainty
-    and checks subsequent frames. Terminal separates output at the issue of the Space and of
-    Backspace. One Backspace is authorized by a complete frame drawn after Space that still
-    shows the original input position and space. An unread redraw or a menu leaves cleanup
-    pending. A person's key or ordered input call ends the probe and its startup wait. Terminal
-    revokes the probe key if its write was never issued. For an issued space, the actor samples the
-    output already readable and applies that finite prefix. A complete ordinary box at the probe
-    position permits one Backspace before the person's key, even before any echo. New output sends the intent back
-    to the actor for a fresh reading of the available prefix. With the person's keys queued, all
-    checks share a 16 ms budget and use only the bytes already readable. A menu, native wait,
-    unread frame, missing position or exhausted budget withdraws the erase. The person's keys
-    continue and the daemon reports that the space may remain. With no manual input, the probe
-    continues watching for its space after a withdrawn erase. Once it has seen the space, a stable
-    complete empty box ends the probe even if it withdrew the erase. Verified restoration after
-    Backspace also ends it. A paste or new probe waits for removal or for the person to take the
-    input. The row's verdict stays with this run.
+  - An input whose row may be a hint or a draft (it reads unsure) is probed once a run by its child
+    `probe`. The probe types a Space where the input starts. Space and Backspace pass the same
+    output check at system handoff. The actor reads the available prefix, compares the current
+    complete ordinary box with the probe's input, and checks for native waits. A complete ordinary
+    input drawn after withdrawal of a native wait can authorize a probe while delivery still needs
+    a proved empty box. A frame already open at withdrawal cannot supply that probe's evidence.
+    A confirmed hint provides the empty reading.
+  - After each probe key reaches the terminal, the probe checks the row every 100 ms and allows up
+    to two seconds for the native redraw. Its echo budget also accounts for console input time and
+    the CLI's settle and submission-clear times. Two matching complete readings can establish
+    whether the original row was a hint or a draft. While the screen shows the frame from before
+    Space or the space that Backspace is clearing, the probe waits for that key's echo.
+  - An open synchronized update cannot authorize a write. A resize clears pending approval so an
+    unissued key uses the new box. An unissued Space that loses its box is withdrawn, and the row
+    can still be probed when the ordinary box returns. Backspace needs a complete frame drawn after
+    Space that shows its original position and the space, with no question, menu or intervening
+    external edit. The probe checks that Backspace restored the input before offering delivery.
+    An unread draw or menu supplies no authority to erase. New output sends an unissued erase
+    back to the actor for a fresh reading of the available prefix. The row's verdict stays with
+    this run.
 - **Never does:** write the terminal (it hands its bytes to the actor); read the screen except through the reading the actor gives it; take the person's keys; touch the database.
 - **Interface.** The daemon builds `Typing::text(text, enter, sender)`, `Typing::keys(names)` and
   `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses
@@ -675,6 +675,9 @@ For a send from an authenticated agent, the original admission stores `notify_fa
 delivery deadline. Pending rows carry that ownership through daemon recovery. Schema version 6 gives existing
 rows a false value. Receipt replay uses the original decision. Delivery and result waits share the caller's
 remaining budget. A v1 send with no wait field uses a delivery wait.
+
+For a forwarded Shell delivery or result wait, the origin gives the holder a shorter delivery budget
+in the send arguments. Settlement and the receipt use the remaining peer exchange time.
 
 A command-line result wait belongs to the source daemon and closes with its request. The holder stores the
 reply marker with the original message. Only its verified recipient can answer the associated `#c`

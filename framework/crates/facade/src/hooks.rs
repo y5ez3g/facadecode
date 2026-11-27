@@ -7,6 +7,8 @@
 //! - `session-start <session-file>` saves the session the input names in the run's session file,
 //!   unless the run's environment says the session is not the run's own. The old `--skill` flag
 //!   is accepted and ignored.
+//! - `session-prompt <session-file> <cli>` saves the session the CLI names when a prompt is
+//!   submitted, using the same run folder and session checks.
 //! - `title <session-file> [<command>]` saves the session the title input names in the same way,
 //!   then hands the same input to `command`, the person's own title command, whose output alone
 //!   reaches the CLI.
@@ -44,6 +46,13 @@ pub(crate) enum HookEvent {
         #[arg(long)]
         skill: bool,
     },
+    /// Record the session the CLI reports when a prompt is submitted.
+    SessionPrompt {
+        /// The run's session file, an absolute path in the private run folder.
+        file: PathBuf,
+        /// The CLI whose hook runs it.
+        cli: String,
+    },
     /// Antigravity's title command: write the conversation it shows to the run's session file, then
     /// run the person's own title command with the same input. Reads the input from standard input
     /// and exits 0 whatever happens.
@@ -73,15 +82,23 @@ pub(crate) enum HookEvent {
 /// is the run's `FACADE_AGENT`, whose folder holds the run's instructions.
 pub(crate) fn run(event: HookEvent, agent: Option<&str>) {
     match event {
-        HookEvent::SessionStart { file, .. } => start_run_session(&file),
+        HookEvent::SessionStart { file, .. } => {
+            report_run_session(&file, facade_rules::session_from_hook)
+        }
+        HookEvent::SessionPrompt { file, cli } => report_run_session(&file, |input| {
+            facade_rules::session_from_prompt(&cli, input).map(Some)
+        }),
         HookEvent::Title { file, command } => retitle(&file, command.as_deref()),
         HookEvent::Instructions { cli } => print_run_start(&cli, agent),
         HookEvent::Approve { cli } => print_approval(&cli),
     }
 }
 
-/// `session-start <file>`: saves the run's own session the input names in `file`.
-fn start_run_session(file: &Path) {
+/// Saves the run's own session the hook input names in `file`.
+fn report_run_session(
+    file: &Path,
+    report: impl FnOnce(&[u8]) -> Option<Option<facade_rules::Reported>>,
+) {
     if in_background_job() {
         return;
     }
@@ -89,7 +106,7 @@ fn start_run_session(file: &Path) {
         return;
     };
     let Some(input) = read_input() else { return };
-    let Some(reported) = facade_rules::session_from_hook(&input) else {
+    let Some(reported) = report(&input) else {
         return;
     };
     write_own_session(&folder, reported.as_ref());

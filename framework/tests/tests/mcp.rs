@@ -3228,6 +3228,15 @@ fn each_cli_s_guest_server_responds_as_recorded(through: Through) {
         placeholders: Vec::new(),
         values: Vec::new(),
     };
+    // Guest discovery uses the machine's login environment. Enable only the fixture CLI.
+    let clis: serde_json::Map<_, _> = facade_rules::rules()
+        .expect("the built-in CLI rules")
+        .iter()
+        .filter(|rule| rule.cli != "fake")
+        .map(|rule| (rule.cli.clone(), json!({ "enabled": false })))
+        .collect();
+    let settings = json!({ "names": [], "clis": clis }).to_string();
+
     // In each call's `_meta`, under the CLI's key, or else in the server's environment.
     for (cli, variable, meta_key) in [
         ("claude", Some("CLAUDE_CODE_SESSION_ID"), None),
@@ -3240,22 +3249,7 @@ fn each_cli_s_guest_server_responds_as_recorded(through: Through) {
         // Each direct relay case uses a fresh machine so the test process's PID does not
         // reconnect a Guest from the preceding CLI's case.
         let home = TestHome::new(&format!("mcpgold-{cli}"));
-        std::fs::write(
-            home.path.join("facade.json"),
-            json!({
-                "names": [],
-                "clis": {
-                    "claude": { "enabled": false },
-                    "codex": { "enabled": false },
-                    "agy": { "enabled": false },
-                    "muse": { "enabled": false },
-                    "opencode": { "enabled": false },
-                    "pi": { "enabled": false },
-                },
-            })
-            .to_string(),
-        )
-        .unwrap();
+        std::fs::write(home.path.join("facade.json"), &settings).unwrap();
         let host = home.start_named_fake("host", &[]);
         wait_for_tools(&home, &["host"]);
         // The host's server is its own relay program. A direct connection comes from this test's

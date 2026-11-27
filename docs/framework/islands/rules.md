@@ -29,10 +29,8 @@ files in `framework/rules/`. It is a library; it starts no program.
 - No `cfg` by system. What differs by system is data, chosen by `facade_base::system::SYSTEM` at
   run time: each CLI's hook form, `${folder_toml}`, console typing and the wrappers. On Unix,
   every command line, hook command, file and path is as it was before Windows.
-  For Copilot's managed settings path inside the Unix branch, the runtime OS selects
-  `/Library/Application Support/GitHubCopilot/managed-settings.json` on macOS and
-  `/etc/github-copilot/managed-settings.json` on Linux. Other Unix targets have neither path.
-  Windows uses `GitHubCopilot/managed-settings.json` under the effective `ProgramFiles`.
+- Copilot gets Facade's server through `--additional-mcp-config`, its highest-priority MCP source,
+  so Facade reads none of Copilot's other MCP sources.
 - Every read of a variable of a CLI's environment goes through `facade_base::system::env_var`
   (names without case on Windows), and the home folder the CLIs use is
   `facade_base::system::home_folder_in` (Unix `HOME`, Windows `USERPROFILE`).
@@ -116,6 +114,7 @@ command line together. The children never use each other. They may use the layer
   `holds` and `end_of_options` serve command_line and wiring. `problems_at` gives the setting reader
   the source index of each problem. `choice_value` finds the value of a model or effort option,
   including the short forms its CLI accepts.
+  Cursor's `-H` and `-e` take the rest of their short-option run as the header or endpoint value.
 - `formats.rs`: the CLIs' own text formats in one place: JSON with comments, shell words, TOML
   strings and inline values, and merging Facade's settings into the person's. Facade writes POSIX
   hook commands on Unix and for Claude Code on Windows, whose Git Bash takes `'C:\…'` words as
@@ -145,7 +144,7 @@ Rust regular expressions.
 | `arguments` | how the CLI reads its arguments, and the options and keys Facade sets itself |
 | `choices` | the arguments that give a model and an effort |
 | `input` | the layout of the input box: `frame`, `prompt`, `editor`, `box` or `prompt_row` |
-| `paste` | the settle time, submission key policy, time to show an empty input after submission, and placeholders for a pasted message |
+| `paste` | the settle time, submission key policy, time to show an empty input after submission, and visible controls and placeholders for a pasted message |
 | `session` | `capture` (`session_start` or `none`) and the `resume` arguments with `${session_id}` |
 | `status` | how Facade reads the CLI's state from its screen or a report's words |
 | `status_glyph` | the CLI's glyph for viewer titles once the CLI has reported its state. The `working` list holds one or more glyph frames, each shown for `frame_ms` milliseconds. The `resting` glyph is for Starting after a report, Idle, Just done, Waiting for you and Error. Every glyph must be nonempty, and `frame_ms` must be positive |
@@ -178,6 +177,8 @@ adds, the model and effort, the session a resume names, and the `clis` entries o
     A rule can specify `off_args` to select its normal approval mode explicitly.
     Rule options interpolate `${folder}` and `${folder_toml}`. The TOML value uses the
     resolved working folder, lowercased on Windows as Codex keys a project there.
+  - Kiro's trust-all-tools question can be recognized by its consent text when the title has
+    scrolled out of view. The one-time acceptance must show as selected before confirmation.
   - The rule's agent-start updater environment applies to agent starts in either YOLO mode.
     Reusing a run's environment restores the inputs its launch controls replaced, before the destination's
     entry settings apply. Later changes in the invoking shell take precedence.
@@ -234,6 +235,8 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     Kiro trust and Devin's `✱` trust question are also interactions. Kiro's option menus read as
     interactions by the footer below their selected `❯` row, so its trust-all-tools warning does at
     any window height.
+    When the workspace trust heading scrolls away, the selected workspace choice and the nearby
+    `esc to exit` footer identify the question.
   - Frame, editor and prompt rules use a `scrolled` object that identifies the scroll layout by `position`.
     For `rows` (Muse Code and Antigravity), one capture in each pattern counts the hidden rows
     from separate marker rows inside the frame. For `rules` (Claude Code and Pi), the patterns
@@ -260,17 +263,26 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     is, where it ends in the cursor's row, behind the text, and no menu shows.
   - Frames can specify an indent and a second prompt glyph. Cursor and Kiro anchor their prompt
     rows at the cursor and read wrapped rows using that prompt's margin.
+  - Kiro's colored initialization and working hints at the composer cursor read `unknown` without
+    a Space probe. Its ready hint and drafts use ordinary input reading.
   - Devin uses `❭` inside its two-rule frame. Qoder sets `hidden_cursor_in_frame` and can use
     the hidden terminal cursor without an inverse cell when its position is inside the complete
     input frame, at or after the input column. Both colored hints still need the reversible
     space probe to distinguish them from a draft.
+  - Qoder's terminal setup reads as an interaction for either selected choice when the
+    `↑↓ navigate · Enter select` footer follows within three rows.
+  - Qoder's `waiting_above` matches its resume spinner, divider and mode strip on consecutive
+    physical rows immediately above the input frame. While they show, an empty or uncertain input
+    reads `unknown` without a Space probe. A recognized draft still reads `draft`.
   - Cursor sets `drawn_cursor` on its prompt-row rule. While the terminal cursor is hidden, a single
     inverse cell at or after the input start of a prompt row or one of its wrapped rows supplies the
     cursor position for the input reading and the space probe. With zero or several such cells,
     the rule checks for a menu. A visible terminal cursor supplies its own position.
-  - Cursor's live trust question reads `interaction` when the boxed selected option has the key help
-    within three rows below it. Once answered, the box loses the selection marker and key help.
-    The input box below it can then read `usable` or `draft`.
+  - Cursor's live trust question reads `interaction` when the boxed selected option (`[a]`, `[w]`,
+    or `[q]`) has the key help within four rows below it. Once answered, the box loses the
+    selection marker and key help. The input box below it can then read `usable` or `draft`.
+  - Cursor's boxed `MCP Server Approval Required` question on resume reads `interaction` with
+    `[a]`, `[c]`, or `[q]` selected and the same key help within four rows below it.
   - Cursor's `Run this MCP tool?` question reads `interaction` when the selected `Run (once)`
     option and the `Allowlist MCP Tool` option follow. Its approval caption near the bottom
     reports `Blocked(Permission)` while the composer is absent.
@@ -289,10 +301,14 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     require a visible hardware caret and the `Interactive` footer below the editor.
     The plain frame additionally has a `❯ ` prompt. A full viewport uses the shared editor
     guard. Its compact `[Paste #N - M lines]` marker supplies the paste's line count.
-    The full styled sign-in notice two rows above a recognized editor reads `interaction`.
-    A wrapped notice also matches when the complete styled text sits directly above one to
-    three indented project rows, ending in the native `Run on:` context.
+    The full styled sign-in notice two rows above a recognized editor reads `interaction`
+    with the `auth` wait kind.
+    The same styled notice, on one or more rows, also matches directly above one to three
+    indented project rows ending in the native `Run on:` context.
     Manual `/login` stays available, and Copilot continues to report its state through OSC.
+  - Pi draws startup tool download notices above its editor before the submit handler is ready.
+    The editor reads `unknown` while a styled download notice is newer than that tool's
+    installation or failure notice. Pi keeps those notices in the transcript after startup.
   - Codex's `prompt` input accepts `›` and its `alternate_prompt`, `»` at Ultra effort.
     The updater menu reads `interaction` when the selected `Update now` row has the
     `enter continue · esc skip` footer within five rows. This also covers the wrapped option
@@ -301,7 +317,8 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     across both terminal wrapping and continuation rows.
     A wrapped footer can end with a shortcuts row that may include aligned status, the
     `tab to queue message` hint, or a standalone warning count ending in `f2 to view` with at least
-    20 leading spaces. The model line must start the contiguous, indented footer above the hint
+    20 leading spaces. When a draft hides the hint, a colored model label identifies the
+    wrapped footer. In both cases the model line must start the contiguous, indented footer
     and have a blank row above it.
     Its `last_column` position uses dim glyphs (`↑` and `↓`) in the last column of the first
     and last input rows. When the model line is absent, those glyphs anchor the scrolled composer.
@@ -335,6 +352,9 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     the editor deletes individually at the end. If no unit is recorded, one key per grapheme
     is safe. After confirmed keys, Rules can compare the observed box with literal remainders of
     the original paste and its canonical spellings under either deletion unit.
+  - Kiro's `tab_to_expand` cue matches the colored single-row disclosure at its native caret.
+    It offers Tab to reveal a paste. The resulting draft must show the full text for
+    confirmation, with the usual whitespace handling.
   - OpenCode's `[Pasted ~N lines]` counts the lines after trimming whitespace from both ends of the paste.
     Claude Code's `[Pasted text #N]` matches a paste with no line break.
     Antigravity's `[Pasted text #N M chars]` counts Unicode scalar values, including line breaks.
@@ -343,7 +363,7 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
 - **Never does:** decide when to type, write terminal input, read CLI reports, hooks or session files, or keep state between readings.
 - **Interface** (re-exported from `facade_rules`):
   - `read_box(&InputRule, &ScreenView) -> BoxReading` gives the reading, the draft's text,
-    its cursor within the draft rows when located, the input's first row and whether the
+    its cursor within the draft rows when located, the input's first row, any recognized wait kind, and whether the
     reading is unsure. `BoxReading::logical_draft(paste)` joins display wraps and maps the caret
     to an offset in the logical text, including when the cells and paste have equivalent Unicode
     spellings. Final spaces or tabs in the paste are presentation padding for this comparison.
@@ -385,6 +405,9 @@ Reads a CLI's input box from its screen, tells a pasted message's own draft from
     - `is_own_recovered_draft(&PasteRule, draft, text, hidden) -> bool` also recognizes historical
       layouts declared by `paste.legacy_split_prefixes`. The rule verifies the visible typed prefix
       and the placeholder for the remaining paste.
+    - `PasteRule::shows_tab_to_expand(&BoxReading) -> bool` recognizes the native disclosure.
+    - `is_full_draft(draft, text, hidden) -> bool` compares the fully revealed draft with the
+      paste, allowing layout whitespace differences.
     - `settle_time(&PasteRule, text) -> Duration` gives the base wait plus the wait for each line.
     - `PasteRule::submit_clear_time() -> Option<Duration>` gives the hold limit once the submission key
       reaches the terminal. For the built-in CLIs, `submit_clear_ms` is the larger p99.9 time
@@ -457,6 +480,7 @@ a folder (`sessions.rs` and `sessions/history/`).
 - **Interface:**
   - `facade hook` (`hooks.rs`):
     - `session_from_hook(input) -> Option<Option<Reported>>` reads a `SessionStart` hook's `session_id` and `transcript_path`. `session_from_title(input)` reads the `conversation_id` in Antigravity's title input. For both, `Some(None)` means no session is selected and `None` means leave the file alone.
+    - `session_from_prompt(cli, input) -> Option<Reported>` reads the main conversation's ID and transcript path from Qoder's `UserPromptSubmit` hook.
     - The reported session is then written with `write_session_file`.
     - `run_folder(runs, agent)` finds the agent's single run folder. `SESSION_FILE` checks the file name it is given.
     - `session_variable(cli)` finds the hook's own session.
@@ -573,9 +597,13 @@ session. It also defines the formats of Facade's hooks.
     `session_ends_with_process`.
 
 Cursor loads its local plugin at startup. The plugin supplies Facade's relay, instructions and session hook.
-Qoder takes a session MCP file and a settings overlay with a SessionStart hook. Devin uses a private
+Qoder takes a session MCP file and a settings overlay with `SessionStart` and `UserPromptSubmit` hooks.
+Qoder can fire `SessionStart` before a person trusts a new folder. The first prompt after trust reports the
+session in that case. Devin uses a private
 configuration root with the native `devin/mcp_config.json` path and an in-process local agent. Its
-other existing config entries are linked into that root. Devin 3000 keeps its sessions in
+other existing config entries are linked into that root. Devin loads a project's `.devin/` files,
+`.mcp.json` and `.cursor/mcp.json` ahead of that root, so a `facade` server in any of them leaves the
+run without Facade's tools, and the daemon's log names the file. Devin 3000 keeps its sessions in
 `devin/cli/sessions.db` under its data folder; the catalog reads it there, else `devin/sessions.db`. A child Facade agent inherits the original
 configuration root. Oh My Pi takes a local plugin, a settings overlay for the managed tools' approvals,
 and an extension that reports session and turn changes. Oh My Pi announces the servers and tools it

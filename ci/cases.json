@@ -3825,6 +3825,19 @@
       }
     },
     {
+      "id": "framework/shell/process/hook.session-prompt",
+      "assertion": "Supply a fake Qoder prompt payload that names the session and its transcript, and verify that the run records that session.",
+      "stage": "pr",
+      "existing_tests": [
+        "framework/tests/tests/hooks.rs:113"
+      ],
+      "test": {
+        "runner": "framework-scenario",
+        "target": "hooks",
+        "name": "the_prompt_hook_records_the_session_a_prompt_names"
+      }
+    },
+    {
       "id": "framework/shell/process/hook.title",
       "assertion": "Run the title hook with fixture input; verify the saved conversation and that only the configured title command's stdout reaches the CLI after it receives the original input.",
       "stage": "pr",

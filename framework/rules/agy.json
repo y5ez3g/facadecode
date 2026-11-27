@@ -3,7 +3,7 @@
 	"display_name": "Antigravity",
 	"program": "agy",
 	"launch": { "agent_env": { "AGY_CLI_DISABLE_AUTO_UPDATE": "true" } },
-	"arguments": {"reserved": ["--dangerously-skip-permissions", "--mode", "--sandbox", "--conversation", "--continue", "-c", "--remote-agent", "--print", "-p", "--prompt", "--prompt-interactive", "-i", "--model", "--effort"], "single_dash": true, "required": ["--add-dir", "--agent", "--conversation", "--effort", "--input-format", "--json-schema", "--log-file", "--mode", "--model", "--output-format", "--print-timeout", "--project", "--settings"]},
+	"arguments": {"reserved": ["--dangerously-skip-permissions", "--mode", "--sandbox", "--conversation", "--resume", "-r", "--continue", "-c", "--remote-agent", "--print", "-p", "--prompt", "--prompt-interactive", "-i", "--model", "--effort"], "single_dash": true, "required": ["--add-dir", "--agent", "--conversation", "--resume", "-r", "--effort", "--input-format", "--json-schema", "--log-file", "--mode", "--model", "--output-format", "--print-timeout", "--project", "--settings"]},
 	"choices": {"model": ["--model", "${value}"], "effort": ["--effort", "${value}"], "spelling": {"model": ["--model"], "effort": ["--effort"]}},
 	"input": {
 		"mechanism": "frame",

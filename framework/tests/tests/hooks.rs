@@ -107,6 +107,39 @@ fn a_run_s_hooks_record_its_session_and_join_no_guest() {
     );
 }
 
+/// Qoder's prompt hook records the run's own session from a prompt's input, which names the
+/// session and its transcript.
+#[test]
+fn the_prompt_hook_records_the_session_a_prompt_names() {
+    let home = TestHome::new("prompthook");
+    let bea = home.start_fake("bea");
+    let file = session_file(&home, &bea.id);
+    let file = file.to_str().unwrap();
+    let own = [("FACADE_AGENT", bea.id.as_str())];
+    let transcript = home.path.join("qoder").join(format!("{SESSION}.jsonl"));
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(&transcript, "").unwrap();
+    let prompted = hook(
+        &home,
+        &["session-prompt", file, "qoder"],
+        &own,
+        &input(
+            "UserPromptSubmit",
+            SESSION,
+            json!({ "transcript_path": transcript.to_str().unwrap() }),
+        ),
+    );
+    assert!(
+        prompted.status.success() && prompted.stdout.is_empty(),
+        "{prompted:?}"
+    );
+    assert!(
+        wait_until(secs(10), || inspected_session(&home, "bea") == SESSION),
+        "the run's session: {}",
+        inspected_session(&home, "bea")
+    );
+}
+
 /// A hook exits 0 whatever its variables and words: one with a variable that is not UTF-8 records
 /// the run's session, and a line with a word that is not UTF-8 does nothing.
 #[cfg(unix)]

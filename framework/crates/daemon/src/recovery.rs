@@ -552,9 +552,8 @@ impl Daemon {
     ) -> Option<(String, PromptWatch)> {
         let recipient = self.get_agent(&message.to);
         let guest = recipient.as_ref().is_some_and(AgentHandle::is_guest);
-        // A timed delivery to a guest resumes its wait for an inbox read. Other inbox items
-        // can remain available without a delivery task.
-        if guest && !notify_failure && message.delivery.deadline.is_none() {
+        // Recover a Guest's bounded delivery so a replay can wait for its read or timeout.
+        if guest && message.delivery.deadline.is_none() {
             return None;
         }
         let whereabouts = match &recipient {

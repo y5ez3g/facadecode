@@ -107,7 +107,6 @@ enum DeliveryEvent {
 pub(crate) enum ProbeKey {
     Space,
     Backspace,
-    BackspaceBeforePerson,
 }
 
 /// A selected input byte and the end of the output already readable when its write was issued.
@@ -130,15 +129,12 @@ struct ProbeWrite {
     boundary: OutputBoundary,
     output_read: Option<u64>,
     issued: bool,
-    classifying_key: bool,
 }
 
 struct ProbeErase {
     through: u64,
     output_read: Option<u64>,
     issued: bool,
-    automatic: bool,
-    classifying_key: bool,
 }
 
 /// The first later key that may change a pending submission's input.
@@ -493,10 +489,7 @@ impl Terminal {
             }
             let probe_key = check.map(|(key, _)| key);
             let guarded = probe_key.is_some();
-            let erasing = matches!(
-                probe_key,
-                Some(ProbeKey::Backspace | ProbeKey::BackspaceBeforePerson)
-            );
+            let erasing = probe_key == Some(ProbeKey::Backspace);
             // A write under way is given the same bytes again until it returns.
             if self.input.as_slices().0.len() < self.writing {
                 self.input.make_contiguous();
@@ -642,23 +635,13 @@ impl Terminal {
             .as_ref()
             .filter(|erase| erase.through == head)
         {
-            let key = if erase.automatic {
-                ProbeKey::Backspace
-            } else {
-                ProbeKey::BackspaceBeforePerson
-            };
-            let recheck = !erase.issued
-                && !erase.classifying_key
-                && erase.output_read != Some(self.output_read);
-            return Some((key, recheck));
+            let recheck = !erase.issued && erase.output_read != Some(self.output_read);
+            return Some((ProbeKey::Backspace, recheck));
         }
         self.probe
             .as_ref()
             .filter(|probe| !probe.issued && probe.boundary.input == head)
-            .map(|probe| {
-                let recheck = !probe.classifying_key && probe.output_read != Some(self.output_read);
-                (ProbeKey::Space, recheck)
-            })
+            .map(|probe| (ProbeKey::Space, probe.output_read != Some(self.output_read)))
     }
 
     fn probe_needs_check(&mut self, key: ProbeKey) -> TerminalEvent {
@@ -671,9 +654,7 @@ impl Terminal {
         debug_assert!(!erase.issued);
         erase.issued = true;
         let through = erase.through;
-        if erase.automatic {
-            self.observe_probe_from(through);
-        }
+        self.observe_probe_from(through);
     }
 
     pub(super) fn approve_probe_key(&mut self, key: ProbeKey) {
@@ -685,7 +666,7 @@ impl Terminal {
                     .expect("guarded probe space")
                     .output_read
             }
-            _ => {
+            ProbeKey::Backspace => {
                 &mut self
                     .probe_erase
                     .as_mut()
@@ -703,7 +684,7 @@ impl Terminal {
                 debug_assert!(!probe.issued);
                 probe.boundary.input
             }),
-            _ => self.probe_erase.take().map(|erase| {
+            ProbeKey::Backspace => self.probe_erase.take().map(|erase| {
                 debug_assert!(!erase.issued);
                 erase.through
             }),
@@ -719,21 +700,13 @@ impl Terminal {
     fn write_limit(&self) -> usize {
         let limit = self.probe_erase.as_ref().map_or(MAX_WRITE_BYTES, |erase| {
             let earlier = erase.through - self.sent - 1;
-            if earlier == 0 {
-                usize::from(!erase.classifying_key)
-            } else {
-                earlier.min(MAX_WRITE_BYTES as u64) as usize
-            }
+            earlier.max(1).min(MAX_WRITE_BYTES as u64) as usize
         });
         let Some(probe) = self.probe.as_ref().filter(|probe| !probe.issued) else {
             return limit;
         };
         let earlier = probe.boundary.input - self.sent - 1;
-        if earlier == 0 {
-            usize::from(!probe.classifying_key)
-        } else {
-            earlier.min(limit as u64) as usize
-        }
+        earlier.max(1).min(limit as u64) as usize
     }
 
     fn take_read(&mut self, result: io::Result<usize>) -> TerminalEvent {
@@ -1051,71 +1024,19 @@ impl Terminal {
             },
             output_read: None,
             issued: false,
-            classifying_key: false,
         });
     }
 
-    /// Schedules one Backspace before the next person's bytes. A new read or unread output
-    /// revokes it up to the actual write attempt. Its slot keeps later input positions stable.
-    pub(super) fn push_probe_erase(&mut self, key: u8, automatic: bool) {
+    /// Schedules the probe's Backspace. A new read or unread output revokes its approval up to
+    /// the actual write attempt. Its slot keeps later input positions stable.
+    pub(super) fn push_probe_erase(&mut self, key: u8) {
         debug_assert!(self.probe_erase.is_none());
         self.input.push_back(key);
         self.probe_erase = Some(ProbeErase {
             through: self.sent + self.input.len() as u64,
-            output_read: (!automatic).then_some(self.output_read),
+            output_read: None,
             issued: false,
-            automatic,
-            classifying_key: false,
         });
-    }
-
-    pub(super) fn has_probe_erase(&self) -> bool {
-        self.probe_erase.is_some()
-    }
-
-    /// Prevents a queued probe key from going ahead of a person's key still being classified.
-    pub(super) fn classify_probe_key(&mut self, classifying: bool) {
-        if let Some(erase) = self
-            .probe_erase
-            .as_mut()
-            .filter(|erase| erase.automatic && !erase.issued)
-        {
-            erase.classifying_key = classifying;
-            if classifying && erase.through == self.sent + 1 {
-                self.writing = 0;
-            }
-        }
-        if let Some(probe) = &mut self.probe {
-            probe.classifying_key = classifying;
-            if classifying && !probe.issued && probe.boundary.input == self.sent + 1 {
-                // An offered probe byte may still be waiting for Unix write readiness.
-                self.writing = 0;
-            }
-        }
-    }
-
-    /// Retires observation and revokes the probe byte if the system has not taken its write.
-    pub(super) fn revoke_probe_key(&mut self) -> bool {
-        if let Some(erase) = self
-            .probe_erase
-            .take_if(|erase| erase.automatic && !erase.issued)
-        {
-            self.probe = None;
-            return self.revoke_queued_probe_key(erase.through);
-        }
-        let Some(probe) = self.probe.take().filter(|probe| !probe.issued) else {
-            return false;
-        };
-        self.revoke_queued_probe_key(probe.boundary.input)
-    }
-
-    fn revoke_queued_probe_key(&mut self, through: u64) -> bool {
-        let index = (through - self.sent - 1) as usize;
-        if index < self.writing {
-            self.writing = 0;
-        }
-        debug_assert!(self.output_boundaries().all(|b| b.input < through));
-        self.input.remove(index).is_some()
     }
 
     pub(super) fn stop_observing_probe(&mut self) {
@@ -1497,9 +1418,15 @@ mod tests {
                 // A failed output-prefix sample does not undo the input handoff.
                 terminal.mark_output(1, None);
             }
-            assert_eq!(terminal.revoke_probe_key(), !issued);
+            let needs_check = matches!(terminal.probe_at_head(), Some((ProbeKey::Space, true)));
+            assert_eq!(needs_check, !issued);
+            if needs_check {
+                terminal.probe_needs_check(ProbeKey::Space);
+                terminal.cancel_probe_key(ProbeKey::Space);
+            }
             assert_eq!(terminal.writing, usize::from(issued));
             assert_eq!(terminal.written(), 0);
+            assert_eq!(terminal.input_through(), u64::from(!issued));
             assert_eq!(
                 terminal.input.make_contiguous(),
                 if issued { &b" x"[..] } else { b"x" }
@@ -1677,7 +1604,7 @@ mod tests {
     #[tokio::test]
     async fn an_earlier_queued_redraw_does_not_follow_the_cleanup_write() {
         let (mut terminal, mut cli) = opened();
-        terminal.push_probe_erase(b'\x7f', true);
+        terminal.push_probe_erase(b'\x7f');
         terminal.cancel_probe_key(ProbeKey::Backspace);
         assert_eq!(terminal.input_through(), 1);
         assert_eq!(terminal.written(), 0);

@@ -115,6 +115,39 @@ fn match_remainder<I: Iterator<Item = usize>>(
     (!remaining.is_empty() && shows(remaining)).then_some((remaining, backspaces))
 }
 
+impl PasteRule {
+    /// Whether the live composer shows the colored disclosure and its cursor. This allows a
+    /// reveal gesture. The label gives no evidence of the draft's contents.
+    pub fn shows_tab_to_expand(&self, reading: &BoxReading) -> bool {
+        let (Some(pattern), Some(line), Some(draft)) = (
+            self.tab_to_expand.as_ref(),
+            reading.line.as_ref(),
+            reading.draft.as_deref(),
+        ) else {
+            return false;
+        };
+        reading.info.state == InputState::Draft
+            && reading.info.hidden.is_none()
+            && !line.rest
+            && pattern.is_match(draft.trim())
+            && line
+                .cells
+                .iter()
+                .filter(|cell| !cell.text.trim().is_empty())
+                .all(|cell| cell.colored && !cell.dim)
+            && line
+                .cells
+                .iter()
+                .position(|cell| cell.text == "▸")
+                .is_some_and(|at| line.cursor == (line.start + at + 2, line.row))
+    }
+}
+
+/// Whether all of `text` is visible, allowing the same whitespace differences as a normal draft.
+pub fn is_full_draft(draft: &str, text: &str, hidden: Option<HiddenRows>) -> bool {
+    hidden.is_none_or(|rows| rows.above == 0 && rows.below == 0) && draws_text(draft, text, None)
+}
+
 /// Whether `draft` is `text` alone in the input box, or the CLI's placeholder for a paste of
 /// `text`. `hidden` counts the draft's rows scrolled out of the input box. Never waits.
 pub fn is_own_draft(
@@ -375,11 +408,7 @@ pub fn could_be_paste_prefix(paste: &str, shown: &str) -> bool {
         .all(|ch| original.next() == Some(ch))
 }
 
-/// Whether the complete draft shows `text` alone, with screen wrapping and indentation allowed.
-pub fn shows_original_text(draft: &str, text: &str, hidden: Option<HiddenRows>) -> bool {
-    hidden.is_none_or(|hidden| hidden.above == 0 && hidden.below == 0)
-        && draws_text(draft, text, None)
-}
+pub use is_full_draft as shows_original_text;
 
 /// `draft` with the placeholders the CLI draws for pastes of `texts` given back as their text. Each
 /// paste, in order, takes the first placeholder of its size that no earlier paste took; a paste

@@ -60,7 +60,8 @@ pub(super) fn tools(
             "its --settings names a {SERVER} server that is not Facade's"
         ));
     }
-    session_starts(&mut settings).ok_or("Qoder's --settings has invalid SessionStart hooks")?;
+    event_hooks(&mut settings, "SessionStart")
+        .ok_or("Qoder's --settings has invalid SessionStart hooks")?;
 
     let mut entry = claude_entry(entry);
     entry["trust"] = json!(true);
@@ -91,8 +92,7 @@ pub(super) fn hook(
     if let Some(additions) = &wiring.settings {
         merge_settings(&mut settings, additions);
     }
-    let starts = session_starts(&mut settings)?;
-    starts.push(json!({
+    event_hooks(&mut settings, "SessionStart")?.push(json!({
         "hooks": [{
             "type": "command",
             "command": session.facade,
@@ -100,6 +100,18 @@ pub(super) fn hook(
             "timeout": 10
         }]
     }));
+    // Qoder fires the startup hook before the person trusts a new folder. The first
+    // submitted prompt can report the same session after the person has trusted it.
+    if let Some(prompts) = event_hooks(&mut settings, "UserPromptSubmit") {
+        prompts.push(json!({
+            "hooks": [{
+                "type": "command",
+                "command": session.facade,
+                "args": ["hook", "session-prompt", session.file.to_string_lossy(), "qoder"],
+                "timeout": 10
+            }]
+        }));
+    }
     let found = rule.arguments.found(words, "--settings");
     let file = session.folder().join("settings.json");
     Some(Hooked {
@@ -110,13 +122,13 @@ pub(super) fn hook(
     })
 }
 
-fn session_starts(settings: &mut Value) -> Option<&mut Vec<Value>> {
+fn event_hooks<'a>(settings: &'a mut Value, event: &str) -> Option<&'a mut Vec<Value>> {
     settings
         .as_object_mut()?
         .entry("hooks")
         .or_insert_with(|| json!({}))
         .as_object_mut()?
-        .entry("SessionStart")
+        .entry(event)
         .or_insert_with(|| json!([]))
         .as_array_mut()
 }

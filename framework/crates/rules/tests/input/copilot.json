@@ -1,0 +1,42 @@
+[
+  {
+    "label": "copilot-1.0.116/login-above-wrapped-context",
+    "expect": "interaction",
+    "cols": 48,
+    "cursor": {"x": 2, "y": 29},
+    "rows": [
+      {"cells": " [Current]  Sessions   Issues  →", "bold": [[1, 10]], "dim": [[22, 30]], "colored": [[1, 10]]},
+      {"cells": ""},
+      {"cells": "  ╭─╮╭─╮", "colored": [[0, 8]]},
+      {"cells": "  ╰─╯╰─╯  Copilot v1.0.116 uses AI.", "colored": [[0, 8]]},
+      {"cells": "  █ ▘▝ █  Check for mistakes.", "colored": [[0, 8]]},
+      {"cells": "   ▔▔▔▔", "colored": [[0, 7]]},
+      {"cells": ""},
+      {"cells": " ● No Copilot instructions found for this", "colored": [[1, 2]]},
+      {"cells": "   repository. Run /init to generate them."},
+      {"cells": ""},
+      {"cells": ""},
+      {"cells": ""},
+      {"cells": ""},
+      {"cells": ""},
+      {"cells": ""},
+      {"cells": ""},
+      {"cells": ""},
+      {"cells": ""},
+      {"cells": ""},
+      {"cells": ""},
+      {"cells": ""},
+      {"cells": ""},
+      {"cells": ""},
+      {"cells": ""},
+      {"cells": "Please use /login to sign in to use Copilot", "bold": [[0, 43]], "colored": [[0, 43]]},
+      {"cells": " /private/tmp/f156-r4.0vtu8fk4/repository-wi..."},
+      {"cells": " [⎇ main]"},
+      {"cells": " Run on: This computer ctrl+e change environme…", "bold": [[23, 29]]},
+      {"cells": "────────────────────────────────────────────────", "dim": [[0, 48]]},
+      {"cells": "❯"},
+      {"cells": "────────────────────────────────────────────────", "dim": [[0, 48]]},
+      {"cells": " Interactive · Allow All · / co… Copilot Fusion", "bold": [[27, 28]]}
+    ]
+  }
+]

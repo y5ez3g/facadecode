@@ -109,8 +109,8 @@ fn log_repeat(message: &Message, request_id: &str) {
 }
 
 fn terminal_send_window(remaining: Duration, wait: wire::SendWait) -> Duration {
-    // Settlement can take two grace periods past delivery. Leave another for the reply to reach
-    // the Shell before its transport deadline. An inbox receipt does not wait for settlement.
+    // Settlement can take two grace periods past delivery. Leave another for the receipt to travel
+    // back before the request deadline. An inbox receipt does not wait for settlement.
     let periods = match wait {
         wire::SendWait::Inbox => 1,
         wire::SendWait::Delivery | wire::SendWait::Result => 3,
@@ -470,10 +470,21 @@ impl Daemon {
             (Some(outer), Some(inner)) => Some(outer.min(inner)),
             (outer, inner) => outer.or(inner),
         };
-        let due = match args.wait_for {
-            None => Due::within(budget),
+        let terminal = matches!(caller, Caller::Terminal { .. });
+        let forward_delivery = terminal
+            && !forwarded
+            && args.time_left_ms.is_some()
+            && matches!(
+                args.wait_for,
+                Some(wire::SendWait::Delivery | wire::SendWait::Result)
+            );
+        let (due, forward_until) = match args.wait_for {
+            None => {
+                let due = Due::within(budget);
+                let until = due.instant;
+                (due, until)
+            }
             Some(wait) => {
-                let terminal = matches!(caller, Caller::Terminal { .. });
                 let cap = if terminal {
                     MAX_TERMINAL_SEND
                 } else {
@@ -483,17 +494,23 @@ impl Daemon {
                     .map(Duration::from_millis)
                     .unwrap_or_else(delivery_limit)
                     .min(cap);
-                let left = if terminal && !forwarded {
+                let window = if terminal && !forwarded {
                     terminal_send_window(left, wait)
                 } else {
                     left
                 };
-                let due = Instant::now() + left;
-                let due = control
-                    .deadline
-                    .map(Instant::from_std)
-                    .map_or(due, |cutoff| cutoff.min(due));
-                Due::until(due)
+                let now = Instant::now();
+                let cutoff = control.deadline.map(Instant::from_std);
+                let bound = |until: Instant| cutoff.map_or(until, |cutoff| cutoff.min(until));
+                let due = bound(now + window);
+                // Leave part of the peer exchange for settlement and the receipt, just as for a
+                // local send. The holder caps delivery with the shorter budget in the send args.
+                let forward_until = if forward_delivery {
+                    bound(now + left)
+                } else {
+                    due
+                };
+                (Due::until(due), forward_until)
             }
         };
         if !forwarded
@@ -509,8 +526,7 @@ impl Daemon {
                 return Ok(Box::pin(async move { Ok(result) }));
             }
         }
-        let command_request = args.wait_for == Some(wire::SendWait::Result)
-            && matches!(caller, Caller::Terminal { .. });
+        let command_request = args.wait_for == Some(wire::SendWait::Result) && terminal;
         if command_request && args.request_id.is_none() {
             return Err(ErrorBody::invalid_argument(
                 "a command-line reply wait needs a request ID",
@@ -695,25 +711,25 @@ impl Daemon {
             }
             drop(send_effect(control.relay.as_deref(), due.instant, &mut cancel).await?);
             let retry = args.request_id.is_some();
-            let call = api::call::<wire::AgentSend>(wire::SendArgs {
-                to: wire::AgentTarget::Reference(api::wire_ref(&recipient)),
-                time_left_ms: None,
-                ..args
-            });
+            let forward = |left: Duration, from_name| {
+                let call = api::call::<wire::AgentSend>(wire::SendArgs {
+                    to: wire::AgentTarget::Reference(api::wire_ref(&recipient)),
+                    time_left_ms: forward_delivery.then_some(left.as_millis() as u64),
+                    ..args.clone()
+                });
+                self.forward_call(
+                    target,
+                    caller,
+                    call,
+                    from_name,
+                    None,
+                    Some(forward_until.saturating_duration_since(Instant::now())),
+                )
+            };
             let delivering = async {
-                let mut response = self
-                    .forward_call(
-                        target,
-                        caller,
-                        call.clone(),
-                        sender.from_name.clone(),
-                        None,
-                        Some(
-                            send_time_left(due.instant)
-                                .map_err(|error| if replay { send_unconfirmed() } else { error })?,
-                        ),
-                    )
-                    .await;
+                let left = send_time_left(until)
+                    .map_err(|error| if replay { send_unconfirmed() } else { error })?;
+                let mut response = forward(left, sender.from_name.clone()).await;
                 if retry
                     && response.as_ref().is_err_and(|error| {
                         error.data.unavailable.as_ref().is_some_and(|unavailable| {
@@ -725,11 +741,9 @@ impl Daemon {
                         self.ensure_machine_route(target, caller),
                     )
                     .await
-                    && let Ok(left) = send_time_left(due.instant)
+                    && let Ok(left) = send_time_left(until)
                 {
-                    let retried = self
-                        .forward_call(target, caller, call, sender.from_name, None, Some(left))
-                        .await;
+                    let retried = forward(left, sender.from_name).await;
                     if retried.is_ok()
                         || retried
                             .as_ref()

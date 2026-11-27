@@ -8,9 +8,12 @@ mod recorded;
 
 use std::ops::Range;
 
-use facade_base::model::terminal::{HiddenRows, InputState};
+use facade_base::model::{
+    agent::WaitKind,
+    terminal::{HiddenRows, InputState},
+};
 use facade_rules::{
-    PasteDrawing, ProbeVerdict, find, is_own_draft, read_box, read_box_for_screen,
+    PasteDrawing, Pattern, ProbeVerdict, find, is_own_draft, read_box, read_box_for_screen,
     read_box_for_typing, read_draft, read_input, restored, shows_paste_end, space_taken,
     verdict_of,
 };
@@ -61,10 +64,8 @@ fn reads_as_recorded(cli: &str) {
     );
     states.sort();
     states.dedup();
-    // Cursor also shows a completed question alone and a frame before hiding its terminal cursor.
-    // Codex's recordings also show its search and selection screens, which read unknown, Muse's its
-    // drafts with the cursor where the input starts, which read unknown as unsure, OpenCode's an
-    // empty box that the screen ends in, and Pi's its dialogs in a small window.
+    // Recorded unknown states include a visible Cursor caret, Codex pickers,
+    // Muse's unsure drafts, OpenCode's cut input, and Pi's provisioning and cut dialogs.
     let shown: &[&str] = match cli {
         "agent" | "codex" | "muse" | "opencode" | "pi" => {
             &["draft", "interaction", "unknown", "usable"]
@@ -296,6 +297,74 @@ fn a_message_is_its_own_draft_in_every_cut_of_pi_s_editor() {
     }
 }
 
+#[test]
+fn qoder_waits_for_its_resumed_composer() {
+    let rule = find("qoder").unwrap().unwrap();
+    let frames: [serde_json::Value; 4] = recorded("qoder").try_into().unwrap();
+    let [resuming, restored, space, draft] = frames.map(|frame| view_of(&frame));
+
+    let restored_input = read_box(&rule.input, &restored);
+    assert!(restored_input.unsure);
+    let before = restored_input.line.as_ref().unwrap();
+    assert_eq!((before.row, before.cursor), (18, (3, 18)));
+    let space = read_box(&rule.input, &space);
+    assert_eq!(space.line.as_ref().unwrap().cursor, (4, 18));
+    assert!(space_taken(before, &space));
+    assert_eq!(verdict_of(before, &space), ProbeVerdict::Hint);
+    assert_eq!(read_box(&rule.input, &draft).info.state, InputState::Draft);
+
+    let mut history = restored;
+    history.rows[9] = resuming.rows[9].clone();
+    assert!(read_box(&rule.input, &history).unsure);
+
+    for untouched in [false, true] {
+        let input = read_box_for_typing(&rule.input, &resuming, untouched);
+        assert_eq!(input.info.state, InputState::Unknown);
+        assert!(!input.unsure && input.line.is_none(), "{input:?}");
+    }
+}
+
+#[test]
+fn qoder_reads_either_terminal_setup_choice_as_interaction() {
+    let rule = find("qoder").unwrap().unwrap();
+    let screens: [serde_json::Value; 2] = recorded("qoder-startup").try_into().unwrap();
+    let [yes, no] = screens.map(|screen| view_of(&screen));
+
+    let mut without_footer = no.clone();
+    without_footer.rows[17].clear();
+    assert_eq!(
+        read_input(&rule.input, &without_footer).state,
+        InputState::Unknown
+    );
+
+    for (choice, screen) in [("Yes", &yes), ("No", &no)] {
+        let input = read_input(&rule.input, screen);
+        assert_eq!(
+            input.state,
+            InputState::Interaction,
+            "{choice} selected. {}",
+            input.evidence
+        );
+    }
+}
+
+#[test]
+fn copilot_reads_a_one_line_login_notice_above_wrapped_context() {
+    let rule = find("copilot").unwrap().unwrap();
+    let screen = recorded("copilot")
+        .into_iter()
+        .find(|screen| screen["label"] == "copilot-1.0.116/login-above-wrapped-context")
+        .unwrap();
+    let read = read_box(&rule.input, &view_of(&screen));
+    assert_eq!(
+        read.info.state,
+        InputState::Interaction,
+        "{}",
+        read.info.evidence
+    );
+    assert_eq!(read.wait_kind, Some(WaitKind::Auth));
+}
+
 /// The live question reads as one, by its selected option and key help. Answered, it stays on the
 /// screen above a fresh input, which then reads by itself.
 #[test]
@@ -305,6 +374,94 @@ fn cursor_screens_read_as_recorded() {
 
 fn cursor_screen(label: &str) -> ScreenView {
     view_of(&screen_of("agent", &format!("cursor-2026.11.22/{label}")))
+}
+
+fn kiro_screen(label: &str) -> ScreenView {
+    let label = format!("kiro-3.6.2/{label}");
+    let screen = recorded("kiro-cli")
+        .into_iter()
+        .find(|screen| screen["label"] == label)
+        .unwrap();
+    view_of(&screen)
+}
+
+#[test]
+fn kiro_offers_tab_only_on_the_captured_collapse_cue() {
+    let rule = find("kiro-cli").unwrap().unwrap();
+    let view = kiro_screen("collapsed-multiline");
+    let read = |view| read_box(&rule.input, view);
+    let observed = read(&view);
+    assert_eq!(observed.info.state, InputState::Draft);
+    assert!(rule.paste.shows_tab_to_expand(&observed), "{observed:?}");
+
+    let mut plain = view.clone();
+    for cell in &mut plain.rows[plain.cursor.1] {
+        cell.colored = false;
+    }
+    assert!(!rule.paste.shows_tab_to_expand(&read(&plain)));
+
+    let mut other_caret = observed;
+    other_caret.line.as_mut().unwrap().cursor.0 += 1;
+    assert!(!rule.paste.shows_tab_to_expand(&other_caret));
+}
+
+#[test]
+fn kiro_recognizes_the_trust_warning_when_its_heading_scrolls_out() {
+    let rule = find("kiro-cli").unwrap().unwrap();
+    let question = rule.yolo.question.as_ref().unwrap();
+    for (label, accepting) in [("decline-selected", false), ("accept-selected", true)] {
+        let view = kiro_screen(label);
+        let rows: Vec<String> = view
+            .rows
+            .iter()
+            .map(|row| row.iter().map(|cell| cell.text()).collect())
+            .collect();
+        let shows = |pattern: &Pattern| rows.iter().any(|row| pattern.is_match(row.trim_end()));
+        assert!(shows(&question.shown) && shows(&question.answer), "{label}");
+        assert_eq!(shows(&question.selected), accepting, "{label}");
+        assert_eq!(
+            read_input(&rule.input, &view).state,
+            InputState::Interaction
+        );
+    }
+}
+
+#[test]
+fn kiro_reads_workspace_trust_without_its_heading() {
+    let rule = find("kiro-cli").unwrap().unwrap();
+    for label in ["workspace-trust-selected", "workspace-decline-selected"] {
+        assert_eq!(
+            read_input(&rule.input, &kiro_screen(label)).state,
+            InputState::Interaction,
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn kiro_waits_for_the_ready_prompt_after_working() {
+    let rule = find("kiro-cli").unwrap().unwrap();
+    let working = kiro_screen("work-hint");
+    let ready = kiro_screen("ready-after-work");
+    for untouched in [false, true] {
+        let waiting = read_box_for_typing(&rule.input, &working, untouched);
+        assert_eq!(waiting.info.state, InputState::Unknown);
+        assert!(!waiting.unsure && waiting.line.is_none(), "{waiting:?}");
+
+        let ready = read_box_for_typing(&rule.input, &ready, untouched);
+        assert!(ready.unsure && ready.line.is_some(), "{ready:?}");
+    }
+}
+
+#[test]
+fn kiro_waits_for_the_composer_before_probing_its_hint() {
+    let rule = find("kiro-cli").unwrap().unwrap();
+    let reading = read_box_for_typing(&rule.input, &kiro_screen("initializing"), true);
+    assert_eq!(reading.info.state, InputState::Unknown);
+    assert!(!reading.unsure, "{}", reading.info.evidence);
+
+    let copied = read_box_for_typing(&rule.input, &kiro_screen("initializer-copy"), true);
+    assert_eq!(copied.info.state, InputState::Draft);
 }
 
 /// Changes the cells of row `y` at columns `columns`.
@@ -1480,6 +1637,13 @@ fn a_draft_reads_as_its_rows_draw_it_and_a_long_paste_as_its_placeholder() {
             "📨 Message m4 from example-helper (a2@testbox) · in reply to m2\nExample reply body"
         );
     }
+    assert_eq!(
+        draft(
+            "codex",
+            "codex-0.172.0/42x18-idle-shell-paste-with-wrapped-footer"
+        ),
+        "📨 Message m1 from command line\nNARROW42SEND. Reply with the single\nword OK."
+    );
     let lines = |count: usize| {
         (1..=count)
             .map(|line| format!("line {line}"))
