@@ -8,6 +8,10 @@
 		"mechanism": "editor",
 		"upper": "^(?:─+|─{2,} \\S.*? ─+)$",
 		"lower": "^─+(?: ↓ \\d+ more ─+)?$",
+		"provisioning": [
+			{ "downloading": "^ fd not found\\. Downloading\\.{3}$", "finished": "^ (?:fd installed to |Warning: Failed to download fd:)" },
+			{ "downloading": "^ ripgrep not found\\. Downloading\\.{3}$", "finished": "^ (?:ripgrep installed to |Warning: Failed to download ripgrep:)" }
+		],
 		"scrolled": { "position": "rules", "above": "^─{2,} ↑ (\\d+) more ─+$", "below": "^─+ ↓ (\\d+) more ─+$" },
 		"most_rows": 5,
 		"most_share": 0.3,

@@ -5,7 +5,7 @@
 	"arguments": {
 		"reserved": ["--resume", "--continue", "--new-session-id", "--print", "-p", "--output-format", "--force", "-f", "--yolo", "--auto-review", "--approve-mcps", "--sandbox", "--trust", "--workspace", "--worktree", "-w", "--data-dir", "--exclude-workspace-context", "--model"],
 		"required": ["--model", "--mode", "--add-dir", "--plugin-dir", "--image", "--api-key"],
-		"clusters": []
+		"clusters": ["-H", "-e"]
 	},
 	"choices": { "model": ["--model", "${value}"], "spelling": { "model": ["--model"] } },
 	"input": {
@@ -17,10 +17,10 @@
 		"drawn_cursor": true,
 		"menus": [
 			{
-				"selected": "^ *│ +▶ \\[(?:a\\] Trust this workspace|q\\] Quit) *│ *$",
+				"selected": "^ *│ +▶ \\[(?:a\\] (?:Trust this workspace|Approve all servers)|w\\] Trust this workspace, but don't enable all MCP servers|c\\] Continue without approval|q\\] Quit) *│ *$",
 				"hint": {
 					"pattern": "^ *│ +Use arrow keys to navigate, Enter to select, or press the key shown *│ *$",
-					"within": 3
+					"within": 4
 				}
 			},
 			{

@@ -537,17 +537,12 @@ fn shell_start_and_resume_from_a_managed_run_keep_only_explicit_updater_values()
 }
 
 const MODEL: &str = "gpt-5.6-luna";
-const HUMAN_OVERRIDES: [&str; 10] = [
-    "-c",
-    "check_for_update_on_startup=true",
-    "-cfoo=1",
-    "-ccheck_for_update_on_startup=true",
-    "--config",
-    "check_for_update_on_startup=true",
-    "--config=bar=2",
-    "--config=check_for_update_on_startup=true",
-    "-c=check_for_update_on_startup=true",
-    "-c=baz=3",
+const UPDATER_OPTIONS: [&[&str]; 5] = [
+    &["-c", "check_for_update_on_startup=true"],
+    &["-ccheck_for_update_on_startup=true"],
+    &["--config", "check_for_update_on_startup=true"],
+    &["--config=check_for_update_on_startup=true"],
+    &["-c=check_for_update_on_startup=true"],
 ];
 
 #[test]
@@ -555,7 +550,7 @@ fn codex_preserves_explicit_update_options_except_under_agent_yolo() {
     let home = TestHome::new("codex-launch-options");
     let capture = Capture::new(&home);
     let mut codex = capture.entry();
-    codex["args"] = json!(HUMAN_OVERRIDES);
+    codex["args"] = json!(["-cfoo=1", "--config=bar=2", "-c=baz=3"]);
     codex["model"] = json!(MODEL);
     let caller = home.start_fake("caller");
     let mut tools = McpTestClient::open(&home, &caller.id);
@@ -563,22 +558,22 @@ fn codex_preserves_explicit_update_options_except_under_agent_yolo() {
     let written = format!("model = \"{MODEL}\"\ncheck_for_update_on_startup = true\n");
     std::fs::write(&config_file, &written).unwrap();
 
-    for (name, yolo) in [
-        ("agent-off", false),
-        ("person-on", true),
-        ("agent-on", true),
+    let person_args: Vec<_> = UPDATER_OPTIONS
+        .into_iter()
+        .flatten()
+        .copied()
+        .chain(["--", "--config=check_for_update_on_startup=false"])
+        .collect();
+    for (name, yolo, expected_updates) in [
+        ("agent-off", false, &[][..]),
+        ("person-on", true, &["true"; UPDATER_OPTIONS.len()][..]),
+        ("agent-on", true, &["false"][..]),
     ] {
         set_clis(&home, yolo, &json!({ "codex": codex }));
         if name == "person-on" {
-            home.run_facade_ok(&[
-                "start",
-                "-d",
-                "--name",
-                name,
-                "codex",
-                "--",
-                "--config=check_for_update_on_startup=false",
-            ]);
+            let mut command = vec!["start", "-d", "--name", name, "codex"];
+            command.extend(person_args.iter().copied());
+            home.run_facade_ok(&command);
         } else {
             mcp_start(&home, &mut tools, "codex", name);
         }
@@ -595,16 +590,16 @@ fn codex_preserves_explicit_update_options_except_under_agent_yolo() {
             .iter()
             .filter_map(|&(key, value)| (key == UPDATE).then_some(value))
             .collect();
+        assert_eq!(
+            updates.as_slice(),
+            expected_updates,
+            "{name} updater options"
+        );
         let migration = overrides.iter().find_map(|&(key, value)| {
             (key == "notice.model_migrations" || key.starts_with("notice.model_migrations."))
                 .then_some((key, value))
         });
         if name == "agent-on" {
-            assert_eq!(
-                updates.last().copied(),
-                Some("false"),
-                "agent YOLO takes precedence"
-            );
             assert!(
                 overrides.iter().any(|&(key, value)| {
                     (key == "notice.model_migrations"
@@ -619,31 +614,47 @@ fn codex_preserves_explicit_update_options_except_under_agent_yolo() {
                 "Codex receives its model migration acknowledgement: {migration:?}"
             );
         } else {
-            assert_eq!(updates, ["true"; 5], "{name} honors all explicit spellings");
             assert!(
                 migration.is_none(),
                 "{name} leaves the native notice enabled"
             );
         }
         if name == "person-on" {
-            let delimiter = argv.iter().position(|arg| arg == "--").unwrap();
             assert_eq!(
-                &argv[delimiter..],
-                ["--", "--config=check_for_update_on_startup=false"]
+                &argv[argv.len().saturating_sub(person_args.len())..],
+                person_args.as_slice(),
+                "{name} native options and their terminator"
             );
         }
         home.run_facade_ok(&["stop", name]);
+        assert_eq!(
+            std::fs::read(&config_file).unwrap(),
+            written.as_bytes(),
+            "{name} keeps the native config"
+        );
     }
-    assert_eq!(std::fs::read_to_string(config_file).unwrap(), written);
 
-    codex["args"] = json!(["--config=projects={}"]);
-    set_clis(&home, true, &json!({ "codex": codex }));
-    let rejected = tools.call("start_agent", json!({ "cli": "codex", "name": "reserved" }));
-    assert_eq!(rejected["reason"], "invalid_settings", "{rejected}");
-    assert!(
-        rejected["message"].as_str().unwrap().contains("projects"),
-        "{rejected}"
-    );
+    for (args, key) in UPDATER_OPTIONS
+        .into_iter()
+        .map(|args| (args, UPDATE))
+        .chain([(&["--config=projects={}"][..], "projects")])
+    {
+        codex["args"] = json!(args);
+        set_clis(&home, true, &json!({ "codex": codex }));
+        let rejected = tools.call("start_agent", json!({ "cli": "codex", "name": "reserved" }));
+        assert_eq!(
+            rejected["reason"], "invalid_settings",
+            "{args:?}: {rejected}"
+        );
+        assert!(
+            rejected["message"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("clis.codex.args[0] sets {key}")),
+            "{args:?}: {rejected}"
+        );
+    }
+    assert_eq!(std::fs::read(config_file).unwrap(), written.as_bytes());
 }
 
 #[test]
@@ -719,7 +730,11 @@ fn opening_a_native_saved_session_as_a_new_agent_uses_person_policy() {
     let home = TestHome::new("launch-resume-native");
     let capture = Capture::new(&home);
     set_clis(&home, true, &json!({ "codex": capture.entry() }));
-    let sessions = home.user_home().join(".codex/sessions/2026/11/01");
+    let native_folder = home.user_home().join(".codex");
+    let config_file = native_folder.join("config.toml");
+    let native_config: &[u8] = b"check_for_update_on_startup = true\n";
+    std::fs::write(&config_file, native_config).unwrap();
+    let sessions = native_folder.join("sessions/2026/11/01");
     std::fs::create_dir_all(&sessions).unwrap();
     let history = json!({
         "type": "session_meta", "payload": { "id": SESSION, "cwd": real(&home.project) },
@@ -741,19 +756,19 @@ fn opening_a_native_saved_session_as_a_new_agent_uses_person_policy() {
     assert!(resumed["agent"].get("creator").is_none());
     assert_eq!(&args[..2], ["resume", SESSION]);
     check_cli(&home, "codex", &args, &env, false, true);
+    assert_eq!(std::fs::read(&config_file).unwrap(), native_config);
 
-    // Native resume composition must also accept an explicit update decision from the entry.
+    // Resume through Shell with an allowed override in the configured entry.
     let address = resumed["agent"]["address"].as_str().unwrap();
     home.run_facade_ok(&["stop", address]);
     home.remove_agent(address);
     let mut codex = capture.entry();
-    codex["args"] = json!(HUMAN_OVERRIDES);
+    codex["args"] = json!(["--config=analytics.enabled=false"]);
     set_clis(&home, true, &json!({ "codex": codex }));
     home.run_facade_ok(&["resume", "-d", &format!("codex:{SESSION}")]);
-    let (args, _) = capture.read();
-    let updates: Vec<_> = overrides(&args)
-        .into_iter()
-        .filter_map(|(key, value)| (key == UPDATE).then_some(value))
-        .collect();
-    assert_eq!(updates, ["true"; 5]);
+    let (args, env) = capture.read();
+    assert_eq!(&args[..2], ["resume", SESSION]);
+    assert!(overrides(&args).contains(&("analytics.enabled", "false")));
+    check_cli(&home, "codex", &args, &env, false, true);
+    assert_eq!(std::fs::read(config_file).unwrap(), native_config);
 }

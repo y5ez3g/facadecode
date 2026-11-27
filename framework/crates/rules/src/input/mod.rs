@@ -8,7 +8,10 @@
 mod paste;
 mod probe;
 
-use facade_base::model::terminal::{HiddenRows, InputInfo, InputState};
+use facade_base::model::{
+    agent::WaitKind,
+    terminal::{HiddenRows, InputInfo, InputState},
+};
 use facade_screen::{ScreenView, VisibleCell};
 use regex::Regex;
 
@@ -18,8 +21,8 @@ use crate::{
 };
 
 pub use paste::{
-    is_legacy_split_paste, is_own_draft, is_own_paste_tail, is_same_draft, settle_time,
-    with_paste_text,
+    is_full_draft, is_legacy_split_paste, is_own_draft, is_own_paste_tail, is_same_draft,
+    settle_time, with_paste_text,
 };
 pub use probe::{ProbeVerdict, restored, shape_of, space_taken, verdict_of};
 
@@ -50,6 +53,8 @@ pub fn read_draft(rule: &InputRule, view: &ScreenView) -> (InputInfo, Option<Str
 pub struct BoxReading {
     pub info: InputInfo,
     pub draft: Option<String>,
+    /// The reason given by a recognized interaction, when the rule knows it.
+    pub wait_kind: Option<WaitKind>,
     /// Visible text ending at the caret of a full viewport that has no scroll markers.
     /// Only a paste just made into an observed empty input can use it for confirmation.
     pub paste_tail: Option<String>,
@@ -66,6 +71,7 @@ impl BoxReading {
         Self {
             info,
             draft,
+            wait_kind: None,
             paste_tail: None,
             line: None,
             unsure: false,
@@ -112,6 +118,7 @@ pub fn read_box_for_typing(
         evidence,
         hidden,
         draft,
+        wait_kind,
         paste_tail,
         line,
         unsure,
@@ -125,6 +132,7 @@ pub fn read_box_for_typing(
     BoxReading {
         info,
         draft,
+        wait_kind,
         paste_tail,
         line,
         unsure,
@@ -138,6 +146,7 @@ struct Reading {
     hidden: Option<HiddenRows>,
     /// The draft as its rows draw it.
     draft: Option<String>,
+    wait_kind: Option<WaitKind>,
     paste_tail: Option<String>,
     line: Option<InputLine>,
     unsure: bool,
@@ -158,6 +167,7 @@ fn reading(state: InputState, evidence: impl Into<String>) -> Reading {
         evidence: evidence.into(),
         hidden: None,
         draft: None,
+        wait_kind: None,
         paste_tail: None,
         line: None,
         unsure: false,
@@ -359,6 +369,7 @@ impl<'a> Screen<'a> {
                 prompt,
                 alternate_prompt,
                 placeholder,
+                unready_hint,
                 dim_draft,
                 ..
             } => match placeholder {
@@ -366,6 +377,7 @@ impl<'a> Screen<'a> {
                     prompt,
                     alternate_prompt.as_deref(),
                     placeholder,
+                    unready_hint.as_deref(),
                     dim_draft.as_deref(),
                     untouched_input,
                 ),
@@ -645,14 +657,30 @@ impl<'a> Screen<'a> {
                 };
             }
         }
-        self.after_prompt(
+        let input = self.after_prompt(
             first,
             lower,
             "the input frame",
             row_marks,
             untouched_input && frame.probe_unstyled_hint,
             column,
-        )
+        );
+        let waiting = &frame.waiting_above;
+        if (input.unsure || input.state == InputState::Usable)
+            && !waiting.is_empty()
+            && let Some(start) = upper.checked_sub(waiting.len())
+            && self
+                .continues
+                .get(start..=upper)
+                .is_some_and(|rows| rows.iter().all(|&wrapped| !wrapped))
+            && waiting
+                .iter()
+                .zip(&self.lines[start..upper])
+                .all(|(pattern, row)| pattern.is_match(row.trim_end_matches(' ')))
+        {
+            return unknown("the CLI is still preparing the input frame");
+        }
+        input
     }
 
     /// `prompt`: a prompt row above a model line, or a scrolled input without the model line.
@@ -670,16 +698,21 @@ impl<'a> Screen<'a> {
             .find(|&y| model_at(y))
             .filter(|&y| self.blank(y - 1))
             .or_else(|| {
-                let hint = rule.wrapped_footer_hint.as_ref()?;
-                if !hint.is_match(self.lines[bottom].trim_end()) {
-                    return None;
-                }
-                // A wrapped footer begins at the top of the indented block before the hint.
-                (0..bottom)
+                let has_hint = rule
+                    .wrapped_footer_hint
+                    .as_ref()
+                    .is_some_and(|hint| hint.is_match(self.lines[bottom].trim_end()));
+                let footer_end = bottom + usize::from(!has_hint);
+                // A draft can hide the hint. The colored model label still anchors the footer.
+                (0..footer_end)
                     .rev()
                     .take_while(|&y| self.wrapped(y) && !self.blank(y))
                     .last()
-                    .filter(|&y| model_at(y) && self.blank(y - 1))
+                    .filter(|&y| {
+                        model_at(y)
+                            && self.blank(y - 1)
+                            && (has_hint || self.row(y).get(2).is_some_and(|cell| cell.colored))
+                    })
             });
         // The input ends before the blank row above the model line, or after the last row with text.
         let last = model.map_or(bottom, |model| model - 2);
@@ -790,6 +823,9 @@ impl<'a> Screen<'a> {
                 cursor_row + 1
             ));
         }
+        if self.editor_is_provisioning(rule, upper) {
+            return unknown(format!("the CLI is still provisioning tools above {place}"));
+        }
         let lines: Vec<&Cells> = (upper + 1..lower).map(|y| self.row(y)).collect();
         if limit == Some(lines.len()) {
             return self.full_editor(lower, column, lines, &place);
@@ -802,6 +838,29 @@ impl<'a> Screen<'a> {
             _ => (None, None),
         };
         self.editor_reading(upper + 1, 0, &lines, &place, marks, column <= 3)
+    }
+
+    fn editor_is_provisioning(&self, rule: &Editor, upper: usize) -> bool {
+        // The CLI keeps the notices in its transcript. The newest notice for each tool
+        // says whether it is still downloading.
+        rule.provisioning.iter().any(|tool| {
+            (0..upper).rev().find_map(|row| {
+                let text = self.lines[row].trim_end_matches(' ');
+                if self.continues[row] || !text.starts_with(' ') {
+                    return None;
+                }
+                if tool.finished.is_match(text) {
+                    return Some(false);
+                }
+                (tool.downloading.is_match(text)
+                    && self
+                        .row(row)
+                        .iter()
+                        .filter(|cell| draws(cell))
+                        .all(|cell| cell.dim || cell.colored))
+                .then_some(true)
+            }) == Some(true)
+        })
     }
 
     fn in_editor_rail(&self, rule: &Editor, rail: &EditorRail, cursor_visible: bool) -> Reading {
@@ -863,15 +922,18 @@ impl<'a> Screen<'a> {
             lines.push(&cells[from..to]);
         }
         let place = format!("the editor at {}", row_span(first + 1, lower));
-        if rail
+        if let Some(notice) = rail
             .live_notice
             .as_ref()
-            .is_some_and(|notice| self.editor_live_notice(notice, upper))
+            .filter(|notice| self.editor_live_notice(notice, upper))
         {
-            return reading(
-                InputState::Interaction,
-                format!("the CLI shows a live notice above {place}"),
-            );
+            return Reading {
+                wait_kind: notice.wait_kind,
+                ..reading(
+                    InputState::Interaction,
+                    format!("the CLI shows a live notice above {place}"),
+                )
+            };
         }
         if lines.len() == limit {
             let at = lines[cursor_row - first].partition_point(|cell| cell.column < column);
@@ -942,7 +1004,7 @@ impl<'a> Screen<'a> {
                 return false;
             };
             if prefix.is_empty() {
-                return row != bottom;
+                return true;
             }
             let Some(unmatched) = prefix.strip_suffix(' ') else {
                 return false;
@@ -1257,6 +1319,7 @@ impl<'a> Screen<'a> {
         prompt: &str,
         alternate: Option<&str>,
         placeholder: &Regex,
+        unready_hint: Option<&Regex>,
         dim_draft: Option<&Regex>,
         untouched_input: bool,
     ) -> Reading {
@@ -1271,6 +1334,16 @@ impl<'a> Screen<'a> {
             })
             .unwrap_or_else(|| self.height());
         let first = self.from(y, start);
+        if y + 1 == end
+            && self.cursor_at(start, y)
+            && unready_hint.is_some_and(|pattern| pattern.is_match(joined(first).trim()))
+            && hint_like(first)
+        {
+            return unknown(format!(
+                "the prompt at row {} shows a hint while its input is unavailable",
+                y + 1
+            ));
+        }
         if y + 1 == end && dim_draft.is_some_and(|pattern| pattern.is_match(joined(first).trim())) {
             let place = format!("the prompt at row {}", y + 1);
             return drafted(&place, (None, None), &[first]).with_line(line_of(

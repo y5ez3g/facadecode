@@ -18,7 +18,7 @@ use facade_base::model::message::DeliveryFailure;
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::{
     model::agent::{
-        AgentRef, AgentsUpdate, ManagedAgent, ManagedAgentState, StateReason, ToolsState,
+        AgentRef, AgentsUpdate, ManagedAgent, ManagedAgentState, StateReason, ToolsState, WaitKind,
     },
     model::terminal::{DEFAULT_TERMINAL_SIZE, InputInfo, InputState},
 };
@@ -203,6 +203,7 @@ pub(super) fn spawn(
         replies_dropped: false,
         typed: 0,
         untouched_input,
+        before_input_box: untouched_input && !recovered,
         start_rows: untouched_input && !recovered,
         holds_input_for_probe: false,
     };
@@ -289,8 +290,10 @@ struct Actor {
     /// How many writes of the person's went on: a probe's Backspace goes only while this is what
     /// it was when the probe read the input.
     typed: u64,
-    /// Automatic delivery can probe an unstyled hint before it accepts any external input.
+    /// Automatic delivery can probe an unstyled hint in a fresh, untouched input box.
     untouched_input: bool,
+    /// The input box has yet to appear in a fresh run.
+    before_input_box: bool,
     /// A new session whose conversation has not begun: what its start pushed off the screen can go.
     start_rows: bool,
     /// The probe of a fresh unstyled hint finishes before external keys reach the terminal.
@@ -776,6 +779,7 @@ impl Actor {
                 self.set_status_glyph(None);
                 self.typist.clear_probes();
                 self.untouched_input = false;
+                self.before_input_box = false;
                 self.start_rows = false;
                 self.holds_input_for_probe = false;
                 self.ready_at =
@@ -891,9 +895,21 @@ impl Actor {
             }
         }
         if matches!(input, Input::Raw(_) | Input::Typed(_)) {
-            self.untouched_input = false;
             self.ordered_input |= input.is_sequence();
-            if self.ordered_input || self.holds_input_for_probe || self.start_holds_input() {
+            let held = self.ordered_input || self.holds_input_for_probe || self.start_holds_input();
+            if self.untouched_input {
+                self.untouched_input = self.before_input_box
+                    && !held
+                    && !self.typist.types_calls()
+                    && self.submitting.is_none()
+                    && match &input {
+                        Input::Raw(keys) => super::person::menu_keys(keys),
+                        Input::Typed(typing) => typing.menu_keys(),
+                        _ => false,
+                    }
+                    && self.read_screen_input().info.state == InputState::Interaction;
+            }
+            if held {
                 self.held.push_back(input);
                 return Ok(());
             }
@@ -1442,14 +1458,22 @@ impl Actor {
             .screen
             .as_ref()
             .expect("the screen exists while the actor runs");
+        let written = self.terminal.written();
+        let queued = written + self.terminal.queued() as u64;
         let modes = Modes {
             bracketed_paste: screen.screen().bracketed_paste(),
             application_cursor_keys: screen.screen().application_cursor_keys(),
             working: self.links.shared.record.lock().unwrap().info.state
                 == ManagedAgentState::Working,
+            reveal_ready: self
+                .typist
+                .paste_rule()
+                .is_some_and(|rule| rule.tab_to_expand.is_some())
+                && self.submitting.is_none()
+                && self.held.is_empty()
+                && self.drawn_since(queued).is_some()
+                && self.room() > 0,
         };
-        let written = self.terminal.written();
-        let queued = written + self.terminal.queued() as u64;
         // Messages wait behind what the run's start does first, as behind a draft.
         let first = if self.readiness.readies_tools() {
             Some("the run's start readies its tools first")
@@ -1817,12 +1841,13 @@ impl Actor {
             .as_ref()
             .expect("the screen exists while the actor runs");
         self.state.observe(screen.screen());
-        // A menu or question of the CLI's own in place of its input waits for the person.
-        let input = self.read_screen_input().info.state;
-        self.state
-            .asks(input == InputState::Interaction, Instant::now());
-        self.state
-            .shows_input(matches!(input, InputState::Usable | InputState::Draft));
+        let input = self.read_screen_input();
+        let wait = (input.info.state == InputState::Interaction)
+            .then_some(input.wait_kind.unwrap_or(WaitKind::Unknown));
+        self.state.asks(wait, Instant::now());
+        let input_shown = matches!(input.info.state, InputState::Usable | InputState::Draft);
+        self.before_input_box &= !input_shown;
+        self.state.shows_input(input_shown);
         self.state_changed = true;
     }
 

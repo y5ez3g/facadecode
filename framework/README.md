@@ -57,15 +57,13 @@ export PATH="$PWD/target/debug:$PATH"
 facade --help
 facade start --help
 facade start fake                          # Ctrl-] detaches and leaves the agent running
-facade start -d --name two fake            # starts in the background and prints a bare ID
+facade start -d --name two fake            # starts in the background and prints the name and reference
 facade list
-facade ls -q                              # one ID per line
 facade type two "hello" --enter
-facade send two "a message"                # prints how the message was delivered
+facade send two "a message"                # confirms the message was saved to the inbox
 facade screen -n 20 two
-facade inspect two                         # state, Facade tools, input box, last input and session
-facade stop two                            # ends the CLI and keeps the agent in the list
-facade rm two
+facade status two                          # state, working directory and launch details
+facade stop two                            # ends the CLI and keeps the agent record for 30 days
 ```
 
 `fake` is the test CLI's rule. Only builds with debug assertions, such as `cargo build`'s, have it. A CLI's rule tells
@@ -74,31 +72,29 @@ Facade how to start the CLI, read its input box and resume its session. The test
 
 ```sh
 FAKECLI_SESSION=86da4482-2bae-4a45-b193-a5664c19826a facade start -d --name three fake
-facade inspect three
+facade status three
 ```
 
-Once `inspect` shows the session ID, stop and resume the agent:
+Once `status` shows the session ID, stop and resume the agent:
 
 ```sh
 facade stop three
-facade resume -d three                    # continues the session and prints the same agent ID
+facade resume -d three                    # continues the session and prints the same agent reference
 ```
 
-Use an agent's name or a bare ID from the list, such as `a2`. Message headers still show `#a2`. In Bash and
-PowerShell, `#` starts a comment, so quote that form as in `facade inspect '#a2'`.
+Use an agent's name, a bare ID such as `a2`, or its full reference from the list, such as `a2@laptop`.
 
 `facade status` shows the Facade home and, when it responds, this command's version, the running services and the
 agent count. A service using a different build shows its build beside its PID. Status makes one connection attempt
-without starting or upgrading Facade. The logs are in `$FACADE_HOME/framework/logs/`. `facade version` prints the
+without starting or upgrading Facade. The logs are in `$FACADE_HOME/framework/logs/`. `facade --version` prints the
 command's version locally.
 
-To clean up this temporary home, collect its IDs once and remove them after a successful, nonempty listing. The
-daemon exits 5 seconds after it has no running agent, client or unfinished work. The keeper exits with it.
+To clean up this temporary home, stop all running managed agents and wait for the daemon's socket to close before
+deleting the folder. The daemon exits 30 seconds after it has no running agent, client or unfinished work. The
+keeper exits with it.
 
 ```sh
-if agents=$(facade ls -q) && [ -n "$agents" ]; then
-    facade rm $agents
-fi
+facade stop --all
 socket=/tmp/facade-framework-$(id -u)/daemon-$(printf %s "$FACADE_HOME" | shasum -a 256 | cut -c1-10).sock
 while [ -e "$socket" ]; do sleep 0.2; done
 rm -rf "${FACADE_HOME:?}"
@@ -114,17 +110,15 @@ facade start --help
 facade start fake                          # Ctrl-] detaches and leaves the agent running
 facade start -d --name two fake
 facade list
-facade ls -q
 facade type two "hello" --enter
 facade send two "a message"
 facade screen -n 20 two
-facade inspect two
+facade status two
 facade stop two
-facade rm two
 $env:FAKECLI_SESSION = '86da4482-2bae-4a45-b193-a5664c19826a'
 facade start -d --name three fake
 Remove-Item Env:FAKECLI_SESSION
-facade inspect three                      # check for the session ID before stopping
+facade status three                       # check for the session ID before stopping
 ```
 
 Once the session ID appears:
@@ -134,30 +128,16 @@ facade stop three
 facade resume -d three
 ```
 
-To clean up the temporary home, wait for the keeper's named pipe to close before deleting the folder:
+To clean up the temporary home, stop all running managed agents and wait for the keeper's named pipe to close
+before deleting the folder:
 
 ```powershell
-$agents = @(facade ls -q)
-if ($LASTEXITCODE -eq 0 -and $agents.Count -gt 0) {
-    facade rm $agents
-}
+facade stop --all
 $sha = [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($env:FACADE_HOME))
 $pipe = "\\.\pipe\facade-framework-keeper-" + (-join ($sha[0..4] | ForEach-Object { $_.ToString('x2') }))
 while ([IO.Directory]::GetFiles('\\.\pipe\') -contains $pipe) { Start-Sleep -Milliseconds 200 }
 Remove-Item -LiteralPath $env:FACADE_HOME -Recurse -Force
 ```
-
-## Shell completion
-
-`facade completion <SHELL>` prints a script for completing commands, aliases and options. Put `facade` on your shell's
-`PATH` before configuring it.
-
-- **Bash.** Add `source <(facade completion bash)` to `~/.bashrc`.
-- **Zsh.** Add `source <(facade completion zsh)` to `~/.zshrc` after `compinit`.
-- **Fish.** Save the output of `facade completion fish` to `~/.config/fish/completions/facade.fish`, creating the
-  directory if needed.
-- **PowerShell.** Add `facade completion powershell | Out-String | Invoke-Expression` to your PowerShell profile
-  (`$PROFILE`).
 
 ## What is in this folder
 

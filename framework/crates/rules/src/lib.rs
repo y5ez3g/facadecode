@@ -22,6 +22,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use facade_base::key_input::Key;
+use facade_base::model::agent::WaitKind;
 use facade_base::model::terminal::InputMechanism;
 use facade_base::system::{SYSTEM, System};
 use regex::Regex;
@@ -35,15 +36,15 @@ pub use compose::{
 };
 pub use formats::shell_word;
 pub use input::{
-    BoxReading, InputLine, LineCell, ProbeVerdict, is_legacy_split_paste, is_own_draft,
-    is_own_paste_tail, is_same_draft, read_box, read_box_for_typing, read_draft, read_input,
-    restored, settle_time, shape_of, space_taken, verdict_of, with_paste_text,
+    BoxReading, InputLine, LineCell, ProbeVerdict, is_full_draft, is_legacy_split_paste,
+    is_own_draft, is_own_paste_tail, is_same_draft, read_box, read_box_for_typing, read_draft,
+    read_input, restored, settle_time, shape_of, space_taken, verdict_of, with_paste_text,
 };
 pub use sessions::{
     Reported, SESSION_FILE, SESSION_VARIABLES, SavedSession, SessionFile, WriteFailure,
     is_session_variable, list_sessions, parse_session_id, read_session_file, run_folder,
-    session_evidence, session_for_id, session_from_hook, session_from_title, session_variable,
-    write_session_file,
+    session_evidence, session_for_id, session_from_hook, session_from_prompt, session_from_title,
+    session_variable, write_session_file,
 };
 pub use state::{ScreenState, read_state};
 pub use wiring::{
@@ -54,7 +55,6 @@ pub use wiring::{
 };
 pub use wrappers::direct_command;
 
-pub(crate) use sessions::copilot_config_dir;
 pub(crate) use sessions::qoder_config_dir;
 pub(crate) use wiring::devin_config_dir;
 
@@ -232,6 +232,9 @@ pub struct PasteRule {
     /// What the input shows in place of a long paste.
     #[serde(default)]
     pub placeholders: Vec<PastePlaceholder>,
+    /// The exact single-row label offering Tab to reveal a collapsed paste.
+    #[serde(default)]
+    pub tab_to_expand: Option<Pattern>,
 }
 
 /// What the input shows in place of a long paste, such as `[Pasted text #1 +3 lines]`.
@@ -330,6 +333,8 @@ pub enum InputRule {
         alternate_prompt: Option<String>,
         /// A native placeholder identifies a cursor-anchored, possibly wrapped composer.
         placeholder: Option<Pattern>,
+        /// A colored hint the native CLI shows before its composer is ready.
+        unready_hint: Option<Pattern>,
         /// A paste marker that the CLI draws dim, like a hint.
         dim_draft: Option<Pattern>,
         /// The CLI hides the terminal cursor and draws its own, one inverse cell in its input box.
@@ -363,6 +368,9 @@ pub struct Frame {
     /// A hidden terminal cursor supplies its position inside the complete input frame.
     #[serde(default)]
     pub(crate) hidden_cursor_in_frame: bool,
+    /// Whole rows immediately above the upper rule while the CLI is preparing the input.
+    #[serde(default)]
+    pub(crate) waiting_above: Vec<Pattern>,
     pub menus: Vec<Menu>,
 }
 
@@ -394,6 +402,9 @@ pub struct Editor {
     /// An editor with a rail and a plain fallback, both identified by their interactive footer.
     #[serde(default)]
     pub(crate) rail: Option<EditorRail>,
+    /// Notices above the editor while the CLI is provisioning its startup tools.
+    #[serde(default)]
+    pub(crate) provisioning: Vec<EditorProvisioning>,
     pub upper: Pattern,
     pub lower: Pattern,
     pub scrolled: Scrolled,
@@ -401,6 +412,13 @@ pub struct Editor {
     pub most_rows: usize,
     pub most_share: f64,
     pub menus: Vec<Menu>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EditorProvisioning {
+    pub(crate) downloading: Pattern,
+    pub(crate) finished: Pattern,
 }
 
 #[derive(Debug, Deserialize)]
@@ -423,6 +441,8 @@ pub(crate) struct EditorRail {
 #[serde(deny_unknown_fields)]
 pub(crate) struct EditorLiveNotice {
     pub(crate) text: String,
+    #[serde(default)]
+    pub(crate) wait_kind: Option<WaitKind>,
     pub(crate) rows_above_upper: std::num::NonZeroUsize,
     #[serde(default)]
     pub(crate) wrapped_context: Option<EditorNoticeContext>,
@@ -922,14 +942,18 @@ impl Editor {
                     "an editor rail needs a visible fallback prompt ending in a space".into(),
                 );
             }
-            if let Some(notice) = &rail.live_notice
-                && (notice.text.is_empty()
+            if let Some(notice) = &rail.live_notice {
+                if notice.text.is_empty()
                     || notice.text.trim() != notice.text
-                    || notice.text.chars().any(char::is_control))
-            {
-                return Err(
-                    "an editor live notice needs visible text without edge whitespace".into(),
-                );
+                    || notice.text.chars().any(char::is_control)
+                {
+                    return Err(
+                        "an editor live notice needs visible text without edge whitespace".into(),
+                    );
+                }
+                if notice.wait_kind == Some(WaitKind::Unrecognized) {
+                    return Err("an editor live notice needs a recognized wait kind".into());
+                }
             }
         }
         if let Some(band) = &self.band {

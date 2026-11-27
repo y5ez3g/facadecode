@@ -749,6 +749,8 @@ mod tests {
         assert!(refused("codex", &["-pwork", "-pmy-model"]).is_empty());
         assert_eq!(refused("opencode", &["-cs", "abc"]), ["0:-c"]);
         assert_eq!(refused("muse", &["-wc"]), ["0:-w"]);
+        assert!(refused("agent", &["-Hfoo: bar", "-ehttp://127.0.0.1:9"]).is_empty());
+        assert_eq!(refused("agent", &["-fHfoo: bar"]), ["0:-f"]);
         let grammar = &find("codex").unwrap().unwrap().arguments;
         let options = ["--model", "-m"].map(String::from);
         let args = [
@@ -870,6 +872,10 @@ mod tests {
             "--mode=plan",
             "-continue",
             "-sandbox=false",
+            "--resume=session",
+            "-resume=session",
+            "-r=session",
+            "--r=session",
         ];
         let expected = [
             "0:-c",
@@ -885,6 +891,10 @@ mod tests {
             "0:--mode",
             "0:--continue",
             "0:--sandbox",
+            "0:--resume",
+            "0:--resume",
+            "0:-r",
+            "0:-r",
         ];
         for (arg, expected) in spellings.iter().zip(expected) {
             assert_eq!(refused("agy", &[arg]), [expected], "{arg}");
@@ -893,7 +903,12 @@ mod tests {
         // that flag's value
         assert!(refused("agy", &["--project", "-c=true"]).is_empty());
         assert!(refused("agy", &["-log-file", "--p"]).is_empty());
+        assert!(refused("agy", &["--log-file", "--resume"]).is_empty());
         assert_eq!(refused("agy", &["-add-dir", "-i", "-i"]), ["2:-i"]);
+        assert_eq!(
+            refused("agy", &["-resume", "--mode", "-r", "--conversation"]),
+            ["0:--resume", "2:-r"]
+        );
     }
 
     /// A refused argument is said by its place and option or key, never a value that may be a

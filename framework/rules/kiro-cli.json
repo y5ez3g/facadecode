@@ -18,11 +18,20 @@
 		"prompt": "› ",
 		"alternate_prompt": "> ",
 		"placeholder": "^ask a question,? or describe a task(?: (?:↩|↵|Enter))?$",
+		"unready_hint": "^(?:Initializing · type to queue a message|Kiro is working(?: · (?:(?:[0-9]+h )?[0-9]+m )?[0-9]+s)? · Type to steer · Ctrl\\+S to queue)$",
 		"menus": [
 			{ "selected": "^\\s*Trust this workspace\\?$" },
 			{
+				"selected": "^\\s*❯ (?:Trust, continue|Don't trust, exit)$",
+				"hint": { "pattern": "^\\s*esc to exit · ↑↓ to navigate · ↵ to select$", "within": 3 }
+			},
+			{
 				"selected": "^\\s*❯ \\S",
 				"hint": { "pattern": "^\\s*esc to cancel · ↑↓ to navigate · ↵ to select$", "within": 16 }
+			},
+			{
+				"selected": "^\\s*❯ \\S",
+				"hint": { "pattern": "^\\s*esc to go back · ↑↓ to navigate · ↵ to select · ↑ at top for controls · tab to switch panels$", "within": 16 }
 			},
 			{
 				"selected": "^ {2}You are not logged in\\. Login now\\?$",
@@ -32,6 +41,7 @@
 	},
 	"paste": {
 		"enter_ms": 120,
+		"tab_to_expand": "^[1-9][0-9]* lines ▸   Press Tab to expand$",
 		"placeholders": [
 			{ "pattern": "^\\[paste #\\d+ \\+(\\d+) lines\\]$", "count": "lines", "spaced": true },
 			{ "pattern": "^\\[paste #\\d+ (\\d+) chars\\]$", "count": "chars", "spaced": true }
@@ -48,7 +58,7 @@
 		"work": { "args": ["--trust-all-tools"] },
 		"startup": { "args": ["--trust-workspace"] },
 		"question": {
-			"shown": "^\\s*Warning: Kiro is running in trust all tools mode$",
+			"shown": "^\\s*(?:Warning: Kiro is running in trust all tools mode|By proceeding, you confirm that you understand the risks and accept(?: responsibility\\b.*)?)$",
 			"answer": "^\\s*(?:[❯›>]\\s*)?Yes, I accept$",
 			"selected": "^\\s*[❯›>]\\s+Yes, I accept$",
 			"keys": ["Down"],

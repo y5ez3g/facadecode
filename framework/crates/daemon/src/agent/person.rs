@@ -41,6 +41,14 @@ pub(super) fn has_key(mut bytes: &[u8]) -> bool {
     !bytes.is_empty()
 }
 
+/// Up and Down in either cursor mode, with at most one Enter at the end.
+pub(super) fn menu_keys(mut bytes: &[u8]) -> bool {
+    while let [b'\x1b', b'[' | b'O', b'A' | b'B', rest @ ..] = bytes {
+        bytes = rest;
+    }
+    matches!(bytes, [] | [b'\r'])
+}
+
 /// An Enter in the person's keys that may submit the input.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Enter {

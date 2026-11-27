@@ -23,8 +23,16 @@
 		"hidden_cursor_in_frame": true,
 		"upper": "^[─-]+(?: .+)?$",
 		"lower": "^[─-]+ *$",
+		"waiting_above": [
+			"^ [⠁-⣿] Resuming session\\.\\.\\.(?: +\\? for shortcuts)?$",
+			"^─+$",
+			"^ .+ Shift\\+Tab to .+ Mode(?: {2,}\\S.*)?$"
+		],
 		"scrolled": { "position": "rows", "above": "^↑ (\\d+) more lines?$", "below": "^↓ (\\d+) more lines?$" },
-		"menus": [{ "selected": "^ *❯ +\\S", "next": "^ +\\S" }]
+		"menus": [
+			{ "selected": "^  ❯ (?:1\\. Yes, use recommended settings|2\\. No, maybe later)$", "hint": { "pattern": "^ ↑↓ navigate · Enter select$", "within": 3 } },
+			{ "selected": "^ *❯ +\\S", "next": "^ +\\S" }
+		]
 	},
 	"paste": {
 		"enter_ms": 100,

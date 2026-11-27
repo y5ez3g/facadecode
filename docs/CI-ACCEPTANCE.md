@@ -3,7 +3,7 @@
 Generated from [ci/cases.json](../ci/cases.json) by `python3 -B ci/acceptance.py table`.
 See the [CI design](CI.md) for the acceptance policy.
 
-237 API obligations and 63 P0 cases. 208 have exact bindings and 92 are pending.
+238 API obligations and 63 P0 cases. 209 have exact bindings and 92 are pending.
 
 Bound rows in the current plan require passing evidence. Historical rows describe checks for earlier builds.
 
@@ -304,6 +304,7 @@ Bound rows in the current plan require passing evidence. Historical rows describ
 | `framework/shell/process/hook.approve` | pr | `mcp` · `the_approve_hook_approves_facade_s_own_tools_alone` | Check the approval hook emits approval for Facade's own recognized tools and leaves unrelated tool requests undecided. | [hooks.rs](../framework/crates/facade/src/hooks.rs), [mcp.rs](../framework/tests/tests/mcp.rs#L1360) |
 | `framework/shell/process/hook.instructions` | pr | `mcp` · `the_instructions_hook_says_where_the_run_s_agent_works` | Send the CLI hook request and check its formatted response delivers the agent's saved instructions and folder context to the matching run. | [hooks.rs](../framework/crates/facade/src/hooks.rs), [mcp.rs](../framework/tests/tests/mcp.rs#L1295), [mcp.rs](../framework/tests/tests/mcp.rs#L1231) |
 | `framework/shell/process/hook.session-start` | pr | `resume` · `the_session_hook_accepts_the_old_skill_flag_and_records_the_session` | Supply a fake session-start payload, verify the session and optional skill output for the current run, and check that a background job posts no session. | [hooks.rs](../framework/crates/facade/src/hooks.rs), [hooks.rs](../framework/tests/tests/hooks.rs#L57), [resume.rs](../framework/tests/tests/resume.rs#L330), [tools_tests.rs](../framework/crates/rules/src/compose/tools_tests.rs#L433) |
+| `framework/shell/process/hook.session-prompt` | pr | `hooks` · `the_prompt_hook_records_the_session_a_prompt_names` | Supply a fake Qoder prompt payload that names the session and its transcript, and verify that the run records that session. | [hooks.rs](../framework/crates/facade/src/hooks.rs), [hooks.rs](../framework/tests/tests/hooks.rs#L113) |
 | `framework/shell/process/hook.title` | pr | `resume` · `antigravity_s_title_command_writes_the_conversation_and_runs_the_person_s_own` | Run the title hook with fixture input; verify the saved conversation and that only the configured title command's stdout reaches the CLI after it receives the original input. | [hooks.rs](../framework/crates/facade/src/hooks.rs), [resume.rs](../framework/tests/tests/resume.rs#L468) |
 | `framework/shell/process/keeper` | pr | Pending | Start through the installed launcher and prove the Keeper owns the test CLI terminal. | [cli.rs](../framework/crates/facade/src/cli.rs), [attach.rs](../framework/tests/tests/attach.rs), [cli.rs](../framework/tests/tests/cli.rs), [commands.rs](../framework/tests/tests/commands.rs#L518), [keeper.rs](../framework/tests/tests/keeper.rs#L119) |
 | `framework/shell/process/machine.link` | pr | Pending | Start the background SSH link in an isolated home and verify the command returns with the expected saved peer and the link still carrying requests. | [cli.rs](../framework/crates/facade/src/cli.rs), [machines.rs](../framework/tests/tests/machines.rs) |

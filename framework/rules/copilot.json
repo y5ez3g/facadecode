@@ -19,6 +19,7 @@
 			"footer": "^ *(?:← open sidebar · )?Interactive · (?:Manual Approval|Assisted Permissions|Allow All)(?: · | {2,}| *$)",
 			"live_notice": {
 				"text": "Please use /login to sign in to use Copilot",
+				"wait_kind": "auth",
 				"rows_above_upper": 2,
 				"wrapped_context": { "max_rows": 3, "last": "^ (?:\\[⎇ .+\\] +)?Run on: \\S.*$" }
 			}

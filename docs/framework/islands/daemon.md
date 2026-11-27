@@ -323,6 +323,7 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 - **Owns:** what the CLI reported and its screen showed, the turn, a question the CLI asks, the tools' connection, how the run ended, what was last said to the agent, and the file `framework/screens/<id>/state`.
 - **Keeps:**
   - One state, by a fixed order: `Ended`; the CLI's own `WaitingForYou` or `Error`; a question in place of the input box (`WaitingForYou`); tools unavailable (`Error`); `JustDone`; `Working`; `Starting`; `Idle`; a failed start (`Error`); else `Unknown`.
+  - A recognized input interaction supplies its wait kind when known. Other input interactions use `unknown`.
   - Work that stops reads `Working` for 1 more second; a turn someone asked for that ends unwatched reads `JustDone` until a terminal shows the agent.
   - Under `background_report`, a `working` report with matching words becomes idle evidence.
   - Under `background_correction`, a `working` report is narrowed to idle evidence while the screen
@@ -336,7 +337,7 @@ The terminal, as a `PtyIo`, and the input waiting for it.
     native startup deadline if it fails. The typist still checks whether it can write the prompt safely.
   - Only `keep` writes the state file, through a private temporary file and a rename. What the screen shows is read again, never kept.
 - **Never does:** touch the terminal; change the agent's record; publish.
-- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(asking, now)`, `shows_input(shown)`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connections(connections: ToolsConnections)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
+- **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `has_report_evidence()`, `observe(&Screen)`, `asks(kind: Option<WaitKind>, now)`, `shows_input(shown)`; run: `ended(exit, stopped)`, `restarted(started, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connections(connections: ToolsConnections)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
 
 #### glyph
 
@@ -360,24 +361,27 @@ The actor uses `new(rule)`, `restart()`, `update(state, has_report)`, `frame_int
 `Typist`: types calls and messages into the input box, one at a time, and settles each message.
 
 - **Owns:** the calls and messages waiting, the paste under way, where its bytes are in the terminal, its pauses, and what it submitted; the probe under way, and what this run's probes found of each row they tried (`probed`).
-- The actor allows unstyled hint probes for automatic delivery to a freshly launched input. Starting with a
-  session, recovery, resume, an unconfirmed paste or accepting external input leaves plain writing on the
-  normal draft path. External input that arrives during an unstyled hint probe waits for its Space and
+- The actor allows unstyled hint probes for automatic delivery to a freshly launched input. Up, Down and a
+  final Enter sent directly to a recognized native menu before the input box appears keep the probe available.
+  Other external input, starting with a session, recovery, resume and an unconfirmed paste leave plain writing
+  on the normal draft path. External input that arrives during an unstyled hint probe waits for its Space and
   Backspace to finish.
 - **Keeps:**
   - Each call goes in whole and in order; a pause counts from when its bytes reached the terminal.
   - `DeliveryHandle::begin_paste` records the paste before the typist writes the complete message in one paste.
   - The submission key goes once the input box shows this paste alone and stays still for the CLI's settle time.
     Codex queues an ordinary message with Tab while Working. The start prompt and recovered pastes use Enter.
+  - For Kiro's collapsed paste, the typist can press Tab once after writing its fresh bracketed paste, with the same person-input generation and the native disclosure visible. The CLI must draw after each write and earlier person input must be settled. The typist applies the normal whitespace comparison to the full revealed draft before Enter. An unconfirmed reveal leaves the draft to the person. Recovered collapsed pastes retain the existing refusal.
   - A message is delivered once its submission key reaches the terminal. When the deadline expires before
     submission, the typist can withdraw the message after the screen confirms it cleared its own draft.
   - The start prompt is pasted alone; a paste an earlier daemon began is never typed again.
   - The wait before submission counts the paste rate from `PASTE_BYTES_PER_MS`. With console typing, characters above U+FFFF go as key-down records and the wait adds `per_char` for each UTF-16 code unit.
-  - When the first row may be a hint or a draft, `probe` types a Space where input starts and reads the row every
-    100 ms for up to a second. Two equal readings settle the row. If both still match the row and cursor from
-    before Space, the probe keeps waiting for the echo within the same deadline. It presses Backspace only once
-    the input shows that Space went in, no menu or question shows and the person has typed nothing since the
-    probe began. It gives Backspace up to another second to settle and checks that it restored the input.
+  - When the first row may be a hint or a draft, `probe` types a Space where input starts. After each key reaches
+    the terminal it reads the row every 100 ms for up to two seconds. Two equal readings settle the row. If the
+    screen still shows the frame from before Space or the space that Backspace is clearing, the probe keeps
+    waiting for that key's echo within its deadline. It presses Backspace only once the input shows that Space
+    went in, no menu or question shows and the person has typed nothing since the probe began. It checks that
+    Backspace restored the input.
     Nothing else is typed during the probe, and a failed check ends it without further keys. The typist keeps
     the finding for that row until the CLI's next run.
 - **Never does:** write the terminal (it hands its bytes to the actor); read the screen except through the reading the actor gives it; take the person's keys; touch the database.
@@ -444,6 +448,9 @@ For a send from an authenticated agent, the original admission stores `notify_fa
 delivery deadline. Pending rows carry that ownership through daemon recovery. Schema version 6 gives existing
 rows a false value. Receipt replay uses the original decision. Delivery and result waits share the caller's
 remaining budget. A v1 send with no wait field uses a delivery wait.
+
+For a forwarded Shell delivery or result wait, the origin gives the holder a shorter delivery budget
+in the send arguments. Settlement and the receipt use the remaining peer exchange time.
 
 A command-line result wait belongs to the source daemon and closes with its request. The holder stores the
 reply marker with the original message. Only its verified recipient can answer the associated `#c`

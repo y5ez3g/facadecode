@@ -185,10 +185,7 @@ pub(crate) fn wire_managed(
             )
         }
         "agy" => (run_tools::agy_managed(server, credential), uses_credential),
-        "copilot" => (
-            copilot::tools(rule, words, server, &entry, environment)?,
-            uses_credential,
-        ),
+        "copilot" => (copilot::tools(&entry), uses_credential),
         "devin" => (devin::tools(server, &entry, environment)?, uses_credential),
         "agent" => (cursor::tools(server, &entry), uses_credential),
         "kiro-cli" => {

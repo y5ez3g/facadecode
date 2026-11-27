@@ -115,6 +115,14 @@ fn send(home: &TestHome, name: &str, text: &str) -> (bool, String) {
 fn a_hint_is_probed_once_a_run_and_the_message_goes_in() {
     let home = TestHome::new("probehint");
     let file = keys_file(&home, "muse");
+    let expect_keys = |expected: &[u8], context: &str| {
+        assert!(
+            wait_until(secs(30), || pressed(&file).len() >= expected.len()),
+            "{context}: the test CLI recorded {:?}",
+            pressed(&file)
+        );
+        assert_eq!(pressed(&file), expected, "{context}");
+    };
     let id = start(
         &home,
         "muse",
@@ -124,14 +132,14 @@ fn a_hint_is_probed_once_a_run_and_the_message_goes_in() {
     report_session(&home, &id, "muse");
     let (sent, said) = send(&home, "muse", "first message");
     assert!(sent, "{said}");
-    assert_eq!(
-        pressed(&file),
-        b" \x7f\r",
-        "space, Backspace, then the message"
-    );
+    expect_keys(b" \x7f\r", "space, Backspace, then the message");
     let (sent, said) = send(&home, "muse", "second message");
     assert!(sent, "{said}");
-    assert_eq!(pressed(&file), b" \x7f\r\r", "the run remembers the hint");
+    expect_keys(b" \x7f\r\r", "the run remembers the hint");
+    assert!(
+        wait_until(secs(30), || home.submitted_messages().len() >= 2),
+        "the test CLI records both submitted messages"
+    );
     let messages = home.submitted_messages();
     assert_eq!(messages.len(), 2, "{messages:?}");
     assert!(
@@ -156,10 +164,9 @@ fn a_hint_is_probed_once_a_run_and_the_message_goes_in() {
     assert!(wait_for_screen_text(&home, "muse", "❯ review my changes"));
     let (sent, said) = send(&home, "muse", "third message");
     assert!(sent, "{said}");
-    assert_eq!(
-        pressed(&file),
+    expect_keys(
         b" \x7f\r\r \x7f\r",
-        "a new run of the CLI tries the hint again"
+        "a new run of the CLI tries the hint again",
     );
 }
 

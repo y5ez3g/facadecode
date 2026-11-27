@@ -160,6 +160,16 @@ fn start_and_resume_answer_the_first_cli_color_queries() {
         } else {
             "painter"
         };
+        // The next turn resumes painter's session, which its session hook reports after its start.
+        assert!(
+            wait_until(
+                LOADED_TIMEOUT,
+                || home.inspect_agent(name)["agent"]["session"]
+                    == "55000000-0000-4000-8000-000000000011"
+            ),
+            "{name}'s session: {}",
+            home.inspect_agent(name)["agent"]["session"]
+        );
         home.run_facade_ok(&["stop", name]);
         let input = std::fs::read(&keys).unwrap();
         assert_eq!(String::from_utf8_lossy(&input), expected);

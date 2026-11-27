@@ -587,6 +587,10 @@ fn a_command_in_an_agent_s_terminal_acts_as_the_command_line() {
         .output()
         .unwrap();
     assert!(sent.status.success(), "{}", stderr(&sent));
+    assert!(
+        wait_until(secs(30), || !home.submitted_messages().is_empty()),
+        "the receiving CLI records the submitted message"
+    );
     assert_eq!(
         home.submitted_messages(),
         ["📨 Message m1 from command line\nfrom a terminal"]

@@ -326,6 +326,23 @@ impl LocalMouseInput {
     }
 }
 
+/// `keys` without the complete SGR mouse reports in them. A report the CLI gets, such as the
+/// pointer moving over it, is no typing.
+pub(super) fn without_reports(keys: &[u8]) -> Vec<u8> {
+    let mut rest = Vec::with_capacity(keys.len());
+    let mut at = 0;
+    while at < keys.len() {
+        match sgr_report(&keys[at..]) {
+            Report::Complete { length, .. } => at += length,
+            _ => {
+                rest.push(keys[at]);
+                at += 1;
+            }
+        }
+    }
+    rest
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Button {
     Down,
@@ -464,6 +481,16 @@ fn starts_arrow_record(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pointer moving after a drag the terminal app took over reaches the CLI as reports, which
+    /// are no typing: only the keys around them remain.
+    #[test]
+    fn reports_leave_only_the_keys_around_them() {
+        assert_eq!(without_reports(b"\x1b[<35;20;16M"), b"");
+        assert_eq!(without_reports(b"\x1b[<35;20;16M\x1b[<0;21;16m"), b"");
+        assert_eq!(without_reports(b"a\x1b[<35;20;16Mb"), b"ab");
+        assert_eq!(without_reports(b"\x1b[A\x1b"), b"\x1b[A\x1b");
+    }
 
     const NONE: Arrows = Arrows {
         up: false,
